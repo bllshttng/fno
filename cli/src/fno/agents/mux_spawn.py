@@ -237,7 +237,6 @@ def _shell_integration() -> str:
 
 
 # Moved to fno.agents.mux_server (file budget); re-exported here.
-from fno.agents.mux_server import mux_server_env as mux_server_env  # noqa: E402
 from fno.agents.mux_server import resolve_mux_session  # noqa: E402
 
 
@@ -784,8 +783,7 @@ def _backfill_opencode_session_id(
 # Codex writes its rollout at session start, but the TUI has to boot first, so
 # the first look can legitimately land before the file exists. More attempts and
 # a longer nap than opencode's SQLite read for exactly that reason. One extra
-# attempt buys the stability gate in _backfill_codex_session_id its confirmation
-# probe without shrinking the capture window (Codex P2, #603).
+# attempt widens the capture window.
 _CODEX_BACKFILL_ATTEMPTS = 5
 _CODEX_BACKFILL_DELAY_S = 0.75
 
@@ -802,13 +800,13 @@ def _backfill_codex_session_id(
 ) -> Optional[str]:
     """Best-effort capture of a freshly spawned codex pane's session id.
 
-    With the pane's child pid, the id is read race-free from the child's open
-    rollout (see :func:`_codex_session_id_for_pid`): codex mints no ``--session``
-    id, but its process holds the rollout open and the filename embeds the id, so
-    each pane resolves its own session even when two spawn in one cwd at once.
-    Without a child pid (direct/test callers only) this falls back to cwd +
-    started-after-spawn discovery, stability-gated -- that path cannot fully
-    separate a same-cwd sibling and is not used by production spawns.
+    The id is read race-free from the child's open rollout (see
+    :func:`_codex_session_id_for_pid`): codex mints no ``--session`` id, but its
+    process holds the rollout open and the filename embeds the id, so each pane
+    resolves its own session even when two spawn in one cwd at once. Without a
+    child pid there is nothing to correlate, so the answer is None: a cwd and
+    start-time guess cannot separate a same-cwd sibling. ``cwd``, ``since_ms``
+    and ``sessions_dir`` are unread.
 
     A miss leaves the row id-less so ``_discover_from_registry`` drops it before
     name matching, which is what makes a live codex worker unreachable by truth,
@@ -819,40 +817,18 @@ def _backfill_codex_session_id(
     death between probes, which a bare retry loop cannot see. Direct callers keep
     the default.
     """
-    from fno.agents.discover import codex_session_ids_started_in
-
     naptime = sleep or time.sleep
     tries = _CODEX_BACKFILL_ATTEMPTS if attempts is None else max(int(attempts), 1)
-    if child_pid is not None:
-        # Race-free primary path: the child's open rollout identifies its own
-        # session. codex opens the rollout shortly after start, so retry until it
-        # appears; never fall through to cwd/time guessing when we have a pid.
-        for attempt in range(tries):
-            if attempt:
-                naptime(_CODEX_BACKFILL_DELAY_S)
-            sid = _codex_session_id_for_pid(child_pid, psutil_mod=psutil_mod)
-            if sid is not None:
-                return sid
+    if child_pid is None:
         return None
-
-    # No child pid: direct/test caller only. Two same-cwd panes can surface
-    # rollouts out of order, so accept only once the same single id repeats on
-    # the next probe -- a transiently-unique sibling then grows to an ambiguous
-    # pair (-> None below) or is displaced first (Codex P1 residual, #603).
-    prev: Optional[str] = None
-    # Floored at 2: the stability gate below accepts an id only when the SAME
-    # single id repeats, and `prev` is None on the first pass, so one attempt
-    # can never return anything. A caller passing attempts=1 here would get a
-    # guaranteed silent miss rather than one honest probe.
-    for attempt in range(max(tries, 2)):
+    # codex opens the rollout shortly after start, so retry until it appears;
+    # never fall through to cwd/time guessing.
+    for attempt in range(tries):
         if attempt:
             naptime(_CODEX_BACKFILL_DELAY_S)
-        ids = codex_session_ids_started_in(cwd, since_ms, sessions_dir=sessions_dir)
-        if len(ids) > 1:
-            return None  # ambiguous; retrying cannot narrow it
-        if len(ids) == 1 and ids[0] == prev:
-            return ids[0]
-        prev = ids[0] if ids else None
+        sid = _codex_session_id_for_pid(child_pid, psutil_mod=psutil_mod)
+        if sid is not None:
+            return sid
     return None
 
 
@@ -1022,11 +998,7 @@ def build_pane_argv(
     a byte-identical argv."""
     message = normalize_command(message, provider) if is_verb_seed(message) else message
 
-    from fno.agents.harness_map import (
-        DispatchResolveError,
-        is_declared,
-        render_session_argv,
-    )
+    from fno.agents.harness_map import is_declared, render_session_argv
 
     # An undeclared harness has no resume contract to render an identity from,
     # and none is invented: the generic arm below is the bare binary. Any
@@ -3873,6 +3845,14 @@ def dispatch_spawn_pane(
             json_receipt = bool(at or tab_id)
             if json_receipt:
                 run_args.append("--json")
+            # A `preassigned` binding harness starts with the id this spawn
+            # minted, so the pane is addressable before its registry row
+            # exists: naming it records the birthright the send gate reads.
+            from fno.agents.harness_map import capabilities_or_undeclared
+
+            spawn_binding = capabilities_or_undeclared(provider).get("session_binding") or {}
+            if session_uuid is not None and spawn_binding.get("strategy") == "preassigned":
+                run_args += ["--fno-id", session_uuid]
             run_args += ["--", *wrapped]
         # pop FNO_SPAWN_TRIGGER BEFORE this env snapshot, mirroring the
         # bg_create ordering fix in dispatch.py. `{**os.environ, ...}` here
@@ -4097,28 +4077,16 @@ def dispatch_spawn_pane(
         if message and readiness != "failed" and not codex_seed:
             seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unattempted":
-                # One retry, and ONLY from `unattempted`. That state means no
-                # send was made, so a second attempt cannot double-type: an
-                # `unconfirmed` submit may have typed the seed, and re-deriving
-                # the payload from a frame holding a partial seed would submit
-                # fragment+seed into a live pane.
-                # Failing that spawn is the safer answer than typing twice.
-                #
-                # "Nothing can already be in the buffer" was FALSE for a seed
-                # that rode in the argv: that one is committed at exec time,
-                # before the first probe runs, and a late-painting pane read
-                # `unattempted` while already running its task. Recovering it
-                # left a queued duplicate verb behind a live pipeline. The
-                # premise holds now for a different reason - an argv seed is
-                # classified before the frame is consulted and never reaches
-                # this state - so the retry keeps serving the pane-send path it
-                # was written for and can no longer double-seed an argv one.
-                #
-                # The sleep is load-bearing, not politeness. `unattempted` IS
-                # the late-paint state, and `_run_mux` neither polls nor backs
-                # off, so an immediate re-read lands milliseconds later on the
-                # same blank frame and the retry recovers nothing it was written
-                # to recover.
+                # One retry, and ONLY from `unattempted`: no send was made, so
+                # a second attempt cannot double-type. An argv seed once read
+                # `unattempted` while already running its task, and recovering
+                # it double-seeded a live pane; argv seeds are now classified
+                # before the frame is consulted and never reach this state, so
+                # the retry keeps serving only the pane-send path it was
+                # written for. The sleep is load-bearing, not politeness:
+                # `unattempted` IS the late-paint state and `_run_mux` neither
+                # polls nor backs off, so an immediate re-read lands
+                # milliseconds later on the same blank frame.
                 time.sleep(_SEED_RETRY_DELAY_S)
                 seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unconfirmed":

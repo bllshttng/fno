@@ -631,11 +631,44 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     {
         return Status::Pending("a child lock is held".to_string());
     }
+    // A claim-aux lane dir belongs to a live waiter that polls its path, and
+    // every claim-aux child is a dir, so the lock probe never sees a ticket.
+    // The fold waits until every child dir is empty; the next daemon-start
+    // pass retries.
+    if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
+        return Status::Pending("a waiter holds a ticket".to_string());
+    }
     // The probe fds stay open through the fold: a lock another writer takes
     // between the probe and a rename cannot split a child from its holder.
     // The vec drops when the fold ends and releases them.
     if !apply {
         return Status::Pending("fold (dry run)".to_string());
+    }
+    // claim-aux folds whole, by lead ruling: a directory rename is atomic,
+    // so no waiter's ticket path ever moves mid-write. The emptiness probe
+    // re-runs right before the rename, and any lane holding a ticket skips
+    // the row for this pass with place() still answering the legacy dir.
+    // Only the destination's parent is created first; the rename carries
+    // every child in one step.
+    if row.legacy == "claim-aux" {
+        if !lane_dirs_empty(&legacy) {
+            return Status::Pending("a waiter holds a ticket".to_string());
+        }
+        match new.parent() {
+            Some(parent) => {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return Status::Refused(format!("refused: {e}"));
+                }
+            }
+            None => return Status::Refused("refused: no destination parent".to_string()),
+        }
+        if new.exists() {
+            return Status::Pending("the destination already holds a claim-aux".to_string());
+        }
+        return match std::fs::rename(&legacy, &new) {
+            Ok(()) => Status::Moved,
+            Err(e) => Status::Refused(format!("refused: {e}")),
+        };
     }
     if let Err(e) = std::fs::create_dir_all(&new) {
         return Status::Refused(format!("refused: {e}"));
@@ -694,6 +727,27 @@ fn dir_children_lockable(dir: &Path, held: &mut Vec<std::fs::File>) -> bool {
                 held.push(f);
             }
             Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Whether every child dir of `dir` is empty: the `claim-aux` fold guard.
+/// Tickets live one level down (`<lane>/<NNNNNN>/holder`), a depth the lock
+/// probe's file-only walk never reaches.
+fn lane_dirs_empty(dir: &Path) -> bool {
+    let Ok(children) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for child in children.flatten() {
+        if !child.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let empty = std::fs::read_dir(child.path())
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !empty {
+            return false;
         }
     }
     true
@@ -1061,10 +1115,14 @@ mod tests {
             std::fs::read(root.join("state").join("flight").join("b.json")).unwrap(),
             b"B"
         );
-        // Readers follow the SHIPPED row: flight is still self-mapped, so
-        // place_dir answers the old spelling until the slice retargets the
-        // row. The synthetic fold above must not leak into the reader.
-        assert_eq!(place_dir(&root, "flight"), Some(root.join("flight")));
+        // Readers follow the SHIPPED row: flight now folds under state/, so
+        // place_dir answers the destination always, while the legacy dir
+        // above still holds files. The synthetic fold must not leak into the
+        // reader.
+        assert_eq!(
+            place_dir(&root, "flight"),
+            Some(root.join("state").join("flight"))
+        );
         clean(&root);
 
         // The pre-fold read: the file resolves through the legacy dir until
@@ -1130,11 +1188,51 @@ mod tests {
     }
 
     #[test]
+    fn dir_row_folds_claim_aux_only_when_every_lane_dir_is_empty() {
+        let root = tmp_root("claimaux");
+        let lane = root
+            .join("claim-aux")
+            .join("build%3Acargo.lock.queue.d")
+            .join("000001");
+        std::fs::create_dir_all(&lane).unwrap();
+        std::fs::write(lane.join("holder"), b"12345").unwrap();
+        let rows = parse_table("claim-aux\tstate/claim-aux\tdir\tdaemon\n").unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt
+                .iter()
+                .any(|e| matches!(e.status, Status::Pending(_))),
+            "a lane dir holding a ticket keeps the row pending: {receipt:?}"
+        );
+        assert!(
+            root.join("claim-aux")
+                .join("build%3Acargo.lock.queue.d")
+                .join("000001")
+                .join("holder")
+                .exists(),
+            "nothing moved past a held ticket"
+        );
+        std::fs::remove_file(lane.join("holder")).unwrap();
+        std::fs::remove_dir(lane).unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt.iter().any(|e| matches!(e.status, Status::Moved)),
+            "an empty lane dir folds: {receipt:?}"
+        );
+        assert!(!root.join("claim-aux").exists(), "the emptied folder left");
+        assert!(
+            root.join("state").join("claim-aux").exists(),
+            "the children landed at the new path"
+        );
+        clean(&root);
+    }
+
+    #[test]
     fn dir_resolution_helpers_and_self_rows() {
         let root = tmp_root("dirhelp");
         assert_eq!(
             place_dir(&root, "flight"),
-            Some(root.join("flight")),
+            Some(root.join("state").join("flight")),
             "a shipped dir row answers at its destination"
         );
         assert_eq!(

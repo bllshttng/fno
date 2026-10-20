@@ -121,7 +121,7 @@ The body holds the title and the question body. `## Options` carries one `- [ ] 
 
 ## The arm
 
-The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/attention/questions.json`. The projection cache at `~/.fno/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
+The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/state/attention/questions.json`. The projection cache at `~/.fno/state/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
 
 ## Config keys
 
@@ -167,7 +167,7 @@ A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `ev
 
 ## Delivery
 
-The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row, whatever its sink, drives one reply ladder from the persisted state at `~/.fno/attention/replies.json`. First the clear: while the item is still open, the arm runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes a note. Then the rungs, in order:
+The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row, whatever its sink, drives one reply ladder from the persisted state at `~/.fno/state/attention/replies.json`. First the clear: while the item is still open, the arm runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes a note. Then the rungs, in order:
 
 1. `mail` - the clear's mail leg. The posture line decides: `delivered (hosted)` is the end, `rung: mail, outcome: landed`.
 2. `resume` - a durable park under an idle asker. When the asker has a session id, the arm runs `fno agents session resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id in the asker's transcript, after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`).

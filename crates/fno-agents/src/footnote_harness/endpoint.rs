@@ -12,29 +12,11 @@ fn host(base_url: &str) -> &str {
 }
 
 /// The `config.model_routing.providers.<provider>` record the endpoint reads,
-/// with the zero-config zai lane filling every field the config leaves absent
-/// or empty: the same built-in record Python's model_routing
-/// `_DEFAULT_PROVIDERS` carries. `None` when neither names the provider.
+/// merged with the built-in preset by the one owner (`provider_route`): the
+/// zero-config zai lane fills every field the config leaves absent or
+/// empty. `None` when neither names the provider.
 pub fn provider_record(cwd: &Path, provider: &str) -> Option<toml::Table> {
-    let mut record =
-        crate::agents_config::config_table_merged(cwd, &["model_routing", "providers", provider]);
-    if provider == "zai" {
-        let table = record.get_or_insert_with(toml::Table::new);
-        for (field, value) in [
-            ("base_url", "https://api.z.ai/api/anthropic"),
-            ("api_key_env", "ZAI_API_KEY"),
-            ("api_key_file", "~/.fno/.env"),
-        ] {
-            let set = table
-                .get(field)
-                .and_then(toml::Value::as_str)
-                .is_some_and(|v| !v.is_empty());
-            if !set {
-                table.insert(field.into(), toml::Value::String(value.into()));
-            }
-        }
-    }
-    record
+    crate::provider_route::record_table(cwd, provider)
 }
 
 /// `-m <provider>/<model>`: the provider a footnote model id names, and the

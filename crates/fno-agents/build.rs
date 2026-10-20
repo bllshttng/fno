@@ -38,6 +38,7 @@ fn main() {
     sync_page_reload();
     sync_spawn_phase();
     sync_model_tiers();
+    sync_model_reach();
     sync_registry_schema();
     sync_events_limits();
     sync_events_schema();
@@ -423,6 +424,27 @@ fn sync_model_tiers() {
         return;
     }
     write_if_different(&cli_copy, &bytes);
+}
+
+/// PRODUCE the downstream copy of the vendor reach + built-in provider preset.
+///
+/// The canonical TOML lives in this crate (`provider_route.rs`
+/// `include_str!`s it, and `crates/fno/src/model_catalog.rs` reads the byte
+/// copy), so the built-in zai preset is written once and the composer's
+/// prediction of what the spawn door resolves cannot drift from the door's
+/// answer. No-op when the sibling crate is absent: the crates.io tarball.
+fn sync_model_reach() {
+    println!("cargo:rerun-if-changed=src/model_reach.toml");
+    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/model_reach.toml");
+    let Ok(bytes) = std::fs::read(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let fno_copy = root.join("crates/fno/src/model_reach.toml");
+    if !fno_copy.is_file() {
+        return;
+    }
+    write_if_different(&fno_copy, &bytes);
 }
 
 /// Render the registry schema version and writer floor from their single owner,

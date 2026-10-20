@@ -255,7 +255,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_PR_WATCH_LOADED` | rs | Test seam: pins the launchctl load state the `pr-watch status` verb reports (`1` loaded, anything else not loaded) so the parity goldens do not depend on the capture machine's own registration. |
 | `FNO_TEST_PR_WATCH_TICK_PID` | rs | Test seam: pins the tick-in-flight answer the `pr-watch refresh` verb defers on (`0` reads as no tick, a positive pid defers the bounce) so the parity goldens never probe the real launchd. |
 | `FNO_TEST_TIMEOUT_SECONDS` | py | unclear: cli/src/fno/test_runner.py:31 |
-| `FNO_THINK_SPAWN_WAVE0` | py+rs | unclear: cli/src/fno/provenance/spawn_think.py:277; crates/fno-agents/src/backlog/decompose.rs reads the same override |
+| `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
 | `FNO_TRACKER_BACKEND` | py+rs | unclear: cli/src/fno/outstanding/core.py:457 |
@@ -295,6 +295,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `POSTMORTEMS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:2981 |
 | `POSTMORTEM_CORRECTIONS_LOG` | rs | Overrides the corrections.log path; the finalize writer and the corrections-verify reader resolve it together. crates/fno-agents/src/finalize.rs:3098 |
 | `POST_MERGE_NONINTERACTIVE` | py+rs | unclear: cli/src/fno/pr/cli.py:918 |
+| `PROJECT_ZAI_KEY` | py | Test seam: a project-scoped zai key env var the dispatch test pins so the repository-settings overlay proves a `PROJECT_`-prefixed key env resolves over the account-level `ZAI_API_KEY`. |
 | `PWD` | py+rs | unclear: cli/src/fno/adapters/providers/cli.py:54 |
 | `PYTEST_CURRENT_TEST` | py+rs | unclear: cli/src/fno/cli.py:404 |
 | `PYTHONPATH` | rs | unclear: crates/fno-agents/src/finalize.rs:1090 |

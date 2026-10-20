@@ -389,7 +389,10 @@ fn default_true() -> bool {
 /// the squad-root `cwd` in `pane ls`; floor stays 58.
 /// v116: `ClientMsg::Observe` and `Layout.observers`, who watches which pane;
 /// floor stays 58.
-pub const PROTO_VERSION: u32 = 116;
+/// v117: `ControlVerb::PaneRun.fno_id` (serde default), the caller's
+/// preassigned session id recorded as the pane's resume birthright so a
+/// spawned pane is addressable before its registry row exists; floor stays 58.
+pub const PROTO_VERSION: u32 = 117;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -569,6 +572,13 @@ pub enum ControlVerb {
         /// a plain `pane run` stays byte-identical.
         #[serde(default)]
         worker: Option<String>,
+        /// (v117) The caller's preassigned session id for a harness whose
+        /// binding strategy is `preassigned`: the id rode into the child at
+        /// exec time, so the pane is addressable before its registry row is
+        /// written. Recorded as the resume birthright, the same join the
+        /// resume path fills; `None` records nothing.
+        #[serde(default)]
+        fno_id: Option<String>,
     },
     /// Write raw bytes to a pane's PTY (no focus change) -> [`ServerMsg::Ok`].
     /// `guarded` (v21) makes the send atomic against the target going busy:
@@ -3969,6 +3979,7 @@ mod tests {
                     claim: false,
                     placement: placement.clone(),
                     worker: None,
+                    fno_id: None,
                 },
             },
             ClientMsg::Command(Command::AttachAgent {
@@ -4087,7 +4098,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 116);
+        assert_eq!(PROTO_VERSION, 117);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

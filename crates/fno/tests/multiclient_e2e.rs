@@ -185,7 +185,21 @@ while :; do sleep 0.2; done\n",
     )
     .unwrap();
     a.input(b"sh ./winchpaint.sh\r");
-    a.wait_pane_text(15, pane, |t| t.contains("INPUTBOX n=1"));
+    let count = |t: &str| -> i32 {
+        t.split("INPUTBOX n=")
+            .nth(1)
+            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-1)
+    };
+    // Wait for the FIRST paint, not the literal "n=1": the script's init
+    // paint can coalesce with an early nudge before the client ever observes
+    // an intermediate frame, so n can already read 2 the first time this
+    // client sees any INPUTBOX at all (CI job 117926446680, 2026-10-19: text
+    // showed "INPUTBOX n=2" with no "n=1" frame ever seen, a real flake, not
+    // a loaded-runner timeout).
+    a.wait_pane_text(15, pane, |t| count(t) >= 1);
+    let initial = count(&a.pane_text(pane));
 
     // A smaller coviewer clamps the pane 40x120 -> 20x80. The resize ioctl
     // signals once and the nudge jiggles twice more; a shell may coalesce
@@ -194,14 +208,7 @@ while :; do sleep 0.2; done\n",
     a.wait_layout(10, "a clamped", |l| l.area == (20, 80));
     b.wait_layout(10, "b clamped", |l| l.area == (20, 80));
 
-    let count = |t: &str| -> i32 {
-        t.split("INPUTBOX n=")
-            .nth(1)
-            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(-1)
-    };
-    let settled = a.wait_pane_text(15, pane, |t| count(t) >= 3);
+    let settled = a.wait_pane_text(15, pane, |t| count(t) >= initial + 2);
     assert_eq!(
         settled.matches("TOPMARK").count(),
         1,
@@ -678,6 +685,7 @@ fn concurrent_strict_spawn_only_one_commits() {
                 fit: false,
             },
             worker: None,
+            fno_id: None,
         },
     };
     // Queue both before reading either: the server serializes them in arrival

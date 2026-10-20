@@ -9,7 +9,7 @@
 //! `archive-dedupe-ids`. Heavier bodies (decompose, intake, capture, batch,
 //! task, provenance reads, the rich done surface, requeue, retro, carveout,
 //! pick, discover, ready, lanes, stuck-epics, reprioritize, remove, project-
-//! root, epic status, reconcile-findings) keep their documented dispositions
+//! root, epic status) keep their documented dispositions
 //! in the dispatcher until their own arms land.
 
 use serde_json::{json, Map, Value};

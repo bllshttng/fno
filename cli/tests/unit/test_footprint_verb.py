@@ -743,7 +743,7 @@ def test_ac1_edge_all_bad_rows_still_refuse_and_name_the_rows(
     # The floor arm: every data row failing means the instrument is
     # unreadable, and the refusal names the count and the masked first row.
     assert "all 3 ps row(s) failed to parse" in error
-    assert "12345 1 00:01 <tok:1> 4096" in error
+    assert "row 1 pid 12345 cpu: 12345 1 00:01 <tok:1> 4096" in error
 
 
 def test_cause_reading_still_voids_on_serve_discovery_exception(monkeypatch) -> None:

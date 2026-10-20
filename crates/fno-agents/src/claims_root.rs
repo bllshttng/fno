@@ -227,7 +227,21 @@ mod tests {
     }
 }
 
-/// Host-local diagnostics and admission tickets beside the retired claims path.
+/// Host-local diagnostics and admission tickets beside the retired claims
+/// path. The global store's aux folder folds under `state/` beside it; a
+/// space-scoped claims dir keeps its sibling spelling, so no `state/` dir
+/// appears inside a space.
 pub(crate) fn auxiliary_dir(claims_dir: &Path) -> PathBuf {
-    claims_dir.with_file_name("claim-aux")
+    match claims_dir.parent() {
+        Some(parent) if parent.file_name().is_some_and(|n| n == ".fno") => {
+            crate::state_layout::place(parent, "claim-aux")
+        }
+        // A space-scoped claims dir keeps its sibling spelling by design: no
+        // state/ dir appears inside a space.
+        _ => {
+            let mut aux = claims_dir.to_path_buf();
+            aux.set_file_name("claim-aux");
+            aux
+        }
+    }
 }

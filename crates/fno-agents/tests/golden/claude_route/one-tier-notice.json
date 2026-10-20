@@ -1,0 +1,46 @@
+{
+  "config": {
+    "keys": null,
+    "layer": "fno_config",
+    "toml": "[model_routing.providers.flat]\nbase_url = \"https://flat.example.com\"\napi_key_env = \"FLAT_KEY\"\n"
+  },
+  "ctx": {
+    "kind": "role",
+    "name": "build"
+  },
+  "env": {
+    "FLAT_KEY": "fk"
+  },
+  "expected": {
+    "notices": [
+      "model-routing: every tier resolves to glm-5.3; /model will offer no alternative; declare model_routing.providers.flat.tier_models to differentiate"
+    ],
+    "route": {
+      "ANTHROPIC_AUTH_TOKEN": "fk",
+      "ANTHROPIC_BASE_URL": "https://flat.example.com",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",
+      "ANTHROPIC_MODEL": "glm-5.3"
+    }
+  },
+  "expected_providers": {
+    "flat": {
+      "api_key_env": "FLAT_KEY",
+      "api_key_file": null,
+      "base_url": "https://flat.example.com",
+      "key": {
+        "checked": [
+          "FLAT_KEY"
+        ],
+        "satisfying": "FLAT_KEY"
+      },
+      "protocol": "anthropic",
+      "tier_models": {}
+    }
+  },
+  "model": "glm-5.3",
+  "name": "one-tier-notice",
+  "provider": "flat"
+}

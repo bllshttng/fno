@@ -1,0 +1,38 @@
+{
+  "config": {
+    "keys": null,
+    "layer": "fno_config",
+    "toml": "[model_routing.providers.px]\nprotocol = \"openai\"\nbase_url = \"https://px.example.com/v1\"\napi_key_env = \"PX_KEY\"\n"
+  },
+  "ctx": {
+    "kind": "role",
+    "name": "build"
+  },
+  "env": {
+    "PX_KEY": "pxk"
+  },
+  "expected": {
+    "notices": [
+      "model-routing: provider 'px' uses the 'openai' protocol, which a claude worker cannot use; using the primary model"
+    ],
+    "route": null
+  },
+  "expected_providers": {
+    "px": {
+      "api_key_env": "PX_KEY",
+      "api_key_file": null,
+      "base_url": "https://px.example.com/v1",
+      "key": {
+        "checked": [
+          "PX_KEY"
+        ],
+        "satisfying": "PX_KEY"
+      },
+      "protocol": "openai",
+      "tier_models": {}
+    }
+  },
+  "model": "m-1",
+  "name": "openai-protocol",
+  "provider": "px"
+}

@@ -402,13 +402,19 @@ pub trait Probes {
     /// Run `gh` with these arguments. `Ok((success, combined_output))`.
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String>;
     /// Shell the `fno` CLI for a gate probe: `Ok((exit_code, stdout, stderr))`,
-    /// None code = signal death. The coverage and fidelity gates ride this, so
-    /// Fake-based tests answer the gates without a network.
+    /// None code = signal death. The fidelity gate rides this, so Fake-based
+    /// tests answer the gate without a network.
     fn fno_shell(
         &self,
         cwd: &Path,
         args: &[String],
     ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String>;
+    /// The review-coverage verdict for one PR, answered in process. The merge
+    /// gate reads the verdict instead of shelling the coverage-check verb: one
+    /// computation now serves the verb, the publisher and the merge, and a
+    /// fake answers it directly so tests need no network.
+    fn coverage_verdict(&self, cwd: &Path, pr: u64)
+        -> crate::loopcheck::coverage_gate::GateVerdict;
     /// Live parallel-lane claims. The default 0 keeps the overlap gate
     /// disarmed wherever an impl does not count lanes (the sequential default).
     fn live_lanes(&self, _cwd: &Path) -> usize {
@@ -1567,19 +1573,35 @@ fn checkout_refused(output: &str) -> bool {
     lower.contains("is already used by worktree") || lower.contains("already checked out")
 }
 
-/// The fno gh proxy prefixes its own stderr with `fno config:` when it warns
-/// about an unmodeled config key. That text is never gh's verdict.
-fn is_config_warning(line: &str) -> bool {
-    line.trim_start().starts_with("fno config:")
+/// The fno gh proxy prefixes its own stderr lines with `fno config:`,
+/// `gh proxy:`, or `gh budget:` when it reports on itself (an unmodeled
+/// config key, a fail-open admit, a budget read). An `fno config:` line is
+/// always noise. A `gh proxy:`/`gh budget:` line is noise ONLY when it
+/// announces an admit (contains "admitting"): the proxy prints that banner
+/// to stderr right before `os.execve` replaces it with the real `gh`, so
+/// both share one stderr stream and the banner lands as line one, ahead of
+/// gh's own refusal. The SAME prefix also carries the proxy's own terminal
+/// refusals (`--draft refused`, `re-entered itself`, `real gh executable not
+/// found`) when it never admits - those never contain "admitting" and must
+/// never be skipped, because they are the entire story, not noise ahead of
+/// one.
+fn is_proxy_noise_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("fno config:") {
+        return true;
+    }
+    (trimmed.starts_with("gh proxy:") || trimmed.starts_with("gh budget:"))
+        && trimmed.contains("admitting")
 }
 
 /// The first non-blank line of a command's output, capped for a receipt.
-/// Leading `fno config:` warning lines are skipped so the reason names the
-/// real gh error; a stderr of only warnings still reports its first line.
+/// Leading proxy-noise lines (see [`is_proxy_noise_line`]) are skipped so the
+/// reason names the real gh error; output that is only proxy noise still
+/// reports its first line.
 fn first_line(output: &str) -> String {
     let line = output
         .lines()
-        .find(|line| !line.trim().is_empty() && !is_config_warning(line))
+        .find(|line| !line.trim().is_empty() && !is_proxy_noise_line(line))
         .or_else(|| output.lines().find(|line| !line.trim().is_empty()))
         .unwrap_or("no error output");
     // Truncate by CHARACTER. A byte slice panics when the cut lands inside a
@@ -1651,6 +1673,14 @@ impl RealProbes {
 impl Probes for RealProbes {
     fn pr_facts(&self, cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String> {
         head_probe::read(cwd, pr)
+    }
+
+    fn coverage_verdict(
+        &self,
+        cwd: &Path,
+        pr: u64,
+    ) -> crate::loopcheck::coverage_gate::GateVerdict {
+        crate::loopcheck::coverage_gate::verdict(self, cwd, pr, true)
     }
 
     fn node_binding(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {

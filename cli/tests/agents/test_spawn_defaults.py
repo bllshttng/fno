@@ -9,7 +9,6 @@ verb call under a pinned FNO_CONFIG.
 from __future__ import annotations
 
 import io
-import json
 from pathlib import Path
 
 import pytest
@@ -68,35 +67,14 @@ def test_config_provider_injects_the_harness_end_to_end(
     printed = err.getvalue()
     assert ": applied " not in printed, printed
     assert len([ln for ln in printed.splitlines() if ln.strip()]) <= 2, printed
-    rows = [json.loads(line) for line in journal.read_text().splitlines() if line.strip()]
-    applied = [r for r in rows if r.get("kind") == "spawn_defaults_applied"]
+    from fno.events.log import read_events
+
+    rows = read_events(journal)
+    applied = [r for r in rows if r.get("type") == "spawn_defaults_applied"]
     assert applied, "exactly the compose wrote the row"
-    assert applied[-1]["verb"] == "target"
+    assert applied[-1]["data"]["verb"] == "target"
     err = io.StringIO()
     sd.compose_spawn_argv(
         ["spawn", "--name", "w", "--verbose", "/fno:target x-1"], stderr=err
     )
     assert "applied harness=codex (agents.profiles.target.provider)" in err.getvalue()
-
-
-@requires_rust
-def test_transport_names_the_skip_when_the_verb_is_unavailable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No binary: one named skip line, the normalized argv, no raise. The
-    resolver falls through a bogus FNO_AGENTS_BIN by design (a stale export
-    must not strand the binary), so the fault is raised at the transport."""
-    from fno.agents import spawn_overlay_client
-
-    def boom(payload, *a, **k):
-        raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
-
-    monkeypatch.setattr(
-        spawn_overlay_client, "spawn_overlay_call", boom
-    )
-    err = io.StringIO()
-    out = sd.compose_spawn_argv(
-        ["spawn", "--name", "w", "/fno:target x-1"], stderr=err
-    )
-    assert "config defaults skipped (spawn-overlay unavailable: no binary)" in err.getvalue()
-    assert "--name" in out
