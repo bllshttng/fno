@@ -102,9 +102,6 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
         # a nameless `spawn --route zai,glm-5.2` registered an agent named "zai,glm-5.2".
         # Kept in lockstep with cmd_spawn (test_spawn_value_flags_cover_every_value_option).
         "--route", "--account", "--promote", "--promote", "-k", "--dispatch-account",
-        # --take-over's reason must not read as a prompt positional: the Rust
-        # compose consumes the flag, but the scan runs before it and a lane
-        # bundle would take the first bundle token as the prompt.
         "--take-over",
         # --at's value (current|<pane>) must not read as a positional.
         "--at",
