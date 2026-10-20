@@ -602,13 +602,13 @@ fn hold_metadata(a: &Args, flags: &Option<Vec<String>>) -> serde_json::Map<Strin
 fn parse_flags_json(raw: &str) -> Option<Vec<String>> {
     let parsed: Value = serde_json::from_str(raw).ok()?;
     let items = parsed.as_array()?;
-    Some(
-        items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
-    )
+    // One non-string refuses the whole payload, as the Python twin's
+    // all(isinstance(flag, str)) did; a silent drop would widen the door.
+    let mut flags = Vec::with_capacity(items.len());
+    for item in items {
+        flags.push(item.as_str()?.to_string());
+    }
+    Some(flags)
 }
 
 /// Whether either chain journal exists: the round action fails closed when
@@ -661,12 +661,14 @@ fn run_stdin_door() -> (i32, String, String) {
             let flags: Option<Vec<String>> = parsed
                 .get("flags")
                 .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
+                .and_then(|items| {
+                    // Same refusal as parse_flags_json: one non-string
+                    // refuses the payload rather than dropping it.
+                    let mut flags = Vec::with_capacity(items.len());
+                    for item in items {
+                        flags.push(item.as_str()?.to_string());
+                    }
+                    Some(flags)
                 })
                 .filter(|f: &Vec<String>| !f.is_empty());
             let refusal = review_invocation_refusal(&cwd, branch, head, flags.as_deref());
