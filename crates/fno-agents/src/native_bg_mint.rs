@@ -277,6 +277,23 @@ fn user_text(v: &Value) -> Option<String> {
 /// The row a listing observation mints. The listing is the evidence: name
 /// from `--name`, pid and cwd from the listing, node and model from the
 /// transcript. Every field carries its basis; nothing is guessed.
+/// An unnamed `claude --bg` job is listed under its prompt, so the listing
+/// name is slugged and capped before it becomes a registry name.
+fn listing_name_slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+        if out.len() >= 48 {
+            break;
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
 fn prepare_row(
     row: &crate::claude_roster::ClaudeAgentRow,
     session: &str,
@@ -289,7 +306,9 @@ fn prepare_row(
     RegistryEntry {
         name: row
             .name
-            .clone()
+            .as_deref()
+            .map(listing_name_slug)
+            .filter(|s| !s.is_empty())
             .unwrap_or_else(|| crate::claude_adopt::synthesized_entry_name(session, &row.short_id)),
         origin: Some("adopted".into()),
         status: AgentStatus::Live,
@@ -297,7 +316,9 @@ fn prepare_row(
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
         node,
-        pid: row.pid,
+        // The listing pid can be a pre-warmed spare in claude's bg daemon,
+        // not this session; the row stays pidless and routes by short id.
+        pid: None,
         transcript_path: transcript.map(|p| p.display().to_string()),
         start_source: Some(START_SOURCE.into()),
         cwd: cwd.clone(),
@@ -366,13 +387,17 @@ mod tests {
             assert_eq!(e.substrate.as_deref(), Some("native-bg"));
             assert_eq!(e.harness_name(), "claude");
             assert_eq!(e.status, AgentStatus::Live);
-            assert_eq!(e.pid, Some(1895));
+            assert_eq!(e.pid, None, "a listing pid never seeds an adopted row");
             assert_eq!(e.cwd, "/tmp/proj");
             assert_eq!(
                 e.claude_session_uuid.as_deref(),
                 Some("492ccda4-63ff-4736-a02a-8818f63c8b46")
             );
             assert_eq!(e.start_source.as_deref(), Some(START_SOURCE));
+            let prompt = "Fix the login bug: see /tmp/x.log, then run ALL the tests please now ok";
+            let slug = listing_name_slug(prompt);
+            assert_eq!(slug, "fix-the-login-bug-see-tmp-x.log-then-run-all-the");
+            assert!(slug.len() <= 48);
         });
     }
 

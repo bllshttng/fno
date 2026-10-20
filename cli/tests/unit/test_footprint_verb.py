@@ -188,7 +188,10 @@ def _assert_named_cause(error: str, expect: str) -> None:
     assert expect in cause, error
 
 
-def test_live_root_pids_refuses_registry_pid_without_start_token(monkeypatch) -> None:
+def test_live_root_pids_routes_a_tokenless_pid_through_its_session(monkeypatch) -> None:
+    """One tokenless row never blinds the instrument: its listed pid is
+    untrusted and the session route attributes the real root instead."""
+    import os
     from fno import doctor_footprint
     from types import SimpleNamespace
 
@@ -196,14 +199,19 @@ def test_live_root_pids_refuses_registry_pid_without_start_token(monkeypatch) ->
         status="live",
         pid=902,
         pid_start_time=None,
-        harness="opencode",
+        harness="claude",
         short_id="oc",
+        name="t-tokenless",
     )
     monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
+    monkeypatch.setattr(doctor_footprint, "_row_transport_key", lambda _row: "oc")
+    monkeypatch.setattr(
+        "fno.agents.session_procs.bg_socket_pid_map", lambda **_kw: {"oc": os.getpid()}
+    )
 
     roots, error = doctor_footprint._live_root_pids()
-    assert roots == set()
-    _assert_named_cause(error, "carries no pid start token")
+    assert error is None
+    assert roots == {os.getpid()}
 
 
 def test_live_root_pids_names_a_recycled_root_as_a_gap(monkeypatch) -> None:

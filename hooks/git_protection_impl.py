@@ -51,7 +51,7 @@ import time
 # guard runs under whatever interpreter the harness hands it, so the import
 # path is built from __file__, never the cwd.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from guard_mark import guard_mark
+import guard_mark
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote
@@ -74,7 +74,8 @@ OVERRIDE_LOG = FNO_HOME / "logs" / "merge-gate-overrides.log"
 # Both markers expire and are consumed: a forgotten sentinel must not linger.
 MARKER_TTL_SECONDS = 300
 # Push debounce: the timestamp of the last allowed push, one file per branch.
-PUSH_STAMP_DIR = FNO_HOME / "push-stamps"
+# The folder itself answers from the Rust state door (_push_stamp_path), so
+# the hook never spells it and a fold retargets this side with the verb.
 # The stamp covers the registration window; the probe covers a run that is
 # already visible after the stamp expires.
 PUSH_DEBOUNCE_SECONDS = 120
@@ -258,10 +259,33 @@ def push_names_explicit_dest(command):
     return len(args) >= 2 and args[-1] not in ('HEAD', '@')
 
 def _push_stamp_path(branch):
-    """The last-push stamp for one branch. Slashes are the common case in a
-    feature branch name, so they are flattened rather than nested."""
+    """The last-push stamp for one branch, answered by the Rust state door
+    (`state path dir push-stamps`) through the stdlib-only resolver
+    (guard_mark._resolve_agents_bin): this hook is stdlib-only and runs
+    under a bare python3 that cannot import fno. None (no binary) skips the
+    debounce, the same cost as today's unwritable stamp; a door refusal
+    (an fno-agents predating the dir door) falls back to the legacy
+    spelling, the path every such binary wrote and read. Slashes are the
+    common case in a feature branch name, so they are flattened rather
+    than nested."""
+    agents_bin = guard_mark._resolve_agents_bin()
+    if not agents_bin:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(agents_bin), "state", "path", "dir", "push-stamps"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode == 0 and proc.stdout.strip():
+        base = proc.stdout.strip()
+    else:
+        base = str(FNO_HOME / "push-stamps")  # state-root: legacy fallback
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", branch or "HEAD")
-    return PUSH_STAMP_DIR / f"{safe}.stamp"
+    return Path(base) / f"{safe}.stamp"
 
 
 def push_debounce_refusal(command, branch):
@@ -281,8 +305,12 @@ def push_debounce_refusal(command, branch):
         _emit_push_bypass_event(branch)
         return None
 
+    stamp = _push_stamp_path(branch)
+    if stamp is None:
+        return None
+
     try:
-        age = time.time() - _push_stamp_path(branch).stat().st_mtime
+        age = time.time() - stamp.stat().st_mtime
         if 0 <= age < PUSH_DEBOUNCE_SECONDS:
             return (
                 f"[fno push debounce] this branch was pushed {int(age)}s ago and "
@@ -338,8 +366,11 @@ def _stamp_push(branch):
     """Record that a push was allowed. Best-effort: a stamp that cannot be
     written costs one skipped debounce, never a blocked push."""
     try:
-        PUSH_STAMP_DIR.mkdir(parents=True, exist_ok=True)
-        _push_stamp_path(branch).touch()
+        stamp = _push_stamp_path(branch)
+        if stamp is None:
+            return
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
     except OSError:
         pass
 
@@ -1957,7 +1988,7 @@ def _guard_mark(decision, tool):
     guard actually ran and what it decided. The shared writer commits it to
     the journal's store; best-effort by contract: any failure is swallowed
     and can never change the decision."""
-    guard_mark("git-protection", decision, tool)
+    guard_mark.guard_mark("git-protection", decision, tool)
 
 
 _GUARD_MARKED = {"done": False}

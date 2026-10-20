@@ -1029,7 +1029,7 @@ fn tunnel_url(line: &str) -> Option<String> {
 pub fn serve(args: ShareArgs) -> i32 {
     if !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_PANE_SHARE) {
         eprintln!(
-            "fno mux serve --share is experimental and off: turn on \"pane share\" in the mux sideline menu, under experimental"
+            "fno mux serve --share is experimental and off: turn on \"pane share\" in the mux menu, under settings > experimental"
         );
         return 2;
     }

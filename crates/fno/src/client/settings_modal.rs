@@ -10,22 +10,22 @@ use super::*;
 pub(crate) enum SettingsTab {
     General,
     Theme,
-    Keys,
     Colors,
+    Experimental,
 }
 
 impl SettingsTab {
-    /// Tab's section cycle: General -> Theme -> Keys -> Colors -> General,
-    /// the order the tab strip draws (user ruling 2026-10-09: tab reaches
-    /// every section the header lists). `Keys` is a launcher: landing on it
-    /// opens the which-key table, and a later dismiss returns to the settings
-    /// modal on the section the user came from ([`switch_tab`]).
+    /// Tab's section cycle: General -> Theme -> Colors -> Experimental ->
+    /// General, the order the tab strip draws (user ruling 2026-10-09: tab
+    /// reaches every section the header lists). Keybindings is no section
+    /// here: it opened a different modal, so a tab landing on it left
+    /// settings and every section after it was reachable only by click.
     pub(crate) fn next(self) -> Self {
         match self {
             SettingsTab::General => SettingsTab::Theme,
-            SettingsTab::Theme => SettingsTab::Keys,
-            SettingsTab::Keys => SettingsTab::Colors,
-            SettingsTab::Colors => SettingsTab::General,
+            SettingsTab::Theme => SettingsTab::Colors,
+            SettingsTab::Colors => SettingsTab::Experimental,
+            SettingsTab::Experimental => SettingsTab::General,
         }
     }
 }
@@ -33,8 +33,8 @@ impl SettingsTab {
 pub(crate) const ALL: [SettingsTab; 4] = [
     SettingsTab::General,
     SettingsTab::Theme,
-    SettingsTab::Keys,
     SettingsTab::Colors,
+    SettingsTab::Experimental,
 ];
 
 impl View {
@@ -105,17 +105,25 @@ impl View {
                     actions.push(AuxAction::ThemeImportOpen);
                 }
             }
-            SettingsTab::Keys => {
-                // Never rendered: switching to this tab opens the which-key
-                // table instead (switch_tab). The arm stays so the width
-                // measurement below compiles unchanged.
-            }
             SettingsTab::Colors => {
                 (rows, actions) = crate::lane_colors_panel::build_lane_color_rows(
                     crate::sideline_color::palette(),
                     &self.lane,
                     &self.theme,
                 );
+            }
+            SettingsTab::Experimental => {
+                // Features still in progress, each off until turned on.
+                let flags = experimental::flags(self);
+                for flag in experimental::Flag::ALL {
+                    rows.push(PopupRow::Entry {
+                        glyph: if flag.on(flags) { "☑" } else { "☐" }.into(),
+                        label: flag.label().into(),
+                        hint: String::new(),
+                        enabled: true,
+                    });
+                    actions.push(AuxAction::ToggleExperimental(flag));
+                }
             }
         }
         (rows, actions)
@@ -144,8 +152,8 @@ impl View {
             .tabs(vec![
                 ("general".to_string(), tab == SettingsTab::General),
                 ("theme".to_string(), tab == SettingsTab::Theme),
-                ("keybindings".to_string(), tab == SettingsTab::Keys),
                 ("colors".to_string(), tab == SettingsTab::Colors),
+                ("experimental".to_string(), tab == SettingsTab::Experimental),
             ])
             .footer(if self.settings_drilled() {
                 "esc back"
@@ -192,34 +200,12 @@ fn is_settings(view: &View) -> bool {
         .is_some_and(|m| !m.popup.chrome.tabs.is_empty())
 }
 
-/// Put `tab` in front at its top level. The keybindings tab is a launcher:
-/// it opens the SAME which-key table the menu's keybindings row opens, so
-/// the two surfaces cannot drift again (US1). Reached by tab as well as
-/// click, so the marker is set and a later dismiss walks the user back here
-/// instead of dropping them on the board ([`dismiss_keys_modal`]).
+/// Put `tab` in front at its top level.
 pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
-    if tab == SettingsTab::Keys {
-        view.keys_modal_return = true;
-        view.aux = None;
-        view.open_keys_modal();
-        return;
-    }
     view.settings_tab = tab;
     view.lane.reset();
     theme_import_ui::reset(view);
     view.reopen_settings_keeping_sel();
-}
-
-/// Close the which-key modal. When it was opened FROM the settings modal,
-/// reopen the settings modal on the section the user came from; otherwise
-/// this is the plain close. A run of an actual chord closes for real (the
-/// action ran; the user moved on) - only the pure-dismiss paths come here.
-pub(super) fn dismiss_keys_modal(view: &mut View) {
-    view.keys_modal = None;
-    if view.keys_modal_return {
-        view.keys_modal_return = false;
-        view.reopen_settings_keeping_sel();
-    }
 }
 
 /// A left press on a settings tab switches to it. True when the press hit

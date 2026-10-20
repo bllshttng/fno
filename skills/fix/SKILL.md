@@ -9,10 +9,10 @@ metadata:
       - "git >= 2.0"
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Fix
 
-**One verb on a broken state.** `/fix` routes between fast repair and methodical diagnosis.
+**One command on a broken state.** `/fix` routes between fast repair and methodical diagnosis.
 
 | Mode | What runs | Use when |
 |------|-----------|----------|

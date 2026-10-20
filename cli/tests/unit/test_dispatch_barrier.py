@@ -462,7 +462,7 @@ def test_a_pane_spawn_still_holds_the_reservation_for_its_worker(
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--split", "left", "--node", "x-abcd"],
+         "--as", "pane", "--split", "left", "--node", "x-abcd"],
     )
     assert result.exit_code == 0, result.output
     assert claim_status("dispatch:x-abcd", root=tmp_path)["state"] == "live"

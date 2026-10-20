@@ -33,14 +33,14 @@ Two shorts moved to make room. `-H` takes a harness value; it used to mean headl
 
 ## The default substrate
 
-A spawn with no `--substrate` seats a **thread** wherever the harness seats one. A harness with no thread lane falls back to a **pane**. Thread is the persistent lane: closing a view never ends the worker. Two spawn inputs still imply the pane: the pane placement flags (`--workspace`, `--split`, `--at`, `--tab`) and a `--` passthrough fence. Only the pane argv builders honor those, so the implicit thread refuses them with a pointer to `--substrate pane`.
+A spawn with no `--as` seats a **thread**. Thread is the persistent lane: closing a view never ends the worker. Nothing opens a pane by accident. Three inputs refuse and name `--as pane`. The first is a pane placement flag (`--workspace`, `--split`, `--at`, `--tab`). The second is a `--` fence token the thread lane cannot carry. The third is a harness with no thread lane.
 
 ## Routing a worker to another vendor
 
 `--provider <vendor> --model <m>` (or the single-string `--route <vendor>,<m>`) points a claude worker at a different model endpoint. The vendor must be a known `model_routing.providers` record with a resolvable key; an unknown, non-anthropic-compatible, or keyless vendor is refused before anything spawns, so the node stays dispatchable.
 
 ```bash
-fno agents spawn "fix the failing test" --name glm-worker --substrate thread --provider zai --model glm-5.2
+fno agents spawn "fix the failing test" --name glm-worker --as thread --provider zai --model glm-5.2
 ```
 
 Routing is claude-only and reaches the `bg` and `headless` substrates only. The route is applied by writing a `0600` claude `--settings` file and passing `--settings <path>`: a `claude --bg` session's serving process is forked by the claude daemon, which drops per-spawn `ANTHROPIC_*` env before the first model request, and a settings file is read by the session process itself so it survives that fork. `pane` is not a routed lane and is refused rather than silently running the primary model.

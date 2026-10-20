@@ -186,6 +186,15 @@ pub fn aggregate(rows: &[NodeCalibration]) -> Vec<AggregateRow> {
 /// `node_id` (friction with no node correlation) is skipped: it cannot
 /// contribute to any node's calibration.
 pub fn friction_counts_by_node(journal: &Path) -> BTreeMap<String, BTreeMap<String, u32>> {
+    friction_counts_by_node_checked(journal).0
+}
+
+/// The same read, reporting store readability: an unreadable store must not
+/// read as zero friction downstream, so the by-lane scorecard carries the
+/// unreadable case as None and emits null instead of a measured zero.
+pub fn friction_counts_by_node_checked(
+    journal: &Path,
+) -> (BTreeMap<String, BTreeMap<String, u32>>, bool) {
     let mut out: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
     let query = crate::event_store::EventQuery {
         types: vec!["friction".to_string()],
@@ -203,7 +212,7 @@ pub fn friction_counts_by_node(journal: &Path) -> BTreeMap<String, BTreeMap<Stri
                 "fno backlog calibration: could not read the friction event store ({err}); \
 every node's friction count reads as zero rather than unknown."
             );
-            return out;
+            return (out, false);
         }
     };
     for row in rows {
@@ -219,7 +228,7 @@ every node's friction count reads as zero rather than unknown."
             .unwrap_or_else(|| "unknown".to_string());
         *out.entry(node_id).or_default().entry(origin).or_insert(0) += 1;
     }
-    out
+    (out, true)
 }
 
 #[cfg(test)]

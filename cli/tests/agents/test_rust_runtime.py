@@ -148,10 +148,10 @@ def test_route_missing_binary_exits_127(capsys) -> None:
 def test_spawn_seam_injects_config_defaults(
     monkeypatch, tmp_path
 ) -> None:
-    """x-de9d US8: the seam injects config.agents.defaults into a bare spawn
-    argv before the route, so the Rust route sees the config provider. The
-    compose reads the config FILE (the Python stub is invisible to it), so
-    the test pins a real TOML and the real binary."""
+    """x-de9d US8, as the axis retirement left it: the seam composes a bare
+    spawn through the real binary against a real config TOML. The launch
+    values moved to the lane template, so the composed argv carries the
+    seam's own marker and no harness axis of its own."""
     import pytest
 
     from fno.rust_binary import find_dev_binary
@@ -187,9 +187,10 @@ def test_spawn_seam_injects_config_defaults(
     assert result.exit_code == 0, result.output
     argv = captured[0]
     assert argv[0] == "spawn"
-    assert "--harness" in argv and argv[argv.index("--harness") + 1] == "codex"
-    # positionals still resolvable after the injected flags
-    assert argv[-2:] == ["worker-A", "hi"] or "worker-A" in argv
+    assert "--defaults-applied=unenforced" in argv
+    assert "--harness" not in argv, "the lane template owns the launch axis"
+    # positionals still resolvable after the composed flags
+    assert "worker-A" in argv
 
 
 def test_codex_code_spawn_refuses_when_git_grant_is_unresolved(
@@ -758,7 +759,7 @@ def test_monitor_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch) -> No
     )
 
     assert result.exit_code == 2, result.output
-    assert "pane-only" in result.output
+    assert "needs --as pane" in result.output
     assert called == []
 
 

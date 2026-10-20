@@ -792,10 +792,9 @@ pub(crate) fn mint_link(link: &Value) -> (String, Vec<Value>) {
             flags.push(json!(v));
         }
     }
-    // The --substrate flag is retired: a thread is the spawn default where the
-    // harness seats one, a pane is an automated placement, and headless is the
-    // one-shot spelling. claude keeps its thread; every other harness keeps
-    // the pane it took before.
+    // A thread is the spawn default; a pane needs an explicit --as pane, and
+    // headless is the one-shot spelling. claude keeps its thread; every other
+    // harness keeps the pane it took before.
     let substrate = field("substrate");
     let substrate = match substrate.as_str() {
         "" if harness == "claude" => "thread",
@@ -803,7 +802,7 @@ pub(crate) fn mint_link(link: &Value) -> (String, Vec<Value>) {
         other => other,
     };
     match substrate {
-        "pane" => flags.push(json!("--bounded-placement")),
+        "pane" => flags.extend([json!("--as"), json!("pane"), json!("--bounded-placement")]),
         "headless" => flags.push(json!("--once")),
         _ => {}
     }

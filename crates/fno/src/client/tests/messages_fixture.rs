@@ -160,10 +160,15 @@ async fn messages_reply_board_contracts() {
     assert_eq!(partner, "first");
     let chats_lines = b.chats_column(100);
     assert!(
-        chats_lines[0].text.starts_with("Chats"),
+        chats_lines[0].text.starts_with(" Chats "),
         "{:?}",
         chats_lines[0].text
     );
+    // The active tab is one full inverted cell, pad included; the
+    // inactive cells never invert.
+    let strip = &chats_lines[0];
+    assert!(strip.roles[..7].iter().all(|r| *r == BRole::Tab));
+    assert!(!strip.roles[7..].contains(&BRole::Tab));
     b.col2 = ChatTab::System;
     let sys = b.chat_rows("s-c");
     assert!(
@@ -485,6 +490,36 @@ async fn messages_reply_board_contracts() {
         "the ... click opens the chat popup"
     );
     view.messages_board.as_mut().unwrap().detail = None;
+    // The band follows focus: the focused column's cursor row is the
+    // terminal pair swapped, every other column's selection a dim swap.
+    {
+        let b = view.messages_board.as_mut().unwrap();
+        b.sel_agent = Some("s-c".into());
+        b.col2 = ChatTab::Chats;
+        b.cursors = [0, 0, 0];
+    }
+    let band_fg = |view: &View, x: usize| {
+        let mut cells = vec![Cell::default(); 24 * 100];
+        super::paint(view, &mut cells, 24, 100, 100, 24);
+        (1..23)
+            .map(|r| cells[r * 100 + x])
+            .find(|c| c.flags & crate::proto::cell_flags::INVERSE != 0 && c.c == ' ')
+            .map(|c| c.fg)
+    };
+    let dim = crate::theme::dim_fg(&view.theme);
+    // Each column's last cell: past the row text, so only the band paints it.
+    let ends = [(Col::Tree, col1_w - 1), (Col::Chats, col1_w + col2_w - 1)];
+    for (col, _) in ends {
+        view.messages_board.as_mut().unwrap().col = col;
+        for (owner, x) in ends {
+            let want = if owner == col {
+                crate::proto::Color::Default
+            } else {
+                dim
+            };
+            assert_eq!(band_fg(&view, x), Some(want), "{col:?} x={x}");
+        }
+    }
     crate::view_store::clear_test_path();
 }
 

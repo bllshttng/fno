@@ -969,10 +969,12 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
         gh_bin: "gh".to_string(),
         fno_bin: "fno".to_string(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        // The hook's own stamp dir (git-protection.py PUSH_STAMP_DIR is
-        // $FNO_HOME/push-stamps = ~/.fno/push-stamps). Rooting this at
-        // AgentsHome would split the clock: the verb writes stamps the hook
-        // never reads, and the registration-window guard never fires.
+        // The hook's own stamp dir (git_protection_impl.py
+        // _push_stamp_path resolves $FNO_HOME/push-stamps through the state
+        // door, falling back to that legacy spelling on a door refusal).
+        // Rooting this at AgentsHome would split the clock: the verb writes
+        // stamps the hook never reads, and the registration-window guard
+        // never fires.
         stamps_dir: default_stamps_dir(),
     };
     let mut i = 0;
@@ -1032,17 +1034,21 @@ fn unknown_flag(other: &str) -> String {
     format!("unknown flag: {other}")
 }
 
-/// `$FNO_HOME/push-stamps` (else `$HOME/.fno/push-stamps`), matching the
-/// hook's own resolution (git-protection.py: `FNO_HOME = env FNO_HOME or
-/// ~/.fno`). The hook reads the stamps this verb writes, so both sides must
-/// resolve the dir the same way or the registration window never fires.
+/// The state-root `push-stamps` folder under the hook's own root chain
+/// (git_protection_impl.py: `FNO_HOME = env FNO_HOME or ~/.fno`), answered
+/// by the layout table so a fold retargets this side with the hook's door
+/// call in the same release. The hook reads the stamps this verb writes,
+/// so both sides must resolve the dir the same way or the registration
+/// window never fires.
 pub(crate) fn default_stamps_dir() -> PathBuf {
-    std::env::var_os("FNO_HOME")
-        .map(|h| PathBuf::from(h).join("push-stamps"))
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno").join("push-stamps"))
-        })
-        .unwrap_or_else(|| PathBuf::from("/tmp").join(".fno-push-stamps"))
+    let root = match std::env::var_os("FNO_HOME").filter(|v| !v.is_empty()) {
+        Some(h) => PathBuf::from(h),
+        None => match std::env::var_os("HOME") {
+            Some(h) => PathBuf::from(h).join(".fno"),
+            None => return PathBuf::from("/tmp").join(".fno-push-stamps"),
+        },
+    };
+    crate::state_layout::place(&root, "push-stamps")
 }
 
 /// Preflight modes for the receipt.

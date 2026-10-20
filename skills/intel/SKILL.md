@@ -73,7 +73,7 @@ The fold names its populations, and the report keeps them apart. Every number sa
 
 5. Write the report: `<vault>/fno/intel/<date>-<question key>.md`, where `<vault>/fno/` is the directory `fno do plan path` resolves beside `plans/`. Sections: [references/report-shape.md](references/report-shape.md). Every number comes from the JSON named in the frontmatter `fold:` field. When step 4 failed, `fold:` names the raw sidecar. Otherwise it names the judgment summary. A run that passed `--scorecard` carries the By model and by lead section. Compare models only within a kind bucket, and print the block's `unmeasured` columns verbatim.
 
-6. Corrections section: quote user corrections verbatim, dedupe across sessions, rank by repeat count. Each correction sits on its own line ending with ` #agent-correction` and carrying `signal=<friction category>`. When the correction is about how one fno verb behaves, the line also carries `skill=<name>`, that verb's skills/ directory. Each one is a candidate AGENTS.md line, a law, or a SKILL.md diff. Say which in the report.
+6. Corrections section: quote user corrections verbatim, dedupe across sessions, rank by repeat count. Each correction sits on its own line ending with ` #agent-correction` and carrying `signal=<friction category>`. When the correction is about how one fno command behaves, the line also carries `skill=<name>`, that command's skills/ directory. Each one is a candidate AGENTS.md line, a law, or a SKILL.md diff. Say which in the report.
 
 7. Feed the S2 writer so the rows land in `~/.fno/logs/corrections.log`:
 

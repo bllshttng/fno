@@ -166,7 +166,7 @@ def test_sandbox_policy_refusal_happens_before_the_gate(
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--split", "left", "--sandbox-write-policy", str(policy),
+            "--as", "pane", "--split", "left", "--sandbox-write-policy", str(policy),
         ],
     )
     assert result.exit_code == 2, result.output

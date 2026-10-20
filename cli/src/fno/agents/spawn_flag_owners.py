@@ -66,7 +66,6 @@ class FlagOwner(NamedTuple):
 RETIRED_SPAWN_FLAGS: tuple[str, ...] = (
     "--provider",
     "--recorded-provider",
-    "--substrate",
     "--yolo",
     "--model",
     "--permission-mode",
@@ -83,6 +82,7 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     "--name": FlagOwner(FNO, "registry-row handle; slug minted when omitted"),
     "--harness": FlagOwner(FNO, "which CLI binary launches; its own flags ride the fence"),
     "--once": FlagOwner(FNO, "selects the create+exchange+teardown lifecycle"),
+    "--as": FlagOwner(FNO, "picks the lane: thread, pane, headless or cloud"),
     "--print": FlagOwner(FNO, "renders the lane's native line; launches nothing"),
     "--sandbox-write-policy": FlagOwner(FNO, "composes the one settings file; refused on panes"),
     "--cwd": FlagOwner(FNO, "launch-dir policy; pairs with --fresh/--here"),
@@ -103,7 +103,6 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     ),
     "--output-format": FlagOwner(FNO, "headless JSON contract fno parses the reply out of"),
     "--workspace": FlagOwner(FNO, "mux pane placement; fno owns the mux"),
-    "--squad": FlagOwner(FNO, "deprecated alias of --workspace"),
     "--split": FlagOwner(FNO, "mux pane placement"),
     "--at": FlagOwner(FNO, "mux exact-origin placement"),
     "--tab": FlagOwner(FNO, "mux tab placement"),

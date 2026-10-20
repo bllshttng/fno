@@ -163,7 +163,7 @@ jobs:
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
           case "$files" in
-            *client/bell.rs*|*client/snapshot.rs*|*mux-demo-snapshot.sh*)
+            *client/bell.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*mux-demo-snapshot.sh*)
               echo "shoot=1" >> "$GITHUB_ENV"
               echo "the bell surface changed: shooting"
               ;;
@@ -180,7 +180,7 @@ jobs:
           cargo build --locked
           cargo build --locked --manifest-path ../fno-agents/Cargo.toml
 
-      - name: Shoot the three bell views
+      - name: Shoot the bell and Messages views
         if: env.shoot == '1'
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
@@ -195,7 +195,7 @@ jobs:
           # does; the Mac demo works because the binary is installed there.
           export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
           mkdir -p shots
-          for view in bell bell-wide bell-full; do
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
 

@@ -169,6 +169,7 @@ impl SpawnAxes {
         "-m",
         "--effort",
         "--substrate",
+        "--as",
     ];
 
     /// The one refusal for a retired spawn axis at the binary door: the same
@@ -222,14 +223,15 @@ impl SpawnAxes {
                             i += 2;
                         }
                     }
-                } else if long == "--substrate" {
-                    // The one value the retired axis still admits: cloud has
-                    // no template lane, so the flag is its only selector.
+                } else if long == "--as" || long == "--substrate" {
+                    // The one lane this door selects: cloud has no template
+                    // lane, so `--as cloud` is its only selector. The Python
+                    // door routes thread, pane and headless itself.
                     let value = inline.or_else(|| head.get(i + 1).cloned());
                     if value.as_deref() != Some("cloud") {
                         return Err(Self::refused_axis(long));
                     }
-                    pairs.push(long.to_string());
+                    pairs.push("--substrate".to_string());
                     pairs.push("cloud".to_string());
                     i += if tok.contains('=') { 1 } else { 2 };
                 } else {
@@ -482,8 +484,12 @@ mod tests {
     }
 
     #[test]
-    fn spawn_axes_substrate_admits_cloud_alone() {
-        for form in [vec!["--substrate", "cloud"], vec!["--substrate=cloud"]] {
+    fn spawn_axes_as_admits_cloud_alone() {
+        for form in [
+            vec!["--as", "cloud"],
+            vec!["--as=cloud"],
+            vec!["--substrate", "cloud"],
+        ] {
             let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
             let (axes, _) = SpawnAxes::scan(&toks).expect("cloud is admitted");
             assert_eq!(axes.substrate.as_deref(), Some("cloud"));

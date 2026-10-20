@@ -18,6 +18,9 @@ pub(crate) struct PaneRegions {
     pub(crate) bar: (usize, usize, usize, usize),
     pub(crate) board: (usize, usize, usize, usize),
     pub(crate) detail: (usize, usize, usize, usize),
+    /// The one-column rule between side-by-side panes as (top, col, h);
+    /// `None` when stacked.
+    pub(crate) seam: Option<(usize, usize, usize)>,
 }
 
 /// The layout `paint` computes for a host rect: the filter bar, the board
@@ -31,11 +34,13 @@ pub(crate) fn regions(rect: (usize, usize, usize, usize), hint_h: usize) -> Pane
     let panes_h = h.saturating_sub(bar_h + hint_h);
     let side_by_side = w >= 100;
     let board_w = if side_by_side { w * 55 / 100 } else { w };
-    let detail_w = w.saturating_sub(board_w);
+    // Side by side, the seam column holds a rule so board text never runs
+    // into detail text; the detail pane starts one column right of it.
+    let detail_w = w.saturating_sub(board_w + 1);
     let (board, detail) = if side_by_side {
         (
             (top + bar_h, left, panes_h, board_w),
-            (top + bar_h, left + board_w, panes_h, detail_w),
+            (top + bar_h, left + board_w + 1, panes_h, detail_w),
         )
     } else {
         let half = panes_h / 2;
@@ -48,6 +53,29 @@ pub(crate) fn regions(rect: (usize, usize, usize, usize), hint_h: usize) -> Pane
         bar: (top, left, bar_h, w),
         board,
         detail,
+        seam: side_by_side.then_some((top + bar_h, left + board_w, panes_h)),
+    }
+}
+
+/// Paint the vertical rule down the seam column in the theme's border color.
+fn paint_seam(
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    seam: (usize, usize, usize),
+    theme: &Theme,
+) {
+    let (top, col, h) = seam;
+    if col >= cols {
+        return;
+    }
+    for r in top..(top + h).min(rows) {
+        cells[r * cols + col] = Cell {
+            c: '\u{2502}',
+            fg: theme.border,
+            bg: Color::Default,
+            flags: 0,
+        };
     }
 }
 
@@ -214,6 +242,9 @@ pub(crate) fn paint(
         dfollow,
         theme,
     );
+    if let Some(seam) = laid_out.seam {
+        paint_seam(cells, rows, cols, seam, theme);
+    }
     // The hint: the wrapped sheet, painted once more in the new key-role
     // style the hint_lines builder produced.
     let hint_top = top + h - hint_h;
@@ -523,6 +554,27 @@ mod tests {
             bold_found,
             "an owned hint keeps its normal key/body colors, not all-meta"
         );
+    }
+
+    // Side by side, the seam column holds the rule on every pane row, and
+    // neither pane paints a glyph into it.
+    #[test]
+    fn side_by_side_seam_holds_the_rule() {
+        let b = board_with_fixture();
+        let theme = crate::theme::Theme::default_theme();
+        let (rows, cols) = (24, 120);
+        let mut cells = vec![Cell::default(); rows * cols];
+        paint(&b, &mut cells, rows, cols, (0, 0, rows, cols), true, &theme);
+        let hint_h = hint_lines(&b, false, cols).len().min(4);
+        let r = regions((0, 0, rows, cols), hint_h);
+        let (top, col, h) = r.seam.expect("w >= 100 lays out side by side");
+        assert_eq!(col, r.board.1 + r.board.3);
+        assert_eq!(r.detail.1, col + 1);
+        assert_eq!(r.board.3 + 1 + r.detail.3, cols);
+        for row in top..top + h {
+            assert_eq!(cells[row * cols + col].c, '\u{2502}', "row {row}");
+        }
+        assert!(regions((0, 0, rows, 80), hint_h).seam.is_none());
     }
 
     fn board_with_fixture() -> BoardView {

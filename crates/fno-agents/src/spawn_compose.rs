@@ -353,6 +353,10 @@ pub struct Answer {
     pub stdout: Option<Value>,
     pub events: Vec<Value>,
     pub injected: bool,
+    /// The take-over reason the compose consumed from the argv, carried in
+    /// the answer to the in-process seam - never the environment, which a
+    /// child inherits and any process can set.
+    pub take_over: String,
     /// The billing gate needs `facts.role_resolves` and the ask carried no
     /// answer: nothing applied, nothing journaled; the transport resolves
     /// the role once and asks again.
@@ -368,6 +372,7 @@ impl Answer {
             "stdout": self.stdout.clone().unwrap_or(Value::Null),
             "events": self.events,
             "injected": self.injected,
+            "take_over": self.take_over,
             "role_gate_needed": self.role_gate_needed,
         })
     }
@@ -387,6 +392,7 @@ struct Seam {
     argv: Option<Vec<String>>,
     injected: bool,
     role_gate_needed: bool,
+    take_over: String,
 }
 
 impl Seam {
@@ -476,6 +482,7 @@ pub fn compose(inputs: &Inputs) -> Answer {
         stdout: seam.stdout.take(),
         events: seam.events,
         injected: seam.injected,
+        take_over: std::mem::take(&mut seam.take_over),
         role_gate_needed: seam.role_gate_needed,
     }
 }
@@ -491,6 +498,81 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         .any(|a| a == "-h" || a == "--help");
     if inputs.argv.first().map(String::as_str) != Some("spawn") || help_rides {
         return;
+    }
+    // The take-over reason travels inside the answer, in process. A value
+    // in the environment is a forgery or a stale leak: nothing sets it, so
+    // any spawn under one refuses.
+    if std::env::var_os("FNO_SPAWN_TAKE_OVER").is_some() {
+        seam.refuse(
+            "spawn: FNO_SPAWN_TAKE_OVER is set in this process's environment. The \
+             take-over reason travels inside the compose answer, never the \
+             environment; a child must never inherit it. Clear it and re-run."
+                .to_string(),
+        );
+        return;
+    }
+    // The take-over front door: the ask is only legal shaped as
+    // `spawn --promote <scope> --take-over "<why>"`. Refusing here keeps
+    // the shape check in Rust. On the legal shape the flag is CONSUMED
+    // here and its reason rides the answer to the in-process seam, so the
+    // Python flag surface stays at net zero (lead ruling 2026-10-16):
+    // typer never declares --take-over.
+    if argv_has_take_over(&inputs.argv) {
+        if !argv_has_team(&inputs.argv) || argv_has_hand_off(&inputs.argv) {
+            seam.refuse(
+                "--take-over moves a sub-team to the new colleague and needs --promote <scope>; \
+                 it cannot be combined with --hand-off."
+                    .to_string(),
+            );
+            return;
+        }
+        if let Some(argv) = seam.argv.as_mut() {
+            let mut reason = String::new();
+            loop {
+                let cut = argv
+                    .iter()
+                    .position(|t| t.as_str() == "--argv" || t.as_str() == "--")
+                    .unwrap_or(argv.len());
+                match argv[1..cut]
+                    .iter()
+                    .position(|t| t == "--take-over" || t.starts_with("--take-over="))
+                {
+                    Some(at) => {
+                        let i = at + 1;
+                        if argv[i].starts_with("--take-over=") {
+                            reason = argv[i]["--take-over=".len()..].to_string();
+                            argv.remove(i);
+                        } else {
+                            // A separate value must sit inside the fence: with
+                            // --take-over last, the next token is the --argv
+                            // fence or a payload word, and neither is a reason.
+                            // A flag-shaped token is never a reason either:
+                            // eating one would silently rewrite the ask.
+                            if i + 1 < cut && !argv[i + 1].starts_with('-') {
+                                reason = argv[i + 1].clone();
+                                argv.remove(i);
+                                argv.remove(i);
+                            } else {
+                                argv.remove(i);
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+            seam.take_over = reason.trim().to_string();
+        }
+        if seam.take_over.is_empty() {
+            // The flag without a usable value must not degrade to a plain
+            // promote: the settle's own refusal would never see the ask,
+            // and the colleague would launch unjournaled.
+            seam.refuse(
+                "--take-over needs a reason: --take-over \"why the \
+                 paused lead is unreachable\""
+                    .to_string(),
+            );
+            return;
+        }
     }
     let (verb, profile_verb, profile) = match resolve_profile(inputs, &scan) {
         Ok(found) => found,
@@ -800,6 +882,43 @@ fn read_fields(stage: &Stage) -> Fields {
         account: f("account"),
         pane_group: f("pane_group"),
     }
+}
+
+/// Whether the argv names a role (`-k` in all three Click spellings, or
+/// `--promote`) before the `--argv` boundary or a bare `--` fence (fenced
+/// tokens are prompt text) - the same boundary rule Python's
+/// `_has_permission_mode` applies, and the same short-form spellings the
+/// Python routing detector accepts.
+fn argv_has_team(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| {
+            // retired-ok: the daemon accepts the retired alias for one release
+            t == "--promote"
+                || t.starts_with("--promote=")
+                || t == "-k"
+                || t.starts_with("-k=")
+                || (t.starts_with("-k") && t.len() > 2 && !t.starts_with("--"))
+        })
+}
+
+/// Whether the argv carries `--take-over` (or `--take-over=...`) before the
+/// `--argv` boundary or a `--` fence.
+fn argv_has_take_over(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--take-over" || t.starts_with("--take-over="))
+}
+
+/// Whether the argv carries `--hand-off` before the boundary. The retired
+/// `--succeed` spelling dies at the tombstone, before compose runs.
+fn argv_has_hand_off(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--hand-off" || t.starts_with("--hand-off="))
 }
 
 /// An overlay table (or lane args) can carry the ONLY value this spawn
@@ -1371,4 +1490,242 @@ pub fn fill_values(payload: &Value) -> std::collections::BTreeMap<String, String
         values.insert(hole.to_string(), value.to_string());
     }
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Saved = Vec<(&'static str, Option<std::ffi::OsString>)>;
+
+    /// The per-process fake world the CLAIMS root pins to, for the whole
+    /// run. The claims pin is SET-FOREVER and the dir is never deleted:
+    /// restoring it reopens live-$HOME claims reads (28 CI failures), and
+    /// a deleted dir starves later readers of a readable-empty world (6).
+    /// The STATE pins are NOT set-forever: a persisting empty state world
+    /// shadows the tests that pin their own (5 CI failures), so those
+    /// snapshot-restore like the config path.
+    fn fake_root() -> &'static std::path::Path {
+        static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let root = ROOT.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("fno-fake-world-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        });
+        root.as_path()
+    }
+
+    fn hermetic() -> (
+        std::sync::MutexGuard<'static, ()>,
+        &'static std::path::Path,
+        Saved,
+    ) {
+        let guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let root = fake_root();
+        // Snapshot the config and state pins for restore; only the claims
+        // root is set-forever (see fake_root). FNO_TEST_HERMETIC is never
+        // touched, so CI's declared ambient ("0") survives the process.
+        let saved: Saved = vec![
+            ("FNO_CONFIG", std::env::var_os("FNO_CONFIG")),
+            ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
+            ("FNO_AGENTS_HOME", std::env::var_os("FNO_AGENTS_HOME")),
+        ];
+        // The consult arm reads the declared rows, the policy and the lanes
+        // from DISK (the gather's own read); pin an empty config or the
+        // test process's ambient config answers the walk.
+        std::fs::write(root.join("config.toml"), "").unwrap();
+        std::env::set_var("FNO_CONFIG", root.join("config.toml"));
+        std::env::set_var("FNO_CLAIMS_ROOT", root);
+        std::env::set_var("FNO_STATE_DIR", root.join("state"));
+        std::env::set_var("FNO_AGENTS_HOME", root.join("agents-home"));
+        (guard, root, saved)
+    }
+
+    fn clear_hermetic(_root: &std::path::Path, saved: Saved) {
+        for (key, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+
+    /// AC7-ERR: the take-over front door refuses `--take-over` without
+    /// `--promote` or combined with `--hand-off`/`--succeed` (exit 2, the
+    /// front-door line), and lets the legal shape compose through.
+    #[test]
+    fn the_take_over_front_door_refuses_the_illegal_shapes() {
+        let (guard, root, saved) = hermetic();
+        let make_inputs = |tokens: &[&str]| -> Inputs {
+            Inputs {
+                argv: std::iter::once("spawn".to_string())
+                    .chain(tokens.iter().map(|t| t.to_string()))
+                    .collect(),
+                defaults: toml::Value::Table(toml::map::Map::new()),
+                profiles: toml::Value::Table(toml::map::Map::new()),
+                dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
+                roster: vec!["target".to_string()],
+                node_verb: None,
+                env_node: None,
+                ambient_harness: "claude".to_string(),
+                apply_permission_builtin: true,
+                scan: serde_json::json!({
+                    "has_harness": false, "explicit_harness": null,
+                    "has_model": false, "has_effort": false,
+                    "explicit_route": false, "role": null,
+                    "has_permission": false, "seed": null,
+                    "name": "Maya", "positional_present": false
+                }),
+                facts: serde_json::json!({"role_resolves": null}),
+                node: None,
+                node_row: None,
+                verbose: false,
+            }
+        };
+        let front_door_line =
+            "--take-over moves a sub-team to the new colleague and needs --promote <scope>;";
+        let refused = compose(&make_inputs(&["--take-over", "why", "--name", "Maya"]));
+        assert_eq!(refused.exit, 2, "{:?}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .iter()
+                .any(|line| line.contains(front_door_line)),
+            "{:?}",
+            refused.stderr
+        );
+        let refused = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "why",
+            "--hand-off",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(refused.exit, 2, "{:?}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .iter()
+                .any(|line| line.contains(front_door_line)),
+            "{:?}",
+            refused.stderr
+        );
+        let ok = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "why",
+            "--name",
+            "Maya",
+        ]));
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_ne!(ok.exit, 2, "{:?}", ok.stderr);
+        assert!(
+            !ok.stderr.iter().any(|line| line.contains(front_door_line)),
+            "{:?}",
+            ok.stderr
+        );
+        // The flag is carried here: the answer argv drops it and the
+        // reason rides the answer to the in-process seam.
+        assert!(!ok.argv.iter().any(|t| t == "--take-over"), "{:?}", ok.argv);
+        assert_eq!(ok.take_over, "why");
+        // With the flag last before the fence, the ask refuses: the answer
+        // carries the input argv untouched (the fence and the payload were
+        // never eaten) and the door names the missing reason instead of
+        // silently degrading to a plain promote.
+        let fenced = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--",
+            "review the ledger",
+        ]));
+        assert_eq!(fenced.exit, 2, "{:?}", fenced.stderr);
+        assert!(
+            fenced.argv.iter().any(|t| t == "--"),
+            "fence rewritten: {:?}",
+            fenced.argv
+        );
+        assert!(
+            fenced.argv.iter().any(|t| t == "review the ledger"),
+            "payload rewritten: {:?}",
+            fenced.argv
+        );
+        assert!(
+            fenced
+                .stderr
+                .iter()
+                .any(|line| line.contains("needs a reason")),
+            "{:?}",
+            fenced.stderr
+        );
+        // A flag-shaped token after --take-over is never the reason: the ask
+        // refuses instead of eating --name and launching nameless.
+        let eaten = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(eaten.exit, 2, "{:?}", eaten.stderr);
+        assert!(
+            eaten.argv.iter().any(|t| t == "--name") && eaten.argv.iter().any(|t| t == "Maya"),
+            "name eaten: {:?}",
+            eaten.argv
+        );
+    }
+
+    /// A take-over reason in the environment is a forgery or a stale
+    /// leak: nothing sets it, so any spawn under one refuses.
+    #[test]
+    fn an_inherited_take_over_var_refuses_the_spawn() {
+        let (guard, root, saved) = hermetic();
+        std::env::set_var("FNO_SPAWN_TAKE_OVER", "forged");
+        let inputs = Inputs {
+            argv: vec![
+                "spawn".to_string(),
+                "--name".to_string(),
+                "w".to_string(),
+                "work".to_string(),
+            ],
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: toml::Value::Table(toml::map::Map::new()),
+            dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["target".to_string()],
+            node_verb: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            scan: serde_json::json!({
+                "has_harness": false, "explicit_harness": null,
+                "has_model": false, "has_effort": false,
+                "explicit_route": false, "role": null,
+                "has_permission": false, "seed": null,
+                "name": "w", "positional_present": true
+            }),
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: false,
+        };
+        let answer = compose(&inputs);
+        std::env::remove_var("FNO_SPAWN_TAKE_OVER");
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(answer.exit, 2, "{:?}", answer.stderr);
+        assert!(
+            answer
+                .stderr
+                .iter()
+                .any(|line| line.contains("FNO_SPAWN_TAKE_OVER is set")),
+            "{:?}",
+            answer.stderr
+        );
+    }
 }

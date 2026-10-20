@@ -1,8 +1,10 @@
 // @vendored-core: this file is vendored byte-identical into
 // crates/fno-agents/src/review_invocation_owner.rs; the parity test
 // owner_core_is_vendored_byte_identical pins the equality. Edit here,
-// then copy - never fork. No `crate::` references: the core must splice
-// into either crate.
+// then copy - never fork. One `crate::` reference is sanctioned:
+// `crate::state_layout` - both host crates carry that module at the
+// crate root with the same signatures, so the splice holds in either.
+// No other `crate::` references.
 //
 // The one owner of the review-invocation vocabulary: the verb parser, the
 // canonical flag table, the id mint, and the per-session pending sidecar.
@@ -190,9 +192,11 @@ pub fn pending_invocation_path(
     {
         return Err("target_session_id must be a non-empty path component");
     }
-    Ok(invocation_home(home)
-        .join("review-invocations")
-        .join(format!("{target_session_id}.json")))
+    Ok(crate::state_layout::place_in(
+        &invocation_home(home),
+        "review-invocations",
+        &format!("{target_session_id}.json"),
+    ))
 }
 
 /// Write one pending id without replacing a concurrent sender's id. A

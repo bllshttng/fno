@@ -1,17 +1,17 @@
-//! The sideline menu's experimental section: features still in progress,
-//! each behind a toggle that is off until the operator turns it on. The
-//! choice persists in the view store under the feature's name.
+//! The settings modal's experimental tab: features still in progress, each
+//! behind a toggle that is off until the operator turns it on. The choice
+//! persists in the view store under the feature's name.
 
 use super::*;
 
-/// One experimental feature the menu can toggle.
+/// One experimental feature the settings tab can toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Flag {
     OrgBoard,
     PaneShare,
 }
 
-/// The toggle states the menu builder renders.
+/// The toggle states the settings tab and the menu's share rows render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Flags {
     pub(crate) org_board: bool,
@@ -53,8 +53,9 @@ pub(crate) fn flags(view: &View) -> Flags {
     }
 }
 
-/// Flip one toggle, persist it, and rebuild the open menu so its rows track
-/// it. Turning the org board off while it is showing drops back to Agents.
+/// Flip one toggle, persist it, and rebuild the open settings modal so its
+/// rows track it. Turning the org board off while it is showing drops back
+/// to Agents.
 pub(crate) fn toggle(view: &mut View, flag: Flag) {
     let on = !flag.on(flags(view));
     match flag {
@@ -75,5 +76,5 @@ pub(crate) fn toggle(view: &mut View, flag: Flag) {
     crate::view_store::save_experimental(flag.name(), on);
     let word = if on { "on" } else { "off" };
     view.set_notice(format!("experimental {}: {word}", flag.label()));
-    view.refresh_open_sideline_menu();
+    view.reopen_settings_keeping_sel();
 }

@@ -126,6 +126,9 @@ pub enum Role {
     /// A pill: the bracketed `status · priority` token on a detail title
     /// line. The emulator's index-3 accent slot, on the terminal's own bg.
     PanelPill,
+    /// The active tab of a panel's tab strip: the terminal's own pair,
+    /// swapped (INVERSE), the same look as the active mux tab.
+    PanelTab,
     /// A thin rule under a heading or lane name: the index-8 dim slot.
     PanelRule,
     /// A literal-color span (the colors tab's swatches). The color IS the
@@ -220,6 +223,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // out on a disagreeing palette.
         Role::PanelHead => return (Color::Default, Color::Default, cell_flags::BOLD),
         Role::PanelLabel | Role::PanelPill => return (Color::Indexed(3), Color::Default, 0),
+        Role::PanelTab => return (Color::Default, Color::Default, cell_flags::INVERSE),
         // Index 8, not the DIM flag: the merged band evidence showed DIM
         // washing the default fg out on a light terminal, while index 8 stays
         // a readable gray under both.

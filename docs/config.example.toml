@@ -121,7 +121,7 @@ staleness_days = 21
 # epic_max_open_children = <unset>   # optional; no default
 # Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads it from the config.toml beside graph.json.
 max_open_ideas = 25
-# Auto-rendered boards (GLOBAL config file only): every graph mutation re-renders each {path, scope, projection=local|backlog|roadmap} target; local (the default) writes the unified board page, backlog and roadmap are retired and warn-skip.
+# Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file).
 render_targets = []
 # Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
 page_reload_s = 60

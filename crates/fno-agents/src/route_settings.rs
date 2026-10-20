@@ -243,9 +243,13 @@ fn write_atomic_0600(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// racing writers publish identical bytes, so a last-writer-wins rename stays
 /// correct (model_routing.py:_write_settings_env_file).
 pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
-    let base = crate::agents_config::state_dir(cwd)
-        .ok_or_else(|| "no resolvable state root (set FNO_STATE_DIR or HOME)".to_string())?
-        .join("route-settings");
+    let state = crate::agents_config::state_dir(cwd)
+        .ok_or_else(|| "no resolvable state root (set FNO_STATE_DIR or HOME)".to_string())?;
+    // The row's destination, always: a drain row never relies on the legacy
+    // answer, so a fresh overlay never lands beside the registry paths that
+    // outlive it.
+    let base = crate::state_layout::place_dir(&state, "route-settings")
+        .ok_or_else(|| "route-settings is not a state-root dir".to_string())?;
     std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
     let payload = payload_bytes(&ask.env, ask.sandbox.as_ref());
     let digest = digest_of(&payload);

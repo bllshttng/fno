@@ -1,10 +1,10 @@
-//! The sideline menu's backlog and experimental rows, the org board gate,
-//! and the Settings card-layout toggle.
+//! The sideline menu's backlog and share rows, the org board gate, and the
+//! Settings card-layout toggle.
 
 use super::*;
 
 #[test]
-fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
+fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
     let menu = build_sideline_menu(Anchor::Center, None, experimental::Flags::default());
     let labels: Vec<(&str, &str)> = menu
         .popup
@@ -15,10 +15,13 @@ fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
             _ => None,
         })
         .collect();
-    assert!(labels.contains(&("☐", "fleet org board")));
-    assert!(labels.contains(&("☐", "pane share")));
+    // The experimental toggles live on the settings modal's own tab: a
+    // header here read as if every row below it were experimental.
+    assert!(!labels
+        .iter()
+        .any(|(_, l)| *l == "fleet org board" || *l == "pane share"));
     assert!(!labels.iter().any(|(_, l)| l.contains("backlog view")));
-    assert!(menu
+    assert!(!menu
         .popup
         .rows
         .iter()
@@ -36,18 +39,11 @@ fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
         .map(|k| format!("prefix {k}"))
         .unwrap_or_default();
     assert_eq!(backlog_hint, want, "the row hint is the live chord");
-    // Rows and actions pair by entry index; a swapped pair would toggle the
-    // wrong feature.
+    // Rows and actions pair by entry index; a swapped pair would run the
+    // wrong action.
     let at = |label: &str| labels.iter().position(|(_, l)| *l == label).expect(label);
     assert_eq!(menu.actions[at("backlog")], AuxAction::OpenBacklogView);
-    assert_eq!(
-        menu.actions[at("fleet org board")],
-        AuxAction::ToggleExperimental(experimental::Flag::OrgBoard)
-    );
-    assert_eq!(
-        menu.actions[at("pane share")],
-        AuxAction::ToggleExperimental(experimental::Flag::PaneShare)
-    );
+    assert_eq!(menu.actions[at("keybindings")], AuxAction::OpenKeybinds);
     let on = build_sideline_menu(
         Anchor::Center,
         None,
@@ -57,10 +53,17 @@ fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
             share: None,
         },
     );
-    assert!(on.popup.rows.iter().any(|row| matches!(
-        row,
-        PopupRow::Entry { glyph, label, .. } if glyph == "☑" && label == "pane share"
-    )));
+    // With pane share on, the menu carries the share row, still paired.
+    let at = on
+        .popup
+        .rows
+        .iter()
+        .filter(|row| matches!(row, PopupRow::Entry { .. }))
+        .position(
+            |row| matches!(row, PopupRow::Entry { label, .. } if label == "share focused pane"),
+        )
+        .expect("the share row shows while pane share is on");
+    assert_eq!(on.actions[at], AuxAction::Share(share_flow::Act::Start));
 }
 
 #[test]

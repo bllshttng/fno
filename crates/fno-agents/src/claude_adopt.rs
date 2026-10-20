@@ -189,29 +189,28 @@ pub fn provider_from_route_settings(model: Option<&str>) -> Option<String> {
     }
 }
 
-/// Every parseable `.json` file under the recorded route-settings dir
-/// (`FNO_ROUTE_SETTINGS_DIR`, else `$HOME/.fno/route-settings`), as
-/// (path, parsed JSON) pairs. Unreadable or malformed files drop out; a
-/// missing dir answers empty.
+/// Every parseable route-settings overlay as (path, parsed JSON) pairs.
+/// `FNO_ROUTE_SETTINGS_DIR` pins one dir; otherwise the layout table's
+/// `route-settings` row answers (`list_dir_children` keeps a straggler at
+/// the legacy spelling visible until its drain empties it). Unreadable or
+/// malformed files drop out; a missing dir answers empty.
 pub(crate) fn route_settings_files() -> Vec<(PathBuf, serde_json::Value)> {
-    let dir = std::env::var_os("FNO_ROUTE_SETTINGS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".fno")
-                .join("route-settings")
-        });
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+    let files: Vec<PathBuf> = match std::env::var_os("FNO_ROUTE_SETTINGS_DIR") {
+        Some(dir) => match std::fs::read_dir(PathBuf::from(dir)) {
+            Ok(entries) => entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_json_path(p))
+                .collect(),
+            Err(_) => Vec::new(),
+        },
+        None => crate::state_layout::list_dir_children(&route_settings_root(), "route-settings")
+            .into_iter()
+            .filter(|p| is_json_path(p))
+            .collect(),
     };
     let mut out: Vec<(PathBuf, serde_json::Value)> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
+    for path in files {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -221,6 +220,17 @@ pub(crate) fn route_settings_files() -> Vec<(PathBuf, serde_json::Value)> {
         out.push((path, v));
     }
     out
+}
+
+fn is_json_path(p: &Path) -> bool {
+    p.extension().and_then(|e| e.to_str()) == Some("json")
+}
+
+/// The state root the no-env branch reads overlays from: the same
+/// resolution `route_settings::write` publishes into.
+fn route_settings_root() -> PathBuf {
+    let anchor = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::agents_config::state_dir(&anchor).unwrap_or_else(|| PathBuf::from(".").join(".fno"))
 }
 
 /// One frontmatter scalar from a lead manifest: `key: value`, quotes stripped,

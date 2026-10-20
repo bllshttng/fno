@@ -15,6 +15,10 @@ import re
 import sys
 from typing import IO, Callable, List, Mapping, Optional, Sequence, Set, Tuple
 
+#: The take-over reason the Rust compose consumed from the argv, in process
+#: only: the environment never carries it (lead ruling, 2026-10-16).
+PENDING_TAKE_OVER: List[str] = []
+
 # Flags that consume the FOLLOWING token. Scanning for our three flags skips a
 # value flag's value so a value that looks like `--model` / `--effort` can never
 # masquerade as one of ours. Mirrors client.rs VALUE_FLAGS + the short aliases
@@ -24,7 +28,7 @@ _VALUE_FLAGS = frozenset(
         "--provider", "-P", "--harness", "-H", "--model", "-m", "--effort",
         "--from", "--cwd", "-c",
         "--message", "--session-id", "--cc-session-id", "--channel-id", "--status",
-        "--from-name", "--timeout", "-t", "--mode", "--substrate", "--permission-mode",
+        "--from-name", "--timeout", "-t", "--mode", "--substrate", "--as", "--permission-mode",
         "--output-format", "--monitor", "--tab",
         "--node",
     }
@@ -98,6 +102,7 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
         # a nameless `spawn --route zai,glm-5.2` registered an agent named "zai,glm-5.2".
         # Kept in lockstep with cmd_spawn (test_spawn_value_flags_cover_every_value_option).
         "--route", "--account", "--promote", "--promote", "-k", "--dispatch-account",
+        "--take-over",
         # --at's value (current|<pane>) must not read as a positional.
         "--at",
         # --portal's index is a value, never a prompt word.
@@ -225,11 +230,11 @@ def placement_refusal(
     if bounded_placement and substrate == "bg":
         return "--bounded-placement selects its own tab for a pane; a thread cannot be bounded"
     if at is not None and substrate == "bg":
-        return "--at applies only to the pane lane (a thread has no calling pane)"
+        return "--at needs --as pane (a thread has no calling pane)"
     if placement_requested and (substrate != "pane" or once):
         return (
-            "--workspace/-s, --split/-x, --at, and --tab apply only to the pane lane "
-            "(a --once one-shot has no pane geometry)"
+            "--workspace/-s, --split/-x, --at, and --tab need --as pane "
+            "(a thread or --once one-shot has no pane geometry)"
         )
     if split is not None and split not in ("left", "right", "up", "down"):
         return f"--split/-x must be left, right, up, or down (got {split!r})"
@@ -263,9 +268,9 @@ def _has_explicit_substrate(toks: Sequence[str]) -> Optional[str]:
             break
         if t in _EXPLICIT_SUBSTRATE_BOOLS:
             return "headless"
-        if t == "--substrate":
+        if t in ("--substrate", "--as"):
             return next(it, "")
-        if t.startswith("--substrate="):
+        if t.startswith(("--substrate=", "--as=")):
             return t.split("=", 1)[1]
     return None
 
@@ -829,6 +834,7 @@ def compose_spawn_argv(
         from fno.agents import events
 
         events.emit("model_vendor_mismatch", **event)
+    PENDING_TAKE_OVER[:] = [str(answer.get("take_over") or "")] if answer.get("take_over") else []
     answer_argv = [str(t) for t in answer.get("argv") or out]
     return answer_argv
 
@@ -931,7 +937,7 @@ def resolve_spawn_gates(substrate, monitor, *, once, harness):
         raise SystemExit(2)
     if monitor == "happy" and (substrate != "pane" or once):
         print(
-            "--monitor happy is pane-only; bg and headless workers do not pass "
+            "--monitor happy needs --as pane; thread and headless workers do not pass "
             "the happy launcher seam",
             file=sys.stderr,
         )

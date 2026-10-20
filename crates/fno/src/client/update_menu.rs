@@ -301,10 +301,6 @@ pub(crate) fn build_sideline_menu(
         hint: open_hint,
         enabled: true,
     });
-    rows.push(PopupRow::Header("experimental".into()));
-    for flag in experimental::Flag::ALL {
-        rows.push(entry(if flag.on(flags) { "☑" } else { "☐" }, flag.label()));
-    }
     let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
     rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
@@ -313,12 +309,8 @@ pub(crate) fn build_sideline_menu(
     rows.push(entry("⏏", "detach"));
     actions.push(AuxAction::OpenSweep);
     actions.push(AuxAction::OpenAgentLauncher);
-    // Rows and actions pair by index: these answer the backlog row and the
-    // experimental toggles pushed above, in the same order.
+    // Rows and actions pair by index: this answers the backlog row above.
     actions.push(AuxAction::OpenBacklogView);
-    for flag in experimental::Flag::ALL {
-        actions.push(AuxAction::ToggleExperimental(flag));
-    }
     actions.extend(share_actions);
     actions.push(AuxAction::OpenKeybinds);
     actions.push(AuxAction::OpenSettings);

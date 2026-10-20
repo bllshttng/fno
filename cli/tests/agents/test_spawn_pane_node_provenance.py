@@ -49,7 +49,7 @@ def test_cmd_spawn_node_flag_resolves_and_passes_provenance(
             "peer",
             "--harness",
             "claude",
-            "--split",
+            "--as", "pane", "--split",
             "left",
             "--node",
             node_id,
