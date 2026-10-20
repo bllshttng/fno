@@ -1,0 +1,25 @@
+# The train/held-out split over the stage-tagged bank tasks (node x-8cb0
+# slice 1). bank_rev pins the bank: the pin diff excludes this file, so a
+# commit that only redeclares the split never voids its own pin (the pin
+# exists to catch task changes).
+#
+# Roles: held-out (qualification) tasks never enter a tuning view; a climb
+# verdict claims held-out quality only from these three tasks. validation
+# sits empty until slice 3 lands stage tasks.
+#
+# bank_rev pins origin/main at the slice-1 branch point.
+bank_rev: ae16de58655c3583d7af6d198c9ff8fb97795edd
+
+train:
+  - capability-lane-blueprint
+  - capability-blueprint-batching
+  - capability-lane-review
+  - capability-lane-implementation
+  - capability-judgment-root-cause
+
+validation: []
+
+qualification:
+  - capability-judgment-design
+  - capability-judgment-blast-radius
+  - capability-judgment-investigate
