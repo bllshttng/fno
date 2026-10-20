@@ -1005,22 +1005,10 @@ pub(super) fn stamp_after_delivery(name: &str, delivery: &str, expected_identity
     // owner change between resolve and stamp must refuse the write rather
     // than stamp a row that now names a different session.
 
-    use std::io::Write as _;
     let registry = AgentsHome::shared_registry_json();
-    let lock_dir = registry
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("locks");
-    let _ = std::fs::create_dir_all(&lock_dir);
-    let lock_path = lock_dir.join("registry-stamp.lock");
-    let lock = match lock_dir_acquire(&lock_path, 1.0) {
-        Ok(lock) => lock,
-        Err(_) => return,
-    };
     let run = (|| -> Result<(), String> {
-        let raw = std::fs::read_to_string(&registry).map_err(|e| e.to_string())?;
-        let mut doc: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        let write = crate::registry_store::begin(&registry).map_err(|e| e.to_string())?;
+        let mut doc = write.document.clone();
         let rows = doc
             .get_mut("agents")
             .and_then(Value::as_array_mut)
@@ -1048,17 +1036,8 @@ pub(super) fn stamp_after_delivery(name: &str, delivery: &str, expected_identity
         if !hit || identity_changed {
             return Ok(());
         }
-        let rendered = doc.to_string();
-        let tmp = registry.with_extension("json.tmp");
-        {
-            let mut fh = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-            fh.write_all(rendered.as_bytes())
-                .map_err(|e| e.to_string())?;
-            fh.flush().map_err(|e| e.to_string())?;
-        }
-        std::fs::rename(&tmp, &registry).map_err(|e| e.to_string())
+        write.commit(doc).map(|_| ()).map_err(|e| e.to_string())
     })();
-    let _ = lock_dir_release(lock);
     if let Err(exc) = run {
         eprintln!("registry stamp failed after {delivery} delivery for {name:?}: {exc}; delivery succeeded; do not retry");
     }
