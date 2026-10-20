@@ -168,14 +168,17 @@ pub fn build_records(
             .collect();
         // The last execute session decides the window: a node whose newest
         // ended_at (started_at as the un-ended fallback) sits outside it is
-        // not this window's work.
+        // not this window's work. Ordered by parsed time, not string order,
+        // so an offset-bearing stamp cannot misorder the race.
         let last = execs
             .iter()
             .max_by_key(|s| {
                 s.get("ended_at")
                     .and_then(Value::as_str)
                     .or_else(|| s.get("started_at").and_then(Value::as_str))
-                    .unwrap_or_default()
+                    .and_then(parse_local)
+                    .map(|dt| dt.timestamp_millis())
+                    .unwrap_or(i64::MIN)
             })
             .copied();
         let Some(last) = last else { continue };
