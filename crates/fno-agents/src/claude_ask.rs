@@ -2095,7 +2095,7 @@ pub fn stamp_daemon_receipt(
 }
 
 /// UTC `_utc_now_iso()` second-precision timestamp.
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 

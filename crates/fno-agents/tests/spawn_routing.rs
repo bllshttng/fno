@@ -1434,3 +1434,94 @@ fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
         .map(|doc| serde_json::to_string_pretty(&doc).unwrap())
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
+
+// The cloud lane journey without a live session: a fake claude on PATH
+// prints the measured create markers, the lane parses the id, mints
+// the row, and the receipt names the cloud id. The pty-held create,
+// the parse belt and the row mint all run for real here.
+#[test]
+fn spawn_claude_cloud_receipt_shape() {
+    use fno_agents::claude_cloud::{
+        dispatch_claude_cloud, non_claude_cloud_refusal, refuse_cloud_axes,
+    };
+    use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
+
+    // Phase one, the pure contracts: the router arm (claude+cloud resolves,
+    // codex+cloud refuses naming the claude-harness limit), the axis refusals
+    // by flag name, and the packaged mail argv with its holes filled.
+    assert_eq!(
+        resolve_backend("claude", "cloud"),
+        ResolvedBackend::ClaudeCloud
+    );
+    let refused = resolve_backend("codex", "cloud");
+    match refused {
+        ResolvedBackend::Refused(msg) => {
+            assert!(msg.contains("claude-harness"), "{msg}");
+            assert!(msg.contains("codex"), "{msg}");
+        }
+        other => panic!("codex+cloud must refuse, got {other:?}"),
+    }
+    let params = serde_json::json!({"model": "x"});
+    assert!(refuse_cloud_axes(&params).is_some());
+    let params = serde_json::json!({"harness_args": ["-c"]});
+    assert!(
+        refuse_cloud_axes(&params).is_some(),
+        "passthrough must refuse by name"
+    );
+    assert!(refuse_cloud_axes(&serde_json::json!({})).is_none());
+    assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
+    // Phase two, the lane journey: the pty-held create, the parse belt and
+    // the row mint all run for real here.
+    let home = AgentsHome::at(tmpdir("spawn-cloud-home"));
+    let cwd = tmpdir("spawn-cloud-cwd");
+    let bin = tmpdir("spawn-cloud-bin");
+    install_fake_claude_cloud(&bin);
+    let old_path = std::env::var("PATH").ok();
+    unsafe { std::env::set_var("PATH", path_with(&bin)) };
+    let out = dispatch_claude_cloud(&home, "clouddy", "seed the wave", "fno", &cwd, false);
+    match old_path {
+        Some(p) => unsafe { std::env::set_var("PATH", p) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
+
+    assert_eq!(out.exit_code, 0, "cloud spawn: {}", out.stderr);
+    // stdout is exactly the receipt JSON (the Python seam parses whole-stdout
+    // JSON); the human create output rides stderr.
+    assert!(
+        out.stderr.contains("Created cloud session"),
+        "{}",
+        out.stderr
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_str(out.stdout.trim()).expect("receipt must be valid JSON");
+    assert_eq!(receipt["name"], "clouddy");
+    assert_eq!(receipt["substrate"], "cloud");
+    assert_eq!(receipt["harness"], "claude");
+    let sid = receipt["short_id"].as_str().unwrap().to_string();
+    assert!(sid.starts_with("session_"), "{sid}");
+    let registry: serde_json::Value =
+        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
+    let row = &registry["agents"][0];
+    assert_eq!(row["substrate"], "cloud");
+    assert_eq!(row["harness"], "claude");
+    assert_eq!(row["harness_session_id"], sid.as_str());
+    assert_eq!(row["status"], "live");
+    assert!(row.get("pid").is_none_or(|v| v.is_null()));
+}
+
+// A fake claude whose only job is the create form: print the measured
+// markers and exit, the shape the real CLI shows under a pty.
+fn install_fake_claude_cloud(bin_dir: &std::path::Path) {
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str("printf \'Created cloud session: probe title\\n\'\n");
+    script.push_str(
+        "printf \'View: https://claude.ai/code/session_01CLOUDTEST0123456789?from=cli&m=0\\n\'\n",
+    );
+    script.push_str("printf \'Resume with: claude --teleport session_01CLOUDTEST0123456789\\n\'\n");
+    script.push_str("exit 0\n");
+    let path = bin_dir.join("claude");
+    std::fs::create_dir_all(bin_dir).expect("bin mkdir");
+    std::fs::write(&path, script).expect("write fake claude");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}

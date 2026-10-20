@@ -1038,9 +1038,9 @@ def resolve_spawn_gates(substrate, monitor, *, once, harness):
     warns and still works. Portal gates live on the Rust lane only: the
     Python parser must not advertise a flag whose placement it cannot run.
     """
-    if substrate not in ("pane", "thread", "bg", "headless"):
+    if substrate not in ("pane", "thread", "bg", "headless", "cloud"):
         print(
-            f"--substrate must be one of: pane, thread, headless (got {substrate})",
+            f"--substrate must be one of: pane, thread, headless, cloud (got {substrate})",
             file=sys.stderr,
         )
         raise SystemExit(2)
