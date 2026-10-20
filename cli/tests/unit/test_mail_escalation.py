@@ -60,17 +60,24 @@ def _unread_count(runner, name: str) -> int:
     return sum(1 for m in msgs if is_deliverable(m) and m.id not in withdrawn)
 
 
-def test_question_send_emits_one_valid_overlay_event(runner, mailbox, emitted_events):
+def test_question_send_emits_one_valid_overlay_event(runner, mailbox, monkeypatch):
     # The escalation surfaces in the needs-me overlay via a mail_escalation event
-    # (US1/US2): exactly one per non-debounced escalation, schema-valid.
+    # (US1/US2): exactly one per non-debounced escalation, schema-valid. The
+    # send body lives in the rust leaf, so the read goes through the committed
+    # store; the python emitter capture never sees the subprocess's write.
+    from tests._event_rows import event_rows
+
+    scratch = mailbox / "scratch" / "events.jsonl"
+    monkeypatch.setenv("FNO_EVENTS_PATH", str(scratch))
     res = runner.invoke(
         app,
         ["mail", "send", "--to-project", "web", "--kind", "question",
          "--from-name", "etl", "--body", "which schema wins?"],
     )
     assert res.exit_code == 0, res.output
-    assert len(emitted_events) == 1, "exactly one mail_escalation event per escalation"
-    ev = emitted_events[0]
+    rows = event_rows(scratch, types=["mail_escalation"])
+    assert len(rows) == 1, "exactly one mail_escalation event per escalation"
+    ev = rows[0]
     assert ev["type"] == "mail_escalation"
     fno.events.validate(ev)  # raises if the envelope/shape is invalid
     d = ev["data"]
