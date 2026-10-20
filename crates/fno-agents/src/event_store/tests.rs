@@ -103,19 +103,20 @@ fn a_routed_read_imports_a_stray_and_never_reads_it_raw() {
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let journal = root.join("events.jsonl");
     let mut fields = serde_json::Map::new();
-    fields.insert("marker".to_string(), serde_json::Value::from("committed"));
+    fields.insert("scope".to_string(), serde_json::Value::from("read-test"));
+    fields.insert("change".to_string(), serde_json::Value::from("committed"));
     crate::events::EventEmitter::new(&journal, "daemon")
-        .emit_fields("read_probe", fields)
+        .emit_fields("lead_checkin", fields)
         .unwrap();
     std::fs::write(
         &journal,
         format!(
-            "{{\"ts\":\"{}\",\"type\":\"read_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"raw-stray\"}}}}\n",
+            "{{\"ts\":\"{}\",\"type\":\"lead_checkin\",\"source\":\"loop\",\"data\":{{\"scope\":\"read-test\",\"change\":\"raw-stray\"}}}}\n",
             fresh_ts()
         ),
     )
     .unwrap();
-    let text = journal_text(&journal, &["read_probe"]);
+    let text = journal_text(&journal, &["lead_checkin"]);
     assert!(
         text.contains("committed"),
         "the committed row serves the read: {text}"
@@ -132,7 +133,7 @@ fn a_routed_read_imports_a_stray_and_never_reads_it_raw() {
         1,
         "the imported row dedupes: {text}"
     );
-    let second = journal_text(&journal, &["read_probe"]);
+    let second = journal_text(&journal, &["lead_checkin"]);
     assert_eq!(
         second.matches("raw-stray").count(),
         1,
@@ -161,7 +162,7 @@ fn an_unchanged_stray_opens_no_store_write() {
     std::fs::write(
         &journal,
         format!(
-            "{{\"ts\":\"{}\",\"type\":\"read_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"stray\"}}}}\n",
+            "{{\"ts\":\"{}\",\"type\":\"lead_checkin\",\"source\":\"loop\",\"data\":{{\"scope\":\"read-test\",\"change\":\"stray\"}}}}\n",
             fresh_ts()
         ),
     )
@@ -171,11 +172,11 @@ fn an_unchanged_stray_opens_no_store_write() {
         conn.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
             .unwrap()
     }
-    let text = journal_text(&journal, &["read_probe"]);
+    let text = journal_text(&journal, &["lead_checkin"]);
     assert!(text.contains("stray"), "the first read imports: {text}");
     let store = store_path(&journal);
     let before = data_version(&store);
-    let text = journal_text(&journal, &["read_probe"]);
+    let text = journal_text(&journal, &["lead_checkin"]);
     assert!(
         text.contains("stray"),
         "the second read still serves: {text}"
