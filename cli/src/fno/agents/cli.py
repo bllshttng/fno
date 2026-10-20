@@ -1048,14 +1048,18 @@ def _parse_wait_seconds(raw: str) -> float:
 
 
 
-def _retired_axis(flag: str):
+def _retired_axis(flag: str, admit: str = ""):
     """The refusal for one retired spawn axis: exit 2 naming the native form.
     The lane template (routing.models launch / the harness contract) owns the
-    value now; docs/HARNESSES.md carries each harness's own launch line."""
+    value now; docs/HARNESSES.md carries each harness's own launch line.
+    `admit` names the one value that still passes: `--substrate cloud` is the
+    only selector of the cloud lane, which no template seats."""
 
     def _refuse(ctx, param, value):
         from click.core import ParameterSource
 
+        if admit and value == admit:
+            return value
         # Typed at all refuses, so an empty `--model ''` is no escape hatch.
         if value or ctx.get_parameter_source(param.name) is ParameterSource.COMMANDLINE:
             typer.echo(
@@ -1134,7 +1138,7 @@ def cmd_spawn(
         "",
         "--substrate",
         hidden=True,
-        callback=_retired_axis("--substrate"),
+        callback=_retired_axis("--substrate", admit="cloud"),
     ),
     print_mode: bool = typer.Option(
         False,
@@ -2462,10 +2466,8 @@ def cmd_spawn(
             argv = ["spawn", spawn_seam_marker(), "--name", name, "--harness", harness,
                     "--substrate", "cloud", "--cwd", str(workdir)]
             argv += [f"--from-name={from_name}"] if from_name else []
-            axes = {"--model": model, "--effort": effort, "--add-dir": add_dir,
-                    "--permission-mode": permission_mode, "--agent": agent, "--tools": tools,
-                    "--deny-tools": deny_tools, "--account": account or dispatch_account,
-                    "--yolo": yolo, "--harness-arg": " ".join(passthrough or ()) or None}
+            axes = {"--account": account or dispatch_account,
+                    "--harness-arg": " ".join(passthrough or ()) or None}
             for flag, value in axes.items():
                 argv += [flag, value] if isinstance(value, str) else ([flag] if value else [])
             argv += ["--", message]

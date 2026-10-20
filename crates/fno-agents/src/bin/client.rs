@@ -3961,6 +3961,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         if let Some(a) = &axes.account {
             params.insert("account".into(), Value::String(a.clone()));
         }
+        if let Some(s) = &axes.substrate {
+            params.insert("substrate".into(), Value::String(s.clone()));
+        }
     }
 
     if let Some(av) = argv {

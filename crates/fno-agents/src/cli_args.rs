@@ -222,8 +222,18 @@ impl SpawnAxes {
                             i += 2;
                         }
                     }
+                } else if long == "--substrate" {
+                    // The one value the retired axis still admits: cloud has
+                    // no template lane, so the flag is its only selector.
+                    let value = inline.or_else(|| head.get(i + 1).cloned());
+                    if value.as_deref() != Some("cloud") {
+                        return Err(Self::refused_axis(long));
+                    }
+                    pairs.push(long.to_string());
+                    pairs.push("cloud".to_string());
+                    i += if tok.contains('=') { 1 } else { 2 };
                 } else {
-                    return Err(Self::refused_axis(&long));
+                    return Err(Self::refused_axis(long));
                 }
             } else {
                 i += 1;
@@ -237,11 +247,12 @@ impl SpawnAxes {
             route: matches.get_one::<String>("route").cloned(),
             account: matches.get_one::<String>("account").cloned(),
             harness: matches.get_one::<String>("harness").cloned(),
-            // The retired fields never fill: scan refused the spellings above.
+            // The retired fields never fill: scan refused the spellings above,
+            // all but `--substrate cloud`.
             provider: None,
             model: None,
             effort: None,
-            substrate: None,
+            substrate: matches.get_one::<String>("substrate").cloned(),
         };
         Ok((axes, head_len))
     }
@@ -467,6 +478,24 @@ mod tests {
             assert!(err.starts_with("refused: "), "{err}");
             assert!(err.contains("is retired"), "{err}");
             assert!(err.contains("HARNESSES.md"), "{err}");
+        }
+    }
+
+    #[test]
+    fn spawn_axes_substrate_admits_cloud_alone() {
+        for form in [vec!["--substrate", "cloud"], vec!["--substrate=cloud"]] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let (axes, _) = SpawnAxes::scan(&toks).expect("cloud is admitted");
+            assert_eq!(axes.substrate.as_deref(), Some("cloud"));
+            assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
+        }
+        for other in ["thread", "pane", "headless", "bg"] {
+            let toks: Vec<String> = ["--substrate", other]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let err = SpawnAxes::scan(&toks).expect_err("only cloud passes");
+            assert!(err.contains("is retired"), "{err}");
         }
     }
 
