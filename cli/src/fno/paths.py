@@ -857,8 +857,19 @@ def operator_lane() -> Path:
 
 
 def global_events_json() -> Path:
-    """Return the cross-checkout event journal at the pinned state root."""
-    return _pinned_root_file("events.jsonl")
+    """Return the cross-checkout event journal at the pinned state root.
+
+    The root journal family is retired: writers commit to the routed store,
+    so this path is the store's anchor and the stray-hunt root, never a
+    write target. It resolves without the root fence: the fence refuses new
+    root writers, and the retired name is not one.
+    """
+    if os.environ.get("FNO_STATE_DIR"):
+        pinned = _resolve(os.environ["FNO_STATE_DIR"])
+    else:
+        raw = os.path.expanduser(os.path.expandvars(_settings().state_dir))
+        pinned = _resolve(raw) if os.path.isabs(raw) else _resolve("~/.fno/")
+    return _guard_state_path(pinned / "events.jsonl")
 
 
 def _state_subfile_at(root: Path, subfolder: str, name: str, legacy_name: str) -> Path:
