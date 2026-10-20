@@ -150,6 +150,10 @@ mod budget;
 mod ci_checks;
 mod coverage;
 mod coverage_classify;
+pub(crate) mod coverage_gate;
+// The verdict rides the pub `Probes::coverage_verdict` surface, so external
+// Probes implementors must be able to name its types.
+pub use coverage_gate::{GateState, GateVerdict};
 pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
@@ -611,6 +615,17 @@ pub(crate) fn decide_with_payload(
         .or(manifest.harness_session_id.as_deref())
         .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("null"))
         .map(str::to_string);
+    // The receipt's clear half: a loop-check fire means the loop was
+    // entered again. Clear before deciding; a terminal-allowing fire
+    // re-writes the receipt in finalize moments later. Same population as
+    // the write, so operator and loop-run sessions never clear each other.
+    if let Some(key) = crate::terminal_run::should_record(
+        std::env::var_os("FNO_AGENT_SELF").is_some(),
+        std::env::var_os("FNO_DRIVER_LIB").is_some(),
+        harness_session.as_deref(),
+    ) {
+        crate::terminal_run::remove_receipt(&crate::paths::AgentsHome::from_env(), key);
+    }
     let _ = crate::distress::scan_and_emit(
         &project_events,
         &global_events,

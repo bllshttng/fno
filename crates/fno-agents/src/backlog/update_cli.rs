@@ -83,6 +83,9 @@ struct UpdateArgs {
     add_pr_url: Option<String>,
     add_pr_note: Option<String>,
     remove_pr: Option<String>,
+    /// `--to <new-id>`: the in-place node-id rename through
+    /// `reid_cli::reid_write`. One operation per call.
+    reid_to: Option<String>,
     door: Vec<String>,
     /// Lowered operator tokens (`field=value`, `field+=value`,
     /// `field-=value`), in argument order; the relay refusal quotes them as
@@ -150,6 +153,7 @@ impl UpdateArgs {
             add_pr_url: None,
             add_pr_note: None,
             remove_pr: None,
+            reid_to: None,
             door: Vec::new(),
             ops: Vec::new(),
             details_append: Vec::new(),
@@ -251,6 +255,7 @@ impl UpdateArgs {
                 "--repo" => take_value!(a.repo),
                 "--add-pr-url" => take_value!(a.add_pr_url),
                 "--add-pr-note" => take_value!(a.add_pr_note),
+                "--to" => take_value!(a.reid_to),
                 other => {
                     if let Some(op) = update_ops::parse_op_token(raw) {
                         match update_ops::check(&op) {
@@ -484,6 +489,9 @@ pub fn run(tail: &[String]) -> i32 {
         );
         return 1;
     }
+    if let Some(new_id) = &args.reid_to {
+        return run_reid(&args, new_id);
+    }
     if !args.door.is_empty() {
         return run_door_relay(&args);
     }
@@ -494,6 +502,35 @@ pub fn run(tail: &[String]) -> i32 {
             r.exit
         }
     }
+}
+
+/// The rename door: `--to` renames the node id through reid_cli's locked
+/// publish. One operation per call: a rename next to a field write would
+/// leave the receipt ambiguous about which write landed.
+fn run_reid(args: &UpdateArgs, new_id: &str) -> i32 {
+    let mut mixed: Vec<String> = args.ops.iter().map(|op| op.token.clone()).collect();
+    for (set, flag) in [
+        (args.details_file.is_some(), "--details-file"),
+        (args.blocks_everything, "--blocks-everything"),
+        (args.force, "--force"),
+        (args.repo.is_some(), "--repo"),
+        (args.add_pr_url.is_some(), "--add-pr-url"),
+        (args.add_pr_note.is_some(), "--add-pr-note"),
+        (!args.door.is_empty(), "--status/--leave/--set"),
+    ] {
+        if set {
+            mixed.push(flag.to_string());
+        }
+    }
+    if !mixed.is_empty() {
+        eprintln!(
+            "Error: --to renames the node id and cannot be combined with \
+             ({}) in one call. Run two calls.",
+            mixed.join(", ")
+        );
+        return 2;
+    }
+    super::reid_cli::reid_write(&settings::graph_path(), &args.task_id, new_id)
 }
 
 /// The door relay: refuse the mixed legacy+door call, then hand the door

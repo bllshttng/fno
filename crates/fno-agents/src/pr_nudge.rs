@@ -12,6 +12,11 @@
 //! file seam, so tests stage the world. The ladder fires on the daemon's
 //! retire arm only. A manual `reap` verb never nudges; its dry run prints
 //! the plan (`would nudge <id> (<action>)`) and takes no effect.
+//!
+//! An owner's per-PR hold (`pr-hold:<slug>#<pr>`, the same subject the
+//! authorized-merge gate itself refuses on) outranks the ladder exactly
+//! like a merge order: the row pauses, and a held PR gets no "drive it to
+//! merge" nudge, because the hold forbids exactly that.
 
 use crate::events::EventEmitter;
 use crate::gc_sweep::OpenPrRow;
@@ -67,8 +72,9 @@ pub enum NudgeAction {
     /// Nothing is due: the transcript is fresh, the last nudge is young, or
     /// the ladder already escalated and is waiting for activity.
     Wait,
-    /// A merge order or fleet loop halt holds the session: no nudge, and the
-    /// pause names itself in the event log at most once per hour.
+    /// A merge order, the owner's pr-hold, or a fleet loop halt holds the
+    /// session: no nudge, and the pause names itself in the event log at
+    /// most once per hour.
     Pause,
     /// The attempt budget is spent: file one operator question and wait for
     /// activity.
@@ -142,8 +148,8 @@ pub fn decide(input: &NudgeInput) -> (NudgeAction, LadderState) {
     if !due(&input) {
         return (NudgeAction::Wait, state);
     }
-    // 3. Pause: a merge order or fleet loop halt holds the row. The pause
-    // names itself at most once per hour.
+    // 3. Pause: a merge order, the owner's pr-hold, or a fleet loop halt
+    // holds the row. The pause names itself at most once per hour.
     if input.merge_order_hold {
         return (NudgeAction::Pause, state);
     }
@@ -178,7 +184,8 @@ pub struct NudgeInput {
     pub transcript_age_s: Option<i64>,
     /// Unix seconds of the transcript's last write, when the age answered.
     pub last_activity_at: Option<i64>,
-    /// A live merge order or loop-scoped fleet halt holds this session.
+    /// A live merge order, the owner's pr-hold, or a loop-scoped fleet halt
+    /// holds this session.
     pub merge_order_hold: bool,
     pub grace_secs: i64,
     pub now: i64,
@@ -249,7 +256,7 @@ fn ladder_run(argv: &[String], cwd: &str) -> (i32, String, String) {
 pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow], grace_secs: i64) {
     let now = crate::daemon::now_epoch_secs();
     for row in rows {
-        let held = merge_order_hold(home, &row.node);
+        let held = merge_order_hold(home, &row.node) || authorized_merge_hold(home, row);
         let state = load_state(home, &row.session_id);
         apply(
             home,
@@ -266,7 +273,7 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
 }
 
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    if merge_order_hold(home, &row.node) {
+    if merge_order_hold(home, &row.node) || authorized_merge_hold(home, row) {
         return true;
     }
     loop_pause_hold(home, row)
@@ -798,12 +805,10 @@ fn clean_label(label: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The merge-order pause (the only allowed one): a live decision with the
-/// subject `merge-order:<node>:after:<lead>` names this node, and the lead
-/// node is not done yet. A retracted or superseded decision does not count
-/// (`derive_live` retires both).
-fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
-    let subject_prefix = format!("merge-order:{node}:after:");
+/// The live decision store this home's node sits under: the graph
+/// decisions merged with the journal's rows, retired/superseded rows
+/// already dropped. `None` when neither leg is readable.
+fn live_decisions(home: &AgentsHome) -> Option<crate::decision_index::Index> {
     // The state dir is where the decisions journal, its store and the graph
     // live; the read merges the graph decisions with the journal's rows.
     let state_dir = home
@@ -811,10 +816,20 @@ fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
         .parent()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
-    let Ok(index) = crate::decision_index::read_store_live(
+    crate::decision_index::read_store_live(
         &state_dir.join("graph.json"),
         &state_dir.join("decisions.jsonl"),
-    ) else {
+    )
+    .ok()
+}
+
+/// The merge-order pause (the only allowed one): a live decision with the
+/// subject `merge-order:<node>:after:<lead>` names this node, and the lead
+/// node is not done yet. A retracted or superseded decision does not count
+/// (`derive_live` retires both).
+fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
+    let subject_prefix = format!("merge-order:{node}:after:");
+    let Some(index) = live_decisions(home) else {
         return false;
     };
     let mut newest: Option<(String, String, String)> = None; // (ts, decision_id, lead)
@@ -847,6 +862,31 @@ fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
     !crate::gc_sweep::read_graph_entries(home)
         .and_then(|g| g.statuses.get(&lead).cloned())
         .is_some_and(|status| status == "done")
+}
+
+/// The owner's per-PR hold (`pr-hold:<slug>#<pr>`, `HOLD_DECISION`): the
+/// same subject the authorized-merge gate itself refuses on
+/// (`pr_admission::pr_hold`). A worker whose PR carries this hold must get
+/// no nudge to drive it to merge - the hold forbids exactly that. Read in
+/// process from the live decision store rather than through the gate's own
+/// `gh`-fetched probe, so a held row costs the ladder one local `git
+/// remote` read, never a network call. A row with no PR yet has nothing to
+/// hold.
+fn authorized_merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+    let Some(pr) = row.pr else {
+        return false;
+    };
+    let Some(slug) = crate::backlog::pr_link::resolve_current_repo_slug(Some(&row.cwd)) else {
+        return false;
+    };
+    let Some(index) = live_decisions(home) else {
+        return false;
+    };
+    let subject = crate::pr_admission::hold_subject(&slug, pr);
+    index.rows.iter().any(|r| {
+        r.get("subject").and_then(Value::as_str) == Some(subject.as_str())
+            && r.get("decision").and_then(Value::as_str) == Some(crate::pr_admission::HOLD_DECISION)
+    })
 }
 
 /// The session id is the state filename: hex and dashes only, so a stray
@@ -934,8 +974,11 @@ fn decide_with_read(
     // ponytail: one status read per due row per retire pass (300 s), and an
     // escalated row is due every pass. Read escalated rows once per grace if the
     // gh budget runs hot. A dead-worker row carries no PR: no read, no red
-    // head - the node's open work is the whole reason for the nudge.
-    if !loop_pause_hold && due(&input) && row.pr.is_some() {
+    // head - the node's open work is the whole reason for the nudge. A held
+    // row (merge order, authorized-merge pr-hold, or loop pause) also skips
+    // the read: the decision is Pause either way, and the read is a wasted
+    // `gh`-touching call for a row the ladder already knows not to nudge.
+    if !input.merge_order_hold && due(&input) && row.pr.is_some() {
         let s = read_status(row, runner);
         input.red_head = s.as_ref().ok().and_then(settled_red_head);
         status = Some(s);
@@ -958,7 +1001,7 @@ pub fn plan_with(
     rows.iter()
         .map(|row| {
             let state = load_state(home, &row.session_id);
-            let merge_order = merge_order_hold(home, &row.node);
+            let merge_order = merge_order_hold(home, &row.node) || authorized_merge_hold(home, row);
             let loop_paused = loop_pause_hold(home, row);
             let action = decide_with_read(
                 row,
@@ -1056,6 +1099,69 @@ mod tests {
         });
         assert_eq!(planned[0].1, "paused");
         assert!(!status_read, "a held nudge skips the PR-status read");
+    }
+
+    /// AC: a node held by the owner's pr-hold (the same subject the
+    /// authorized-merge gate refuses on) gets no "drive it to merge" nudge,
+    /// even though the row is otherwise due: a worker repeatedly resumed
+    /// under a live hold drove the merge the hold forbade.
+    #[test]
+    fn authorized_merge_hold_pauses_a_due_nudge() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/bllshttng/fno.git",
+        ]);
+
+        let esc_root = std::env::temp_dir().join("fno-pn-pr-hold");
+        let _ = std::fs::remove_dir_all(&esc_root);
+        let home = AgentsHome::at(esc_root.join("agents"));
+        std::fs::create_dir_all(&esc_root).unwrap();
+        std::fs::write(
+            esc_root.join("decisions.jsonl"),
+            "{\"type\":\"operator_decision\",\"ts\":\"2026-10-19T00:00:00Z\",\
+             \"data\":{\"decision_id\":\"d-1\",\
+             \"subject\":\"pr-hold:bllshttng/fno#3577\",\
+             \"decision\":\"do not merge this pull request\",\
+             \"authority_source\":\"operator\"}}\n",
+        )
+        .unwrap();
+
+        let r = OpenPrRow {
+            pr: Some(3577),
+            cwd: repo.path().to_string_lossy().into_owned(),
+            ..row(false)
+        };
+
+        assert!(
+            authorized_merge_hold(&home, &r),
+            "the owner's pr-hold must hold this PR nudge"
+        );
+
+        let mut status_read = false;
+        let planned = plan_with(&home, &[r], 900, &mut |_, _| {
+            status_read = true;
+            (0, "{}".into(), String::new())
+        });
+        assert_eq!(planned[0].1, "paused");
+        assert!(!status_read, "a held nudge skips the PR-status read");
+        let _ = std::fs::remove_dir_all(&esc_root);
     }
 
     /// The status payload the real verb writes to stdout whatever the exit

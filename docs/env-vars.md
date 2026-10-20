@@ -295,6 +295,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `POSTMORTEMS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:2981 |
 | `POSTMORTEM_CORRECTIONS_LOG` | rs | Overrides the corrections.log path; the finalize writer and the corrections-verify reader resolve it together. crates/fno-agents/src/finalize.rs:3098 |
 | `POST_MERGE_NONINTERACTIVE` | py+rs | unclear: cli/src/fno/pr/cli.py:918 |
+| `PROJECT_ZAI_KEY` | py | Test seam: a project-scoped zai key env var the dispatch test pins so the repository-settings overlay proves a `PROJECT_`-prefixed key env resolves over the account-level `ZAI_API_KEY`. |
 | `PWD` | py+rs | unclear: cli/src/fno/adapters/providers/cli.py:54 |
 | `PYTEST_CURRENT_TEST` | py+rs | unclear: cli/src/fno/cli.py:404 |
 | `PYTHONPATH` | rs | unclear: crates/fno-agents/src/finalize.rs:1090 |

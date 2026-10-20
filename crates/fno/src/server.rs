@@ -728,6 +728,8 @@ pub(crate) enum CoreMsg {
         claim: bool,
         placement: PanePlacement,
         worker: Option<String>,
+        /// (v117) The caller's preassigned session id; see `ControlVerb::PaneRun`.
+        fno_id: Option<String>,
         reply: ControlReply,
     },
     PaneSend {
@@ -735,16 +737,11 @@ pub(crate) enum CoreMsg {
         bytes: Vec<u8>,
         guarded: bool,
         expected_identity: Option<String>,
-        /// A send the Rust hold gate already passed (`own`, `control:` or a
-        /// parked-mail replay): the pane's DND refusal stands down for this
-        /// write. Every other guard stays.
+        /// A send the Rust hold gate already passed; `pane_send` carries the
+        /// full contract.
         hold_pass: bool,
-        /// Fresh registry snapshot for a guarded send, read off-loop in
-        /// `handle_control`. `Err` carries the refusal reason: either the read
-        /// failed or the registry carries a row whose pane cannot be read
-        /// (guarded -> fail closed); an unguarded send leaves it unused.
-        /// `Ok(rows)` is the idle authority the guard checks, `rows` empty =>
-        /// no agents => proceed.
+        /// The fresh registry snapshot `pane_send` guards on, read off-loop
+        /// in `handle_control`; `pane_send` carries the full contract.
         agents: Result<Vec<RegistryAgent>, &'static str>,
         reply: ControlReply,
     },
@@ -11123,6 +11120,7 @@ impl Core {
                 claim,
                 placement,
                 worker,
+                fno_id,
                 reply,
             } => {
                 let rows = rows.unwrap_or(vt::DEFAULT_ROWS);
@@ -11137,6 +11135,7 @@ impl Core {
                     claim,
                     placement,
                     worker,
+                    fno_id,
                     move |core, outcome| {
                         let _ = reply.send(core.pane_run_reply(outcome, receipt));
                         Flow::Continue
@@ -11946,8 +11945,8 @@ async fn handle_control(
             claim,
             placement,
             worker,
+            fno_id,
         } => {
-            // Resolve the squad key off the core loop, exactly like Attach.
             let squad_key = resolve_squad_key(&resolver, &cwd).await;
             core_tx
                 .send(CoreMsg::PaneRun {
@@ -11959,6 +11958,7 @@ async fn handle_control(
                     claim,
                     placement,
                     worker,
+                    fno_id,
                     reply: reply_tx,
                 })
                 .await

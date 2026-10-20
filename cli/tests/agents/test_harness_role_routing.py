@@ -52,6 +52,13 @@ def test_cheap_role_merges_zai_env(
 ) -> None:
     from fno.agents.harnesses import claude as claude_mod
 
+    from tests.agents._route_overlay_stub import claude_route_overlay_stub
+
+    # The route answers from the route-builder binary, which the smoke shard
+    # deliberately leaves absent; pin the zai shape it gives.
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", claude_route_overlay_stub
+    )
     monkeypatch.setenv("ZAI_API_KEY", "zk-secret")
     # A stale Anthropic credential in the parent env must be cleared on a route
     # (both the API key AND a subscription OAuth token) so the z.ai auth token

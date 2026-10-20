@@ -13,7 +13,7 @@ use crate::claude_ask::ClaudeHome;
 use crate::claude_resume::claude_attach_pointer;
 use crate::client_verbs::{
     append_agents_event, echo_extra, is_codex_thread_row, py_repr_str, read_registry_entries,
-    resolve_entry_with_heal, trace_events_path, validate_lifecycle_name, which_on_path,
+    resolve_entry_with_heal_scoped, trace_events_path, validate_lifecycle_name, which_on_path,
 };
 use crate::paths::AgentsHome;
 
@@ -482,33 +482,56 @@ then attach again."
 /// `fno-agents attach <name>` -- interactive attach to a running claude agent,
 /// a codex thread, or a pi session (every other harness is refused). Mirrors
 /// Python `dispatch.attach_agent` + the `cmd_attach` Typer wrapper.
-pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
+/// Parsed `attach` argv: one NAME plus the store-heal flag. Extracted so the
+/// flag grammar is unit-testable without a registry fixture, the way
+/// resume_args did for resume.
+#[derive(Debug)]
+pub(crate) struct AttachArgs {
+    pub name: String,
+    pub cross_project: bool,
+}
+
+pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, String)> {
     let mut name: Option<String> = None;
+    // The store heal's project-confinement refusal prescribes --cross-project;
+    // accept it so the taught remedy is a form this verb takes.
+    let mut cross_project = false;
     for a in rest {
         match a.as_str() {
+            "--cross-project" => cross_project = true,
             other if other.starts_with("--") => {
-                eprintln!("fno-agents: unknown attach flag: {other}");
-                return 2;
+                return Err((2, format!("fno-agents: unknown attach flag: {other}")));
             }
             other => {
                 if name.is_some() {
-                    eprintln!(
-                        "fno-agents: attach takes one NAME (got extra: {}).",
-                        echo_extra(other)
-                    );
-                    return 2;
+                    return Err((
+                        2,
+                        format!(
+                            "fno-agents: attach takes one NAME (got extra: {}).",
+                            echo_extra(other)
+                        ),
+                    ));
                 }
                 name = Some(other.to_string());
             }
         }
     }
-    let name = match name {
-        Some(n) => n,
-        None => {
-            eprintln!("fno-agents: attach needs a <name>");
-            return 2;
+    let name = name.ok_or((2, "fno-agents: attach needs a <name>".to_string()))?;
+    Ok(AttachArgs {
+        name,
+        cross_project,
+    })
+}
+
+pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
+    let parsed = match parse_attach_args(rest) {
+        Ok(p) => p,
+        Err((code, msg)) => {
+            eprintln!("{msg}");
+            return code;
         }
     };
+    let name = parsed.name;
 
     if let Err((code, msg)) = validate_lifecycle_name(&name) {
         eprintln!("{msg}");
@@ -522,7 +545,13 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
             return 12;
         }
     };
-    let entry = match resolve_entry_with_heal(&entries, &name, &home.registry_json()) {
+    let entry = match resolve_entry_with_heal_scoped(
+        &entries,
+        &name,
+        &home.registry_json(),
+        parsed.cross_project,
+        None,
+    ) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("{}", err.message());
@@ -710,6 +739,27 @@ mod tests {
     // The attach-refusal family, a file of its own beside this verb.
     #[path = "x296f_attach_refusals.rs"]
     mod x296f_attach_refusals;
+
+    #[test]
+    fn attach_parses_the_refusal_prescribed_cross_project_flag() {
+        // The store heal's project-confinement refusal prescribes
+        // --cross-project; the old surface died with "unknown attach flag"
+        // before any resolution ran.
+        let a = parse_attach_args(&["cx".to_string(), "--cross-project".to_string()]).unwrap();
+        assert_eq!(a.name, "cx");
+        assert!(a.cross_project);
+        let plain = parse_attach_args(&["cx".to_string()]).unwrap();
+        assert!(!plain.cross_project);
+        let err = parse_attach_args(&["cx".to_string(), "--nope".to_string()]).unwrap_err();
+        assert_eq!(
+            err,
+            (2, "fno-agents: unknown attach flag: --nope".to_string())
+        );
+        let err = parse_attach_args(&[]).unwrap_err();
+        assert_eq!(err, (2, "fno-agents: attach needs a <name>".to_string()));
+        let err = parse_attach_args(&["a".to_string(), "b".to_string()]).unwrap_err();
+        assert!(err.1.contains("attach takes one NAME"), "{err:?}");
+    }
 
     #[test]
     fn mux_thread_fallthrough_exits_match_the_mux() {
