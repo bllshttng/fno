@@ -11,6 +11,13 @@
 //! The front is driven as a SUBPROCESS with `env_clear`, mirroring
 //! squad_prune.rs: no cross-test env races, and `FNO_AGENTS_BIN` points the
 //! paired-binary lookup at the stub.
+//!
+//! Every case here must stay on the NATIVE leg. A plain-name target would
+//! decline to the Python forward, which self-provisions the wheel from the
+//! network in a hermetic env and then resolves `FNO_AGENTS_BIN` to the stub,
+//! so a negative assertion on the record cannot hold. The leg-separation
+//! contract lives at the unit layer, where the classifier tests pin the
+//! plain-name route as the Python forward.
 
 #![cfg(unix)]
 
