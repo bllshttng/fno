@@ -88,13 +88,7 @@ class _DebounceHarness:
         # push-stamps`), so the harness pins the door's answer with a fake
         # fno-agents binary and the real _push_stamp_path derivation
         # (resolve, subprocess, stdout, safe-name flatten) stays under test.
-        stamp_dir = tmp_path / "push-stamps"
-        bindir = tmp_path / "agents-bin"
-        bindir.mkdir(exist_ok=True)
-        fake = bindir / "fno-agents"
-        fake.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(str(stamp_dir)) + "\n")
-        fake.chmod(0o755)
-        monkeypatch.setenv("FNO_AGENTS_BIN", str(fake))
+        _fake_agents_door(tmp_path, monkeypatch, tmp_path / "push-stamps")
         self.bypass_events = []
         monkeypatch.setattr(
             git_protection, "_emit_push_bypass_event", self.bypass_events.append
@@ -115,6 +109,47 @@ def _fake_fno(tmp_path, monkeypatch, body):
     fake.write_text("#!/bin/sh\n" + body)
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '')}")
+
+
+def _fake_agents_door(tmp_path, monkeypatch, stamp_dir):
+    """Pin the door's answer with a fake fno-agents binary, the same seam
+    _DebounceHarness uses."""
+    bindir = tmp_path / "agents-bin"
+    bindir.mkdir(exist_ok=True)
+    fake = bindir / "fno-agents"
+    fake.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(str(stamp_dir)) + "\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(fake))
+
+
+def test_push_stamp_path_resolves_with_fno_unimportable(tmp_path, monkeypatch):
+    """The hook runs under bare python3, which cannot import fno; the door
+    resolver is the stdlib-only guard_mark one. Proven in a subprocess where
+    `import fno` raises, so a regression to the fno.rust_binary import dies
+    here instead of silently switching the debounce off."""
+    stamp_dir = tmp_path / "push-stamps"
+    _fake_agents_door(tmp_path, monkeypatch, stamp_dir)
+    probe = (
+        "import importlib.util, json, sys\n"
+        "sys.modules['fno'] = None\n"
+        "sys.modules['fno.rust_binary'] = None\n"
+        f"spec = importlib.util.spec_from_file_location('git_protection', {str(HOOK_PATH)!r})\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "p = m._push_stamp_path('feature/x')\n"
+        "print(json.dumps({'name': p.name, 'parent': str(p.parent)}))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "FNO_AGENTS_BIN": os.environ["FNO_AGENTS_BIN"]},
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["parent"] == str(stamp_dir), out
+    assert out["name"] == "feature_x.stamp", out
 
 
 def test_debounce_bypass_and_fresh_stamp(tmp_path, monkeypatch):

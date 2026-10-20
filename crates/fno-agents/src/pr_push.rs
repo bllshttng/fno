@@ -969,10 +969,12 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
         gh_bin: "gh".to_string(),
         fno_bin: "fno".to_string(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        // The hook's own stamp dir (git-protection.py PUSH_STAMP_DIR is
-        // $FNO_HOME/push-stamps = ~/.fno/push-stamps). Rooting this at
-        // AgentsHome would split the clock: the verb writes stamps the hook
-        // never reads, and the registration-window guard never fires.
+        // The hook's own stamp dir (git_protection_impl.py
+        // _push_stamp_path resolves $FNO_HOME/push-stamps through the state
+        // door, falling back to that legacy spelling on a door refusal).
+        // Rooting this at AgentsHome would split the clock: the verb writes
+        // stamps the hook never reads, and the registration-window guard
+        // never fires.
         stamps_dir: default_stamps_dir(),
     };
     let mut i = 0;

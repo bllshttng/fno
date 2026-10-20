@@ -58,18 +58,18 @@ fi
 
 # Record the resolved intended identity for Layer 2 + post-hoc audit (best effort).
 # The folder answers from the state layout table via the `dir` door, so a
-# fold retargets this writer with its readers. Door failure skips the
-# sidecar step (best-effort by contract); never fall back to a hand-spelled
-# folder, which would strand the file outside the next fold.
+# fold retargets this writer with its readers. On a door refusal (no binary,
+# or an fno-agents predating the door) the legacy spelling answers instead:
+# the path every pre-door binary wrote and its readers read, folded by the
+# next daemon start.
 if [[ -n "$SESSION_ID" ]]; then
   ATTEST_DIR="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest 2>/dev/null || true)"
-  if [[ -n "$ATTEST_DIR" ]]; then
-    SIDE="$ATTEST_DIR/${SESSION_ID}.json"
-    mkdir -p "$(dirname "$SIDE")" 2>/dev/null || true
-    TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
-    printf '{"model":"%s","base_url_host":"%s","provider":"%s","ts":"%s"}\n' \
-      "$MODEL" "$BASE_HOST" "$PROVIDER" "$TS" > "$SIDE" 2>/dev/null || true
-  fi
+  [[ -n "$ATTEST_DIR" ]] || ATTEST_DIR="${FNO_HOME:-$HOME/.fno}/attest"
+  SIDE="$ATTEST_DIR/${SESSION_ID}.json"
+  mkdir -p "$(dirname "$SIDE")" 2>/dev/null || true
+  TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+  printf '{"model":"%s","base_url_host":"%s","provider":"%s","ts":"%s"}\n' \
+    "$MODEL" "$BASE_HOST" "$PROVIDER" "$TS" > "$SIDE" 2>/dev/null || true
 fi
 
 # Bedrock / Vertex: Anthropic models under ids that do not start with "claude-"

@@ -63,10 +63,11 @@ record_review_subagent_marker() {
   invocation_id="$(printf '%s' "$hold_json" \
     | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
   [[ -n "$invocation_id" ]] || return 0
-  # The folder answers from the state layout table via the `dir` door; a
-  # failed door skips the marker (best-effort), never a hand-spelled folder.
+  # The folder answers from the state layout table via the `dir` door; on a
+  # door refusal (no binary, or an fno-agents predating the door) the legacy
+  # spelling answers, the path every pre-door binary wrote and read.
   marker_dir="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${invocation_id}.subagents" 2>/dev/null || true)"
-  [[ -n "$marker_dir" ]] || return 0
+  [[ -n "$marker_dir" ]] || marker_dir="${FNO_HOME:-$HOME/.fno}/review-invocations/${invocation_id}.subagents"
   marker_name="$(printf '%s' "${agent_transcript:-$$}" \
     | shasum -a 256 2>/dev/null | awk '{print $1}')"
   [[ -n "$marker_name" ]] || marker_name="pid-$$"

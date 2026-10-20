@@ -51,7 +51,7 @@ import time
 # guard runs under whatever interpreter the harness hands it, so the import
 # path is built from __file__, never the cwd.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from guard_mark import guard_mark
+import guard_mark
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote
@@ -260,30 +260,32 @@ def push_names_explicit_dest(command):
 
 def _push_stamp_path(branch):
     """The last-push stamp for one branch, answered by the Rust state door
-    (`state path dir push-stamps`). None (no binary, or a failing door)
-    skips the debounce, the same cost as today's unwritable stamp. Slashes
-    are the common case in a feature branch name, so they are flattened
-    rather than nested."""
-    try:
-        from fno.rust_binary import resolve_binary
-    except Exception:  # noqa: BLE001 - the hook must run on any git command
-        return None
-    binary = resolve_binary()
-    if binary is None:
+    (`state path dir push-stamps`) through the stdlib-only resolver
+    (guard_mark._resolve_agents_bin): this hook is stdlib-only and runs
+    under a bare python3 that cannot import fno. None (no binary) skips the
+    debounce, the same cost as today's unwritable stamp; a door refusal
+    (an fno-agents predating the dir door) falls back to the legacy
+    spelling, the path every such binary wrote and read. Slashes are the
+    common case in a feature branch name, so they are flattened rather
+    than nested."""
+    agents_bin = guard_mark._resolve_agents_bin()
+    if not agents_bin:
         return None
     try:
         proc = subprocess.run(
-            [str(binary), "state", "path", "dir", "push-stamps"],
+            [str(agents_bin), "state", "path", "dir", "push-stamps"],
             capture_output=True,
             text=True,
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
+    if proc.returncode == 0 and proc.stdout.strip():
+        base = proc.stdout.strip()
+    else:
+        base = str(FNO_HOME / "push-stamps")
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", branch or "HEAD")
-    return Path(proc.stdout.strip()) / f"{safe}.stamp"
+    return Path(base) / f"{safe}.stamp"
 
 
 def push_debounce_refusal(command, branch):
@@ -1986,7 +1988,7 @@ def _guard_mark(decision, tool):
     guard actually ran and what it decided. The shared writer commits it to
     the journal's store; best-effort by contract: any failure is swallowed
     and can never change the decision."""
-    guard_mark("git-protection", decision, tool)
+    guard_mark.guard_mark("git-protection", decision, tool)
 
 
 _GUARD_MARKED = {"done": False}

@@ -177,9 +177,10 @@ case "$invocation_id" in
   *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
 esac
 # The attest sidecar answers from the state layout table via the `dir`
-# door; a failed door leaves the path empty and the family unread, the same
-# shape as a missing sidecar.
+# door; on a door refusal (no binary, or an fno-agents predating the door)
+# the legacy spelling answers, the path every pre-door binary wrote.
 model_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
+[[ -n "$model_sidecar" ]] || model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json"
 model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
 data="$(jq -cn \
   --arg invocation_id "$invocation_id" \
