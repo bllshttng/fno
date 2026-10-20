@@ -2,7 +2,7 @@
 //! drain, copy, publish, park, verify. Nothing is deleted. A refused row
 //! keeps both copies; a pending row retries on the next lane pass.
 
-use crate::state_layout::{find, Row, Status};
+use crate::state_layout::{find, park_file_at, Row, Status};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -740,9 +740,12 @@ pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Sta
     // Step 1: park every family file first. A rename is atomic, so a writer
     // that appends around the move lands its bytes in the parked copy and
     // the one import below reads them; no append falls between an import
-    // and a park. A collision in the same stamp gains `.1`, `.2`, ... so a
-    // second pass never clobbers the first copy. A failed park refuses that
-    // file alone.
+    // and a park. One window stays open: a writer whose fd predates the
+    // rename can append after the import, and those bytes sit uncommitted
+    // in the parked copy. Only a stale pre-store writer can open that fd,
+    // and the copy is never unlinked, so an audit recovers them. A
+    // collision in the same stamp gains `.1`, `.2`, ... so a second pass
+    // never clobbers the first copy. A failed park refuses that file alone.
     let mut parked: Vec<(String, PathBuf)> = Vec::new();
     for (path, name) in family.iter().zip(names.iter()) {
         match park_file_at(root, stamp, path) {
@@ -779,40 +782,45 @@ pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Sta
             return out;
         }
     };
-    // Step 3: one receipt row. `repeat` is true when an earlier pass already
+    // Step 3: one receipt row per completed retire. A pass that left a file
+    // at the root is a straggler pass, not a retire: a receipt here would
+    // make the completing pass read as a repeat and fire a false
+    // legacy_journal signal. `repeat` is true when an earlier pass already
     // retired this journal.
-    let prior = crate::event_store::query_events(
-        &live,
-        &crate::event_store::EventQuery {
-            types: vec!["legacy_journal_retired".to_string()],
-            ..Default::default()
-        },
-    )
-    .unwrap_or_default();
-    let repeat = prior.iter().any(|row| {
-        serde_json::from_str::<serde_json::Value>(&row.line)
-            .ok()
-            .and_then(|v| {
-                v.get("data")
-                    .and_then(|d| d.get("journal"))
-                    .and_then(|j| j.as_str())
-                    .map(str::to_string)
-            })
-            .is_some_and(|j| j == "events.jsonl")
-    });
-    let mut fields = serde_json::Map::new();
-    fields.insert("journal".into(), serde_json::Value::from("events.jsonl"));
-    fields.insert("files".into(), serde_json::Value::from(parked.len()));
-    fields.insert("bytes".into(), serde_json::Value::from(receipt.read_bytes));
-    fields.insert("ingested".into(), serde_json::Value::from(receipt.ingested));
-    fields.insert("corrupt".into(), serde_json::Value::from(receipt.corrupt));
-    fields.insert(
-        "parked_to".into(),
-        serde_json::Value::from(dir.to_string_lossy().to_string()),
-    );
-    fields.insert("repeat".into(), serde_json::Value::from(repeat));
-    let _ = crate::events::EventEmitter::new(&live, "daemon")
-        .emit_fields("legacy_journal_retired", fields);
+    if parked.len() == names.len() {
+        let prior = crate::event_store::query_events(
+            &live,
+            &crate::event_store::EventQuery {
+                types: vec!["legacy_journal_retired".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap_or_default();
+        let repeat = prior.iter().any(|row| {
+            serde_json::from_str::<serde_json::Value>(&row.line)
+                .ok()
+                .and_then(|v| {
+                    v.get("data")
+                        .and_then(|d| d.get("journal"))
+                        .and_then(|j| j.as_str())
+                        .map(str::to_string)
+                })
+                .is_some_and(|j| j == "events.jsonl")
+        });
+        let mut fields = serde_json::Map::new();
+        fields.insert("journal".into(), serde_json::Value::from("events.jsonl"));
+        fields.insert("files".into(), serde_json::Value::from(parked.len()));
+        fields.insert("bytes".into(), serde_json::Value::from(receipt.read_bytes));
+        fields.insert("ingested".into(), serde_json::Value::from(receipt.ingested));
+        fields.insert("corrupt".into(), serde_json::Value::from(receipt.corrupt));
+        fields.insert(
+            "parked_to".into(),
+            serde_json::Value::from(dir.to_string_lossy().to_string()),
+        );
+        fields.insert("repeat".into(), serde_json::Value::from(repeat));
+        let _ = crate::events::EventEmitter::new(&live, "daemon")
+            .emit_fields("legacy_journal_retired", fields);
+    }
     for (name, _) in &parked {
         out.push((name.clone(), Status::Merged));
     }
