@@ -2169,3 +2169,34 @@ mod self_address_tests {
         assert_eq!(refuse_unsafe_short_address(Some(&head8), true), Ok(()));
     }
 }
+
+// Ported from cli/tests/unit/test_mail_origin.py when classify_origin moved:
+// the classification contract is unguarded in Rust, so it ports rather than
+// deletes (dead-seam rule).
+#[cfg(test)]
+mod classify_origin_tests {
+    use super::*;
+    use crate::claims::EnvVarGuard;
+
+    /// An ambient agent identity cannot claim an origin above peer, whatever
+    /// the flag says.
+    #[test]
+    fn an_agent_identity_downgrades_declared_origins_to_peer() {
+        let _sid = EnvVarGuard::set("CODEX_SESSION_ID", "session-origin-1");
+        assert_eq!(classify_origin(Some("operator")), Ok("peer".to_string()));
+        assert_eq!(classify_origin(Some("scheduler")), Ok("peer".to_string()));
+        assert_eq!(classify_origin(Some("peer")), Ok("peer".to_string()));
+    }
+
+    /// No agent identity: an unattended stdin classifies unknown, and an
+    /// explicit invalid vocabulary word refuses with the usage message.
+    /// (The attended "operator" branch needs a real tty and stays reachable
+    /// only live.)
+    #[test]
+    fn without_an_identity_the_unattended_stream_classifies_unknown() {
+        let _clear = EnvVarGuard::set("CODEX_SESSION_ID", "");
+        let _clear2 = EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "");
+        assert_eq!(classify_origin(None), Ok("unknown".to_string()));
+        assert!(classify_origin(Some("admiral")).is_err());
+    }
+}
