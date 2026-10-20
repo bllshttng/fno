@@ -919,18 +919,13 @@ fn argv_has_take_over(argv: &[String]) -> bool {
         .any(|t| t == "--take-over" || t.starts_with("--take-over="))
 }
 
-/// Whether the argv carries `--hand-off` or its retired `--succeed`
-/// spelling before the boundary.
+/// Whether the argv carries `--hand-off` before the boundary. The retired
+/// `--succeed` spelling dies at the tombstone, before compose runs.
 fn argv_has_hand_off(argv: &[String]) -> bool {
     argv.iter()
         .skip(1)
         .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
-        .any(|t| {
-            t == "--hand-off"
-                || t.starts_with("--hand-off=")
-                || t == "--succeed"
-                || t.starts_with("--succeed=")
-        })
+        .any(|t| t == "--hand-off" || t.starts_with("--hand-off="))
 }
 
 /// An overlay table (or lane args) can carry the ONLY value this spawn
