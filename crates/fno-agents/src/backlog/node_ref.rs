@@ -68,6 +68,16 @@ pub fn has_node_id_prefix(s: &str) -> bool {
     s.starts_with(settings::node_id_prefix().as_str()) || s.starts_with("ab-")
 }
 
+/// The row's retired ids: the `aliases` list the update --to rename
+/// rewrites and other modules read (mint exclusion, collision checks).
+/// Absent on rows never renamed.
+pub(crate) fn entry_aliases(entry: &Value) -> Vec<&str> {
+    match entry.get("aliases").and_then(Value::as_array) {
+        Some(items) => items.iter().filter_map(Value::as_str).collect(),
+        None => Vec::new(),
+    }
+}
+
 /// Deterministic tiers 1 to 3, exact only: exact id, exact slug
 /// (case insensitive), bare 4 to 8 lowercase hex re-prefixed by the
 /// configured prefix then the legacy `ab-`.
@@ -79,6 +89,13 @@ pub fn resolve_tiers<'a>(entries: &'a [Value], query: &str) -> Option<&'a Value>
     }
     for e in entries {
         if e.get("id").and_then(Value::as_str) == Some(query) {
+            return Some(e);
+        }
+    }
+    // Retired ids: a rename keeps the old id on the row as an alias, so
+    // history written before the rename still resolves. Exact match only.
+    for e in entries {
+        if entry_aliases(e).contains(&query) {
             return Some(e);
         }
     }
@@ -148,9 +165,12 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
             })
             .map(|(i, _)| i)
             .collect();
-        return match candidates.as_slice() {
-            [one] => Some(*one),
-            [] => None,
+        match candidates.as_slice() {
+            [one] => return Some(*one),
+            // An empty prefix tier falls through to the exact and alias
+            // tiers: a short spelling of a retired `ab-` alias is an exact
+            // alias hit, never a miss.
+            [] => {}
             many => {
                 let ids: Vec<&str> = many
                     .iter()
@@ -160,9 +180,9 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
                     "[graph] ambiguous prefix '{node_id}' matches: {}",
                     ids.join(", ")
                 );
-                None
+                return None;
             }
-        };
+        }
     }
     // Dash variants (`x-bbbb` <-> `xbbbb`), still exact-match only: the graph
     // confirms the id, not the spelling. Exact spelling wins first.
@@ -171,6 +191,14 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
         .position(|e| e.get("id").and_then(Value::as_str) == Some(node_id))
     {
         return Some(exact);
+    }
+    // Retired ids resolve to the row that carries them, the same tier the
+    // read ladder serves.
+    if let Some(hit) = entries
+        .iter()
+        .position(|e| entry_aliases(e).contains(&node_id))
+    {
+        return Some(hit);
     }
     for alt in dash_variants(&node_id.to_lowercase()) {
         if let Some(hit) = entries
@@ -493,6 +521,46 @@ mod tests {
         assert!(find_node(&entries, "-x-aaaa").is_none());
         // The dash-shaped alias of a real id is a flag leak too, not a spelling.
         assert!(resolve_tiers(&entries, "-aaaa").is_none());
+    }
+
+    #[test]
+    fn resolve_tiers_aliases_dash_shapes_both_ways() {
+        let compact = vec![json!({"id": "xbbbb", "slug": "xbbbb"})];
+        assert!(resolve_tiers(&compact, "xbbbb").is_some());
+        assert!(resolve_tiers(&compact, "x-bbbb").is_some());
+        let dashed = vec![json!({"id": "x-aaaa", "slug": "a"})];
+        assert!(resolve_tiers(&dashed, "x-aaaa").is_some());
+        assert!(resolve_tiers(&dashed, "xaaaa").is_some());
+        assert!(resolve_tiers(&dashed, "x-missing").is_none());
+    }
+
+    #[test]
+    fn resolvers_match_a_retired_id_alias() {
+        let entries = vec![json!({"id": "x-cccc", "aliases": ["ab-cccc"]})];
+        assert!(resolve_tiers(&entries, "x-cccc").is_some());
+        assert!(resolve_tiers(&entries, "ab-cccc").is_some());
+        assert!(resolve_tiers(&entries, "ab-dddd").is_none());
+        assert!(find_node(&entries, "ab-cccc").is_some());
+        assert!(find_node(&entries, "b-cccc").is_none());
+        // A row without the key never aliases.
+        let bare = vec![json!({"id": "x-eeee"})];
+        assert!(resolve_tiers(&bare, "x-eeee").is_some());
+        assert!(resolve_tiers(&bare, "eeee").is_none());
+    }
+
+    #[test]
+    fn find_node_unique_prefix_resolves_and_ambiguous_refuses() {
+        let entries = vec![
+            json!({"id": "ab-1a2b3c4d"}),
+            json!({"id": "ab-1234abcd"}),
+            json!({"id": "x-bbbb2222"}),
+        ];
+        assert!(find_node(&entries, "ab-1a2b3c4d").is_some());
+        // Both stored ids carry the bare `ab-` family prefix, so the fuzzy
+        // tier names two candidates and reads as a miss.
+        assert!(find_node(&entries, "ab-").is_none());
+        assert!(find_node(&entries, "x-bbbb2222").is_some());
+        assert!(find_node(&entries, "x-missing").is_none());
     }
 
     #[test]
