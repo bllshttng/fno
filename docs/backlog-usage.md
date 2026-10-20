@@ -402,11 +402,11 @@ Read the fine print before comparing numbers. The scope line names the window, t
 
 ## Scorecard by lane
 
-`fno backlog calibration --by-lane` answers which lane did which kind of work and how it went. It folds every node whose last execute session ended inside the window into cells keyed by task kind, harness, provider and model. The window defaults to 28 days; `--since 90` widens it.
+`fno backlog calibration --by-lane` answers which lane did which kind of work, and how it went. It folds every node whose last execute session ended inside the window into cells keyed by task kind, harness, provider and model. The window defaults to 28 days. `--since 90` widens it.
 
-Each cell carries outcome and cost columns. `nodes` counts the records in the cell, `merged` and `merged_pct` the merge outcome, `spend_usd` and `cost_per_merged_usd` the money, `median_work_hours` the elapsed worker time, `bounce_pct` the share of merged nodes that drew a fix node inside the follow-up window, and `ci_failure_per_node` plus `review_round_per_node` the friction counts per node. `shared` counts nodes whose execute sessions ran on more than one lane.
+Each cell carries outcome and cost columns. `nodes` counts the records in the cell. `merged` and `merged_pct` give the merge outcome. `spend_usd` and `cost_per_merged_usd` are the money columns. `median_work_hours` is elapsed worker time. `bounce_pct` is the share of merged nodes that drew a fix node in the follow-up window. `ci_failure_per_node` and `review_round_per_node` are friction counts per node. `shared` counts nodes whose execute sessions ran on more than one lane.
 
-The coverage block above the table reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row, and model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
+The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
 
 The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
