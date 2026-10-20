@@ -35,12 +35,14 @@ def _trailer_ensure_passthrough(monkeypatch):
 @pytest.fixture(autouse=True)
 def _verified_head(monkeypatch):
     monkeypatch.setattr(
-        "fno.pr._preflight.local_verification_required",
-        lambda **_kwargs: (True, "required"),
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"required": True, "reason": "required"}
+        if payload.get("op") == "required"
+        else {"required": False, "reason": "x"},
     )
     monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {
             "satisfied": True,
             "mode": "full",
             "result": "passed",
@@ -115,8 +117,8 @@ def test_existing_pr_still_requires_current_verification(tmp_path, monkeypatch):
         MagicMock(returncode=0, stdout=json.dumps(existing_pr), stderr=""),
     ]
     monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {"satisfied": False, "mode": "subset", "result": "passed"},
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"satisfied": False, "mode": "subset", "result": "passed"},
     )
 
     with patch("subprocess.run", mock_run):
@@ -159,7 +161,7 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"refusal": ""}
     ):
         from importlib import reload
         import fno.worker.ship as ship_mod
@@ -207,7 +209,7 @@ def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"refusal": ""}
     ):
         from fno.worker.ship import ship
         result = ship(
@@ -246,7 +248,7 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
         "fno.rust_binary.verb_call",
         lambda verb, payload, **k: {"code": 3, "message": refusal},
     ), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"refusal": ""}
     ):
         from importlib import reload
         import fno.worker.ship as ship_mod
@@ -282,7 +284,7 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
         if verb == "pr-base-check"
         else {"body": payload["body"]},
     ), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=dup_refusal
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"refusal": dup_refusal}
     ):
         from fno.worker.ship import ship
 
@@ -308,12 +310,12 @@ def test_non_full_verification_refuses_pr_create(tmp_path, monkeypatch):
         MagicMock(returncode=0, stdout="[]", stderr=""),
     ]
     monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {"satisfied": False, "mode": "subset", "result": "passed"},
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"satisfied": False, "mode": "subset", "result": "passed"},
     )
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"refusal": ""}
     ):
         from fno.worker.ship import ship
 

@@ -67,7 +67,7 @@ def _arm_world(
         lambda pr, repo: _grant_verdict(),
     )
     monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"worktree": str(payload.get("cwd") or repo)}
     )
     monkeypatch.setattr(merge_mod, "_load_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
     monkeypatch.setattr(merge_mod.shutil, "which", lambda _x: "/usr/bin/gh")

@@ -50,7 +50,9 @@ fn config_leaf<T: Default + Copy>(
 ) -> Option<T> {
     let read = |path: &Path| -> Option<T> {
         let content = std::fs::read_to_string(path).ok()?;
-        pick(&crate::loopcheck::settings::parse_settings(&content))
+        crate::loopcheck::settings::parse_settings_result(&content)
+            .ok()
+            .and_then(|settings| pick(&settings))
     };
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let global = read(&PathBuf::from(home).join(".fno/config.toml"));

@@ -550,8 +550,8 @@ def hold_check(
         "project, global, and known delivery-root event journals. "
         "--allow-rebase-equivalent also accepts a full/passed receipt for an "
         "earlier commit whose verbatim patch ids match HEAD (a rebase with no "
-        "code change; never a rescue of a failed or pending receipt for HEAD "
-        "itself); review entry opts in, the attestation reuse path never does."
+        "code change; never a rescue of a failed/pending receipt for HEAD "
+        "itself). Answered by fno-agents verify-evidence check."
     ),
 )
 def evidence_check(
@@ -561,45 +561,29 @@ def evidence_check(
         help="Accept a receipt for an earlier commit whose patches match HEAD.",
     ),
 ) -> None:
-    from fno.pr import _preflight
-
-    raise typer.Exit(code=_preflight.run_evidence_check(allow_equivalent=allow_rebase_equivalent))
-
+    args = []
+    if allow_rebase_equivalent:
+        args.append("--allow-rebase-equivalent")
+    _forward_to_binary("verify-evidence", args)
 
 @pr_app.command("evidence-required", hidden=True)
 def evidence_required(
     base: str = typer.Option("origin/main", "--base"),
 ) -> None:
     """Expose the one local-verification policy to shell-based ship paths."""
-    from fno.pr import _preflight
-
-    required, reason = _preflight.local_verification_required(cwd=os.getcwd(), base_ref=base)
-    typer.echo(json.dumps({"required": required, "reason": reason}, separators=(",", ":")))
-
+    _forward_to_binary("verify-evidence", ["required", "--base", base])
 
 @pr_app.command("next-receipt-generation", hidden=True)
 def next_receipt_generation(
     candidate_sha: str = typer.Option(..., "--candidate-sha"),
 ) -> None:
     """Derive the next receipt generation from every discovered journal."""
-    from fno.pr import _preflight
-
-    try:
-        generation = _preflight.next_verification_generation(
-            cwd=os.getcwd(), candidate_sha=candidate_sha
-        )
-    except ValueError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
-    typer.echo(str(generation))
-
+    _forward_to_binary("verify-evidence", ["next-generation", "--candidate-sha", candidate_sha])
 
 @pr_app.command("global-receipt-events-path", hidden=True)
 def global_receipt_events_path() -> None:
     """Print the durable cross-checkout verification receipt journal."""
-    from fno.paths import global_events_json
-
-    typer.echo(str(global_events_json()))
+    _forward_to_binary("verify-evidence", ["journal-path"])
 
 
 @pr_app.command(

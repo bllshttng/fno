@@ -266,7 +266,7 @@ def enabled(monkeypatch, tmp_path):
     monkeypatch.setattr(claims, "acquire_claim", partial(claims.acquire_claim, root=tmp_path))
     monkeypatch.setattr(claims, "release_claim", partial(claims.release_claim, root=tmp_path))
     monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"worktree": str(payload.get("cwd") or repo)}
     )
     monkeypatch.setattr(_merge, "_load_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
     real_which = _merge.shutil.which
@@ -334,7 +334,7 @@ def _door_stub(answer, verdict=None):
 def _stub_pr_worktree_resolution(monkeypatch):
     """Keep merge tests hermetic; the resolver has its own real-worktree test."""
     monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"worktree": str(payload.get("cwd") or repo)}
     )
 
 
@@ -375,8 +375,8 @@ def test_merge_immediate_exit_0_uses_pr_worktree(enabled, monkeypatch, capsys, t
     feature = tmp_path / "feature-worktree"
     (feature / ".fno").mkdir(parents=True)
     monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree",
-        lambda pr, repo: str(feature),
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"worktree": str(feature)},
     )
     fake = FakeRun(gh_merge=Result(0, "Merged pull request", ""), toplevel=str(tmp_path))
     monkeypatch.setattr(_merge, "run", fake)

@@ -925,11 +925,17 @@ pub(crate) fn hosted_ci_not_configured(
 fn run(args: &[String]) -> (i32, String, String) {
     let git_bin = std::env::var("FNO_VERIFY_GIT_BIN").unwrap_or_else(|_| "git".to_string());
 
+    // With no sub-token, one JSON op on stdin: the shape
+    // `verb_call("verify-evidence", {"op": ...})` sends.
+    if args.is_empty() {
+        return run_stdin_ops();
+    }
+
     let Some(sub) = args.first().map(|s| s.as_str()) else {
         return (
             2,
             String::new(),
-            "verify-evidence: missing subcommand (child-promise|has-nonclaude|receipt)\n"
+            "verify-evidence: missing subcommand (child-promise|has-nonclaude|receipt|check|required|next-generation|journal-path)\n"
                 .to_string(),
         );
     };
@@ -989,6 +995,94 @@ fn run(args: &[String]) -> (i32, String, String) {
             };
             (code, format!("{decision}\n"), String::new())
         }
+        "check" => {
+            // The strict decision wired to journal discovery and (on opt-in)
+            // the rebase-equivalence arm. stdout is the decision JSON; the
+            // equivalence receipt prints one stderr line, exit 0 or 1.
+            let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let mut allow_equivalent = false;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--allow-rebase-equivalent" => allow_equivalent = true,
+                    "--cwd" => {
+                        i += 1;
+                        if i < rest.len() {
+                            cwd = PathBuf::from(&rest[i]);
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let decision =
+                crate::receipt_policy::check_verification_evidence(&cwd, None, allow_equivalent);
+            let code = if decision["satisfied"] == Value::Bool(true) {
+                0
+            } else {
+                1
+            };
+            let stderr = if decision.get("result").and_then(Value::as_str) == Some("equivalent") {
+                let matched = decision
+                    .pointer("/coverage/matched_sha")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                format!("evidence: satisfied by rebase-equivalent receipt for {matched}\n")
+            } else {
+                String::new()
+            };
+            (code, format!("{decision}\n"), stderr)
+        }
+        "required" => {
+            let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let mut base = "origin/main".to_string();
+            let mut i = 0;
+            while i < rest.len() {
+                if rest[i] == "--base" {
+                    i += 1;
+                    if i < rest.len() {
+                        base = rest[i].clone();
+                    }
+                }
+                i += 1;
+            }
+            let (required, reason) =
+                crate::receipt_policy::local_verification_required(&cwd, &base, None);
+            (
+                0,
+                format!("{}\n", json!({"required": required, "reason": reason})),
+                String::new(),
+            )
+        }
+        "next-generation" => {
+            let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let mut sha = String::new();
+            let mut i = 0;
+            while i < rest.len() {
+                if rest[i] == "--candidate-sha" {
+                    i += 1;
+                    if i < rest.len() {
+                        sha = rest[i].clone();
+                    }
+                }
+                i += 1;
+            }
+            match crate::receipt_policy::next_verification_generation(&cwd, &sha) {
+                Ok(n) => (0, format!("{n}\n"), String::new()),
+                Err(e) => (1, String::new(), format!("{e}\n")),
+            }
+        }
+        "journal-path" => (
+            0,
+            format!(
+                "{}\n",
+                crate::paths_cli::global_events_json(
+                    &std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                )
+                .display()
+            ),
+            String::new(),
+        ),
         other => (
             2,
             String::new(),
@@ -997,7 +1091,82 @@ fn run(args: &[String]) -> (i32, String, String) {
     }
 }
 
-/// Print stdout/stderr and return the exit code. Used by `bin/client.rs`.
+/// One JSON op on stdin, one JSON answer on stdout (plus the argv-form
+/// stderr line on equivalence): the shape `verb_call("verify-evidence",
+/// {...})` sends. Ops mirror the sub-tokens: check, required, next-generation.
+fn run_stdin_ops() -> (i32, String, String) {
+    use std::io::Read;
+    let mut payload = String::new();
+    if std::io::stdin().read_to_string(&mut payload).is_err() {
+        return (
+            2,
+            String::new(),
+            "verify-evidence: stdin did not answer\n".into(),
+        );
+    }
+    let parsed: Value = match serde_json::from_str(&payload) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                2,
+                String::new(),
+                format!("verify-evidence: unreadable payload: {e}\n"),
+            )
+        }
+    };
+    let op = parsed.get("op").and_then(Value::as_str).unwrap_or("");
+    let cwd = parsed
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    match op {
+        "check" => {
+            let allow = parsed
+                .get("allow_equivalent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let decision = crate::receipt_policy::check_verification_evidence(&cwd, None, allow);
+            let code = if decision["satisfied"] == Value::Bool(true) {
+                0
+            } else {
+                1
+            };
+            (code, format!("{decision}\n"), String::new())
+        }
+        "required" => {
+            let base = parsed
+                .get("base")
+                .and_then(Value::as_str)
+                .unwrap_or("origin/main")
+                .to_string();
+            let (required, reason) =
+                crate::receipt_policy::local_verification_required(&cwd, &base, None);
+            (
+                0,
+                format!("{}\n", json!({"required": required, "reason": reason})),
+                String::new(),
+            )
+        }
+        "next-generation" => {
+            let sha = parsed
+                .get("candidate_sha")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            match crate::receipt_policy::next_verification_generation(&cwd, &sha) {
+                Ok(n) => (0, format!("{n}\n"), String::new()),
+                Err(e) => (1, String::new(), format!("{e}\n")),
+            }
+        }
+        other => (
+            1,
+            String::new(),
+            format!(
+                "verify-evidence: unknown op {other:?} (want check, required or next-generation)\n"
+            ),
+        ),
+    }
+}
 pub fn run_verify_evidence(args: &[String]) -> i32 {
     let (code, stdout, stderr) = run(args);
     if !stdout.is_empty() {

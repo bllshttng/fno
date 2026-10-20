@@ -167,14 +167,18 @@ def ship(
                 "branch": branch,
             }
 
-    from fno.pr._preflight import check_verification_evidence, local_verification_required
+    from fno.rust_binary import verb_call
 
-    evidence_required, _policy_reason = local_verification_required(
-        cwd=str(Path.cwd()), base_ref=f"origin/{base_branch}"
-    )
+    evidence_required = verb_call(
+        "verify-evidence",
+        {"op": "required", "cwd": str(Path.cwd()), "base": f"origin/{base_branch}"},
+    ).get("required")
     if evidence_required:
-        evidence = check_verification_evidence(allow_equivalent=True)
-        if not evidence["satisfied"]:
+        evidence = verb_call(
+            "verify-evidence",
+            {"op": "check", "cwd": str(Path.cwd()), "allow_equivalent": True},
+        )
+        if not evidence.get("satisfied"):
             return {
                 "action": "error",
                 "error": (
@@ -182,7 +186,7 @@ def ship(
                     "verification receipt for HEAD, and no earlier receipt "
                     "whose patches match it. Run scripts/ci/preflight.sh "
                     "(required by config.preflight.required = true). "
-                    f"(mode={evidence['mode']} result={evidence['result']})"
+                    f"(mode={evidence.get('mode')} result={evidence.get('result')})"
                 ),
                 "branch": branch,
             }
@@ -240,8 +244,11 @@ def ship(
             },
         )["body"]
         # Create new PR
-        from fno.pr._preflight import check_duplicate_pr
-        if dup := check_duplicate_pr(os.getcwd(), f"origin/{base_branch}", title):
+        dup = verb_call(
+            "pr-create",
+            {"check_only": True, "title": title, "base": f"origin/{base_branch}", "cwd": os.getcwd()},
+        ).get("refusal", "")
+        if dup:
             return {"action": "error", "error": dup, "branch": branch}
         create_result = subprocess.run(
             [

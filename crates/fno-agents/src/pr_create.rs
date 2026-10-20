@@ -23,7 +23,7 @@
 //! * otherwise gh's own create exit code
 
 use crate::pr_push::{gh_api, run_labeled, READ_TIMEOUT};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -249,6 +249,11 @@ fn find_duplicate(
 }
 
 pub fn run_pr_create_verb(argv: &[String]) -> i32 {
+    if let Some(first) = argv.first() {
+        if first.trim_start().starts_with('{') {
+            return run_stdin_check_only(first);
+        }
+    }
     let a = match parse_args(argv) {
         Ok(a) => a,
         Err(msg) => {
@@ -257,6 +262,70 @@ pub fn run_pr_create_verb(argv: &[String]) -> i32 {
         }
     };
     run(&a, &|path| gh_api("gh", &a.cwd, path, &[]))
+}
+
+/// One JSON request on stdin (the argv form starts with `{`): the shape
+/// `verb_call("pr-create", {...})` sends. The twin scan only - the argv
+/// form's owners and unknowns gates are create-leg gates, and the worker
+/// duplicate check never ran them (it read only the exit-3 stderr).
+fn run_stdin_check_only(payload: &str) -> i32 {
+    let parsed: Value = match serde_json::from_str(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("pr-create: unreadable payload: {e}");
+            return 2;
+        }
+    };
+    let title = parsed.get("title").and_then(Value::as_str).unwrap_or("");
+    let base = parsed.get("base").and_then(Value::as_str).unwrap_or("main");
+    let cwd = parsed
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let branch = git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()
+        .filter(|b| !b.is_empty() && b != "HEAD");
+    let my_files: Vec<String> = git(
+        &cwd,
+        &[
+            "diff",
+            "--name-only",
+            &format!("{}...HEAD", crate::pr_body_check::base_ref(base)),
+        ],
+    )
+    .map(|f| f.lines().map(String::from).collect())
+    .unwrap_or_default();
+    let slug = crate::pr_list::origin_slug(&cwd, None).unwrap_or_default();
+    let refusal = match find_duplicate(
+        title,
+        &my_files,
+        branch.as_deref().unwrap_or(""),
+        &[],
+        &|path| gh_api("gh", &cwd, path, &[]),
+        &slug,
+    ) {
+        Ok(Some((pr, shared))) => {
+            let shown = shared
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if shared.len() > 5 {
+                format!(" (and {} more)", shared.len() - 5)
+            } else {
+                String::new()
+            };
+            format!(
+                "pr-create: REFUSED: open PR #{} already touches the same changed files with an overlapping subject\n  PR:     #{} {}\n  branch: {}\n  files:  {shown}{more}",
+                pr.number, pr.number, pr.title, pr.branch
+            )
+        }
+        _ => String::new(),
+    };
+    println!("{}", json!({"refusal": refusal, "title": title}));
+    0
 }
 
 /// The audited-owners gate for the create leg: a code PR (a changed

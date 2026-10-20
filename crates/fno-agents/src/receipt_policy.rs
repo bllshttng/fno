@@ -461,7 +461,7 @@ pub(crate) fn rebase_equivalent_evidence(
         if git_out(cwd, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_none() {
             continue;
         }
-        if patch_identity(cwd, sha, base_ref) == head_ids {
+        if patch_identity(cwd, sha, base_ref) == Some(head_ids.clone()) {
             let mut matched = decision.clone();
             matched["satisfied"] = Value::Bool(true);
             matched["result"] = Value::String("equivalent".into());
@@ -471,6 +471,30 @@ pub(crate) fn rebase_equivalent_evidence(
         }
     }
     None
+}
+
+/// `config.preflight.required` for the checkout, fail OPEN (false): the
+/// failure this policy exists to remove is a gate no one can satisfy
+/// stopping a green commit from reaching CI, so an unreadable or malformed
+/// config means not-required, never a refusal. `$FNO_CONFIG` pins an
+/// explicit file and is read directly.
+fn preflight_required_by_config(cwd: &Path) -> bool {
+    let read_required = |path: &Path| -> Option<bool> {
+        let content = std::fs::read_to_string(path).ok()?;
+        let root: toml::Value = toml::from_str(&content).ok()?;
+        root.get("preflight")
+            .and_then(|block| block.get("required"))
+            .and_then(|v| v.as_bool())
+    };
+    if let Ok(pin) = std::env::var("FNO_CONFIG") {
+        if !pin.trim().is_empty() {
+            return read_required(Path::new(&pin)).unwrap_or(false);
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let global = read_required(&PathBuf::from(home).join(".fno/config.toml"));
+    let local = read_required(&cwd.join(".fno/config.toml"));
+    local.or(global).unwrap_or(false)
 }
 
 #[cfg(test)]
