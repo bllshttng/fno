@@ -74,7 +74,8 @@ OVERRIDE_LOG = FNO_HOME / "logs" / "merge-gate-overrides.log"
 # Both markers expire and are consumed: a forgotten sentinel must not linger.
 MARKER_TTL_SECONDS = 300
 # Push debounce: the timestamp of the last allowed push, one file per branch.
-PUSH_STAMP_DIR = FNO_HOME / "push-stamps"
+# The folder itself answers from the Rust state door (_push_stamp_path), so
+# the hook never spells it and a fold retargets this side with the verb.
 # The stamp covers the registration window; the probe covers a run that is
 # already visible after the stamp expires.
 PUSH_DEBOUNCE_SECONDS = 120
@@ -258,10 +259,31 @@ def push_names_explicit_dest(command):
     return len(args) >= 2 and args[-1] not in ('HEAD', '@')
 
 def _push_stamp_path(branch):
-    """The last-push stamp for one branch. Slashes are the common case in a
-    feature branch name, so they are flattened rather than nested."""
+    """The last-push stamp for one branch, answered by the Rust state door
+    (`state path dir push-stamps`). None (no binary, or a failing door)
+    skips the debounce, the same cost as today's unwritable stamp. Slashes
+    are the common case in a feature branch name, so they are flattened
+    rather than nested."""
+    try:
+        from fno.rust_binary import resolve_binary
+    except Exception:  # noqa: BLE001 - the hook must run on any git command
+        return None
+    binary = resolve_binary()
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), "state", "path", "dir", "push-stamps"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", branch or "HEAD")
-    return PUSH_STAMP_DIR / f"{safe}.stamp"
+    return Path(proc.stdout.strip()) / f"{safe}.stamp"
 
 
 def push_debounce_refusal(command, branch):
@@ -281,8 +303,12 @@ def push_debounce_refusal(command, branch):
         _emit_push_bypass_event(branch)
         return None
 
+    stamp = _push_stamp_path(branch)
+    if stamp is None:
+        return None
+
     try:
-        age = time.time() - _push_stamp_path(branch).stat().st_mtime
+        age = time.time() - stamp.stat().st_mtime
         if 0 <= age < PUSH_DEBOUNCE_SECONDS:
             return (
                 f"[fno push debounce] this branch was pushed {int(age)}s ago and "
@@ -338,8 +364,11 @@ def _stamp_push(branch):
     """Record that a push was allowed. Best-effort: a stamp that cannot be
     written costs one skipped debounce, never a blocked push."""
     try:
-        PUSH_STAMP_DIR.mkdir(parents=True, exist_ok=True)
-        _push_stamp_path(branch).touch()
+        stamp = _push_stamp_path(branch)
+        if stamp is None:
+            return
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
     except OSError:
         pass
 

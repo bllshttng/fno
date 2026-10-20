@@ -57,12 +57,19 @@ if [[ -n "$BASE" ]]; then
 fi
 
 # Record the resolved intended identity for Layer 2 + post-hoc audit (best effort).
+# The folder answers from the state layout table via the `dir` door, so a
+# fold retargets this writer with its readers. Door failure skips the
+# sidecar step (best-effort by contract); never fall back to a hand-spelled
+# folder, which would strand the file outside the next fold.
 if [[ -n "$SESSION_ID" ]]; then
-  SIDE="${FNO_HOME:-$HOME/.fno}/attest/${SESSION_ID}.json"
-  mkdir -p "$(dirname "$SIDE")" 2>/dev/null || true
-  TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
-  printf '{"model":"%s","base_url_host":"%s","provider":"%s","ts":"%s"}\n' \
-    "$MODEL" "$BASE_HOST" "$PROVIDER" "$TS" > "$SIDE" 2>/dev/null || true
+  ATTEST_DIR="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest 2>/dev/null || true)"
+  if [[ -n "$ATTEST_DIR" ]]; then
+    SIDE="$ATTEST_DIR/${SESSION_ID}.json"
+    mkdir -p "$(dirname "$SIDE")" 2>/dev/null || true
+    TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+    printf '{"model":"%s","base_url_host":"%s","provider":"%s","ts":"%s"}\n' \
+      "$MODEL" "$BASE_HOST" "$PROVIDER" "$TS" > "$SIDE" 2>/dev/null || true
+  fi
 fi
 
 # Bedrock / Vertex: Anthropic models under ids that do not start with "claude-"

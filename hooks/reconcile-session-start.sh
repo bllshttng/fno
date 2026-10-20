@@ -44,11 +44,13 @@ source "$HOOK_DIR/../scripts/lib/reconcile-throttle.sh" 2>/dev/null || exit 0
 #     2 actually consumes them; this only reports the backlog so it never goes
 #     silent between throttle windows. Best-effort + cosmetic: a failed harvest
 #     retains its sentinel, so the count re-surfaces next session.
-# ponytail: default state dir (env-injectable for tests); a
-# config.paths.retro_pending_dir override degrades this count, NOT the harvest -
-# `fno backlog retro run` in step 2 resolves the dir via Python and honors the override.
-RETRO_PENDING_DIR="${RETRO_PENDING_DIR:-$HOME/.fno/retro-pending}"
-if [[ -d "$RETRO_PENDING_DIR" ]]; then
+#     The default answers from the state layout table via the `dir` door (env
+#     override stays for tests); a config.paths.retro_pending_dir override
+#     degrades this count, NOT the harvest - `fno backlog retro run` in step 2
+#     resolves the dir via Python and honors the override. A failed door skips
+#     the advisory and never blocks the reconcile trigger below.
+RETRO_PENDING_DIR="${RETRO_PENDING_DIR:-$("${FNO_AGENTS_BIN:-fno-agents}" state path dir retro-pending 2>/dev/null || true)}"
+if [[ -n "$RETRO_PENDING_DIR" && -d "$RETRO_PENDING_DIR" ]]; then
     # Fail-open inside the substitution: under this hook's `set -euo pipefail`, a
     # non-zero `find` (permission race, dir removed after the -d check) would
     # otherwise abort the hook BEFORE the load-bearing reconcile_maybe_fire below.

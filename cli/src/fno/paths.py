@@ -1496,12 +1496,17 @@ def retro_pending_dir() -> Path:
     ``fno backlog reconcile`` drops a per-node sentinel here naming a node
     it closed mechanically, so a later session's inbox/triage pass can pick up
     the judgment half (follow-up capture) without reconcile automating it.
+    The default answers from the Rust ``dir`` door (the layout table is the
+    path's one owner, in step with the Rust writer); only the configured
+    override stays Python-resolved.
     """
     settings = _settings()
     override = settings.paths.retro_pending_dir
     if override is not None:
         return _guard_state_path(_resolve(override))
-    return state_dir() / "retro-pending"
+    return Path(
+        _plan_path_door(["state", "path", "dir", "retro-pending", "--root", str(state_dir())])
+    )
 
 
 def hook_logs_dir() -> Path:

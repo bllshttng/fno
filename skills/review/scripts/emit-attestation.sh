@@ -352,13 +352,16 @@ if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
 fi
 review_model_family=""
 if [[ -n "$session_id" ]]; then
+  attest_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session_id}.json" 2>/dev/null || true)"
   review_model_family="$(jq -r '.model_family // .model // empty' \
-    "${FNO_HOME:-$HOME/.fno}/attest/${session_id}.json" 2>/dev/null || true)"
+    "$attest_sidecar" 2>/dev/null || true)"
 fi
 if [[ "$review_model_family" == "unobserved" ]]; then
   review_model_family=""
 fi
-count_dir="${FNO_HOME:-$HOME/.fno}/review-invocations/${invocation_id}.subagents"
+# Both reads answer from the state layout table via the `dir` door; a
+# failed door degrades to the empty defaults the block already handles.
+count_dir="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${invocation_id}.subagents" 2>/dev/null || true)"
 subagent_count=0
 if [[ -d "$count_dir" ]]; then
   for marker in "$count_dir"/*; do
