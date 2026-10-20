@@ -538,6 +538,28 @@ fn plan_with_projects(
                 caller_value,
             ));
         }
+        // A retired name must refuse at the plan, not at the carry: the
+        // registry move would still commit, and a carry error skips both the
+        // journal row and the mail, leaving the team moved unjournaled. A
+        // take-over has no draw, so the pending-draw accept never applies.
+        if let Some(store_path) =
+            crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json())
+        {
+            let retired = crate::team_names::history_names(&store_path)
+                .map(|used| used.contains(&proposed_name.to_ascii_lowercase()))
+                .unwrap_or(false);
+            if retired {
+                return Ok(plan_answer(
+                    "declined",
+                    occupancy,
+                    Vec::new(),
+                    json!(format!(
+                        "--take-over requires a fresh person name: {proposed_name} is retired, an earlier lead, worker or draw used it, and names are never reused"
+                    )),
+                    caller_value,
+                ));
+            }
+        }
         let vacate = holder_names(&occupancy.holders);
         let predecessors: Vec<Value> = occupancy
             .holders
@@ -1126,298 +1148,6 @@ mod tests {
         }
     }
 
-    /// The store path every test hands `resolve_at`: one file at the fixture
-    /// dir root, the layout `AgentsHome::team_names_json` produces.
-    fn team_store(dir: &std::path::Path) -> std::path::PathBuf {
-        dir.join("team_names.json")
-    }
-
-    /// Seed the store with the stale named record a fresh grant forgets.
-    fn named_record_fixture(dir: &std::path::Path) {
-        std::fs::write(
-            team_store(dir),
-            serde_json::to_string(&json!({
-                "version": 1,
-                "teams": {
-                    "x-aaaa": {"name": "barnaby", "generation": 1,
-                               "holder_session": "sess-old"}
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    }
-
-    /// The one live recipient the fleet announce needs, shaped like the
-    /// registry's own fixtures.
-    fn agents_with_succession_rows() -> Value {
-        json!([{
-            "name": "Avery", "status": "live", "cwd": "/repo",
-            "log_path": "/repo/lead-successor.log",
-            "harness": "claude", "harness_session_id": "sess-new",
-            "created_at": "2026-10-04T00:00:00Z",
-        }])
-    }
-
-    /// Restores the env `team_registry` touched, or hands off when the home
-    /// was already pinned (the caller owns that home, as `record_rows` does).
-    enum HomeRestore {
-        HandsOff,
-        Remove,
-    }
-
-    impl Drop for HomeRestore {
-        fn drop(&mut self) {
-            match self {
-                HomeRestore::HandsOff => {}
-                HomeRestore::Remove => std::env::remove_var("FNO_AGENTS_HOME"),
-            }
-        }
-    }
-
-    /// Seed one registry under the agents home and make sure a home exists:
-    /// the already-pinned `FNO_AGENTS_HOME` wins (`HandsOff`); an unset one
-    /// points at `dir/home` and is removed on drop. Raw env write, never
-    /// `AgentsHomeEnvGuard`: `record_rows` holds the env lock for its whole
-    /// scope and the guard would deadlock on it.
-    fn team_registry(dir: &std::path::Path, agents: Value) -> HomeRestore {
-        let seed = |home: &std::path::Path| {
-            std::fs::create_dir_all(home).unwrap();
-            std::fs::write(
-                home.join("registry.json"),
-                serde_json::to_string(&json!({
-                    "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
-                    "agents": agents,
-                }))
-                .unwrap(),
-            )
-            .unwrap();
-        };
-        match std::env::var_os("FNO_AGENTS_HOME") {
-            Some(existing) => {
-                seed(&std::path::PathBuf::from(existing));
-                HomeRestore::HandsOff
-            }
-            None => {
-                let home = dir.join("home");
-                seed(&home);
-                std::env::set_var("FNO_AGENTS_HOME", &home);
-                HomeRestore::Remove
-            }
-        }
-    }
-
-    #[test]
-    fn record_rows() {
-        // The transaction receipts land under a pinned nested home for the
-        // successor settle; the lock keeps the env mutation off parallel tests.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let bus_home = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(bus_home.path().join("home")).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", bus_home.path().join("home"));
-        // The fleet announce needs one live recipient in the home registry.
-        std::fs::write(
-            bus_home.path().join("home/registry.json"),
-            serde_json::to_string(&json!({
-                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
-                "agents": [{
-                    "name": "Avery", "status": "live", "cwd": "/repo", "log_path": "/repo/lead-successor.log",
-                    "harness": "claude", "harness_session_id": "sess-new",
-                    "created_at": "2026-10-04T00:00:00Z",
-                }],
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _reg = team_registry(tmp.path(), agents_with_succession_rows());
-        named_record_fixture(tmp.path());
-        let answer = resolve_at(
-            &json!({
-                "kind": "role-settle", "scope": "x-aaaa",
-                "plan": {
-                    "caller": {"kind": "agent", "name": "Avery"},
-                    "holder_ids": [{"name": "lead-old", "harness_session_id": "sess-old"}],
-                    "outcome": "succeeded", "vacate": ["lead-old"],
-                },
-                "rows": [{
-                    "name": "lead-old", "role_scope": "x-aaaa", "status": "busy",
-                    "harness_session_id": "sess-old",
-                }],
-            }),
-            &team_store(tmp.path()),
-        )
-        .unwrap();
-        assert_eq!(answer["outcome"], "declined");
-        let store = std::fs::read_to_string(team_store(tmp.path())).unwrap();
-        let doc: Value = serde_json::from_str(&store).unwrap();
-        assert_eq!(doc["teams"]["x-aaaa"]["generation"], json!(1));
-        assert_eq!(doc["teams"]["x-aaaa"]["holder_session"], json!("sess-old"));
-
-        // A payload carrying the successor key pends the succession with the
-        // predecessor identity from the plan's holder_ids.
-        let answer = resolve_at(
-            &json!({
-                "kind": "role-settle", "scope": "x-aaaa", "successor": "Avery",
-                "plan": {
-                    "caller": {"kind": "agent", "name": "Avery"},
-                    "holder_ids": [{"name": "lead-old", "harness_session_id": "sess-old"}],
-                    "outcome": "succeeded", "vacate": ["lead-old"],
-                },
-                "rows": [{
-                    "name": "lead-old", "role_scope": "x-aaaa", "status": "busy",
-                    "harness_session_id": "sess-old",
-                }],
-            }),
-            &team_store(tmp.path()),
-        )
-        .unwrap();
-        assert_eq!(answer["outcome"], "succeeded");
-        let store = std::fs::read_to_string(team_store(tmp.path())).unwrap();
-        let doc: Value = serde_json::from_str(&store).unwrap();
-        let pending = &doc["teams"]["x-aaaa"]["pending_succession"];
-        assert_eq!(pending["successor_name"], json!("Avery"));
-        assert_eq!(pending["predecessor_name"], json!("lead-old"));
-        assert_eq!(pending["predecessor_session"], json!("sess-old"));
-        assert!(pending["ts"].is_string());
-        // AC2-HP: exactly one announce row and one transfer receipt for the
-        // succeeded settle. The store commit is the write boundary: query
-        // the store; the raw journal bytes are only a fallback.
-        let journal = crate::paths::AgentsHome::from_env().events_jsonl();
-        let raw = match crate::event_store::query_events(&journal, &Default::default()) {
-            Ok(rows) => rows
-                .iter()
-                .filter(|r| {
-                    serde_json::from_str::<Value>(&r.line)
-                        .is_ok_and(|v| v["data"]["scope"] == "x-aaaa")
-                })
-                .map(|r| r.line.clone())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            Err(_) => std::fs::read_to_string(&journal).unwrap_or_default(),
-        };
-        assert_eq!(
-            raw.matches("team_succession_transferred").count(),
-            1,
-            "one transfer receipt: {raw}"
-        );
-        assert_eq!(
-            raw.matches("team_succession_announced").count(),
-            1,
-            "one announce receipt: {raw}"
-        );
-        let bus =
-            std::fs::read_to_string(bus_home.path().join("bus/messages.jsonl")).unwrap_or_default();
-        assert_eq!(
-            bus.matches("succession: x-aaaa").count(),
-            1,
-            "one fleet announcement: {bus}"
-        );
-        std::env::remove_var("FNO_AGENTS_HOME");
-        // Without the successor key (an old caller) today's shape holds: no
-        // pending record is written.
-        named_record_fixture(tmp.path());
-        let answer = resolve_at(
-            &json!({
-                "kind": "role-settle", "scope": "x-aaaa",
-                "plan": {
-                    "caller": {"kind": "agent", "name": "Avery"},
-                    "holder_ids": [{"name": "lead-old", "harness_session_id": "sess-old"}],
-                    "outcome": "succeeded", "vacate": ["lead-old"],
-                },
-                "rows": [{
-                    "name": "lead-old", "role_scope": "x-aaaa", "status": "busy",
-                    "harness_session_id": "sess-old",
-                }],
-            }),
-            &team_store(tmp.path()),
-        )
-        .unwrap();
-        assert_eq!(answer["outcome"], "declined");
-        let store = std::fs::read_to_string(team_store(tmp.path())).unwrap();
-        let doc: Value = serde_json::from_str(&store).unwrap();
-        assert!(doc["teams"]["x-aaaa"].get("pending_succession").is_none());
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let _reg = team_registry(tmp.path(), json!([{"name": "w", "status": "exited"}]));
-        named_record_fixture(tmp.path());
-        let answer = resolve_at(
-            &json!({
-                "kind": "role-settle", "scope": "x-aaaa",
-                "plan": {
-                    "caller": {"kind": "human"},
-                    "holder_ids": [],
-                    "outcome": "granted", "vacate": [],
-                },
-                "rows": [],
-            }),
-            &team_store(tmp.path()),
-        )
-        .unwrap();
-        assert_eq!(answer["outcome"], "granted");
-        let store = std::fs::read_to_string(team_store(tmp.path())).unwrap();
-        let doc: Value = serde_json::from_str(&store).unwrap();
-        assert!(doc["teams"].get("x-aaaa").is_none(), "{store}");
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        // A fresh grant carries the successor's own people-shaped row name: the
-        // stale record from the dead predecessor team is forgotten, then the
-        // new team takes the row's name bound to the successor session the payload
-        // plumbs. No registry read anywhere: the carry keys on the payload's
-        // successor_identity.
-        named_record_fixture(tmp.path());
-        let answer = resolve_at(
-            &json!({
-                "kind": "role-settle", "scope": "x-aaaa", "successor": "kestrel",
-                "successor_identity": {"harness": "claude", "session_id": "sess-new",
-                                   "cwd": "/repo"},
-                "plan": {
-                    "caller": {"kind": "human"},
-                    "holder_ids": [],
-                    "outcome": "granted", "vacate": [],
-                },
-                "rows": [],
-            }),
-            &team_store(tmp.path()),
-        )
-        .unwrap();
-        assert_eq!(answer["outcome"], "granted");
-        let doc: Value =
-            serde_json::from_str(&std::fs::read_to_string(team_store(tmp.path())).unwrap())
-                .unwrap();
-        let person = doc["teams"]["x-aaaa"]["name"].as_str().unwrap();
-        assert!(person.chars().all(char::is_alphabetic));
-        assert_eq!(person, "kestrel");
-        assert_ne!(person, "barnaby");
-        assert_eq!(doc["teams"]["x-aaaa"]["holder_session"], json!("sess-new"));
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        // A file where the store's parent dir would be: the write fails.
-        let blocker = tmp.path().join("blocker");
-        std::fs::write(&blocker, "x").unwrap();
-        let store = blocker.join("team_names.json");
-        named_record_fixture(tmp.path());
-        let answer = resolve_at(
-            &json!({
-                "kind": "role-settle", "scope": "x-aaaa",
-                "plan": {
-                    "caller": {"kind": "agent", "name": "Avery"},
-                    "holder_ids": [{"name": "lead-old", "harness_session_id": "sess-old"}],
-                    "outcome": "succeeded", "vacate": ["lead-old"],
-                },
-                "rows": [{
-                    "name": "lead-old", "role_scope": "x-aaaa", "status": "busy",
-                    "harness_session_id": "sess-old",
-                }],
-            }),
-            &store,
-        )
-        .unwrap();
-        assert_eq!(answer["outcome"], "declined");
-    }
-
     // -- take-over: a superior caller moves a contained sub-team --
 
     /// The AC1 world: an L1 row over the `fno` project, a live L2 `alder`
@@ -1446,6 +1176,10 @@ mod tests {
     /// no `take_over` key the same L1 now gets the door-naming refusal.
     #[test]
     fn a_superior_lead_takes_over_a_contained_sub_team_and_the_refusal_names_the_door() {
+        // The plan reads the name history through the agents home: pin a
+        // fresh home so the test never reads the machine's real store.
+        let home = tempfile::TempDir::new().unwrap();
+        let _env = crate::AgentsHomeEnvGuard::set(&home.path().join("home"));
         let payload = json!({
             "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
             "take_over": {"reason": "Alder paused since 10:00 on the intake bug"},

@@ -548,7 +548,7 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
                             // fence or a payload word, and neither is a reason.
                             // A flag-shaped token is never a reason either:
                             // eating one would silently rewrite the ask.
-                            if i + 1 < cut && !argv[i + 1].starts_with("--") {
+                            if i + 1 < cut && !argv[i + 1].starts_with('-') {
                                 reason = argv[i + 1].clone();
                                 argv.remove(i);
                                 argv.remove(i);
@@ -1668,7 +1668,7 @@ mod tests {
                     .chain(tokens.iter().map(|t| t.to_string()))
                     .collect(),
                 defaults: toml::Value::Table(toml::map::Map::new()),
-                profiles: String::new(),
+                profiles: toml::Value::Table(toml::map::Map::new()),
                 dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
                 roster: vec!["target".to_string()],
                 node_verb: None,
@@ -1799,7 +1799,7 @@ mod tests {
                 "work".to_string(),
             ],
             defaults: toml::Value::Table(toml::map::Map::new()),
-            profiles: String::new(),
+            profiles: toml::Value::Table(toml::map::Map::new()),
             dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
             roster: vec!["target".to_string()],
             node_verb: None,

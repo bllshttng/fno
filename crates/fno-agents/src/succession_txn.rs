@@ -455,7 +455,7 @@ mod tests {
         assert!(raw.contains("vellum"), "{raw}");
         assert!(raw.contains("Alder paused since 10:00"), "{raw}");
         // The mail rides by name (to_kind name), addressed to the old lead.
-        let bus = std::fs::read_to_string(home.path().join("../bus/messages.jsonl")).unwrap();
+        let bus = std::fs::read_to_string(home.path().join("bus/messages.jsonl")).unwrap();
         let row: serde_json::Value = serde_json::from_str(bus.lines().last().unwrap()).unwrap();
         assert_eq!(row["to"], json!("alder"));
         assert_eq!(row["to_kind"], json!("name"));
@@ -480,7 +480,7 @@ mod tests {
             ],
         });
         taken_over("x-aaaa,x-bbbb", &pending, &human);
-        let bus = std::fs::read_to_string(home.path().join("../bus/messages.jsonl")).unwrap();
+        let bus = std::fs::read_to_string(home.path().join("bus/messages.jsonl")).unwrap();
         let rows: Vec<serde_json::Value> = bus
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
