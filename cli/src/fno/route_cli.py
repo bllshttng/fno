@@ -570,11 +570,27 @@ def settings_ls_cmd(
     except Exception:  # noqa: BLE001 - unreadable registry degrades the column, never the verb
         referenced_paths = None
 
-    base_dir = paths.state_dir() / "route-settings"
+    state_root = paths.state_dir()
     rows: list[dict[str, object]] = []
     now = time.time()
     pruned: list[str] = []
-    files = sorted(base_dir.glob("*.json")) if base_dir.is_dir() else []
+    # The layout table owns the folder's name: the file list answers from
+    # the Rust `dir` door at the same root the writer publishes into, so a
+    # fold retargets the lister with the writer instead of splitting them.
+    from pathlib import Path
+
+    children = paths._plan_path_door(
+        [
+            "state",
+            "path",
+            "dir",
+            "route-settings",
+            "--children",
+            "--root",
+            str(state_root),
+        ]
+    )
+    files = sorted(Path(line) for line in children.splitlines() if line.endswith(".json"))
     for path in files:
         # A concurrent prune or manual clean can remove a file between the
         # glob and this read; that file is not this listing's problem, and one

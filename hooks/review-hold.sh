@@ -176,7 +176,11 @@ case "$invocation_id" in
   ri-*) ;;
   *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
 esac
-model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json"
+# The attest sidecar answers from the state layout table via the `dir`
+# door; on a door refusal (no binary, or an fno-agents predating the door)
+# the legacy spelling answers, the path every pre-door binary wrote.
+model_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
+[[ -n "$model_sidecar" ]] || model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json" # state-root: legacy fallback
 model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
 data="$(jq -cn \
   --arg invocation_id "$invocation_id" \
