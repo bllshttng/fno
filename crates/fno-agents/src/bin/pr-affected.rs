@@ -59,10 +59,11 @@ fn is_light(path: &str) -> bool {
     if LIGHT_TREES.iter().any(|tree| path.starts_with(tree)) {
         return true;
     }
-    // Prose and images outside the code trees; a crate or cli .md can be a
+    // Prose and images outside the code and test trees; a .md there can be a
     // compiled prompt or a test fixture.
-    !path.starts_with("crates/")
-        && !path.starts_with("cli/")
+    !["crates/", "cli/", "tests/", "evals/"]
+        .iter()
+        .any(|tree| path.starts_with(tree))
         && LIGHT_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
@@ -178,6 +179,7 @@ mod tests {
             paths(&["docs/usage.md", "cli/tests/unit/test_example.py"]),
             paths(&["crates/fno-agents/src/lib.rs"]),
             paths(&["crates/fno-agents/src/pr_steward_prompt.md"]),
+            paths(&["tests/fixtures/report.md"]),
             paths(&["docs/env-vars.md"]),
             paths(&["skills/x/SKILL.md", "scripts/ci/check.sh"]),
             paths(&[]),
