@@ -203,6 +203,31 @@ done < <(
         || true
 )
 
+# The line where a file's test module starts: a `#[cfg(test)]` opening a
+# `mod` on the same or the next line, or a test-named bare `mod`. A bare
+# `#[cfg(test)]` on one test-only item (a use, a helper fn) above production
+# code is not a boundary, and a bare production `mod x;` is not one either;
+# the file's lower half stays in scope.
+tests_module_start() {
+    awk '
+        { lines[NR] = $0 }
+        END {
+            for (i = 1; i <= NR; i++) {
+                if (lines[i] ~ /^(pub\([^)]*\)[[:space:]]+)?mod [a-z0-9_]*tests($|[[:space:]])/ ||
+                    lines[i] ~ /^#\[cfg\(test\)\][[:space:]]+(pub\([^)]*\)[[:space:]]+)?mod /) {
+                    print i
+                    exit
+                }
+                if (lines[i] ~ /^#\[cfg\(test\)\]$/ && i < NR &&
+                    lines[i + 1] ~ /^(pub\([^)]*\)[[:space:]]+)?mod /) {
+                    print i
+                    exit
+                }
+            }
+        }
+    ' "$1" 2>/dev/null
+}
+
 # Rule 8: event-fn-raw-append
 # Rule 5 only sees a literal events.jsonl in the open() call; the surviving
 # legs hid the path behind a variable. An event-named function that opens a
@@ -217,7 +242,7 @@ while IFS= read -r hit; do
     lineno="${hit#*:}"
     lineno="${lineno%%:*}"
     window_end=$((lineno + 40))
-    test_start=$(grep -nE '^(mod tests|#\[cfg\(test\)\])' "$file" 2>/dev/null | cut -d: -f1 | head -1)
+    test_start=$(tests_module_start "$file")
     if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
         continue
     fi
@@ -253,7 +278,7 @@ while IFS= read -r hit; do
     lineno="${hit#*:}"
     lineno="${lineno%%:*}"
     window_end=$((lineno + 40))
-    test_start=$(grep -nE '^(mod tests|#\[cfg\(test\)\])' "$file" 2>/dev/null | cut -d: -f1 | head -1)
+    test_start=$(tests_module_start "$file")
     if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
         continue
     fi
