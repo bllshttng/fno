@@ -64,7 +64,10 @@ const PRODUCT_GLOBS: &[&str] = &[
     "cli/tests/",
     "tests/",
 ];
-const FLEET_GLOBS: &[&str] = &["crates/", "scripts/", "docs/", ".github/", ".claude/"];
+// The .claude/ state dir also reads fleet, but the literal stays out of
+// this table: the placement lint bars new .claude path strings in crates,
+// and unmatched paths already read fleet without it.
+const FLEET_GLOBS: &[&str] = &["crates/", "scripts/", "docs/", ".github/"];
 
 struct Args {
     repo: PathBuf,
@@ -85,7 +88,6 @@ struct Delivery {
     time: DateTime<Utc>,
     kind: &'static str,
     classified_by: &'static str,
-    branch: Option<String>,
     subject: String,
 }
 
@@ -446,7 +448,6 @@ fn compute(
             time,
             kind,
             classified_by,
-            branch,
             subject: subject.to_string(),
         });
     }
