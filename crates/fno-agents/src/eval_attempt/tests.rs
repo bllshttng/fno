@@ -251,3 +251,72 @@ fn cli_row_json_prints_one_verdict() {
     // classify tests for the payload.
     assert_eq!(run_evals_attempt(&args), 0);
 }
+
+// --- the split pin excludes the declaration file it names ------------------
+
+use super::bank_unchanged;
+use std::process::Command;
+
+/// One commit inside a throwaway git repo; returns the sha.
+fn commit(dir: &std::path::Path, message: &str) -> String {
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    run(&["add", "-A"]);
+    let out = run(&["commit", "-m", message]);
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(!sha.is_empty(), "commit produced no sha");
+    sha
+}
+
+#[test]
+fn pin_ignores_cohorts_yaml_but_not_task_files() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    let bank = dir.join("evals/bank");
+    std::fs::create_dir_all(&bank).unwrap();
+    let init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init failed");
+
+    std::fs::write(bank.join("capability-lane-blueprint.yaml"), "id: t1\n").unwrap();
+    let pinned = commit(dir, "the bank task the split pins");
+
+    // The declaration lands after the pin and names it: the pin must hold.
+    std::fs::write(
+        bank.join("cohorts.yaml"),
+        format!("bank_rev: {pinned}\ntrain: [t1]\nvalidation: []\nqualification: []\n"),
+    )
+    .unwrap();
+    commit(dir, "declare the split against the pinned bank");
+    assert!(
+        bank_unchanged(dir.to_str().unwrap(), &pinned),
+        "a cohorts.yaml commit alone must not void the pin"
+    );
+
+    // A task change is what the pin exists to catch.
+    std::fs::write(
+        bank.join("capability-lane-blueprint.yaml"),
+        "id: t1\ngrade: changed\n",
+    )
+    .unwrap();
+    commit(dir, "change a task after the pin");
+    assert!(
+        !bank_unchanged(dir.to_str().unwrap(), &pinned),
+        "a task change after the pin must void it"
+    );
+}
