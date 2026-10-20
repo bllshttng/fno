@@ -253,7 +253,7 @@ def info(
 ) -> None:
     from fno.rust_binary import VerbUnavailable, verb_call
 
-    ask = {"op": "status-pr-info", "cwd": os.getcwd()}
+    ask: dict = {"op": "status-pr-info", "cwd": os.getcwd()}
     if pr_number is not None:
         ask["pr"] = pr_number
     if repo:
