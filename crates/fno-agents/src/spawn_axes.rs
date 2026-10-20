@@ -924,6 +924,12 @@ pub fn account_seam(account: Option<&str>, provider: &str, stamp: Option<&str>) 
     let Some(account) = account else {
         return AccountSeam::None;
     };
+    if account.is_empty() {
+        // Python reads an empty flag value as an account spawn it must
+        // resolve (and refuse), so the old re-exec always handed it there;
+        // an empty value goes back too, and an empty stamp can never match.
+        return AccountSeam::NeedsPython;
+    }
     if provider != "claude" {
         return AccountSeam::Refuse(format!(
             "--account is claude-only; got harness {}",
@@ -1017,6 +1023,20 @@ mod tests {
         ));
         assert!(matches!(
             account_seam(Some("makers"), "claude", Some("other-acct")),
+            AccountSeam::NeedsPython
+        ));
+    }
+
+    #[test]
+    fn account_seam_sends_an_empty_account_value_back_to_python() {
+        // Python treats an empty flag value as an account it must resolve;
+        // an empty stamp (exported empty) must never satisfy it either.
+        assert!(matches!(
+            account_seam(Some(""), "claude", Some("")),
+            AccountSeam::NeedsPython
+        ));
+        assert!(matches!(
+            account_seam(Some(""), "claude", None),
             AccountSeam::NeedsPython
         ));
     }
