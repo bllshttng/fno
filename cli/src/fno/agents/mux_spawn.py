@@ -883,12 +883,6 @@ def build_pane_argv(
     (e.g. opencode: bare ``opencode --prompt`` here vs ``opencode run
     --dangerously-skip-permissions`` there, NOT the stale docs' ``--auto``); no parity contract.
 
-    ``model`` : an explicit ``--model`` forwarded to the provider's own
-    TUI flag (claude/codex/gemini/agy ``--model <m>``; opencode
-    ``--model <provider/model>``). Exact passthrough, no fuzzy resolution;
-    empty/None = provider default. A CLI ``--model`` arg beats any role-routing
-    model set via env (``resolve_route``), so explicit intent wins.
-
     ``name`` is the worker's registry name, forwarded to claude's ``--name``
     (its session DISPLAY name). Parity with the bg lane, which has always
     hardcoded it (``claude_ask.rs`` ``build_argv``). Without it claude falls

@@ -377,7 +377,7 @@ def test_spawn_agy_headless_refuses_by_name(workdir, monkeypatch) -> None:
         )
     message = str(caught.value)
     assert "unmeasured" in message
-    assert "--substrate thread" in message
+    assert "a bare spawn" in message
     assert "no measured thread lane" not in message, (
         "the merged measurement disproved that sentence for agy"
     )

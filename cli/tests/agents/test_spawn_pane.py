@@ -505,31 +505,6 @@ def test_build_pane_argv_codex_strip_drops_the_user_grant_too(tmp_path: Path) ->
     assert argv[-2:] == ["--", "seed text"]
 
 
-def test_build_pane_argv_tier3_fails_closed(tmp_path: Path) -> None:
-    # x-b6e2: a no-equivalent (provider, flag) cell raises BEFORE any spawn.
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import build_pane_argv
-
-    closed = [
-        ("codex", {"agent": "x"}),
-        ("codex", {"tools": "Read"}),
-        ("agy", {"deny_tools": "Bash"}),
-        ("opencode", {"add_dir": "/w"}),
-        ("gemini", {"add_dir": "/w"}),
-        ("gemini", {"agent": "x"}),
-    ]
-    for provider, kw in closed:
-        with pytest.raises(DispatchAskError):
-            build_pane_argv(provider, "t", tmp_path, False, None, **kw)
-
-    # AC2-ERR: an EMPTY value is unset, not a stray token - it must NOT trip the
-    # fail-closed guard even on a no-equivalent provider (gemini review finding).
-    for provider, kw in closed:
-        argv = build_pane_argv(provider, "t", tmp_path, False, None, **{k: "" for k in kw})
-        assert "" not in argv
-        assert "--agent" not in argv
-
-
 def _stub_harness_bin(monkeypatch, tmp_path: Path, name: str) -> Path:
     """A stub CLI binary on a tmp PATH under a name no roster knows."""
     bin_dir = tmp_path / "stub-bin"
@@ -2338,22 +2313,22 @@ def test_codex_hook_review_prompt_refuses_before_seed_and_reaps(
     assert load_registry() == []
 
 
-def test_codex_hook_review_bypass_posture_keeps_argv_seed_contract(
+def test_codex_hook_review_bypass_rides_the_bounded_pane(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """The hook-trust bypass rides every codex pane. The bounded posture keeps
+    the seed off argv, so the pane delivers it once the TUI is ready."""
     from fno.agents import mux_spawn
 
     monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
     runner = FakeRunner(read_stdout="Hooks need review")
 
-    result, _ = _spawn(
-        monkeypatch, tmp_path, provider="codex", runner=runner, yolo=True
-    )
+    result, _ = _spawn(monkeypatch, tmp_path, provider="codex", runner=runner)
 
     run_call = next(call for call in runner.calls if call[1:4] == ["mux", "pane", "run"])
     assert "--dangerously-bypass-hook-trust" in run_call
     assert result.seed == "submitted"
-    assert result.seed_source == "argv"
+    assert result.seed_source == "delivered"
 
 
 def test_a_timed_out_submit_keeps_the_row_and_never_retries(

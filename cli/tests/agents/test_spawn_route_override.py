@@ -391,7 +391,7 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     # CLI maps the door refusal to a clean exit.
     refused = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--print"],
+        ["spawn", "--name", "w", "hi", "-H", "codex", "--print"],
     )
     assert refused.exit_code == 2, refused.output
     assert "no native line yet" in refused.output
@@ -771,6 +771,33 @@ def test_bg_and_headless_refuse_modelless_route_env(
         claude_mod.headless_create(message="hi", cwd=tmp_path, route_env=modelless)
 
 
+def _stub_zai_claude_route(monkeypatch) -> None:
+    """Answer the claude-route ask the Rust owner serves (the zai preset); a
+    fake binary cannot. Every other overlay ask reaches the real transport."""
+    from fno.agents import spawn_overlay_client
+
+    real_overlay_call = spawn_overlay_client.spawn_overlay_call
+
+    def route_stub(ask: dict, **kwargs: object) -> dict:
+        if ask.get("kind") == "claude-route":
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": "zk-live",
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
+        return real_overlay_call(ask, **kwargs)
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", route_stub)
+
+
 def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None:
     """A fresh routed claude thread spawn execs the lane's own bg line through
     the launch kind: the ask carries the RAW overlays and the record
@@ -820,6 +847,7 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     )
     fake.chmod(0o755)
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
+    _stub_zai_claude_route(monkeypatch)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--route", "zai-flash"],
@@ -832,7 +860,8 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
     assert ask["account_env"] == {}
     assert ask["model"] == "glm-5.3-flash[1m]"
-    assert ask["effort"] == "xhigh"
+    # The launch template owns effort; the door ask leaves the hole empty.
+    assert ask["effort"] == ""
     assert ask["provider"] == "zai"
     assert ask["launcher_session"] == "lead-1"
     assert RecordingGate.release_calls, "the gate still releases"
@@ -885,29 +914,7 @@ def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monk
     )
     fake.chmod(0o755)
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
-    from fno.agents import spawn_overlay_client
-
-    real_overlay_call = spawn_overlay_client.spawn_overlay_call
-
-    def route_stub(ask: dict, **kwargs: object) -> dict:
-        # The Rust owner answers the zai preset; the fake binary cannot.
-        if ask.get("kind") == "claude-route":
-            model = ask.get("model", "")
-            return {
-                "route": {
-                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                    "ANTHROPIC_AUTH_TOKEN": "zk-live",
-                    "ANTHROPIC_MODEL": model,
-                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
-                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
-                },
-                "notices": [],
-            }
-        return real_overlay_call(ask, **kwargs)
-
-    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", route_stub)
+    _stub_zai_claude_route(monkeypatch)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--route", "zai-flash"],
