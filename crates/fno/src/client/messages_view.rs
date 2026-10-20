@@ -25,6 +25,46 @@ fn seg(text: impl Into<String>, role: BRole) -> BSeg {
 
 /// Push one spacer line unless the paint already ends in one (item 12:
 /// blanks never stack).
+/// One tab cell of a strip: the label padded one space each side, so the
+/// active cell paints as a full inverted block (the active mux tab's look).
+/// Inactive cells keep the same width, so the click spans never move.
+fn tab_seg(label: &str, active: bool, focused: bool) -> BSeg {
+    let role = if active {
+        BRole::Tab
+    } else if focused {
+        BRole::Body
+    } else {
+        BRole::Meta
+    };
+    seg(format!(" {label} "), role)
+}
+
+/// The cell span each strip tab owns, from the labels in paint order and
+/// the separator width between them. The click map reads the same spans.
+fn tab_spans(start: usize, labels: &[&str], sep: usize) -> Vec<std::ops::Range<usize>> {
+    let mut at = start;
+    labels
+        .iter()
+        .map(|l| {
+            let span = at..at + l.chars().count() + 2;
+            at = span.end + sep;
+            span
+        })
+        .collect()
+}
+
+/// The band pair for a column's cursor row: the terminal's own pair,
+/// swapped, when the column holds focus; a dim swap (gray ground) when
+/// focus is elsewhere, so the selection stays visible but reads secondary.
+fn column_band(focused: bool, theme: &crate::theme::Theme) -> (Color, Color, u8) {
+    use crate::proto::cell_flags::INVERSE;
+    if focused {
+        (Color::Default, Color::Default, INVERSE)
+    } else {
+        (crate::theme::dim_fg(theme), Color::Default, INVERSE)
+    }
+}
+
 fn push_blank(lines: &mut Vec<BLine>, owners: &mut Vec<Option<usize>>) {
     if lines.last().is_some_and(|l| l.text.is_empty()) {
         return;
@@ -473,25 +513,12 @@ impl MessagesBoard {
     fn tree_column(&self, w: usize) -> Vec<BLine> {
         let wrap_w = w.saturating_sub(2).max(1);
         let mut lines: Vec<BLine> = Vec::new();
+        let focused = self.col == Col::Tree;
         let filter_row = BLine::of(&[
-            seg("a ".to_string(), BRole::Meta),
-            seg(
-                "All".to_string(),
-                if self.filter == ListFilter::All {
-                    BRole::Body
-                } else {
-                    BRole::Meta
-                },
-            ),
-            seg(" \u{b7} b ".to_string(), BRole::Meta),
-            seg(
-                "Broadcasts".to_string(),
-                if self.filter == ListFilter::Broadcasts {
-                    BRole::Body
-                } else {
-                    BRole::Meta
-                },
-            ),
+            seg("a", BRole::Meta),
+            tab_seg("All", self.filter == ListFilter::All, focused),
+            seg(" \u{b7} b", BRole::Meta),
+            tab_seg("Broadcasts", self.filter == ListFilter::Broadcasts, focused),
         ]);
         lines.push(filter_row);
         if self.filter == ListFilter::All {
@@ -501,23 +528,13 @@ impl MessagesBoard {
             };
             let agents_active = self.list_tab == ListTab::Agents;
             let strip = BLine::of(&[
-                seg(
-                    format!("Agents \u{b7} {sort_word}"),
-                    if agents_active {
-                        BRole::Body
-                    } else {
-                        BRole::Meta
-                    },
+                tab_seg(
+                    &format!("Agents \u{b7} {sort_word}"),
+                    agents_active,
+                    focused,
                 ),
-                seg(" | ".to_string(), BRole::Meta),
-                seg(
-                    "Archive".to_string(),
-                    if agents_active {
-                        BRole::Meta
-                    } else {
-                        BRole::Body
-                    },
-                ),
+                seg("|", BRole::Meta),
+                tab_seg("Archive", !agents_active, focused),
             ]);
             lines.push(strip);
         }
@@ -568,18 +585,11 @@ impl MessagesBoard {
     /// label (item 5).
     fn chats_column(&self, w: usize) -> Vec<BLine> {
         let wrap_w = w.saturating_sub(2).max(1);
-        let tab = |label: &str, active: bool| {
-            seg(
-                label.to_string(),
-                if active { BRole::Body } else { BRole::Meta },
-            )
-        };
+        let focused = self.col == Col::Chats;
         let strip = BLine::of(&[
-            tab("Chats", self.col2 == ChatTab::Chats),
-            seg("  ", BRole::Meta),
-            tab("System", self.col2 == ChatTab::System),
-            seg("  ", BRole::Meta),
-            tab("Archive", self.col2 == ChatTab::Archive),
+            tab_seg("Chats", self.col2 == ChatTab::Chats, focused),
+            tab_seg("System", self.col2 == ChatTab::System, focused),
+            tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
         ]);
         let mut lines = vec![strip, BLine::meta("")];
         let Some(agent) = self.sel_agent.as_deref() else {
@@ -665,8 +675,14 @@ impl MessagesBoard {
                 .unwrap_or_default();
             self.participant_name(&other)
         };
+        // The focused column's title is bold; elsewhere it reads plain.
+        let name_role = if self.col == Col::Thread {
+            BRole::Head
+        } else {
+            BRole::Body
+        };
         let title = BLine::of(&[
-            seg(name, BRole::Head),
+            seg(name, name_role),
             seg("  [i]  ...".to_string(), BRole::Meta),
         ]);
         title
@@ -807,26 +823,21 @@ pub(crate) fn paint(
     // Each column's rows start after its own prefix lines (strip, status,
     // spacer), so the follow line is that prefix plus the cursor.
     let tree_prefix = tree.len().saturating_sub(b.tree_rows().len());
-    super::backlog_style::paint_panel_at(
+    super::backlog_style::paint_panel_banded(
         cells,
         rows,
         cols,
-        0,
-        1,
-        tree_w,
-        body_h,
+        (0, 1, tree_w, body_h),
         &tree,
         Some(tree_prefix + b.cursors[0]),
+        column_band(b.col == Col::Tree, &view.theme),
         &view.theme,
     );
-    super::backlog_style::paint_panel_at(
+    super::backlog_style::paint_panel_banded(
         cells,
         rows,
         cols,
-        tree_w,
-        1,
-        part_w,
-        body_h,
+        (tree_w, 1, part_w, body_h),
         &partners,
         Some(
             partners.len().saturating_sub(
@@ -836,16 +847,14 @@ pub(crate) fn paint(
                     .unwrap_or(0),
             ) + b.cursors[1],
         ),
+        column_band(b.col == Col::Chats, &view.theme),
         &view.theme,
     );
-    super::backlog_style::paint_panel_at(
+    super::backlog_style::paint_panel_banded(
         cells,
         rows,
         cols,
-        tree_w + part_w,
-        1,
-        thread_w,
-        body_h,
+        (tree_w + part_w, 1, thread_w, body_h),
         &thread,
         Some(
             thread
@@ -853,12 +862,13 @@ pub(crate) fn paint(
                 .rposition(|line| line.band)
                 .unwrap_or_else(|| thread.len().saturating_sub(1)),
         ),
+        column_band(b.col == Col::Thread, &view.theme),
         &view.theme,
     );
     // The context help line (item 8), on the row the three panels leave
     // free. Truncated to the width: at a degenerate terminal the keys still
     // work, only the hint shortens.
-    let help = "h/l columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} m id \u{b7} y copy \u{b7} q close";
+    let help = "h/l or \u{2190}/\u{2192} columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} m id \u{b7} y copy \u{b7} q close";
     let help: String = help.chars().take(width.saturating_sub(1)).collect();
     for (i, ch) in help.chars().enumerate() {
         if let Some(cell) = cells.get_mut((height - 1) * cols + i) {
@@ -1476,12 +1486,13 @@ pub(crate) async fn mouse(
             Col::Tree => {
                 // The filter row: `a All · b Broadcasts` (item 5).
                 let rel = rep.col as usize;
-                if hit(2..5, rel) {
+                let spans = tab_spans(1, &["All", "Broadcasts"], 4);
+                if hit(spans[0].clone(), rel) {
                     if let Some(b) = view.messages_board.as_mut() {
                         b.filter = ListFilter::All;
                         b.cursors[0] = 0;
                     }
-                } else if hit(10..20, rel) {
+                } else if hit(spans[1].clone(), rel) {
                     if let Some(b) = view.messages_board.as_mut() {
                         b.filter = ListFilter::Broadcasts;
                         b.cursors[0] = 0;
@@ -1491,11 +1502,12 @@ pub(crate) async fn mouse(
             }
             Col::Chats => {
                 let rel = (rep.col as usize).saturating_sub(tree_w);
-                let tab = if hit(0..5, rel) {
+                let spans = tab_spans(0, &["Chats", "System", "Archive"], 0);
+                let tab = if hit(spans[0].clone(), rel) {
                     Some(ChatTab::Chats)
-                } else if hit(7..13, rel) {
+                } else if hit(spans[1].clone(), rel) {
                     Some(ChatTab::System)
-                } else if hit(15..22, rel) {
+                } else if hit(spans[2].clone(), rel) {
                     Some(ChatTab::Archive)
                 } else {
                     None
@@ -1522,13 +1534,13 @@ pub(crate) async fn mouse(
                 SortMode::Last => "Agents · last",
                 SortMode::Alpha => "Agents · a-z",
             };
-            let a = label.chars().count();
+            let spans = tab_spans(0, &[label, "Archive"], 1);
             let rel = rep.col as usize;
-            if hit(0..a, rel) {
+            if hit(spans[0].clone(), rel) {
                 if let Some(b) = view.messages_board.as_mut() {
                     b.list_tab = ListTab::Agents;
                 }
-            } else if hit(a + 3..a + 10, rel) {
+            } else if hit(spans[1].clone(), rel) {
                 if let Some(b) = view.messages_board.as_mut() {
                     b.list_tab = ListTab::Archive;
                 }
