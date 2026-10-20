@@ -5,7 +5,7 @@
 # action: keep|move|merge|split|retire. target: new path (move), surviving page (merge), comma list (split), - otherwise; relative to docs/
 # cited_by: files outside docs/ that name the path (git grep -lF <path> -- ':!docs' | wc -l), measured when the map was written
 docs/HARNESSES.md	install	reference	move	reference/harnesses.md	10	what works on each CLI; 10 citing files
-docs/README.md	none	entry	keep	-	0	docs home; generated from this map once the user approves
+docs/README.md	none	entry	keep	-	0	docs home; lists every entry page by stage
 docs/SETUP-HERMES.md	install	guide	move	harnesses/hermes.md	1	install under an alternate runtime
 docs/SETUP-OPENCLAW.md	install	guide	move	harnesses/openclaw.md	1	install under an alternate runtime
 docs/SKILL-COMPAT-MATRIX.md	install	reference	move	reference/skill-compat-matrix.md	3	which skill runs on which harness
@@ -188,13 +188,13 @@ docs/code-standards.md	contribute	contributor	move	contributing/code-standards.m
 docs/codebase-summary.md	contribute	internal	retire	-	0	hand-kept inventory says 26 skills; skills/ has 27
 docs/comment-prose-reading-list.md	none	internal	keep	-	0	unplaced: ranked function list with no named reader and no generator found
 docs/configuration-guide.md	daily-driver	reference	move	reference/config.md	4	the full config.toml key reference; 76 KB
-docs/deployment-guide.md	install	guide	merge	install.md	0	repeats the install steps in getting-started.md and README.md
+docs/contributing/README.md	contribute	entry	keep	-	0	Stage 6 entry: rules, gates, and the slot rule
 docs/design-guidelines.md	contribute	contributor	move	contributing/design-guidelines.md	0	skill and agent design rules for contributors
 docs/distribution.md	contribute	contributor	move	contributing/distribution.md	2	packaging and release runbook
 docs/env-vars.md	daily-driver	reference	move	reference/env-vars.md	3	generated env var registry; the move PR updates its checker
 docs/evals.md	contribute	contributor	move	contributing/evals.md	2	eval bank for maintainers
 docs/fleet-faq.md	fleet	guide	move	guides/fleet-faq.md	2	lead and orchestrator FAQ
-docs/getting-started.md	first-target	entry	split	install.md,quickstart.md,workflows.md	3	one 17 KB page covers install, first feature and daily commands
+docs/fleet.md	fleet	entry	keep	-	0	Stage 5 entry: links each fleet task to its guide
 docs/graph-search.md	daily-driver	guide	move	guides/graph-search.md	5	optional graphify tool guide
 docs/guide/opencode.md	install	guide	move	harnesses/opencode.md	1	the only file under guide/; codex.md already sits in harnesses/
 docs/guides/agents-quickstart.md	fleet	guide	keep	-	1	first spawn and message; the fleet entry links it
@@ -202,7 +202,6 @@ docs/guides/agents-spawn-flags.md	fleet	reference	move	reference/agents-spawn-fl
 docs/guides/buddy.md	daily-driver	guide	keep	-	1	companion mod guide
 docs/guides/configuring-impeccable-executor.md	daily-driver	guide	keep	-	0	plan-author guide
 docs/guides/cross-project-inbox.md	fleet	guide	keep	-	1	messaging between projects
-docs/guides/execution-modes.md	daily-driver	guide	merge	workflows.md	0	names do and operator modes; skills/ has neither
 docs/guides/fix.md	daily-driver	guide	keep	-	0	repair loop guide
 docs/guides/fleet-load.md	fleet	guide	keep	-	0	fleet load report
 docs/guides/fno-agents-ask-followup.md	fleet	guide	keep	-	1	message a running agent
@@ -223,7 +222,6 @@ docs/guides/review.md	daily-driver	guide	keep	-	0	review lanes for a user
 docs/guides/target.md	first-target	guide	keep	-	1	the target loop in depth
 docs/guides/task-to-verified-pr-demo.md	contribute	contributor	move	contributing/task-to-verified-pr-demo.md	0	maintainer demo protocol
 docs/guides/think-and-plan.md	daily-driver	guide	keep	-	1	think and blueprint; mentions think what-if and panel, which the move PR checks
-docs/guides/utilities.md	daily-driver	guide	merge	workflows.md	0	its Debug section names a debug skill; skills/ has fix, not debug
 docs/guides/web-view.md	fleet	guide	keep	-	0	watch panes from a browser
 docs/guides/worktrees.md	daily-driver	guide	keep	-	0	worktree basics
 docs/harness-command-matrix.md	fleet	reference	move	reference/harness-command-matrix.md	4	every agents verb per harness
@@ -239,15 +237,18 @@ docs/harnesses/launch/launch-pi.md	fleet	guide	keep	-	1	seat a pi worker
 docs/harnesses/promise-sentinel.md	contribute	reference	keep	-	4	protocol for third-party loop drivers
 docs/harnesses/verb-matrix.md	install	reference	keep	-	4	generated verb by harness table
 docs/hooks-fail-open.md	daily-driver	concept	move	concepts/hooks-fail-open.md	4	explains the optional-hook budget
+docs/install.md	install	entry	keep	-	0	Stage 2 entry: install half of getting-started.md and the live part of deployment-guide.md
 docs/loops.md	fleet	reference	move	reference/loops.md	2	generated scheduled-loop table; the move PR updates its generator
 docs/mux-keys.md	fleet	reference	move	reference/mux-keys.md	2	mux keybinding table
 docs/mux-themes.md	fleet	guide	move	guides/mux-themes.md	0	how to set mux colors
 docs/output-style.md	contribute	contributor	move	contributing/output-style.md	1	agent output rules behind AGENTS.md
+docs/overview.md	discover	entry	keep	-	0	Stage 1 entry: what fno does and how done is decided
 docs/path-config.md	daily-driver	reference	move	reference/path-config.md	6	config.paths schema
 docs/preflight.md	daily-driver	guide	move	guides/preflight.md	4	opt-in CI rehearsal
 docs/project-overview-pdr.md	discover	internal	merge	overview.md	1	product overview from 2026-06-18; says 26 skills
 docs/protocol/a2a-status-events.md	fleet	reference	keep	-	2	wire contract for outside observers
 docs/provider-rotation.md	fleet	reference	split	guides/accounts.md,reference/accounts.md	2	106 KB mixes account setup steps with the schema reference
+docs/quickstart.md	first-target	entry	keep	-	0	Stage 3 entry: first-feature half of getting-started.md
 docs/reaping-faq.md	fleet	guide	move	guides/reaping-faq.md	2	why a session row is still on the roster
 docs/reference/otel-schema.md	fleet	reference	keep	-	2	generated telemetry schema
 docs/security-posture.md	discover	concept	move	concepts/security-posture.md	2	the trust boundary a reader checks before install
@@ -272,3 +273,4 @@ docs/test-audit/unit-a-l-campaign.md	contribute	contributor	keep	-	0	test-cut ca
 docs/test-audit/unit-m-z-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/testing-guide.md	contribute	contributor	move	contributing/testing-guide.md	0	test layout for contributors
 docs/troubleshooting.md	first-target	guide	move	guides/troubleshooting.md	1	the failures first runs hit
+docs/workflows.md	daily-driver	entry	keep	-	0	Stage 4 entry: daily commands plus execution-modes.md and utilities.md

@@ -1,16 +1,17 @@
-# footnote documentation
+# fno documentation
 
-The repo root [`README.md`](../README.md) is the quickstart. This index maps the rest of the docs. For the deepest technical detail, each skill's `SKILL.md` under `skills/` is the source of truth.
+Pick the stage you are at. Each entry page answers one question and links onward. For the deepest technical detail, each skill's `SKILL.md` under `skills/` is the source of truth.
 
-## Start here
+| Stage | Your question | Start at |
+|---|---|---|
+| Discover | What does fno do, and is it safe to point at my repo? | [overview.md](overview.md) |
+| Install | How do I install it, and how do I know it worked? | [install.md](install.md) |
+| First target | How do I ship my first PR with it? | [quickstart.md](quickstart.md) |
+| Daily driver | Which verb do I run for this task? | [workflows.md](workflows.md) |
+| Fleet | How do I spawn, watch, route and recover workers? | [fleet.md](fleet.md) |
+| Contribute | How is fno built, and where does my change go? | [contributing/README.md](contributing/README.md) |
 
-- [getting-started.md](getting-started.md) - install to first run
-- [troubleshooting.md](troubleshooting.md) - common failures and how to fix them
-- [best-practices.md](best-practices.md) - how to get reliable, cost-bounded runs
-- [auth.md](auth.md) - credential setup and multi-account notes
-- [security-posture.md](security-posture.md) - the trust boundary for plan execution (see also [../SECURITY.md](../SECURITY.md))
-
-## Guides (task-oriented)
+## Guides
 
 - [guides/target.md](guides/target.md) - the autonomous loop: flags, gates, cross-project, resume
 - [guides/how-done-is-decided.md](guides/how-done-is-decided.md) - how the stop gate decides a run is done
@@ -18,48 +19,25 @@ The repo root [`README.md`](../README.md) is the quickstart. This index maps the
 - [guides/pr-lifecycle.md](guides/pr-lifecycle.md) - review, create, check, merged: the PR arc by hand
 - [guides/review.md](guides/review.md) - the owned review lane versus a cross-model second opinion
 - [guides/fix.md](guides/fix.md) - fast repair versus methodical diagnosis
-- [guides/agents-quickstart.md](guides/agents-quickstart.md) - spawn and message peer agents (claude/codex/gemini)
-- [guides/execution-modes.md](guides/execution-modes.md) - when to use target vs do vs operator
-- [guides/per-task-executors.md](guides/per-task-executors.md) - how operator resolves an executor per task
-- [guides/megawalk-walker.md](guides/megawalk-walker.md) - the continuous-delivery loop
-- [guides/cross-project-inbox.md](guides/cross-project-inbox.md) - messaging between projects
+- [backlog-usage.md](backlog-usage.md) and [backlog-triage.md](backlog-triage.md) - the backlog, day to day
 - [guides/worktrees.md](guides/worktrees.md) - isolate each feature in its own worktree
-- [guides/utilities.md](guides/utilities.md) - debug, code review
+- [guides/per-task-executors.md](guides/per-task-executors.md) - how an executor is picked per task
 - [guides/buddy.md](guides/buddy.md) - the companion mod above the Claude Code prompt
 - [guides/reading-shipped-plans.md](guides/reading-shipped-plans.md) - the completion-stamp format
-
-## Configuration
-
-- [path-config.md](path-config.md) - the `config.paths.*` schema, env vars, template variables
-- [configuration-guide.md](configuration-guide.md) - the full `config.toml` reference
-- [provider-rotation.md](provider-rotation.md) - provider records, failover, per-agent routing, combos
-
-## Architecture (how it works)
-
-The [architecture/](architecture/) directory holds the design docs (one per subsystem). Entry points:
-
-- [system-architecture.md](system-architecture.md) - the big picture
-- [architecture/control-plane-loop.md](architecture/control-plane-loop.md) - the current completion model: external truth (PR + CI + required-bot review) plus a budget cap, decided by `fno-agents loop-check`- [architecture/megawalk-pipeline.md](architecture/megawalk-pipeline.md) - the multi-feature loop
-- [architecture/coordination.md](architecture/coordination.md) - the `fno agents claim` work-claim primitive
-- [architecture/memory-system.md](architecture/memory-system.md) - the memory pass
-- [architecture/multi-cli-hooks.md](architecture/multi-cli-hooks.md) - how footnote wires into each CLI's hooks
-- [architecture/cost-accuracy.md](architecture/cost-accuracy.md) - session cost math: transcript dedup, version-aware pricing, the backfill runbook, `fno doctor --cost-check`
+- [troubleshooting.md](troubleshooting.md) and [best-practices.md](best-practices.md) - first-run failures and habits
+- [auth.md](auth.md) - credential setup and multi-account notes
 
 ## Reference
 
+- [configuration-guide.md](configuration-guide.md) - the full `config.toml` reference
+- [path-config.md](path-config.md) - the `config.paths.*` schema, env vars, template variables
+- [env-vars.md](env-vars.md) - every environment variable fno reads
+- [provider-rotation.md](provider-rotation.md) - provider records, failover, per-agent routing, combos
 - [api-reference.md](api-reference.md) - command surface reference
-- [code-standards.md](code-standards.md) - coding conventions in this repo
-- [testing-guide.md](testing-guide.md) - test layout, markers, and how to run each tier
-- [HARNESSES.md](HARNESSES.md) - per-CLI substrate facts (hook events, frontmatter, skill dirs)
-- [SKILL-COMPAT-MATRIX.md](SKILL-COMPAT-MATRIX.md) - per-skill cross-CLI compatibility
-- [distribution.md](distribution.md) - packaging and release
-- [deployment-guide.md](deployment-guide.md) - deployment notes
+- [HARNESSES.md](HARNESSES.md) and [SKILL-COMPAT-MATRIX.md](SKILL-COMPAT-MATRIX.md) - what works on each CLI
+- [harnesses/](harnesses/) - per-harness install notes; [SETUP-HERMES.md](SETUP-HERMES.md), [SETUP-OPENCLAW.md](SETUP-OPENCLAW.md) for alternate runtimes
+- [security-posture.md](security-posture.md) - the trust boundary for plan execution (see also [../SECURITY.md](../SECURITY.md))
 
-## Harnesses and alternate runtimes
+## Where a page belongs
 
-- [harnesses/](harnesses/) - per-harness adapter notes (`gemini.md`, `codex.md`, `harness-adapters.md`)
-- [SETUP-HERMES.md](SETUP-HERMES.md), [SETUP-OPENCLAW.md](SETUP-OPENCLAW.md) - alternate CLI runtimes
-
-## Contributing
-
-See [../CONTRIBUTING.md](../CONTRIBUTING.md) for dev setup, tests, and the CI gates.
+[docs-map.tsv](docs-map.tsv) gives every page a stage, a kind and a slot. A new page adds its row in the same change.

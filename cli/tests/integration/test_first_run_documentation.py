@@ -1,6 +1,6 @@
 """First-run documentation premises against the packaged front door.
 
-README.md and docs/getting-started.md promise a first-run journey: fno
+README.md and the docs entry pages promise a first-run journey: fno
 commands, /fno: skill spellings, and config defaults. This fixture checks
 each promise against the packaged CLI (fno on PATH) instead of trusting the
 prose. Command probes run with --help short-circuit so nothing documented
@@ -24,14 +24,16 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DOC_PATHS = [REPO_ROOT / "README.md", REPO_ROOT / "docs" / "getting-started.md"]
-SETTINGS_DOC = REPO_ROOT / "docs" / "getting-started.md"
+DOC_PATHS = [REPO_ROOT / "README.md"] + [
+    REPO_ROOT / "docs" / name for name in ("install.md", "quickstart.md", "workflows.md")
+]
+SETTINGS_DOC = REPO_ROOT / "docs" / "install.md"
 
 FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.S)
 INLINE_RE = re.compile(r"`(fno [^`]+)`")
 SKILL_RE = re.compile(r"/fno:([a-z][a-z-]*)")
 
-# Defaults README/getting-started promise, keyed by user-facing config path.
+# Defaults README/install promise, keyed by user-facing config path.
 # Value is the normalized packaged-schema default cell that must match;
 # review.posture is special-cased (schema default is none; the promise is the
 # self_review floor named in its row text).
