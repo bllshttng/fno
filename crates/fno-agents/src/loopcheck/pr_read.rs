@@ -156,6 +156,55 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
+/// The session manifest node's PR number, as a gh selector string.
+///
+/// The terminal read pins the PR the manifest's own node shipped instead of
+/// asking gh to resolve the checkout branch: a merged, deleted or detached
+/// head has no branch-to-PR answer, and the branch-resolved read then fails
+/// (under load, as a signal-killed child with empty stderr), which the gate
+/// renders as a causeless block on a PR that in fact merged. With the number
+/// the same read answers MERGED and retires the fire. Read-only against the
+/// graph store, the same door `node_is_done` uses, and fail-open: no node in
+/// the manifest, an unreadable store, or a node with no PR keeps the
+/// branch-resolved read, which is exactly the pre-existing behavior - and the
+/// only correct one before the session's PR exists at all.
+///
+/// A node can carry several PRs (`pull_request_attach` files every PR after
+/// the first under additional_prs, and the reconcile passes stamp the row
+/// they settle as merged or closed). The selector prefers a row the store
+/// does not stamp terminal - the live one - and among equals takes the
+/// newest number, so a closed or earlier merged primary never pins the gate
+/// to a dead PR.
+pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
+    let node_id = node_id?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    let mut rows: Vec<(i64, Option<&str>)> = node
+        .primary_pr
+        .iter()
+        .chain(node.additional_prs.iter().flatten())
+        .filter_map(|pr| {
+            pr.number
+                .filter(|number| *number > 0)
+                .map(|n| (n, pr.merge_status.as_deref()))
+        })
+        .collect();
+    // Newest first, then a stable pass that lifts non-terminal rows above
+    // stamped ones. The stamps ride the writers' own spelling, which is
+    // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
+    // case-insensitive on purpose. `merge_status` is None on every attached
+    // row, so an untracked live PR beats a stamped dead one, and a node
+    // whose only PR is merged still pins it.
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|(_, status)| {
+        status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+    });
+    rows.first().map(|(number, _)| number.to_string())
+}
+
 /// Run done() reads. Returns Ok(PrInfo) or Err((read_name, stderr_tail)) on gh failure.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn read_pr_info(
@@ -357,7 +406,7 @@ pub(super) fn read_pr_info(
         if !checks_out.status.success() {
             return Err(GhReadError::failed(
                 checks_read,
-                stderr_tail(&checks_out.stderr_tail),
+                failed_read_tail(&checks_out),
             ));
         }
 
@@ -531,7 +580,7 @@ pub(super) fn read_pr_info(
                 }
                 Ok(out) => log_bounded_read_error(
                     "round-budget reviews read",
-                    &GhReadError::failed("pr_reviews", stderr_tail(&out.stderr_tail)),
+                    &GhReadError::failed("pr_reviews", failed_read_tail(&out)),
                 ),
                 Err(e) => log_bounded_read_error("round-budget reviews read", &e),
             }
@@ -562,7 +611,7 @@ pub(super) fn read_pr_info(
         if !reviews_out.status.success() {
             return Err(GhReadError::failed(
                 "pr_reviews",
-                stderr_tail(&reviews_out.stderr_tail),
+                failed_read_tail(&reviews_out),
             ));
         }
 
@@ -639,7 +688,7 @@ pub(super) fn read_pr_info(
         if !comments_out.status.success() {
             return Err(GhReadError::failed(
                 "pulls_comments",
-                stderr_tail(&comments_out.stderr_tail),
+                failed_read_tail(&comments_out),
             ));
         }
 
@@ -673,7 +722,7 @@ pub(super) fn read_pr_info(
             if !commits_out.status.success() {
                 return Err(GhReadError::failed(
                     "pr_commits",
-                    stderr_tail(&commits_out.stderr_tail),
+                    failed_read_tail(&commits_out),
                 ));
             }
             let commits_json: Value = serde_json::from_slice(&commits_out.stdout)
