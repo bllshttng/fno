@@ -65,6 +65,8 @@ def test_codex_successor_uses_bounded_dispatch_without_claude_route(
             "successor",
             "--harness",
             "codex",
+            "--as",
+            "pane",
             "--bounded-placement",
             "--dispatch-account",
             "work",

@@ -758,7 +758,7 @@ def test_monitor_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch) -> No
     )
 
     assert result.exit_code == 2, result.output
-    assert "pane-only" in result.output
+    assert "needs --as pane" in result.output
     assert called == []
 
 

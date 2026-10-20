@@ -795,7 +795,7 @@ def test_cmd_spawn_pane_uses_global_bounded_dispatch(monkeypatch) -> None:
 
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "ordinary", "--split", "left", "do work"],
+        ["spawn", "--name", "ordinary", "--as", "pane", "--split", "left", "do work"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1766,7 +1766,7 @@ def test_ac1_cli_passthrough_reaches_dispatch(tmp_path: Path, monkeypatch) -> No
 
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "peer", "--harness", "claude", "hi", "--", "--verbose"],
+        ["spawn", "--name", "peer", "--harness", "claude", "--as", "pane", "hi", "--", "--verbose"],
     )
     assert result.exit_code == 0, result.output
     assert captured["message"] == "hi"

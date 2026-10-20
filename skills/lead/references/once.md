@@ -71,14 +71,14 @@ Grooming stays on a small model because it is daily and levers-only; a lead is r
 
 ```bash
 fno agents spawn --name lead-<epic> "<brief>" --effort high --model <your frontier model> \
-  --promote <epic> --substrate pane --workspace <epic>
+  --promote <epic> --as pane --workspace <epic>
 ```
 
-`--substrate pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
+`--as pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
 
 What `pane` buys here is the ORG, not the role.
 
-The role itself rides `--substrate thread` for Claude: a Claude thread worker is persistent, attachable and resumable. Non-Claude thread spawns reject `--promote` because role support is Claude-only. For Claude, only the `headless` one-shot is refused, since it exits before it can lead. The retired `bg` spelling refuses with a redirect to `thread`.
+The role itself rides `--as thread` for Claude: a Claude thread worker is persistent, attachable and resumable. Non-Claude thread spawns reject `--promote` because role support is Claude-only. For Claude, only the `headless` one-shot is refused, since it exits before it can lead. The retired `bg` spelling refuses with a redirect to `thread`.
 What a thread lead loses is placement.
 The placement flags are mux geometry and refuse outside a pane, and the exact anchor resolves from `FNO_PANE`, which a thread session does not have.
 So a thread lead seats teammates in fresh tabs instead of beside itself, and the org stops cohering around one screen.
@@ -166,7 +166,7 @@ Make capture part of each tick. Run `fno inbox operator status`. Disposition eve
 
 A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
-**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --substrate pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/verb` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.
 `fno backlog advance --epic <id>` is the graph-driven fan-out and needs `config.auto_continue.enabled`.
@@ -175,7 +175,7 @@ It refuses with a named exit code when it cannot, and [step 4](#4-kick-off) read
 
 **Placement is a pane-only concern, and it applies to both shapes.**
 `--workspace <name>` (short `-s`) sends a new pane into a named mux workspace, and `--split left|right|up|down` tiles it there.
-Both are refused outside `--substrate pane`: `thread` and `headless` have no mux geometry, so a `thread` example carrying `--workspace` is a command that exits nonzero rather than a stricter one.
+Both are refused outside `--as pane`: `thread` and `headless` have no mux geometry, so a `thread` example carrying `--workspace` is a command that exits nonzero rather than a stricter one.
 The consequence splits cleanly by substrate.
 A pass dispatching on `thread` or `headless` carries its mission in the graph and the spawn provenance, and names no placement flag at all.
 Which placement flag depends on whether you are already in the target workspace, and the two cases split by shape.
@@ -436,10 +436,10 @@ read -r -d '' payload <<'CLAUSE' || true   # read -d '' exits 1 at EOF; absorb i
 Take node <id> through <phase verb: /fno:think, /fno:blueprint, or /fno:target>.
 <minion clause - paste verbatim from references/minion-clause.md>
 CLAUSE
-fno agents spawn --name <node-name> "$payload" --substrate pane --at current --split <dir> --effort <e>
+fno agents spawn --name <node-name> "$payload" --as pane --at current --split <dir> --effort <e>
 ```
 
-- **Anchor to your own pane, do not aim at the workspace.** `--workspace <name> --split <dir>` splits that workspace's *focused* pane, and focus is shared mutable state: another client can move it between the moment you build the command and the moment the server runs it, landing your teammate in a different tab from you. `--at current` pins the new pane to the calling pane - yours - by resolving `FNO_PANE`, so the org accretes around the lead by construction rather than by hoping focus held. It is strict: if the anchor is gone or the split cannot fit, it refuses rather than minting a tab somewhere else, and the `--json` receipt reports the server-committed anchor and tab so you read where it actually landed. It requires `--split` and `--substrate pane`, and it only works from inside a mux pane.
+- **Anchor to your own pane, do not aim at the workspace.** `--workspace <name> --split <dir>` splits that workspace's *focused* pane, and focus is shared mutable state: another client can move it between the moment you build the command and the moment the server runs it, landing your teammate in a different tab from you. `--at current` pins the new pane to the calling pane - yours - by resolving `FNO_PANE`, so the org accretes around the lead by construction rather than by hoping focus held. It is strict: if the anchor is gone or the split cannot fit, it refuses rather than minting a tab somewhere else, and the `--json` receipt reports the server-committed anchor and tab so you read where it actually landed. It requires `--split` and `--as pane`, and it only works from inside a mux pane.
 - **The workspace comes from where you are.** Because the teammate anchors to your pane, it inherits your workspace - which is the mission workspace, provided you were promoted with `--workspace <epic>` as above. That is why the lead's own placement is load-bearing and not cosmetic. Use explicit `--workspace <name> --split <dir>` only when you must place into a workspace you are not in, and accept the focus race when you do. An older deprecated alias for that flag still resolves, so a stale command runs clean and teaches the wrong spelling anyway - see the migration note in [the spawn guide](../../../docs/guides/fno-agents-spawn.md#place-a-pane-in-a-mux-workspace).
 - **Creation is implicit.** The first placement into a workspace name creates it. There is no create verb, and nothing to set up before the first spawn. A blank name is refused at the CLI boundary rather than falling back to a default.
 - **Split.** First teammate `--split right`, subsequent teammates `--split down`, accreting quarters in your active tab so your viewport shows the whole org. Exact sequencing is yours; the invariant is only that every teammate lands in the one mission workspace. Treat a split direction as a placement *intent* at spawn time: several teammates launching at once are laid out concurrently, so the direction says where each one goes in, not what the final tab arrangement will be.

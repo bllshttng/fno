@@ -165,10 +165,10 @@ pub(crate) fn launch_spawn_argv(fno: &str, req: &AgentLaunchRequest, session: &s
     if let Some(id) = &req.node {
         argv.extend(["--node".to_string(), id.clone()]);
     }
-    // The mux session anchors a PANE placement and implies the pane lane
-    // at the door (--substrate is retired); a thread launch (the default)
-    // never sends it.
+    // A pane only comes from an explicit --as pane; the mux session anchors
+    // its placement. A thread launch (the default) sends neither.
     if req.substrate == "pane" {
+        argv.extend(["--as".to_string(), "pane".to_string()]);
         argv.extend(["--mux-session".to_string(), session.to_string()]);
     }
     argv.extend([
@@ -214,6 +214,7 @@ pub(crate) fn validate_extra_flags(flags: &[String]) -> Result<(), String> {
         return Err("extra launch flags exceed 64 argv values".to_string());
     }
     const COMPOSER_FLAGS: &[&str] = &[
+        "--as",
         "--cwd",
         "--route",
         "--tab",
@@ -914,6 +915,8 @@ mod tests {
                 "spawn",
                 "--cwd",
                 "/tmp/proj",
+                "--as",
+                "pane",
                 "--mux-session",
                 "work",
                 "--no-wait",
@@ -1055,6 +1058,8 @@ mod tests {
                 "spawn",
                 "--cwd",
                 "/tmp/p6",
+                "--as",
+                "pane",
                 "--mux-session",
                 "s",
                 "--no-wait",

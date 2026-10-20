@@ -1076,8 +1076,8 @@ def _retired_axis(flag: str, admit: str = ""):
 @agents_app.command(
     "spawn",
     epilog=(
-        "The harness lane is chosen, not flagged: placement args imply the pane "
-        "lane, --once means headless, everything else seats a thread. Declared "
+        "--as picks the lane: thread (the default), pane, headless, or cloud. "
+        "Placement flags need --as pane; --once means headless. Declared "
         "harnesses: claude, codex, opencode, pi, agy, cursor-agent, grok "
         "(docs/HARNESSES.md)."
     ),
@@ -1134,12 +1134,10 @@ def cmd_spawn(
             "claude peers are persistent bg threads; use plain spawn."
         ),
     ),
-    substrate: str = typer.Option(
-        "",
-        "--substrate",
-        hidden=True,
-        callback=_retired_axis("--substrate", admit="cloud"),
+    lane: str = typer.Option(
+        "", "--as", help="Where the worker runs: thread (default), pane, headless, or cloud."
     ),
+    substrate: str = typer.Option("", "--substrate", hidden=True),
     print_mode: bool = typer.Option(
         False,
         "--print",
@@ -1468,44 +1466,29 @@ def cmd_spawn(
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
     uncarried = fence_uncarried(harness, passthrough)
-    defaulted = False
-    if not substrate and once:  # --once always means a one-shot
+    if substrate:
+        print("--substrate is now --as; the old spelling answers for one release.", file=sys.stderr)
+    substrate = lane or substrate or ("headless" if once else "thread")
+    if substrate not in ("thread", "pane", "headless", "cloud"):
+        print(f"--as must be thread, pane, headless, or cloud (got {substrate!r})", file=sys.stderr)
+        raise typer.Exit(code=2)
+    if once and substrate == "pane":
         substrate = "headless"
-    if not substrate:
-        # Empty = unset: pane capability implies pane; else thread where seated.
-        defaulted = True
-        pane_implied = bool(
-            passthrough or split or at or tab or bounded_placement or squad
-            or pane is not None or monitor is not None or mux_session is not None
-            or uncarried is not None
-        )
+    # A pane only comes from an explicit --as pane: a thread that cannot seat
+    # refuses and names the flag instead of opening a pane by surprise.
+    if substrate == "thread":
         try:
             seatable = thread_seatable(harness)
         except DispatchResolveError:  # an undeclared harness seats no thread
             seatable = False
-        if pane_implied or not seatable:
-            substrate = "pane"
-        else:
-            substrate = "thread"
-    # `--once` is the pre-substrate spelling of headless, but Python leaves it on
-    # the pane default; a routed `--once` would then reach dispatch as
-    # claude+once+not-headless and die on the "persistent bg threads" refusal.
-    if once and substrate == "pane":
-        substrate = "headless"
-    # A thread seat meeting an uncarried flag demotes loudly, named seat or
-    # defaulted; an explicit pane or headless one-shot stays silent.
-    if (
-        uncarried is not None
-        and substrate != "headless"
-        and (defaulted or substrate in ("thread", "bg"))
-    ):
-        if substrate in ("thread", "bg"):
-            substrate = "pane"
-        print(
-            f"fno agents spawn: substrate: pane (the {harness} thread lane "
-            f"has no carrier for {uncarried})",
-            file=sys.stderr,
-        )
+        why = uncarried and f"has no carrier for {uncarried}"
+        why = why or (not seatable and "is not seatable")
+        if why:
+            print(
+                f"fno agents spawn: the {harness} thread lane {why}; add --as pane",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
 
     # change 1: `--node` with no typed message resolves the seed from
     # the node (render + launch workdir, one module); change 1 adds the
@@ -1561,8 +1544,8 @@ def cmd_spawn(
 
     if mux_session is not None and substrate != "pane":
         print(
-            f"--mux-session is pane-only; substrate {substrate!r} has no mux "
-            "session to spawn into",
+            "--mux-session needs --as pane; only a pane has a mux session "
+            "to spawn into",
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
@@ -1588,7 +1571,7 @@ def cmd_spawn(
             print(conflict, file=sys.stderr)
             raise typer.Exit(code=2)
         if substrate != "pane" or once:
-            print("--pane applies only to the pane lane (thread/headless have no existing mux pane target)", file=sys.stderr)
+            print("--pane needs --as pane (thread/headless have no existing mux pane target)", file=sys.stderr)
             raise typer.Exit(code=2)
 
     refusal = placement_refusal(
@@ -1612,7 +1595,7 @@ def cmd_spawn(
             print(
                 "--promote needs a session that outlives the grant; headless is a "
                 "one-shot that exits after one answer, so its role would be "
-                "orphaned at birth. Give the spawn a pane lane (placement) or let it seat a thread.",
+                "orphaned at birth. Use --as pane or --as thread.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
@@ -2464,7 +2447,7 @@ def cmd_spawn(
             from fno.agents.spawn_defaults import spawn_seam_marker
             from fno.rust_binary import call_binary_json
             argv = ["spawn", spawn_seam_marker(), "--name", name, "--harness", harness,
-                    "--substrate", "cloud", "--cwd", str(workdir)]
+                    "--as", "cloud", "--cwd", str(workdir)]
             argv += [f"--from-name={from_name}"] if from_name else []
             axes = {"--account": account or dispatch_account,
                     "--harness-arg": " ".join(passthrough or ()) or None}

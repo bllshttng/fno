@@ -29,18 +29,18 @@ fno agents spawn "fix the failing test" bg --provider zai --model glm-5.2     # 
 
 A **harness name on the provider axis is refused by name**: `--provider claude` exits 2 with `claude is a harness, not a provider; use --harness claude`. This used to be how the harness was selected, so the refusal names the fix rather than launching the wrong thing.
 
-Two shorts moved to make room. `-H` takes a harness value; it used to mean headless. `-p` now means headless, mirroring the harnesses' own one-shot short (`claude -p`), which is why the provider axis takes the capital `-P`. A one-shot is `--headless`, `-p`, `--once`, `-o`, or `--substrate headless`.
+Two shorts moved to make room. `-H` takes a harness value; it used to mean headless. `-p` now means headless, mirroring the harnesses' own one-shot short (`claude -p`), which is why the provider axis takes the capital `-P`. A one-shot is `--headless`, `-p`, `--once`, `-o`, or `--as headless`.
 
 ## The default substrate
 
-A spawn with no `--substrate` seats a **thread** wherever the harness seats one. A harness with no thread lane falls back to a **pane**. Thread is the persistent lane: closing a view never ends the worker. Two spawn inputs still imply the pane: the pane placement flags (`--workspace`, `--split`, `--at`, `--tab`) and a `--` passthrough fence. Only the pane argv builders honor those, so the implicit thread refuses them with a pointer to `--substrate pane`.
+A spawn with no `--as` seats a **thread**. Thread is the persistent lane: closing a view never ends the worker. Nothing opens a pane by accident. The pane placement flags (`--workspace`, `--split`, `--at`, `--tab`), a `--` fence token the thread lane cannot carry, and a harness with no thread lane each refuse and name `--as pane`.
 
 ## Routing a worker to another vendor
 
 `--provider <vendor> --model <m>` (or the single-string `--route <vendor>,<m>`) points a claude worker at a different model endpoint. The vendor must be a known `model_routing.providers` record with a resolvable key; an unknown, non-anthropic-compatible, or keyless vendor is refused before anything spawns, so the node stays dispatchable.
 
 ```bash
-fno agents spawn "fix the failing test" --name glm-worker --substrate thread --provider zai --model glm-5.2
+fno agents spawn "fix the failing test" --name glm-worker --as thread --provider zai --model glm-5.2
 ```
 
 Routing is claude-only and reaches the `bg` and `headless` substrates only. The route is applied by writing a `0600` claude `--settings` file and passing `--settings <path>`: a `claude --bg` session's serving process is forked by the claude daemon, which drops per-spawn `ANTHROPIC_*` env before the first model request, and a settings file is read by the session process itself so it survives that fork. `pane` is not a routed lane and is refused rather than silently running the primary model.
@@ -84,7 +84,7 @@ The workspace does not have to exist first: the first placement into a name crea
 
 Migrating an older command: `--squad` is a hidden deprecated alias for `--workspace`.
 It still resolves, and `--workspace` wins when both are passed, whatever the order.
-That holds on every path that can place a pane: a `--substrate pane` spawn is Python-owned, and a direct `fno-agents` pane spawn re-execs the Python CLI with the original arguments rather than resolving placement itself.
+That holds on every path that can place a pane: a `--as pane` spawn is Python-owned, and a direct `fno-agents` pane spawn re-execs the Python CLI with the original arguments rather than resolving placement itself.
 Rewrite the flag anyway; passing both is just a half-finished migration.
 
 The lower-level equivalent avoids option punctuation entirely: `fno mux pane run workspace reviews split right echo ready`. It also accepts `--workspace` / `-s` and `--split` / `-x`.
@@ -115,10 +115,10 @@ A bare `--split` anchors on the caller's own pane (FNO_PANE), not on whatever th
 
 ```bash
 fno agents spawn "investigate the failing test" --name digger \
-  -H codex --substrate pane --at current --split down
+  -H codex --as pane --at current --split down
 ```
 
-`--at current` resolves the calling pane from the `FNO_PANE` environment variable the mux server sets in every pane, and requires `--split` and `--substrate pane`. It opts into *strict* placement: if the anchor pane is gone, a selector names a workspace or tab the anchor is not in, or the split cannot fit the minimum pane size, the spawn refuses (nonzero exit) rather than substituting focus or minting a new tab.
+`--at current` resolves the calling pane from the `FNO_PANE` environment variable the mux server sets in every pane, and requires `--split` and `--as pane`. It opts into *strict* placement: if the anchor pane is gone, a selector names a workspace or tab the anchor is not in, or the split cannot fit the minimum pane size, the spawn refuses (nonzero exit) rather than substituting focus or minting a new tab.
 The mux server never creates a tab and never steals the viewer's focus on this path.
 On a strict spawn the `--json` receipt carries `placement` with the server-committed `anchor`, `direction`, `fallback` (`refuse`), `squad` (the receipt's field name for the workspace), and `tab`, so automation captures real identities instead of predicting pane ids.
 A provider that exits before it is ready is treated as a launch failure: the spawned pane is reaped, the split collapses through normal tree normalization, and no agent registry row is written.
@@ -135,7 +135,7 @@ A spawn is a paneless thread: a DEFAULT never opens a view. An explicit placemen
 ### Spawn and place in one call
 
 ```bash
-fno agents spawn "fix the failing test" --name w2 --substrate thread \
+fno agents spawn "fix the failing test" --name w2 --as thread \
   --portal 1
 ```
 

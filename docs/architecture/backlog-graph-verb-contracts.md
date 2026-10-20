@@ -736,7 +736,7 @@ Spawn width-bounded joiners into a held node's worktree.
     Resolves the holder's worktree from the LIVE ``node:<id>`` claim (never a
     manifest snapshot), computes the bound plan's ready-graph width, and
     spawns ``/fno:execute waves <plan>`` workers there via ``fno agents spawn
-    --substrate thread`` - one per distinct wave band when the plan carries
+    --as thread`` - one per distinct wave band when the plan carries
     bands (highest band first, the lead; each lane resolved per band by
     ``_grid_lane_for``), else ``min(workers, width - 1)`` shapeless workers
     (joiner 2). Either way the width rule caps the count: the node holder is

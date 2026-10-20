@@ -491,7 +491,7 @@ Read `spawn.sh`'s single outcome line and relay it faithfully:
 sniffing output (Group 1 put claude creation on `spawn`, so claude
 takes the JSON `.short_id` family below, not a bare 8-hex line):
 
-- **`spawn --once` / `--substrate headless`**: a **client-side one-shot**
+- **`spawn --once` / `--as headless`**: a **client-side one-shot**
   (`codex exec` / `gemini -p`). stdout is the model REPLY verbatim, not a
   short-id. Success = exit 0 AND a non-empty reply; an empty reply (even on
   exit 0) is FAILED, never a fabricated answer.

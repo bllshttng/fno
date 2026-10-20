@@ -72,11 +72,11 @@ def test_fence_uncarried_reads_the_carrier_rows() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The resolver demotes instead of refusing (AC4)
+# A thread never demotes to a pane: it refuses and names --as pane
 # ---------------------------------------------------------------------------
 
 
-def test_a_thread_meeting_an_uncarried_fence_token_demotes_loudly(
+def test_a_thread_meeting_an_uncarried_fence_token_refuses_naming_as_pane(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sent = _capture_pane_dispatch(monkeypatch)
@@ -84,10 +84,10 @@ def test_a_thread_meeting_an_uncarried_fence_token_demotes_loudly(
         monkeypatch,
         ["spawn", "work", "--harness", "codex", "--", "--profile", "p"],
     )
-    assert sent.get("provider") == "codex", res.output
+    assert res.exit_code == 2, res.output
+    assert sent == {}, res.output
     assert (
-        "fno agents spawn: substrate: pane (the codex thread lane has no carrier for --profile)"
-        in res.output
+        "the codex thread lane has no carrier for --profile; add --as pane" in res.output
     ), res.output
 
 

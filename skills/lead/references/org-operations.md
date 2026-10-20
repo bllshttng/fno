@@ -23,7 +23,7 @@ the pane receipt before sending the next task.
 
 | Duty | Verb | Notes |
 |---|---|---|
-| **Launch** a teammate | the native `claude --bg` line from [Control surfaces](#control-surfaces), or `fno agents spawn --name <n> "<payload>" --substrate thread --effort <e>` | A paneless worker has no placement; the graph and mail carry the mission. |
+| **Launch** a teammate | the native `claude --bg` line from [Control surfaces](#control-surfaces), or `fno agents spawn --name <n> "<payload>" --as thread --effort <e>` | A paneless worker has no placement; the graph and mail carry the mission. |
 | **Inject** the next phase into a live session | `fno agents mail send <handle> "<ruling + /fno:verb>" --from-self` | A direct send to a live pane injects as a notification it acts on this turn. Receipt-gated - see delivery truth below. Auto-wrapped in the `<fno_mail>` envelope; a raw pane-layer prompt is not - see the envelope rule below. |
 | **Sweep** at a boundary (nonblocking) | `fno agents fleet top` + `fno agents session peek <handle>` | Push-first (the teammate's report mail); this is the backstop sweep, run at a named boundary while you are already awake, not on a repeating timer. `top` = who is alive; `peek` = is a quiet pane done/blocked/dead. Both return immediately and wake nobody. `fno-agents needs --json` is a separate loop-wedge signal, not pane completion. |
 | **Wait** on lifecycle (blocking) | ONE unreconciled teammate: `fno-agents wait --agent <name> --state done --timeout-ms <n>` · a fleet of them: `fno-agents subscribe` | The actual wake source, and the only duty here that is one. `wait` parses a single `--agent` and serves exactly one unreconciled teammate; with two or more in the wait set, arm one unfiltered `subscribe` instead - it streams registry state transitions and pane exits as NDJSON from EOF, so the first teammate to move wakes you whichever it is; on wake sweep, reconcile, re-arm. Launch each as its OWN harness-tracked task and never append `&` - a trailing `&` returns the call instantly, the harness marks it finished, and nothing is left waiting. Cover one wake per live teammate you have not yet reconciled - an expected report is not coverage, because the report is exactly what goes missing, but a reconciled row still reading `done` matches instantly and spins, so it leaves the set. Always `done`, never `idle`: `idle` is the default verdict (lapsed hook, unknown or absent screen state) so it can return instantly and spin the re-arm loop. No wake arm covers `blocked`: the inside-leg hook emits `working`/`done` only (`blocked` has no wired trigger), so a blocked teammate reaches you by its report mail or your sweep's `BlockedAnswerable` badge, never by this verb. On a hookless pane (gemini/opencode/agy) `done` is a death detector plus a timeout rather than a completion signal - bounded, which is the point. On timeout with the teammate still live, re-arm. |
@@ -60,10 +60,10 @@ Drop `--print` to have spawn run the same line. If you hold the node's claim, do
 
 | Job | Verb |
 |---|---|
-| Launch a teammate | the printed native line above, or `fno agents spawn --name <n> "<payload>" --substrate thread --effort <e>` |
+| Launch a teammate | the printed native line above, or `fno agents spawn --name <n> "<payload>" --as thread --effort <e>` |
 | Move a running pane into another workspace | `fno mux layout apply` rebinds a bound live pane into a target tab, PTY intact, but needs a full template (or a spec file) plus its whole slot set - see mux-layout-templates. No `fno mux pane` verb does it (`break` only detaches to a new tab in place). A promotion-time move, not a mid-wave shuffle |
 | Arm a wake before you stop | ONE unreconciled teammate: `fno-agents wait --agent <name> --state done --timeout-ms <n>` · a fleet: `fno-agents subscribe` unfiltered, armed once (harness-tracked either way; never `idle`, never `&`) |
-| Anoint a sub-lead at spawn | `fno agents spawn --name <n> "<payload>" --substrate thread --promote <scope>` (a lead running an org belongs in its own mission workspace). Repeat `--promote`/`-k` for a portfolio; the rung is derived from what you name |
+| Anoint a sub-lead at spawn | `fno agents spawn --name <n> "<payload>" --as thread --promote <scope>` (a lead running an org belongs in its own mission workspace). Repeat `--promote`/`-k` for a portfolio; the rung is derived from what you name |
 | Role an existing session in place | The target runs `fno agents registry register`; from another attended terminal run `fno agents org promote <printed-handle> --scope <scope>`. A live lead may run it too, but only over a scope its own role strictly contains. It preserves the target's transcript and placement. A lead can also add an epic its own session created to its own role: `fno agents org promote <own handle> --scope <each held epic> --scope <new epic>` |
 | Hand your role to a successor | Spawn the successor over your OWN scope with `--hand-off --name <Name>`: without the explicit transfer flag the spawn is refused and you keep the role. The vacate and stamp are one registry write. Announce first: an outgoing lead that owes the team a handoff notice sends it BEFORE `--hand-off --name <Name>`, while the role still answers for it; after the transfer the outgoing session holds no role and no send authority. Return it with `fno agents org promote --reclaim`; that uses `role_grantor` and creates no session. The attended in-place verb is a re-scope, not succession: it moves a role between two live rows (re-scope the incumbent first, then role the successor) but never creates a successor at spawn |
 | Read your own role | `fno whoami` (prints a `role:` line when your row holds one) |
@@ -82,7 +82,7 @@ Drop `--print` to have spawn run the same line. If you hold the node's claim, do
 
 **Anointing on the thread substrate.**
 
-`--promote` rides `--substrate thread` for Claude only. Non-Claude thread spawns reject it. For Claude, only `headless` is refused, since a one-shot exits before it can lead. The retired `bg` spelling refuses with a redirect to `thread`.
+`--promote` rides `--as thread` for Claude only. Non-Claude thread spawns reject it. For Claude, only `headless` is refused, since a one-shot exits before it can lead. The retired `bg` spelling refuses with a redirect to `thread`.
 
 What a thread sub-lead gives up is placement, not authority.
 
@@ -137,7 +137,7 @@ read -r -d '' payload <<'CLAUSE' || true
 Continue node at /fno:blueprint. Prior /think artifact: <path>.
 <minion clause - paste verbatim from references/minion-clause.md>
 CLAUSE
-fno agents spawn --name node-x-aaaa-g2 "$payload" --substrate thread --effort high
+fno agents spawn --name node-x-aaaa-g2 "$payload" --as thread --effort high
 # ...only after the successor's session header prints, close the predecessor.
 fno agents session stop node-x-aaaa
 fno agents session rm node-x-aaaa

@@ -24,7 +24,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | cursor-agent (Cursor CLI agent) | fno drives the hosted TUI: a mux pane attended, the keeper-hosted thread lane dispatched. The `--print` stream is output-only; no rpc, acp, serve, or stdio transport exists. | Sequential |
 | grok CLI | fno drives its hosted TUI. Rust ACP is separate. Headless `grok -p` awaits signed-in create/resume proof. | Sequential |
 | zcode (ZCode's CLI agent) | Headless one-shot lane: fno runs `zcode -p` turns and resumes the minted `sess_<uuid>` by name. The TUI lane is unmeasured on the 3.14.3 bundle. | Sequential |
-| footnote (footnote's own loop) | Headless: the `fno-agents` client runs the turn loop over a model API, with `-m <provider>/<model>`. Pane: `--substrate pane` hosts the TUI as `footnote --spec <file>`; the spec file is the same launch spec the headless lane pipes on stdin. Thread: `--substrate thread` holds one session open over ACP stdio (see below). | Sequential |
+| footnote (footnote's own loop) | Headless: the `fno-agents` client runs the turn loop over a model API, with `-m <provider>/<model>`. Pane: `--as pane` hosts the TUI as `footnote --spec <file>`; the spec file is the same launch spec the headless lane pipes on stdin. Thread: `--as thread` holds one session open over ACP stdio (see below). | Sequential |
 
 ### footnote
 
@@ -42,7 +42,7 @@ Tools run with your own permissions. There is no sandbox.
 
 #### The thread lane: steering over ACP
 
-`fno agents spawn -H footnote -m zai/glm-5.3-flash --substrate thread "<task>"` keeps one session open. The `fno-agents-worker --footnote-host` process runs `footnote acp <spec>`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/fnh/`. The registry row carries the fnh session id, the host pid and that socket. Every steer is a typed ACP message. No keystroke reaches a pane.
+`fno agents spawn -H footnote -m zai/glm-5.3-flash --as thread "<task>"` keeps one session open. The `fno-agents-worker --footnote-host` process runs `footnote acp <spec>`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/fnh/`. The registry row carries the fnh session id, the host pid and that socket. Every steer is a typed ACP message. No keystroke reaches a pane.
 
 | Verb | ACP message |
 |---|---|
@@ -153,7 +153,7 @@ No harness exposes a human-origin discriminator, and ruling d-e1eec854 measured 
 
 ## The undeclared lane: any binary on PATH gets a pane
 
-`fno agents spawn -H <name> --substrate pane "<seed>" -- <init flags>` hosts any CLI binary on PATH, not only the harnesses with a capability row. The name must look like a binary name (`^[a-z][a-z0-9._-]{0,31}$`) and must resolve on PATH; each failed check refuses by naming it. fno is the viewport for the result, nothing more.
+`fno agents spawn -H <name> --as pane "<seed>" -- <init flags>` hosts any CLI binary on PATH, not only the harnesses with a capability row. The name must look like a binary name (`^[a-z][a-z0-9._-]{0,31}$`) and must resolve on PATH; each failed check refuses by naming it. fno is the viewport for the result, nothing more.
 
 An undeclared harness gets a mux pane, a registry row, a name, mail by pane-send, and the Drive viewport the moment `.fno/config.toml` declares `[harness.<name>.attach]`. That config block is the only further step. No code change, no roster edit. The lane withholds a thread lane, steering, and `fno agents mail ask`: those need the vendor's own protocol and must be measured (a row in the canonical `crates/fno-agents/src/harness_capabilities.toml`, from which the Python-tree and mux-crate copies are generated) before they can exist.
 

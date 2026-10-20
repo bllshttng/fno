@@ -640,7 +640,10 @@ mod tests {
         let flags = answer["eligible"][0]["flags"].as_array().unwrap();
         let toks: Vec<&str> = flags.iter().map(|v| v.as_str().unwrap()).collect();
         // The retired model and effort axes never ride; the pane a non-claude
-        // harness defaults to is an automated placement.
-        assert_eq!(toks, vec!["-H", "codex", "--bounded-placement"]);
+        // harness defaults to is an explicit, automated placement.
+        assert_eq!(
+            toks,
+            vec!["-H", "codex", "--as", "pane", "--bounded-placement"]
+        );
     }
 }
