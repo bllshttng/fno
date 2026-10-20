@@ -441,7 +441,7 @@ fn surface_split(
     parent: &str,
     sha: &str,
 ) -> Result<(&'static str, u64), String> {
-    let numstat = git_out(repo, &["diff", "--numstat", parent, sha])?;
+    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
     let mut product: u64 = 0;
     let mut fleet: u64 = 0;
     for line in numstat.lines() {
