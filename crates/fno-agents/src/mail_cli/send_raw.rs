@@ -974,7 +974,10 @@ fn parse_review_invocation(raw: &str) -> Option<ReviewInvocation> {
 }
 
 fn canonical_flag(token: &str) -> Option<String> {
-    const KNOWN_REVIEW_FLAGS: [&str; 3] = ["comment", "fix", "verify-fixes"];
+    // Keep in step with the owner table in review_invocation_core.rs: this
+    // local copy prices review invocations on the mail surface and must not
+    // read a narrower vocabulary than the parser that minted them.
+    const KNOWN_REVIEW_FLAGS: [&str; 4] = ["comment", "fix", "verify-fixes", "fresh"];
     let mut name = token;
     if let Some(stripped) = name.strip_prefix("--") {
         name = stripped;

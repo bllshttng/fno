@@ -525,5 +525,15 @@ for _b in "${branch:-}" "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 done
 
 # The one receipt: the verdict shown is the measured one on the classified
-# path, the typed one when no findings file was given.
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context lines=$reviewed_line_count files=$reviewed_file_count" >&2
+# path, the typed one when no findings file was given. The review level is
+# composed from fields the row already carries, so the receipt names the
+# round's independence in one word without a new payload field: peer for a
+# cross-model peer verdict, fresh for a fresh-context reviewer round, self
+# for everything else (the inline lane and declare self-cert both included).
+review_level="self"
+if [[ "$reviewer" == "peer" ]]; then
+  review_level="peer"
+elif [[ "$reviewer_context" == "fresh" ]]; then
+  review_level="fresh"
+fi
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review level=$review_level lines=$reviewed_line_count files=$reviewed_file_count" >&2
