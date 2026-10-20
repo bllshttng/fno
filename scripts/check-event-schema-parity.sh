@@ -484,6 +484,16 @@ dual_owner_kinds = {
     # gate on the non-raw sends; both emitters run until the Python leg
     # retires.
     "style_refusal",
+    # The routed-stem writer cutover: the attention answer and delivery
+    # ladders, the day-boundary question index, and the journal retire
+    # receipt moved to the Rust store emitters (attention_arm,
+    # attention_reply, day, state_layout_sqlite); schema.yaml keeps the rows
+    # for the validator and `doctor event find`, the way pr_watch_unparked
+    # above does.
+    "attention_answer",
+    "attention_delivery",
+    "day_boundary",
+    "legacy_journal_retired",
 }
 collisions -= dual_owner_kinds
 if collisions:
