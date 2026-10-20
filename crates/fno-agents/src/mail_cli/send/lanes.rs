@@ -1101,6 +1101,12 @@ pub(super) fn kind_lane_send(
             eprintln!("error: --persist only accepts 'memory' (got {persist:?})");
             return Err(2);
         }
+        // Python refused the flag on every kind but fyi: persisting a
+        // heads-up or question to a memory file was always a caller mistake.
+        if kind != "fyi" {
+            eprintln!("error: --persist requires --kind fyi (got {kind:?})");
+            return Err(2);
+        }
         persist_to_memory = true;
     }
     let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
