@@ -133,7 +133,7 @@ fn run(fx: &Fixture, args: &[&str]) -> (i32, String, String) {
 }
 
 /// The pass row the capture seeded, byte-for-byte (json.dumps spacing).
-fn seed_pass(fx: &Fixture, path: &Path, reviewer: &str) {
+fn seed_pass(path: &Path, reviewer: &str) {
     fs::write(
         path,
         format!(
@@ -194,7 +194,7 @@ fn assert_retraction_row(journal: &Path, head: &str) {
 fn retract_match() {
     let fx = fixture("repo");
     let events = fx.root.join("events.jsonl");
-    seed_pass(&fx, &events, "code-review");
+    seed_pass(&events, "code-review");
     let args = retract_args(&events);
     let (rc, out, err) = run(&fx, &args.iter().map(String::as_str).collect::<Vec<_>>());
     let rust = Golden {
@@ -209,7 +209,7 @@ fn retract_match() {
 fn retract_no_pass() {
     let fx = fixture("repo");
     let events = fx.root.join("events.jsonl");
-    seed_pass(&fx, &events, "other");
+    seed_pass(&events, "other");
     let args = retract_args(&events);
     let (rc, out, err) = run(&fx, &args.iter().map(String::as_str).collect::<Vec<_>>());
     let rust = Golden {
@@ -227,7 +227,7 @@ fn retract_match_via_global() {
     let fx = fixture("repo");
     let events = fx.root.join("events.jsonl");
     fs::write(&events, "").unwrap();
-    seed_pass(&fx, &fx.root.join("state/events.jsonl"), "code-review");
+    seed_pass(&fx.root.join("state/events.jsonl"), "code-review");
     let args = retract_args(&events);
     let (rc, out, err) = run(&fx, &args.iter().map(String::as_str).collect::<Vec<_>>());
     let rust = Golden {
