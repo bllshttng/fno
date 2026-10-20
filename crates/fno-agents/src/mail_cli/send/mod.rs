@@ -1680,7 +1680,7 @@ pub fn run(args: &[String]) -> i32 {
     if let Some(value) = args.provider_tombstone.as_deref() {
         let _ = value;
         eprintln!(
-            "--provider was split at the axis rename: the CLI binary is --harness/-H; a model vendor is only routable at spawn (`fno agents spawn --provider <vendor> --model <m>`)."
+            "--provider was split at the axis rename: the CLI binary is --harness/-H; the route owns the model vendor (native form: docs/HARNESSES.md)."
         );
         return 2;
     }
