@@ -153,12 +153,13 @@ def test_route_allowed_on_capability_enabled_pane(
 ) -> None:
     from fno.agents import mux_spawn, spawn_gate
     from fno.agents.cli import agents_app
-    from fno.agents.model_routing import (
-        DEFAULT_ZAI_BASE_URL,
-        DEFAULT_ZAI_HAIKU_MODEL,
-        MODEL_ENV_KEYS,
-    )
+    from fno.agents.model_routing import MODEL_ENV_KEYS
     from fno.agents.mux_spawn import MuxSpawnResult
+    from tests.agents._route_overlay_stub import claude_route_overlay_stub
+
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", claude_route_overlay_stub
+    )
 
     _setup_tmp_home(tmp_path, monkeypatch)
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
@@ -194,13 +195,13 @@ def test_route_allowed_on_capability_enabled_pane(
     assert captured["route_provider"] == "zai"
     assert gate_call["route_provider"] == "zai"
     route_env = captured["route_env"]
-    assert route_env["ANTHROPIC_BASE_URL"] == DEFAULT_ZAI_BASE_URL
+    assert route_env["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
     assert route_env["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
     for key in MODEL_ENV_KEYS:
         if key == "ANTHROPIC_DEFAULT_HAIKU_MODEL":
             continue
         assert route_env[key] == "glm-5.2"
-    assert route_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == DEFAULT_ZAI_HAIKU_MODEL
+    assert route_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"
     # AC4 + the live specimen (2026-08-06): a routed spawn's receipt carries
     # three axes in three keys - harness (claude), provider (the vendor zai),
     # model (glm-5.2) - and NO key holds a harness literal under `provider`.
@@ -337,6 +338,27 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
 
     def fake_overlay(ask, **k):
         asks.append(ask)
+        if ask.get("kind") == "compose":
+            # Config defaults compose at the seam before the print leg; a
+            # no-op answer keeps the stderr skip line out of the render.
+            return {"exit": 0}
+        if ask.get("kind") == "claude-route":
+            # The transport owns route resolution: the zai preset under the
+            # caller env, all four tiers, or the composition refuses.
+            env = ask.get("env") or os.environ
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": env.get("ZAI_API_KEY", ""),
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
         if ask.get("harness") != "claude":
             # The door refuses a harness with no native line; this stubs the
             # transport so the CLI's exit mapping is what runs.
@@ -401,12 +423,31 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
-    monkeypatch.setattr(
-        spawn_overlay_client,
-        "spawn_overlay_call",
-        lambda ask, **k: asks.append(ask)
-        or {"tokens": ["claude", "--bg", "--name", "w", "go"]},
-    )
+
+    def lane_stub(ask: dict, **_kwargs: object) -> dict:
+        """The transport owns both asks the spawn path makes: the --print
+        tokens ask and the claude-route ask (the Rust owner answers the
+        zai preset under the caller env, all four tiers, or the composition
+        refuses)."""
+        asks.append(ask)
+        if ask.get("kind") == "claude-route":
+            env = ask.get("env") or os.environ
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": env.get("ZAI_API_KEY", ""),
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
+        return {"tokens": ["claude", "--bg", "--name", "w", "go"]}
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", lane_stub)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--harness", "claude",

@@ -1,6 +1,8 @@
-"""Unit tests for retro reconcile-findings (phantom-node close sweep).
+"""Unit tests for the retro reconcile-findings scan (phantom-node sweep).
 
 Drives scan_addressed_findings with injected fetchers so no gh/network is hit.
+The `fno backlog reconcile-findings` door retired; the scan function is the
+live surface the retro routine drives.
 """
 from __future__ import annotations
 
@@ -78,47 +80,3 @@ def test_designed_node_with_plan_path_is_never_swept():
     assert scan_addressed_findings([node], **fetchers) == []
     assert retro_targets([node]) == []
 
-
-def test_apply_close_records_its_reason(monkeypatch):
-    """The --apply closer closes with --note; --force is gone.
-
-    The store refuses an evidence-less close, so the close must carry its
-    reason as the completion note.
-    """
-    import subprocess
-    from types import SimpleNamespace
-
-    import fno.graph.cli as graph_cli
-    from typer.testing import CliRunner
-
-    finding = SimpleNamespace(
-        node_id="x-phantom", pr_number=555, comment_id=1, signal="resolved/outdated"
-    )
-    monkeypatch.setattr(graph_cli, "_graph_path", lambda: None)
-    monkeypatch.setattr(graph_cli, "wire_rows", lambda **kwargs: [])
-    monkeypatch.setattr(
-        graph_cli,
-        "scan_addressed_findings",
-        lambda entries, warnings=None: [finding],
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "fno.retro.reconcile_findings.scan_addressed_findings",
-        lambda entries, warnings=None: [finding],
-    )
-    calls = []
-
-    def _run(cmd, **kwargs):
-        calls.append(list(cmd))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", _run)
-
-    result = CliRunner().invoke(graph_cli.cli, ["reconcile-findings", "--apply"])
-
-    assert result.exit_code == 0, result.output
-    assert calls, "the close must shell out"
-    argv = calls[0]
-    assert argv[:4] == ["fno", "backlog", "done", "x-phantom"]
-    assert "--note" in argv and "--force" not in argv
-    assert argv[-1].startswith("addressed on PR #555")

@@ -80,6 +80,26 @@ fn pane_send_labelled_pane_identity_resolution() {
 }
 
 #[test]
+fn pane_send_birthright_resolves_the_seed_window_send() {
+    // The spawn-time window: a worker pane is labelled the moment it is
+    // placed, but its registry row is written only after the seed submits.
+    // The preassigned id a `pane run --fno-id` records is the resume
+    // birthright, so the unaddressed seed send resolves through it and
+    // lands; a labelled pane with neither row nor birthright keeps
+    // refusing (the test above).
+    let (mut core, pane) = template_core();
+    core.session_name = "sess".into();
+    core.panes.get_mut(&pane).unwrap().name = Some("seeded-worker".into());
+    let uuid = "e58e6ba8-3ba6-4a2f-9c1e-8b6d1f0a2c33";
+    core.worker_session_pane
+        .insert(("footnote".to_string(), uuid.to_string()), pane);
+    match core.pane_send(pane, b"payload", false, None, Ok(Vec::new()), false) {
+        ServerMsg::Ok => {}
+        other => panic!("the birthright makes the pane addressable, got {other:?}"),
+    }
+}
+
+#[test]
 fn pane_send_addresses_either_id_of_a_split_row() {
     // After the id split the row carries two ids: its own minted fno_id and
     // its harness session id. A send naming EITHER lands; a third id refuses.

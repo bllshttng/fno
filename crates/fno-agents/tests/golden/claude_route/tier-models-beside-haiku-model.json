@@ -1,0 +1,47 @@
+{
+  "config": {
+    "keys": null,
+    "layer": "fno_config",
+    "toml": "[model_routing.providers.zai]\ntier_models = { haiku = \"glm-4.7-air\", sonnet = \"s-mini\" }\n"
+  },
+  "ctx": {
+    "kind": "role",
+    "name": "tidy"
+  },
+  "env": {
+    "ZAI_API_KEY": "zk"
+  },
+  "expected": {
+    "notices": [],
+    "route": {
+      "ANTHROPIC_AUTH_TOKEN": "zk",
+      "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7-air",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "s-mini",
+      "ANTHROPIC_MODEL": "glm-5.3"
+    }
+  },
+  "expected_providers": {
+    "zai": {
+      "api_key_env": "ZAI_API_KEY",
+      "api_key_file": "~/.fno/.env",
+      "base_url": "https://api.z.ai/api/anthropic",
+      "key": {
+        "checked": [
+          "ZAI_API_KEY"
+        ],
+        "satisfying": "ZAI_API_KEY"
+      },
+      "protocol": "anthropic",
+      "tier_models": {
+        "haiku": "glm-4.7-air",
+        "sonnet": "s-mini"
+      }
+    }
+  },
+  "model": "glm-5.3",
+  "name": "tier-models-beside-haiku-model",
+  "provider": "zai"
+}

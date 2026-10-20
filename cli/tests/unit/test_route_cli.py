@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 
 from fno.agents import model_routing as mr
+from fno.agents import spawn_overlay_client as soc
 from fno.config import ConfigBlock, ModelProvider, ModelRoutingBlock, SettingsModel
 from fno.route_cli import route_app
 
@@ -28,12 +29,80 @@ def project_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+_ZAI_ONLY_RECORDS = {
+    "zai": {
+        "protocol": "anthropic",
+        "base_url": "https://api.z.ai/api/anthropic",
+        "api_key_env": "ZAI_API_KEY",
+        "api_key_file": "~/.fno/.env",
+        "tier_models": {"haiku": "glm-4.7"},
+    },
+}
+
+
+def _providers_stub(records: dict) -> object:
+    """Canned spawn-overlay answers: pytest shards run without the binary,
+    so the registry the render reads is pinned here. The key column derives
+    from the payload env the transport forwards; the real answer is the
+    Rust owner's, pinned by the parity goldens. A claude-route payload
+    answers the first record's route when its key env is present, else the
+    skip notice, mirroring the owner's env-beats-file read."""
+
+    def _call(payload: dict) -> dict:
+        kind = payload.get("kind")
+        env = payload.get("env")
+        if env is None:
+            import os
+
+            env = os.environ
+        if kind == "providers":
+            out = {}
+            for name, record in records.items():
+                record = dict(record)
+                key_env = record.get("api_key_env") or ""
+                satisfying = key_env if key_env and env.get(key_env) else None
+                record["key"] = {
+                    "satisfying": satisfying,
+                    "checked": [key_env]
+                    if satisfying
+                    else [key_env, record.get("api_key_file")],
+                }
+                out[name] = record
+            return {"providers": out}
+        assert kind == "claude-route", payload
+        record = records.get(payload.get("provider") or "")
+        key_env = (record or {}).get("api_key_env") or ""
+        if record is None or not (key_env and env.get(key_env)):
+            return {
+                "route": None,
+                "notices": [
+                    "model-routing: no API key for provider"
+                    f" '{payload.get('provider')}' ({key_env or 'no key env'})"
+                ],
+            }
+        model = payload.get("model") or ""
+        route = {
+            "ANTHROPIC_BASE_URL": record["base_url"],
+            "ANTHROPIC_AUTH_TOKEN": env[key_env],
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+        }
+        if record.get("tier_models"):
+            for alias, tier_model in record["tier_models"].items():
+                route[f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"] = tier_model
+        return {"route": route, "notices": []}
+
+    return _call
+
+
 # ---------------------------------------------------------------------------
 # ls / build_route_table (AC1-HP, AC1-UI)
 # ---------------------------------------------------------------------------
 
 
-def test_route_table_shows_builtins_config_build_and_protected() -> None:
+def test_route_table_shows_builtins_config_build_and_protected(monkeypatch) -> None:
     settings = _settings(
         providers={
             "zai-openai": ModelProvider(
@@ -44,6 +113,23 @@ def test_route_table_shows_builtins_config_build_and_protected() -> None:
         },
         roles={"codex-verify": "zai-openai,glm-4.6"},
     )
+    records = {
+        "zai": {
+            "protocol": "anthropic",
+            "base_url": "https://api.z.ai/api/anthropic",
+            "api_key_env": "ZAI_API_KEY",
+            "api_key_file": "~/.fno/.env",
+            "tier_models": {"haiku": "glm-4.7"},
+        },
+        "zai-openai": {
+            "protocol": "openai",
+            "base_url": "https://api.z.ai/api/coding/paas/v4",
+            "api_key_env": "ZAI_API_KEY",
+            "api_key_file": None,
+            "tier_models": {},
+        },
+    }
+    monkeypatch.setattr(soc, "spawn_overlay_call", _providers_stub(records))
     rows = mr.build_route_table(settings=settings, env={"ZAI_API_KEY": "k"})
     by_role = {r["role"]: r for r in rows}
 
@@ -110,6 +196,9 @@ def test_env_unsets_parent_anthropic_creds_before_exports(
     # A parent ANTHROPIC_API_KEY / OAuth token in the invoking shell would
     # otherwise win over the routed AUTH_TOKEN and silently bill Anthropic. env
     # must clear them (parity with bg_create), BEFORE the exports.
+    monkeypatch.setattr(
+        soc, "spawn_overlay_call", _providers_stub(_ZAI_ONLY_RECORDS)
+    )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
     res = runner.invoke(route_app, ["env", "zai,glm-5.2"])
     assert res.exit_code == 0
@@ -123,6 +212,9 @@ def test_env_missing_key_emits_no_unset_or_export(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Fail-closed: nothing on stdout at all, not even the unset lines.
+    monkeypatch.setattr(
+        soc, "spawn_overlay_call", _providers_stub(_ZAI_ONLY_RECORDS)
+    )
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
     res = runner.invoke(route_app, ["env", "zai,glm-5.2"])
     assert res.exit_code == 1

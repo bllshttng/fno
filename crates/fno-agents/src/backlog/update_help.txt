@@ -34,6 +34,10 @@ Options:
   --details-file PATH             Read details from a file ('-' = stdin).
   --blocks-everything             Acknowledge that p0 blocks all downstream
                                   work.
+  --to NEW-ID                     Rename the node id in place; the old id
+                                  keeps resolving as an alias. Refuses a
+                                  taken id, a live claim on the node, and
+                                  mixing with field writes.
   --repo TEXT                     owner/name of the repo the PR lives in, when
                                   that differs from the cwd checkout; naming
                                   it makes the stamp an assertion.

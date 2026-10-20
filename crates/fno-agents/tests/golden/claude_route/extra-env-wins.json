@@ -1,0 +1,44 @@
+{
+  "config": {
+    "keys": null,
+    "layer": "fno_config",
+    "toml": "[model_routing.providers.extra-p]\nbase_url = \"https://extra.example.com\"\napi_key_env = \"EP_KEY\"\n[model_routing.extra_env]\nANTHROPIC_DEFAULT_HAIKU_MODEL = \"pinned-haiku\"\n"
+  },
+  "ctx": {
+    "kind": "role",
+    "name": "tidy"
+  },
+  "env": {
+    "EP_KEY": "epk"
+  },
+  "expected": {
+    "notices": [],
+    "route": {
+      "ANTHROPIC_AUTH_TOKEN": "epk",
+      "ANTHROPIC_BASE_URL": "https://extra.example.com",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "pinned-haiku",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",
+      "ANTHROPIC_MODEL": "glm-5.3"
+    }
+  },
+  "expected_providers": {
+    "extra-p": {
+      "api_key_env": "EP_KEY",
+      "api_key_file": null,
+      "base_url": "https://extra.example.com",
+      "key": {
+        "checked": [
+          "EP_KEY"
+        ],
+        "satisfying": "EP_KEY"
+      },
+      "protocol": "anthropic",
+      "tier_models": {}
+    }
+  },
+  "model": "glm-5.3",
+  "name": "extra-env-wins",
+  "provider": "extra-p"
+}
