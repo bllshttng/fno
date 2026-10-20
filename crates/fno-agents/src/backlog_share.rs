@@ -782,21 +782,11 @@ fn repair(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    let mut nodes_moved = false;
     for ((table, columns, names, values), rows) in targets.iter().zip(fetched) {
-        transaction
-            .execute(
-                &format!("DELETE FROM \"{table}\" WHERE {}", match_all(names, 1)),
-                rusqlite::params_from_iter(values),
-            )
-            .map_err(|e| format!("{table}: {e}"))?;
-        let insert = insert_sql(table, columns).replacen("INSERT", "INSERT OR REPLACE", 1);
+        remove(&transaction, table, &match_all(names, 1), values)?;
         for row in &rows {
-            transaction
-                .execute(&insert, rusqlite::params_from_iter(row))
-                .map_err(|e| format!("{table}: {e}"))?;
+            replace(&transaction, table, columns, row)?;
         }
-        nodes_moved |= table == "nodes";
     }
     transaction
         .execute(
@@ -815,9 +805,6 @@ fn repair(
              DELETE FROM graph_meta WHERE key = '{SENDING}';"
         ))
         .map_err(|e| e.to_string())?;
-    if nodes_moved {
-        rebuild_search(&transaction)?;
-    }
     stamp_fresh(&transaction, "repair")?;
     transaction.commit().map_err(|e| e.to_string())?;
     notice_refusal(changes, batch, error);
@@ -1005,20 +992,15 @@ fn catch_up(
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let mut nodes_moved = false;
         for (seq, changes) in &batches {
             for change in changes {
                 if apply(&transaction, change)? {
                     receipt.applied += 1;
-                    nodes_moved |= change.table == "nodes";
                 }
             }
             cursor = *seq;
         }
         crate::backlog::stamp_meta(&transaction, CURSOR, &cursor.to_string())?;
-        if nodes_moved {
-            rebuild_search(&transaction)?;
-        }
         stamp_fresh(&transaction, &cursor.to_string())?;
         transaction.commit().map_err(|e| e.to_string())?;
         receipt.cursor = cursor;
@@ -1053,34 +1035,125 @@ fn apply(connection: &Connection, change: &Change) -> Result<bool, String> {
         ));
     }
     let present = |row: &[SqlValue]| row_exists(connection, change, row);
-    let run = |sql: &str, args: &[SqlValue]| {
-        connection
-            .execute(sql, rusqlite::params_from_iter(args))
-            .map_err(|e| format!("{}: {e}", change.table))
-    };
     match change.op {
         Op::Insert | Op::Update if present(&change.new)? => return Ok(false),
         Op::Delete if !present(&change.old)? => return Ok(false),
         Op::Insert => {}
-        Op::Update | Op::Delete => {
-            let (sql, args) = conditional(&Change {
-                op: Op::Delete,
-                ..change.clone()
-            });
-            run(&sql, &args)?;
-        }
+        Op::Update | Op::Delete => remove(
+            connection,
+            &change.table,
+            &match_all(&change.columns, 1),
+            &change.old,
+        )?,
     }
     if change.op != Op::Delete {
-        let sql =
-            insert_sql(&change.table, &change.columns).replacen("INSERT", "INSERT OR REPLACE", 1);
-        run(&sql, &change.new)?;
+        replace(connection, &change.table, &change.columns, &change.new)?;
     }
     Ok(true)
 }
 
-/// Triggers were off, so the search index rebuilds from the nodes it mirrors.
-fn rebuild_search(connection: &Connection) -> Result<(), String> {
-    crate::backlog::search::rebuild(connection)
+/// Delete the rows of `table` that `filter` selects. The replica runs with
+/// the triggers off, so a nodes row leaves the search index by hand first.
+/// A full index rebuild per write held the write lock long enough to stall
+/// every graph writer.
+fn remove(
+    connection: &Connection,
+    table: &str,
+    filter: &str,
+    args: &[SqlValue],
+) -> Result<(), String> {
+    if table == "nodes" {
+        crate::backlog::search::unindex(connection, filter, rusqlite::params_from_iter(args))
+            .map_err(|e| format!("{table}: {e}"))?;
+    }
+    connection
+        .execute(
+            &format!("DELETE FROM \"{table}\" WHERE {filter}"),
+            rusqlite::params_from_iter(args),
+        )
+        .map_err(|e| format!("{table}: {e}"))?;
+    Ok(())
+}
+
+/// Write `row`, replacing any row it collides with. INSERT OR REPLACE drops
+/// a colliding row without a trigger, so a nodes row that shares the key or
+/// a UNIQUE column with `row` leaves the search index first, and `row` joins
+/// it after.
+fn replace(
+    connection: &Connection,
+    table: &str,
+    columns: &[String],
+    row: &[SqlValue],
+) -> Result<(), String> {
+    let nodes = table == "nodes";
+    if nodes {
+        let (filter, args) = collisions(connection, table, columns, row)?;
+        if !filter.is_empty() {
+            crate::backlog::search::unindex(connection, &filter, rusqlite::params_from_iter(args))
+                .map_err(|e| format!("{table}: {e}"))?;
+        }
+    }
+    connection
+        .execute(
+            &insert_sql(table, columns).replacen("INSERT", "INSERT OR REPLACE", 1),
+            rusqlite::params_from_iter(row),
+        )
+        .map_err(|e| format!("{table}: {e}"))?;
+    if nodes {
+        crate::backlog::search::index(connection, connection.last_insert_rowid())
+            .map_err(|e| format!("{table}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The rows of `table` that `row` collides with: one `col = ?n` group per
+/// key or UNIQUE index whose columns `columns` carries, joined with OR, and
+/// the values from `row` they bind. `=` matches UNIQUE, where NULLs never
+/// collide.
+fn collisions(
+    connection: &Connection,
+    table: &str,
+    columns: &[String],
+    row: &[SqlValue],
+) -> Result<(String, Vec<SqlValue>), String> {
+    let column_names = |sql: &str, arg: &str| -> Result<Vec<Option<String>>, String> {
+        let mut statement = connection.prepare_cached(sql).map_err(|e| e.to_string())?;
+        let names = statement
+            .query_map([arg], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        names
+    };
+    let mut groups = Vec::new();
+    let mut args = Vec::new();
+    let indexes = column_names(
+        "SELECT name FROM pragma_index_list(?1) WHERE \"unique\" AND NOT partial",
+        table,
+    )?;
+    for index in indexes.into_iter().flatten() {
+        let key = column_names(
+            "SELECT name FROM pragma_index_info(?1) ORDER BY seqno",
+            &index,
+        )?;
+        let positions: Option<Vec<usize>> = key
+            .iter()
+            .map(|name| columns.iter().position(|c| Some(c) == name.as_ref()))
+            .collect();
+        let Some(positions) = positions.filter(|p| !p.is_empty()) else {
+            continue;
+        };
+        let group = positions
+            .iter()
+            .map(|&i| {
+                args.push(row[i].clone());
+                format!("\"{}\" = ?{}", columns[i], args.len())
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        groups.push(format!("({group})"));
+    }
+    Ok((groups.join(" OR "), args))
 }
 
 /// A fresh content version, so a locked mutate that read before this write
@@ -1163,7 +1236,8 @@ fn snapshot(remote: &Remote, graph: &Path, connection: &mut Connection) -> Resul
     }
     crate::backlog::stamp_meta(&transaction, CURSOR, &top.to_string())?;
     guard(&transaction, &columns)?;
-    rebuild_search(&transaction)?;
+    // Every nodes row was replaced with the triggers off: one rebuild here.
+    crate::backlog::search::rebuild(&transaction)?;
     stamp_fresh(&transaction, "snapshot")?;
     transaction.commit().map_err(|e| e.to_string())?;
     // Rows written after `top` replay as present or apply.
@@ -1413,6 +1487,20 @@ mod tests {
             .unwrap()
     }
 
+    /// The rows the search index finds for `word`, once FTS5 confirms the
+    /// index matches the nodes it mirrors.
+    fn found(m: &Machine, word: &str) -> i64 {
+        let connection = crate::backlog::open(&m.graph).unwrap();
+        crate::backlog::search::check(&connection).unwrap();
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM nodes_fts WHERE nodes_fts MATCH ?1",
+                [word],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
     fn add_node(m: &Machine, id: &str, title: &str) {
         let mut connection = crate::backlog::open(&m.graph).unwrap();
         let transaction = connection.transaction().unwrap();
@@ -1457,15 +1545,11 @@ mod tests {
         on(&primary, &b);
         assert!(sync(&b.graph).unwrap().snapshot);
         assert_eq!(title(&b, "x-1").as_deref(), Some("shared"));
-        let found: i64 = crate::backlog::open(&b.graph)
-            .unwrap()
-            .query_row(
-                "SELECT COUNT(*) FROM nodes_fts WHERE nodes_fts MATCH 'shared'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(found, 1, "the replica's search index sees the synced row");
+        assert_eq!(
+            found(&b, "shared"),
+            1,
+            "the replica's search index sees the synced row"
+        );
 
         // A's own write replays on A and leaves the row as it was.
         on(&primary, &a);
@@ -1486,6 +1570,14 @@ mod tests {
             assert!(refused.contains(WRITER), "{refused}");
         }
         assert_eq!(title(&a, "x-1").as_deref(), Some("shared"));
+
+        // A retitle reaches the peer through the change log, not a snapshot:
+        // the index drops the old title and finds the new one.
+        retitle(&a, "x-1", "renamed");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        assert!(!sync(&b.graph).unwrap().snapshot);
+        assert_eq!((found(&b, "renamed"), found(&b, "shared")), (1, 0));
 
         // Sharing off: the next open drops the guard, so an older build
         // writes again.
@@ -1522,6 +1614,11 @@ mod tests {
             "{refusal}"
         );
         assert_eq!(title(&b, "x-1").as_deref(), Some("from a"));
+        assert_eq!(
+            (found(&b, "a"), found(&b, "b")),
+            (1, 0),
+            "the take-back moves the index with the row"
+        );
         assert_eq!(outbox(&b), 0);
 
         // A second seed refuses; an unreachable primary keeps the outbox.

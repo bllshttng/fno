@@ -198,6 +198,33 @@ pub(super) fn pr_head_oid(pr_json: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// A nonzero read's cause when gh printed nothing: the exit status IS the
+/// remaining evidence, so the error carries it in words. A child killed by a
+/// signal exits with `code() == None` - under load this is the shape a
+/// timeout-adjacent kill of the Python adapter takes - and rendering it as a
+/// blank tail is how the gate produced the "failed with empty stderr" rows
+/// this names.
+pub(super) fn cause_for_silent_exit(status: &std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("exited {code} with no stderr"),
+        None => "terminated by signal with no stderr".to_string(),
+    }
+}
+
+/// The error tail for ANY failed read: the stderr when gh printed one, else
+/// the exit status in words. Every `GhReadError::failed` built from a
+/// `BoundedOutput` goes through this, so a load-killed child on the checks,
+/// reviews, comments, commits, run-list or coverage read renders a cause
+/// instead of the blank tail that read as a causeless block.
+pub(super) fn failed_read_tail(out: &BoundedOutput) -> String {
+    let tail = stderr_tail(&out.stderr_tail);
+    if tail.is_empty() {
+        cause_for_silent_exit(&out.status)
+    } else {
+        tail
+    }
+}
+
 pub(super) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
@@ -225,10 +252,7 @@ pub(super) fn read_pr_view(
         return if is_no_pr_stderr(&out.stderr_tail) {
             Ok(None)
         } else {
-            Err(GhReadError::failed(
-                metadata_read,
-                stderr_tail(&out.stderr_tail),
-            ))
+            Err(GhReadError::failed(metadata_read, failed_read_tail(&out)))
         };
     }
     serde_json::from_slice(&out.stdout)

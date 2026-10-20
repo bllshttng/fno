@@ -298,7 +298,7 @@ pub(super) fn post_coverage_status(
     match result {
         Ok(out) if out.status.success() => {}
         Ok(out) => {
-            let error = GhReadError::failed("coverage_status_post", stderr_tail(&out.stderr_tail));
+            let error = GhReadError::failed("coverage_status_post", failed_read_tail(&out));
             log_bounded_read_error("review-coverage publisher", &error);
         }
         Err(error) => log_bounded_read_error("review-coverage publisher", &error),

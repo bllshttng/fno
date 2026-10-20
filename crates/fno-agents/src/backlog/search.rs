@@ -64,6 +64,50 @@ pub(crate) fn rebuild(connection: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Take the nodes rows `filter` selects out of the index, by the values they
+/// hold now. For a writer that runs with the triggers off: it calls this
+/// before the rows go, and [`index`] once the new row lands.
+pub(crate) fn unindex(
+    connection: &Connection,
+    filter: &str,
+    args: impl rusqlite::Params,
+) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "INSERT INTO nodes_fts(nodes_fts, rowid, id, title, slug, description)
+                 SELECT 'delete', rowid, id, title, slug, description FROM nodes WHERE {filter}"
+            ),
+            args,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Put the nodes row at `rowid` into the index.
+pub(crate) fn index(connection: &Connection, rowid: i64) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO nodes_fts(rowid, id, title, slug, description)
+             SELECT rowid, id, title, slug, description FROM nodes WHERE rowid = ?1",
+            [rowid],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// FTS5's own check that the index holds exactly the nodes rows it mirrors.
+#[cfg(test)]
+pub(crate) fn check(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO nodes_fts(nodes_fts, rank) VALUES('integrity-check', 1)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Node ids matching the query, best first. Tokens are double-quoted so
 /// user text never reads as FTS5 syntax; adjacent tokens are an implicit AND.
 pub fn search(store: &Store, query: &str, limit: Option<i64>) -> Result<Vec<String>, ApiError> {

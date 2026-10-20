@@ -110,8 +110,7 @@ pub(crate) fn main_head_failing_checks(gh_bin: &str, cwd: &Path) -> Option<Vec<S
         }
     };
     if !list_out.status.success() {
-        let error =
-            super::GhReadError::failed("main_run_list", super::stderr_tail(&list_out.stderr_tail));
+        let error = super::GhReadError::failed("main_run_list", super::failed_read_tail(&list_out));
         super::log_bounded_read_error("main-head", &error);
         return None; // gh error -> unknown -> hold
     }
@@ -153,10 +152,8 @@ pub(crate) fn main_head_failing_checks(gh_bin: &str, cwd: &Path) -> Option<Vec<S
             }
         };
         if !view_out.status.success() {
-            let error = super::GhReadError::failed(
-                "main_run_view",
-                super::stderr_tail(&view_out.stderr_tail),
-            );
+            let error =
+                super::GhReadError::failed("main_run_view", super::failed_read_tail(&view_out));
             super::log_bounded_read_error("main-head", &error);
             return None; // any per-run gh error -> unknown -> hold (fail closed)
         }

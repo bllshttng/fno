@@ -1256,6 +1256,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("repeated_asks", crate::repeated_asks::reading());
     take("skill_drift", crate::skill_drift::reading());
     take("main_ci", crate::main_ci::r_main_ci());
+    take("evals", crate::lead_checkin_evals::reading());
     take("control_plane", r_control_plane(ctx));
     take("self_hold", {
         crate::claims::resolve_identity()
@@ -1875,6 +1876,7 @@ fn render_lines_with(
     lines.extend(crate::lead_answers::held_lines(readings));
     lines.extend(crate::repeated_asks::lines(readings));
     lines.extend(crate::skill_drift::lines(readings));
+    lines.extend(crate::lead_checkin_evals::lines(readings));
 
     match failed("org") {
         Some(r) => lines.push(format!("READER FAILED org: {}", r.error)),

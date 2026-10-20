@@ -318,3 +318,18 @@ fn park_refuses_every_non_exhaustion_shape() {
         None
     );
 }
+
+/// A child that died without stderr still names its death: the exit code in
+/// words, or the signal - the shape a load-killed adapter read produced when
+/// the gate rendered it as a blank tail.
+#[test]
+fn silent_nonzero_exits_name_their_cause() {
+    use std::os::unix::process::ExitStatusExt;
+    let signaled = std::process::ExitStatus::from_raw(9);
+    assert_eq!(
+        cause_for_silent_exit(&signaled),
+        "terminated by signal with no stderr"
+    );
+    let exited = std::process::ExitStatus::from_raw(1 << 8);
+    assert_eq!(cause_for_silent_exit(&exited), "exited 1 with no stderr");
+}

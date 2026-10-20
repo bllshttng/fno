@@ -1307,19 +1307,10 @@ def _scrub_account_auth_at_seam(args: Sequence[str]) -> None:
     ``os.environ``, so scrubbing first would delete the source value and make a
     previously valid ``--account`` spawn unresolvable. Resolve, then scrub, then
     re-apply the resolved values.
-
-    A resolution failure leaves the environment untouched and returns: the
-    downstream ``resolve_account_overlay_or_exit`` owns that refusal receipt,
-    and this seam must not pre-empt it with a different error.
     """
+    os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
     account = _spawn_flag_value(args, "--account")
     if not account:
-        #: an inherited FNO_LAUNCH_ACCOUNT (set by the PARENT worker's
-        # own --account spawn) must not outlive that spawn. The Rust mint reads
-        # it first, so a stale value would stamp the parent's account onto a
-        # child that pinned none. Clearing here keeps the three-valued read
-        # honest: this spawn's account fact is its own, or absent.
-        os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
         # Its provenance twin dies with it, or a stale "config" mislabels
         # the next spawn the way a stale id would.
         os.environ.pop(LAUNCH_ACCOUNT_SOURCE_ENV, None)

@@ -1541,45 +1541,15 @@ async fn run(args: Vec<String>) -> i32 {
                 }
                 Some(_) => {}
             }
-            // A marked call that still lands here must not forward the marker
-            // into the Python CLI (an unknown flag there): strip it from the
-            // re-exec argv. The seam gate above already sent unmarked spawns
-            // back; this keeps even a hand-built marked pane argv clean.
-            let pane_args: Vec<String> = args
-                .iter()
-                .filter(|a| !a.starts_with("--defaults-applied"))
-                .cloned()
-                .collect();
-            let err = exec_python_front(&pane_args);
-            eprintln!(
-                "fno-agents: substrate 'pane' is mux-hosted via the Python CLI, \
-                 but exec of 'fno agents spawn' failed: {err}. Install the fno \
-                 front door or run `fno agents spawn ...` directly."
+            return bounce_to_python(
+                &args,
+                "substrate 'pane' is mux-hosted via the Python CLI",
+                "Install the fno front door or run `fno agents spawn ...` directly.",
             );
-            return 127;
         }
-        // an --account spawn on ANY substrate resolves its four-lane env
-        // overlay in Python (fno.agents.account_env); re-exec the Python CLI here
-        // rather than the native Rust bg spawn below, so the resolver + refusals
-        // live in exactly one place (pane already re-exec'd above). Without this
-        // the flag silently vanishes on the Rust-intercepted bg/headless path -
-        // the known "two path gates for a new provider field" drift class.
-        // FNO_AGENTS_RUNTIME=python stops the Python front door bouncing back.
-        if params.get("account").and_then(|v| v.as_str()).is_some() {
-            let account_args: Vec<String> = args
-                .iter()
-                .filter(|a| !a.starts_with("--defaults-applied"))
-                .cloned()
-                .collect();
-            let err = exec_python_front(&account_args);
-            eprintln!(
-                "fno-agents: --account resolution runs in the Python CLI, but \
-                 exec of 'fno agents spawn' failed: {err}. Run `fno agents \
-                 spawn ...` directly."
-            );
-            return 127;
-        }
-        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name) {
+        // An --account spawn is decided inside maybe_run_spawn: the seam's
+        // stamp names the account it applied; anything else re-execs Python.
+        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args) {
             if code == 0 {
                 // A placement failure never recolors the spawn verdict: the
                 // receipt is the truth, the worker is live, and a nonzero here
@@ -2208,7 +2178,21 @@ fn exec_python_front(args: &[String]) -> std::io::Error {
     err
 }
 
-fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+/// The Python-lane bounce: strip --defaults-applied (the Python CLI has no
+/// such flag) and re-exec the front door; on exec failure the arm's only
+/// decision path is gone and the caller returns the 127.
+fn bounce_to_python(args: &[String], why: &str, remedy: &str) -> i32 {
+    let stripped: Vec<String> = args
+        .iter()
+        .filter(|a| !a.starts_with("--defaults-applied"))
+        .cloned()
+        .collect();
+    let err = exec_python_front(&stripped);
+    eprintln!("fno-agents: {why}, but exec of 'fno agents spawn' failed: {err}. {remedy}");
+    127
+}
+
+fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String]) -> Option<i32> {
     use fno_agents::agy_ask::dispatch_agy_once_with_effort;
     use fno_agents::claude_ask::{
         dispatch_claude_headless, dispatch_claude_spawn, py_repr, ClaudeHome,
@@ -2282,6 +2266,17 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         Some(p) => p,
         None => infer_dispatch_provider(|k| std::env::var(k).ok()),
     };
+
+    // The account arm: native launch on a seam stamp naming the request;
+    // Python re-exec otherwise.
+    if let Some(code) = fno_agents::spawn_axes::account_seam_exit(
+        params.get("account").and_then(Value::as_str),
+        provider,
+        args,
+        exec_python_front,
+    ) {
+        return Some(code);
+    }
 
     // R3, the state-root grant gate. Placed HERE because every non-pane spawn
     // passes through this function exactly once, including the codex thread
@@ -2412,6 +2407,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
                 flags,
                 seed: fno_agents::spawn_phase::params_seed(&params),
                 route_provider: fno_agents::claude_adopt::gate_route_provider(&params),
+                account: params
+                    .get("account")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 ..Default::default()
             },
         ) {

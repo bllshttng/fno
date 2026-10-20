@@ -91,6 +91,23 @@ def test_seam_clears_a_stale_launch_account_on_an_unaccounted_spawn(monkeypatch)
     assert "FNO_LAUNCH_ACCOUNT" not in os.environ
 
 
+def test_seam_drops_the_launch_account_when_resolution_fails(monkeypatch):
+    # The fail-open this closes: a worker spawned under --account inherits
+    # FNO_LAUNCH_ACCOUNT, and when THAT worker's own --account child fails to
+    # resolve, a surviving stamp would let the Rust client trust the parent's
+    # overlay and launch the child on an account the seam never applied. The
+    # stamp drops at entry, before resolution, so the client re-exec's Python,
+    # whose resolve_account_overlay_or_exit owns the refusal receipt.
+    monkeypatch.setenv("FNO_LAUNCH_ACCOUNT", "parent-acct")
+
+    def _boom(account_id):
+        raise RuntimeError("resolution failed")
+
+    monkeypatch.setattr("fno.agents.account_env.resolve_account_overlay", _boom)
+    _scrub_account_auth_at_seam([*BASE, "--account", "parent-acct", "--model", "opus"])
+    assert "FNO_LAUNCH_ACCOUNT" not in os.environ
+
+
 def test_seam_resolves_the_account_before_scrubbing(monkeypatch):
     # An api_key record may reference the ambient env
     # (ANTHROPIC_API_KEY = "${ENV:ANTHROPIC_API_KEY}") and resolve_env_value
