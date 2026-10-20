@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# install-autocorrect-cron.sh - schedule the monthly review and the 15-minute S0
-# watcher on the host platform.
+# install-autocorrect-cron.sh - schedule the weekly review (Mondays 09:00) and
+# the 15-minute S0 watcher on the host platform.
 #
 # Detects macOS (launchd) vs Linux (cron). Idempotent: re-running updates the
 # installed entries in place without duplicating them.
@@ -39,6 +39,26 @@ done
 
 PLATFORM="$(uname)"
 
+# One-time rename: the monthly log's history joins the merged weekly log,
+# which now carries stdout AND stderr for every run. Only when the old file
+# exists and the new one does not; never overwrites.
+migrate_old_log() {
+  local old="$LOG_DIR/autocorrect-monthly.log"
+  local new="$LOG_DIR/autocorrect-review.log"
+  if [[ ! -f "$old" ]]; then
+    return 0
+  fi
+  if [[ -e "$new" ]]; then
+    return 0
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "install-autocorrect-cron: would move $old to $new" >&2
+    return 0
+  fi
+  mv "$old" "$new"
+  echo "install-autocorrect-cron: moved $old to $new" >&2
+}
+
 render_plist() {
   local template="$1"
   sed \
@@ -52,6 +72,7 @@ render_plist() {
 
 install_macos() {
   mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
+  migrate_old_log
 
   local jobs=("com.user.autocorrect" "com.user.autocorrect-watcher")
   for job in "${jobs[@]}"; do
@@ -143,12 +164,13 @@ _strip_managed_block() {
 
 install_linux() {
   mkdir -p "$LOG_DIR"
-  local monthly_entry="0 9 1 * * $PACK_SCRIPT --severity S1,S2 | $REVIEW_SCRIPT --severity S1,S2 --packet-source monthly-cron >> $LOG_DIR/autocorrect-monthly.log 2>&1"
+  migrate_old_log
+  local weekly_entry="0 9 * * 1 $PACK_SCRIPT --severity S1,S2 | $REVIEW_SCRIPT --severity S1,S2 --packet-source weekly-cron >> $LOG_DIR/autocorrect-review.log 2>&1"
   local watcher_entry="*/15 * * * * $WATCHER_SCRIPT >> $LOG_DIR/autocorrect-watcher.log 2>&1"
 
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "----- would add to crontab -----"
-    printf '%s\n%s\n%s\n%s\n' "$_BEGIN_MARK" "$monthly_entry" "$watcher_entry" "$_END_MARK"
+    printf '%s\n%s\n%s\n%s\n' "$_BEGIN_MARK" "$weekly_entry" "$watcher_entry" "$_END_MARK"
     return
   fi
 
@@ -165,7 +187,7 @@ install_linux() {
     if [[ -n "$stripped" ]]; then
       printf '%s\n' "$stripped"
     fi
-    printf '%s\n%s\n%s\n%s\n' "$_BEGIN_MARK" "$monthly_entry" "$watcher_entry" "$_END_MARK"
+    printf '%s\n%s\n%s\n%s\n' "$_BEGIN_MARK" "$weekly_entry" "$watcher_entry" "$_END_MARK"
   } | crontab -
   echo "install-autocorrect-cron: installed Linux cron entries" >&2
 }
@@ -196,9 +218,9 @@ status_linux() {
     inblk {print}
   ')
   if printf '%s\n' "$managed" | grep -qF -- "$PACK_SCRIPT"; then
-    echo "  monthly cron: registered"
+    echo "  weekly cron: registered"
   else
-    echo "  monthly cron: NOT registered"
+    echo "  weekly cron: NOT registered"
   fi
   if printf '%s\n' "$managed" | grep -qF -- "$WATCHER_SCRIPT"; then
     echo "  watcher cron: registered"
