@@ -884,6 +884,29 @@ def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monk
     )
     fake.chmod(0o755)
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
+    from fno.agents import spawn_overlay_client
+
+    real_overlay_call = spawn_overlay_client.spawn_overlay_call
+
+    def route_stub(ask: dict, **kwargs: object) -> dict:
+        # The Rust owner answers the zai preset; the fake binary cannot.
+        if ask.get("kind") == "claude-route":
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": "zk-live",
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
+        return real_overlay_call(ask, **kwargs)
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", route_stub)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--route", "zai-flash"],
