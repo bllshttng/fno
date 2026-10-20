@@ -26,12 +26,12 @@ The brief is what the reviewer sees. It carries exactly four things and nothing 
 
 1. The lane: load `skills/review/references/single-lane.md` and execute it in full, in your own context, at the resolved level, with `--fix` off.
 2. The diff inputs: `BASE` and `REVIEW_TARGET` exactly as the router's Step 1 and the empty-diff guard resolved them (Phase 0 in the lane re-derives the diff from these).
-3. The acceptance criteria: the plan's acceptance-criteria block (or the node's details when no plan is bound), pasted verbatim. Criteria say DONE, not HOW.
+3. The acceptance criteria: the plan's acceptance-criteria block, pasted verbatim. With no plan bound, paste the node's details. Criteria say DONE, not HOW.
 4. The output contract below, and the review-only constraint: change nothing, commit nothing, post nothing. The reviewer's only artifacts are the report and the findings array.
 
-The brief never carries: the builder's transcript, session state, SUMMARY.md, intermediate notes, prior review rounds' reasoning, or anything describing how the work was done. The reviewer reads the diff and the criteria; context beyond that is the contamination `--fresh` exists to prevent.
+The brief never carries: the builder's transcript, session state, SUMMARY.md, intermediate notes, prior review rounds' reasoning, or anything describing how the work was done. The reviewer reads the diff and the criteria. Context beyond that is the contamination `--fresh` exists to prevent.
 
-Dispatch exactly ONE subagent (the Agent/Task tool; a fork is the same contract). One, never two, never a roster.
+Dispatch exactly ONE subagent through the Agent/Task tool. A fork is the same contract. One, never two, never a roster.
 
 ## Phase F3 - the three outcomes
 
@@ -41,7 +41,7 @@ Dispatch exactly ONE subagent (the Agent/Task tool; a fork is the same contract)
 bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review pass fresh fork --findings-file "$FINDINGS"
 ```
 
-`reviewer_context=fresh`, `execution_context=fork`. The typed `pass` is ignored on this path: the classifier measures the verdict from the findings record. Then fix the findings HERE, in this session, and run `--verify-fixes` here; a scoped fix-verification is not a round.
+`reviewer_context=fresh`, `execution_context=fork`. The typed `pass` is ignored on this path: the classifier measures the verdict from the findings record. Then fix the findings HERE, in this session, and run `--verify-fixes` here. A scoped fix-verification is not a round.
 
 **A clean report.** An explicit empty findings array is a real pass: a reviewer ran, read the diff, and named zero findings. Same emit line.
 
@@ -53,7 +53,7 @@ fno doctor event emit -t review_invocation -s daemon -d "$(jq -cn \
   '{invocation_id:$invocation_id,stage:"refused",verb:"/fno:review",reason:"fresh_reviewer_silent",head_sha:$head_sha,branch:$branch}')"
 ```
 
-Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re-run bare only as an operator decision; that round records the level as self.
+Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re-run bare only as an operator decision. That round records the level as self.
 
 ## Ownership
 

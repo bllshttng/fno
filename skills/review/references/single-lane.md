@@ -10,7 +10,7 @@ Inputs from the router: a level (`low` `medium` `high` `xhigh` `max`), optional 
 
 ## Fresh dispatch
 
-When `--fresh` dispatched this lane ([fresh.md](fresh.md)), everything here runs unchanged in the fresh reviewer's own context, on the same inputs: the diff and the plan's acceptance criteria, and nothing about how the work was built. The dispatching session, not the reviewer, owns the emit, the fixes, and `--verify-fixes`; the reviewer reports findings and stops. The lane text needs no fresh-specific branch - the context stamp on the row is what records the difference.
+When `--fresh` dispatched this lane ([fresh.md](fresh.md)), everything here runs unchanged in the fresh reviewer's own context, on the same inputs: the diff and the plan's acceptance criteria, and nothing about how the work was built. The dispatching session, not the reviewer, owns the emit, the fixes, and `--verify-fixes`. The reviewer reports findings and stops. The lane text needs no fresh-specific branch - the context stamp on the row is what records the difference.
 
 ## Phase 0 - gather the diff
 

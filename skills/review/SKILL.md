@@ -191,7 +191,7 @@ The event is pinned to the current HEAD; if a new commit lands afterward, the de
 
 `peer`, `code-review`, and `declare` are local review producers. Each emits the SAME head-pinned `review_attestation` event via `scripts/emit-attestation.sh <reviewer>` on a pass - the single producer surface loop-check reads:
 
-- **the fno lane** (the default) emits `code-review` through the lane's emit step ([single-lane.md](references/single-lane.md)): `pass` only when `fno do review classify` yields zero blocking findings, `fail` carrying the classified record. One contract, one emit path, no hook-availability dependency. A `--fresh` round ([fresh.md](references/fresh.md)) emits through the same step with `reviewer_context=fresh` and `execution_context=fork`, still emitted by the building session.
+- **the fno lane** (the default) emits `code-review` through the lane's emit step ([single-lane.md](references/single-lane.md)): the verdict reads `pass` only on zero blocking findings from `fno do review classify`, and `fail` carries the classified record. One contract, one emit path, no hook-availability dependency. A `--fresh` round ([fresh.md](references/fresh.md)) emits through the same step with `reviewer_context=fresh` and `execution_context=fork`, still emitted by the building session.
 - **peer** emits `peer` only after `consume-peer-verdict.sh` validates an explicit clean cross-model verdict with zero blocking findings.
 - **code-review** is the gate entry the fno lane satisfies above.
   - Run `/fno:review` on the final HEAD. Its emit step produces the attestation on every harness without hook support.
