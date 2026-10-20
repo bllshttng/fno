@@ -151,14 +151,8 @@ def test_codex_json_dispatch_reaches_spawn_subprocess_and_parses_receipt(
     assert payload["decision"] == "spawned"
     assert payload["think_session"] == "real123"
     argv = capture.read_bytes().decode().rstrip("\0").split("\0")
-    assert argv[:6] == [
-        "agents",
-        "spawn",
-        "--harness",
-        "claude",
-        "--substrate",
-        "thread",
-    ]
+    assert argv[:4] == ["agents", "spawn", "--harness", "claude"]
+    assert "--substrate" not in argv
     assert "codex posture:" not in result.stdout
     assert "claude-bg-fallback" in result.stderr
 

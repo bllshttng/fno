@@ -396,52 +396,41 @@ def test_ac1_fr_billing_guard_refuses_print_argv_before_pane(
 def test_build_pane_argv_provider_forms(no_state_grant: None, tmp_path: Path) -> None:
     from fno.agents.mux_spawn import build_pane_argv
 
-    claude = build_pane_argv("claude", "task", tmp_path, False, "uuid-1")
+    claude = build_pane_argv("claude", "task", tmp_path, "uuid-1")
     assert claude == ["claude", "--session-id", "uuid-1", "--", "task"]
 
-    codex = build_pane_argv("codex", "task", tmp_path, False, None)
+    codex = build_pane_argv("codex", "task", tmp_path, None)
     assert codex[:5] == ["codex", "--remote", "unix://", "-C", str(tmp_path)]
     assert "--sandbox" in codex and codex[-1] == "task"
     # The codex seed rides behind clap's own end-of-options fence.
     assert codex[-2] == "--"
-    codex_yolo = build_pane_argv("codex", "", tmp_path, True, None)
-    assert "--dangerously-bypass-approvals-and-sandbox" in codex_yolo
 
-    gemini = build_pane_argv("gemini", "task", tmp_path, False, None)
+    gemini = build_pane_argv("gemini", "task", tmp_path, None)
     assert gemini[:2] == ["gemini", "--skip-trust"]
     assert "-i" in gemini
     # Bare interactive session: no -i without a message.
-    assert "-i" not in build_pane_argv("gemini", "", tmp_path, False, None)
+    assert "-i" not in build_pane_argv("gemini", "", tmp_path, None)
 
     # agy is never-prompt and stateless. The seed is delivered after readiness.
-    agy = build_pane_argv("agy", "task", tmp_path, False, "ignored-uuid")
+    agy = build_pane_argv("agy", "task", tmp_path, "ignored-uuid")
     assert agy == ["agy", "--dangerously-skip-permissions"]
     assert "-p" not in agy and "--session-id" not in agy
-    assert build_pane_argv("agy", "", tmp_path, False, None) == [
+    assert build_pane_argv("agy", "", tmp_path, None) == [
         "agy",
         "--dangerously-skip-permissions",
     ]
 
     # x-51f6 US2: bare `opencode` is the TUI; the message rides --prompt in
     # the EQUAL form (yargs misparses the split form on a flag-shaped value;
-    # the positional is a PROJECT PATH, not a prompt), --auto only under
-    # yolo, and never the headless `run` subcommand.
+    # the positional is a PROJECT PATH, not a prompt), and never the headless `run` subcommand.
     # x-c772: opencode is always launched with a model (the valid
     # zai-coding-plan/glm-5.3 default).
-    opencode = build_pane_argv("opencode", "task", tmp_path, False, "ignored")
+    opencode = build_pane_argv("opencode", "task", tmp_path, "ignored")
     assert opencode == ["opencode", "--prompt=task", "--model", "zai-coding-plan/glm-5.3"]
-    assert build_pane_argv("opencode", "", tmp_path, False, None) == [
+    assert build_pane_argv("opencode", "", tmp_path, None) == [
         "opencode",
         "--model",
         "zai-coding-plan/glm-5.3",
-    ]
-    opencode_yolo = build_pane_argv("opencode", "task", tmp_path, True, None)
-    assert opencode_yolo == [
-        "opencode",
-        "--prompt=task",
-        "--model",
-        "zai-coding-plan/glm-5.3",
-        "--auto",
     ]
     assert "run" not in opencode and "--session-id" not in opencode
 
@@ -463,10 +452,6 @@ def test_generic_pane_arm_hosts_an_undeclared_harness(
     assert argv[0] == "nanoclaw"
     assert seed_rode_in_argv("say ready", argv) is False
     assert build_pane_argv("nanoclaw", "", tmp_path, False, None) == ["nanoclaw"]
-    # yolo/model/effort/permission carry no invented spelling on this arm: the
-    # spawn gate refuses them upstream (AC6-ERR) and the builder never guesses.
-    quiet = build_pane_argv("nanoclaw", "", tmp_path, True, None, model="m", effort="high")
-    assert quiet == ["nanoclaw"]
 
 
 def test_build_pane_argv_normalizes_direct_slash_commands(tmp_path: Path) -> None:
@@ -487,14 +472,6 @@ def test_build_pane_argv_normalizes_direct_slash_commands(tmp_path: Path) -> Non
         "claude", "/fno:target x-81ad", tmp_path, False, "uuid"
     )[-1] == "/fno:target x-81ad"
 
-
-def _pane_repo(tmp_path: Path) -> Path:
-    import subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    return repo
 
 
 @pytest.fixture
@@ -519,36 +496,13 @@ def test_build_pane_argv_codex_strip_drops_the_user_grant_too(tmp_path: Path) ->
     from fno.agents.mux_spawn import build_pane_argv
 
     repo = _pane_repo(tmp_path)
-    argv = build_pane_argv("codex", "seed text", repo, False, None, add_dir="/extra")
+    argv = build_pane_argv(
+        "codex", "seed text", repo, False, None, passthrough=["--add-dir", "/extra"]
+    )
 
     assert argv.count("--add-dir") == 0
     assert "/extra" not in argv
     assert argv[-2:] == ["--", "seed text"]
-
-
-def test_build_pane_argv_tier3_fails_closed(tmp_path: Path) -> None:
-    # x-b6e2: a no-equivalent (provider, flag) cell raises BEFORE any spawn.
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import build_pane_argv
-
-    closed = [
-        ("codex", {"agent": "x"}),
-        ("codex", {"tools": "Read"}),
-        ("agy", {"deny_tools": "Bash"}),
-        ("opencode", {"add_dir": "/w"}),
-        ("gemini", {"add_dir": "/w"}),
-        ("gemini", {"agent": "x"}),
-    ]
-    for provider, kw in closed:
-        with pytest.raises(DispatchAskError):
-            build_pane_argv(provider, "t", tmp_path, False, None, **kw)
-
-    # AC2-ERR: an EMPTY value is unset, not a stray token - it must NOT trip the
-    # fail-closed guard even on a no-equivalent provider (gemini review finding).
-    for provider, kw in closed:
-        argv = build_pane_argv(provider, "t", tmp_path, False, None, **{k: "" for k in kw})
-        assert "" not in argv
-        assert "--agent" not in argv
 
 
 def _stub_harness_bin(monkeypatch, tmp_path: Path, name: str) -> Path:
@@ -841,7 +795,7 @@ def test_cmd_spawn_pane_uses_global_bounded_dispatch(monkeypatch) -> None:
 
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "ordinary", "--harness", "claude", "--substrate", "pane", "do work"],
+        ["spawn", "--name", "ordinary", "--split", "left", "do work"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1709,23 +1663,23 @@ def test_ac1_passthrough_splices_into_every_pane_arm(tmp_path: Path) -> None:
 
     tok = ["--verbose", "--setting", "x"]
     # claude/codex: before the end-of-options fence carrying the seed.
-    argv = build_pane_argv("claude", "task", tmp_path, False, "u1", passthrough=tok)
+    argv = build_pane_argv("claude", "task", tmp_path, "u1", passthrough=tok)
     fence = argv.index("--")
     assert argv[fence - 3 : fence] == tok
     assert argv[fence + 1] == "task"
-    argv = build_pane_argv("codex", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("codex", "task", tmp_path, None, passthrough=tok)
     fence = argv.index("--")
     assert argv[fence - 3 : fence] == tok
     # agy: the seed is delivered after readiness, so passthrough owns the tail.
-    argv = build_pane_argv("agy", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("agy", "task", tmp_path, None, passthrough=tok)
     assert argv[-3:] == tok and "task" not in argv
     # gemini: before the -i <message> pair.
-    argv = build_pane_argv("gemini", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("gemini", "task", tmp_path, None, passthrough=tok)
     i = argv.index("-i")
     assert argv[i - 3 : i] == tok
-    # opencode: before the permission tail (the positional is a project path).
-    argv = build_pane_argv("opencode", "task", tmp_path, True, None, passthrough=tok)
-    assert argv[-4:-1] == tok and argv[-1] == "--auto"
+    # opencode: the tail, after the model pair (the positional is a project path).
+    argv = build_pane_argv("opencode", "task", tmp_path, None, passthrough=tok)
+    assert argv[-3:] == tok
 
 
 def test_ac3_passthrough_hits_the_happy_refusals(
@@ -1759,38 +1713,6 @@ def test_ac3_passthrough_hits_the_happy_refusals(
     assert exc.value.exit_code == 2
     assert runner.calls == []
 
-
-@pytest.mark.parametrize(
-    ("provider", "kwargs", "tok"),
-    [
-        ("claude", {"model": "opus"}, ["--model", "glm"]),
-        # An alias spelling of an axis fno already emitted: the exact-name
-        # check alone would let both ride (--yolo is an alias of opencode's
-        # --auto).
-        ("opencode", {"yolo": True}, ["--yolo"]),
-    ],
-)
-def test_ac4_duplicated_flag_is_a_named_refusal(
-    tmp_path: Path, provider: str, kwargs: dict, tok: list[str]
-) -> None:
-    """AC4-ERR: two sources for one value is the defect; never a silent
-    last-wins that would make the receipt disagree with the process."""
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import build_pane_argv
-
-    yolo = kwargs.pop("yolo", False)
-    with pytest.raises(DispatchAskError, match="on both sides") as exc:
-        build_pane_argv(
-            provider,
-            "task",
-            tmp_path,
-            yolo,
-            None,
-            passthrough=tok,
-            **kwargs,
-        )
-    assert exc.value.exit_code == 2
-    assert tok[0] in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -1878,7 +1800,7 @@ def test_ac7_claude_off_pane_forwards_fenced_tokens(
     monkeypatch.setattr(_dispatch, "dispatch_spawn", recorder)
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "peer", "--substrate", "thread", "hi", "--", "--verbose", "x"],
+        ["spawn", "--name", "peer", "--once", "hi", "--", "--verbose", "x"],
     )
     assert sent.get("passthrough") == ["--verbose", "x"], (
         f"the fenced tokens must ride the off-pane dispatch: {result.output}"
@@ -2391,22 +2313,22 @@ def test_codex_hook_review_prompt_refuses_before_seed_and_reaps(
     assert load_registry() == []
 
 
-def test_codex_hook_review_bypass_posture_keeps_argv_seed_contract(
+def test_codex_hook_review_bypass_rides_the_bounded_pane(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """The hook-trust bypass rides every codex pane. The bounded posture keeps
+    the seed off argv, so the pane delivers it once the TUI is ready."""
     from fno.agents import mux_spawn
 
     monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
     runner = FakeRunner(read_stdout="Hooks need review")
 
-    result, _ = _spawn(
-        monkeypatch, tmp_path, provider="codex", runner=runner, yolo=True
-    )
+    result, _ = _spawn(monkeypatch, tmp_path, provider="codex", runner=runner)
 
     run_call = next(call for call in runner.calls if call[1:4] == ["mux", "pane", "run"])
     assert "--dangerously-bypass-hook-trust" in run_call
     assert result.seed == "submitted"
-    assert result.seed_source == "argv"
+    assert result.seed_source == "delivered"
 
 
 def test_a_timed_out_submit_keeps_the_row_and_never_retries(
@@ -2464,7 +2386,7 @@ def test_cmd_spawn_explicit_happy_monitor_refuses_separate_model_override(
     )
 
     assert result.exit_code == 2, result.output
-    assert "separate --model" in result.output
+    assert "--model is retired" in result.output
 
 
 def test_explicit_happy_monitor_refuses_separate_model_before_runner(
@@ -2571,8 +2493,7 @@ def test_cmd_spawn_refuses_a_monitor_other_than_happy(tmp_path: Path, monkeypatc
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     args = [
-        "spawn", "--name", "peer", "--harness", "claude", "--provider", "zai",
-        "--model", "glm-5.2", "--monitor", "other", "hello",
+        "spawn", "--name", "peer", "--harness", "claude", "--monitor", "other", "hello",
     ]
     result = CliRunner().invoke(agents_cli.agents_app, args)
 
@@ -2687,3 +2608,12 @@ def test_stable_tab_id_refuses_ordinal_before_spawn(tmp_path: Path, monkeypatch)
     with pytest.raises(DispatchAskError, match="stable-id"):
         _spawn(monkeypatch, tmp_path, tab_id="2", runner=runner)
     assert runner.calls == []
+
+
+def _pane_repo(tmp_path: Path) -> Path:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    return repo

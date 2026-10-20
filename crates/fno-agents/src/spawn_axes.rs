@@ -78,15 +78,7 @@ pub(crate) fn repr(s: &str) -> String {
 pub fn decide(payload: &Value) -> Value {
     let route = axis(payload, "route");
     let account = axis(payload, "account");
-    let model = axis(payload, "model");
     let explicit_route = flag(payload, "explicit_route");
-    let explicit_vendor_present = flag(payload, "explicit_vendor_present");
-    let explicit_vendor = payload
-        .get("explicit_vendor")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let explicit_model_present = flag(payload, "explicit_model_present");
-    let has_model = flag(payload, "has_model");
     let grid_candidate_present = flag(payload, "grid_candidate_present");
     let slot_chain: Vec<String> = payload
         .get("slot_chain")
@@ -98,10 +90,6 @@ pub fn decide(payload: &Value) -> Value {
         })
         .unwrap_or_default();
     let prov = payload.get("prov").and_then(Value::as_str).unwrap_or("");
-    let cfg_harness = payload
-        .get("cfg_harness")
-        .and_then(Value::as_str)
-        .unwrap_or("");
 
     let mut inject: Vec<Value> = Vec::new();
     let mut applied: Vec<Value> = Vec::new();
@@ -112,12 +100,7 @@ pub fn decide(payload: &Value) -> Value {
     let mut bundle_inject: Vec<Value> = Vec::new();
 
     // --- route ---------------------------------------------------------- //
-    if !route.value.is_empty()
-        && !explicit_route
-        && !explicit_model_present
-        && !explicit_vendor_present
-        && !grid_candidate_present
-    {
+    if !route.value.is_empty() && !explicit_route && !grid_candidate_present {
         inject.push(json!(["--route", route.value]));
         applied.push(json!([
             "route",
@@ -132,8 +115,6 @@ pub fn decide(payload: &Value) -> Value {
         // candidate excludes an explicit -m anyway.
         let why = if explicit_route {
             "the caller passed --route".to_string()
-        } else if explicit_vendor_present {
-            format!("the caller passed --provider {}", repr(explicit_vendor))
         } else if grid_candidate_present {
             let chain = if slot_chain.is_empty() {
                 "no reason recorded".to_string()
@@ -141,17 +122,12 @@ pub fn decide(payload: &Value) -> Value {
                 slot_chain.join("; ")
             };
             format!("the capacity grid chose a lane ({chain})")
-        } else if explicit_model_present {
-            "the caller passed --model".to_string()
         } else {
             "no suppression reason recorded".to_string()
         };
-        // The caller's own argv is route-shaped when it carries a route, or a
-        // vendor and a model together: the pair carries what --route carries
-        // (spawn_defaults.py reads it that way), so the caller's own route
-        // bills and the "caller default" tail would be false.
-        let caller_route_shaped =
-            explicit_route || (explicit_vendor_present && explicit_model_present);
+        // The caller's own route bills and the "caller default" tail would be
+        // false.
+        let caller_route_shaped = explicit_route;
         let tail = if caller_route_shaped {
             "your own route bills this worker"
         } else {
@@ -164,13 +140,6 @@ pub fn decide(payload: &Value) -> Value {
         ));
         suppressed.push(json!(["route", route.value, route.rung, why,]));
     }
-    // route_present covers BOTH ways --route ends up in the final argv:
-    // injected from config, or already explicit on the caller's argv. An
-    // operator-typed `--route zai/...` with no `-m` must still suppress the
-    // config model below - the route+model collision (five-opus-workers
-    // defect) this exists to prevent.
-    let route_present = route_injected || explicit_route;
-
     // --- account -------------------------------------------------------- //
     let grid_account_injected = flag(payload, "grid_account_injected");
     let account_flag_present = flag(payload, "account_flag_present");
@@ -200,255 +169,6 @@ pub fn decide(payload: &Value) -> Value {
                 account.value,
                 account.rung,
                 format!("accounts are claude-only; resolved provider {}", repr(prov)),
-            ]));
-        }
-    }
-
-    // --- model ---------------------------------------------------------- //
-    if !model.value.is_empty() && !has_model {
-        // The config model is suppressed when something else already owns
-        // the model: an injected route (route carries vendor/model), a bare
-        // explicit vendor, or a --role that resolves to a real route. An
-        // explicit -m already won via has_model.
-        if route_present {
-            messages.push(format!(
-                "fno agents spawn: --route owns the model; not injecting {}.model {}",
-                model.rung,
-                repr(&model.value),
-            ));
-            suppressed.push(json!([
-                "model",
-                model.value,
-                model.rung,
-                "--route owns the model",
-            ]));
-        } else if explicit_vendor_present {
-            // A bare explicit -P/--provider names the vendor half of a route;
-            // injecting the config model would pair a DIFFERENT vendor's model
-            // behind the explicit vendor.
-            messages.push(format!(
-                "fno agents spawn: --provider {} names a vendor; not injecting \
-                 {}.model {} (add --model yourself to complete the route)",
-                repr(explicit_vendor),
-                model.rung,
-                repr(&model.value),
-            ));
-            suppressed.push(json!([
-                "model",
-                model.value,
-                model.rung,
-                format!("--provider {} names a vendor", repr(explicit_vendor)),
-            ]));
-        } else if flag(payload, "role_resolves") {
-            // resolve_route is fail-SAFE: only a REAL route owns the model.
-            let role = opt_str(payload, "role").unwrap_or_default();
-            messages.push(format!(
-                "fno agents spawn: --role {} resolves to a route; leaving model to \
-                 the route (not injecting {}.model {})",
-                repr(&role),
-                model.rung,
-                repr(&model.value),
-            ));
-            suppressed.push(json!([
-                "model",
-                model.value,
-                model.rung,
-                format!("--role {} resolves to a route", repr(&role)),
-            ]));
-        } else {
-            // A provider-less config model is scoped to its HOME harness (the
-            // config provider, else claude), never the ambient one. Inject
-            // only when the spawn's resolved TARGET equals that home: a codex
-            // spawn must not inherit a claude model (it 400s after the
-            // round-trip). The seam precomputed the target; a resolution
-            // failure degrades open (AC5-FR).
-            let home = if cfg_harness.is_empty() {
-                "claude".to_string()
-            } else {
-                cfg_harness.to_string()
-            };
-            let failed = flag(payload, "harness_target_failed");
-            let target = opt_str(payload, "harness_target").filter(|s| !s.is_empty());
-            if failed {
-                messages.push(
-                    "fno agents spawn: harness resolution failed; leaving model \
-                     to the harness"
-                        .to_string(),
-                );
-                suppressed.push(json!([
-                    "model",
-                    model.value,
-                    model.rung,
-                    "harness resolution failed",
-                ]));
-            } else if let Some(t) = target {
-                if t == home {
-                    inject.push(json!(["--model", model.value]));
-                    applied.push(json!([
-                        "model",
-                        model.value,
-                        format!("{}.model", model.rung),
-                    ]));
-                } else {
-                    messages.push(format!(
-                        "fno agents spawn: config model {} is scoped to {}; spawn \
-                         resolves {}, leaving model to the harness (bind {}.provider \
-                         to apply it cross-harness)",
-                        repr(&model.value),
-                        home,
-                        t,
-                        model.rung,
-                    ));
-                    suppressed.push(json!([
-                        "model",
-                        model.value,
-                        model.rung,
-                        format!("scoped to {home}; spawn resolves {t}"),
-                    ]));
-                }
-            }
-        }
-    }
-
-    // --- effort --------------------------------------------------------- //
-    // The seam pre-validates the effort surface (effort_tokens) and passes
-    // the reason when validation failed; a config value with no reason
-    // injects. Explicit --effort remains fail-closed in cmd_spawn.
-    let effort = axis(payload, "effort");
-    if !flag(payload, "has_effort") && !effort.value.is_empty() {
-        match opt_str(payload, "effort_reason").filter(|s| !s.is_empty()) {
-            None => {
-                inject.push(json!(["--effort", effort.value]));
-                applied.push(json!([
-                    "effort",
-                    effort.value,
-                    format!("{}.effort", effort.rung),
-                ]));
-            }
-            Some(reason) => {
-                messages.push(format!(
-                    "fno agents spawn: effort skipped ({reason}); {}.effort = {} ignored",
-                    effort.rung,
-                    repr(&effort.value),
-                ));
-                suppressed.push(json!(["effort", effort.value, effort.rung, reason]));
-            }
-        }
-    }
-
-    // --- substrate ------------------------------------------------------ //
-    // A config-sourced substrate must be a KNOWN value AND honored by the
-    // resolved provider (the seam precomputes both facts); otherwise it
-    // degrades open with the named condition, never failing at the spawn
-    // parser. The injected value feeds the permission axis' effective lane.
-    let substrate = axis(payload, "substrate");
-    let explicit_substrate = opt_str(payload, "explicit_substrate").filter(|s| !s.is_empty());
-    let mut injected_substrate: Option<String> = None;
-    // `bg` is the Rust-internal kind, never a config spelling: the CLI flag
-    // refuses it and the dispatch resolver refuses it, so a config value that
-    // reached the child as `--substrate bg` would be the ONE untaught door.
-    // Map it to `thread` loudly instead.
-    let mut substrate_mapped = false;
-    let mut substrate_value = substrate.value.clone();
-    if substrate_value == "bg" {
-        substrate_value = "thread".to_string();
-        substrate_mapped = true;
-    }
-    if explicit_substrate.is_none() && !substrate_value.is_empty() {
-        let substrate_ok = flag(payload, "substrate_ok");
-        if !prov.is_empty() && substrate_ok {
-            if substrate_mapped {
-                messages.push(format!(
-                    "fno agents spawn: {}.substrate = \"bg\" is the retired spelling; \
-                     mapping it to \"thread\" (set substrate = \"thread\" to silence this)",
-                    substrate.rung,
-                ));
-            }
-            inject.push(json!(["--substrate", substrate_value]));
-            injected_substrate = Some(substrate_value.clone());
-            applied.push(json!([
-                "substrate",
-                substrate_value,
-                format!("{}.substrate", substrate.rung),
-            ]));
-        } else {
-            let reason = if prov.is_empty() {
-                "harness resolution failed".to_string()
-            } else if flag(payload, "substrate_unknown") {
-                format!(
-                    "unknown substrate (valid: {})",
-                    payload
-                        .get("substrate_valid_list")
-                        .and_then(Value::as_str)
-                        .unwrap_or("pane, thread, headless, bg, cloud")
-                )
-            } else {
-                format!(
-                    "{prov} does not support substrate {}; thread requires a \
-                     journey-proven lane (claude and codex today; opencode remains \
-                     unearned), so the spawn falls back to the pane default",
-                    repr(&substrate.value)
-                )
-            };
-            messages.push(format!(
-                "fno agents spawn: substrate skipped ({reason}); {}.substrate = {} ignored",
-                substrate.rung,
-                repr(&substrate.value),
-            ));
-            suppressed.push(json!([
-                "substrate",
-                substrate.value,
-                substrate.rung,
-                reason,
-            ]));
-        }
-    }
-
-    // --- permission mode ------------------------------------------------ //
-    // Same shape as substrate, but mappability depends on the EFFECTIVE
-    // substrate (explicit pin > this-run injection > the pane default): a
-    // non-claude bg/headless lane refuses a mapped --permission-mode. Claude
-    // honors it everywhere; the pane token check is precomputed by the seam.
-    let permission = axis(payload, "permission_mode");
-    if !flag(payload, "has_permission") && !permission.value.is_empty() {
-        let eff = explicit_substrate
-            .or(injected_substrate)
-            .unwrap_or_else(|| "pane".to_string());
-        // The capability table decides which lanes carry the axis; the seam
-        // precomputes both lanes' answers from the one Rust vocabulary (see
-        // codex_posture.rs). Claude is honored everywhere, as the front doors
-        // have always read.
-        let mappable = prov == "claude"
-            || (eff == "pane" && flag(payload, "pane_tokens_ok"))
-            || ((eff == "thread" || eff == "bg") && flag(payload, "thread_tokens_ok"));
-        if !prov.is_empty() && mappable {
-            inject.push(json!(["--permission-mode", permission.value]));
-            applied.push(json!([
-                "permission_mode",
-                permission.value,
-                format!("{}.permission_mode", permission.rung),
-            ]));
-        } else {
-            let reason = if prov.is_empty() {
-                "harness resolution failed".to_string()
-            } else {
-                format!(
-                    "{prov} cannot map permission mode {} on substrate {}",
-                    repr(&permission.value),
-                    repr(&eff)
-                )
-            };
-            messages.push(format!(
-                "fno agents spawn: permission-mode skipped ({reason}); \
-                 {}.permission_mode = {} ignored",
-                permission.rung,
-                repr(&permission.value),
-            ));
-            suppressed.push(json!([
-                "permission_mode",
-                permission.value,
-                permission.rung,
-                reason,
             ]));
         }
     }
@@ -700,12 +420,9 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     // A `keeper_posture` field asks the agy_launch owner which permission
     // tokens a launch carries (same field-on-a-verb shape as node_seed).
     if let Some(ask) = parsed.get("keeper_posture") {
-        let s = |k: &str| ask.get(k).and_then(Value::as_str).map(|v| v.to_string());
         let answer = match crate::agy_launch::keeper_posture(
             ask.get("harness").and_then(Value::as_str).unwrap_or(""),
             ask.get("lane").and_then(Value::as_str).unwrap_or("pane"),
-            s("permission_mode").as_deref(),
-            ask.get("yolo").and_then(Value::as_bool).unwrap_or(false),
         ) {
             Ok(p) => serde_json::json!({
                 "tokens": p.tokens,
@@ -716,28 +433,6 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
             Err(reason) => serde_json::json!({"refused": reason}),
         };
         println!("{answer}");
-        return 0;
-    }
-    // An `agy_mint` field asks for the conversation-mint argv.
-    if let Some(ask) = parsed.get("agy_mint") {
-        let s = |k: &str| ask.get(k).and_then(Value::as_str).map(|v| v.to_string());
-        let answer = match crate::agy_launch::agy_mint_argv(
-            s("model").as_deref(),
-            s("effort").as_deref(),
-            s("permission_mode").as_deref(),
-            ask.get("yolo").and_then(Value::as_bool).unwrap_or(false),
-        ) {
-            Ok(argv) => serde_json::json!({"argv": argv}),
-            Err(reason) => serde_json::json!({"refused": reason}),
-        };
-        println!("{answer}");
-        return 0;
-    }
-    // An `agy_mint_run` field asks the runtime to EXECUTE the mint turn and
-    // answer the conversation id (the argv owner stays in agy_launch.rs; the
-    // process mechanics live in agy_mint.rs).
-    if let Some(ask) = parsed.get("agy_mint_run") {
-        println!("{}", crate::agy_mint::run(ask));
         return 0;
     }
     // A `resume_pin` field routes the same way: which model a resume comes
@@ -864,7 +559,16 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{answer}");
         return 0;
     }
-    println!("{}", decide(&parsed));
+    // The fallthrough WAS the axis composition (config --model/--effort/
+    // --substrate/--permission-mode injection); it is retired with the flags.
+    // A stale caller reads the refusal and stops; the field asks above are
+    // the verb's live surface.
+    println!(
+        "{}",
+        serde_json::json!({
+            "refused": "the spawn-axis composition is retired; the lane template owns the launch line (docs/HARNESSES.md)"
+        })
+    );
     0
 }
 
@@ -1098,24 +802,5 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("fno agents spawn: account skipped (accounts are claude-only, resolved provider 'codex')"));
-    }
-
-    #[test]
-    fn config_substrate_bg_maps_to_thread_loudly() {
-        // `bg` is the Rust-internal kind: the flag and the dispatch resolver
-        // both refuse it, so a config value must not ride the one untaught
-        // door. Inject `thread` and name the mapping.
-        let out = decide_map(json!({
-            "substrate": {"value": "bg", "rung": "agents.defaults"},
-            "prov": "claude",
-            "substrate_ok": true,
-        }));
-        assert_eq!(out["inject"], json!([["--substrate", "thread"]]));
-        let msg = out["messages"][0].as_str().unwrap();
-        assert!(msg.contains("retired spelling"), "{msg}");
-        // The rung name rides the message in two halves: the composed
-        // 25-char form is a tracked cross-language twin literal.
-        assert!(msg.contains("agents.defaults"), "{msg}");
-        assert!(msg.contains(".substrate = \"bg\""), "{msg}");
     }
 }

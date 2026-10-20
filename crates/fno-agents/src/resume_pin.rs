@@ -187,9 +187,9 @@ pub fn resolve(
         Some(p) if p != "anthropic" => Err(Unpinned {
             text: format!(
                 "session {session_id} last ran {candidate}, which only route {p} serves, \
-                 and this resume restores no route; resume it with: \
-                 fno agents spawn --resume {session_id} -P {p} -m {}",
-                crate::spawn_axes::repr(&candidate)
+                 and this resume restores no route. The lane template owns the vendor \
+                 choice now: seed a new session on a lane that names {p}, or pin an \
+                 account with `fno agents spawn --account <id>`."
             ),
             lost_route: Some((p, candidate.clone())),
             model: Some(candidate),
@@ -218,9 +218,9 @@ pub fn resolve(
                     model: Some(candidate.clone()),
                     text: format!(
                         "session {session_id} last ran {candidate}, but no recorded route names \
-                         its provider and this resume restores no route; resume it with: \
-                         fno agents spawn --resume {session_id} -P <provider> -m {}",
-                        crate::spawn_axes::repr(&candidate)
+                         its provider and this resume restores no route. The lane template \
+                         owns the vendor choice now: seed a new session on a lane that \
+                         names it, or pin an account with `fno agents spawn --account <id>`."
                     ),
                 });
             }
@@ -383,8 +383,8 @@ mod tests {
         );
         let text = refusal_text(answer);
         assert!(text.contains("route zai serves"), "{text}");
-        assert!(text.contains("-P zai -m 'glm-5.3-flash[1m]'"), "{text}");
-        assert!(text.contains("fno agents spawn --resume"), "{text}");
+        assert!(text.contains("a lane that names zai"), "{text}");
+        assert!(text.contains("fno agents spawn --account <id>"), "{text}");
         std::fs::remove_file(&transcript).ok();
     }
 
@@ -405,10 +405,7 @@ mod tests {
             text.contains("no recorded route names its provider"),
             "{text}"
         );
-        assert!(
-            text.contains("-P <provider> -m 'glm-5.3-flash[1m]'"),
-            "{text}"
-        );
+        assert!(text.contains("fno agents spawn --account <id>"), "{text}");
     }
 
     #[test]
@@ -459,6 +456,65 @@ mod tests {
             Some(("zai".to_string(), "glm-5.3-flash[1m]".to_string()))
         );
         assert_eq!(unpinned.model.as_deref(), Some("glm-5.3-flash[1m]"));
+        std::fs::remove_file(&transcript).ok();
+    }
+
+    #[test]
+    fn bare_row_glm_birth_without_route_refuses_with_recipe() {
+        // AC1-ERR: the same bare row over an empty route dir: the refusal
+        // names the override recipe, with the model recorded on the answer.
+        let transcript = temp_transcript(
+            "bare-row-no-route",
+            &[attachment_line("glm-5.3-flash[1m]", None)],
+        );
+        let answer = resolve(
+            row(None, None),
+            Some(&transcript),
+            false,
+            "77770002-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        let Err(unpinned) = answer else {
+            panic!("expected a refusal")
+        };
+        assert!(unpinned.lost_route.is_none());
+        assert_eq!(unpinned.model.as_deref(), Some("glm-5.3-flash[1m]"));
+        assert!(
+            unpinned.text.contains("this resume restores no route"),
+            "{}",
+            unpinned.text
+        );
+        std::fs::remove_file(&transcript).ok();
+    }
+
+    #[test]
+    fn bare_row_anthropic_birth_pins_the_birth_model() {
+        // AC1-EDGE: a bare row born on an Anthropic model (marketing name
+        // present) pins the birth model as today; and a row that records a
+        // model still answers from the row, transcript unread.
+        let transcript = temp_transcript(
+            "bare-row-anthropic",
+            &[attachment_line("claude-opus-5", Some("Opus 5"))],
+        );
+        let answer = resolve(
+            row(None, None),
+            Some(&transcript),
+            false,
+            "77770003-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        assert_eq!(answer.unwrap().argv_model.as_deref(), Some("claude-opus-5"));
+        let answer = resolve(
+            row(Some("claude-fable-5-1"), None),
+            Some(&transcript),
+            false,
+            "77770004-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        assert_eq!(
+            answer.unwrap().argv_model.as_deref(),
+            Some("claude-fable-5-1")
+        );
         std::fs::remove_file(&transcript).ok();
     }
 
@@ -558,7 +614,7 @@ mod tests {
         assert!(decided["refusal"]
             .as_str()
             .unwrap_or_default()
-            .contains("-P <provider>"));
+            .contains("fno agents spawn --account <id>"));
 
         let rowless = decide(&json!({"session_id": "", "routed": false, "row": null}));
         assert!(rowless["refusal"]

@@ -79,7 +79,7 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--substrate", "pane",
+            "--dispatch-account", "makers", "--here", "--split", "left",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -114,7 +114,7 @@ def test_proven_credential_carrier_refuses_when_unreadable(monkeypatch, runner):
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--substrate", "pane",
+            "--dispatch-account", "makers", "--here", "--split", "left",
         ],
     )
     assert result.exit_code == 2
@@ -173,7 +173,7 @@ def test_composed_receipt_names_live_credential_and_payer(monkeypatch, runner):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude",
          "--account", "readyrule", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
@@ -250,8 +250,6 @@ def test_codex_thread_client_env_seals_our_state_roots(monkeypatch, tmp_path):
         message="/target ab-2222aaaa",
         cwd=tmp_path,
         from_name="",
-        model=None,
-        yolo=False,
         account_env={"HOME": "/accounts/zai-1/home"},
         route_env=None,
     )
@@ -290,7 +288,7 @@ def test_codex_one_shot_refuses_a_pinned_account(monkeypatch, tmp_path):
             account_env={"HOME": "/accounts/zai-1/home"},
         )
     assert "one-shot" in str(exc.value)
-    assert "--substrate thread" in str(exc.value)
+    assert "drop --once" in str(exc.value)
 
 
 def test_account_non_claude_provider_refused(monkeypatch, runner):

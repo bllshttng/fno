@@ -1,13 +1,15 @@
 """The codex thread effort journey (opt-in, ``FNO_CODEX_LIVE=1``).
 
-An operator spawn carrying ``--effort`` must land that effort on a REAL
-app-server thread - not in a refusal, not in a dropped field. The positive
+The --effort spawn flag is retired; an operator who wants another effort
+passes codex's own ``-c model_reasoning_effort=<level>`` past the ``--``
+fence. That effort must land on a REAL app-server thread - not in a
+refusal, not in a dropped field. The positive
 marker is the vendor's own rollout record: a ``turn_context`` entry whose
 payload carries the effort the spawn named. The field name (``effort``,
 plain, inside the ``turn_context`` payload) was confirmed 2026-09-11
 against a real rollout on this machine before being asserted here.
 
-The control spawn carries no ``--effort``; its rollout reads the configured
+The control spawn carries no fenced effort; its rollout reads the configured
 default (``model_reasoning_effort`` from ``~/.codex/config.toml``, codex's
 own fallback ``medium`` when unset). That proves the reader, not the flag.
 
@@ -46,7 +48,7 @@ def _configured_default_effort() -> str:
 def _spawn(name: str, extra: list[str]) -> None:
     subprocess.run(
         ["fno", "agents", "spawn", "--name", name, "--harness", "codex",
-         "--substrate", "thread", "Reply with the single word: ready.", *extra],
+         "Reply with the single word: ready.", *extra],
         check=True,
         capture_output=True,
         text=True,
@@ -94,7 +96,7 @@ def test_ac10_hp_a_real_codex_thread_carries_the_requested_effort(tmp_path) -> N
     treatment = "x-c9ce-effort-t"
     control = "x-c9ce-effort-c"
     try:
-        _spawn(treatment, ["--effort", "high"])
+        _spawn(treatment, ["--", "-c", "model_reasoning_effort=high"])
         _spawn(control, [])
 
         treatment_rollout = _rollout_path(treatment)
@@ -107,7 +109,7 @@ def test_ac10_hp_a_real_codex_thread_carries_the_requested_effort(tmp_path) -> N
         assert efforts, f"no turn_context ever landed in {treatment_rollout}"
         assert (
             efforts[0] == "high"
-        ), f"the spawn named --effort high; the rollout reads {efforts!r}"
+        ), f"the spawn fenced effort high; the rollout reads {efforts!r}"
 
         control_efforts = _rollout_efforts(control_rollout)
         assert control_efforts, f"no turn_context ever landed in {control_rollout}"

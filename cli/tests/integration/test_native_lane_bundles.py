@@ -112,7 +112,7 @@ def test_sibling_lane_selection_carries_that_lanes_bundle(monkeypatch):
         ["spawn", "--name", "w", "/fno:target x-1"],
         stderr=err,
     )
-    assert out[out.index("--model") + 1] == "claude-opus-5"
+    assert "--model" not in out, "the lane owns its model; compose names none"
     i = out.index("--")
     assert out[i + 1 : i + 3] == ["--settings", "b.json"]
     assert "a.json" not in out

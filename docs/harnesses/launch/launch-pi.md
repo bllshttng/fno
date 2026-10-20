@@ -33,7 +33,7 @@ The loop closes through the same `footnote.ts` in the pi agent dir. If that file
 
 ## Known refusals
 
-- `spawn --resume` on the thread lane. Revive the same row by name with `fno agents resume <name>`.
+- The spawn `--resume` fork door is retired. Revive the same row by name with `fno agents resume <name>`.
 - An unmeasured substrate. Spawn names it and stops.
 
 Back to [the harness choice table](../SKILL.md#launch-a-worker).

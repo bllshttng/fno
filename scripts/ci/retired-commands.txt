@@ -125,6 +125,20 @@ stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
 
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.
+# The spawn axes retire (the spawn-axis retirement): the lane template owns the launch
+# line, native forms live in docs/HARNESSES.md. Compound forms so the native
+# launch lines (claude --bg --model ...) never match.
+spawn --provider|the route owns the vendor; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --substrate|the native lane resolves it; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --yolo|the lane's own bypass posture; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --model|the lane template and route own the model; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --permission-mode|the lane default posture; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --effort|the lane template owns it; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --resume|fno agents session resume <name>|the spawn-axis retirement
+spawn --add-dir|the state grant rides the lane; native form: docs/HARNESSES.md|the spawn-axis retirement
+spawn --agent|pass it after the -- fence|the spawn-axis retirement
+spawn --tools|pass it after the -- fence|the spawn-axis retirement
+spawn --deny-tools|pass it after the -- fence|the spawn-axis retirement
 # The agents fold deleted five dead leaves; no caller-facing string may teach them.
 fno agents gate|fno agents admit gate (the spawn gate) or nothing (the injection gate is gone)|the agents fold
 fno agents ping|fno agents session status|the agents fold

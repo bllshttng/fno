@@ -83,7 +83,7 @@ def test_spawn_claude_persists_resolved_uuid(workdir_claude, monkeypatch) -> Non
 
     result = CliRunner().invoke(
         agents_app,
-        ["spawn", "--name", "uuid-agent", "-H", "claude", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "uuid-agent", "-H", "claude", "hello"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output

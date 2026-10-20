@@ -133,7 +133,7 @@ def _default_spawn(
     prompt: str, workdir: Path, timeout_s: int, *,
     provider: Optional[str] = None, lane: Optional[Any] = None
 ) -> SpawnResult:
-    """Run the worker via ``fno agents spawn --substrate headless`` in *workdir*.
+    """Run the worker via ``fno agents spawn --once`` in *workdir*.
     A non-zero exit, missing binary, or timeout is a graded failure, never a
     sweep crash. A *lane* is a complete coordinate: its harness wins over *provider*.
     The worker name is the ``ev-th-evals-<run>``: typed non-node identity,
@@ -147,15 +147,14 @@ def _default_spawn(
         return SpawnResult(False, "spawn failed: worker name unmintable (stale binary)")
     cmd = [
         "fno", "agents", "spawn", "--name", name,
-        "--substrate", "headless", "--cwd", str(workdir),
+        "--once", "--cwd", str(workdir),
         "--timeout", str(timeout_s),
     ]
     harness = (lane.harness if lane else None) or provider
     if harness:
         cmd += ["--harness", harness]
     if lane:
-        for flag, val in (("--model", lane.model), ("--effort", lane.effort),
-                          ("--route", lane.route), ("--account", lane.account)):
+        for flag, val in (("--route", lane.route), ("--account", lane.account)):
             if val:
                 cmd += [flag, val]
     # Behind `--` (fno's own click parser honors it, verified both

@@ -13,72 +13,45 @@
       "spawn",
       "--route",
       "zai/glm-5",
-      "--permission-mode",
-      "bypassPermissions",
       "--name",
       "w15",
       "/fno:target x-13"
     ],
     "exit": 0,
     "journal": {
-      "type": "spawn_defaults_applied",
-      "source": "agents",
       "data": {
+        "name": "w15",
+        "verb": "target",
+        "seed": "/fno:target x-13",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "zai/glm-5",
+            "rung": "agents.defaults"
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
         "applied": [
           [
             "route",
             "zai/glm-5",
             "agents.defaults.route"
-          ],
-          [
-            "permission_mode",
-            "bypassPermissions",
-            "builtin.autonomous.permission_mode"
           ]
         ],
-        "fingerprint": "",
-        "name": "w15",
-        "resolved": {
-          "account": {
-            "rung": null,
-            "value": ""
-          },
-          "effort": {
-            "rung": null,
-            "value": ""
-          },
-          "model": {
-            "rung": null,
-            "value": ""
-          },
-          "pane_group": {
-            "rung": null,
-            "value": ""
-          },
-          "permission_mode": {
-            "rung": "builtin.autonomous",
-            "value": "bypassPermissions"
-          },
-          "provider": {
-            "rung": null,
-            "value": ""
-          },
-          "route": {
-            "rung": "agents.defaults",
-            "value": "zai/glm-5"
-          },
-          "substrate": {
-            "rung": null,
-            "value": ""
-          }
-        },
-        "seed": "/fno:target x-13",
-        "suppressed": [],
-        "verb": "target"
-      }
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
     },
     "stderr": [
-      "fno agents spawn: applied route=zai/glm-5 (agents.defaults.route), permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
+      "fno agents spawn: applied route=zai/glm-5 (agents.defaults.route)"
     ],
     "stdout": null
   },

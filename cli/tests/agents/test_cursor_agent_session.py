@@ -65,15 +65,6 @@ def test_cursor_agent_refuses_native_worktree_passthrough():
         )
 
 
-def test_cursor_agent_permission_and_effort_mappings_fail_closed():
-    from fno.agents.mux_spawn import DispatchAskError, effort_tokens, permission_pane_tokens
-
-    assert permission_pane_tokens("cursor-agent", "force") == ["--force"]
-    with pytest.raises(DispatchAskError, match="unmappable"):
-        permission_pane_tokens("cursor-agent", "auto")
-    with pytest.raises(DispatchAskError, match="no --effort flag"):
-        effort_tokens("cursor-agent", "high")
-
 
 def test_cursor_agent_worker_server_selector_is_exclusive_to_owner_tree():
     from fno.agents.harnesses import cursor_agent
@@ -126,3 +117,10 @@ def test_cursor_agent_reaper_refuses_unreadable_captured_identity(monkeypatch):
             [cursor_agent.CursorWorkerServerHandle(pid=731, start_time=7)]
         )
 
+
+def test_cursor_agent_permission_mappings_fail_closed():
+    from fno.agents.mux_spawn import DispatchAskError, permission_pane_tokens
+
+    assert permission_pane_tokens("cursor-agent", "force") == ["--force"]
+    with pytest.raises(DispatchAskError, match="unmappable"):
+        permission_pane_tokens("cursor-agent", "auto")

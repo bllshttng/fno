@@ -58,7 +58,6 @@ pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
 pub mod agy_launch;
-pub mod agy_mint;
 pub mod agy_transcript;
 #[cfg(test)]
 #[path = "agy_transcript_tests.rs"]
@@ -251,6 +250,7 @@ pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
+pub mod launch_exec;
 pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
