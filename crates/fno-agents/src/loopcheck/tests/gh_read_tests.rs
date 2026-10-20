@@ -455,11 +455,14 @@ fn graphql_fallback_failure_returns_the_original_rest_refusal() {
         .unwrap_or_else(|e| e.into_inner());
     for _ in 0..5 {
         let dir = tempfile::tempdir().unwrap();
-        let (bin, _calls) = fallback_adapter(
+        let (bin, calls) = fallback_adapter(
             dir.path(),
             FGB_PROBE_CORE_DRAINED,
             "printf '%s' 'graphql discretionary read refused: budget exhausted' >&2\n    exit 1",
         );
+        // The calls file exists so the fake's own append lands there and the
+        // refusal tail carries only the rate-limit line the assert reads.
+        std::env::set_var("FGB_CALLS", &calls);
         std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
         let read = read_pr_view(
             bin.to_str().unwrap(),
@@ -467,6 +470,7 @@ fn graphql_fallback_failure_returns_the_original_rest_refusal() {
             Some("42"),
             std::time::Duration::from_secs(10),
         );
+        std::env::remove_var("FGB_CALLS");
         std::env::remove_var("FNO_LOOPCHECK_GH_BIN");
         let Err(err) = read else { continue };
         assert!(
