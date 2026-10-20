@@ -123,22 +123,22 @@ def test_cli_to_lead_refuses_a_second_addressing_mode(env):
     assert "mutually exclusive" in res.output
 
 
-def test_cli_to_lead_hands_the_holder_to_the_name_lane(env, monkeypatch):
+def test_cli_to_lead_hands_the_holder_to_the_name_lane(env):
     """AC1: the resolved holder, not a handle a peer remembered, is what the
-    ordinary name lane is asked to deliver to."""
-    import fno.agents.dispatch as dispatch
+    ordinary name lane is asked to deliver to.
+
+    The send body lives in the rust leaf, so the handoff is pinned through its
+    stdout receipt: the `to` field names the resolved holder, and the test
+    host's only deliverable outcome is the durable demotion.
+    """
+    import json as _json
+
     from fno.mail.cli import mail_app
 
     _register("lead-fno-g5", scope="fno", level=1)
-    seen: dict = {}
-
-    def _fake_send(**kwargs):
-        seen.update(kwargs)
-        return dispatch.DispatchSendResult(msg_id="msg-1", delivery="hosted")
-
-    monkeypatch.setattr(dispatch, "dispatch_send", _fake_send)
     res = CliRunner().invoke(mail_app, ["send", "--to-lead", "fno", "ping"])
 
     assert res.exit_code == 0, res.output
-    assert seen["name"] == "lead-fno-g5"
-    assert seen["message"] == "ping"
+    receipt = _json.loads(res.stdout.strip().splitlines()[0])
+    assert receipt["to"] == "lead-fno-g5"
+    assert "queued (durable)" in receipt["status"]

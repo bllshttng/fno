@@ -813,7 +813,7 @@ pub(super) fn dispatch_send_to_project(
     }
     let (recipient, _candidates, durable) = resolve_to_project(project, any_flag)?;
     if let Some(recipient) = recipient {
-        let result = dispatch_send(
+        let mut result = dispatch_send(
             &recipient,
             message,
             provider,
@@ -822,6 +822,10 @@ pub(super) fn dispatch_send_to_project(
             origin,
             subject,
         )?;
+        // Python's dispatch_send_to_project replaced result.recipient with the
+        // resolved peer before returning, so the demotion receipt names the
+        // PEER the lane asked for, never the project.
+        result.to = Some(recipient.clone());
         return Ok((result, Some(recipient)));
     }
     if !durable {
@@ -941,6 +945,25 @@ pub(super) fn print_project_demotion(
         return;
     }
     warn_deferred(resolved, false, result.reason.as_deref());
+    let refs: Vec<String> = demotion_door_args(result, to_project, subject);
+    let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
+    match render_receipt(&refs) {
+        Ok(text) => println!("{text}"),
+        Err(exc) => println!("{exc}"),
+    }
+}
+
+/// The demotion door argv for one resolved peer's durable demotion; split
+/// from the print so a unit test can pin the cause riding the receipt (the
+/// door's own failure prints the error, so stdout alone does not pin it).
+pub(super) fn demotion_door_args(
+    result: &DispatchSendResult,
+    to_project: &str,
+    subject: Option<&str>,
+) -> Vec<String> {
+    let Some(resolved) = result.to.as_ref() else {
+        return Vec::new();
+    };
     let age_target = resolved;
     let suffix = live_miss_age_suffix(age_target);
     let ttl = owner_ttl_hours(result.durable_owner.as_deref().unwrap_or("wake-daemon"));
@@ -967,10 +990,40 @@ pub(super) fn print_project_demotion(
         door.push("--subject".to_string());
         door.push(sub.to_string());
     }
-    let refs: Vec<&str> = door.iter().map(String::as_str).collect();
-    match render_receipt(&refs) {
-        Ok(text) => println!("{text}"),
-        Err(exc) => println!("{exc}"),
+    door
+}
+
+#[cfg(test)]
+mod project_demotion_tests {
+    use super::*;
+
+    /// Python test_cli_send_to_project_carries_the_lock_timeout_reason: the
+    /// anycast lane reaches the same demotion door as the by-name lane, so a
+    /// cause pinned on one path only is pinned on neither - the reason the
+    /// dispatch reports must reach the receipt, verbatim.
+    #[test]
+    fn the_lock_timeout_reason_rides_the_demotion_door() {
+        let result = DispatchSendResult {
+            msg_id: "msg-lock01".to_string(),
+            delivery: "durable".to_string(),
+            reason: Some(LOCK_TIMEOUT_REASON.to_string()),
+            durable_owner: None,
+            to: Some("alpha".to_string()),
+            to_harness: None,
+            to_session: None,
+        };
+        let door = demotion_door_args(&result, "projA", None);
+        let pos = door
+            .iter()
+            .position(|a| a == "--reason")
+            .expect("the reason rides the door");
+        assert_eq!(door[pos + 1], LOCK_TIMEOUT_REASON);
+        let target = door
+            .iter()
+            .position(|a| a == "--target")
+            .map(|p| door[p + 1].clone())
+            .expect("the peer names the receipt");
+        assert_eq!(target, "alpha");
     }
 }
 

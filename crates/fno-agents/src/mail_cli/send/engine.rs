@@ -1856,24 +1856,31 @@ pub(super) fn project_id_from_cwd(cwd: &str) -> Option<String> {
 }
 
 /// Python `_project_id_from_settings`: the `project` key, flat or nested.
+/// Python's reader parses config.toml as TOML and a legacy settings.yaml as
+/// YAML, so the document parses under whichever grammar the suffix names.
 pub(super) fn project_id_from_settings_text(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let trimmed = line.trim();
-        let Some(eq) = trimmed.find('=') else {
-            continue;
-        };
-        let key = trimmed[..eq].trim().trim_matches('"');
-        if key != "project" {
-            continue;
-        }
-        let mut value = trimmed[eq + 1..].trim().to_string();
-        if value.ends_with(',') {
-            value.pop();
-        }
-        let value = value.trim_matches('"').trim_matches('\'').to_string();
-        if !value.is_empty() {
-            return Some(value);
+    let doc = toml::from_str::<toml::Value>(text)
+        .ok()
+        .and_then(|v| serde_json::to_value(v).ok())
+        .or_else(|| serde_yaml_ng::from_str::<Value>(text).ok())?;
+    let cfg = doc.get("config").and_then(Value::as_object);
+    if let Some(cp) = cfg
+        .and_then(|c| c.get("project"))
+        .and_then(Value::as_object)
+    {
+        if let Some(id) = cp.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
         }
     }
-    None
+    match doc.get("project") {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Object(map)) => map
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
 }
