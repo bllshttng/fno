@@ -414,17 +414,46 @@ pub(super) fn ambiguous_token_exit(name: &str, candidates: &[String]) -> i32 {
     2
 }
 
-pub(super) fn unreachable_token_exit(name: &str, candidates: &[String], code: i32) -> i32 {
+pub(super) fn unreachable_token_line(name: &str, candidates: &[String]) -> String {
     let hint = if candidates.is_empty() {
         String::new()
     } else {
         format!(" Closest live sessions: {}.", candidates.join(", "))
     };
-    eprintln!(
+    format!(
         "unknown agent or live-session handle: {}.{hint}",
         py_repr(name)
-    );
+    )
+}
+
+pub(super) fn unreachable_token_exit(name: &str, candidates: &[String], code: i32) -> i32 {
+    eprintln!("{}", unreachable_token_line(name, candidates));
     code
+}
+
+#[cfg(test)]
+mod token_exit_tests {
+    use super::*;
+
+    /// The unknown-handle refusal names the closest live handles when the
+    /// resolver found any, and stays bare when it found none.
+    #[test]
+    fn the_unknown_handle_refusal_names_closest_live_sessions_when_any_exist() {
+        let line = unreachable_token_line(
+            "nope",
+            &["fno-think001".to_string(), "fno-tgt00001".to_string()],
+        );
+        assert!(
+            line.contains("Closest live sessions: fno-think001"),
+            "{line}"
+        );
+        assert!(
+            line.contains("unknown agent or live-session handle"),
+            "{line}"
+        );
+        let bare = unreachable_token_line("nope", &[]);
+        assert!(!bare.contains("Closest live sessions"), "{bare}");
+    }
 }
 
 pub(super) fn unavailable_token_exit(name: &str, failed: &[String], candidates: &[String]) -> i32 {
