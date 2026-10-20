@@ -1435,6 +1435,10 @@ pub(crate) fn decide_with_payload(
         } else {
             gh_bin.to_string()
         };
+        // The manifest node's own PR pins the terminal read (merged, deleted
+        // and detached heads stay readable); an absent node or PR keeps the
+        // branch-resolved read exactly as before.
+        let node_pr_selector = pr_read::manifest_node_pr_selector(&cwd, node_id.as_deref());
         let done_result = run_done(
             &done_gh_bin,
             git_bin,
@@ -1460,6 +1464,7 @@ pub(crate) fn decide_with_payload(
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),
             &resolved_local_peer_reviewers_for_author(&settings, author_harness.as_deref()),
+            node_pr_selector.as_deref(),
         );
 
         match done_result {
@@ -2545,6 +2550,10 @@ fn run_done(
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
     peer_reviewers: &[String],
+    // The PR selector the manifest's node resolves (`manifest_node_pr_selector`):
+    // pins the terminal read to the session's own PR so a merged, deleted or
+    // detached head cannot turn the read into a branch-resolution failure.
+    pr_selector: Option<&str>,
 ) -> Result<PrInfo, GhReadError> {
     let info = read_pr_info(
         gh_bin,
@@ -2563,7 +2572,7 @@ fn run_done(
         global_events_path,
         repo_slug,
         author_session,
-        None,
+        pr_selector,
         None,
         github_approval_satisfies,
         max_rounds,

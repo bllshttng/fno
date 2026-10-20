@@ -156,6 +156,31 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
+/// The session manifest node's primary PR number, as a gh selector string.
+///
+/// The terminal read pins the PR the manifest's own node shipped instead of
+/// asking gh to resolve the checkout branch: a merged, deleted or detached
+/// head has no branch-to-PR answer, and the branch-resolved read then fails
+/// (under load, as a signal-killed child with empty stderr), which the gate
+/// renders as a causeless block on a PR that in fact merged. With the number
+/// the same read answers MERGED and retires the fire. Read-only against the
+/// graph store, the same door `node_is_done` uses, and fail-open: no node in
+/// the manifest, an unreadable store, or a node with no primary PR keeps the
+/// branch-resolved read, which is exactly the pre-existing behavior - and the
+/// only correct one before the session's PR exists at all.
+pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
+    let node_id = node_id?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    match crate::backlog::api::node(&store, node_id) {
+        Ok(Some(n)) => n
+            .primary_pr
+            .and_then(|pr| pr.number)
+            .filter(|number| *number > 0)
+            .map(|number| number.to_string()),
+        _ => None,
+    }
+}
+
 /// Run done() reads. Returns Ok(PrInfo) or Err((read_name, stderr_tail)) on gh failure.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn read_pr_info(
