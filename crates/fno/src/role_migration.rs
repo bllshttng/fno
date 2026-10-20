@@ -7,6 +7,12 @@
 /// This constant is the only quoting of it outside this boundary file.
 pub const SUCCESSION_CHECKIN_EVENT: &str = "reign_checkin";
 
+/// The JSON key old spawn stamps and event rows use for the leadless flag:
+/// the wire label predates the vocabulary migration and stays for row
+/// compatibility. Readers accept it beside `leadless`; this constant is the
+/// only quoting of it outside this boundary file.
+pub const LEGACY_LEADLESS_KEY: &str = "kingless";
+
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
