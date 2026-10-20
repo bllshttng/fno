@@ -780,7 +780,10 @@ pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Sta
     // Step 3: re-ingest the parked live file. The rename changed the inode,
     // so the ingest cursor no longer covers it; `row_hash` makes the repeat
     // import insert zero duplicates, and bytes a writer appended between the
-    // steps land here.
+    // steps land here. Nothing parked, nothing to attest, so stop here.
+    if !parked_any {
+        return out;
+    }
     if let Some(parked) = &parked_live {
         if let Err(e) = crate::event_store::sync_sources(&live, &[parked]) {
             for name in &names {
@@ -829,10 +832,8 @@ pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Sta
     fields.insert("repeat".into(), serde_json::Value::from(repeat));
     let _ = crate::events::EventEmitter::new(&live, "daemon")
         .emit_fields("legacy_journal_retired", fields);
-    if parked_any {
-        for name in &names {
-            out.push((name.clone(), Status::Merged));
-        }
+    for name in &names {
+        out.push((name.clone(), Status::Merged));
     }
     out
 }
