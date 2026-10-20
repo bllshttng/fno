@@ -408,7 +408,7 @@ Each cell carries outcome and cost columns. `nodes` counts the records in the ce
 
 The coverage block above the table reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row, and model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
 
-The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`; `--json` gives the machine shape and `--domain` filters by domain.
+The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
 ## Health and hygiene
 
