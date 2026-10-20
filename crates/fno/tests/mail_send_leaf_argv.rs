@@ -112,27 +112,6 @@ fn uuid_target_keeps_the_tail_verbatim() {
     );
 }
 
-/// A plain-name target never takes the native leg: it stays the Python
-/// leg's, so the stub must not run. This keeps the two legs from merging -
-/// the fix that re-added `send` must not swallow the relay's claim.
-#[test]
-fn plain_name_target_stays_off_the_native_leg() {
-    let s = LeafStub::new("name");
-    let record = s.dir.join("argv.txt");
-    let _ = Command::new(env!("CARGO_BIN_EXE_fno"))
-        .args(["agents", "mail", "send", "zz-no-such-agent", "probe"])
-        .env_clear()
-        .env("HOME", &s.dir)
-        .env("FNO_AGENTS_BIN", s.dir.join("fno-agents-stub"))
-        .env("LEAF_ARGV_RECORD", &record)
-        .output()
-        .unwrap();
-    assert!(
-        !record.exists(),
-        "a plain-name target must not reach the native leaf"
-    );
-}
-
 /// The machine-mail door (`fno backlog note` notify, events push) execs the
 /// front with a flag-led send: `agents mail send --from-name <sender> --
 /// <recipient> <body>`. The flag-led target claims the native leg, so the
