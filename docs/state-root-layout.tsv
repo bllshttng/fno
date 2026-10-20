@@ -165,6 +165,8 @@ graph.json.history	-	park	daemon
 .plan-sync-watermark	-	park	daemon
 id-tombstones.json.tmp	-	park	daemon
 convo-signals.jsonl	-	park	daemon
+events.jsonl.lock	-	park	daemon
+events.jsonl.shell-writers.d	-	park	daemon
 groom-*.md	-	park	daemon
 # The 2026-10-01 residue batch: an empty dir ensure-global-dir.sh created
 # until this table landed (hooks, signals), session scratch (tmp, jobs-tmp),

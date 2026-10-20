@@ -93,6 +93,103 @@ fn store_path_strips_generation_suffix() {
 }
 
 #[test]
+fn a_routed_read_imports_a_stray_and_never_reads_it_raw() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prior = std::env::var_os("FNO_AGENTS_HOME");
+    std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents"));
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let journal = root.join("events.jsonl");
+    let mut fields = serde_json::Map::new();
+    fields.insert("scope".to_string(), serde_json::Value::from("read-test"));
+    fields.insert("change".to_string(), serde_json::Value::from("committed"));
+    crate::events::EventEmitter::new(&journal, "daemon")
+        .emit_fields("lead_checkin", fields)
+        .unwrap();
+    std::fs::write(
+        &journal,
+        format!(
+            "{{\"ts\":\"{}\",\"type\":\"lead_checkin\",\"source\":\"loop\",\"data\":{{\"scope\":\"read-test\",\"change\":\"raw-stray\"}}}}\n",
+            fresh_ts()
+        ),
+    )
+    .unwrap();
+    let text = journal_text(&journal, &["lead_checkin"]);
+    assert!(
+        text.contains("committed"),
+        "the committed row serves the read: {text}"
+    );
+    // The stray imports on the read: its row is store-committed now, so the
+    // read serves it from the store, and a second read does not duplicate
+    // it. The raw file itself stays for the migrate pass to park.
+    assert!(
+        text.contains("raw-stray"),
+        "the stray's row imports and serves: {text}"
+    );
+    assert_eq!(
+        text.matches("raw-stray").count(),
+        1,
+        "the imported row dedupes: {text}"
+    );
+    let second = journal_text(&journal, &["lead_checkin"]);
+    assert_eq!(
+        second.matches("raw-stray").count(),
+        1,
+        "the second read serves the same committed row: {second}"
+    );
+    assert!(
+        journal.exists(),
+        "the stray stays at the root for the retire pass"
+    );
+    match prior {
+        Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+        None => std::env::remove_var("FNO_AGENTS_HOME"),
+    }
+}
+
+#[test]
+fn an_unchanged_stray_opens_no_store_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prior = std::env::var_os("FNO_AGENTS_HOME");
+    std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents"));
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let journal = root.join("events.jsonl");
+    std::fs::write(
+        &journal,
+        format!(
+            "{{\"ts\":\"{}\",\"type\":\"lead_checkin\",\"source\":\"loop\",\"data\":{{\"scope\":\"read-test\",\"change\":\"stray\"}}}}\n",
+            fresh_ts()
+        ),
+    )
+    .unwrap();
+    fn data_version(store: &Path) -> i64 {
+        let conn = open_read(store).unwrap();
+        conn.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    }
+    let text = journal_text(&journal, &["lead_checkin"]);
+    assert!(text.contains("stray"), "the first read imports: {text}");
+    let store = store_path(&journal);
+    let before = data_version(&store);
+    let text = journal_text(&journal, &["lead_checkin"]);
+    assert!(
+        text.contains("stray"),
+        "the second read still serves: {text}"
+    );
+    let after = data_version(&store);
+    assert_eq!(before, after, "an unchanged stray must not write the store");
+    match prior {
+        Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+        None => std::env::remove_var("FNO_AGENTS_HOME"),
+    }
+}
+
+#[test]
 fn append_envelope_refuses_empty_journal_without_creating_a_store() {
     let cwd = std::env::current_dir().unwrap();
     let had_dot_db = cwd.join(".db").exists();

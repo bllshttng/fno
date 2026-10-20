@@ -1922,6 +1922,14 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // in both the Python schema and this Rust registry is a COLLISION). finalize
     // emits run_summary via a custom envelope writer (not the registered
     // `.emit()` path), so the production-emit-kind guard does not require it.
+    // The routed-stem writer cutover: attention answers and their delivery
+    // ladders, the day-boundary question index, and the journal retire
+    // receipt all emit through the store now (attention_arm, attention_reply,
+    // day, state_layout_sqlite).
+    "attention_answer",
+    "attention_delivery",
+    "day_boundary",
+    "legacy_journal_retired",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

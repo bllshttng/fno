@@ -1871,7 +1871,7 @@ fn control_plane_tick(arm: &str, acted: u64, skip_reason: Option<&str>, detail: 
             let Some(dir) = crate::backlog::settings::state_dir() else {
                 return;
             };
-            dir.join("events.jsonl")
+            dir.join("events.jsonl") // events-discipline:allow: the tick emitter's anchor, the write in the window is the nudge stamp
         }
     };
     let emitter = crate::events::EventEmitter::new(path, "daemon");

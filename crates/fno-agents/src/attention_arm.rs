@@ -1552,31 +1552,30 @@ pub(crate) fn append_answer_row(
     } else {
         "needs_door"
     };
-    let row = json!({
-        "ts": answered_at,
-        "type": "attention_answer",
-        "source": "daemon",
-        "data": {
-            "item_id": item_id,
-            "sink": sink,
-            "option": option,
-            "words": words,
-            "done": done,
-            "answered_at": answered_at,
-            "authority": authority,
-            "attested_by": attested_by,
-            "mapped_by": mapped_by,
-            "superseded": already_won,
-            "delegate": matches!(answer, crate::attention_file::FileAnswer::Delegate),
-            "decision_id": null,
-        }
-    });
-    // The row is the durable half of the contract: an append that fails
-    // must fail the record so the settle state never marks it recorded.
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    crate::day::append_row(&path, &format!("{row}\n"))?;
+    let mut fields = serde_json::Map::new();
+    fields.insert("item_id".into(), serde_json::Value::from(item_id));
+    fields.insert("sink".into(), serde_json::Value::from(sink));
+    fields.insert("option".into(), serde_json::Value::from(option));
+    fields.insert("words".into(), serde_json::Value::from(words));
+    fields.insert("done".into(), serde_json::Value::from(done));
+    fields.insert("answered_at".into(), serde_json::Value::from(answered_at));
+    fields.insert("authority".into(), serde_json::Value::from(authority));
+    fields.insert("attested_by".into(), serde_json::Value::from(attested_by));
+    fields.insert("mapped_by".into(), serde_json::Value::from(mapped_by));
+    fields.insert("superseded".into(), serde_json::Value::from(already_won));
+    fields.insert(
+        "delegate".into(),
+        serde_json::Value::from(matches!(
+            answer,
+            crate::attention_file::FileAnswer::Delegate
+        )),
+    );
+    fields.insert("decision_id".into(), serde_json::Value::Null);
+    // The row is the durable half of the contract: a commit that fails must
+    // fail the record so the settle state never marks it recorded.
+    crate::events::EventEmitter::new(&path, "daemon")
+        .emit_fields("attention_answer", fields)
+        .map_err(|e| format!("answer row for {item_id}: {e}"))?;
     Ok((receipt, already_won))
 }
 
