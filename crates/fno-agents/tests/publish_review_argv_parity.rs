@@ -59,9 +59,8 @@ fn fixture(tag: &str) -> Fixture {
     fs::write(repo.join("file.txt"), "v1\n").unwrap();
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "c0"]);
-    let home = fs::create_dir_all(tmp.join("home"))
-        .then(|| tmp.join("home"))
-        .unwrap();
+    fs::create_dir_all(tmp.join("home")).unwrap();
+    let home = tmp.join("home");
     let gh_dir = write_fake_gh(&tmp);
     Fixture {
         root: tmp,
