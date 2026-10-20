@@ -391,7 +391,9 @@ fn graphql_field_sets_extend_the_metadata_set() {
 /// identical consumer path.
 #[test]
 fn graphql_fallback_retries_the_broker_field_set() {
-    let _env = crate::claims::test_env_lock();
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let answer = r#"{"state":"OPEN","number":42,"headRefName":"feature/pr-info-fallback","headRefOid":"abc123def","mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","baseRefName":"main","author":{"login":"jj"},"url":"https://github.test/o/r/pull/42"}"#;
     // A loaded runner intermittently fails one fork/exec; the stub answers
     // deterministically, so only a failed fork can red the happy path (the
@@ -448,7 +450,9 @@ fn graphql_fallback_retries_the_broker_field_set() {
 /// is what tells the operator a second transport ran.
 #[test]
 fn graphql_fallback_failure_returns_the_original_rest_refusal() {
-    let _env = crate::claims::test_env_lock();
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     for _ in 0..5 {
         let dir = tempfile::tempdir().unwrap();
         let (bin, _calls) = fallback_adapter(
@@ -486,7 +490,9 @@ fn graphql_fallback_failure_returns_the_original_rest_refusal() {
 /// refusal secondary and the fallback never fires: two spawns, no retry.
 #[test]
 fn secondary_refusal_never_earns_the_fallback() {
-    let _env = crate::claims::test_env_lock();
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     for _ in 0..5 {
         let dir = tempfile::tempdir().unwrap();
         let (bin, calls) = fallback_adapter(
