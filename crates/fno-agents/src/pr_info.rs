@@ -60,7 +60,15 @@ pub(crate) fn run_op(payload: &Value) -> Value {
             if reason.rate_limit_class == "core" {
                 match fallback_payload(cwd, None, Some(&slug)) {
                     Ok(Some(info)) => return info,
-                    Ok(None) | Err(cause) => {
+                    // The fallback answering "no such PR" is the real
+                    // answer: nothing rides on the drained REST read.
+                    Ok(None) => {
+                        return json!({
+                            "pr": null,
+                            "error": "no pull request exists for the current branch",
+                        });
+                    }
+                    Err(cause) => {
                         return json!({
                             "pr": null,
                             "error": append_fallback_cause(&reason.text, cause),
@@ -78,7 +86,15 @@ pub(crate) fn run_op(payload: &Value) -> Value {
             if reason.rate_limit_class == "core" {
                 match fallback_payload(cwd, Some(pr), Some(&slug)) {
                     Ok(Some(info)) => return info,
-                    Ok(None) | Err(cause) => {
+                    // The fallback answering "no such PR" is the real
+                    // answer about this number.
+                    Ok(None) => {
+                        return json!({
+                            "pr": pr,
+                            "error": "no pull request matches the selector",
+                        });
+                    }
+                    Err(cause) => {
                         return json!({
                             "pr": pr,
                             "error": append_fallback_cause(&reason.text, cause),
