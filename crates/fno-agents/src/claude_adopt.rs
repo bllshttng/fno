@@ -200,13 +200,13 @@ pub(crate) fn route_settings_files() -> Vec<(PathBuf, serde_json::Value)> {
             Ok(entries) => entries
                 .flatten()
                 .map(|e| e.path())
-                .filter(is_json_path)
+                .filter(|p| is_json_path(p))
                 .collect(),
             Err(_) => Vec::new(),
         },
         None => crate::state_layout::list_dir_children(&route_settings_root(), "route-settings")
             .into_iter()
-            .filter(is_json_path)
+            .filter(|p| is_json_path(p))
             .collect(),
     };
     let mut out: Vec<(PathBuf, serde_json::Value)> = Vec::new();

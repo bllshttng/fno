@@ -1489,7 +1489,6 @@ mod tests {
         std::fs::write(root.join("route-settings").join("cc44.json"), b"{}").unwrap();
         let receipt = migrate_rows(&root, &rows, true, "test");
         let entry = receipt
-            .entries
             .iter()
             .find(|e| e.legacy == "route-settings")
             .unwrap();
@@ -1505,7 +1504,6 @@ mod tests {
         std::fs::remove_file(root.join("route-settings").join("cc44.json")).unwrap();
         let receipt = migrate_rows(&root, &rows, true, "test");
         let entry = receipt
-            .entries
             .iter()
             .find(|e| e.legacy == "route-settings")
             .unwrap();
