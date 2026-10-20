@@ -65,6 +65,7 @@ fn usage_error(detail: &str) -> i32 {
 struct ReplyArgs {
     to: Option<String>,
     kind: String,
+    kind_seen: bool,
     body: Option<String>,
     body_file: Option<PathBuf>,
     positional: Option<String>,
@@ -81,6 +82,7 @@ fn parse_args(args: &[String]) -> Result<ReplyArgs, i32> {
     let mut out = ReplyArgs {
         to: None,
         kind: "fyi".to_string(),
+        kind_seen: false,
         body: None,
         body_file: None,
         positional: None,
@@ -102,7 +104,10 @@ fn parse_args(args: &[String]) -> Result<ReplyArgs, i32> {
         };
         match a.as_str() {
             "--to" => out.to = Some(flag_value("--to")?),
-            "--kind" => out.kind = flag_value("--kind")?,
+            "--kind" => {
+                out.kind = flag_value("--kind")?;
+                out.kind_seen = true;
+            }
             "--body" => out.body = Some(flag_value("--body")?),
             "--body-file" => out.body_file = Some(PathBuf::from(flag_value("--body-file")?)),
             "--ref-mission" => out.ref_mission = Some(flag_value("--ref-mission")?),
@@ -225,7 +230,9 @@ pub fn run(args: &[String]) -> i32 {
             extra.push(name.to_string());
         }
     }
-    let kind_given = parsed.kind != "fyi";
+    // The RemoteMail tail parser counted ANY --kind spelling, so the default
+    // value rides the cross-host drop-note exactly as it did there.
+    let kind_given = parsed.kind_seen;
     if let Some(code) =
         crate::mail_remote::reply_cross_host(&to_msg, &body_text, kind_given, &extra)
     {

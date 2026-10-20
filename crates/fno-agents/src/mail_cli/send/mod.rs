@@ -1329,7 +1329,11 @@ pub(crate) fn write_durable_thread(
         None
     };
     let mut meta = serde_json::Map::new();
-    meta.insert("owner".to_string(), json!(owner));
+    // Python omitted the owner key when its caller passed None; the reply
+    // leaf's orphan self-note passes empty for the same shape.
+    if !owner.is_empty() {
+        meta.insert("owner".to_string(), json!(owner));
+    }
     if let Some(ttl) = &ttl_at {
         meta.insert("ttl_at".to_string(), json!(ttl));
     }
