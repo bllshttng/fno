@@ -65,6 +65,11 @@ if grep -q -- '--packet-source weekly-cron' "$PLIST_TEMPLATE"; then
 else
     fail "packet source is not weekly-cron"
 fi
+if grep -q -- '--severity S1,S2 --dry-run' "$PLIST_TEMPLATE"; then
+    pass "pack runs dry-run so only the review advances the watermark"
+else
+    fail "pack does not run dry-run; a refused review loses its window"
+fi
 
 # ---- T02: Linux dry-run prints the weekly block, writes nothing ----
 echo "T02: Linux dry-run schedule"
@@ -84,6 +89,16 @@ else
         pass "cron line merges both streams into the review log"
     else
         fail "cron line does not merge into autocorrect-review.log"
+    fi
+    if grep -F -- '--severity S1,S2 --dry-run' "$DRY_OUT" > /dev/null; then
+        pass "cron line runs pack dry-run so the review owns the watermark"
+    else
+        fail "cron line advances the watermark at pack time"
+    fi
+    if grep -F '; } >>' "$DRY_OUT" > /dev/null; then
+        pass "pipeline is brace-grouped so pack stderr reaches the log"
+    else
+        fail "pipeline redirect binds to the review script only"
     fi
     if grep -q 'monthly' "$DRY_OUT"; then
         fail "dry-run block still names monthly"

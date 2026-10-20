@@ -106,6 +106,9 @@ emit_run_event() {
     outcome="refused"
   fi
   command -v jq >/dev/null 2>&1 || return 0
+  # Pass every field through plainly and strip the absent ones afterwards:
+  # a `select` in object-value position yields an EMPTY stream, which
+  # collapses the whole object construction to no output at all.
   data=$(jq -cn \
     --arg outcome "$outcome" \
     --argjson exit_code "$rc" \
@@ -118,11 +121,12 @@ emit_run_event() {
       outcome: $outcome,
       exit_code: $exit_code,
       packet_source: $packet_source,
-      input_count: ($input_count | select(type == "number")),
-      patch_count: ($patch_count | select(type == "number")),
-      output_path: ($output_path | select(length > 0)),
-      reason: ($reason | select(length > 0))
-    } | with_entries(select(.value != null))') || return 0
+      input_count: $input_count,
+      patch_count: $patch_count,
+      output_path: $output_path,
+      reason: $reason
+    }
+    | with_entries(select(.value != null and .value != ""))') || return 0
   (cd "$REPO_ROOT" && run_fno doctor event emit -t autocorrect_review_run -s bash -d "$data") >/dev/null 2>&1 || true
 }
 
@@ -135,17 +139,23 @@ notify_operator() {
   local rc="$1"
   if [[ "$rc" == "0" ]]; then
     [[ -n "${PATCH_COUNT:-}" && "$PATCH_COUNT" -gt 0 ]] || return 0
-    run_fno inbox notify "autocorrect review" \
-      "$PATCH_COUNT patches proposed: $OUTPUT_PATH" \
-      --pointer "$OUTPUT_PATH" >/dev/null 2>&1 || true
+    # --pointer rides BEFORE the positionals: the notify group callback
+    # refuses an option after them (docs/status-fanout.md).
+    run_fno inbox notify --pointer "$OUTPUT_PATH" \
+      "autocorrect review" \
+      "$PATCH_COUNT patches proposed: $OUTPUT_PATH" >/dev/null 2>&1 || true
     return 0
   fi
   if [[ "$rc" != "2" ]]; then
     return 0
   fi
   local reason="${REASON:-validation refusal (see stderr)}"
+  # --node is a stable synthetic dedup key, not a backlog id: the intake
+  # dedups only when BOTH --subject and --node are set, and without it the
+  # S0 watcher's 15-minute retry would file one pin per tick.
   run_fno inbox outstanding ask "$reason" \
     --subject "autocorrect review" \
+    --node autocorrect-review \
     --ask "clear once the launchd key or the packet problem is fixed" >/dev/null 2>&1 || true
 }
 
@@ -383,6 +393,15 @@ chmod 600 "$OUTPUT_PATH" 2>/dev/null || true
 
 # Count patches: simple heuristic - look for "N. Source:" headings.
 PATCH_COUNT=$(grep -cE '^[0-9]+\. Source:' "$PATCH_TEXT" || true)
+
+# The review owns the watermark: every scheduled pipeline runs the packer
+# with --dry-run, so a refused run leaves the window intact and only a
+# successful review marks it covered. The packet carries the window end.
+WATERMARK_END="$(sed -n 's/^  last_review: //p' "$PACKET_TMP" | head -1)"
+if [[ -n "$WATERMARK_END" ]]; then
+  printf '%s\n' "$WATERMARK_END" > "${CLAUDE_DIR}/.corrections-watermark" 2>/dev/null || true
+  chmod 600 "${CLAUDE_DIR}/.corrections-watermark" 2>/dev/null || true
+fi
 
 echo "autocorrect-review: $PATCH_COUNT patches proposed; saved to $OUTPUT_PATH" >&2
 echo "autocorrect-review: usage: ${INPUT_TOKENS} in / ${OUTPUT_TOKENS} out tokens" >&2

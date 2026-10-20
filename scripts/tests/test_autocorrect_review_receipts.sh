@@ -5,8 +5,9 @@
 # writes both lines naming the failure; a --help exit writes no receipts at
 # all, because an argument error is not a run.
 #
-# FNO_BIN=/bin/false pins the visibility legs to a stub, so the test never
-# files a real attention item or emits a real event.
+# FNO_BIN points at a stub that logs its argv, so the test also asserts the
+# event payload the run emits: valid JSON carrying the outcome, never the
+# empty -d "" an absent optional field once produced.
 
 # No pipefail: the assertions grep text through a pipe, and a grep -q early
 # exit can SIGPIPE the printf producer under load; pipefail would flip that
@@ -37,12 +38,24 @@ trap 'rm -rf "$TMP"' EXIT
 FIXTURE="$TMP/packet.yaml"
 printf 'review_id: receipts-test\nwindow: test\nentries: []\nimplicated_rules: []\n' > "$FIXTURE"
 
-# ---- T01: no key -> exit 2, start + end receipts naming the refusal ----
-echo "T01: key-less run leaves a refusal receipt pair"
+# A stub runner that logs its argv: stands in for the fno binary so the
+# test sees the exact emit call without touching a real journal.
+STUB="$TMP/fno-stub.sh"
+cat > "$STUB" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FNO_STUB_LOG"
+STUB
+chmod +x "$STUB"
+
+STUB_LOG="$TMP/fno-calls.log"
+
+# ---- T01: no key -> exit 2, receipts naming the refusal, event payload ----
+echo "T01: key-less run leaves a refusal receipt pair and a real event"
 LOG1="$TMP/logs1"
 OUT="$TMP/out1"
 ERR="$TMP/err1"
-env -u ANTHROPIC_API_KEY FNO_BIN=/bin/false AUTOCORRECT_LOG_DIR="$LOG1" \
+: > "$STUB_LOG"
+env -u ANTHROPIC_API_KEY FNO_BIN="$STUB" FNO_STUB_LOG="$STUB_LOG" AUTOCORRECT_LOG_DIR="$LOG1" \
     bash "$REVIEW" --packet-file "$FIXTURE" > "$OUT" 2> "$ERR"
 RC=$?
 if [[ $RC -eq 2 ]]; then
@@ -71,15 +84,43 @@ if [[ ! -s "$OUT" ]]; then
 else
     fail "stdout carried bytes; the refusal must live in the receipts"
 fi
+if grep -q 'doctor event emit -t autocorrect_review_run -s bash -d ' "$STUB_LOG"; then
+    pass "event emit ran through the stub"
+else
+    fail "no event emit call logged"
+fi
+PAYLOAD_LINE="$TMP/payload-line.txt"
+grep -o '\-d {.*}' "$STUB_LOG" > "$PAYLOAD_LINE" || true
+PYCHECK_RC=0
+python3 - "$PAYLOAD_LINE" <<'PYCHECK' || PYCHECK_RC=1
+import json
+import sys
+
+line = open(sys.argv[1]).read().strip()
+prefix = "-d "
+assert line.startswith(prefix + "{"), f"no -d payload logged: {line!r}"
+data = json.loads(line[len(prefix):])
+assert data.get("outcome") == "refused", data
+assert data.get("exit_code") == 2, data
+assert data.get("packet_source") == "manual", data
+assert data.get("reason") == "ANTHROPIC_API_KEY env var is required", data
+assert "patch_count" not in data and "output_path" not in data, data
+PYCHECK
+if [[ $PYCHECK_RC -eq 0 ]]; then
+    pass "event payload carries the refusal fields, no empties"
+else
+    fail "event payload is not the refused run's JSON"
+fi
 
 # ---- T02: dead local endpoint -> exit 1, receipts name the failure ----
 echo "T02: API failure run leaves a failure receipt pair"
 LOG2="$TMP/logs2"
 OUT2="$TMP/out2"
 ERR2="$TMP/err2"
+: > "$STUB_LOG"
 env ANTHROPIC_API_KEY=receipts-test-fake-key \
     ANTHROPIC_API_URL=http://127.0.0.1:9 \
-    FNO_BIN=/bin/false \
+    FNO_BIN="$STUB" FNO_STUB_LOG="$STUB_LOG" \
     AUTOCORRECT_LOG_DIR="$LOG2" \
     bash "$REVIEW" --packet-file "$FIXTURE" --packet-source receipts-test > "$OUT2" 2> "$ERR2"
 RC2=$?
@@ -98,6 +139,26 @@ if grep -q 'run end exit=1 outcome=failed reason=API call failed with HTTP' "$LO
     pass "end receipt names the API failure"
 else
     fail "end receipt missing or does not name the API failure"
+fi
+grep -o '\-d {.*}' "$STUB_LOG" > "$PAYLOAD_LINE" || true
+PYCHECK_RC=0
+python3 - "$PAYLOAD_LINE" <<'PYCHECK' || PYCHECK_RC=1
+import json
+import sys
+
+line = open(sys.argv[1]).read().strip()
+prefix = "-d "
+assert line.startswith(prefix + "{"), f"no -d payload logged: {line!r}"
+data = json.loads(line[len(prefix):])
+assert data.get("outcome") == "failed", data
+assert data.get("exit_code") == 1, data
+assert data.get("packet_source") == "receipts-test", data
+assert str(data.get("reason", "")).startswith("API call failed with HTTP"), data
+PYCHECK
+if [[ $PYCHECK_RC -eq 0 ]]; then
+    pass "failure event payload carries the failure fields"
+else
+    fail "failure event payload is not the failed run's JSON"
 fi
 
 # ---- T03: --help writes no receipts ----

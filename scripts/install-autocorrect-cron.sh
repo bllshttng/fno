@@ -165,7 +165,10 @@ _strip_managed_block() {
 install_linux() {
   mkdir -p "$LOG_DIR"
   migrate_old_log
-  local weekly_entry="0 9 * * 1 $PACK_SCRIPT --severity S1,S2 | $REVIEW_SCRIPT --severity S1,S2 --packet-source weekly-cron >> $LOG_DIR/autocorrect-review.log 2>&1"
+  # The braces group the whole pipeline so the redirect merges BOTH scripts'
+  # stderr into the log; `a | b >> f 2>&1` binds to b only, and a pack
+  # failure would vanish into cron mail.
+  local weekly_entry="0 9 * * 1 { $PACK_SCRIPT --severity S1,S2 --dry-run | $REVIEW_SCRIPT --severity S1,S2 --packet-source weekly-cron; } >> $LOG_DIR/autocorrect-review.log 2>&1"
   local watcher_entry="*/15 * * * * $WATCHER_SCRIPT >> $LOG_DIR/autocorrect-watcher.log 2>&1"
 
   if [[ "$DRY_RUN" == "1" ]]; then
