@@ -25,7 +25,7 @@ A harness with no subagent dispatch at all takes the same exit: the fresh attemp
 The brief is what the reviewer sees. It carries exactly four things and nothing else:
 
 1. The lane: load `skills/review/references/single-lane.md` and execute it in full, in your own context, at the resolved level, with `--fix` off.
-2. The diff inputs: `BASE` and `REVIEW_TARGET` exactly as the router's Step 1 and the empty-diff guard resolved them (Phase 0 in the lane re-derives the diff from these).
+2. The diff inputs: `BASE` and `REVIEW_TARGET` as Step 1 and the empty-diff guard resolved them. Phase 0 in the lane re-derives the diff from these.
 3. The acceptance criteria: the plan's acceptance-criteria block, pasted verbatim. With no plan bound, paste the node's details. Criteria say DONE, not HOW.
 4. The output contract below, and the review-only constraint: change nothing, commit nothing, post nothing. The reviewer's only artifacts are the report and the findings array.
 
