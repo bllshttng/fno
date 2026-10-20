@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -77,7 +77,18 @@ pub enum ViewKind {
     OrgTable,
     /// The org board in Graph mode: the node-link canvas.
     OrgGraph,
+    /// The Messages board with focus on column 1, 2 or 3.
+    MessagesTree,
+    MessagesChats,
+    MessagesThread,
+    /// The Messages board with column 2's System or Archive tab active.
+    MessagesSystem,
+    MessagesArchive,
 }
+
+/// The seeded demo mail id a Messages view opens on when no --message
+/// names one (scripts/ops/mux-demo-snapshot.sh writes it).
+const DEMO_MESSAGE_ID: &str = "fmail-demo-2";
 
 fn parse_view(v: &str) -> Option<ViewKind> {
     match v {
@@ -96,6 +107,11 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "org-tree" => Some(ViewKind::OrgTree),
         "org-table" => Some(ViewKind::OrgTable),
         "org-graph" => Some(ViewKind::OrgGraph),
+        "messages-tree" => Some(ViewKind::MessagesTree),
+        "messages-chats" => Some(ViewKind::MessagesChats),
+        "messages-thread" => Some(ViewKind::MessagesThread),
+        "messages-system" => Some(ViewKind::MessagesSystem),
+        "messages-archive" => Some(ViewKind::MessagesArchive),
         _ => None,
     }
 }
@@ -168,7 +184,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system or messages-archive")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -467,6 +483,17 @@ fn live_frame(
     // snapshot has no event loop, so the tab would paint empty. --message
     // opens the board on that fmail id and runs one gather synchronously;
     // the paint gate's shots come from here (law d-9f18c4d5).
+    use crate::client::messages_view::{ChatTab, Col};
+    // A Messages view: the column that holds focus and column 2's tab.
+    let messages_shot = match kind {
+        Some(ViewKind::MessagesTree) => Some((Col::Tree, ChatTab::Chats)),
+        Some(ViewKind::MessagesChats) => Some((Col::Chats, ChatTab::Chats)),
+        Some(ViewKind::MessagesThread) => Some((Col::Thread, ChatTab::Chats)),
+        Some(ViewKind::MessagesSystem) => Some((Col::Chats, ChatTab::System)),
+        Some(ViewKind::MessagesArchive) => Some((Col::Chats, ChatTab::Archive)),
+        _ => None,
+    };
+    let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
     if let Some(id) = message {
         crate::client::messages_view::open_message(&mut view, id.to_string());
         let gen = view
@@ -491,6 +518,10 @@ fn live_frame(
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
                     .into(),
             );
+        }
+        if let (Some((col, tab)), Some(b)) = (messages_shot, view.messages_board.as_mut()) {
+            b.col = col;
+            b.col2 = tab;
         }
     }
     // The messages seam above is the shape: flip the client state the live
@@ -792,6 +823,11 @@ mod tests {
             ("org-tree", ViewKind::OrgTree),
             ("org-table", ViewKind::OrgTable),
             ("org-graph", ViewKind::OrgGraph),
+            ("messages-tree", ViewKind::MessagesTree),
+            ("messages-chats", ViewKind::MessagesChats),
+            ("messages-thread", ViewKind::MessagesThread),
+            ("messages-system", ViewKind::MessagesSystem),
+            ("messages-archive", ViewKind::MessagesArchive),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
@@ -799,7 +835,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system or messages-archive"
             ),
             "{e}"
         );
