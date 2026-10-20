@@ -1695,7 +1695,7 @@ def make_agents_group_cls() -> type:
                     or _is_role_bearing_spawn(verb, args)
                     or _is_promotion_bearing_spawn(verb, args)
                     or _is_monitor_bearing_spawn(verb, args)
-                    or _is_route_bearing_spawn(verb, args)
+                    or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_pane_substrate_spawn(verb, args)
                     or _is_keeper_thread_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)

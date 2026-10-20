@@ -2278,6 +2278,38 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         return Some(code);
     }
 
+    // The route arm: resolved before the gate, so a refusal takes no slot.
+    let public_substrate = if substrate == "bg" {
+        "thread"
+    } else {
+        substrate
+    };
+    let route = match fno_agents::spawn_route::route_seam(
+        params.get("route").and_then(Value::as_str),
+        params.get("account").and_then(Value::as_str),
+        provider,
+        public_substrate,
+        &cwd,
+        &|k| std::env::var(k).ok(),
+    ) {
+        fno_agents::spawn_route::RouteSeam::None => None,
+        fno_agents::spawn_route::RouteSeam::Python(why) => {
+            return Some(bounce_to_python(
+                args,
+                why,
+                "Run `fno agents spawn ...` directly.",
+            ));
+        }
+        fno_agents::spawn_route::RouteSeam::Refuse(line) => {
+            eprintln!("{line}");
+            return Some(2);
+        }
+        fno_agents::spawn_route::RouteSeam::Routed(route) => {
+            std::env::set_var(fno_agents::spawn_route::ROUTE_PROVIDER_ENV, &route.provider);
+            Some(route)
+        }
+    };
+
     // R3, the state-root grant gate. Placed HERE because every non-pane spawn
     // passes through this function exactly once, including the codex thread
     // spawn that returns None below and completes over the daemon RPC - one
@@ -2380,7 +2412,16 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         allowed_tools: None,
         disallowed_tools: None,
         passthrough: &harness_args,
+        route: route.as_ref().map(|r| fno_agents::claude_ask::RouteStamp {
+            provider: &r.provider,
+            model: &r.model,
+            settings: &r.settings,
+        }),
     };
+    let route_env: Vec<(&str, &str)> = route
+        .iter()
+        .flat_map(|r| r.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .collect();
 
     // Spawn gate: cap + RAM floor for the CLIENT-SIDE substrates only.
     // `pane` re-execs into the Python CLI whose mirrored gate is the sole gate
@@ -2468,8 +2509,8 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
                 }
             };
             // The refusal carrier rides the inherited env (see the note
-            // above), so extra_env stays empty: a worker that drops the flag
-            // post-compaction still folds the refusal at init.
+            // above), so extra_env carries only a route's env: a worker that
+            // drops the flag post-compaction still folds the refusal at init.
             let mut outcome = dispatch_claude_spawn(
                 home,
                 &claude_home,
@@ -2479,10 +2520,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
                 &cwd,
                 false,
                 timeout,
-                &[],
+                &route_env,
                 None,
                 None,
-                None,
+                route.as_ref().and_then(|r| r.effort.as_deref()),
                 claude_flags,
                 surface_cwd,
             );
@@ -3972,6 +4013,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         }
         if let Some(a) = &axes.account {
             params.insert("account".into(), Value::String(a.clone()));
+        }
+        if let Some(r) = &axes.route {
+            params.insert("route".into(), Value::String(r.clone()));
         }
         if let Some(s) = &axes.substrate {
             params.insert("substrate".into(), Value::String(s.clone()));

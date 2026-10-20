@@ -233,7 +233,13 @@ impl SpawnAxes {
                     pairs.push("cloud".to_string());
                     i += if tok.contains('=') { 1 } else { 2 };
                 } else {
-                    return Err(Self::refused_axis(long));
+                    // A short names its long, as the Python stubs print it.
+                    let named = match long {
+                        "-P" => "--provider",
+                        "-m" => "--model",
+                        other => other,
+                    };
+                    return Err(Self::refused_axis(named));
                 }
             } else {
                 i += 1;
@@ -475,8 +481,15 @@ mod tests {
         ] {
             let toks: Vec<String> = [flag, "x"].iter().map(|s| s.to_string()).collect();
             let err = SpawnAxes::scan(&toks).expect_err("retired axis refuses");
-            assert!(err.starts_with("refused: "), "{err}");
-            assert!(err.contains("is retired"), "{err}");
+            let long = match flag {
+                "-P" => "--provider",
+                "-m" => "--model",
+                f => f,
+            };
+            assert!(
+                err.starts_with(&format!("refused: {long} is retired")),
+                "{err}"
+            );
             assert!(err.contains("HARNESSES.md"), "{err}");
         }
     }
