@@ -6,7 +6,7 @@ The default lane, run ONCE in a context that is not the builder's. One reviewer 
 
 Why a fresh context: the building session grading its own diff shares every blind spot with the build. docs/architecture/review-lanes.md records the forked native review catching a silent data-loss bug that two in-session passes missed. `--fresh` is that lesson as an explicit flag: the operator names the level of independence they want.
 
-Inputs from the router: a level, optional `--comment` and `--fix`, and an optional target. `--fresh` composes with both flags; both stay BUILDER-side. The reviewer never fixes, never posts: `--fix` applies findings after the fresh round lands, and `--comment` posts through the existing hold-and-publish path.
+Inputs from the router: a level, optional `--comment` and `--fix`, and an optional target. `--fresh` composes with both flags. Both stay BUILDER-side. The reviewer never fixes, never posts: `--fix` applies findings after the fresh round lands, and `--comment` posts through the existing hold-and-publish path.
 
 ## Phase F1 - the width gate
 

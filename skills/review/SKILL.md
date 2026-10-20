@@ -259,4 +259,4 @@ A probe is an *observation* - one that mutates the repo races the session's own 
 
 ## Multi-CLI
 
-Claude-Code primary. All modes need `fno` and `gh`/`git`; peer mode additionally needs the `fno agents` daemon for the `codex`/`gemini` one-shot lane, research mode needs the Task/Agent tool to dispatch its roster, and `--fresh` needs one subagent dispatch ([fresh.md](references/fresh.md) records the not-reviewed fallback). If a dependency is missing, the mode fails loud and reports it - it never fakes a review.
+Claude-Code primary. All modes need `fno` and `gh`/`git`. Peer mode additionally needs the `fno agents` daemon for the `codex`/`gemini` one-shot lane, research mode needs the Task/Agent tool to dispatch its roster, and `--fresh` needs one subagent dispatch ([fresh.md](references/fresh.md) records the not-reviewed fallback). If a dependency is missing, the mode fails loud and reports it - it never fakes a review.
