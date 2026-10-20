@@ -396,6 +396,7 @@ crates/fno-agents/src/worktree_reapable.rs
 crates/fno-agents/src/bin/client.rs
 crates/fno-agents/tests/claude_ask_dispatch.rs
 crates/fno-agents/tests/claude_ask_parity.rs
+crates/fno-agents/src/mail_cli/reply.rs
 crates/fno/src/agents_view.rs
 crates/fno/src/connections_view.rs
 crates/fno/src/transcript_tail.rs
