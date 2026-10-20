@@ -1542,7 +1542,7 @@ async fn run(args: Vec<String>) -> i32 {
                 Some(_) => {}
             }
             return bounce_to_python(
-                args,
+                &args,
                 "substrate 'pane' is mux-hosted via the Python CLI",
                 "Install the fno front door or run `fno agents spawn ...` directly.",
             );
