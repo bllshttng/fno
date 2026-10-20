@@ -1,10 +1,11 @@
 //! The `status-pr-info` op: the Python `fno do pr info` read, ported beside
 //! its REST twins. The verb's read is one REST pulls fetch; a refusal
 //! classified CORE (the budget drained, not the request rate) hands the same
-//! selector to `read_pr_view`, whose brokered GraphQL fallback is the stop
-//! gate's own machinery, and the reply maps onto the REST payload keys so
-//! every consumer reads one shape whichever transport served it. cli/src/fno
-//! gains no line: the Python verb is a forward to this op.
+//! selector to `read_pr_view_fields`, whose brokered GraphQL fallback is the
+//! stop gate's own machinery, and the reply maps onto the REST payload keys
+//! so every consumer reads one shape whichever transport served it. The
+//! Python verb is a bare forward to this op: three net lines in cli/src/fno
+//! carrying the ask, the exit codes, and no transport decision.
 
 use crate::pr_status::{map_mergeable, map_pr_state, rest_reason, RestReason};
 use crate::pr_status_facts::{GhProbe, RealGhProbe};
@@ -14,8 +15,9 @@ use std::process::Command;
 use std::time::Duration;
 
 /// Per-spawn bound for the fallback read, the stop gate's own read bound.
-/// `read_pr_view` can spend up to three (primary read, quota probe, fallback
-/// retry), so the verb forward's timeout must cover the sum, not one spawn.
+/// `read_pr_view_fields` can spend up to three spawns (primary read, quota
+/// probe, fallback retry), so the verb forward's timeout must cover the
+/// sum, not one spawn.
 const FALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The `status-pr-info` op receipt. `error` present means the read refused:
@@ -28,7 +30,20 @@ pub(crate) fn run_op(payload: &Value) -> Value {
     let pr_arg = payload.get("pr").and_then(Value::as_u64);
     let repo = payload.get("repo").and_then(Value::as_str);
 
-    let pr = match resolve_pr(pr_arg, cwd, repo) {
+    if pr_arg == Some(0) {
+        return json!({"pr": null, "error": "PR number must be positive"});
+    }
+    // One slug for every leg: the REST reads name it in their api paths and
+    // the fallback pins it with --repo, so a fork checkout (an upstream
+    // remote gh would rather pick) reads the same repository end to end.
+    let slug = match resolve_slug(cwd, repo) {
+        Ok(slug) => slug,
+        Err(reason) => {
+            return json!({"pr": pr_arg, "error": reason.text});
+        }
+    };
+
+    let pr = match resolve_pr(pr_arg, cwd, &slug) {
         Ok(Some(pr)) => pr,
         Ok(None) => {
             return json!({
@@ -40,22 +55,35 @@ pub(crate) fn run_op(payload: &Value) -> Value {
             // The resolve read hit the drained CORE budget: the branch
             // resolution itself moves to the GraphQL transport (the adapter
             // resolves the current branch when no selector is passed), and a
-            // fallback that answers nothing hands back the REST refusal.
-            if reason.rate_limit_class == "core" && fallback_serves_repo(cwd, repo) {
-                if let Some(info) = fallback_payload(cwd, None) {
-                    return info;
+            // fallback that answers nothing hands back the REST refusal with
+            // the fallback's cause appended.
+            if reason.rate_limit_class == "core" {
+                match fallback_payload(cwd, None, Some(&slug)) {
+                    Ok(Some(info)) => return info,
+                    Ok(None) | Err(cause) => {
+                        return json!({
+                            "pr": null,
+                            "error": append_fallback_cause(&reason.text, cause),
+                        });
+                    }
                 }
             }
             return json!({"pr": null, "error": reason.text});
         }
     };
 
-    match fetch_rest(pr, cwd, repo) {
+    match fetch_rest(pr, cwd, &slug) {
         Ok(info) => info,
         Err(reason) => {
-            if reason.rate_limit_class == "core" && fallback_serves_repo(cwd, repo) {
-                if let Some(info) = fallback_payload(cwd, Some(pr)) {
-                    return info;
+            if reason.rate_limit_class == "core" {
+                match fallback_payload(cwd, Some(pr), Some(&slug)) {
+                    Ok(Some(info)) => return info,
+                    Ok(None) | Err(cause) => {
+                        return json!({
+                            "pr": pr,
+                            "error": append_fallback_cause(&reason.text, cause),
+                        });
+                    }
                 }
             }
             json!({"pr": pr, "error": reason.text})
@@ -63,29 +91,23 @@ pub(crate) fn run_op(payload: &Value) -> Value {
     }
 }
 
-/// Whether the fallback read may serve this ask: the fallback resolves its
-/// repository from cwd, so an explicit `--repo` naming a different
-/// repository must not fall back - the GraphQL answer would be a different
-/// repo's pull request at the same number. Outside any repository the
-/// fallback read itself cannot resolve a repo, so it is skipped too.
-fn fallback_serves_repo(cwd: &Path, repo: Option<&str>) -> bool {
-    match repo {
-        None => true,
-        Some(wanted) => match crate::backlog::pr_link::resolve_current_repo_slug(cwd.to_str()) {
-            Some(slug) => slug == wanted,
-            None => false,
-        },
+/// The verb receipt's error text when the fallback also failed: the ORIGINAL
+/// REST refusal first (its rate-limit wording is what downstream
+/// classifiers read; the broker's own prose carries neither the marker nor a
+/// park trigger), the fallback's cause appended so the operator sees that a
+/// second transport ran and why it answered nothing.
+fn append_fallback_cause(rest_reason_text: &str, cause: Option<String>) -> String {
+    match cause {
+        Some(cause) => format!("{rest_reason_text} | graphql fallback: {cause}"),
+        None => rest_reason_text.to_string(),
     }
 }
 
 /// The numeric selector, else the current branch's PR over the REST
 /// pulls-list read the Python resolver used. `Ok(None)` is the real-world
 /// no-PR state; every refusal is classified, never swallowed.
-fn resolve_pr(pr: Option<u64>, cwd: &Path, repo: Option<&str>) -> Result<Option<u64>, RestReason> {
+fn resolve_pr(pr: Option<u64>, cwd: &Path, slug: &str) -> Result<Option<u64>, RestReason> {
     if let Some(pr) = pr {
-        if pr == 0 {
-            return Err(RestReason::new("PR number must be positive", ""));
-        }
         return Ok(Some(pr));
     }
     let branch = Command::new("git")
@@ -103,16 +125,17 @@ fn resolve_pr(pr: Option<u64>, cwd: &Path, repo: Option<&str>) -> Result<Option<
             "",
         ));
     }
-    let slug = resolve_slug(cwd, repo)?;
     let owner = slug.split('/').next().unwrap_or_default().to_string();
     let probe = RealGhProbe;
-    let (ok, stdout, stderr) = probe.run_gh(
-        cwd,
-        &[
-            "api".to_string(),
-            format!("repos/{slug}/pulls?state=all&head={owner}:{branch}&per_page=2"),
-        ],
-    )?;
+    let (ok, stdout, stderr) = probe
+        .run_gh(
+            cwd,
+            &[
+                "api".to_string(),
+                format!("repos/{slug}/pulls?state=all&head={owner}:{branch}&per_page=2"),
+            ],
+        )
+        .map_err(|e| RestReason::new(format!("gh spawn failed: {e}"), ""))?;
     if !ok {
         return Err(rest_reason(&probe, cwd, &stderr));
     }
@@ -133,13 +156,14 @@ fn resolve_pr(pr: Option<u64>, cwd: &Path, repo: Option<&str>) -> Result<Option<
 /// One REST pulls read mapped onto the verb payload's keys, the byte shape
 /// `fetch_pr_info_rest` returned. Every refusal is classified
 /// (`rest_reason`), so the caller knows CORE from everything else.
-fn fetch_rest(pr: u64, cwd: &Path, repo: Option<&str>) -> Result<Value, RestReason> {
-    let slug = resolve_slug(cwd, repo)?;
+fn fetch_rest(pr: u64, cwd: &Path, slug: &str) -> Result<Value, RestReason> {
     let probe = RealGhProbe;
-    let (ok, stdout, stderr) = probe.run_gh(
-        cwd,
-        &["api".to_string(), format!("repos/{slug}/pulls/{pr}")],
-    )?;
+    let (ok, stdout, stderr) = probe
+        .run_gh(
+            cwd,
+            &["api".to_string(), format!("repos/{slug}/pulls/{pr}")],
+        )
+        .map_err(|e| RestReason::new(format!("gh spawn failed: {e}"), ""))?;
     if !ok {
         return Err(rest_reason(&probe, cwd, &stderr));
     }
@@ -159,24 +183,42 @@ fn resolve_slug(cwd: &Path, repo: Option<&str>) -> Result<String, RestReason> {
         .ok_or_else(|| RestReason::new("could not resolve owner/repo from the origin remote", ""))
 }
 
-/// The fallback: the same selector through `read_pr_view`, whose brokered
-/// GraphQL fallback this op borrows wholesale - the earned checks, the quota
-/// probe, and the bounded spawns are the stop gate's, not a second impl.
-/// The primary read inside it re-attempts the REST fetch that just refused;
-/// that costs one refused request and buys one owner for the whole
-/// transport decision. The binary resolves as the stop gate's does, so a
-/// test injects a fake the same way. None when the fallback answers
-/// nothing: the caller keeps the ORIGINAL REST refusal, whose rate-limit
-/// wording is what downstream classifiers read (the broker's own refusal
-/// prose carries neither the marker nor a park trigger).
-fn fallback_payload(cwd: &Path, pr: Option<u64>) -> Option<Value> {
+/// The fallback: the same selector through `read_pr_view_fields`, whose
+/// brokered GraphQL fallback this op borrows wholesale - the earned checks,
+/// the quota probe, and the bounded spawns are the stop gate's, not a second
+/// impl. The field set is the op's own (the info payload maps four fields
+/// the gate's set never asks for), and the slug the REST legs read pins the
+/// repository with --repo, so gh's own remote priority cannot pick a
+/// different one. The primary read inside it re-attempts the REST fetch that
+/// just refused; that costs one refused request and buys one owner for the
+/// whole transport decision. The binary resolves as the stop gate's does, so
+/// a test injects a fake the same way. `Err(cause)` when the fallback
+/// answered nothing and the caller appends the cause to the REST refusal it
+/// keeps; `Ok(None)` when the fallback answered "no such PR", which is a
+/// real answer, not a failure.
+fn fallback_payload(
+    cwd: &Path,
+    pr: Option<u64>,
+    repo: Option<&str>,
+) -> Result<Option<Value>, Option<String>> {
     let gh_bin =
         std::env::var("FNO_LOOPCHECK_GH_BIN").unwrap_or_else(|_| "fno-gh-loopcheck".into());
     let selector = pr.map(|n| n.to_string());
-    let gh =
-        crate::loopcheck::read_pr_view(&gh_bin, cwd, selector.as_deref(), FALLBACK_READ_TIMEOUT)
-            .ok()??;
-    graphql_payload(&gh)
+    match crate::loopcheck::read_pr_view_fields(
+        &gh_bin,
+        cwd,
+        selector.as_deref(),
+        crate::loopcheck::PR_INFO_FALLBACK_FIELDS,
+        repo,
+        FALLBACK_READ_TIMEOUT,
+    ) {
+        Ok(Some(gh)) => match graphql_payload(&gh) {
+            Some(info) => Ok(Some(info)),
+            None => Err(Some("the reply carried a malformed body".to_string())),
+        },
+        Ok(None) => Ok(None),
+        Err(err) => Err(Some(err.cause_line())),
+    }
 }
 
 /// The REST pulls body mapped onto the verb payload's keys, the twin of
@@ -213,8 +255,10 @@ fn rest_payload(pr: u64, pulls: &Value) -> Option<Value> {
 /// gh's own pr-view JSON mapped onto the same REST payload keys, the twin of
 /// the REST mapper: GraphQL names lower into the REST spellings
 /// (mergeStateStatus lowercased, mergeCommit.oid into merge_sha,
-/// autoMergeRequest into the REST auto_merge keys). The transport marker
-/// names the provenance; consumers read named keys and ignore it.
+/// autoMergeRequest into the REST auto_merge keys). The read asks for every
+/// key this maps (PR_INFO_FALLBACK_FIELDS), so a mapped null is GitHub's
+/// own null, never an unfetched key. The transport marker names the
+/// provenance; consumers read named keys and ignore it.
 fn graphql_payload(gh: &Value) -> Option<Value> {
     let number = gh.get("number")?.as_u64()?;
     let state_status = gh
@@ -335,7 +379,8 @@ mod tests {
 
     /// The op refuses with a named cause and spawns nothing when the ask is
     /// malformed or the cwd names no repository: `pr: null` on the resolve
-    /// arm, the numeric pr on the fetch arm.
+    /// arm, the numeric pr on the fetch arm. The receipt's error text keeps
+    /// the REST refusal first and appends a fallback cause after it.
     #[test]
     fn the_op_refuses_with_a_named_cause_and_no_read() {
         let out = run_op(&serde_json::json!({"pr": 0, "cwd": "."}));
@@ -359,6 +404,25 @@ mod tests {
         assert!(
             err.contains("owner/repo"),
             "names the missing context: {err}"
+        );
+
+        // A fallback that answered nothing appends its cause after the REST
+        // refusal; a causeless fallback leaves the REST refusal alone.
+        let text = append_fallback_cause(
+            "gh: API rate limit exceeded | this is the CORE REST quota",
+            Some("pr_view: broker refused".to_string()),
+        );
+        assert!(
+            text.starts_with("gh: API rate limit exceeded"),
+            "the REST refusal leads: {text}"
+        );
+        assert!(
+            text.contains("graphql fallback: pr_view: broker refused"),
+            "the fallback cause follows: {text}"
+        );
+        assert_eq!(
+            append_fallback_cause("the CORE refusal", None),
+            "the CORE refusal"
         );
     }
 }

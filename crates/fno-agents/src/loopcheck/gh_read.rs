@@ -200,6 +200,15 @@ pub(super) const PR_VIEW_FIELDS: &str =
 pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str =
     "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url";
 
+/// The stop gate's set plus the four the info payload maps but the gate
+/// never reads: body, mergedAt, mergeCommit, autoMergeRequest. The info op's
+/// fallback asks for THIS set - asking for the gate's would promise keys the
+/// read never fetched, and a body mapped from an absent key reads as a real
+/// empty body downstream. Routing still rides the outside-the-set fields
+/// (url is the first); the drift test pins both supersets.
+pub(crate) const PR_INFO_FALLBACK_FIELDS: &str =
+    "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url,body,mergedAt,mergeCommit,autoMergeRequest";
+
 pub(super) fn pr_head_oid(pr_json: &Value) -> Option<String> {
     pr_json
         .get("headRefOid")
@@ -251,11 +260,15 @@ fn graphql_fallback_earned(err: &GhReadError, gh_bin: &str, cwd: &Path) -> bool 
 
 /// One `pr view` read: the argv build, the bounded spawn, and the reply's
 /// status/parse mapping under the read and parse names the caller picks.
+/// `repo` pins the repository when the caller resolved one itself - real gh
+/// otherwise picks the base repo by its own remote priority, which in a
+/// fork checkout can differ from the origin slug the REST legs read.
 fn read_pr_view_once(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,
     fields: &str,
+    repo: Option<&str>,
     read_name: &str,
     parse_name: &str,
     timeout: std::time::Duration,
@@ -263,6 +276,9 @@ fn read_pr_view_once(
     let mut args = vec!["pr", "view"];
     if let Some(selector) = selector {
         args.push(selector);
+    }
+    if let Some(repo) = repo {
+        args.extend(["--repo", repo]);
     }
     args.extend(["--json", fields]);
     let out = bounded_read(gh_bin.as_ref(), &args, cwd, read_name, timeout)?;
@@ -278,10 +294,34 @@ fn read_pr_view_once(
         .map_err(|_| GhReadError::parse_failed(parse_name))
 }
 
+/// The gate's `pr view` read: the metadata field set over REST, with the
+/// earned broker-field-set fallback when the core bucket is spent.
 pub(super) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<Option<Value>, GhReadError> {
+    read_pr_view_fields(gh_bin, cwd, selector, PR_VIEW_FIELDS_GRAPHQL, None, timeout)
+}
+
+/// The earned-fallback read, parametrized for callers whose payload needs
+/// more fields than the gate maps. The primary read is the metadata field
+/// set over REST; a refusal that is ordinary, smells rate limit, and is
+/// explained by the CORE bucket alone retries as the same argv over
+/// `fallback_fields`, which routes to the quota-brokered GraphQL executor
+/// (any field outside the REST metadata set is what does the routing). A
+/// fallback that answers nothing hands back the ORIGINAL REST refusal,
+/// carrying the fallback's own cause appended after it: the REST wording
+/// stays first because the classifiers and quota parks read it, and the
+/// appended cause is what tells the operator a second transport ran and
+/// why it answered nothing.
+pub(crate) fn read_pr_view_fields(
+    gh_bin: &str,
+    cwd: &Path,
+    selector: Option<&str>,
+    fallback_fields: &str,
+    repo: Option<&str>,
     timeout: std::time::Duration,
 ) -> Result<Option<Value>, GhReadError> {
     let rest_adapter = internal_gh_adapter(gh_bin);
@@ -300,6 +340,7 @@ pub(super) fn read_pr_view(
         cwd,
         selector,
         PR_VIEW_FIELDS,
+        repo,
         metadata_read,
         metadata_parse,
         timeout,
@@ -308,23 +349,27 @@ pub(super) fn read_pr_view(
         Err(err) if rest_adapter && graphql_fallback_earned(&err, gh_bin, cwd) => {
             // The REST budget is spent and only the core bucket explains it;
             // the GraphQL bucket is a separate one. The retry is the same
-            // argv with the broker-routing field set, named pr_view so the
-            // event rows read the transport they paid for. A fallback that
-            // answers nothing hands back the REST refusal - on the child's
-            // own failure OR on a nonzero exit, whose prose carries neither
-            // the rate-limit marker the classifiers read nor the quota-park
-            // trigger.
+            // argv with the caller's broker-routing field set, named pr_view
+            // so the event rows read the transport they paid for.
             match read_pr_view_once(
                 gh_bin,
                 cwd,
                 selector,
-                PR_VIEW_FIELDS_GRAPHQL,
+                fallback_fields,
+                repo,
                 "pr_view",
                 "pr_view_parse",
                 timeout,
             ) {
                 Ok(value) => Ok(value),
-                Err(_) => Err(err),
+                Err(fallback_err) => {
+                    let mut err = err;
+                    err.stderr_tail.push_str(&format!(
+                        " | graphql fallback also failed: {}",
+                        fallback_err.cause_line()
+                    ));
+                    Err(err)
+                }
             }
         }
         Err(err) => Err(err),

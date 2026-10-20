@@ -348,7 +348,7 @@ fn fallback_adapter(
     probe_body: &str,
     graphql_arm: &str,
 ) -> (std::path::PathBuf, std::path::PathBuf) {
-    let calls = dir.path().join("calls.log");
+    let calls = dir.join("calls.log");
     let script = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FGB_CALLS\"\ncase \"$*\" in\n  *\"api rate_limit\"*)\n    printf '%s' '{probe_body}'\n    ;;\n  *url*)\n    {graphql_arm}\n    ;;\n  *)\n    printf '%s' 'gh: API rate limit exceeded for user ID 123 (HTTP 403)' >&2\n    exit 1\n    ;;\nesac\n"
     );
@@ -360,21 +360,33 @@ const FGB_PROBE_CORE_DRAINED: &str = r#"{"resources":{"graphql":{"remaining":0,"
 
 const FGB_PROBE_CORE_HEALTHY: &str = r#"{"resources":{"graphql":{"remaining":4800,"reset":1791234567},"core":{"remaining":4980,"reset":1791234500}}}"#;
 
-/// The broker field set is the metadata set plus exactly `,url`: the
-/// superset relationship is what routes the fallback read to the broker,
-/// and the const is a literal (concat! takes literals only), so drift
-/// between the two strings is the failure this guards.
+/// The broker field set is the metadata set plus exactly `,url`, and the
+/// info set is the metadata set plus the four more the info payload maps.
+/// The superset relationships are what route the fallback reads to the
+/// broker and promise every key the mappers read; the consts are literals
+/// (concat! takes literals only), so drift between the strings is the
+/// failure this guards.
 #[test]
-fn graphql_field_set_is_the_metadata_set_plus_url() {
-    use crate::loopcheck::gh_read::{PR_VIEW_FIELDS, PR_VIEW_FIELDS_GRAPHQL};
-    let extra = PR_VIEW_FIELDS_GRAPHQL
+fn graphql_field_sets_extend_the_metadata_set() {
+    use crate::loopcheck::gh_read::{
+        PR_INFO_FALLBACK_FIELDS, PR_VIEW_FIELDS, PR_VIEW_FIELDS_GRAPHQL,
+    };
+    let gate_extra = PR_VIEW_FIELDS_GRAPHQL
         .strip_prefix(PR_VIEW_FIELDS)
-        .expect("the broker field set extends the metadata set");
-    assert_eq!(extra, ",url");
+        .expect("the gate field set extends the metadata set");
+    assert_eq!(gate_extra, ",url");
+    let info_extra = PR_INFO_FALLBACK_FIELDS
+        .strip_prefix(PR_VIEW_FIELDS)
+        .expect("the info field set extends the metadata set");
+    assert_eq!(
+        info_extra,
+        ",url,body,mergedAt,mergeCommit,autoMergeRequest"
+    );
 }
 
-/// The retry the earned fallback makes: same argv, broker-routing field set.
-/// The url the REST adapter does not serve is what routes the read to the
+/// The retry the earned fallback makes: same argv, broker-routing field
+/// set, and the repo the caller resolved pinned with --repo. The url the
+/// REST adapter does not serve is what routes the read to the
 /// quota-brokered GraphQL executor, and the reply parses through the
 /// identical consumer path.
 #[test]
@@ -393,10 +405,12 @@ fn graphql_fallback_retries_the_broker_field_set() {
         );
         std::env::set_var("FGB_CALLS", &calls);
         std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
-        let read = read_pr_view(
+        let read = read_pr_view_fields(
             bin.to_str().unwrap(),
             dir.path(),
             Some("42"),
+            crate::loopcheck::PR_INFO_FALLBACK_FIELDS,
+            Some("o/r"),
             std::time::Duration::from_secs(10),
         );
         std::env::remove_var("FGB_CALLS");
@@ -418,14 +432,20 @@ fn graphql_fallback_retries_the_broker_field_set() {
             "the retry carries the broker-routing field set: {}",
             rows[2]
         );
+        assert!(
+            rows[2].contains("--repo o/r"),
+            "the retry pins the caller's repo: {}",
+            rows[2]
+        );
         return;
     }
     panic!("the fallback never answered in five attempts");
 }
 
-/// A fallback that answers nothing hands back the ORIGINAL REST refusal.
-/// The broker's own prose names no rate limit, so returning it would defeat
-/// the classifiers and the quota parks downstream.
+/// A fallback that answers nothing hands back the ORIGINAL REST refusal
+/// with the fallback's own cause appended after it: the REST wording stays
+/// first (the classifiers and quota parks read it), and the appended cause
+/// is what tells the operator a second transport ran.
 #[test]
 fn graphql_fallback_failure_returns_the_original_rest_refusal() {
     let _env = crate::claims::test_env_lock();
@@ -446,13 +466,14 @@ fn graphql_fallback_failure_returns_the_original_rest_refusal() {
         std::env::remove_var("FNO_LOOPCHECK_GH_BIN");
         let Err(err) = read else { continue };
         assert!(
-            err.stderr_tail.contains("API rate limit exceeded"),
-            "the original REST refusal rides: {:?}",
+            err.stderr_tail.starts_with("gh: API rate limit exceeded"),
+            "the original REST refusal leads: {:?}",
             err.stderr_tail
         );
         assert!(
-            !err.stderr_tail.contains("discretionary"),
-            "the broker prose never replaces the REST refusal: {:?}",
+            err.stderr_tail
+                .contains("| graphql fallback also failed: pr_view:"),
+            "the fallback cause follows, naming the read: {:?}",
             err.stderr_tail
         );
         return;
