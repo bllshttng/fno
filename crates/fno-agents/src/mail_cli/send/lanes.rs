@@ -1114,7 +1114,8 @@ pub(super) fn kind_lane_send(
     from_name: Option<&str>,
 ) -> Result<i32, i32> {
     let kind = args.kind.as_deref().unwrap_or("");
-    let known = ["heads-up", "question", "fyi"];
+    // Python joins sorted(inbox_kinds); keep the literal in sorted order.
+    let known = ["fyi", "heads-up", "question"];
     if !known.contains(&kind) {
         if let Some((_, replacement)) = DEPRECATED_KINDS.iter().find(|(k, _)| *k == kind) {
             eprintln!(
