@@ -2133,7 +2133,8 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
 /// file nor a store reads as empty and creates nothing; a live file or store
 /// that exists and cannot be read is `Err` naming it. A routed state-root
 /// journal never serves raw bytes: a stray file imports into the store
-/// first, and whatever the store still cannot answer reads as empty.
+/// first, a refused import is `Err` naming it, and whatever the store still
+/// cannot answer reads as empty.
 pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, String> {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
@@ -2143,9 +2144,11 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
             // A routed family's raw file is a stray. Until its own retire
             // lane parks it, the read imports those bytes first, so a
             // pre-store writer's rows reach the store this read would have
-            // served them from. With no raw file there is nothing to create.
+            // served them from; a refused import is Err naming it, never a
+            // silent empty. With no raw file there is nothing to create.
             if live.is_file() {
-                let _ = import_all(&live);
+                import_all(&live)
+                    .map_err(|e| format!("stray import for {}: {e}", live.display()))?;
                 if store.is_file() {
                     return journal_text_checked(journal, q);
                 }
