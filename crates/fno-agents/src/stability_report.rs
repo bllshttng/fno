@@ -9,7 +9,8 @@
 //!
 //! - **Merged PRs**: first-parent commits whose subject delivers a PR, in
 //!   either shape this repo produces: squash (`... (#123)`) or merge
-//!   (`Merge pull request #123 from owner/branch`). Earliest delivery wins.
+//!   (`Merge pull request #123 from owner/branch`). A repeated delivery
+//!   keeps its newest landing.
 //! - **Kind ladder** (first hit wins): backlog node kind joined through the
 //!   node id embedded in the branch name (`bugfix/x-aaaa-...` carries
 //!   `x-aaaa`), then the conventional squash subject (`fix(scope): ...`),
@@ -368,7 +369,9 @@ fn compute(
             continue;
         };
         if deliveries.iter().any(|d| d.pr == pr) {
-            continue; // earliest delivery wins
+            // git log walks newest-first, so the delivery already held is
+            // the newest one; keep it.
+            continue;
         }
         let (kind, classified_by) = classify(subject, branch.as_deref(), node_kinds);
         by_sha.insert(sha.to_string(), (pr, time));

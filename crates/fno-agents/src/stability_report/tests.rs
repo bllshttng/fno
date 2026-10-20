@@ -214,8 +214,7 @@ fn without_the_graph_the_branch_prefix_classifies() {
     assert_eq!(report.rows[0].delivery.kind, "feat");
     assert_eq!(report.rows[0].delivery.classified_by, "branch-prefix");
     // skills/ reads product.
-    write(&repo, "placeholder", "");
-    let _ = write(&repo, "skills/x.txt", "x\n");
+    write(&repo, "skills/x.txt", "x\n");
     git(&repo, &["add", "."], FIX_DATE);
     git(
         &repo,
