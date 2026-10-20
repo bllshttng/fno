@@ -457,6 +457,14 @@ fn graph_html_path() -> PathBuf {
     crate::state_layout::place(&state_dir(), "graph.html")
 }
 
+/// A target at a page's pre-fold spelling (`~/.fno/graph.html`) renders at
+/// the page's home. Writing the old spelling re-creates a root file the
+/// state-root migration clears on its next pass, forever.
+fn fold_legacy_page(root: &Path, path: &Path) -> PathBuf {
+    let root = resolve(root);
+    crate::state_layout::page_home(&root, &resolve(path)).unwrap_or_else(|| path.to_path_buf())
+}
+
 fn expand(path: &str) -> PathBuf {
     super::settings::expand_home(path)
 }
@@ -653,14 +661,15 @@ fn configured_targets() -> Vec<RenderTarget> {
     let mut out: Vec<RenderTarget> = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     for row in &rows {
-        let target = match parse_target(row) {
+        let mut target = match parse_target(row) {
             Ok(t) => t,
             Err(message) => {
                 eprintln!("Warning: {message}");
                 continue;
             }
         };
-        let expanded = expand(&target.path);
+        let expanded = fold_legacy_page(&state_dir(), &expand(&target.path));
+        target.path = expanded.to_string_lossy().into_owned();
         let clashes = state_file_collisions(&expanded);
         if !clashes.is_empty() {
             let names: Vec<String> = clashes.iter().map(|p| p.display().to_string()).collect();
@@ -1994,6 +2003,20 @@ mod tests {
             md,
             "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n- Visitor ask published\n"
         );
+    }
+
+    #[test]
+    fn render_target_at_a_legacy_root_page_renders_at_the_page_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = resolve(dir.path());
+        assert_eq!(
+            fold_legacy_page(&root, &root.join("graph.html")),
+            root.join("cache").join("pages").join("graph.html")
+        );
+        let elsewhere = root.join("vault").join("graph.html");
+        assert_eq!(fold_legacy_page(&root, &elsewhere), elsewhere);
+        let not_a_page = root.join("ledger.json");
+        assert_eq!(fold_legacy_page(&root, &not_a_page), not_a_page);
     }
 
     #[test]
