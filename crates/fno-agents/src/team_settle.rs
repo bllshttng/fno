@@ -545,10 +545,11 @@ fn plan_with_projects(
         if let Some(store_path) =
             crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json())
         {
-            let retired = crate::team_names::history_names(&store_path)
-                .map(|used| used.contains(&proposed_name.to_ascii_lowercase()))
-                .unwrap_or(false);
-            if retired {
+            // Fail closed: an unreadable store must refuse the ask, never
+            // read the name as fresh; the carry side refuses the same way.
+            let used = crate::team_names::history_names(&store_path)
+                .map_err(|e| format!("--take-over cannot read the name history: {e}"))?;
+            if used.contains(&proposed_name.to_ascii_lowercase()) {
                 return Ok(plan_answer(
                     "declined",
                     occupancy,
