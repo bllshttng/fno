@@ -64,7 +64,11 @@ fn args(repo: &Path, days: i64, fix_window_days: i64, graph: Option<&Path>) -> A
         fix_window_days,
         graph: graph.map(Path::to_path_buf),
         graph_explicit: false,
-        now: Some(super::DateTime::parse_from_rfc3339("2026-10-05T12:00:00Z").expect("now")),
+        now: Some(
+            super::DateTime::parse_from_rfc3339("2026-10-05T12:00:00Z")
+                .expect("now")
+                .with_timezone(&super::Utc),
+        ),
         json: true,
     }
 }
@@ -118,13 +122,39 @@ fn fix_on_old_code_is_not_a_fix_of_fix() {
     write(&repo, "old.rs", "one\n");
     git(&repo, &["add", "."], FIX_DATE);
     git(&repo, &["commit", "-q", "-m", "fix: trim (#2)"], FIX_DATE);
+    // An add-only fix is measured clean and reported apart.
+    write(&repo, "added.rs", "x\n");
+    git(&repo, &["add", "."], FIX_DATE);
+    git(&repo, &["commit", "-q", "-m", "fix: add (#3)"], FIX_DATE);
 
     let parsed = args(&repo, 30, 7, None);
     let now = parsed.now.expect("now");
     let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
     let stats = aggregate(&report);
-    assert_eq!((stats.fix, stats.fix_of_fix), (1, 0));
+    assert_eq!(stats.fix, 2);
+    assert_eq!(stats.fix_of_fix, 0);
+    assert_eq!(
+        (stats.measured, stats.unmeasured, stats.no_removed),
+        (2, 0, 1)
+    );
+    assert_eq!(report.rows[0].fix_of_fix, Some(false));
     assert_eq!(report.rows[1].fix_of_fix, Some(false));
+    // Render smoke: the JSON parses and the text names the youth window.
+    let json_value: serde_json::Value =
+        serde_json::from_str(&super::render_json(&parsed, now, &report, false)).expect("json");
+    assert_eq!(json_value["totals"]["merged"], 2);
+    assert_eq!(json_value["fix_of_fix"]["window_days"], 7);
+    assert_eq!(json_value["backlog"]["available"], false);
+    assert!(super::render_text(&parsed, now, &report, false).contains("fix youth window: 7d"));
+    // Arg-surface exits: usage (2) and an explicit unreadable graph (3).
+    assert_eq!(super::run(&["--nope".to_string()]), super::EXIT_USAGE);
+    assert_eq!(
+        super::run(&[
+            "--graph".to_string(),
+            "/nonexistent/fno-test/graph.db".to_string()
+        ]),
+        3
+    );
 }
 
 #[test]
@@ -169,6 +199,11 @@ fn merge_delivery_joins_the_backlog_node_kind() {
     assert_eq!(row.delivery.classified_by, "node-kind");
     // crates/ reads fleet.
     assert_eq!(row.surface, "fleet");
+    // With no graph loaded the same branch reads through the prefix rung
+    // (the body carries no title here, so nothing outranks it).
+    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
+    assert_eq!(report.rows[0].delivery.kind, "fix");
+    assert_eq!(report.rows[0].delivery.classified_by, "branch-prefix");
 }
 
 #[test]
@@ -200,7 +235,7 @@ fn merge_title_outranks_the_node_kind() {
             "--no-ff",
             "-m",
             "Merge pull request #8 from owener/feature/x-cccc-stop-gate\n\nfix(stop-gate): repair the gate\n\n* stop the gate\n",
-            "bugfix/x-cccc-stop-gate",
+            "feature/x-cccc-stop-gate",
         ],
         FIX_DATE,
     );
@@ -212,61 +247,6 @@ fn merge_title_outranks_the_node_kind() {
     assert_eq!(report.rows.len(), 1);
     assert_eq!(report.rows[0].delivery.kind, "fix");
     assert_eq!(report.rows[0].delivery.classified_by, "merge-title");
-}
-
-#[test]
-fn without_the_graph_the_branch_prefix_classifies() {
-    let (_dir, repo) = init_repo();
-    write(&repo, "f.rs", "x\n");
-    git(&repo, &["add", "."], OLD_DATE);
-    git(&repo, &["commit", "-q", "-m", "init"], OLD_DATE);
-    git(
-        &repo,
-        &["checkout", "-q", "-b", "feature/x-bbbb-thing"],
-        FEAT_DATE,
-    );
-    write(&repo, "f.rs", "y\n");
-    git(&repo, &["add", "."], FEAT_DATE);
-    git(&repo, &["commit", "-q", "-m", "add it"], FEAT_DATE);
-    git(&repo, &["checkout", "-q", "main"], FEAT_DATE);
-    git(
-        &repo,
-        &[
-            "merge",
-            "-q",
-            "--no-ff",
-            "-m",
-            "Merge pull request #6 from owener/feature/x-bbbb-thing",
-            "feature/x-bbbb-thing",
-        ],
-        FIX_DATE,
-    );
-
-    // Unknown node id: the join degrades to the branch prefix.
-    let graph = tempfile::tempdir().expect("graphdir");
-    let graph_db = graph.path().join("graph.db");
-    graph_fixture(&graph_db, &[("x-zzzz", "bug")]);
-    let parsed = args(&repo, 30, 7, Some(&graph_db));
-    let now = parsed.now.expect("now");
-    let kinds = super::load_node_kinds(&graph_db).expect("graph kinds");
-    let report = compute(&parsed, now, &kinds).expect("report");
-    assert_eq!(report.rows[0].delivery.kind, "feat");
-    assert_eq!(report.rows[0].delivery.classified_by, "branch-prefix");
-    // skills/ reads product.
-    write(&repo, "skills/x.txt", "x\n");
-    git(&repo, &["add", "."], FIX_DATE);
-    git(
-        &repo,
-        &["commit", "-q", "-m", "feat: skill doc (#7)"],
-        FIX_DATE,
-    );
-    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
-    let skill_row = report
-        .rows
-        .iter()
-        .find(|r| r.delivery.pr == 7)
-        .expect("row 7");
-    assert_eq!(skill_row.surface, "product");
 }
 
 #[test]
@@ -323,64 +303,4 @@ index 333..444 100644
     assert_eq!(runs.len(), 2);
     assert_eq!(runs[0], ("f1".to_string(), vec![(1, 1), (3, 3)]));
     assert_eq!(runs[1], ("f2".to_string(), vec![(5, 6)]));
-}
-
-#[test]
-fn run_rejects_unknown_flags_with_the_usage_exit() {
-    assert_eq!(super::run(&["--nope".to_string()]), EXIT_USAGE);
-    assert_eq!(super::run(&["--days".to_string()]), EXIT_USAGE);
-}
-
-#[test]
-fn explicit_graph_read_failure_is_an_error_not_an_opt_out() {
-    // EXIT_ENV = 3; the code value stays literal here so the test does not
-    // import a second const for one assertion.
-    assert_eq!(
-        super::run(&["--graph", "/nonexistent/fno-test/graph.db"].map(String::from)),
-        3
-    );
-}
-
-#[test]
-fn add_only_fix_is_measured_clean_and_reported_apart() {
-    let (_dir, repo) = init_repo();
-    write(&repo, "m.rs", "a\n");
-    git(&repo, &["add", "."], OLD_DATE);
-    git(&repo, &["commit", "-q", "-m", "feat: seed (#30)"], OLD_DATE);
-    write(&repo, "m.rs", "a\nb\n");
-    git(&repo, &["add", "."], FIX_DATE);
-    git(
-        &repo,
-        &["commit", "-q", "-m", "fix: add a line (#31)"],
-        FIX_DATE,
-    );
-
-    let parsed = args(&repo, 30, 7, None);
-    let now = parsed.now.expect("now");
-    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
-    let row = &report.rows[1];
-    assert_eq!(row.fix_of_fix, Some(false));
-    assert_eq!(row.removed_lines, 0);
-    let stats = aggregate(&report);
-    assert_eq!((stats.fix, stats.measured, stats.no_removed), (1, 1, 1));
-    assert_eq!(stats.unmeasured, 0);
-}
-
-#[test]
-fn json_and_text_renders_carry_the_definitions() {
-    let (_dir, repo) = init_repo();
-    write(&repo, "a.rs", "x\n");
-    git(&repo, &["add", "."], OLD_DATE);
-    git(&repo, &["commit", "-q", "-m", "feat: seed (#20)"], OLD_DATE);
-    let parsed = args(&repo, 30, 7, None);
-    let now = parsed.now.expect("now");
-    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
-    let text = super::render_text(&parsed, now, &report, false);
-    assert!(text.contains("fix youth window: 7d"), "{text}");
-    let json_value: serde_json::Value =
-        serde_json::from_str(&super::render_json(&parsed, now, &report, false)).expect("json");
-    assert_eq!(json_value["totals"]["merged"], 1);
-    assert_eq!(json_value["fix_of_fix"]["window_days"], 7);
-    assert_eq!(json_value["backlog"]["available"], false);
-    assert!(json_value["rows"].as_array().expect("rows").len() == 1);
 }

@@ -431,7 +431,13 @@ fn compute(
             // the newest one; keep it.
             continue;
         }
-        let title = merge_title(body, subject);
+        // The PR title rung is merge-delivery only: a squash's own body
+        // lines are commit prose, not a PR title.
+        let title = if branch.is_some() {
+            merge_title(body, subject)
+        } else {
+            None
+        };
         let (kind, classified_by) = classify(subject, title, branch.as_deref(), node_kinds);
         by_sha.insert(sha.to_string(), (pr, time));
         deliveries.push(Delivery {
@@ -461,7 +467,8 @@ fn compute(
             Ok(split) => split,
             Err(_) => {
                 report.diff_failures += 1;
-                ("fleet", 0)
+                // A failed numstat read is unmeasured, never a fleet score.
+                ("unmeasured", 0)
             }
         };
         let (fix_of_fix, young_lines, removed_lines) = if delivery.kind == "fix" {
@@ -667,8 +674,10 @@ struct Totals {
     product_lines: u64,
     fleet_prs: u64,
     fleet_lines: u64,
+    /// PRs whose numstat read failed: neither product nor fleet.
+    surface_unmeasured: u64,
     fix_of_fix: u64,
-    /// Fix PRs whose diff and blame reads both completed.
+    /// Fix PRs blame/diff-measured; the rate's denominator.
     measured: u64,
     /// Fix PRs left out of the rate: diff or blame read failed.
     unmeasured: u64,
@@ -686,6 +695,7 @@ fn aggregate(report: &Report) -> Totals {
         product_lines: 0,
         fleet_prs: 0,
         fleet_lines: 0,
+        surface_unmeasured: 0,
         fix_of_fix: 0,
         measured: 0,
         unmeasured: 0,
@@ -716,12 +726,16 @@ fn aggregate(report: &Report) -> Totals {
             "feat" => t.feat += 1,
             _ => t.other += 1,
         }
-        if row.surface == "product" {
-            t.product_prs += 1;
-            t.product_lines += row.changed_lines;
-        } else {
-            t.fleet_prs += 1;
-            t.fleet_lines += row.changed_lines;
+        match row.surface {
+            "product" => {
+                t.product_prs += 1;
+                t.product_lines += row.changed_lines;
+            }
+            "fleet" => {
+                t.fleet_prs += 1;
+                t.fleet_lines += row.changed_lines;
+            }
+            _ => t.surface_unmeasured += 1,
         }
     }
     t
@@ -750,22 +764,29 @@ fn render_text(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool
         stats.total, stats.fix, stats.feat, stats.other
     ));
     out.push_str(&format!(
-        "surface: product {} PRs / {} lines   fleet {} PRs / {} lines\n",
-        stats.product_prs, stats.product_lines, stats.fleet_prs, stats.fleet_lines
+        "surface: product {} PRs / {} lines   fleet {} PRs / {} lines   unmeasured {}\n",
+        stats.product_prs,
+        stats.product_lines,
+        stats.fleet_prs,
+        stats.fleet_lines,
+        stats.surface_unmeasured
     ));
     if stats.fix > 0 {
-        out.push_str(&format!(
-            "fix-of-fix: {}/{} measured = {:.1}%   unmeasured {}   no-removed-lines {}\n",
-            stats.fix_of_fix,
-            stats.measured,
-            if stats.measured > 0 {
-                100.0 * stats.fix_of_fix as f64 / stats.measured as f64
-            } else {
-                0.0
-            },
-            stats.unmeasured,
-            stats.no_removed
-        ));
+        if stats.measured > 0 {
+            out.push_str(&format!(
+                "fix-of-fix: {}/{} measured = {:.1}%   unmeasured {}   no-removed-lines {}\n",
+                stats.fix_of_fix,
+                stats.measured,
+                100.0 * stats.fix_of_fix as f64 / stats.measured as f64,
+                stats.unmeasured,
+                stats.no_removed
+            ));
+        } else {
+            out.push_str(&format!(
+                "fix-of-fix: n/a ({} fix PRs, none measured)   no-removed-lines {}\n",
+                stats.fix, stats.no_removed
+            ));
+        }
     } else {
         out.push_str("fix-of-fix: no fix PRs in window\n");
     }
@@ -822,6 +843,7 @@ fn render_json(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool
         "surface": {
             "product": {"prs": stats.product_prs, "changed_lines": stats.product_lines},
             "fleet": {"prs": stats.fleet_prs, "changed_lines": stats.fleet_lines},
+            "unmeasured": stats.surface_unmeasured,
         },
         "fix_of_fix": {
             "fix_prs": stats.fix,

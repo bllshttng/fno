@@ -782,35 +782,31 @@ fn qualification_report(
 }
 
 pub fn run_evals_trend(args: &[String]) -> i32 {
-    // `--mode stability`: the stability eval's first slice (fix-of-fix rate
-    // and the product/fleet surface split) rides this verb rather than
-    // growing the over-cap fno-agents root; stability_report owns the
+    // `--mode stability` rides this verb in any argument position rather
+    // than growing the over-cap fno-agents root; stability_report owns the
     // remaining flags.
-    let mut scanned = 0usize;
-    while scanned < args.len() {
-        let arg = args[scanned].as_str();
-        let (name, inline) = match arg.split_once('=') {
-            Some((n, v)) => (n, Some(v)),
-            None => (arg, None),
+    let mut mode_index: Option<usize> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        if args[i] == "--mode" || args[i].starts_with("--mode=") {
+            mode_index = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    if let Some(index) = mode_index {
+        let inline = args[index].split_once('=').map(|(_, v)| v.to_string());
+        let value = match inline {
+            Some(v) => Some(v),
+            None => args.get(index + 1).cloned(),
         };
-        if name == "--mode" {
-            let value = match inline {
-                Some(v) => Some(v.to_string()),
-                None => args.get(scanned + 1).cloned(),
-            };
-            if value.as_deref() == Some("stability") {
-                let mut rest: Vec<String> = Vec::new();
-                rest.extend_from_slice(&args[..scanned]);
-                let skip = if inline.is_some() { 1 } else { 2 };
-                rest.extend_from_slice(&args[scanned + skip..]);
-                return crate::stability_report::run(&rest);
-            }
-            break; // a report/trend/summary mode: evals-trend's own parse
+        if value.as_deref() == Some("stability") {
+            let mut rest: Vec<String> = Vec::new();
+            rest.extend_from_slice(&args[..index]);
+            let skip = if inline.is_some() { 1 } else { 2 };
+            rest.extend_from_slice(&args[index + skip..]);
+            return crate::stability_report::run(&rest);
         }
-        if arg.starts_with('-') && arg != "--" {
-            break; // an evals-trend flag first: its own parse owns the rest
-        }
-        scanned += 1;
     }
     if args.is_empty() {
         // stdin summary: a JSON payload on stdin (the verb_call shape),
