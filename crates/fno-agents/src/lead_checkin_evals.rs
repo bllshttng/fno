@@ -104,7 +104,7 @@ mod tests {
         assert_eq!(
             lines(&[Reading::took("evals", payload)]),
             vec![
-                "evals: regression pass 88%, flakes 1, last run 6d ago, window 7d, ALARM 1, REGRESSED 2"
+                "evals: regression pass 88%, flakes 1, last run 6d ago, window 7d, ALARM 1 REGRESSED 2"
                     .to_string()
             ]
         );
