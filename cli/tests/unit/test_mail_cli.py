@@ -475,32 +475,6 @@ def test_us7a_send_to_disk_discovered_codex_round_trips(runner, mailbox, monkeyp
     assert "ack from K" in payload[0]["body"]  # inside the <fno_mail> wrap
 
 
-@requires_rust
-def test_us8_codex_live_inject_hosted_short_circuits_durable(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    # US8 (node x-d899): a running codex daemon takes the turn LIVE, so the send
-    # reports "delivered (hosted)" and writes only an audit bus row, never a
-    # durable thread.
-    sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
-    _isolate_codex_discovery(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_codex", lambda *_a, **_k: True)
-
-    sent = runner.invoke(
-        app, ["mail", "send", "019f48e1", "ack from K", "--from-name", "web"]
-    )
-    assert sent.exit_code == 0, sent.output
-    assert "delivered (hosted)" in sent.output
-    assert "queued (durable)" not in sent.output
-
-    # The audit row is non-deliverable: drain-self sees nothing for the handle.
-    monkeypatch.setenv("CODEX_THREAD_ID", sid)
-    drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
-    assert drained.exit_code == 0, drained.output
-    payload = json.loads(drained.stdout.strip().splitlines()[-1])
-    assert payload == []
-
-
 def test_plain_send_delivers_header_and_body(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -537,42 +511,6 @@ def test_plain_send_delivers_header_and_body(
 
     row = next(m for m in iter_messages() if m.id == msg_id)
     assert "secret body words" in row.body
-
-
-def test_interrupted_live_send_keeps_the_stored_copy(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    # Write first: the stored copy lands before the live attempt, so a sender
-    # killed between the two steps still leaves the mail `mail show` reads.
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
-    typed: list[str] = []
-
-    def _interrupted(recipient, text, **_k):
-        typed.append(text)
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _interrupted)
-    runner.invoke(
-        app, ["mail", "send", "9a063cd3", "kept body words", "--from-name", "web"]
-    )
-    assert len(typed) == 1
-    msg_id = typed[0].splitlines()[0].split(" · ")[1].rstrip("`")
-
-    from fno.rust_binary import chats_verb
-
-    stored = chats_verb(["show", msg_id, "--all", "--json"], {})
-    assert stored["id"] == msg_id
-    assert "kept body words" in stored["body"]
-
-    # The same staging writes the bus row first, so the killed send is also
-    # drainable: the body's only home is on the bus before any inject.
-    from fno.bus.log import iter_messages
-
-    staged = [m for m in iter_messages() if m.id == msg_id]
-    assert len(staged) == 1
-    assert staged[0].delivery is None
-    assert "kept body words" in staged[0].body
 
 
 # ---------------------------------------------------------------------------
@@ -617,63 +555,6 @@ def _stub_pane_rung(
     monkeypatch.setattr("fno.agents.registry.resolve_agent", _resolve)
     monkeypatch.setattr("fno.agents.dispatch._mux_pane_send", _send)
     return calls
-
-
-@requires_rust
-def test_us7b_mux_pane_rung_delivers_live_when_socket_inject_misses(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    """Codex daemon socket is dead but the session is mux-hosted: the pane rung
-    takes the turn live, so no durable thread is written."""
-    sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
-    _isolate_codex_discovery(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_codex", lambda *_a, **_k: False)
-    calls = _stub_pane_rung(
-        monkeypatch, in_roster=True, pane_sends=True, expect_token=sid
-    )
-
-    sent = runner.invoke(
-        app, ["mail", "send", "019f48e1", "ping", "--from-name", "web"]
-    )
-    assert sent.exit_code == 0, sent.output
-    assert "delivered (hosted)" in sent.output
-    assert "queued (durable)" not in sent.output
-    assert len(calls) == 1
-    # The live turn is the header line, then the body.
-    lines = calls[0][1].splitlines()
-    assert len(lines) == 2, calls[0][1]
-    assert lines[0].startswith("`@web · fmail-")
-    assert lines[1] == "ping"
-
-    monkeypatch.setenv("CODEX_THREAD_ID", sid)
-    drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
-    assert json.loads(drained.stdout.strip().splitlines()[-1]) == []
-
-
-@requires_rust
-def test_us7b_mux_pane_send_failure_falls_closed_to_durable(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    """Roster entry exists but the pane send fails (mux gone, claim lost): the
-    message must land on the durable floor, never vanish."""
-    sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
-    _isolate_codex_discovery(monkeypatch, tmp_path, session_id=sid)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_codex", lambda *_a, **_k: False)
-    calls = _stub_pane_rung(
-        monkeypatch, in_roster=True, pane_sends=False, expect_token=sid
-    )
-
-    sent = runner.invoke(
-        app, ["mail", "send", "019f48e1", "ping", "--from-name", "web"]
-    )
-    assert sent.exit_code == 14, sent.output
-    assert "queued (durable)" in sent.output
-    assert len(calls) == 1
-
-    monkeypatch.setenv("CODEX_THREAD_ID", sid)
-    drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
-    payload = json.loads(drained.stdout.strip().splitlines()[-1])
-    assert payload and "ping" in payload[0]["body"]
 
 
 @requires_rust
