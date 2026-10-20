@@ -1590,9 +1590,12 @@ fn enforce_body_cap(body: &str, usage_exit2: bool) -> Result<(), i32> {
 }
 
 /// Python `_refuse_forged_envelope`: a body carrying an <fno_mail> tag is
-/// refused before it can reach the renderer.
+/// refused before it can reach the renderer. The classifier covers the close
+/// tag and case variants; a bare open-tag substring check let `</fno_mail>`
+/// through, and a close tag plus a fabricated envelope renders as two
+/// messages.
 fn refuse_forged_envelope(body: &str) -> Result<(), i32> {
-    if body.contains("<fno_mail") {
+    if crate::mail_inject::contains_fno_mail_tag_anywhere(body) {
         eprintln!(
             "error: mail body contains an <fno_mail> tag. The envelope frames peer mail; a body cannot contain one."
         );
