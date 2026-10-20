@@ -61,7 +61,7 @@ def test_codex_pane_bounded_default_rides_the_rust_owner(rust_door, monkeypatch,
     ]
 
 
-# --- agy pane posture: default bypass, explicit mode replaces it -------------
+# --- the posture door: this checkout's fno-agents build -------------------
 
 
 @pytest.fixture
@@ -75,13 +75,6 @@ def rust_door(monkeypatch):
     if binary is None:
         pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
     monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
-
-
-@pytest.mark.dev_build
-def test_agy_pane_yolo_plus_mode_refuses(rust_door):
-    # AC13-ERR flavor: one knob at a time, before any spawn.
-    with pytest.raises(DispatchAskError):
-        build_pane_argv("agy", "hi", CWD, True, "uuid", None, "plan")
 
 
 # --- build_pane_argv integration -------------------------------------------

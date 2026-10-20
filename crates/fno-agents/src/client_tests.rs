@@ -643,7 +643,7 @@ fn spawn_flag_rows() {
     assert_eq!(
         validate_spawn_placement(&serde_json::json!({"portal": 1u8}), "pane"),
         Err(
-            "--portal applies only to --substrate thread; a pane hosts its \
+            "--portal applies only to the thread lane; a pane hosts its \
              own geometry and headless hosts no session at all"
                 .to_string()
         )

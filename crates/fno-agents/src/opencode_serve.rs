@@ -1606,11 +1606,10 @@ mod tests {
         drop(requests);
         let launched = std::fs::read_to_string(cwd.join("argv.txt")).unwrap();
         let lines: Vec<&str> = launched.lines().collect();
-        let stub_str = stub.to_string_lossy().into_owned();
+        // `$@` holds the arguments only: argv[0] (the stub) is not printed.
         assert_eq!(
-            &lines[..6],
+            &lines[..5],
             &[
-                stub_str.as_str(),
                 "run",
                 "--attach",
                 fake.base_url().as_str(),

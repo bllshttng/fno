@@ -193,7 +193,7 @@ def test_headless_role_is_refused(bg_home) -> None:
     assert result.exit_code == 2
     assert "outlives the grant" in result.output
     assert "not yet supported" not in result.output
-    assert "Drop --once" in result.output
+    assert "let it seat a thread" in result.output
     assert not [e for e in load_registry() if e.name == "one-shot-lead"], (
         "a refused role must launch nothing"
     )
