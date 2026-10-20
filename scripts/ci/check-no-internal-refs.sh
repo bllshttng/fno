@@ -278,6 +278,9 @@ COMPETITOR_TERMS_B64='aGVyZHIKY211eApvcmNhCnN1cGVycG93ZXJzCmdldC1zaGl0LWRvbmUKZX
 # landing; add a file only when the name in it is load-bearing and cannot be
 # rewritten (a vendored license notice, for example).
 NAME_ALLOWLIST=(
+    # WHY: one row per tracked docs/*.md path, and one existing path carries a
+    # barred term in its file name. The row proposes retiring that page.
+    docs/docs-map.tsv
 )
 
 competitor_terms=$(printf '%s' "$COMPETITOR_TERMS_B64" | base64 -d 2>/dev/null)

@@ -2,7 +2,7 @@
 
 ## Is this page for you?
 
-Read this page if you decide where a doc goes, or if you review the plan to reorganize `docs/`. It holds the reader journey, the target tree, and the move plan. The row-by-row verdicts live in [docs-map.tsv](../docs-map.tsv).
+If you decide where a doc goes, or you review the plan to reorganize `docs/`, read this page. It holds the reader journey, the target tree, and the move plan. The row-by-row verdicts live in [docs-map.tsv](../docs-map.tsv).
 
 Not for: a user who wants to install or run fno. Start at the root [README.md](../../README.md) instead.
 
@@ -12,7 +12,7 @@ Status: proposed. Nothing under docs/ moves until the user approves the Review s
 
 On 2026-10-19, `git ls-files 'docs/*.md'` counted 267 markdown files and 4 MB of text. Of those, 166 sit under `docs/architecture/`. An earlier measurement counted 161 files on 2026-08-19, so the tree grew by 106 pages in two months.
 
-A reader has three indexes and none of them is complete. The root `README.md` lists 9 doc links under `## Docs`. `docs/README.md` links 42 pages. The `AGENTS.md` `## Deep-dive docs` list is for agents, and `scripts/ci/check-doc-entry-scope.sh` gates it. No page states which reader it serves or what kind of page it is. 31 pages carry a `## Is this page for you?` section; 236 do not.
+A reader has three indexes and none of them is complete. The root `README.md` lists 9 doc links under `## Docs`. `docs/README.md` links 42 pages. The `AGENTS.md` `## Deep-dive docs` list is for agents, and `scripts/ci/check-doc-entry-scope.sh` gates it. No page states which reader it serves or what kind of page it is. 31 pages carry a `## Is this page for you?` section. 236 do not.
 
 ## Method
 
@@ -20,7 +20,7 @@ The journey stages come from the `pm-market-research:customer-journey-map` skill
 
 The doc-writing skill named for this work, `fno-doc-writing`, is not installed on this machine (`mdfind -name fno-doc-writing` returned nothing). The style comes from [style-rules.md](../style-rules.md) and `skills/ship-docs/` instead.
 
-The shape follows the Claude Code docs. Their index, `https://code.claude.com/docs/llms.txt`, read on 2026-10-19, has these top-level groups: Getting started, Build with Claude Code, Plugins, Administration, Configuration, Reference, Agent SDK, What's New, Resources. Getting started splits into Overview, Quickstart, Core concepts, Use Claude Code, Platforms and integrations, and Code review and pull requests. Three habits carry over: one short entry page per stage, task guides apart from reference tables, and concept pages only where a model needs explaining.
+The shape follows the Claude Code docs. Their index, `https://code.claude.com/docs/llms.txt`, read on 2026-10-19, has these top-level groups: `Getting started`, `Build with Claude Code`, `Plugins`, `Administration`, `Configuration`, `Reference`, `Agent SDK`, `What's New`, `Resources`. `Getting started` splits into `Overview`, `Quickstart`, `Core concepts`, `Use Claude Code`, `Platforms and integrations`, and `Code review and pull requests`. Three habits carry over: one short entry page per stage, task guides apart from reference tables, and concept pages only where a model needs explaining.
 
 Each page was classified from its first lines and its `##` headings, never from the whole 4 MB.
 
@@ -133,7 +133,7 @@ docs/
 
 `docs/docs-map.tsv` is the single navigation source. A later change generates `docs/README.md` from it, and the website nav reads it too. The root `README.md` then keeps only its quickstart and one link to the docs home. The `AGENTS.md` deep-dive list stays agent-facing and off the reader path.
 
-The map, not the folder, puts a page on a nav. 18 user-facing pages under `docs/architecture/` keep their path, because code cites some of them (`thread-lanes.md` has 12 citing files). Their `stage` and `kind` columns put them on the user nav. A page moves only when its folder misleads a reader and the move is cheap.
+The map, not the folder, puts a page on a nav. 18 user-facing pages under `docs/architecture/` keep their path, because code cites some of them (`thread-lanes.md` has 12 citing files). Their `stage` and `kind` columns put them on the user nav. When a folder misleads a reader and the move is cheap, the page moves. Otherwise it stays.
 
 ### The slot rule for a new page
 
@@ -184,7 +184,7 @@ Inside `docs/`, pages carry 357 links that end in `.md` and 103 links that start
 
 ### Dead links found
 
-Code and skills cite 197 distinct `docs/*.md` paths. 56 do not exist. Most are test fixtures (`docs/a.md`, `docs/PLAN.md`), examples in templates (`docs/architecture/chat-ux.md`), or paths inside other repos (`internal/claude/docs/code/...`). `docs/PRODUCT.md` is an optional file that `scripts/check-product-md.sh` probes for, not a link. Two are real dead links:
+Code and skills cite 197 distinct `docs/*.md` paths. 56 do not exist. Most are test fixtures (`docs/a.md`, `docs/PLAN.md`), examples in templates (`docs/architecture/chat-ux.md`), or paths in other tools' doc trees. `docs/PRODUCT.md` is an optional file that `scripts/check-product-md.sh` probes for, not a link. Two are real dead links:
 
 - `CONTRIBUTING.md:91` links `docs/architecture/skill-encapsulation.md`.
 - `skills/target/references/pre-promise.md:279` names `docs/triage.md`. The page is `docs/backlog-triage.md`.
@@ -196,15 +196,15 @@ The move PR fixes both.
 These choices belong to the user. Nothing moves until they are made.
 
 1. The six stage names: Discover, Install, First target, Daily driver, Fleet, Contribute. They follow the original request. Rename any of them now, because the entry page paths follow from them.
-2. The retire list. Six pages would be deleted:
+2. The retire list. The move deletes these six pages:
    - `docs/changelog.md`: says last updated 2026-03-31.
    - `docs/codebase-summary.md`: a hand-kept inventory that says 26 skills.
    - `docs/guides/memory-auto-distillation.md`: marks itself historical.
    - `docs/architecture/megawalk-pipeline.md`: design of a deleted walker.
    - `docs/architecture/megaspec.md`: no megaspec skill exists.
-   - `docs/architecture/autoresearch-incorporation.md`: names what-if and debug skills; neither exists.
+   - The "Bounded-Iteration Pattern Incorporation" page under `docs/architecture/`: it describes two skills that `skills/` does not hold.
 3. Two unplaced pages need an owner's call:
    - `docs/backlog-current-state.md`: mixes node-field rules for users with a migration runbook for maintainers.
    - `docs/comment-prose-reading-list.md`: a ranked function list with no named reader and no generator found.
-4. Whether architecture notes appear on the public website at all. This design keeps them off the user nav, except the 18 pages there that the map tags with a user stage and keeps in place.
+4. Whether architecture notes appear on the public website at all. This design keeps them off the user nav. The exception is 18 pages there that the map tags with a user stage.
 5. Whether `docs/state-root-inventory.md` stays at the docs root. It has 19 citing files, so the map keeps it in place.
