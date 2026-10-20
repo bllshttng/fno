@@ -256,7 +256,7 @@ def test_tier_remap_preflight_normalizes_actual_conflict(
 
     from fno.agents.dispatch import DispatchAskError, dispatch_spawn
 
-    with pytest.raises(DispatchAskError, match="--model opus is ambiguous") as exc_info:
+    with pytest.raises(DispatchAskError, match="model 'opus' is ambiguous") as exc_info:
         dispatch_spawn(
             name="remap-worker",
             message="work",

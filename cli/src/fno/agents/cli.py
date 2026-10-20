@@ -2531,6 +2531,7 @@ def cmd_spawn(
                 headless=substrate == "headless",
                 output_format=output_format,
                 account_env=account_env,
+                route_env=route_env,
                 launch_account=account or dispatch_account,
                 route_provider_id=route_provider,
                 model_name=model or route_model,

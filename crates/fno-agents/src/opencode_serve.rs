@@ -637,15 +637,11 @@ fn dispatch_opencode_serve_inner(
         Ok(template) => template,
         Err(error) => return AskOutcome::err(error, 2),
     };
+    // The template's {model} hole is required, and the spawn door no longer
+    // carries --model, so an unnamed model takes the lane default.
     let model_value = model
         .filter(|m| !m.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            effort
-                .filter(|e| !e.is_empty())
-                .map(|_| OPENCODE_DEFAULT_MODEL.to_string())
-        })
-        .unwrap_or_default();
+        .unwrap_or(OPENCODE_DEFAULT_MODEL);
     let ask = serde_json::json!({
         "name": name,
         "payload": full_prompt,

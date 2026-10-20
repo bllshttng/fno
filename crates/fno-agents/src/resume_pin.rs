@@ -383,8 +383,8 @@ mod tests {
         );
         let text = refusal_text(answer);
         assert!(text.contains("route zai serves"), "{text}");
-        assert!(text.contains("-P zai -m 'glm-5.3-flash[1m]'"), "{text}");
-        assert!(text.contains("fno agents spawn --resume"), "{text}");
+        assert!(text.contains("a lane that names zai"), "{text}");
+        assert!(text.contains("fno agents spawn --account <id>"), "{text}");
         std::fs::remove_file(&transcript).ok();
     }
 
@@ -405,10 +405,7 @@ mod tests {
             text.contains("no recorded route names its provider"),
             "{text}"
         );
-        assert!(
-            text.contains("-P <provider> -m 'glm-5.3-flash[1m]'"),
-            "{text}"
-        );
+        assert!(text.contains("fno agents spawn --account <id>"), "{text}");
     }
 
     #[test]
@@ -617,7 +614,7 @@ mod tests {
         assert!(decided["refusal"]
             .as_str()
             .unwrap_or_default()
-            .contains("-P <provider>"));
+            .contains("fno agents spawn --account <id>"));
 
         let rowless = decide(&json!({"session_id": "", "routed": false, "row": null}));
         assert!(rowless["refusal"]

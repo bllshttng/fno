@@ -668,8 +668,7 @@ mod tests {
 
         let (argv, word) = revival_argv("agy", &base_argv()).unwrap();
         assert!(
-            argv.windows(2)
-                .any(|w| w == ["--dangerously-skip-permissions"]),
+            argv.iter().any(|a| a == "--dangerously-skip-permissions"),
             "{argv:?}"
         );
         assert_eq!(word, "bypass");

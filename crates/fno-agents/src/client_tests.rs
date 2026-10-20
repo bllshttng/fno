@@ -635,8 +635,8 @@ fn spawn_flag_rows() {
     let params = serde_json::json!({"squad": "reviews", "split": "Right"});
     assert_eq!(
         validate_spawn_placement(&params, "bg"),
-        Err("--workspace/-s, --split/-x, and --tab on --substrate \
-             thread need --portal N: a thread hosts no pane until a portal \
+        Err("--workspace/-s, --split/-x, and --tab on the thread \
+             lane need --portal N: a thread hosts no pane until a portal \
              opens one, so the placement has nothing to place"
             .to_string())
     );
