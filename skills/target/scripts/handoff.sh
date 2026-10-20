@@ -442,7 +442,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents name --source sh --verb t \
+_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --verb t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then
@@ -520,7 +520,7 @@ _CAPABILITY_ELAPSED=0
 _CAPABILITY_TIMEOUT="${HANDOFF_CAPABILITY_TIMEOUT:-$VERIFY_TIMEOUT}"
 _CAPABILITY_INTERVAL="${HANDOFF_CAPABILITY_INTERVAL:-1}"
 while [ -z "$_CAPABILITY_FAILURE" ] && [ "$_CAPABILITY_ELAPSED" -lt "$_CAPABILITY_TIMEOUT" ]; do
-  _TRUTH_OUT="$(fno agents truth "$_TRUTH_HANDLE" --json 2>/dev/null || true)"
+  _TRUTH_OUT="$(fno agents fleet truth "$_TRUTH_HANDLE" --json 2>/dev/null || true)"
   _TRUTH_MESSAGE="$(printf '%s' "$_TRUTH_OUT" | jq -r '.last_message // empty' 2>/dev/null || true)"
   _TRUTH_MODEL_KIND="$(printf '%s' "$_TRUTH_OUT" | jq -r '.observed_model.kind // empty' 2>/dev/null || true)"
   _TRUTH_MODEL="$(printf '%s' "$_TRUTH_OUT" | jq -r '.observed_model.model // empty' 2>/dev/null || true)"
@@ -540,8 +540,8 @@ if [ -z "$_CAPABILITY_FAILURE" ] \
 fi
 
 if [ -n "$_CAPABILITY_FAILURE" ]; then
-  fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
   _emit_event "handoff_failed" \
     "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"capability_probe\",\"detail\":\"$(printf '%s' "$_CAPABILITY_FAILURE" | tr '\n' ' ' | cut -c1-300)\"}"
   echo "parked $NODE_ID reason=\"capability_probe: $_CAPABILITY_FAILURE\""
@@ -823,8 +823,8 @@ _ASK_ERR="$(cat "$_ASK_ERR_FILE" 2>/dev/null)"; rm -f "$_ASK_ERR_FILE"
 # Only a nonzero raw-submit rc is a delivery failure. Task execution is proven
 # separately after this step; a send receipt is never treated as consumption.
 if [ "$_ASK_RC" -ne 0 ] || printf '%s\n' "$_ASK_OUT" | grep -q '"status":[[:space:]]*"refused"'; then
-  fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
   # Target-seed failure: unwind in order
   #   (a) re-acquire node:<id> FIRST; capture the rc
   _REACQ_RC=0
@@ -895,8 +895,8 @@ while [ "$_VERIFY_ELAPSED" -lt "$VERIFY_TIMEOUT" ]; do
 done
 
 if [ "$_CHILD_TARGET_READY" -eq 0 ]; then
-  fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
 
   # No shell-side node release here, and not as a formality: the child never
   # proved custody, so a release naming the child's holder is a guess about

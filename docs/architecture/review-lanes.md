@@ -81,7 +81,7 @@ Anchor the probe at the repository root, because a relative pathspec silently ma
 
 The probe answers in the positive direction only. A fresh write proves a live writer. A stale read proves nothing, because a fork thinking between edits and a fork wedged look identical from outside. So a wedge call needs more than a quiet probe, and more than a timer.
 
-A forked review does not appear in `fno agents top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
+A forked review does not appear in `fno agents fleet top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
 
 This section is prose and stays prose. A gate needs a mechanical signal, and the whole defect is that no signal arrives.
 
@@ -291,7 +291,7 @@ Idempotent by a positive marker: an invocation with any attestation carrying its
 **Two identity implementations now exist, and that is deliberate, not drift.** `pr_code_diff_identity` decides whether a local verdict counts toward the event row. `coverage-carry.sh`'s patch-id decides whether the CI status carries. They can disagree, and both disagreements fail closed:
 
 - Local carries but CI does not: the status stays red until a session re-greens it. That is today's behavior, unchanged.
-- CI carries but local does not: `fno do pr merge` still enforces `covered_conjuncts` (`cli/src/fno/pr/_coverage_gate.py`) on its own. A CI-only carry is refused at merge time.
+- CI carries but local does not: `fno do pr merge` still enforces `covered_conjuncts` (the native gate) on its own. A CI-only carry is refused at merge time.
 
 The two gates are an AND, never an OR. Neither implementation can launder the other's refusal into a merge.
 
@@ -510,7 +510,7 @@ Three PRs on 2026-08-22 read green, settled, mergeable and `ready: true` with an
 
 The window is the default ordering, not a race. A push starts a review. CI runs against that same head in parallel. CI is bounded, roughly nineteen minutes in this repo. A review is not. Green arrives FIRST, reliably. Any merge taken at the moment a PR turns green lands inside the window.
 
-Config makes this worse rather than better. With no `required_bots`, no `reviewers` and `self_review_required` false, `_review_lane_configured` short-circuits coverage to COVERED. So `ready: true` is correct against the configured policy and wrong against the world. The hold is therefore config-independent. A running review blocks whether or not the project requires any review.
+Config makes this worse rather than better. With no `required_bots`, no `reviewers` and `self_review_required` false, the lane predicate short-circuits coverage to COVERED. So `ready: true` is correct against the configured policy and wrong against the world. The hold is therefore config-independent. A running review blocks whether or not the project requires any review.
 
 ### Two layers
 
@@ -592,7 +592,7 @@ The verb cannot assert coverage without performing the reads. There is no `--for
 
 That pre-empts the aggregate-that-overstates-its-inputs shape at the field that becomes a bypass on the day anything enforces it.
 
-A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `hooks/git-protection.py` shells the hidden `fno do pr coverage-check` verb. That verb evaluates the guard's coverage check in `cli/src/fno/pr/_coverage_gate.py` without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character in `cli/tests/unit/test_pr_coverage_check.py`.
+A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `hooks/git-protection.py` shells the hidden `fno do pr coverage-check` verb. That verb evaluates the guard's coverage check (the native `review-coverage check` operand) without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character by the coverage_gate parity goldens.
 
 ### The GitHub status is a projection, not a latch
 

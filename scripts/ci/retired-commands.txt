@@ -25,7 +25,52 @@ fno workspace|fno agents workspace|d-cf2d6fe1
 fno project|fno config project|d-344fe242
 fno yard|fno agents yard|the root-verb fold
 fno runtime|fno agents workspace (retired outright, tombstoned)|d-cf2d6fe1
---model-tier|fno backlog update --difficulty <band> - the work-difficulty axis (low, medium, high)|the difficulty-axis rename
+--model-tier|difficulty=<band> on fno backlog update - the work-difficulty axis (low, medium, high)|the difficulty-axis rename
+# The operator-form retirement (user 2026-10-02): fno backlog update writes
+# fields through field=value / field+=value / field-=value tokens. One
+# verb-scoped line per retired spelling; the pattern is a grep -E fragment
+# joined into the gate's alternation, so it can read anything a line-scoped
+# grep can, but it must not hold a `|`.
+backlog update[^`]* --title|title=<value> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --details|details=<value> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --description|details=<value> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --domain|domain=<value> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --size|size=<S|M|L> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --model|model=<token> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --type|type=<bug|epic|feature|roadmap> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --public|public=true on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --no-public|public=false on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --batch|batch=<value> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --orphan-ok|orphan_ok=<reason> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --has-brief|has_brief=<true|false> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --priority|priority=<p0|p1|p2|p3> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --project|project=<slug> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --cwd|cwd=<path> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --completion-note|completion_note+=<text> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --acknowledge-collisions|collisions_acknowledged=<ids> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --fixes-pr|fixes_pr=<n> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --reverted|reverted=true on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --no-reverted|reverted=false on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --difficulty|difficulty=<band> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --tag|tags+=<tag> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --untag|tags-=<tag> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --dispatch-verb|dispatch_verb=<verb> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --dispatch-brief|dispatch_brief=<text> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --locked-by|locked_by=<holder> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --locked-by-harness|fno agents claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --locked-by-harness-session|fno agents claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --plan-path|plan_path=<path> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --parent|parent=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --caused-by|caused_by=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --source-node|source_node_id=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --pr-number|pr_number=<n> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --pr-url|pr_url=<url> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --add-pr|additional_prs+=<n> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --remove-pr|additional_prs-=<n> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --related|related=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --blocked-by|blocked_by=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --add-blocker|blocked_by+=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --remove-blocker|blocked_by-=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
 # The launch-on-write hook stays unrunnable. Blueprint completion dispatches nothing; a lead or the drain runs fno backlog advance.
 autolaunch-on-ready.sh|fno backlog advance (the ordered drain start)|the one-drain-start ruling
 # d-e1eec854 collapses /fno:law to one user-invoked step. The staged-proposal
@@ -71,5 +116,18 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 # teach them.
 --succeed|--hand-off, the succession transfer|the people-word rename
 
+# The bus-era inbox verbs moved under fno agents mail; fno inbox view has no
+# one-for-one successor. The python plan stamper was ported to plan_doc.
+fno inbox view|fno agents mail list --all [--from P] [--json], or fno agents mail unread [-n NAME]|the mail-verb fold
+fno inbox drain|fno agents mail drain|the mail-verb fold
+fno inbox migrate-bus|fno agents mail migrate-bus|the mail-verb fold
+stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
+
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.
+# The agents fold deleted five dead leaves; no caller-facing string may teach them.
+fno agents gate|fno agents admit gate (the spawn gate) or nothing (the injection gate is gone)|the agents fold
+fno agents ping|fno agents session status|the agents fold
+fno agents team-fold|fno agents org chart fold|the agents fold
+fno agents team-orphans|fno agents org chart vacancies|the agents fold
+fno agents term-ledger|fno agents org chart rundown|the agents fold

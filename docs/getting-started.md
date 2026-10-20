@@ -1,4 +1,4 @@
-# Getting started with footnote
+# Getting started with fno
 
 From install to your first shipped PR, then the handful of commands you'll actually run day to day.
 
@@ -9,7 +9,7 @@ The rest of this page fills in the details.
 
 1. In a Claude Code session, install the plugin, then restart the session:
    ```
-   /plugin marketplace add bllshttng/footnote
+   /plugin marketplace add bllshttng/fno#stable
    /plugin install fno@footnote
    ```
 2. Confirm the CLI is live:
@@ -42,9 +42,13 @@ When a step breaks, the sections below cover what to change.
 In any Claude Code session:
 
 ```
-/plugin marketplace add bllshttng/footnote
+/plugin marketplace add bllshttng/fno#stable
 /plugin install fno@footnote
 ```
+
+`#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
+
+If the add refuses because the name `footnote` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
 
 On the first session after install, footnote prints the install plan and starts nothing: a person's yes is what runs it. On a yes, run `bash <plugin root>/.claude-plugin/postinstall.sh`. Its output ends with `installer exit 0` on success. Then open a new session, and `fno` is on your PATH. Prefer the CLI standalone? `curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install bllshttng/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use. Full options: the [README](../README.md).
 
@@ -53,7 +57,7 @@ On the first session after install, footnote prints the install plan and starts 
 Clone, run setup, get the CLI:
 
 ```bash
-git clone https://github.com/bllshttng/footnote.git
+git clone https://github.com/bllshttng/fno.git footnote
 cd footnote
 bash scripts/setup.sh
 ```
@@ -62,7 +66,7 @@ The setup checks the prerequisites (`bash`, `git`, `gh`, `jq`, and `python3` 3.1
 
 ### Windows (WSL2)
 
-footnote runs under [WSL2](https://learn.microsoft.com/windows/wsl/install), not native Windows. The loop leans on POSIX file locking, Unix sockets, and signals that Windows handles differently. WSL2 is real Linux, so everything here works unchanged inside it, and most Windows devs who'd want footnote already run their toolchain (and Claude Code) there.
+fno runs under [WSL2](https://learn.microsoft.com/windows/wsl/install), not native Windows. The loop leans on POSIX file locking, Unix sockets, and signals that Windows handles differently. WSL2 is real Linux, so everything here works unchanged inside it. Most Windows devs who want fno already run their toolchain there, including Claude Code.
 
 One-time setup, from PowerShell as Administrator:
 
@@ -107,7 +111,7 @@ fno config setup plan --advanced   # the advanced config tier, as JSON
 
 Both walk the same schema-derived question plan and write through the validated config writer, so a typo or an out-of-range value is rejected, not silently stored.
 
-The terminal wizard also offers, defaulting to No, to wire footnote's SessionStart context into Codex and Gemini user config. You can do the same later with `fno config setup cli-hooks`.
+The terminal wizard also offers, defaulting to No, to wire fno's SessionStart context into Codex and Gemini user config. You can do the same later with `fno config setup cli-hooks`.
 
 ### Reading and editing config directly
 
@@ -224,11 +228,11 @@ The PR has a lifecycle, and there's a verb for each step. Full walkthrough: [the
 
 ### Work alongside other agents
 
-footnote can spawn a worker on another provider and coordinate with it over a message bus. Quickstart: [the agents guide](guides/agents-quickstart.md).
+fno can spawn a worker on another provider and coordinate with it over a message bus. Quickstart: [the agents guide](guides/agents-quickstart.md).
 
 ```bash
 fno agents spawn "find why tests/test_login.py is flaky" --name helper -H codex
-fno agents ask helper "what did you find?"
+fno agents mail ask helper "what did you find?"
 ```
 
 For a one-off question to another model without keeping a peer around, spawn an ephemeral worker:
@@ -258,10 +262,10 @@ From a clone, the full refresh has three steps. `fno doctor update` refreshes th
 ```bash
 git pull
 fno doctor update          # reinstall the Python CLI + cargo binaries (fno mux + fno-agents) from source
-fno agents restart --mux   # restart the daemon AND the mux server onto the fresh binaries
+fno agents session restart --mux   # restart the daemon AND the mux server onto the fresh binaries
 ```
 
-`fno agents restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive** - it ends live mux sessions - so it is opt-in; reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills/hooks after a pull.
+`fno agents session restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive** - it ends live mux sessions - so it is opt-in; reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills/hooks after a pull.
 
 ## Uninstall
 
