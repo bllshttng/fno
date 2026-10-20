@@ -796,14 +796,14 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     }
     if let Some(index) = mode_index {
         let inline = args[index].split_once('=').map(|(_, v)| v.to_string());
-        let value = match inline {
-            Some(v) => Some(v),
-            None => args.get(index + 1).cloned(),
+        let skip = if inline.is_some() { 1 } else { 2 };
+        let value = match &inline {
+            Some(v) => Some(v.as_str()),
+            None => args.get(index + 1).map(String::as_str),
         };
-        if value.as_deref() == Some("stability") {
+        if value == Some("stability") {
             let mut rest: Vec<String> = Vec::new();
             rest.extend_from_slice(&args[..index]);
-            let skip = if inline.is_some() { 1 } else { 2 };
             rest.extend_from_slice(&args[index + skip..]);
             return crate::stability_report::run(&rest);
         }
