@@ -1281,7 +1281,7 @@ pub fn stamp_spawn_lineage(params: &mut serde_json::Map<String, Value>) -> Resul
         .unwrap_or(Value::Null),
     );
     // Dispatch credit: a --node spawn whose no producer named an owner
-    // answers to the live role covering the node (native path). A kingless
+    // answers to the live role covering the node (native path). A leadless
     // node keeps the session owner.
     let owner_value = match params
         .get("node")

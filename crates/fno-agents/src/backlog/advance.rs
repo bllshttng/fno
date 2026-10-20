@@ -2238,11 +2238,11 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
             brief.tag,
         );
     }
-    // The same word the drain readout renders: a dispatch into a kingless
+    // The same flag the drain readout renders: a dispatch into a leadless
     // territory names it on the arm line an operator reads.
     let mut tick_detail = format!("node={node_id} worker={short_id}");
-    if spawn_receipt.get("kingless").and_then(Value::as_bool) == Some(true) {
-        tick_detail.push_str(" kingless");
+    if spawn_leadless(&spawn_receipt) {
+        tick_detail.push_str(" leadless");
     }
     tick(1, None, &tick_detail);
     touch_nudge();
@@ -2268,5 +2268,39 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
                     .collect()
             })
             .unwrap_or_default(),
+    }
+}
+
+/// True when the spawn receipt marks the territory leadless: the current
+/// key, or the legacy spelling stored rows written before the rename carry.
+fn spawn_leadless(spawn_receipt: &Value) -> bool {
+    spawn_receipt
+        .get("leadless")
+        .or_else(|| spawn_receipt.get(crate::role_migration::LEGACY_LEADLESS_KEY))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_leadless;
+    use serde_json::json;
+
+    #[test]
+    fn a_current_row_keyed_leadless_marks_the_render() {
+        assert!(spawn_leadless(&json!({"leadless": true})));
+        assert!(!spawn_leadless(&json!({"leadless": false})));
+    }
+
+    #[test]
+    fn an_old_row_keyed_with_the_legacy_key_still_marks_the_render() {
+        let legacy = crate::role_migration::LEGACY_LEADLESS_KEY;
+        assert!(spawn_leadless(&json!({ (legacy): true })));
+        assert!(!spawn_leadless(&json!({ (legacy): false })));
+    }
+
+    #[test]
+    fn a_receipt_with_neither_key_renders_nothing() {
+        assert!(!spawn_leadless(&json!({})));
     }
 }
