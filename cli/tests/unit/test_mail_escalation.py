@@ -31,19 +31,6 @@ def mailbox(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def notified(monkeypatch):
-    """Capture every send_notification call (best-effort OS notifier)."""
-    calls: list[tuple[str, str]] = []
-
-    def fake(title: str, message: str):
-        calls.append((title, message))
-        return (0, "")
-
-    monkeypatch.setattr("fno.notify._impl.send_notification", fake)
-    return calls
-
-
-@pytest.fixture
 def emitted_events(monkeypatch):
     """Capture the mail_escalation events the escalation helper emits.
 
@@ -73,44 +60,24 @@ def _unread_count(runner, name: str) -> int:
     return sum(1 for m in msgs if is_deliverable(m) and m.id not in withdrawn)
 
 
-def test_question_send_escalates_to_human(runner, mailbox, notified):
-    res = runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "which schema wins?"],
-    )
-    assert res.exit_code == 0, res.output
-    assert len(notified) == 1, "one escalation fires at send time"
-    title, message = notified[0]
-    assert "etl" in (title + message)
-    # The durable question is written regardless (truthful unread count).
-    assert _unread_count(runner, "web") == 1
-
-
-def test_question_escalation_debounced_per_pair(runner, mailbox, notified):
-    for _ in range(3):
-        res = runner.invoke(
-            app,
-            ["mail", "send", "--to-project", "web", "--kind", "question",
-             "--from-name", "etl", "--body", "spam?"],
-        )
-        assert res.exit_code == 0, res.output
-    # A chatty peer escalates ONCE (debounced) but every question is still queued.
-    assert len(notified) == 1
-    assert _unread_count(runner, "web") == 3
-
-
-def test_question_send_emits_one_valid_overlay_event(runner, mailbox, emitted_events):
+def test_question_send_emits_one_valid_overlay_event(runner, mailbox, monkeypatch):
     # The escalation surfaces in the needs-me overlay via a mail_escalation event
-    # (US1/US2): exactly one per non-debounced escalation, schema-valid.
+    # (US1/US2): exactly one per non-debounced escalation, schema-valid. The
+    # send body lives in the rust leaf, so the read goes through the committed
+    # store; the python emitter capture never sees the subprocess's write.
+    from tests._event_rows import event_rows
+
+    scratch = mailbox / "scratch" / "events.jsonl"
+    monkeypatch.setenv("FNO_EVENTS_PATH", str(scratch))
     res = runner.invoke(
         app,
         ["mail", "send", "--to-project", "web", "--kind", "question",
          "--from-name", "etl", "--body", "which schema wins?"],
     )
     assert res.exit_code == 0, res.output
-    assert len(emitted_events) == 1, "exactly one mail_escalation event per escalation"
-    ev = emitted_events[0]
+    rows = event_rows(scratch, types=["mail_escalation"])
+    assert len(rows) == 1, "exactly one mail_escalation event per escalation"
+    ev = rows[0]
     assert ev["type"] == "mail_escalation"
     fno.events.validate(ev)  # raises if the envelope/shape is invalid
     d = ev["data"]

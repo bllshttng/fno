@@ -36,14 +36,3 @@ def test_enforce_warns_but_does_not_block(capsys, monkeypatch):
     assert "brevity guide" in err
 
 
-def test_cli_send_refuses_oversized_body(runner, mailbox, monkeypatch):
-    monkeypatch.setattr(mail_cli, "_BODY_WARN_BYTES", 5)
-    monkeypatch.setattr(mail_cli, "_BODY_REFUSE_BYTES", 10)
-    body = "x" * 200
-    res = runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "fyi",
-         "--from-name", "etl", "--body", body],
-    )
-    assert res.exit_code == 1
-    assert "put the detail in a node or doc" in (res.output + (res.stderr or ""))

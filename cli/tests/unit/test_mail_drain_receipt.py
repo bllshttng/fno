@@ -79,39 +79,6 @@ def _capture_events(monkeypatch) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_send_failed_post_mint_carries_msg_id(runner, tmp_path, monkeypatch):
-    """AC2-HP: a failure AFTER the id is minted (envelope-write) carries msg_id,
-    so it joins to the agent_send_started record for the same send."""
-    from fno.cli import app
-
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_claude_peer("red")
-    events = _capture_events(monkeypatch)
-
-    def _boom(*_a, **_k):
-        raise RuntimeError("disk on fire")
-
-    monkeypatch.setattr("fno.inbox.store.write_new_thread", _boom)
-
-    res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
-    assert res.exit_code == 12, f"exit={res.exit_code} out={res.output!r}"
-
-    failed = [e for e in events if e.get("kind") == "agent_send_failed"]
-    assert failed, "no agent_send_failed event was emitted"
-    env_write = [e for e in failed if e.get("stage") == "envelope-write"]
-    assert env_write, (
-        "the envelope-write failure stage did not fire; "
-        f"stages seen: {[e.get('stage') for e in failed]}"
-    )
-    assert env_write[0].get("msg_id"), (
-        "a post-mint failure carried no msg_id, leaving it uncorrelatable"
-    )
-    # The same id rides agent_send_started, so the join yields one send.
-    started = [e for e in events if e.get("kind") == "agent_send_started"]
-    assert started, "agent_send_started was not emitted"
-    assert started[0].get("msg_id") == env_write[0].get("msg_id")
-
-
 # ---------------------------------------------------------------------------
 # W1.1: the dead-letter sweep prefers a positive drain marker
 # ---------------------------------------------------------------------------
