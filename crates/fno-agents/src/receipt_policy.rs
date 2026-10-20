@@ -1,5 +1,5 @@
 //! Receipt policy: the journal discovery, generation, equivalence and
-//! local-verification policy behind `fno do pr evidence-*` (x-1d1e wave 3).
+//! local-verification policy behind `fno do pr evidence-*` (the receipts wave).
 //!
 //! Ports `cli/src/fno/pr/_preflight.py` (deleted in the same change). The
 //! strict receipt decision itself was already native
@@ -134,6 +134,12 @@ fn delivery_journals_from_ledger(text: &str) -> Result<Vec<PathBuf>, String> {
         };
         for field in ["root_path", "canonical_root_path"] {
             if let Some(value) = map.get(field) {
+                // An explicit null is the writer's own no-root shape
+                // (cost/_register.py writes `root_path or None`): only a
+                // present, non-null, non-string or empty string refuses.
+                if value.is_null() {
+                    continue;
+                }
                 let s = value.as_str().map(str::trim).unwrap_or("");
                 if s.is_empty() {
                     return Err(format!("ledger {field} must be a non-empty string or null"));
@@ -352,10 +358,15 @@ fn patch_identity(cwd: &Path, sha: &str, base_ref: &str) -> Option<Vec<String>> 
         .stdout(std::process::Stdio::piped())
         .spawn()
         .ok()?;
-    {
+    // Write the patch text from a thread: patch-id emits ids as it parses,
+    // so a long log can fill its stdout pipe while we are still writing
+    // stdin, and a same-thread write-then-read deadlocks on both pipes.
+    let mut stdin = child.stdin.take()?;
+    let log_bytes = log.into_bytes();
+    std::thread::spawn(move || {
         use std::io::Write;
-        child.stdin.take()?.write_all(log.as_bytes()).ok()?;
-    }
+        let _ = stdin.write_all(&log_bytes);
+    });
     let out = child.wait_with_output().ok()?;
     if !out.status.success() {
         return None;

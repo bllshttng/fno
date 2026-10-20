@@ -1122,13 +1122,11 @@ fn run_stdin_ops() -> (i32, String, String) {
                 .get("allow_equivalent")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // Always exit 0: the caller (verb_call) raises on any nonzero
+            // exit, and an UNSATISFIED decision is a verdict to read, not a
+            // transport failure - the ship lane wants the decision JSON.
             let decision = crate::receipt_policy::check_verification_evidence(&cwd, None, allow);
-            let code = if decision["satisfied"] == Value::Bool(true) {
-                0
-            } else {
-                1
-            };
-            (code, format!("{decision}\n"), String::new())
+            (0, format!("{decision}\n"), String::new())
         }
         "required" => {
             let base = parsed

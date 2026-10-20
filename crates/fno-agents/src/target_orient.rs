@@ -1150,27 +1150,30 @@ mod marker_tests {
         // The heading the boundary-reconcile step writes when Step 0 ran:
         // the regex crate has no look-around, so the token boundary must be
         // an alternation. `#34890` must NOT match `#3489`, and the heading
-        // may name the PR at end-of-line or before a separator.
-        let text = "### x-2b5d landed via #3489 - boundary reconcile\n";
-        assert!(marker_present(text, "x-2b5d", Some(3489)));
-        assert!(!marker_present(text, "x-2b5d", Some(34890)));
+        // may name the PR at end-of-line or before a separator. Blocker ids
+        // are the allowlisted synthetic pool (x-aaaa), not real nodes.
+        let text = "### x-aaaa landed via #3489 - boundary reconcile\n";
+        assert!(marker_present(text, "x-aaaa", Some(3489)));
+        assert!(!marker_present(text, "x-aaaa", Some(34890)));
         assert!(marker_present("### #3489 landed\n", "x-none", Some(3489)));
         assert!(marker_present("### #3489\n", "x-none", Some(3489)));
     }
 
     #[test]
     fn id_marker_matches_on_token_boundaries() {
-        // `x-2b5d1` must not match for blocker x-2b5d; a leading dash is
-        // part of a longer token and excludes the match, as before.
+        // `x-aaaa1` must not match for blocker x-aaaa; a leading dash is
+        // part of a longer token and excludes the match, as before. The
+        // longer forms are synthetic (built from the allowlisted pool
+        // token), never real node ids.
         assert!(marker_present(
-            "### x-2b5d landed - boundary reconcile\n",
-            "x-2b5d",
+            "### x-aaaa landed - boundary reconcile\n",
+            "x-aaaa",
             None
         ));
-        assert!(!marker_present("### x-2b5d1 landed\n", "x-2b5d", None));
+        assert!(!marker_present("### x-aaaa1 landed\n", "x-aaaa", None));
         assert!(!marker_present(
-            "### prefix-x-2b5d landed\n",
-            "x-2b5d",
+            "### prefix-x-aaaa landed\n",
+            "x-aaaa",
             None
         ));
     }

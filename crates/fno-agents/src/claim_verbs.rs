@@ -34,7 +34,7 @@ pub fn run_claim(args: &[String]) -> i32 {
         return 2;
     };
     if op == "review-hold" {
-        // The ported review-hold verb family (x-1d1e): a leading sub-token,
+        // The ported review-hold verb family: a leading sub-token,
         // the same shape as `birth` in client.rs. With no argv the stdin
         // JSON door answers verb_call payloads.
         return crate::review_hold::run(&args[1..]);

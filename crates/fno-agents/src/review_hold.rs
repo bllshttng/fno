@@ -178,7 +178,7 @@ pub(crate) fn verify_fixes_advisory(cwd: &Path, branch: &str, head: &str) -> Str
     } else {
         return String::new();
     };
-    let short = &last_head[..last_head.len().min(8)];
+    let short = last_head.get(..8).unwrap_or(last_head);
     format!(
         "review-hold: the last round at {short} {detail} and the head has moved.\n\
 If this pass verifies those fixes, invoke it with {VERIFY_FIXES_FLAG}: a scoped \
@@ -206,7 +206,7 @@ fn acquire_hold(
     ttl_ms: i64,
     metadata: serde_json::Map<String, Value>,
 ) -> bool {
-    let reason = format!("review in flight at {}", &head[..head.len().min(12)]);
+    let reason = format!("review in flight at {}", head.get(..12).unwrap_or(head));
     let opts = crate::claims::AcquireOpts {
         ttl_ms: Some(ttl_ms),
         reason: Some(reason),

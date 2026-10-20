@@ -948,7 +948,7 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
 /// Two independent legs ride one answer: the verdict mirror under the bot
 /// identity, and the held-findings post under the caller's own auth (`held`).
 pub fn run_publish_review(args: &[String]) -> i32 {
-    // The argv door beside the JSON door (x-1d1e wave 4): the deleted
+    // The argv door beside the JSON door (the pr-port-4 wave): the deleted
     // Python typer command parsed these flags and shelled this verb with
     // the payload built below, so the port keeps both halves in one place.
     // Flags mean the argv door; the events-cli caller pipes its payload

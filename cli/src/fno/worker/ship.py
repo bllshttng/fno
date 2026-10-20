@@ -169,10 +169,13 @@ def ship(
 
     from fno.rust_binary import verb_call
 
-    evidence_required = verb_call(
-        "verify-evidence",
-        {"op": "required", "cwd": str(Path.cwd()), "base": f"origin/{base_branch}"},
-    ).get("required")
+    try:
+        evidence_required = verb_call(
+            "verify-evidence",
+            {"op": "required", "cwd": str(Path.cwd()), "base": f"origin/{base_branch}"},
+        ).get("required")
+    except Exception:  # noqa: BLE001 - a failed policy call fails open (docs/preflight.md)
+        evidence_required = False
     if evidence_required:
         evidence = verb_call(
             "verify-evidence",
@@ -244,10 +247,13 @@ def ship(
             },
         )["body"]
         # Create new PR
-        dup = verb_call(
-            "pr-create",
-            {"check_only": True, "title": title, "base": f"origin/{base_branch}", "cwd": os.getcwd()},
-        ).get("refusal", "")
+        try:
+            dup = verb_call(
+                "pr-create",
+                {"check_only": True, "title": title, "base": f"origin/{base_branch}", "cwd": os.getcwd()},
+            ).get("refusal", "")
+        except Exception:  # noqa: BLE001 - a failed twin scan never blocked create
+            dup = ""
         if dup:
             return {"action": "error", "error": dup, "branch": branch}
         create_result = subprocess.run(

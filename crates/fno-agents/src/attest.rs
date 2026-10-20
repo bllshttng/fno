@@ -412,7 +412,7 @@ fn retract_body(
     let Some(pass) = pass else {
         eprintln!(
             "no passing attestation for reviewer '{reviewer}' attester '{attester}' at head {} in {}; nothing retracted",
-            &head[..head.len().min(12)],
+            head.get(..12).unwrap_or(head),
             journal.display()
         );
         return 1;
@@ -543,7 +543,7 @@ fn retract_emit(
     let id_shown = resolved_id.unwrap_or_else(|| "unattributed".into());
     println!(
         "retracted: reviewer={reviewer} attester={attester} head={} by={id_shown} reason={reason}",
-        &head[..head.len().min(12)]
+        head.get(..12).unwrap_or(head)
     );
     0
 }
