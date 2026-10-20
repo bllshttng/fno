@@ -2200,3 +2200,44 @@ mod classify_origin_tests {
         assert!(classify_origin(Some("admiral")).is_err());
     }
 }
+
+// Ported from cli/tests/unit/test_mail_word_budget.py when the style gate
+// moved: the 81-word refusal contract is unguarded in Rust, so it ports
+// rather than deletes (dead-seam rule).
+#[cfg(test)]
+mod style_gate_tests {
+    use super::*;
+    use crate::claims::EnvVarGuard;
+
+    /// The per-message cap is the only ordinary word gate: an 81-word
+    /// style-clean body refuses with exit 1 and names the count, before any
+    /// lane is chosen.
+    #[test]
+    fn an_ordinary_81_word_body_still_breaks_rule_seven() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let scratch = tempfile::tempdir().unwrap();
+        let _events = EnvVarGuard::set(
+            "FNO_EVENTS_PATH",
+            scratch.path().join("events.jsonl").to_str().unwrap(),
+        );
+        let _enforce = EnvVarGuard::set("FNO_STYLE_ENFORCE", "");
+        let body = style_clean_body(81);
+        assert_eq!(vet_body(&body, None), Err(1));
+        let rule7 = crate::backlog::style_check::check(&body, "mail", None)
+            .into_iter()
+            .find(|v| v.rule == 7)
+            .expect("the cap fires");
+        assert!(rule7.detail.contains("runs 81 words"), "{}", rule7.detail);
+    }
+
+    fn style_clean_body(n_words: usize) -> String {
+        let words: Vec<String> = (0..n_words).map(|i| format!("w{i}")).collect();
+        words
+            .chunks(5)
+            .map(|chunk| format!("{}.", chunk.join(" ")))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
