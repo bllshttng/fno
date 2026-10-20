@@ -232,8 +232,24 @@ def _read_state_field(state_file: str, field: str) -> str:
     return ""
 
 
+def _resolve_pr_worktree(pr_number: int, repo: str) -> str:
+    """The PR's local worktree path, or ``""`` when the branch has none here.
 
+    ``""`` is an answer, not a failure: the verb's exit-3 refusal is a
+    successful enumeration of a PR that is simply not checked out locally,
+    and a PR with no local worktree carries no worktree hold. Callers read
+    it as "no hold" - staying in their own checkout, whose worktree list
+    still enumerates every worktree of the repo - never as a blocker. Any
+    other failure still raises: a dead instrument blocks.
+    """
+    from fno.rust_binary import VerbUnavailable, verb_call
 
+    try:
+        return str(verb_call("pr-worktree", {"pr": pr_number, "cwd": repo})["worktree"])
+    except VerbUnavailable as exc:
+        if exc.returncode == 3 and "no local worktree" in str(exc):
+            return ""
+        raise
 
 
 def _pr_head_ref_and_oid(
@@ -1245,18 +1261,9 @@ def run_merge(
     pr_number = int(pr_raw)
 
     try:
-        from fno.rust_binary import VerbUnavailable, verb_call
-
         # "" = no local worktree on the PR branch: the gates below probe from
         # this checkout, whose worktree list still enumerates every worktree.
-        answer = verb_call("pr-worktree", {"pr": pr_number, "cwd": repo})
-        repo = str(answer.get("worktree") or "") or repo
-    except VerbUnavailable as exc:
-        if exc.returncode == 3 and "no local worktree" in str(exc):
-            pass
-        else:
-            _emit(pr_number, "held", str(exc), "none", err=True)
-            return 2
+        repo = _resolve_pr_worktree(pr_number, repo) or repo
     except Exception as exc:
         _emit(pr_number, "held", str(exc), "none", err=True)
         return 2

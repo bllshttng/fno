@@ -173,9 +173,9 @@ def ship(
         evidence_required = verb_call(
             "verify-evidence",
             {"op": "required", "cwd": str(Path.cwd()), "base": f"origin/{base_branch}"},
-        ).get("required")
-    except Exception:  # noqa: BLE001 - a failed policy call fails open (docs/preflight.md)
-        evidence_required = False
+        ).get("required", True)
+    except Exception:  # noqa: BLE001 - a failed policy call fails closed: demand evidence
+        evidence_required = True
     if evidence_required:
         evidence = verb_call(
             "verify-evidence",

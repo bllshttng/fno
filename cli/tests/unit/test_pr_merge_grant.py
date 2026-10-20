@@ -30,7 +30,7 @@ PR = 42
 @pytest.fixture(autouse=True)
 def _stub_pr_worktree_resolution(monkeypatch):
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call", lambda verb, payload, *a, **k: {"worktree": str(payload.get("cwd") or repo)}
+        "fno.pr._merge._resolve_pr_worktree", lambda _pr, repo: repo
     )
 
 
