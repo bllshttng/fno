@@ -607,7 +607,17 @@ pub(super) fn resolve_pane_entry(
     }
     for candidate in candidates {
         for row in rows.iter() {
-            if opt_str_field(row, "harness_session_id").as_deref() == Some(candidate) {
+            // Python hands each candidate to resolve_agent, whose ladder
+            // answers name, short id, and the canonical handle too, not just
+            // the full session id this door kept matching.
+            let sid = opt_str_field(row, "harness_session_id");
+            if opt_str_field(row, "name").as_deref() == Some(candidate)
+                || opt_str_field(row, "short_id").as_deref() == Some(candidate)
+                || sid.as_deref() == Some(candidate)
+                || sid
+                    .as_deref()
+                    .is_some_and(|s| crate::identity::canonical_handle(s) == candidate)
+            {
                 return Some(row.clone());
             }
         }
