@@ -226,6 +226,17 @@ impl GhReadError {
         Self::failed(read, String::new())
     }
 
+    /// The one-line cause a caller appends when a fallback also failed: the
+    /// read name and the stderr tail, or the read name alone when the tail
+    /// is empty (a parse failure renders with no stderr to quote).
+    pub(crate) fn cause_line(&self) -> String {
+        if self.stderr_tail.trim().is_empty() {
+            format!("{} failed with no stderr", self.read)
+        } else {
+            format!("{}: {}", self.read, self.stderr_tail.trim())
+        }
+    }
+
     pub(super) fn timed_out(read: &str, elapsed: std::time::Duration, stderr_tail: String) -> Self {
         GhReadError {
             read: read.to_string(),
