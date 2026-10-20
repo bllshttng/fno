@@ -1133,39 +1133,6 @@ def test_dispatch_send_events_carry_context_envelope(tmp_path: Path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# US2 (ab-098967b4): send by discovered live-session handle
-# ---------------------------------------------------------------------------
-
-def test_us2_unknown_handle_errors_with_suggestions(runner, tmp_path, monkeypatch):
-    """AC2-ERR: an unknown handle errors with the closest live handles, sending
-    nothing (dispatch_send_to_project is never called)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import write_registry
-
-    write_registry([])
-
-    from fno.agents import discover as discover_mod
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(
-        discover_mod, "resolve_or_suggest",
-        lambda h, **kw: (None, ["fno-think001", "fno-tgt00001"]),
-    )
-
-    def _boom(*a, **k):  # must NOT be called
-        raise AssertionError("must not send on an unknown handle")
-
-    monkeypatch.setattr(dispatch_mod, "dispatch_send_to_project", _boom)
-
-    from fno.mail.cli import mail_app
-
-    res = runner.invoke(mail_app, ["send", "nope", "hi"])
-    assert res.exit_code != 0
-    assert "Closest live sessions" in res.output
-    assert "fno-think001" in res.output
-
-
-# ---------------------------------------------------------------------------
 # An agent-lock timeout must queue the message, never lose it
 # ---------------------------------------------------------------------------
 

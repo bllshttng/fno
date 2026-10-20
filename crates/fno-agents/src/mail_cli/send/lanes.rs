@@ -1237,13 +1237,18 @@ pub(super) fn kind_lane_send(
         );
     } else {
         let window_tail = crate::mail_receipt::window_clause(24.0);
+        let verb = if appended {
+            "appended (durable)"
+        } else {
+            "queued (durable)"
+        };
         println!(
             "{}",
             crate::mail_receipt::json_line(
                 &thread_id,
                 subject,
                 &recipient,
-                &format!("queued (durable) [param-forced: --kind {kind}]{window_tail}"),
+                &format!("{verb} [param-forced: --kind {kind}]{window_tail}"),
             )
         );
     }

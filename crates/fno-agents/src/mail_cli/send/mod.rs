@@ -593,6 +593,9 @@ struct SendArgs {
     raw: bool,
     check: bool,
     to_self: bool,
+    // The front already resolved --to-self: the positional IS this session,
+    // and self-addressing is allowed. Never re-derives the recipient.
+    self_ok: bool,
     force: bool,
     style_exception: Option<String>,
     cwd: Option<PathBuf>,
@@ -623,6 +626,7 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         raw: false,
         check: false,
         to_self: false,
+        self_ok: false,
         force: false,
         style_exception: None,
         cwd: None,
@@ -683,7 +687,8 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             // `--self-ok` is the raw leaf's spelling: the parity leaf argv
             // carries it directly (the python front resolves --to-self to
             // the own session id plus --self-ok before the leaf runs).
-            "--to-self" | "--self-ok" => out.to_self = true,
+            "--to-self" => out.to_self = true,
+            "--self-ok" => out.self_ok = true,
             "--force" | "-F" => out.force = true,
             "--style-exception" => {
                 out.style_exception = Some(take_arg(args, &mut index, "--style-exception")?)
@@ -1496,7 +1501,16 @@ fn append_ruling(ruling: &str, message: &str, graph_path: Option<&Path>) -> Resu
     // same transaction, so the gate the graph store enforces stays the one
     // gate. The Python leg resolved the graph from --cwd or the ambient
     // project; the native verb resolves identically.
-    let _ = graph_path;
+    // Refuse an unknown node by name before any mail moves, through the same
+    // id/slug read and store the note verb uses. An unreadable store falls
+    // through so the note verb reports its own cause.
+    let graph = graph_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::graph_get::default_graph_path);
+    if let Ok(None) = crate::graph_store::read_one(&graph, ruling) {
+        eprintln!("error: ruling node not found: {}", py_repr(ruling));
+        return Err(2);
+    }
     let front = crate::mail_remote::fno_binary();
     let argv = vec![
         front.to_string_lossy().into_owned(),
@@ -1786,7 +1800,9 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     if args.to_project.is_none() && args.to_lead.is_none() {
-        if let Err(code) = refuse_unsafe_short_address(name.as_deref(), args.to_self) {
+        if let Err(code) =
+            refuse_unsafe_short_address(name.as_deref(), args.to_self || args.self_ok)
+        {
             return code;
         }
     }
@@ -1839,7 +1855,7 @@ pub fn run(args: &[String]) -> i32 {
         if args.check {
             raw_args.push("--check".to_string());
         }
-        if args.to_self {
+        if args.to_self || args.self_ok {
             raw_args.push("--self-ok".to_string());
         }
         if let Some(reason) = args.style_exception.as_deref() {
