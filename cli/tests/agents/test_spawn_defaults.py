@@ -76,4 +76,4 @@ def test_config_provider_is_inert_end_to_end(
     sd.compose_spawn_argv(
         ["spawn", "--name", "w", "--verbose", "/fno:target x-1"], stderr=err
     )
-    assert "applied harness=codex (agents.profiles.target.provider)" in err.getvalue()
+    assert "applied harness=" not in err.getvalue(), "even --verbose names no inert scalar"
