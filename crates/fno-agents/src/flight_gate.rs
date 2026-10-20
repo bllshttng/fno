@@ -160,8 +160,10 @@ pub(crate) fn acquire_flight(
 /// `flight-acquire <key> --scope <s> --ttl-ms <n> --holder <h> [--claims-root <dir>]`
 /// `            [--events-dir <dir>]`
 ///
-/// Prints one JSON receipt: `{"acquired":true,"holder":...}` or
-/// `{"acquired":false,"holder":...,"held_for_s":...,"requests":...}`.
+/// Prints one JSON receipt: `{"acquired":true,"holder":...,"record_dir":...}`
+/// or `{"acquired":false,"holder":...,"held_for_s":...,"requests":...}`.
+/// `record_dir` names the flight-record dir the stack file lives beside; it
+/// is absent when no claims root resolves.
 pub fn run_flight_acquire(args: &[String]) -> i32 {
     let Some(key) = args.first().cloned() else {
         eprintln!("flight-acquire: missing key");
@@ -185,7 +187,17 @@ pub fn run_flight_acquire(args: &[String]) -> i32 {
 
     match acquire_flight(&key, &holder, ttl_ms, &scope, pid, root, events_dir) {
         FlightGate::Acquired(holder) => {
-            print_receipt(&json!({"acquired": true, "holder": holder}));
+            let record_dir = receipt_root
+                .as_deref()
+                .map(claims::flight_dir)
+                .or_else(|| claims::global_claims_root().map(|root| claims::flight_dir(&root)));
+            let receipt = match record_dir {
+                Some(dir) => {
+                    json!({"acquired": true, "holder": holder, "record_dir": dir.display().to_string()})
+                }
+                None => json!({"acquired": true, "holder": holder}),
+            };
+            print_receipt(&receipt);
             0
         }
         FlightGate::Held => held_receipt(&key, receipt_root.as_deref()),

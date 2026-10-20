@@ -273,7 +273,7 @@ where
     }
 }
 
-/// `<claims root>/.fno/flight/<encoded key>.json`. The directory comes from
+/// `<claims root>/.fno/state/flight/<encoded key>.json`. The directory comes from
 /// the claims resolver rather than a join here: a hand-built state path
 /// consults nothing, so no root override and no guard can reach it.
 fn record_path(root: &Path, key: &str) -> PathBuf {
