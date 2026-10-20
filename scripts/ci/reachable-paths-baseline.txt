@@ -81,6 +81,7 @@ A	could not resolve to a repository	py=cli/src/fno/graph/_reconcile.py;rs=crates
 A	cpu_instrument_unreadable	py=cli/src/fno/agents/spawn_gate.py;rs=crates/fno-agents/src/spawn_gate.rs|crates/fno-agents/src/spawn_gate_blind_tests.rs|crates/fno-agents/src/spawn_gate_verb.rs	# CLASSIFY protocol|msg-twin|data
 A	cutover_low_after_minutes	py=cli/src/fno/config/__init__.py;rs=crates/fno-agents/src/backlog/quota_route.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	crates/fno-agents/src/harness_capabilities.toml	py=scripts/regen-generated-copies.py;rs=crates/fno-agents/src/harness_matrix.rs	# data: the byte-copy source path each side reads by name
+A	cli/src/fno/events/schema.yaml	py=scripts/regen-generated-copies.py;rs=crates/fno-agents/build.rs|crates/fno-agents/src/lib.rs	# data: the events schema source path; the no-build regen reads it by name to project events_schema.json as build.rs does
 A	delete from outbox where seq = ?	py=cli/src/fno/approvals/store.py;rs=crates/fno-agents/src/effect_gate.rs	# CLASSIFY protocol|msg-twin|data
 A	deliberate reopen postdates the merge	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	delivery-evaluate-response.v1	py=cli/src/fno/delivery/contracts.py;rs=crates/fno-agents/src/delivery_completion.rs	# CLASSIFY protocol|msg-twin|data
