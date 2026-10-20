@@ -65,6 +65,14 @@ pub(super) fn decode_project_dir(name: &str) -> Option<String> {
 
 /// `pub(crate)`: the reply leaf's transcript scan reads the same store.
 pub(crate) fn projects_dir() -> PathBuf {
+    // Python `default_projects_dir` precedence, which the delivery-matrix
+    // cell 6b fixture pins: the fno override leads, and a blank value never
+    // redirects the scan at a cwd-relative path.
+    if let Ok(dir) = std::env::var(crate::claude_drive::PROJECTS_DIR_ENV) {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir).join("projects");
@@ -73,6 +81,27 @@ pub(crate) fn projects_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
         .join(".claude")
         .join("projects")
+}
+
+#[cfg(test)]
+mod projects_dir_tests {
+    use super::*;
+
+    /// The delivery-matrix fixtures redirect the transcript store with
+    /// FNO_CLAUDE_PROJECTS_DIR; a reader that misses the override scans the
+    /// operator's real store and a stored-legacy reply never resolves.
+    #[test]
+    fn the_transcript_store_reader_honors_the_fno_projects_override() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let scratch = tempfile::tempdir().unwrap();
+        let _guard = crate::claims::EnvVarGuard::set(
+            crate::claude_drive::PROJECTS_DIR_ENV,
+            scratch.path().to_str().unwrap(),
+        );
+        assert_eq!(projects_dir(), scratch.path().to_path_buf());
+    }
 }
 
 pub(super) fn roster_path() -> PathBuf {
