@@ -50,7 +50,7 @@ bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review pass fresh fork --fi
 ```bash
 fno doctor event emit -t review_invocation -s daemon -d "$(jq -cn \
   --arg invocation_id "$INVOCATION_ID" --arg head_sha "$HEAD_SHA" --arg branch "$BRANCH" \
-  '{invocation_id:$invocation_id,stage:"refused",verb:"/fno:review",reason:"fresh_reviewer_silent",head_sha:$head_sha,branch:$branch}')"
+  '{invocation_id:$invocation_id,stage:"refused",verb:"/review",reason:"fresh_reviewer_silent",head_sha:$head_sha,branch:$branch}')"
 ```
 
 Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re-run bare only as an operator decision. That round records the level as self.

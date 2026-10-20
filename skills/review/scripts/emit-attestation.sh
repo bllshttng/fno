@@ -530,10 +530,12 @@ done
 # round's independence in one word without a new payload field: peer for a
 # cross-model peer verdict, fresh for a fresh-context reviewer round, self
 # for everything else (the inline lane and declare self-cert both included).
-review_level="self"
+# The variable is review_level_word, NOT review_level: that name carries the
+# invocation's effort level (:333) and feeds the event payload above.
+review_level_word="self"
 if [[ "$reviewer" == "peer" ]]; then
-  review_level="peer"
+  review_level_word="peer"
 elif [[ "$reviewer_context" == "fresh" ]]; then
-  review_level="fresh"
+  review_level_word="fresh"
 fi
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review level=$review_level lines=$reviewed_line_count files=$reviewed_file_count" >&2
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count" >&2
