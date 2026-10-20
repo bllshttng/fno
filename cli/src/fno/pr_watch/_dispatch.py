@@ -1308,8 +1308,14 @@ def run_execute_queue(
 ) -> dict[str, int]:
     """Drain granted rows; executed, held, failed, skipped and budget sum to len(queue)."""
     from fno.pr import _merge
-    from fno.pr._review_hold import WORKTREE_DIRTY, WORKTREE_HEAD_MISMATCH
     from fno.pr_watch._state import WatermarkStore
+
+    # The worktree blocker vocabulary, spelled here once the _review_hold
+    # module retired: callers map these onto their own surface and never
+    # invent a second spelling (the Rust owner lives in
+    # crates/fno-agents/src/pr_status/reviews.rs).
+    WORKTREE_DIRTY = "worktree_dirty"
+    WORKTREE_HEAD_MISMATCH = "worktree_head_mismatch"
 
     holder = f"pr-watch-merge:{os.getpid()}"
     counts = {"executed": 0, "held": 0, "failed": 0, "skipped": 0, "budget": 0}

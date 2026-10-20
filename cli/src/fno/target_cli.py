@@ -1083,14 +1083,24 @@ def _hold_branch_under_review(
     if str(receipt.get("outcome") or "") in {"refused", "unconfirmed"}:
         return
     try:
-        from fno.pr._review_hold import acquire_review_hold, review_invocation_refusal
+        from fno.rust_binary import verb_call
 
         if not branch or branch == "HEAD":
             return
-        if review_invocation_refusal(branch, head_sha, cwd=str(cwd)):
-            return
         holder = f"review-session:{session_id or 'unknown'}"
-        acquire_review_hold(branch, head=head_sha, holder=holder, verb="/fno:review")
+        # The native acquire runs the cap refusal first (exit 3 raises), so
+        # the separate refusal read the Python leg made goes away here.
+        verb_call(
+            ["claim", "review-hold"],
+            {
+                "action": "acquire",
+                "branch": branch,
+                "head": head_sha,
+                "holder": holder,
+                "verb": "/fno:review",
+                "cwd": str(cwd),
+            },
+        )
     except Exception:  # noqa: BLE001 - see docstring
         pass
 

@@ -225,7 +225,7 @@ pub(super) fn failed_read_tail(out: &BoundedOutput) -> String {
     }
 }
 
-pub(super) fn read_pr_view(
+pub(crate) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,

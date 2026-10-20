@@ -245,6 +245,12 @@ pub(crate) struct Settings {
     /// from the older head still carries. `0` disables the arm. Parsed in the
     /// same block as `max_rounds`; resolved by `carry_interdiff_lines_resolved`.
     pub(super) carry_interdiff_lines: Option<i64>,
+    /// config.review.hold_ttl_minutes (default 90, clamped into the claim
+    /// bounds at read): how long the review-hold lease lives. Parsed in the
+    /// same block as max_rounds; resolved by `review_hold::resolve_ttl_ms`.
+    /// A fractional value coerces; a malformed one stays None so the default
+    /// applies, exactly like the other lax review leaves.
+    pub(super) hold_ttl_minutes: Option<f64>,
     /// config.review.nudge: per-login overrides for the bot-review
     /// nudge, resolved against BOT_PROFILES by `resolved_nudge_configs`. Empty =
     /// no overrides (the built-in profiles alone decide nudgeability). A
@@ -716,6 +722,17 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
                 .or_else(|| v.as_str().and_then(|raw| raw.trim().parse::<i64>().ok()));
             if parsed.is_some_and(|n| n >= 0) {
                 s.carry_interdiff_lines = parsed;
+            }
+        }
+        if let Some(v) = review.get("hold_ttl_minutes") {
+            // A number (minutes; fractional coerces) or its string form;
+            // anything else stays None -> the default 90, so a typo cannot
+            // shrink or balloon the hold lease.
+            let parsed = v
+                .as_f64()
+                .or_else(|| v.as_str().and_then(|raw| raw.trim().parse::<f64>().ok()));
+            if parsed.is_some_and(|n| n.is_finite()) {
+                s.hold_ttl_minutes = parsed;
             }
         }
         if let Some(v) = review.get("self_review_required") {

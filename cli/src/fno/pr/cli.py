@@ -41,10 +41,17 @@ def _select_pr_worktree(ctx: typer.Context) -> None:
     if not (command := ctx.invoked_subcommand) or command not in {"verify", "status", "base-lineage-check", "merge-result-check", "coverage-check"}:
         return
     if pr := next((arg.partition("=")[2] if arg.startswith("--pr-number=") else arg for arg in sys.argv[sys.argv.index(command) + 1:] if arg.isdigit() or arg.startswith("--pr-number=")), None):
-        from fno.pr._review_hold import resolve_pr_worktree
+        from fno.rust_binary import VerbUnavailable, verb_call
 
         try:
-            worktree = resolve_pr_worktree(int(pr), os.getcwd())
+            answer = verb_call("pr-worktree", {"pr": int(pr), "cwd": os.getcwd()})
+            worktree = str(answer.get("worktree") or "")
+        except VerbUnavailable as exc:
+            # "" = no local worktree on the PR branch: nothing to select, and
+            # the command's own checkout lists every worktree of the repo.
+            if exc.returncode == 3 and "no local worktree" in str(exc):
+                return
+            raise typer.BadParameter(str(exc)) from exc
         except Exception as exc:
             raise typer.BadParameter(str(exc)) from exc
         # "" = no local worktree on the PR branch: nothing to select, and the
@@ -508,185 +515,21 @@ def _parse_flags(flags_json: Optional[str]) -> Optional[List[str]]:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, list) and all(isinstance(flag, str) for flag in parsed) else None
-
-
 @pr_app.command(
     "review-hold",
     hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "Register, clear, or read the hold that says a review of this PR's head "
         "is RUNNING. Merge readiness only knows what verdicts EXIST for a head, "
         "so a review still writing its fixes is invisible to it. Actions: "
-        "check <pr> (exit 0 clear, 3 held, 4 unanswered), acquire, release, round."
+        "check <pr> (exit 0 clear, 3 held, 4 unanswered), acquire, release, "
+        "metadata, round. Answered by the fno-agents claim verb's review-hold "
+        "sub-token; the flags pass through unchanged."
     ),
 )
-def review_hold(
-    action: str = typer.Argument(..., help="check | acquire | release | round"),
-    pr_number: Optional[int] = typer.Argument(None, help="GitHub PR number (check)"),
-    branch: Optional[str] = typer.Option(None, "--branch", help="Head branch (acquire/release)."),
-    head: str = typer.Option("", "--head", help="The head sha being reviewed (acquire)."),
-    holder: Optional[str] = typer.Option(None, "--holder", help="Who holds the review."),
-    verb: Optional[str] = typer.Option(None, "--verb", help="Which review verb is running."),
-    invocation_id: Optional[str] = typer.Option(
-        None, "--invocation-id", help="Review invocation telemetry join id."
-    ),
-    args_raw: Optional[str] = typer.Option(
-        None, "--args-raw", help="Review arguments preserved for invocation telemetry."
-    ),
-    level: Optional[str] = typer.Option(None, "--level", help="Parsed review level."),
-    level_source: Optional[str] = typer.Option(
-        None, "--level-source", help="Source of the parsed review level."
-    ),
-    flags_json: Optional[str] = typer.Option(
-        None, "--flags-json", help="JSON array of parsed review flags."
-    ),
-    ttl_minutes: Optional[float] = typer.Option(
-        None, "--ttl-minutes", help="Override config.review.hold_ttl_minutes."
-    ),
-    repo: Optional[str] = typer.Option(None, "--repo", help="Repository working directory."),
-) -> None:
-    from fno.pr import _review_hold
-
-    cwd = repo or os.getcwd()
-    if action == "check":
-        if pr_number is None:
-            typer.echo("review-hold check needs a PR number", err=True)
-            raise typer.Exit(code=1)
-        from fno.pr._merge import _pr_head_ref_and_oid
-
-        refs = _pr_head_ref_and_oid(pr_number, cwd)
-        if refs is None:
-            # Exit 4 is the named-instrument-failure code `coverage-check` uses,
-            # and a caller that cannot import fno reads it the same way: the
-            # probe died, so this is not a verdict.
-            typer.echo(
-                f"PR {pr_number}: could not resolve the head branch; no in-flight "
-                "review could be ruled out",
-                err=True,
-            )
-            raise typer.Exit(code=4)
-        branch, head, _state = refs
-        refusal = _review_hold.review_hold_refusal(branch, pr_head=head, repo=cwd)
-        if refusal:
-            typer.echo(refusal, err=True)
-            raise typer.Exit(code=3)
-        typer.echo(f"PR {pr_number}: no review in flight on {branch}")
-        raise typer.Exit(code=0)
-
-    if not branch and not (action == "acquire" and pr_number is not None):
-        typer.echo(f"review-hold {action} needs --branch", err=True)
-        raise typer.Exit(code=1)
-    # A PR-number acquire resolves the branch below; every path reaching here
-    # otherwise holds one. Rebound so the callers read as typed.
-    branch = branch or ""
-    if action == "release":
-        # --holder is OPTIONAL here, and omitting it is the normal case: this is
-        # a lane lock, not an ownership assertion. The refusal an operator reads
-        # prints exactly `--branch <b>`, so requiring more would make the one
-        # documented recovery command exit 1.
-        released = _review_hold.release_review_hold(branch, holder=holder)
-        # Say which happened. "released" printed over an absent hold is the
-        # absence-as-success shape, on the one recovery path there is.
-        typer.echo(
-            f"review-hold: released {branch}" if released else f"review-hold: no hold on {branch}"
-        )
-        raise typer.Exit(code=0)
-    if action == "metadata":
-        from fno.claims.core import claim_status
-
-        typer.echo(json.dumps(claim_status(_review_hold.review_hold_key(branch))))
-        raise typer.Exit(code=0)
-    if action == "round":
-        if not head:
-            typer.echo("review-hold round needs --head", err=True)
-            raise typer.Exit(code=1)
-        # The instrument must have RUN: an empty chain is an absence with more
-        # than one explanation, and journals missing on both mirrors means no
-        # read ever answered. Fail closed so the caller stamps nothing rather
-        # than trusting a zero-shaped read.
-        from fno.pr._reviews import _coverage_logs
-
-        try:
-            journal_paths = _coverage_logs(cwd)[:2]
-        except Exception:  # noqa: BLE001 - a dead probe never mints a round
-            raise typer.Exit(code=1) from None
-        if not any(path is not None and path.exists() for path in journal_paths):
-            raise typer.Exit(code=1)
-        try:
-            round_no = _review_hold.scoped_verify_round(branch, head, cwd=cwd)
-        except Exception:  # noqa: BLE001 - fail closed: no number, no stamp
-            raise typer.Exit(code=1) from None
-        typer.echo(round_no)
-        raise typer.Exit(code=0)
-    if not holder:
-        typer.echo("review-hold acquire needs --holder", err=True)
-        raise typer.Exit(code=1)
-    if action == "acquire":
-        if pr_number is not None:
-            # a review that names its PR keys the hold on that PR's head
-            # ref, resolved from GitHub - never on whatever branch this checkout
-            # stands on. No hold rather than a guessed one: a hold on a
-            # bystander branch reports protection of a PR it is not protecting.
-            # The verb runs inside a PreToolUse hook, so the read is bounded.
-            from fno.pr._merge import _pr_head_ref_and_oid
-
-            try:
-                refs = _pr_head_ref_and_oid(
-                    pr_number, cwd, runner=functools.partial(run, timeout=10)
-                )
-            except subprocess.TimeoutExpired:
-                refs = None
-            if refs is None:
-                typer.echo(
-                    f"review-hold: not registered on PR {pr_number}: the PR read failed; "
-                    "no hold rather than a guessed branch",
-                    err=True,
-                )
-                raise typer.Exit(code=0)
-            resolved_branch, resolved_head, resolved_state = refs
-            if resolved_state != "OPEN":
-                typer.echo(
-                    f"review-hold: not registered on PR {pr_number}: {resolved_state}; "
-                    "no hold rather than a guessed branch",
-                    err=True,
-                )
-                raise typer.Exit(code=0)
-            # The PR's own head ref and head replace whatever the caller passed.
-            branch = resolved_branch
-            head = resolved_head
-        flags = _parse_flags(flags_json)
-        # The cap gate: the prefixed line lets the hook surface the denial;
-        # policy, not infra, so the one acquire failure that blocks.
-        refusal = _review_hold.review_invocation_refusal(branch, head, flags=flags, cwd=cwd)
-        if refusal:
-            typer.echo(f"review-invocation-refused: {refusal}")
-            raise typer.Exit(code=3)
-        advisory = _review_hold.verify_fixes_advisory(branch, head, cwd=cwd)
-        if advisory:
-            typer.echo(advisory, err=True)
-        claim = _review_hold.acquire_review_hold(
-            branch,
-            head=head,
-            holder=holder,
-            verb=verb,
-            invocation_id=invocation_id,
-            args_raw=args_raw,
-            level=level,
-            level_source=level_source,
-            flags=flags,
-            ttl_ms=(_review_hold.resolve_ttl_ms(ttl_minutes) if ttl_minutes is not None else None),
-        )
-        if claim is None:
-            # Registration never blocks a review from starting: an unheld review
-            # is still covered by the worktree layer, and a review that refuses
-            # to start because a lockfile write failed is strictly worse.
-            typer.echo(f"review-hold: not registered on {branch}", err=True)
-            raise typer.Exit(code=0)
-        typer.echo(f"review-hold: holding {branch} at {head or 'an unrecorded head'}")
-        raise typer.Exit(code=0)
-    typer.echo(f"unknown review-hold action: {action}", err=True)
-    raise typer.Exit(code=1)
-
+def review_hold(ctx: typer.Context) -> None:
+    _forward_to_binary("claim", ["review-hold", *ctx.args])
 
 @pr_app.command("hold-check", hidden=True)
 def hold_check(

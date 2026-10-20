@@ -1278,11 +1278,18 @@ def run_merge(
     pr_number = int(pr_raw)
 
     try:
-        from fno.pr._review_hold import resolve_pr_worktree
+        from fno.rust_binary import VerbUnavailable, verb_call
 
         # "" = no local worktree on the PR branch: the gates below probe from
         # this checkout, whose worktree list still enumerates every worktree.
-        repo = resolve_pr_worktree(pr_number, repo) or repo
+        answer = verb_call("pr-worktree", {"pr": pr_number, "cwd": repo})
+        repo = str(answer.get("worktree") or "") or repo
+    except VerbUnavailable as exc:
+        if exc.returncode == 3 and "no local worktree" in str(exc):
+            pass
+        else:
+            _emit(pr_number, "held", str(exc), "none", err=True)
+            return 2
     except Exception as exc:
         _emit(pr_number, "held", str(exc), "none", err=True)
         return 2

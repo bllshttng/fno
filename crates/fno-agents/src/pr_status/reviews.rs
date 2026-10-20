@@ -939,8 +939,33 @@ now ships the code the review is still fixing. Clear it with `fno do pr review-h
                 .map(|r| r.holder.clone())
                 .unwrap_or_else(|| "unknown".into());
             eprintln!(
-                "note: review hold on {branch} expired (holder {holder}); it no longer blocks. \
-A review hold is a lease: it lapses on its TTL whether or not the holder session still runs."
+                "note: review hold on {branch} expired (holder {holder}, expires_at {}); it no longer blocks. \
+A review hold is a lease: it lapses on its TTL whether or not the holder session still runs.",
+                record.as_ref().and_then(|r| r.expires_at).map(|v| v.to_string()).unwrap_or_else(|| "null".into())
+            );
+            // Ages out, but never silently: a lane that clears with no
+            // receipt is indistinguishable from one that was never held.
+            // Same envelope the Python `_emit_expired` writes, through the
+            // claims audit writer (Branch-A parity, claims.rs:782).
+            crate::claims::emit_audit_event(
+                None,
+                "review_hold_expired",
+                serde_json::Map::from_iter([
+                    ("key".to_string(), json!(key)),
+                    ("holder".to_string(), json!(holder)),
+                    (
+                        "head_sha".to_string(),
+                        json!(record
+                            .as_ref()
+                            .and_then(|r| r.metadata.get("head_sha"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")),
+                    ),
+                    (
+                        "expires_at".to_string(),
+                        json!(record.as_ref().and_then(|r| r.expires_at)),
+                    ),
+                ]),
             );
             let _ = crate::claims::release(
                 &key,
