@@ -51,7 +51,7 @@ source "$HOOK_DIR/../scripts/lib/reconcile-throttle.sh" 2>/dev/null || exit 0
 #     (no binary, or an fno-agents predating the door) the legacy spelling
 #     answers; the failed-door path still never blocks the reconcile trigger.
 RETRO_PENDING_DIR="${RETRO_PENDING_DIR:-$("${FNO_AGENTS_BIN:-fno-agents}" state path dir retro-pending 2>/dev/null || true)}"
-[[ -n "$RETRO_PENDING_DIR" ]] || RETRO_PENDING_DIR="$HOME/.fno/retro-pending"
+[[ -n "$RETRO_PENDING_DIR" ]] || RETRO_PENDING_DIR="$HOME/.fno/retro-pending" # state-root: legacy fallback
 if [[ -n "$RETRO_PENDING_DIR" && -d "$RETRO_PENDING_DIR" ]]; then
     # Fail-open inside the substitution: under this hook's `set -euo pipefail`, a
     # non-zero `find` (permission race, dir removed after the -d check) would

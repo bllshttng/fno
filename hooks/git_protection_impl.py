@@ -283,7 +283,7 @@ def _push_stamp_path(branch):
     if proc.returncode == 0 and proc.stdout.strip():
         base = proc.stdout.strip()
     else:
-        base = str(FNO_HOME / "push-stamps")
+        base = str(FNO_HOME / "push-stamps")  # state-root: legacy fallback
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", branch or "HEAD")
     return Path(base) / f"{safe}.stamp"
 

@@ -64,7 +64,7 @@ fi
 # next daemon start.
 if [[ -n "$SESSION_ID" ]]; then
   ATTEST_DIR="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest 2>/dev/null || true)"
-  [[ -n "$ATTEST_DIR" ]] || ATTEST_DIR="${FNO_HOME:-$HOME/.fno}/attest"
+  [[ -n "$ATTEST_DIR" ]] || ATTEST_DIR="${FNO_HOME:-$HOME/.fno}/attest" # state-root: legacy fallback
   SIDE="$ATTEST_DIR/${SESSION_ID}.json"
   mkdir -p "$(dirname "$SIDE")" 2>/dev/null || true
   TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
