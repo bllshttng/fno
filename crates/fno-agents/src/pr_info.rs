@@ -41,7 +41,7 @@ pub(crate) fn run_op(payload: &Value) -> Value {
             // resolution itself moves to the GraphQL transport (the adapter
             // resolves the current branch when no selector is passed), and a
             // fallback that answers nothing hands back the REST refusal.
-            if reason.rate_limit_class == "core" {
+            if reason.rate_limit_class == "core" && fallback_serves_repo(cwd, repo) {
                 if let Some(info) = fallback_payload(cwd, None) {
                     return info;
                 }
@@ -53,13 +53,28 @@ pub(crate) fn run_op(payload: &Value) -> Value {
     match fetch_rest(pr, cwd, repo) {
         Ok(info) => info,
         Err(reason) => {
-            if reason.rate_limit_class == "core" {
+            if reason.rate_limit_class == "core" && fallback_serves_repo(cwd, repo) {
                 if let Some(info) = fallback_payload(cwd, Some(pr)) {
                     return info;
                 }
             }
             json!({"pr": pr, "error": reason.text})
         }
+    }
+}
+
+/// Whether the fallback read may serve this ask: the fallback resolves its
+/// repository from cwd, so an explicit `--repo` naming a different
+/// repository must not fall back - the GraphQL answer would be a different
+/// repo's pull request at the same number. Outside any repository the
+/// fallback read itself cannot resolve a repo, so it is skipped too.
+fn fallback_serves_repo(cwd: &Path, repo: Option<&str>) -> bool {
+    match repo {
+        None => true,
+        Some(wanted) => match crate::backlog::pr_link::resolve_current_repo_slug(cwd.to_str()) {
+            Some(slug) => slug == wanted,
+            None => false,
+        },
     }
 }
 
@@ -147,11 +162,13 @@ fn resolve_slug(cwd: &Path, repo: Option<&str>) -> Result<String, RestReason> {
 /// The fallback: the same selector through `read_pr_view`, whose brokered
 /// GraphQL fallback this op borrows wholesale - the earned checks, the quota
 /// probe, and the bounded spawns are the stop gate's, not a second impl.
-/// The binary resolves as the stop gate's does, so a test injects a fake the
-/// same way. None when the fallback answers nothing: the caller keeps the
-/// ORIGINAL REST refusal, whose rate-limit wording is what downstream
-/// classifiers read (the broker's own refusal prose carries neither the
-/// marker nor a park trigger).
+/// The primary read inside it re-attempts the REST fetch that just refused;
+/// that costs one refused request and buys one owner for the whole
+/// transport decision. The binary resolves as the stop gate's does, so a
+/// test injects a fake the same way. None when the fallback answers
+/// nothing: the caller keeps the ORIGINAL REST refusal, whose rate-limit
+/// wording is what downstream classifiers read (the broker's own refusal
+/// prose carries neither the marker nor a park trigger).
 fn fallback_payload(cwd: &Path, pr: Option<u64>) -> Option<Value> {
     let gh_bin =
         std::env::var("FNO_LOOPCHECK_GH_BIN").unwrap_or_else(|_| "fno-gh-loopcheck".into());
