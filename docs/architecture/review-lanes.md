@@ -483,7 +483,7 @@ Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` ga
 
 The fresh row's provenance feeds the posture `independent` component, which rewards only a positive `reviewer_context=fresh` marker at the reviewed head. Coverage counting is unchanged: every `reviewed` verdict counts regardless of origin.
 
-The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Setup would read it to offer the install. The lane would read it to pick fresh or fall back to self. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
+The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Its designed readers are setup, for the install offer, and the lane, for the fresh-vs-self pick. None ships here. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
 
 ## The pass condition and the four verdict states
 
