@@ -8506,7 +8506,7 @@ event_types:
     data:
       required: []
   - name: spawn_defaults_applied
-    description: "Spawn compose: the defaults one spawn resolved, by axis and rung, with the regen script's fingerprint."
+    description: "Spawn compose: the defaults one spawn resolved, by axis and rung, with the config fingerprint."
     sources: [agents]
     data:
       required: [name, fingerprint]

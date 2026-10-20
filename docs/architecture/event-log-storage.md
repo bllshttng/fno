@@ -39,12 +39,13 @@ collision. A failed commit never falls back to a file write.
 
 A pruned row is gone, but its count stays. Each delete batch adds its rows to the `event_rollup` table in the same transaction. The key is the UTC day, the kind, and a subject. The subject is the arm of a tick, `guard:decision` of a guard row, the state of an inside-leg row, and empty for the rest. `occurrences` sums each row's `occurrence_count`, so a coalesced poll counts every poll it stood for. The rollup never expires. It grows by one row per kind and subject per day.
 
-`fno doctor event signals [--events <journal>] [--window-hours 24] [--pruned-days 30] [--check]` reads those shapes. Its `pruned` list totals the rollup per kind and subject over `--pruned-days`. It is read-only and flags four shapes:
+`fno doctor event signals [--events <journal>] [--window-hours 24] [--pruned-days 30] [--check]` reads those shapes. Its `pruned` list totals the rollup per kind and subject over `--pruned-days`. It is read-only and flags five shapes:
 
 - `burst`: one type wrote 1,000 rows in one minute.
 - `spike`: one type is at 5 times its prior daily average.
 - `arm_errors`: an arm's tick detail reported a failure 10 times.
 - `daemon_restarts`: the daemon started more than 12 times.
+- `legacy_journal`: a receipt row in the window carries `repeat`, the mark of a writer recreating the retired root journal family after its import-and-park pass.
 
 If any signal fires, `--check` exits 3.
 

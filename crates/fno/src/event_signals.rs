@@ -1,6 +1,6 @@
 //! `fno doctor event signals`: read the store for patterns that point at a
 //! fault. One row of telemetry is noise; the shape of many rows is the
-//! signal. The verb flags four shapes over a window (24h by default):
+//! signal. The verb flags five shapes over a window (24h by default):
 //!
 //! - `burst`: one event type wrote at least `burst_rows` rows in one minute.
 //! - `spike`: a type wrote at least `spike_rows` rows in the window and at
