@@ -189,7 +189,7 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
     # The stack file lives beside the flight's records, the dir the receipt
     # names. An older binary sends no record_dir: the watch arms without it.
     stack_path = Path(flight.record_dir) / f"stack-{os.getpid()}.txt" if flight.record_dir else None
-    fh = None
+    fh: IO[str] | None = None
     if stack_path is not None:
         try:
             stack_path.parent.mkdir(parents=True, exist_ok=True)
