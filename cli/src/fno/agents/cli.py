@@ -1481,9 +1481,9 @@ def cmd_spawn(
             seatable = thread_seatable(harness)
         except DispatchResolveError:  # an undeclared harness seats no thread
             seatable = False
-        why = uncarried and f"has no carrier for {uncarried}"
-        why = why or (not seatable and "is not seatable")
-        if why:
+        why = f"has no carrier for {uncarried}" if uncarried else ""
+        if why or not seatable:
+            why = why or "is not seatable"
             print(
                 f"fno agents spawn: the {harness} thread lane {why}; add --as pane",
                 file=sys.stderr,
