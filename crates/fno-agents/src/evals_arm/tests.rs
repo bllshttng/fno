@@ -270,7 +270,6 @@ fn fresh_bank_run_failure_journals_but_files_no_task() {
     let tmp = TempDir::new().unwrap();
     let events = tmp.path().join("events.jsonl");
     let notify_log = tmp.path().join("notify.log");
-    let history = tmp.path().join("history.jsonl");
     // A fixture whose evals run exits nonzero.
     let mut script = String::from("#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    exit 3\n    ;;\n  inbox/notify)\n    echo \"$*\" >> '");
     script += &notify_log.to_string_lossy();
