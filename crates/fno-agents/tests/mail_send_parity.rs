@@ -127,11 +127,34 @@ impl Leg {
 }
 
 fn json_sorted_compact(text: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+    let mut value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
     if !value.is_object() {
         return None;
     }
+    // preserve_order keeps the re-dump at insertion order; the capture driver
+    // sorted, so sort here at every nesting level to match it.
+    sort_keys(&mut value);
     Some(value.to_string())
+}
+
+fn sort_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (_, v) in map.iter_mut() {
+                sort_keys(v);
+            }
+            let mut pairs: Vec<(String, serde_json::Value)> =
+                std::mem::take(map).into_iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            *map = pairs.into_iter().collect();
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                sort_keys(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn normalize(text: &str, root: &Path) -> String {
