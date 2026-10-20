@@ -128,8 +128,10 @@ emit_run_event() {
 
 notify_operator() {
   # Step 5: one inbox item naming the output path when patches landed, one
-  # attention item naming the reason on a refusal. A pin carries no options
-  # and an ask line. Best-effort on both legs.
+  # attention item naming the reason on a REFUSAL (exit 2) only. An API
+  # failure (exit 1) stays in the receipts and the event row: the S0 watcher
+  # retries it within 15 minutes, and a pin per transient failure would
+  # spam the operator queue through every outage.
   local rc="$1"
   if [[ "$rc" == "0" ]]; then
     [[ -n "${PATCH_COUNT:-}" && "$PATCH_COUNT" -gt 0 ]] || return 0
@@ -138,7 +140,10 @@ notify_operator() {
       --pointer "$OUTPUT_PATH" >/dev/null 2>&1 || true
     return 0
   fi
-  local reason="${REASON:-run failed (see stderr)}"
+  if [[ "$rc" != "2" ]]; then
+    return 0
+  fi
+  local reason="${REASON:-validation refusal (see stderr)}"
   run_fno inbox outstanding ask "$reason" \
     --subject "autocorrect review" \
     --ask "clear once the launchd key or the packet problem is fixed" >/dev/null 2>&1 || true
