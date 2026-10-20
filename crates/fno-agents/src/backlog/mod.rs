@@ -83,6 +83,7 @@ pub mod relations;
 pub mod render;
 pub mod requests;
 pub mod schema_v4;
+pub mod scorecard;
 pub mod search;
 pub mod session_cli;
 pub mod sessions;

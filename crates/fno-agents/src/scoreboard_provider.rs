@@ -304,8 +304,9 @@ fn row_shipped(row: &Value, by_node: &Map<String, Value>) -> bool {
 
 /// The ported `_node_outcome` (fold.py:488): `reverted` flag, else a
 /// caused_by fix node within the follow-up window -> bounced, else
-/// merged_clean. An un-time-boundable fix counts against the node.
-fn node_outcome(
+/// merged_clean. An un-time-boundable fix counts against the node. Shared
+/// with the by-lane scorecard, which reuses the same bounce read per node.
+pub(crate) fn node_outcome(
     nid: &str,
     shipped_at: Option<chrono::NaiveDateTime>,
     by_id: &HashMap<&str, &Value>,

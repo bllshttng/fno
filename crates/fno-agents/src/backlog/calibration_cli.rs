@@ -4,17 +4,22 @@
 //! computation; this module owns argv, I/O and render).
 
 use super::calibration::{aggregate, compute, friction_counts_by_node};
+use super::scorecard;
 use serde_json::{json, Value};
 
 struct CalibrationArgs {
     domain: Option<String>,
     json_out: bool,
+    by_lane: bool,
+    since: Option<i64>,
 }
 
 impl CalibrationArgs {
     fn parse(tail: &[String]) -> Option<CalibrationArgs> {
         let mut domain = None;
         let mut json_out = false;
+        let mut by_lane = false;
+        let mut since = None;
         let mut i = 0;
         while i < tail.len() {
             match tail[i].as_str() {
@@ -23,17 +28,32 @@ impl CalibrationArgs {
                     domain = Some(tail.get(i)?.clone());
                 }
                 "--json" | "-J" => json_out = true,
+                "--by-lane" => by_lane = true,
+                "--since" => {
+                    i += 1;
+                    since = Some(tail.get(i)?.parse().ok()?);
+                }
                 // No positional arguments: any other token (flag-shaped or
                 // not) is a usage error.
                 _ => return None,
             }
             i += 1;
         }
-        Some(CalibrationArgs { domain, json_out })
+        // --since alone names no view the plain read takes, so it is a usage
+        // error rather than a silently ignored flag.
+        if since.is_some() && !by_lane {
+            return None;
+        }
+        Some(CalibrationArgs {
+            domain,
+            json_out,
+            by_lane,
+            since,
+        })
     }
 }
 
-const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  -h, --help             Print help";
+const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  -h, --help             Print help";
 
 pub fn run(tail: &[String]) -> i32 {
     if tail.iter().any(|t| t == "--help" || t == "-h") {
@@ -42,7 +62,7 @@ pub fn run(tail: &[String]) -> i32 {
     }
     let Some(args) = CalibrationArgs::parse(tail) else {
         eprintln!(
-            "fno backlog calibration: usage: fno backlog calibration [-d DOMAIN] [-J] (--help for detail)"
+            "fno backlog calibration: usage: fno backlog calibration [-d DOMAIN] [-J] [--by-lane [--since DAYS]] (--help for detail)"
         );
         return 2;
     };
@@ -50,13 +70,22 @@ pub fn run(tail: &[String]) -> i32 {
     // graph directly and has no Python/external-tracker leg to forward to
     // (unlike get/find), so an external backend must refuse rather than
     // silently compute over a store the tracker no longer treats as
-    // authoritative.
+    // authoritative. The by-lane scorecard shares the refusal: it reads the
+    // same store.
     if crate::graph_get::external_backend_selected() {
         eprintln!(
             "fno backlog calibration: this verb reads graph state directly; under an \
 external tracker backend it is refused rather than computed over a non-authoritative store."
         );
         return 1;
+    }
+    if args.by_lane {
+        let since_days = args.since.unwrap_or(28);
+        if since_days < 1 {
+            eprintln!("fno backlog calibration: --since must be at least 1");
+            return 2;
+        }
+        return run_by_lane(since_days, args.json_out, args.domain.as_deref());
     }
     let graph_path = super::settings::graph_path();
     let query = super::RowQuery {
@@ -117,6 +146,116 @@ external tracker backend it is refused rather than computed over a non-authorita
             a.node_count,
             a.smooth_count,
             a.avg_cost_usd,
+        );
+    }
+    0
+}
+
+/// The by-lane scorecard path: every live node, the native ledger read and
+/// the friction journal, folded per lane cell. The lane axes and the cell
+/// shape live in `scorecard`; this stays argv, reads and render.
+fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
+    let graph_path = super::settings::graph_path();
+    let query = super::RowQuery {
+        filter: super::api::NodeFilter::default(),
+        ..Default::default()
+    };
+    let nodes = match super::read_entries_where(&graph_path, &query) {
+        Ok(rows) => rows,
+        Err(err) => {
+            eprintln!("fno backlog calibration: could not read the graph cleanly: {err}");
+            return super::get_cli::GRAPH_UNREADABLE_EXIT;
+        }
+    };
+    let ledger = scorecard::LedgerIndex::load();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let journal = crate::paths::events_path(&cwd);
+    let friction_by_node = friction_counts_by_node(&journal);
+    let records = scorecard::build_records(
+        &nodes,
+        &ledger,
+        &friction_by_node,
+        since_days,
+        chrono::Local::now().naive_local(),
+        domain,
+    );
+    let cells = scorecard::fold_cells(&records);
+    let cov = scorecard::coverage(&records);
+    if json_out {
+        println!(
+            "{}",
+            super::render::py_json_pretty(&json!({
+                "since_days": since_days,
+                "coverage": cov,
+                "cells": cells,
+            }))
+        );
+        return 0;
+    }
+    if cells.is_empty() {
+        println!(
+            "fno backlog calibration --by-lane: no node has an execute session ending in the last {since_days}d"
+        );
+        return 0;
+    }
+    println!("fno backlog calibration --by-lane (last {since_days}d)\n");
+    println!("Coverage");
+    println!("  nodes in window:     {}", cov["nodes"]);
+    for (label, key) in [
+        ("harness", "harness_pct"),
+        ("provider", "provider_pct"),
+        ("model", "model_pct"),
+        ("cost", "cost_pct"),
+    ] {
+        println!("  {label:<19}{}%", cov[key]);
+    }
+    println!(
+        "\n  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}",
+        "kind",
+        "harness",
+        "provider",
+        "model",
+        "nodes",
+        "merged",
+        "spend$",
+        "$/merged",
+        "med hrs",
+        "bounce%",
+        "ci/n",
+        "rev/n"
+    );
+    for c in &cells {
+        let fmt = |v: &Value| -> String {
+            v.as_f64()
+                .map(|f| {
+                    if f.fract() == 0.0 {
+                        format!("{}", f as i64)
+                    } else {
+                        format!("{f}")
+                    }
+                })
+                .unwrap_or_else(|| "n/a".to_string())
+        };
+        println!(
+            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10.2}{:>10}{:>9}{bounce:>9}{:>7}{:>7}",
+            c["kind"].as_str().unwrap_or_default(),
+            c["harness"].as_str().unwrap_or_default(),
+            c["provider"].as_str().unwrap_or_default(),
+            c["model"].as_str().unwrap_or_default(),
+            c["nodes"].as_i64().unwrap_or(0),
+            c["merged"].as_i64().unwrap_or(0),
+            c["spend_usd"].as_f64().unwrap_or(0.0),
+            fmt(&c["cost_per_merged_usd"]),
+            fmt(&c["median_work_hours"]),
+            bounce = fmt(&c["bounce_pct"]),
+            c["ci_failure_per_node"]
+                .as_f64()
+                .map(|f| format!("{f:.2}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            c["review_round_per_node"]
+                .as_f64()
+                .map(|f| format!("{f:.2}"))
+                .unwrap_or_else(|| "n/a".to_string()),
         );
     }
     0
