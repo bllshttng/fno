@@ -1030,7 +1030,7 @@ fn run(args: &[String]) -> (i32, String, String) {
             (code, format!("{decision}\n"), stderr)
         }
         "required" => {
-            let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let mut base = "origin/main".to_string();
             let mut i = 0;
             while i < rest.len() {
@@ -1051,7 +1051,7 @@ fn run(args: &[String]) -> (i32, String, String) {
             )
         }
         "next-generation" => {
-            let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let mut sha = String::new();
             let mut i = 0;
             while i < rest.len() {

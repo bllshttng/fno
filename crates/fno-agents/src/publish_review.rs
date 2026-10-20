@@ -998,7 +998,7 @@ fn run_publish_argv(args: &[String]) -> i32 {
             Some((f, v)) => (f, Some(v.to_string())),
             None => (tok.as_str(), None),
         };
-        let value = |inline: &Option<String>| inline.clone().or_else(|| it.next().cloned());
+        let mut value = |inline: &Option<String>| inline.clone().or_else(|| it.next().cloned());
         match flag {
             "--pr-number" => pr_number = value(&inline).and_then(|v| v.parse().ok()),
             "--pr" => pr_legacy = value(&inline).and_then(|v| v.parse().ok()),

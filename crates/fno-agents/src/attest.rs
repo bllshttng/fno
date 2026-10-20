@@ -18,7 +18,7 @@
 use crate::finalize::repo_identity_from_git_remote;
 use crate::store_remote::{configured, Remote, SqlValue};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) const TABLE: &str = "review_attestation";
 
