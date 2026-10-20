@@ -318,6 +318,11 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
 # ---------------------------------------------------------------------------
 
 
+CANONICAL_ADDRESS_FORMS = [
+    pytest.param("9a063cd3", id="bare-8-hex"),
+]
+
+
 @pytest.mark.parametrize("address", CANONICAL_ADDRESS_FORMS)
 def test_no_guard_rejects_a_canonical_address_before_resolution(address):
     """AC11-EDGE: a validator must never swallow an address that would resolve.
