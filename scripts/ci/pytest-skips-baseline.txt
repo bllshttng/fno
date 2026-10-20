@@ -85,7 +85,6 @@ cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survive
 cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survives_both::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_effect_sequence::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_mail_cli.py::test_named_send_ruling_appends_dated_node_block_before_transport::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mail_name_lane_reply.py::test_reply_refuses_when_unreadable_transcripts_hide_a_short_id_collision::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mutex_steal.py::test_threshold_matches_the_rust_constant::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_operator_capture.py::_native_backlog::pytest.skip  # on main before this ratchet
