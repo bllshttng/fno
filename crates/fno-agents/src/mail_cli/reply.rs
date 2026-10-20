@@ -96,7 +96,7 @@ fn parse_args(args: &[String]) -> Result<ReplyArgs, i32> {
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let flag_value = |name: &str| match it.next() {
+        let mut flag_value = |name: &str| match it.next() {
             Some(v) => Ok(v.clone()),
             None => Err(usage_error(&format!(
                 "Option '{name}' requires an argument."

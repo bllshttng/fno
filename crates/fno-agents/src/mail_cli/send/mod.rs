@@ -34,9 +34,11 @@ use std::path::{Path, PathBuf};
 // The send surface split by question: resolution (who is reachable),
 // engine (the dispatch machinery and live transports), lanes (the
 // address-shape lanes), verify (landing, escalation, liveness).
+// lanes and resolve are crate-visible: the reply leaf is their second
+// caller, and a sibling cannot see a private module.
 mod engine;
-mod lanes;
-mod resolve;
+pub(crate) mod lanes;
+pub(crate) mod resolve;
 mod verify;
 
 use lanes::*;
