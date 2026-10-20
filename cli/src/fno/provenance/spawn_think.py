@@ -55,9 +55,9 @@ from collections.abc import Mapping
 from typing import Optional
 
 from fno import _subprocess_util
-from fno import route_resolve as _route_resolve
 from fno.rust_binary import call_binary_json
 from fno.agents.naming import dispatch_agent_name
+from fno.agents.spawn_defaults import substrate_lane_flags
 from fno.harness_identity import env_marks_unattended, resolve_harness_identity
 from fno.provenance.resolver import resolve_transcript
 from fno.user import display_name
@@ -784,17 +784,6 @@ def _spawn_think_worker(
     resolved_harness = resolved["harness"]
     substrate = resolved["substrate"]
     native_think = resolved["command"]
-    resolved_model = (model or "").strip() or None
-    if resolved_model is None and node is not None:
-        # Left at node_model's default resolution: this seam has NO grid
-        # receiving end (the argv always carries an explicit --harness and
-        # never --node, so the compose's grid stands down), and
-        # resolve_difficulty=False here would silently drop a banded node's
-        # band instead of deferring it (round-3 finding 1).
-        resolved_model = _route_resolve.node_model(
-            node,
-            provider=resolved_harness,
-        )
     portable_think = f"/think {node_id}"
     rendered_prompt = (
         native_think + prompt[len(portable_think) :]
@@ -808,32 +797,12 @@ def _spawn_think_worker(
         "spawn",
         "--harness",
         resolved_harness,
-        "--substrate",
-        substrate,
+        *substrate_lane_flags(substrate),
     ]
     if node_cwd:
         cmd += ["--cwd", node_cwd]
     else:
         cmd += ["--fresh"]
-    # a pinned node's /think worker also runs on the pin (US1 honors it
-    # on the claude/bg arm). Empty/None = provider default, unchanged.
-    if resolved_model:
-        cmd += ["--model", resolved_model]
-    # an explicit permission_mode wins; else the operator's spawn
-    # default (config.agents.defaults.permission_mode); else the built-in
-    # unattended answer.
-    mode = (permission_mode or "").strip()
-    if not mode:
-        try:
-            from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
-
-            mode = (
-                settings_obj.agents.defaults.permission_mode or ""
-            ).strip() or SPAWN_PERMISSION_BUILTIN
-        except Exception:  # noqa: BLE001 - fail-safe to unset (unchanged)
-            mode = ""
-    if mode and (resolved_harness == "claude" or substrate == "pane"):
-        cmd += ["--permission-mode", mode]
     # Behind `--` (fno's own click parser honors it, verified both
     # directions): a leading-flag seed must be the prompt positional.
     cmd += ["--name", agent_name, "--", rendered_prompt]

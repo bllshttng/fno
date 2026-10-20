@@ -368,7 +368,12 @@ fn join_persists_brief_and_enforced_policies_before_each_launch() {
             launches.matches("--sandbox-write-policy").count(),
             if sandbox { 2 } else { 0 }
         );
-        assert!(launches.contains("--model glm-5.3-flash[1m]"));
+        // The joiners seat threads on the lane template: the retired model and
+        // substrate axes never ride the spawn.
+        assert!(
+            !launches.contains("--model") && !launches.contains("--substrate"),
+            "{launches}"
+        );
         let brief = std::fs::read_to_string(w.root.join(".fno/join-briefs/x-aaaa.md")).unwrap();
         assert!(brief.contains(receipt["lead"].as_str().unwrap()));
         assert!(brief.contains("claim ONE ready task"));
@@ -604,8 +609,13 @@ fn advance_reads_real_selection_and_preserves_launch_pins() {
     assert_eq!(receipt["node_id"], "x-aaaa");
     let calls = std::fs::read_to_string(&log).unwrap();
     assert_eq!(calls.lines().count(), 1);
-    assert!(calls.contains("--effort high"), "{calls}");
-    assert!(calls.contains("--model glm-5.3-flash[1m]"));
+    // The node's model and effort pins resolve at the spawn door through
+    // the lane template; the retired axes never ride the launch argv.
+    assert!(
+        !calls.contains("--effort") && !calls.contains("--model"),
+        "{calls}"
+    );
+    assert!(calls.contains("--node x-aaaa"), "{calls}");
     w.claim("x-aaaa", &seed.root);
     let _ = decode(&invoke());
     assert_eq!(

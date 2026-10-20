@@ -65,12 +65,7 @@ def test_codex_successor_uses_bounded_dispatch_without_claude_route(
             "successor",
             "--harness",
             "codex",
-            "--substrate",
-            "pane",
             "--bounded-placement",
-            "--recorded-provider=openai",
-            "--model",
-            "gpt-5.6-sol",
             "--dispatch-account",
             "work",
             "/fno:target --no-merge scratch",
@@ -79,8 +74,7 @@ def test_codex_successor_uses_bounded_dispatch_without_claude_route(
 
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "codex"
-    assert captured["route_provider_id"] == "openai"
+    assert captured["route_provider_id"] is None
     assert captured["account_record_id"] == "work"
-    assert captured["model_name"] == "gpt-5.6-sol"
     assert captured["workspace"] is None
     assert captured["tab"] is None

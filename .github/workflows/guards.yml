@@ -285,6 +285,16 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/tests/test_corrections_insights_tag.sh
 
+      - name: Autocorrect review leaves a receipt pair
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/tests/test_autocorrect_review_receipts.sh
+
+      - name: Autocorrect installer weekly schedule contract
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/tests/test_autocorrect_install_dryrun.sh
+
       - name: PR-create out-of-scope tracking contract
         if: ${{ !cancelled() }}
         timeout-minutes: 5

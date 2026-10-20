@@ -306,6 +306,7 @@ _RUNNER_PASSTHROUGH = (
     # reads it, so the journey skips for someone who set it - an acceptance
     # nobody can run. It spends real tokens only when the flag is set.
     "FNO_CODEX_LIVE",
+    "FNO_CLOUD_LIVE",  # opt-in live cloud journey (cli/tests/agents/test_cloud_spawn_journey.py)
 )
 
 # Toolchain CACHES, not state fno reads. Sandboxing HOME relocates them, which

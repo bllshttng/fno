@@ -246,8 +246,6 @@ def test_sealed_codex_thread_spawn_refuses_a_stale_binary(monkeypatch, tmp_path)
             message="msg",
             cwd=tmp_path,
             from_name="fno",
-            model=None,
-            yolo=False,
             account_env={"HOME": str(tmp_path / "account-home")},
         )
     assert "fno doctor update" in str(excinfo.value)

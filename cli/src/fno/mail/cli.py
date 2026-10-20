@@ -1613,7 +1613,7 @@ def _forced_pane_send(
         print(
             f"error: --force types into a mux pane and {recipient} has none. "
             f"Send without --force (it queues durable), or spawn the recipient "
-            f"with --substrate pane.",
+            f"on the pane lane (--split right).",
             file=sys.stderr,
         )
         raise typer.Exit(code=1)

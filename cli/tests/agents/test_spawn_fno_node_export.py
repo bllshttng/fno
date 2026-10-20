@@ -73,8 +73,7 @@ def test_export_does_not_outlive_the_dispatch(spawned_env: Dict[str, Any]) -> No
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--substrate", "thread", "--node", "x-aaaa"],
+        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude", "--node", "x-aaaa"],
     )
     assert result.exit_code == 0, result.output
     assert spawned_env["env"]["FNO_NODE"] == "x-aaaa"
@@ -94,8 +93,7 @@ def test_provenance_keys_are_set_or_cleared_as_a_group(
     monkeypatch.setenv("FNO_PLAN", "/parent/plan.md")
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--substrate", "thread", "--node", "x-aaaa"],
+        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude", "--node", "x-aaaa"],
     )
     assert result.exit_code == 0, result.output
     assert spawned_env["env"]["FNO_NODE"] == "x-aaaa"
@@ -119,7 +117,7 @@ def test_spawn_overwrites_an_inherited_worker_name(
     monkeypatch.setenv("FNO_WORKER_NAME", "parent-otter")
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w2", "hi", "--harness", "claude", "--substrate", "thread"],
+        ["spawn", "--name", "w2", "hi", "--harness", "claude"],
     )
     assert result.exit_code == 0, result.output
     assert spawned_env["env"]["FNO_WORKER_NAME"] == "w2"

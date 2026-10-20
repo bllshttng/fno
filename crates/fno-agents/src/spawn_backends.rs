@@ -20,6 +20,10 @@ pub enum ResolvedBackend {
     MuxPane,
     /// A client-side one-shot (bg / headless); no durable row from the daemon.
     ClientOneShot,
+    /// The claude cloud lane: a session on Anthropic-managed infrastructure,
+    /// created by the client under a pty and tracked by its remote id. No
+    /// local process, no daemon-held thread.
+    ClaudeCloud,
     /// The harness/substrate combination is genuinely unsupported; the reason
     /// names what the caller can do instead.
     Refused(String),
@@ -57,6 +61,23 @@ pub fn resolve_backend(harness: &str, substrate: &str) -> ResolvedBackend {
             )),
         },
         "pane" => ResolvedBackend::MuxPane,
+        "cloud" => {
+            if harness == "claude" && contract.cloud_row_present() {
+                ResolvedBackend::ClaudeCloud
+            } else if harness == "claude" {
+                ResolvedBackend::Refused(
+                    "cloud spawn refused: the claude row declares no cloud carrier \
+                     in the capability contract; rebuild so the packaged copy and \
+                     the reader agree"
+                        .to_string(),
+                )
+            } else {
+                ResolvedBackend::Refused(format!(
+                    "cloud spawn refused: cloud is a claude-harness substrate; \
+                     {harness} has no cloud session form"
+                ))
+            }
+        }
         "bg" | "headless" => ResolvedBackend::ClientOneShot,
         other => ResolvedBackend::Refused(format!("unknown substrate '{other}'")),
     }

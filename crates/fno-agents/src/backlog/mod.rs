@@ -1165,7 +1165,7 @@ pub(crate) fn emit_gate_event(mutation: &str, wait_ms: u128, retries: u32) {
 
 /// Save one node's whole row set through the owning modules. The caller
 /// owns the transaction; only this node's rows are touched.
-fn save_aggregate(connection: &Connection, node: &Node) -> Result<(), String> {
+pub(crate) fn save_aggregate(connection: &Connection, node: &Node) -> Result<(), String> {
     nodes::save(connection, node)?;
     sessions::save(
         connection,

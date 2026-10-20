@@ -186,7 +186,7 @@ fn drain_receipt_two_territories() {
     assert_case("drain_two_territories", &fixture, || rust_drain(&fixture));
 
     // Dispatch credit (dispatch_credit): the live role whose scope covers
-    // the node answers for it; a kingless node keeps no owner. Pure core,
+    // the node answers for it; a leadless node keeps no owner. Pure core,
     // so the asserts stay hermetic beside the golden above.
     let projects = std::collections::HashMap::from([
         ("f".to_string(), "fno".to_string()),
@@ -212,22 +212,22 @@ fn drain_receipt_two_territories() {
     assert_eq!(covered["lead"]["session"], "aaaa-bbbb");
 
     let terminal_rows = vec![role("gone", "x-epic", "aaaa-bbbb", "exited")];
-    let kingless = fno_agents::dispatch_credit::covering_role_in(
+    let leadless = fno_agents::dispatch_credit::covering_role_in(
         "x-child",
         Some(&node_row("x-child", "x-epic")),
         &terminal_rows,
         &projects,
     );
-    assert!(kingless["owner"].is_null());
+    assert!(leadless["owner"].is_null());
 
     let elsewhere = vec![role("far", "x-other", "aaaa-bbbb", "live")];
-    let kingless = fno_agents::dispatch_credit::covering_role_in(
+    let leadless = fno_agents::dispatch_credit::covering_role_in(
         "x-child",
         Some(&node_row("x-child", "x-epic")),
         &elsewhere,
         &projects,
     );
-    assert!(kingless["owner"].is_null());
+    assert!(leadless["owner"].is_null());
 
     let specific = vec![
         role("portfolio", "x-a,x-epic", "pppp", "live"),

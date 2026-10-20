@@ -10,6 +10,13 @@
 # Refuses to call the API if any implicated_rules entry is missing full_text -
 # the reviewer would be operating blind. Refuses if ANTHROPIC_API_KEY is unset.
 #
+# Every run leaves a receipt: one start line and one end line in
+# autocorrect-review.log (launchd merges stdout and stderr into that same
+# file), one autocorrect_review_run event in the project journal, and one
+# push channel line - an inbox notification when patches were proposed, an
+# attention item naming the reason on a refusal. All three legs are
+# best-effort; the receipt lines are the trace that never fails.
+#
 # Exit codes:
 #   0  - review captured, patch list written
 #   1  - API failure (rate limit, auth, network); watermark NOT advanced
@@ -24,6 +31,9 @@ PROMPT_FILE="${AUTOCORRECT_PROMPT_FILE:-$REPO_ROOT/skills/autocorrect/references
 CLAUDE_DIR="${CLAUDE_DIR_OVERRIDE:-$HOME/.claude}"
 PATCHES_DIR="$CLAUDE_DIR/proposed-patches"
 
+LOG_DIR="${AUTOCORRECT_LOG_DIR:-$HOME/.claude/logs}"
+LOG_FILE="$LOG_DIR/autocorrect-review.log"
+
 MODEL="${AUTOCORRECT_MODEL:-claude-sonnet-4-6}"
 PACKET_FILE=""
 SEVERITY_LABEL=""
@@ -31,6 +41,148 @@ PACKET_SOURCE="manual"
 MAX_TOKENS=4096
 API_URL="${ANTHROPIC_API_URL:-https://api.anthropic.com/v1/messages}"
 ANTHROPIC_VERSION="2023-06-01"
+
+# Receipt state. INPUT_COUNT / PATCH_COUNT / OUTPUT_PATH / REASON fill in as
+# the run progresses; the EXIT trap reads whatever is set by then.
+REASON=""
+INPUT_COUNT=""
+PATCH_COUNT=""
+OUTPUT_PATH=""
+START_WRITTEN=0
+TMPDIR_R=""
+
+write_receipt() {
+  # The receipt must never flip the run's exit code or abort the trap.
+  printf '%s\n' "$1" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+write_start_receipt() {
+  START_WRITTEN=1
+  # The inline call at packet-read time runs before the trap's mkdir, so the
+  # first receipt of a fresh log dir must create it.
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  write_receipt "$(date -u +%Y-%m-%dT%H:%M:%SZ) autocorrect-review run start source=${PACKET_SOURCE} inputs=${INPUT_COUNT:--}"
+}
+
+refuse() {
+  # refuse <exit-code> <reason>: print the refusal line the old exits
+  # printed, name it for the end receipt, exit.
+  REASON="$2"
+  echo "autocorrect-review: $2" >&2
+  exit "$1"
+}
+
+# run_fno <args...>: run the fno CLI from the best available substrate.
+# FNO_BIN (the same override scripts/lib/events.sh honors) wins, so a
+# hermetic run or a test can point the visibility legs at a stub; then the
+# checkout venv, then fno-py / fno on PATH. Returns 127 when none exists,
+# which every caller treats as skip.
+run_fno() {
+  if [[ -n "${FNO_BIN:-}" ]]; then
+    "$FNO_BIN" "$@"
+    return
+  fi
+  if [[ -x "$REPO_ROOT/cli/.venv/bin/python" ]]; then
+    PYTHONPATH="$REPO_ROOT/cli/src" "$REPO_ROOT/cli/.venv/bin/python" -m fno.cli "$@"
+    return
+  fi
+  if command -v fno-py >/dev/null 2>&1; then
+    fno-py "$@"
+    return
+  fi
+  command -v fno >/dev/null 2>&1 || return 127
+  fno "$@"
+}
+
+emit_run_event() {
+  # One autocorrect_review_run row per run, through the existing emitter
+  # verb. The row is judged against the schema's event_types registry, so
+  # this dies loudly in dev if the type drifts; under launchd with no fno
+  # substrate it is a skip.
+  local rc="$1" outcome="failed" data
+  if [[ "$rc" == "0" ]]; then
+    outcome="ok"
+  elif [[ "$rc" == "2" ]]; then
+    outcome="refused"
+  fi
+  command -v jq >/dev/null 2>&1 || return 0
+  # Pass every field through plainly and strip the absent ones afterwards:
+  # a `select` in object-value position yields an EMPTY stream, which
+  # collapses the whole object construction to no output at all.
+  data=$(jq -cn \
+    --arg outcome "$outcome" \
+    --argjson exit_code "$rc" \
+    --arg packet_source "$PACKET_SOURCE" \
+    --argjson input_count "${INPUT_COUNT:-null}" \
+    --argjson patch_count "${PATCH_COUNT:-null}" \
+    --arg output_path "${OUTPUT_PATH:-}" \
+    --arg reason "${REASON:-}" \
+    '{
+      outcome: $outcome,
+      exit_code: $exit_code,
+      packet_source: $packet_source,
+      input_count: $input_count,
+      patch_count: $patch_count,
+      output_path: $output_path,
+      reason: $reason
+    }
+    | with_entries(select(.value != null and .value != ""))') || return 0
+  (cd "$REPO_ROOT" && run_fno doctor event emit -t autocorrect_review_run -s bash -d "$data") >/dev/null 2>&1 || true
+}
+
+notify_operator() {
+  # Step 5: one inbox item naming the output path when patches landed, one
+  # attention item naming the reason on a REFUSAL (exit 2) only. An API
+  # failure (exit 1) stays in the receipts and the event row: the S0 watcher
+  # retries it within 15 minutes, and a pin per transient failure would
+  # spam the operator queue through every outage.
+  local rc="$1"
+  if [[ "$rc" == "0" ]]; then
+    [[ -n "${PATCH_COUNT:-}" && "$PATCH_COUNT" -gt 0 ]] || return 0
+    # --pointer rides BEFORE the positionals: the notify group callback
+    # refuses an option after them (docs/status-fanout.md).
+    run_fno inbox notify --pointer "$OUTPUT_PATH" \
+      "autocorrect review" \
+      "$PATCH_COUNT patches proposed: $OUTPUT_PATH" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if [[ "$rc" != "2" ]]; then
+    return 0
+  fi
+  local reason="${REASON:-validation refusal (see stderr)}"
+  # --node is a stable synthetic dedup key, not a backlog id: the intake
+  # dedups only when BOTH --subject and --node are set, and without it the
+  # S0 watcher's 15-minute retry would file one pin per tick.
+  run_fno inbox outstanding ask "$reason" \
+    --subject "autocorrect review" \
+    --node autocorrect-review \
+    --ask "clear once the launchd key or the packet problem is fixed" >/dev/null 2>&1 || true
+}
+
+finish_run() {
+  # The one EXIT trap every exit path flows through: the end receipt, the
+  # event row, the push channel, and the tmp cleanup the old trap did.
+  local rc=$?
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  if [[ "$START_WRITTEN" != "1" ]]; then
+    write_start_receipt
+  fi
+  if [[ "$rc" == "0" ]]; then
+    write_receipt "$(date -u +%Y-%m-%dT%H:%M:%SZ) autocorrect-review run end exit=0 patches=${PATCH_COUNT:-0} out=${OUTPUT_PATH:-}"
+  else
+    local outcome="failed"
+    if [[ "$rc" == "2" ]]; then
+      outcome="refused"
+    fi
+    write_receipt "$(date -u +%Y-%m-%dT%H:%M:%SZ) autocorrect-review run end exit=${rc} outcome=${outcome} reason=${REASON:-unspecified (see stderr)}"
+  fi
+  emit_run_event "$rc"
+  notify_operator "$rc"
+  if [[ -n "$TMPDIR_R" && -d "$TMPDIR_R" ]]; then
+    rm -rf "$TMPDIR_R"
+  fi
+  return 0
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -49,6 +201,7 @@ Env:
   AUTOCORRECT_MODEL       overrides default model
   AUTOCORRECT_PROMPT_FILE overrides the prompt template path
   ANTHROPIC_API_URL       overrides the API endpoint (for testing)
+  AUTOCORRECT_LOG_DIR     overrides the receipt log directory
 EOF
   exit 2
 }
@@ -65,33 +218,30 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# From here on the invocation is a run: every exit leaves its receipt pair.
+trap finish_run EXIT
+
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "autocorrect-review: ANTHROPIC_API_KEY env var is required" >&2
-  exit 2
+  refuse 2 "ANTHROPIC_API_KEY env var is required"
 fi
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
-  echo "autocorrect-review: prompt template not found at $PROMPT_FILE" >&2
-  exit 2
+  refuse 2 "prompt template not found at $PROMPT_FILE"
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "autocorrect-review: curl is required" >&2
-  exit 2
+  refuse 2 "curl is required"
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  echo "autocorrect-review: jq is required" >&2
-  exit 2
+  refuse 2 "jq is required"
 fi
 
 # Read packet from file or stdin.
 TMPDIR_R="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_R"' EXIT
 PACKET_TMP="$TMPDIR_R/packet.yaml"
 if [[ -n "$PACKET_FILE" ]]; then
   if [[ ! -f "$PACKET_FILE" ]]; then
-    echo "autocorrect-review: --packet-file not found: $PACKET_FILE" >&2
-    exit 2
+    refuse 2 "--packet-file not found: $PACKET_FILE"
   fi
   cp "$PACKET_FILE" "$PACKET_TMP"
 else
@@ -99,9 +249,17 @@ else
 fi
 
 if [[ ! -s "$PACKET_TMP" ]]; then
-  echo "autocorrect-review: packet is empty" >&2
-  exit 2
+  refuse 2 "packet is empty"
 fi
+
+# The packet is in hand: the start receipt can name its size. The packer's
+# event_count field is the honest count; a hand-rolled packet falls back to
+# counting the events list entries.
+INPUT_COUNT="$(sed -n 's/^event_count: //p' "$PACKET_TMP" | head -1)"
+if [[ -z "$INPUT_COUNT" ]]; then
+  INPUT_COUNT="$(grep -c '^  - timestamp:' "$PACKET_TMP" || true)"
+fi
+write_start_receipt
 
 # Validate: every implicated_rules entry must have a non-empty full_text.
 # Missing full_text means the reviewer would be operating blind on that
@@ -109,7 +267,7 @@ fi
 # fragile to rule files whose contents happened to include a YAML-shaped
 # `full_text:` line (e.g. a rule documenting the packet format itself).
 # Walk the YAML structurally with python's parser instead.
-PACKET_PATH="$PACKET_TMP" python3 - <<'PY' >&2 || exit 2
+PACKET_PATH="$PACKET_TMP" python3 - <<'PY' >&2 || { REASON="rule text not provided for all implicated files"; exit 2; }
 import os, sys, re
 
 with open(os.environ["PACKET_PATH"]) as f:
@@ -156,8 +314,7 @@ PY
 PROMPT_BODY="$TMPDIR_R/prompt.txt"
 awk '/<!-- PROMPT_START -->/{found=1; next} /<!-- PROMPT_END -->/{found=0} found' "$PROMPT_FILE" > "$PROMPT_BODY"
 if [[ ! -s "$PROMPT_BODY" ]]; then
-  echo "autocorrect-review: failed to extract prompt body from $PROMPT_FILE" >&2
-  exit 2
+  refuse 2 "failed to extract prompt body from $PROMPT_FILE"
 fi
 
 # Substitute {PACKET} with the packet contents. Use a sentinel + python so
@@ -198,12 +355,11 @@ HTTP_CODE=$(curl -sS -o "$RESPONSE_BODY" -w "%{http_code}" \
   || true)
 
 if [[ "$HTTP_CODE" != "200" ]]; then
-  echo "autocorrect-review: API call failed with HTTP $HTTP_CODE" >&2
   if [[ -s "$RESPONSE_BODY" ]]; then
     jq -r '.error.message // .' "$RESPONSE_BODY" 2>/dev/null >&2 || cat "$RESPONSE_BODY" >&2
   fi
   echo "autocorrect-review: watermark NOT advanced; rerun with same window to retry" >&2
-  exit 1
+  refuse 1 "API call failed with HTTP ${HTTP_CODE}"
 fi
 
 # Extract text content + usage stats.
@@ -211,7 +367,7 @@ PATCH_TEXT="$TMPDIR_R/patches.md"
 jq -r '.content[]? | select(.type == "text") | .text' "$RESPONSE_BODY" > "$PATCH_TEXT" || {
   echo "autocorrect-review: failed to parse API response" >&2
   jq . "$RESPONSE_BODY" 2>&1 | head -20 >&2
-  exit 1
+  refuse 1 "failed to parse API response"
 }
 
 INPUT_TOKENS=$(jq -r '.usage.input_tokens // 0' "$RESPONSE_BODY")
@@ -237,6 +393,18 @@ chmod 600 "$OUTPUT_PATH" 2>/dev/null || true
 
 # Count patches: simple heuristic - look for "N. Source:" headings.
 PATCH_COUNT=$(grep -cE '^[0-9]+\. Source:' "$PATCH_TEXT" || true)
+
+# The review owns the watermark, and only the weekly run writes it: the
+# file is shared across severities, so an S0 watcher success would move it
+# to now and the next weekly S1/S2 packet would drop every correction since
+# the last Monday. Every scheduled pipeline runs the packer with --dry-run,
+# so a refused run leaves the window intact too. The packet carries the
+# window end.
+WATERMARK_END="$(sed -n 's/^  last_review: //p' "$PACKET_TMP" | head -1)"
+if [[ -n "$WATERMARK_END" && "$PACKET_SOURCE" == "weekly-cron" ]]; then
+  printf '%s\n' "$WATERMARK_END" > "${CLAUDE_DIR}/.corrections-watermark" 2>/dev/null || true
+  chmod 600 "${CLAUDE_DIR}/.corrections-watermark" 2>/dev/null || true
+fi
 
 echo "autocorrect-review: $PATCH_COUNT patches proposed; saved to $OUTPUT_PATH" >&2
 echo "autocorrect-review: usage: ${INPUT_TOKENS} in / ${OUTPUT_TOKENS} out tokens" >&2

@@ -226,14 +226,17 @@ use fire_history::{
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
 #[cfg(test)]
+use gh_read::cause_for_silent_exit;
+#[cfg(test)]
 use gh_read::is_no_pr_stderr;
 use gh_read::{
-    attestation_in_scope, git_head_branch, git_head_sha, graphql_exhausted_reason, head_is_shipped,
-    pr_head_oid, primary_exhaustion_park_s, probe_graphql_quota, read_pr_head_oid, read_pr_view,
-    refusal_is_secondary, stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail,
-    GraphqlQuota,
+    attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
+    graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
+    probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
+    stderr_is_unauthenticated, stderr_smells_rate_limit, GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
+pub(crate) use gh_read::{read_pr_view_fields, PR_INFO_FALLBACK_FIELDS};
 pub(crate) use intent::read_tail_lines;
 #[cfg(test)]
 use intent::INTENT_LOOKBACK_ENTRIES;
@@ -255,6 +258,8 @@ use posture::{
     resolved_required_bots_for_author, PostureConfig, PostureVerdict, LOCAL_PEER_REVIEWER,
     SAME_MODEL_LOCAL_PEER_SENTINEL, SAME_MODEL_PEER_SENTINEL,
 };
+#[cfg(test)]
+use pr_read::manifest_node_pr_selector;
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_verb::{run_review_coverage, run_review_coverage_capture};
@@ -1435,6 +1440,10 @@ pub(crate) fn decide_with_payload(
         } else {
             gh_bin.to_string()
         };
+        // The manifest node's own PR pins the terminal read (merged, deleted
+        // and detached heads stay readable); an absent node or PR keeps the
+        // branch-resolved read exactly as before.
+        let node_pr_selector = pr_read::manifest_node_pr_selector(&cwd, node_id.as_deref());
         let done_result = run_done(
             &done_gh_bin,
             git_bin,
@@ -1460,6 +1469,7 @@ pub(crate) fn decide_with_payload(
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),
             &resolved_local_peer_reviewers_for_author(&settings, author_harness.as_deref()),
+            node_pr_selector.as_deref(),
         );
 
         match done_result {
@@ -2545,6 +2555,10 @@ fn run_done(
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
     peer_reviewers: &[String],
+    // The PR selector the manifest's node resolves (`manifest_node_pr_selector`):
+    // pins the terminal read to the session's own PR so a merged, deleted or
+    // detached head cannot turn the read into a branch-resolution failure.
+    pr_selector: Option<&str>,
 ) -> Result<PrInfo, GhReadError> {
     let info = read_pr_info(
         gh_bin,
@@ -2563,7 +2577,7 @@ fn run_done(
         global_events_path,
         repo_slug,
         author_session,
-        None,
+        pr_selector,
         None,
         github_approval_satisfies,
         max_rounds,

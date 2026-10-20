@@ -29,11 +29,7 @@ from fno.agents.model_routing import (
     unrouted_model_keys,
 )
 from fno.agents.rust_runtime import (
-    _refuse_inherited_tier_remap,
     _scrub_account_auth_at_seam,
-    _warn_env_scrub_spawn,
-    env_scrub_spawn_warning,
-    inherited_tier_remap,
 )
 
 ZAI_ENV = {
@@ -43,45 +39,8 @@ ZAI_ENV = {
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
 }
 
-BASE = ["spawn", "--name", "w", "--substrate", "thread", "hi"]
+BASE = ["spawn", "--name", "w", "hi"]
 
-
-def test_a_role_exempts_only_once_it_resolves_to_a_real_route(monkeypatch):
-    # resolve_route is fail-SAFE: a protected role, a disabled block, an
-    # unconfigured provider or a missing key all return None and leave the
-    # ambient env untouched, so mentioning --role must not exempt on its own.
-    args = [*BASE, "--role", "tidy", "--model", "opus"]
-
-    monkeypatch.setattr(
-        "fno.agents.model_routing.resolve_route", lambda *a, **k: None
-    )
-    assert inherited_tier_remap(args, ZAI_ENV) == ("opus", "glm-5.2[1m]")
-
-    monkeypatch.setattr(
-        "fno.agents.model_routing.resolve_route",
-        lambda *a, **k: {"ANTHROPIC_MODEL": "glm-5.2"},
-    )
-    assert inherited_tier_remap(args, ZAI_ENV) is None
-
-
-def test_cli_tier_preflight_normalizes_business_role_refusal(monkeypatch, capsys):
-    from fno.agents.model_routing import BusinessRoleRoutingProjectionError
-
-    for key, value in ZAI_ENV.items():
-        monkeypatch.setenv(key, value)
-
-    def blocked(*args, **kwargs):
-        raise BusinessRoleRoutingProjectionError("invalid business role at CLI seam")
-
-    monkeypatch.setattr("fno.agents.model_routing.resolve_route", blocked)
-
-    with pytest.raises(SystemExit) as exc_info:
-        _refuse_inherited_tier_remap(
-            [*BASE, "--role", "publisher", "--model", "opus"]
-        )
-
-    assert exc_info.value.code == 2
-    assert "invalid business role at CLI seam" in capsys.readouterr().err
 
 
 def test_in_process_spawn_apis_enforce_the_same_invariant():
@@ -108,16 +67,16 @@ def test_routed_env_covers_every_tier_alias():
 
 
 def test_account_spawn_scrubs_at_the_seam_so_rust_inherits_it(monkeypatch):
-    # An --account spawn on --substrate bg auto-routes to the Rust client, which
-    # has no ANTHROPIC_* handling; route_to_rust execs with os.environ, so the
-    # seam is the only edit that lane sees.
+    # An --account spawn on the headless lane auto-routes to the Rust client,
+    # which has no ANTHROPIC_* handling; route_to_rust execs with os.environ,
+    # so the seam is the only edit that lane sees.
     for k, v in ZAI_ENV.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setattr(
         "fno.agents.account_env.resolve_account_overlay",
         lambda aid: SimpleNamespace(env={"CLAUDE_CONFIG_DIR": "/tmp/x"}),
     )
-    _scrub_account_auth_at_seam([*BASE, "--account", "makers", "--model", "opus"])
+    _scrub_account_auth_at_seam([*BASE, "--account", "makers"])
     assert not [k for k in SCRUB_AUTH_VARS if k in os.environ]
     assert os.environ["CLAUDE_CONFIG_DIR"] == "/tmp/x"
 
@@ -128,7 +87,24 @@ def test_seam_clears_a_stale_launch_account_on_an_unaccounted_spawn(monkeypatch)
     # clear the inherited id: the Rust mint reads it first, so a stale value
     # stamps the parent's account onto a row that pinned nothing.
     monkeypatch.setenv("FNO_LAUNCH_ACCOUNT", "parent-acct")
-    _scrub_account_auth_at_seam([*BASE, "--model", "opus"])
+    _scrub_account_auth_at_seam([*BASE])
+    assert "FNO_LAUNCH_ACCOUNT" not in os.environ
+
+
+def test_seam_drops_the_launch_account_when_resolution_fails(monkeypatch):
+    # The fail-open this closes: a worker spawned under --account inherits
+    # FNO_LAUNCH_ACCOUNT, and when THAT worker's own --account child fails to
+    # resolve, a surviving stamp would let the Rust client trust the parent's
+    # overlay and launch the child on an account the seam never applied. The
+    # stamp drops at entry, before resolution, so the client re-exec's Python,
+    # whose resolve_account_overlay_or_exit owns the refusal receipt.
+    monkeypatch.setenv("FNO_LAUNCH_ACCOUNT", "parent-acct")
+
+    def _boom(account_id):
+        raise RuntimeError("resolution failed")
+
+    monkeypatch.setattr("fno.agents.account_env.resolve_account_overlay", _boom)
+    _scrub_account_auth_at_seam([*BASE, "--account", "parent-acct", "--model", "opus"])
     assert "FNO_LAUNCH_ACCOUNT" not in os.environ
 
 
@@ -148,7 +124,7 @@ def test_seam_resolves_the_account_before_scrubbing(monkeypatch):
     monkeypatch.setattr(
         "fno.agents.account_env.resolve_account_overlay", fake_resolve
     )
-    _scrub_account_auth_at_seam([*BASE, "--account=acct", "--model", "opus"])
+    _scrub_account_auth_at_seam([*BASE, "--account=acct"])
     assert seen["account"] == "acct"
     assert seen["key_at_resolve"] == "sk-from-parent"
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-resolved"
@@ -177,26 +153,6 @@ def test_an_api_key_record_naming_an_anthropic_compatible_vendor_validates():
 
 # ---- warn (never refuse) when spawning under env scrub ----
 
-
-def test_env_scrub_warning_fires_when_var_set_and_a_mode_is_pinned():
-    # --yolo is a stated permission intent; the var silently overrides it, and
-    # the warning names both consequences plus the opt-out.
-    msg = env_scrub_spawn_warning([*BASE, "--yolo"], env={ENV_SCRUB_VAR: "1"})
-    assert msg is not None
-    assert ENV_SCRUB_VAR in msg
-    assert "ANTHROPIC_AUTH_TOKEN" in msg
-    assert "ANTHROPIC_BASE_URL" in msg
-    assert "--permission-mode" in msg
-    assert f"{ENV_SCRUB_VAR}=0" in msg
-
-
-def test_env_scrub_warning_is_not_a_refusal(monkeypatch, capsys):
-    # A warning, never a refusal: the seam prints and returns normally even when
-    # the message fires (unlike _refuse_inherited_tier_remap, which exits 2).
-    monkeypatch.setenv(ENV_SCRUB_VAR, "1")
-    _warn_env_scrub_spawn([*BASE, "--yolo"])  # must not raise
-    captured = capsys.readouterr()
-    assert ENV_SCRUB_VAR in captured.err
 
 
 def test_env_scrub_warning_structured_form_uses_the_resolved_provider():
@@ -288,17 +244,16 @@ def test_unrouted_keys_name_every_claim_coherent_or_not():
 
 def test_an_unrouted_scrub_clears_a_coherent_claim_and_says_so(capsys):
     # A spawn composing no route inherits the shell's pin otherwise; the
-    # notice is true whether or not --model was typed: it never
-    # calls a pinned child unrouted nor prescribes the flag it already used.
+    # notice is true whether or not a route was typed: it never
+    # calls a pinned child unrouted nor prescribes the route it already used.
     env = {"ANTHROPIC_MODEL": "claude-opus-4-8"}
     dropped = scrub_incoherent_model_env_and_notify(env, routed=False)
     assert dropped == ()
     assert "ANTHROPIC_MODEL" not in env
     notice = capsys.readouterr().err
     assert "fno: cleared ANTHROPIC_MODEL" in notice
-    assert "The child's model comes from its --model flag" in notice
+    assert "The child's model comes from its route" in notice
     assert "unrouted" not in notice
-    assert "Select one with --model" not in notice
 
 
 def test_overlay_restores_model_env_requires_an_actual_model_var():

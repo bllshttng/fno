@@ -157,11 +157,9 @@ def resolve_target_coordinate(
     verb = (node_effective_verb(find_node_row(node), node_id=node) or "target").lstrip(
         "/"
     ) or "target"
+    # The probe argv carries no --model/--effort: both are retired at the
+    # spawn door, so the operator's values overlay the composed answer below.
     args = ["spawn", "--name", "retask-probe"]
-    if model is not None:
-        args += ["--model", model]
-    if effort is not None:
-        args += ["--effort", effort]
     args.append(f"/fno:{verb} {node}")
     # a probe, not a real dispatch - the builtin rung would otherwise
     # read as an explicit override and force every retask to respawn.
@@ -184,12 +182,12 @@ def resolve_target_coordinate(
         if not separator:
             provider = route
             route_model = None
-    resolved_model = _flag_value(resolved, "--model", "-m") or route_model
+    resolved_model = model or _flag_value(resolved, "--model", "-m") or route_model
     return RetaskCoordinate(
         harness=harness,
         provider=provider,
         model=resolved_model,
-        effort=_flag_value(resolved, "--effort"),
+        effort=effort or _flag_value(resolved, "--effort"),
         substrate=_flag_value(resolved, "--substrate"),
         permission_mode=_flag_value(resolved, "--permission-mode"),
         route=route,

@@ -94,7 +94,7 @@ def test_node_seeded_pane_carries_verb_and_brief(monkeypatch, runner, loop_admis
     rendered verb command, the brief rides TARGET_BRIEF, and the receipt names
     both sources."""
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
-    result = _invoke(runner, "--node", "x-1", "--here", "--substrate", "pane")
+    result = _invoke(runner, "--node", "x-1", "--here", "--split", "left")
     assert result.exit_code == 0, result.output
     assert received["message"] == "/target --no-merge x-1"
     assert received["provenance"]["TARGET_BRIEF"] == "the brief"
@@ -109,7 +109,7 @@ def test_unencoded_node_refuses_before_any_peer(monkeypatch, runner):
     """AC1-ERR: a node with no dispatch_verb and no typed message exits
     non-zero naming the node and the encode remedy; no pane is created."""
     received = _stub_pane_path(monkeypatch, rec={"id": "x-2", "slug": "bare", "difficulty": "low"})
-    result = _invoke(runner, "--node", "x-2", "--here", "--substrate", "pane")
+    result = _invoke(runner, "--node", "x-2", "--here", "--split", "left")
     assert result.exit_code != 0
     assert "x-2" in result.output
     assert "fno backlog update x-2 dispatch_verb=" in result.output
@@ -122,7 +122,7 @@ def test_typed_message_with_a_node_composes_the_nodes_command(
     """with `--node`, a prose message gains the node's derived
     command in front; the node row is read and the brief rides along."""
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
-    result = _invoke(runner, "--node", "x-1", "say hi directly", "--here", "--substrate", "pane")
+    result = _invoke(runner, "--node", "x-1", "say hi directly", "--here", "--split", "left")
     assert result.exit_code == 0, result.output
     assert received["message"] == "/fno:target x-1\n\nsay hi directly"
     assert "brief_source" not in result.output
@@ -135,12 +135,12 @@ def test_mux_session_forwards_to_the_pane_and_refuses_off_pane(
     dispatch_spawn_bounded_pane as `session`, and a non-pane substrate refuses."""
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
     result = _invoke(
-        runner, "--node", "x-1", "--here", "--substrate", "pane", "--mux-session", "work"
+        runner, "--node", "x-1", "--here", "--split", "left", "--mux-session", "work"
     )
     assert result.exit_code == 0, result.output
     assert received["session"] == "work"
 
-    result = _invoke(runner, "--name", "w2", "hi", "--substrate", "thread", "--mux-session", "work")
+    result = _invoke(runner, "--name", "w2", "hi", "--once", "--mux-session", "work")
     assert result.exit_code != 0
     assert "pane-only" in result.output
 
@@ -163,7 +163,7 @@ def test_node_seeded_spawn_launches_in_the_ensured_worktree(monkeypatch, runner,
     import fno.rust_binary as rb
 
     monkeypatch.setattr(rb, "verb_call", fake_verb_call)
-    result = _invoke(runner, "--node", "x-1", "--substrate", "pane")
+    result = _invoke(runner, "--node", "x-1", "--split", "left")
     assert result.exit_code == 0, result.output
     assert seen["verb"] == "launch-workdir"
     assert seen["payload"] == {"recorded_cwd": "/repo", "node": "x-1", "harness": "claude"}
@@ -177,7 +177,7 @@ def test_ensure_refusal_holds_the_node(monkeypatch, runner):
     import fno.rust_binary as rb
 
     monkeypatch.setattr(rb, "verb_call", lambda *a, **k: {"hold": "refused"})
-    result = _invoke(runner, "--node", "x-1", "--substrate", "pane")
+    result = _invoke(runner, "--node", "x-1", "--split", "left")
     assert result.exit_code == 2
     assert "worktree ensure refused or misconfigured for x-1" in result.output
     assert received == {}
@@ -340,7 +340,7 @@ def test_seed_only_pane_spawn_mints_the_nodes_row_binding(
         )
 
     monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_pane)
-    result = _invoke(runner, "/fno:target x-1", "--here", "--substrate", "pane")
+    result = _invoke(runner, "/fno:target x-1", "--here", "--split", "left")
     assert result.exit_code == 0, result.output
     assert received["provenance"]["FNO_NODE"] == "x-1"
     assert received["message"] == "/fno:target x-1"

@@ -138,7 +138,8 @@ def test_spawn_once_codex_happy_path(workdir, fake_codex_create_once, monkeypatc
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "tmp1", "-H", "codex", "--once", "summarize X"],
+        ["spawn", "--name", "tmp1", "--once", "summarize X"],
+        env={"CODEX_THREAD_ID": "019f0000-0000-7000-8000-00000000000a"},
         catch_exceptions=False,
     )
 
@@ -214,7 +215,7 @@ def test_spawn_claude_plain(workdir_claude) -> None:
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "myagent-c", "-H", "claude", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "myagent-c", "hello"],
         catch_exceptions=False,
     )
 
@@ -259,7 +260,7 @@ def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
 
     result = _make_runner().invoke(
         agents_app,
-        ["spawn", "--name", "eaten-c", "-H", "codex", "arget x-1", "--substrate", "thread"],
+        ["spawn", "--name", "eaten-c", "-H", "codex", "arget x-1"],
         catch_exceptions=False,
     )
 
@@ -295,7 +296,7 @@ def test_spawn_codex_plain_no_once_requires_runtime(workdir, monkeypatch) -> Non
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "ptagent", "-H", "codex", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "ptagent", "-H", "codex", "hello"],
     )
 
     assert result.exit_code == 87, (
@@ -376,7 +377,7 @@ def test_spawn_agy_headless_refuses_by_name(workdir, monkeypatch) -> None:
         )
     message = str(caught.value)
     assert "unmeasured" in message
-    assert "--substrate thread" in message
+    assert "a bare spawn" in message
     assert "no measured thread lane" not in message, (
         "the merged measurement disproved that sentence for agy"
     )
@@ -419,7 +420,7 @@ def test_spawn_agy_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) ->
     monkeypatch.setattr(dispatch, "_keeper_seed_submit", _fake_seed)
 
     result = dispatch.dispatch_spawn(
-        name="wkagy", message="hello", harness="agy", cwd=workdir, model="gemini-3-pro"
+        name="wkagy", message="hello", harness="agy", cwd=workdir
     )
 
     assert result.kind == "created"
@@ -427,7 +428,6 @@ def test_spawn_agy_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) ->
     assert result.short_id == "c5661b28-bcba-4690-8b2e-4a4a88541e8c"
     assert len(calls) == 1, "the agy branch must drive the keeper lane exactly once"
     assert calls[0]["harness"] == "agy"
-    assert calls[0]["model"] == "gemini-3-pro", "the model axis rides the lane"
     assert len(seeds) == 1, f"exactly one seed paste, got {seeds!r}"
     assert seeds[0]["session_id"] == "c5661b28-bcba-4690-8b2e-4a4a88541e8c"
     assert seeds[0]["message"].startswith("hello")
@@ -460,7 +460,7 @@ def test_undeclared_harness_thread_and_headless_refuse_pane_only() -> None:
         assert "nanoclaw" in msg
         assert "no capability row" in msg
         assert "pane" in msg
-        assert "only substrate" in msg
+        assert "only lane" in msg
         assert "gemini" not in msg
         assert "agy" not in msg
 
@@ -506,8 +506,6 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
             "wkoc",
             "-H",
             "opencode",
-            "--substrate",
-            "thread",
             "--node",
             "x-abcd",
             "--cwd",
@@ -530,35 +528,6 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
     assert receipt["harness"] == "opencode"
 
 
-def test_spawn_opencode_bg_once_refused(workdir) -> None:
-    """The serve lane is the bg substrate; a one-shot is refused, not fallen
-    through to the retired-gemini text."""
-    from fno.agents.cli import agents_app
-
-    runner = _make_runner()
-    result = runner.invoke(
-        agents_app,
-        [
-            "spawn",
-            "--name",
-            "wkoc",
-            "-H",
-            "opencode",
-            "--substrate",
-            "thread",
-            "--once",
-            "--cwd",
-            str(workdir),
-            "hello",
-        ],
-    )
-
-    assert result.exit_code == 2, (
-        f"expected exit 2, got {result.exit_code}\noutput: {result.output}"
-    )
-    assert "headless" in result.output
-
-
 def test_spawn_opencode_bg_resume_refused(workdir) -> None:
     """Resume over the serve API is a filed follow-up; the spawn refuses
     instead of pretending to resume."""
@@ -573,8 +542,6 @@ def test_spawn_opencode_bg_resume_refused(workdir) -> None:
             "wkoc",
             "-H",
             "opencode",
-            "--substrate",
-            "thread",
             "--resume",
             "ses_old123",
             "--cwd",
@@ -603,10 +570,9 @@ def test_opencode_serve_spawn_without_binary_exits_13(workdir, monkeypatch) -> N
             message="hello",
             cwd=workdir,
             from_name="",
-            model=None,
         )
     assert exc_info.value.exit_code == 13
-    assert "--substrate pane" in str(exc_info.value)
+    assert "pane lane (--split)" in str(exc_info.value)
     assert dispatch_mod._opencode_serve_spawn is _opencode_serve_spawn
 
 
@@ -624,7 +590,7 @@ def test_keeper_lane_child_env_never_inherits_the_spawn_trigger(
     monkeypatch.setattr(
         "fno.agents.harness_map.render_session_argv", lambda *a, **k: ["pi"]
     )
-    monkeypatch.setattr(dispatch, "complete_launch_argv", lambda *a, **k: ["pi"])
+    monkeypatch.setattr("fno.agents.spawn_axes_client.keeper_posture", lambda *a, **k: [])
 
     captured: dict = {}
 
@@ -648,3 +614,12 @@ def test_keeper_lane_child_env_never_inherits_the_spawn_trigger(
         )
 
     assert "FNO_SPAWN_TRIGGER" not in captured["env"]
+
+
+@pytest.fixture(autouse=True)
+def _python_door(monkeypatch):
+    """These tests pin the PYTHON door's receipts and refusals. The axis
+    flags that used to route their argvs to Python are retired, so an argv
+    with no Python-only marker would exec the Rust client instead; the
+    sanctioned fallback pins the door under test. The gate stays live."""
+    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")

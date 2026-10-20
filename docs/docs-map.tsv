@@ -1,0 +1,274 @@
+# docs/docs-map.tsv: one row per tracked .md file under docs/. Design: docs/architecture/docs-information-architecture.md
+# Columns (TAB-separated): path, stage, kind, action, target, cited_by, reason
+# stage: discover|install|first-target|daily-driver|fleet|contribute|none
+# kind: entry|guide|reference|concept|contributor|internal
+# action: keep|move|merge|split|retire. target: new path (move), surviving page (merge), comma list (split), - otherwise; relative to docs/
+# cited_by: files outside docs/ that name the path (git grep -lF <path> -- ':!docs' | wc -l), measured when the map was written
+docs/HARNESSES.md	install	reference	move	reference/harnesses.md	10	what works on each CLI; 10 citing files
+docs/README.md	none	entry	keep	-	0	docs home; generated from this map once the user approves
+docs/SETUP-HERMES.md	install	guide	move	harnesses/hermes.md	1	install under an alternate runtime
+docs/SETUP-OPENCLAW.md	install	guide	move	harnesses/openclaw.md	1	install under an alternate runtime
+docs/SKILL-COMPAT-MATRIX.md	install	reference	move	reference/skill-compat-matrix.md	3	which skill runs on which harness
+docs/api-reference.md	daily-driver	reference	merge	reference/cli.md	0	says 24 skills and 17 agents; skills/ has 27 and agents/ has 18
+docs/architecture/active-backlog-dispatcher.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/activity-feed.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/advance-auto-continue.md	contribute	contributor	merge	architecture/merge-triggered-auto-continue.md	0	moved from cli/src/fno/backlog/advance.py, which no longer exists
+docs/architecture/agent-launcher.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/agents-peek.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/approvals-and-effects.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/attention-items.md	fleet	concept	keep	-	5	how questions reach a user away from the terminal
+docs/architecture/authorized-merge.md	contribute	contributor	keep	-	3	design note for contributors
+docs/architecture/auto-post-merge-ritual.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/autoresearch-incorporation.md	contribute	contributor	retire	-	0	describes what-if and debug skills; skills/ has neither
+docs/architecture/axis-vocabulary.md	fleet	concept	move	concepts/axes.md	2	the five routing axes a fleet user sets
+docs/architecture/background-process-hygiene.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/background-processes.md	fleet	guide	move	guides/background-processes.md	2	which process is which, and how to stop it
+docs/architecture/backlog-advance-native.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/backlog-board-ordering.md	daily-driver	concept	keep	-	3	why one card sits above another
+docs/architecture/backlog-graph-verb-contracts.md	contribute	contributor	keep	-	13	design note for contributors
+docs/architecture/batch-lane-loop-integration.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/blast-radius-router.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/claim-verbs-do-provenance.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/claude-mail-pane.md	fleet	guide	move	guides/claude-mail-pane.md	0	open delivered mail in Claude Code
+docs/architecture/cli-lazy-imports.md	contribute	contributor	keep	-	6	design note for contributors
+docs/architecture/cloud-substrate.md	fleet	concept	keep	-	1	remote claude workers
+docs/architecture/codex-thread-driver.md	contribute	contributor	keep	-	5	design note for contributors
+docs/architecture/codex-thread-sandbox-posture.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/company-boundaries.md	contribute	contributor	keep	-	3	design note for contributors
+docs/architecture/company-work-contracts.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/config-readback.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/control-plane-doc-colocation.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/control-plane-loop.md	contribute	contributor	keep	-	11	design note for contributors
+docs/architecture/coordination.md	contribute	contributor	keep	-	6	design note for contributors
+docs/architecture/cost-accuracy.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/cross-agent-bus-log.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/cross-language-schema-parity.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/cross-model-review.md	daily-driver	concept	keep	-	1	review by a different provider
+docs/architecture/cross-project-inbox.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/decision-record.md	daily-driver	concept	keep	-	7	how a ruling is recorded and found
+docs/architecture/disposable-deletes.md	contribute	contributor	keep	-	5	design note for contributors
+docs/architecture/docs-information-architecture.md	contribute	contributor	keep	-	0	this design
+docs/architecture/domain-agnostic-pipeline.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/dual-implementation-inventory.md	contribute	contributor	keep	-	13	design note for contributors
+docs/architecture/event-log-storage.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/event-rules.md	contribute	contributor	keep	-	8	design note for contributors
+docs/architecture/events-schema-contract.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/external-tracker.md	daily-driver	concept	keep	-	2	bring your own tracker ids
+docs/architecture/field-coverage.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/fleet-cutover.md	fleet	guide	move	guides/fleet-cutover.md	0	move the fleet to another computer
+docs/architecture/fleet-watchdog.md	contribute	contributor	keep	-	3	design note for contributors
+docs/architecture/fno-agents-ask-auto-route.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-claude-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	1	one verb's port history over four pages
+docs/architecture/fno-agents-codex-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one verb's port history over four pages
+docs/architecture/fno-agents-codex-provider.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-deliver-gate.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/fno-agents-drive.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-followup.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-gemini-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one verb's port history over four pages
+docs/architecture/fno-agents-gemini-commands.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-interactive-drive.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-lifecycle.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-list-logs.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-mcp-channel.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agents-registry-and-dispatch.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-cli-promotion.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-cli-short-flags.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-overhead-measurement.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-pr-internalization.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-project-environments.md	daily-driver	concept	keep	-	1	what a project state root isolates
+docs/architecture/footnote-transcript-schema.md	contribute	contributor	keep	-	3	design note for contributors
+docs/architecture/frontend-craft-gate.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/frontend-executor-pipeline-awareness.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/function-pack-substrate.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/fuzzy-resolver.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/generic-delivery-evidence.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/graph-cli-rationale.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/graph-collision-detection.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/graph-db-schema.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/happy-hosted-claude-panes.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/help-routing.md	contribute	contributor	keep	-	6	design note for contributors
+docs/architecture/hook-budget-audit.md	contribute	internal	keep	-	0	one dated measurement
+docs/architecture/installed-fno-staleness.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/json-output-contract.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/lane-qualification.md	fleet	guide	move	guides/lane-qualification.md	4	recipe to qualify a model lane
+docs/architecture/lead.md	fleet	concept	keep	-	5	the tenured lead role
+docs/architecture/lean-blueprint.md	daily-driver	concept	keep	-	3	why blueprint edits the design doc
+docs/architecture/lean-think.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/live-session-comms.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/loop-audit-close-out.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/machine-footprint.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/mail-envelope-filter.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/mail-live-inject.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/mail-push-first-delivery.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/mail-reply-routing.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/managed-claude-slot-cutover.md	fleet	guide	move	guides/managed-claude-slot.md	1	arm or diagnose slot changes
+docs/architecture/megaspec.md	contribute	contributor	retire	-	0	describes a megaspec skill; skills/ has none
+docs/architecture/megawalk-migration.md	daily-driver	guide	merge	guides/megawalk-walker.md	0	removed-command table for a deleted skill; the walker guide is the redirect
+docs/architecture/megawalk-pipeline.md	contribute	contributor	retire	-	1	design of the walker that guides/megawalk-walker.md says is deleted
+docs/architecture/memory-auto-distillation.md	contribute	contributor	keep	-	0	marks itself historical; kept for why the memory pass replaced it
+docs/architecture/memory-system.md	contribute	contributor	keep	-	3	design note for contributors
+docs/architecture/merge-triggered-auto-continue.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/multi-cli-hooks.md	contribute	contributor	keep	-	5	design note for contributors
+docs/architecture/multiplayer.md	fleet	concept	keep	-	2	one fleet over several machines
+docs/architecture/mux-agent-pty-substrate.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/mux-layout-templates.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/mux-open-files.md	fleet	guide	move	guides/mux-open-files.md	0	how a click opens a file
+docs/architecture/mux-restart-recovery.md	fleet	guide	move	guides/mux-restart-recovery.md	0	what survives a reconnect and a restart
+docs/architecture/mux-selector-resolution.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/node-cwd-authority.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/node-provenance.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/notice-routing.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/operator-impeccable-executor.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/org-scope-fold.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/org-view.md	fleet	guide	move	guides/org-view.md	0	a key press and what it shows
+docs/architecture/pane-keeper.md	fleet	concept	keep	-	2	why panes outlive the mux server
+docs/architecture/pane-transport.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/pane-worker-relaunch.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/path-census.md	contribute	internal	keep	-	0	working manifest of one consolidation effort
+docs/architecture/plan-claims.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/plan-completion-stamp.md	daily-driver	reference	keep	-	1	plan frontmatter stamp schema
+docs/architecture/plan-fidelity-gate.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/plugin-marketplace-tree.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/portals.md	fleet	concept	keep	-	2	the portal and pane model
+docs/architecture/pr-heal.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/pr-state-watcher.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/pr-status-verdict.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/pr-watch-merge-phase.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/product-boundaries.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/provider-cap-failover.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/provider-cap.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/provider-rotation-substrate.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/reachability-contract.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/registry-schema-history.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/research-layer.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/resource-meter.md	fleet	concept	keep	-	4	how many lanes the machine can take
+docs/architecture/retirement-receipts.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/retro-auto-triage.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/review-coverage-termination.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/review-lanes.md	contribute	contributor	keep	-	8	design note for contributors
+docs/architecture/review-scorer-subprocess.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/role-based-model-routing.md	fleet	concept	keep	-	5	per-stage model routing
+docs/architecture/roles-bounded-context.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/rust-python-seam.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/schema-config-resolution.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/self-improvement-loops.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/session-liveness.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/skill-body-diet.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/skill-portability.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/source-field-migration.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/spawn-gate.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/spawn-watch.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/stream-json-host-lane.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/subtask-containment.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/synthesis-guardrails.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/target-plan-mode-integration.md	daily-driver	concept	keep	-	3	native Plan Mode into target
+docs/architecture/target-plan-mode-phase2.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/target-reliability-core.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/target-self-handoff.md	contribute	contributor	keep	-	5	design note for contributors
+docs/architecture/target-start-verb.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/task-context-binding.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/test-hermeticity.md	contribute	contributor	keep	-	4	design note for contributors
+docs/architecture/test-run-lifecycle.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/thread-lanes.md	fleet	concept	keep	-	12	the session lane a fleet user picks; 12 citing files
+docs/architecture/unfinished-work-and-row-registration.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/unified-loop.md	contribute	contributor	keep	-	2	design note for contributors
+docs/architecture/vocabulary-user-and-operator.md	daily-driver	concept	move	concepts/vocabulary.md	3	the root README links it as a user page
+docs/architecture/workspace-folders.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/workspace-restore.md	fleet	guide	keep	-	5	bring workers back after a reboot
+docs/architecture/worktree-mechanics.md	contribute	contributor	keep	-	3	design note for contributors
+docs/architecture/zcode-cli-trial.md	contribute	internal	keep	-	0	one dated trial report
+docs/auth.md	install	guide	move	guides/auth.md	0	credential setup a new user reads before the first run
+docs/backlog-current-state.md	none	internal	keep	-	0	unplaced: mixes node-field rules for users with a migration runbook for maintainers
+docs/backlog-triage.md	daily-driver	guide	move	guides/backlog-triage.md	1	task guide for the triage picker
+docs/backlog-usage.md	daily-driver	guide	move	guides/backlog.md	3	day-to-day backlog guide; 47 KB
+docs/best-practices.md	first-target	guide	move	guides/best-practices.md	1	habits for the first runs
+docs/changelog.md	none	internal	retire	-	0	says last updated 2026-03-31; lists the removed gemini project-agent mode as a feature
+docs/code-index-providers.md	daily-driver	reference	move	reference/code-index-providers.md	5	provider contract for blueprint code indexes
+docs/code-standards.md	contribute	contributor	move	contributing/code-standards.md	0	coding conventions for contributors
+docs/codebase-summary.md	contribute	internal	retire	-	0	hand-kept inventory says 26 skills; skills/ has 27
+docs/comment-prose-reading-list.md	none	internal	keep	-	0	unplaced: ranked function list with no named reader and no generator found
+docs/configuration-guide.md	daily-driver	reference	move	reference/config.md	4	the full config.toml key reference; 76 KB
+docs/deployment-guide.md	install	guide	merge	install.md	0	repeats the install steps in getting-started.md and README.md
+docs/design-guidelines.md	contribute	contributor	move	contributing/design-guidelines.md	0	skill and agent design rules for contributors
+docs/distribution.md	contribute	contributor	move	contributing/distribution.md	2	packaging and release runbook
+docs/env-vars.md	daily-driver	reference	move	reference/env-vars.md	3	generated env var registry; the move PR updates its checker
+docs/evals.md	contribute	contributor	move	contributing/evals.md	2	eval bank for maintainers
+docs/fleet-faq.md	fleet	guide	move	guides/fleet-faq.md	2	lead and orchestrator FAQ
+docs/getting-started.md	first-target	entry	split	install.md,quickstart.md,workflows.md	3	one 17 KB page covers install, first feature and daily commands
+docs/graph-search.md	daily-driver	guide	move	guides/graph-search.md	5	optional graphify tool guide
+docs/guide/opencode.md	install	guide	move	harnesses/opencode.md	1	the only file under guide/; codex.md already sits in harnesses/
+docs/guides/agents-quickstart.md	fleet	guide	keep	-	1	first spawn and message; the fleet entry links it
+docs/guides/agents-spawn-flags.md	fleet	reference	move	reference/agents-spawn-flags.md	1	flag reference, not a task
+docs/guides/buddy.md	daily-driver	guide	keep	-	1	companion mod guide
+docs/guides/configuring-impeccable-executor.md	daily-driver	guide	keep	-	0	plan-author guide
+docs/guides/cross-project-inbox.md	fleet	guide	keep	-	1	messaging between projects
+docs/guides/execution-modes.md	daily-driver	guide	merge	workflows.md	0	names do and operator modes; skills/ has neither
+docs/guides/fix.md	daily-driver	guide	keep	-	0	repair loop guide
+docs/guides/fleet-load.md	fleet	guide	keep	-	0	fleet load report
+docs/guides/fno-agents-ask-followup.md	fleet	guide	keep	-	1	message a running agent
+docs/guides/fno-agents-list-logs.md	fleet	guide	keep	-	0	list and tail agents
+docs/guides/fno-agents-send.md	fleet	guide	keep	-	0	async message to a peer
+docs/guides/fno-agents-spawn.md	fleet	guide	keep	-	3	create a peer agent
+docs/guides/fno-agents-stop-rm-reconcile.md	fleet	guide	keep	-	0	agent lifecycle verbs
+docs/guides/how-done-is-decided.md	first-target	guide	keep	-	0	watch a run reach done
+docs/guides/measuring-fno-overhead.md	contribute	contributor	move	contributing/measuring-fno-overhead.md	0	maintainer measurement harness
+docs/guides/megawalk-walker.md	daily-driver	guide	keep	-	0	redirect for the retired walker
+docs/guides/memory-auto-distillation.md	none	internal	retire	-	0	page marks itself historical; how-to for a pipeline that no longer runs
+docs/guides/multiplayer-test.md	fleet	guide	keep	-	2	two-machine claim store test
+docs/guides/per-task-executors.md	daily-driver	guide	keep	-	1	plan-author guide
+docs/guides/pr-lifecycle.md	daily-driver	guide	keep	-	1	the PR arc by hand
+docs/guides/product-qualification.md	contribute	contributor	move	contributing/product-qualification.md	0	maintainer release proof
+docs/guides/reading-shipped-plans.md	daily-driver	guide	keep	-	1	read the completion stamp
+docs/guides/review.md	daily-driver	guide	keep	-	0	review lanes for a user
+docs/guides/target.md	first-target	guide	keep	-	1	the target loop in depth
+docs/guides/task-to-verified-pr-demo.md	contribute	contributor	move	contributing/task-to-verified-pr-demo.md	0	maintainer demo protocol
+docs/guides/think-and-plan.md	daily-driver	guide	keep	-	1	think and blueprint; mentions think what-if and panel, which the move PR checks
+docs/guides/utilities.md	daily-driver	guide	merge	workflows.md	0	its Debug section names a debug skill; skills/ has fix, not debug
+docs/guides/web-view.md	fleet	guide	keep	-	0	watch panes from a browser
+docs/guides/worktrees.md	daily-driver	guide	keep	-	0	worktree basics
+docs/harness-command-matrix.md	fleet	reference	move	reference/harness-command-matrix.md	4	every agents verb per harness
+docs/harnesses/capability-matrix.md	install	reference	keep	-	4	generated feature matrix
+docs/harnesses/codex.md	install	guide	keep	-	1	codex install and use
+docs/harnesses/gemini.md	install	guide	keep	-	3	gemini CLI is deprecated upstream; harness support stays a feature
+docs/harnesses/harness-adapters.md	contribute	contributor	keep	-	1	phase dispatch per client
+docs/harnesses/launch/launch-agy.md	fleet	guide	keep	-	1	seat an agy worker
+docs/harnesses/launch/launch-claude.md	fleet	guide	keep	-	1	seat a claude worker
+docs/harnesses/launch/launch-codex.md	fleet	guide	keep	-	1	seat a codex worker
+docs/harnesses/launch/launch-opencode.md	fleet	guide	keep	-	1	seat an opencode worker
+docs/harnesses/launch/launch-pi.md	fleet	guide	keep	-	1	seat a pi worker
+docs/harnesses/promise-sentinel.md	contribute	reference	keep	-	4	protocol for third-party loop drivers
+docs/harnesses/verb-matrix.md	install	reference	keep	-	4	generated verb by harness table
+docs/hooks-fail-open.md	daily-driver	concept	move	concepts/hooks-fail-open.md	4	explains the optional-hook budget
+docs/loops.md	fleet	reference	move	reference/loops.md	2	generated scheduled-loop table; the move PR updates its generator
+docs/mux-keys.md	fleet	reference	move	reference/mux-keys.md	2	mux keybinding table
+docs/mux-themes.md	fleet	guide	move	guides/mux-themes.md	0	how to set mux colors
+docs/output-style.md	contribute	contributor	move	contributing/output-style.md	1	agent output rules behind AGENTS.md
+docs/path-config.md	daily-driver	reference	move	reference/path-config.md	6	config.paths schema
+docs/preflight.md	daily-driver	guide	move	guides/preflight.md	4	opt-in CI rehearsal
+docs/project-overview-pdr.md	discover	internal	merge	overview.md	1	product overview from 2026-06-18; says 26 skills
+docs/protocol/a2a-status-events.md	fleet	reference	keep	-	2	wire contract for outside observers
+docs/provider-rotation.md	fleet	reference	split	guides/accounts.md,reference/accounts.md	2	106 KB mixes account setup steps with the schema reference
+docs/reaping-faq.md	fleet	guide	move	guides/reaping-faq.md	2	why a session row is still on the roster
+docs/reference/otel-schema.md	fleet	reference	keep	-	2	generated telemetry schema
+docs/security-posture.md	discover	concept	move	concepts/security-posture.md	2	the trust boundary a reader checks before install
+docs/state-root-inventory.md	contribute	contributor	keep	-	19	19 citing files and a TSV sibling; a move costs more than it buys
+docs/status-fanout.md	fleet	guide	move	guides/status-fanout.md	0	send run events to a chat channel
+docs/style-rules.md	contribute	contributor	move	contributing/style-rules.md	7	house style the lint enforces
+docs/system-architecture.md	contribute	contributor	move	contributing/system-architecture.md	1	says 24 and 26 skills, 12 and 17 agents on one page; the move PR fixes the counts
+docs/test-audit/README.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/agents-tests-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/claims-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/cli-tests-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/fno-agents-inline-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/k1-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/k2-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/k8-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/k9-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/k9b-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/plugin-marketplace-tree.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/stress-e2e-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/thread-promotion.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/unit-a-l-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/unit-m-z-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/testing-guide.md	contribute	contributor	move	contributing/testing-guide.md	0	test layout for contributors
+docs/troubleshooting.md	first-target	guide	move	guides/troubleshooting.md	1	the failures first runs hit

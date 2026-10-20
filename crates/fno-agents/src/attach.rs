@@ -619,6 +619,18 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 
     let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
+
+    // A cloud row attaches by teleport: the session runs on claude.ai, and
+    // the CLI pulls its pushed branch into this checkout. The pre-checks
+    // mirror what the CLI itself enforces (same repository, clean working
+    // tree), each refusal naming its unmet requirement before any exec; a
+    // failed teleport surfaces the CLI's own error.
+    if entry.get("substrate").and_then(Value::as_str) == Some("cloud") {
+        if let Some(code) = attach_cloud_teleport(entry, &name, &events_path) {
+            return code;
+        }
+    }
+
     if short_id.is_empty() {
         eprintln!(
             "registry entry {} has no short id on file; cannot attach.",
@@ -732,6 +744,132 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 }
 
+/// A directory's repository identity: the git common dir, shared by every
+/// worktree of one repository. `None` when the directory is outside any
+/// repo, unreadable, or git is missing.
+fn repo_identity(dir: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args([
+            "-C",
+            dir,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!root.is_empty()).then_some(root)
+}
+
+/// The teleport pre-checks, measured here so each refusal names its unmet
+/// requirement before any exec: the checkout must be the repository the
+/// session worked in (any worktree of it), and its tree must be clean -
+/// teleport checks out the session's pushed branch over this tree.
+fn teleport_precheck(row_cwd: &str, here: &std::path::Path) -> Result<(), (i32, String)> {
+    let here_str = here.to_string_lossy().to_string();
+    let (Some(row_repo), Some(here_repo)) = (repo_identity(row_cwd), repo_identity(&here_str))
+    else {
+        return Err((
+            2,
+            "teleport needs a checkout of the session's repository: the row's \
+             cwd or this directory does not resolve to a git repository"
+                .to_string(),
+        ));
+    };
+    if row_repo != here_repo {
+        return Err((
+            2,
+            format!(
+                "teleport refused: this checkout ({here_repo}) is not the \
+                 repository the session worked in ({row_repo}); run from that \
+                 repo"
+            ),
+        ));
+    }
+    let clean = std::process::Command::new("git")
+        .args(["-C", &here_str, "status", "--porcelain"])
+        .output()
+        .map(|out| out.status.success() && out.stdout.is_empty())
+        .unwrap_or(false);
+    if !clean {
+        return Err((
+            2,
+            "teleport refused: the working tree is dirty; commit or stash \
+             first - the teleport checks out the session's branch over this \
+             tree"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Attach a cloud row by teleporting its session into this checkout: the
+/// measured CLI form `claude --teleport <session-id>`, run in this
+/// directory after the pre-checks, mirroring the claude attach arm's exit
+/// contract (stdio inherited, exit code mirrored, outcome event).
+fn attach_cloud_teleport(entry: &Value, name: &str, events_path: &Path) -> Option<i32> {
+    let session_id = entry
+        .get("harness_session_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            entry
+                .get("short_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })?;
+    let row_cwd = entry.get("cwd").and_then(Value::as_str).unwrap_or("");
+    if let Err((code, msg)) = teleport_precheck(row_cwd, &std::env::current_dir().ok()?) {
+        eprintln!("{msg}");
+        append_agents_event(
+            events_path,
+            "agent_attach_refused",
+            &[
+                ("name", Value::String(name.to_string())),
+                ("provider", Value::String("claude".to_string())),
+                ("reason", Value::String("teleport-precheck".to_string())),
+                ("detail", Value::String(msg)),
+            ],
+        );
+        return Some(code);
+    }
+    if !which_on_path("claude") {
+        eprintln!("claude CLI not on PATH");
+        return Some(14);
+    }
+    let mut command = std::process::Command::new("claude");
+    command.arg("--teleport").arg(session_id);
+    match command.status() {
+        Ok(status) => {
+            let exit_code = status.code().unwrap_or(1);
+            append_agents_event(
+                events_path,
+                "agent_attached",
+                &[
+                    ("name", Value::String(name.to_string())),
+                    ("provider", Value::String("claude".to_string())),
+                    ("substrate", Value::String("cloud".to_string())),
+                    ("session_id", Value::String(session_id.to_string())),
+                    ("claude_exit", Value::from(exit_code)),
+                ],
+            );
+            Some(exit_code)
+        }
+        Err(exc) if exc.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("claude CLI not on PATH");
+            Some(14)
+        }
+        Err(exc) => {
+            eprintln!("claude --teleport failed: {exc}");
+            Some(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,6 +877,41 @@ mod tests {
     // The attach-refusal family, a file of its own beside this verb.
     #[path = "x296f_attach_refusals.rs"]
     mod x296f_attach_refusals;
+
+    #[test]
+    fn teleport_precheck_refuses_by_name() {
+        // AC6 shape: the same-repo and dirty-tree refusals name their
+        // requirement, and a clean same-repo tree passes.
+        let base = std::env::temp_dir().join(format!("fno-teleport-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("repo")).expect("mkdir");
+        let git = |args: &[&str], cwd: &std::path::Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("git runs")
+        };
+        let repo = base.join("repo");
+        assert!(git(&["init", "-q"], &repo).status.success());
+        let here = base.join("repo");
+        // Clean, same repo: passes.
+        assert!(teleport_precheck(&here.to_string_lossy(), &here).is_ok());
+        // A different repo (fresh init) fails the same-repo check.
+        let other = base.join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        assert!(git(&["init", "-q"], &other).status.success());
+        assert!(
+            teleport_precheck(&other.to_string_lossy(), &here).is_err(),
+            "a foreign repo refuses"
+        );
+        // Dirty tree: refuses naming the stash requirement.
+        std::fs::write(repo.join("dirty.txt"), b"x").expect("write");
+        let (code, msg) = teleport_precheck(&here.to_string_lossy(), &here).expect_err("refuses");
+        assert_eq!(code, 2);
+        assert!(msg.contains("dirty"), "names the dirt: {msg}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn attach_parses_the_refusal_prescribed_cross_project_flag() {

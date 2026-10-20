@@ -107,7 +107,7 @@ def test_route_missing_key_refused_before_gate(monkeypatch: pytest.MonkeyPatch) 
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude",
          "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 2, result.output
@@ -139,7 +139,7 @@ def test_route_on_non_claude_harness_names_harness_not_provider(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "codex", "--substrate", "thread",
+        ["spawn", "--name", "w1", "hi", "--harness", "codex",
          "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 2, result.output
@@ -188,7 +188,7 @@ def test_route_allowed_on_capability_enabled_pane(
     monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--split", "left", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
     assert captured["provider"] == "claude"
@@ -242,11 +242,10 @@ def test_bg_receipt_carries_route_provider_and_effective_model(
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
-         "--route", "zai,glm-5.2", "--model", "opus"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
-    assert captured["model"] == "opus"
+    assert captured.get("model") is None
     assert captured["route_provider"] == "zai"
     assert captured["route_env"]["ANTHROPIC_MODEL"] == "glm-5.2"
     receipt_line = next(
@@ -255,7 +254,7 @@ def test_bg_receipt_carries_route_provider_and_effective_model(
     receipt = json.loads(receipt_line)
     assert receipt["harness"] == "claude"
     assert receipt["provider"] == "zai"
-    assert receipt["model"] == "opus"
+    assert receipt["model"] == "glm-5.2"
 
 
 def test_route_on_pane_capability_fails_closed_before_gate(
@@ -284,7 +283,7 @@ def test_route_on_pane_capability_fails_closed_before_gate(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--split", "left", "--route", "zai,glm-5.2"],
     )
 
     assert result.exit_code == 2, result.output
@@ -371,8 +370,7 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", fake_overlay)
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "seed work", "--harness", "claude",
-         "--route", "zai,glm-5.2", "--effort", "xhigh", "--print"],
+        ["spawn", "--name", "w", "seed work", "--route", "zai,glm-5.2", "--print"],
     )
     assert result.exit_code == 0, result.output
     line = result.output.strip()
@@ -384,7 +382,8 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     assert ask["harness"] == "claude"
     assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
     assert ask["account_env"] == {}
-    assert ask["model"] == "glm-5.2" and ask["effort"] == "xhigh"
+    # The effort axis is retired and no lane row names one here.
+    assert ask["model"] == "glm-5.2" and ask["effort"] == ""
     assert ask["cwd"], "the print ask carries the spawn's own cwd"
     assert gate_calls == [], "--print must not touch the gate"
 
@@ -392,7 +391,7 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     # CLI maps the door refusal to a clean exit.
     refused = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "codex", "--print"],
+        ["spawn", "--name", "w", "hi", "-H", "codex", "--print"],
     )
     assert refused.exit_code == 2, refused.output
     assert "no native line yet" in refused.output
@@ -522,7 +521,7 @@ def test_bare_route_vendor_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "claude", "--substrate", "headless", "--route", "zai"],
+        ["spawn", "--name", "w", "hi", "--once", "--route", "zai"],
     )
     assert result.exit_code == 2, result.output
     assert "provider,model" in result.output
@@ -541,36 +540,7 @@ def test_harness_name_on_the_provider_axis_is_refused_by_name(
 
     result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--provider", "codex"])
     assert result.exit_code == 2, result.output
-    assert "codex is a harness, not a provider" in result.output
-    assert "use --harness codex" in result.output
-
-
-def test_provider_and_model_build_the_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    """--provider + --model is the decomposed spelling of --route vendor,model.
-    The model rides the route, NOT a `claude --model` token: handing the claude
-    CLI a vendor model id would make it resolve a model it does not have."""
-    from fno.agents import dispatch, spawn_gate
-
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    captured: Dict[str, Any] = {}
-
-    def fake_dispatch_spawn(**kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return dispatch.SpawnResult(kind="created", name=kwargs["name"], provider="claude", short_id="a")
-
-    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch_spawn)
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai", "--model", "glm-5.2"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["route_env"]["ANTHROPIC_MODEL"] == "glm-5.2"
-    assert captured["route_env"]["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
-    assert captured["model"] is None
-    assert captured["harness"] == "claude"
+    assert "--provider is retired" in result.output
 
 
 def test_provider_and_route_together_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -583,11 +553,11 @@ def test_provider_and_route_together_are_refused(monkeypatch: pytest.MonkeyPatch
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai",
+        ["spawn", "--name", "w1", "hi", "--provider", "zai",
          "--model", "glm-5.2", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 2, result.output
-    assert "two spellings" in result.output
+    assert "--provider is retired" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +659,7 @@ def test_dispatch_account_refuses_a_harness_mismatch(monkeypatch: pytest.MonkeyP
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "claude", "--substrate", "headless",
+        ["spawn", "--name", "w", "hi", "--harness", "claude", "--once",
          "--dispatch-account", "codex-acct"],
     )
     assert result.exit_code == 2, result.output
@@ -771,9 +741,9 @@ def test_provider_without_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
     from fno.agents.cli import agents_app
 
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--substrate", "thread", "--provider", "zai"])
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--provider", "zai"])
     assert result.exit_code == 2, result.output
-    assert "--model" in result.output
+    assert "--provider is retired" in result.output
 
 
 def test_bg_and_headless_refuse_modelless_route_env(
@@ -799,3 +769,158 @@ def test_bg_and_headless_refuse_modelless_route_env(
         claude_mod.bg_create(name="w", message="hi", cwd=tmp_path, route_env=modelless)
     with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
         claude_mod.headless_create(message="hi", cwd=tmp_path, route_env=modelless)
+
+
+def _stub_zai_claude_route(monkeypatch) -> None:
+    """Answer the claude-route ask the Rust owner serves (the zai preset); a
+    fake binary cannot. Every other overlay ask reaches the real transport."""
+    from fno.agents import spawn_overlay_client
+
+    real_overlay_call = spawn_overlay_client.spawn_overlay_call
+
+    def route_stub(ask: dict, **kwargs: object) -> dict:
+        if ask.get("kind") == "claude-route":
+            model = ask.get("model", "")
+            return {
+                "route": {
+                    "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": "zk-live",
+                    "ANTHROPIC_MODEL": model,
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                    "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+                },
+                "notices": [],
+            }
+        return real_overlay_call(ask, **kwargs)
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", route_stub)
+
+
+def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None:
+    """A fresh routed claude thread spawn execs the lane's own bg line through
+    the launch kind: the ask carries the RAW overlays and the record
+    context (the compose happens in the door), the dispatcher path never
+    runs, and the gate still releases."""
+    from fno.agents import spawn_gate
+    from fno.agents.cli import agents_app
+
+    gate_calls: list[Any] = []
+
+    class RecordingGate(_Gate):
+        release_calls: list[bool] = []
+
+        def release(self) -> None:
+            RecordingGate.release_calls.append(True)
+
+    monkeypatch.setattr(
+        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or RecordingGate()
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
+    }
+    monkeypatch.setattr(
+        "fno.route_slot_client.route_slot_call",
+        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
+    )
+    from fno.agents import spawn_lineage
+
+    monkeypatch.setattr(
+        spawn_lineage,
+        "_capture_parent_edge",
+        lambda: ("lead-1", "claude", str(tmp_path)),
+    )
+    ask_file = tmp_path / "door-ask.json"
+    fake = tmp_path / "fake-agents"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'echo "$@" >> ' + str(tmp_path / "calls.log") + "\n"
+        "tee " + str(tmp_path / "stdin.log") + " > /dev/null\n"
+        'if [ "$1" = "spawn-axes" ]; then echo \'{"action":"pass"}\'; exit 0; fi\n'
+        'if [ "$1" = "spawn-overlay" ]; then cp '
+        + str(tmp_path / "stdin.log") + " " + str(ask_file) + "; fi\n"
+        'echo \'{"exit":0}\'\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
+    _stub_zai_claude_route(monkeypatch)
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "--name", "w", "go", "--route", "zai-flash"],
+    )
+    assert result.exit_code == 0, result.output
+    ask = json.loads(ask_file.read_text(encoding="utf-8"))
+    assert ask["harness"] == "claude"
+    assert ask["name"] == "w"
+    assert ask["payload"] == "go"
+    assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
+    assert ask["account_env"] == {}
+    assert ask["model"] == "glm-5.3-flash[1m]"
+    # The launch template owns effort; the door ask leaves the hole empty.
+    assert ask["effort"] == ""
+    assert ask["provider"] == "zai"
+    assert ask["launcher_session"] == "lead-1"
+    assert RecordingGate.release_calls, "the gate still releases"
+
+
+def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monkeypatch) -> None:
+    """A routed claude thread spawn with no launcher identity keeps the
+    dispatcher, never the launch kind: the launch record must name a parent,
+    and the dispatcher writes its row synchronously."""
+    from fno.agents import spawn_gate, spawn_lineage
+    from fno.agents.cli import agents_app
+
+    monkeypatch.setattr(spawn_lineage, "_capture_parent_edge", lambda: (None, None, None))
+
+    gate_calls: list[Any] = []
+    monkeypatch.setattr(
+        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
+    }
+    monkeypatch.setattr(
+        "fno.route_slot_client.route_slot_call",
+        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
+    )
+    dispatched: list[dict] = []
+
+    def fake_dispatch(**kw):
+        dispatched.append(kw)
+        from fno.agents.dispatch import SpawnResult
+
+        return SpawnResult(kind="created", name=kw["name"], provider="claude", short_id="c-1")
+
+    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
+    # spawn-overlay is legitimately called for OTHER kinds during normal
+    # resolution (e.g. `compose`, to read the lane row); the fix is about the
+    # `launch` kind specifically, so every call's payload is appended and
+    # checked rather than asserting spawn-overlay is never invoked at all.
+    overlay_log = tmp_path / "overlay-stdin.log"
+    fake = tmp_path / "fake-agents"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "spawn-axes" ]; then echo \'{"action":"pass"}\'; exit 0; fi\n'
+        'if [ "$1" = "spawn-overlay" ]; then cat >> '
+        + str(overlay_log) + "; fi\n"
+        'echo \'{"exit":0}\'\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
+    _stub_zai_claude_route(monkeypatch)
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "--name", "w", "go", "--route", "zai-flash"],
+    )
+    assert result.exit_code == 0, result.output
+    assert dispatched, "a sessionless routed spawn reaches dispatch_spawn"
+    assert dispatched[0]["name"] == "w"
+    overlay_calls = overlay_log.read_text(encoding="utf-8") if overlay_log.exists() else ""
+    assert '"kind": "launch"' not in overlay_calls, "the spawn-overlay launch kind is never reached"

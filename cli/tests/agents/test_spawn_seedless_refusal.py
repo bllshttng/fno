@@ -20,7 +20,7 @@ def _graphless_seed_resolver(monkeypatch):
 
     monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
 
-SEEDED_FORM = "fno agents spawn '/fno:target x-1' --name w --node x-1 --substrate thread"
+SEEDED_FORM = "fno agents spawn '/fno:target x-1' --name w --node x-1."
 RESUME = "0a6e775f-1111-2222-3333-444444444444"
 
 

@@ -274,7 +274,7 @@ def test_lane_b_spawn_without_worker_binary_exits_13(lane_b_home, monkeypatch) -
     with pytest.raises(DispatchAskError) as exc_info:
         _lane_b_thread_spawn(name="wk-nobin", harness="pi", cwd=lane_b_home)
     assert exc_info.value.exit_code == 13
-    assert "--substrate pane" in str(exc_info.value)
+    assert "pane lane (--split)" in str(exc_info.value)
 
 
 def test_lane_b_spawn_kills_the_keeper_when_identify_disagrees(
@@ -664,3 +664,25 @@ def test_lane_b_agy_refuses_a_truncated_resume_id(lane_b_home) -> None:
         _mint_thread_session_id("agy", lane_b_home, requested="c5661b28")
     assert "c5661b28" in str(caught.value)
     assert "not a full UUID" in str(caught.value)
+
+
+def test_lane_b_agy_runs_no_mint_and_binds_at_the_report(lane_b_home, monkeypatch) -> None:
+    """agy's id binds at the session report: a spawn carries no conversation
+    id, runs no mint turn, and the row's id is fno's provisional uuid until
+    the report promotes the harness's own."""
+    _fake_keeper(monkeypatch, lane_b_home)
+
+
+    def _no_mint(payload):
+        # The lane-default posture is the one ask; a mint ask fails the test.
+        if set(payload) == {"keeper_posture"}:
+            return {"tokens": ["--dangerously-skip-permissions"]}
+        raise AssertionError(f"no mint ask may run at agy spawn: {payload}")
+
+    monkeypatch.setattr("fno.agents.spawn_axes_client.spawn_axes_call", _no_mint)
+    receipt = _lane_b_thread_spawn(name="wk-agy", harness="agy", cwd=lane_b_home)
+
+    assert receipt["session_id"]
+    row = next(e for e in load_registry() if e.name == "wk-agy")
+    assert row.harness == "agy"
+    assert row.harness_session_id == receipt["session_id"]

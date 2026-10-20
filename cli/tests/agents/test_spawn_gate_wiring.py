@@ -84,7 +84,7 @@ def test_bg_spawn_gates_as_bg_and_receipt_is_byte_identical(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude"],
     )
     assert result.exit_code == 0, result.output
     assert calls == [
@@ -120,8 +120,7 @@ def test_succeed_passes_the_role_scope_to_the_gate(runner, gate_calls, monkeypat
     result = runner.invoke(
         agents_app,
         [
-            "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--substrate", "thread", "--promote", "x-epic", "--succeed",
+            "spawn", "--name", "w1", "hi", "--harness", "claude", "--promote", "x-epic", "--succeed",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -146,7 +145,7 @@ def test_gate_refusal_propagates_exit_code(runner, monkeypatch):
     result = runner.invoke(
         agents_app,
         [
-            "spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
+            "spawn", "--name", "w1", "hi", "--harness", "claude",
             "--no-wait",
         ],
     )
@@ -167,7 +166,7 @@ def test_sandbox_policy_refusal_happens_before_the_gate(
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--substrate", "pane", "--sandbox-write-policy", str(policy),
+            "--split", "left", "--sandbox-write-policy", str(policy),
         ],
     )
     assert result.exit_code == 2, result.output

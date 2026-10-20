@@ -547,7 +547,7 @@ async fn handle_spawn_thread_attach_without_server_refuses_with_client_pointer()
         crate::protocol::ResponsePayload::Err(e) => {
             assert_eq!(e.code, ErrorCode::InvalidParams);
             assert!(
-                e.message.contains("--substrate thread"),
+                e.message.contains("a bare `fno agents spawn`"),
                 "attach-without-server must point at the client-side lane; got: {}",
                 e.message
             );

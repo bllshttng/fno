@@ -254,6 +254,16 @@ def test_no_parseable_evidence_never_wakes():
     [v] = _run(rows, {"eeee6666-0000": facts})
     assert v.verdict == LEAVE
     assert "no parseable transcript evidence" in v.basis
+    # A transcript-less CLOUD row is LEAVE, for its own reason: the session
+    # lives on claude.ai, so no local transcript is BY DESIGN, not the ghost
+    # a dead local session would read.
+    [cloud] = _run(
+        [Row("session_cloud01", "w1", "working", None, "/tmp/w1", substrate="cloud")],
+        {},
+    )
+    assert cloud.verdict == LEAVE
+    assert "claude.ai" in cloud.basis
+    assert cloud.action == "report"
 
 
 def test_stopped_row_under_live_429_window_waits_not_wakes():

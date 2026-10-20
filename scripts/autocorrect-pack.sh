@@ -11,7 +11,7 @@
 #
 # Defaults:
 #   window: 30 days (or since watermark, whichever is more recent)
-#   severity filter: S1,S2 (monthly review). Pass --severity S0 to filter to S0 only.
+#   severity filter: S1,S2 (weekly review). Pass --severity S0 to filter to S0 only.
 #   format: yaml
 
 set -euo pipefail

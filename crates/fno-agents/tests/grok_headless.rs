@@ -56,8 +56,7 @@ fn grok_headless_fails_closed_until_live_create_and_resume_are_measured() {
             "hello",
             "--harness",
             "grok",
-            "--substrate",
-            "headless",
+            "--once",
         ])
         .arg("--cwd")
         .arg(cwd)

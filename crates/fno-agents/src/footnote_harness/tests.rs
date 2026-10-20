@@ -181,7 +181,7 @@ fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
         assert!(bad.unwrap_err().contains("malformed fno_id"));
     }
     assert_eq!(files, 1);
-    assert!(refused.unwrap_err().contains("needs -m"));
+    assert!(refused.unwrap_err().contains("needs a model"));
     let (path, sid) = written.unwrap();
     assert!(crate::resume_wake::is_uuid_shaped(&sid));
     assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);

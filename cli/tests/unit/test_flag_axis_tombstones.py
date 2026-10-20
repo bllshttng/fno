@@ -73,5 +73,5 @@ def test_retired_provider_exits_2():
     with pytest.raises(typer.Exit) as excinfo:
         refuse_retired_provider("claude")
     assert excinfo.value.exit_code == 2
-    # The refusal keeps naming the flag that replaced it.
-    assert "--harness/-H" in PROVIDER_AXIS_TOMBSTONE
+    # The refusal names what owns the vendor now.
+    assert "the route owns the vendor" in PROVIDER_AXIS_TOMBSTONE

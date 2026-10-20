@@ -62,7 +62,8 @@ class TestFireSkill:
         cmd_str = " ".join(str(c) for c in captured["cmd"])
         assert captured["cmd"][:3] != ["claude", "--print", "--output-format"]
         assert "agents" in captured["cmd"] and "spawn" in captured["cmd"]
-        assert captured["cmd"][captured["cmd"].index("--substrate") + 1] == "headless"
+        assert "--once" in captured["cmd"]
+        assert "--substrate" not in captured["cmd"]
         assert captured["cmd"][captured["cmd"].index("--harness") + 1] == "claude"
         assert captured["cmd"][captured["cmd"].index("--output-format") + 1] == "json"
         assert "check" in cmd_str

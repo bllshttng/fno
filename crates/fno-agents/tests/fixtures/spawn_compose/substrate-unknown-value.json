@@ -11,76 +11,38 @@
   "expect": {
     "argv": [
       "spawn",
-      "--permission-mode",
-      "bypassPermissions",
       "--name",
       "w22",
       "/fno:target x-20"
     ],
     "exit": 0,
     "journal": {
-      "type": "spawn_defaults_applied",
-      "source": "agents",
       "data": {
-        "applied": [
-          [
-            "permission_mode",
-            "bypassPermissions",
-            "builtin.autonomous.permission_mode"
-          ]
-        ],
-        "fingerprint": "",
         "name": "w22",
+        "verb": "target",
+        "seed": "/fno:target x-20",
+        "fingerprint": "",
         "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
           "account": {
-            "rung": null,
-            "value": ""
-          },
-          "effort": {
-            "rung": null,
-            "value": ""
-          },
-          "model": {
-            "rung": null,
-            "value": ""
+            "value": "",
+            "rung": null
           },
           "pane_group": {
-            "rung": null,
-            "value": ""
-          },
-          "permission_mode": {
-            "rung": "builtin.autonomous",
-            "value": "bypassPermissions"
-          },
-          "provider": {
-            "rung": null,
-            "value": ""
-          },
-          "route": {
-            "rung": null,
-            "value": ""
-          },
-          "substrate": {
-            "rung": "agents.defaults",
-            "value": "wat"
+            "value": "",
+            "rung": null
           }
         },
-        "seed": "/fno:target x-20",
-        "suppressed": [
-          [
-            "substrate",
-            "wat",
-            "agents.defaults",
-            "unknown substrate (valid: pane, thread, headless, bg)"
-          ]
-        ],
-        "verb": "target"
-      }
+        "applied": [],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
     },
-    "stderr": [
-      "fno agents spawn: substrate skipped (unknown substrate (valid: pane, thread, headless, bg)); agents.defaults.substrate = 'wat' ignored",
-      "fno agents spawn: applied permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
-    ],
+    "stderr": [],
     "stdout": null
   },
   "facts": {

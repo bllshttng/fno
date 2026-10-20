@@ -9,7 +9,7 @@ matches=$(python3 scripts/ci/graphql-caller-inventory.py)
 classified=$(printf '%s\n' "$matches" | awk 'NF {n++} END {print n+0}')
 unclassified=$(printf '%s\n' "$matches" | awk -F'|' '$1 == "unclassified" {n++} END {print n+0}')
 digest=$(printf '%s\n' "$matches" | LC_ALL=C sort | shasum -a 256 | awk '{print $1}')
-expected_digest="63ad7c8054a29a741db49339c1b15cd333a1fbf15a09178eae4a11cbdd713bf4"
+expected_digest="820b62501766008a4fcc4e7e7f14d9dad8cd3d00c3486e9eec66d8978de8286f"
 
 if [[ "${1:-}" == "--print-digest" ]]; then
   printf 'classified_graphql_callers=%s digest=%s\n' "$classified" "$digest"
