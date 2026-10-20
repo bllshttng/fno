@@ -15,6 +15,37 @@ const UNKNOWN: &str = "unknown";
 /// window bounces the node; an un-time-boundable fix counts against it.
 const FOLLOWUP_DAYS: i64 = 14;
 
+/// The native ledger read: `<agents home>/../ledger.json`, `entries` wrapper
+/// or root array, empty on any read failure. One loader for the escalation
+/// view and the by-lane scorecard, so the file shape has one reader. A
+/// present-but-unparseable file warns instead of reading silently as empty.
+pub(crate) fn ledger_rows() -> Vec<Value> {
+    let home = crate::paths::AgentsHome::from_env();
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
+    let raw = std::fs::read_to_string(fno_dir.join("ledger.json")).unwrap_or_default();
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => v
+            .get("entries")
+            .cloned()
+            .or_else(|| Some(v))
+            .and_then(|e| e.as_array().cloned())
+            .unwrap_or_default(),
+        Err(err) => {
+            if !raw.trim().is_empty() {
+                eprintln!(
+                    "fno-agents: ledger.json is present but unreadable ({err}); lane and \
+escalation reads see no ledger rows rather than a partial parse."
+                );
+            }
+            Vec::new()
+        }
+    }
+}
+
 pub(crate) fn view(params: &Value) -> Result<Value, String> {
     let empty = Vec::new();
     let entries = params
@@ -304,8 +335,9 @@ fn row_shipped(row: &Value, by_node: &Map<String, Value>) -> bool {
 
 /// The ported `_node_outcome` (fold.py:488): `reverted` flag, else a
 /// caused_by fix node within the follow-up window -> bounced, else
-/// merged_clean. An un-time-boundable fix counts against the node.
-fn node_outcome(
+/// merged_clean. An un-time-boundable fix counts against the node. Shared
+/// with the by-lane scorecard, which reuses the same bounce read per node.
+pub(crate) fn node_outcome(
     nid: &str,
     shipped_at: Option<chrono::NaiveDateTime>,
     by_id: &HashMap<&str, &Value>,

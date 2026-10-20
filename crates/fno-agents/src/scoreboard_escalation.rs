@@ -74,16 +74,7 @@ pub fn run_escalation_view(since_days: i64, json_out: bool) -> i32 {
             }
         }
     }
-    let ledger_raw = std::fs::read_to_string(fno_dir.join("ledger.json")).unwrap_or_default();
-    let rows: Vec<Value> = serde_json::from_str::<Value>(&ledger_raw)
-        .ok()
-        .and_then(|v| {
-            v.get("entries")
-                .cloned()
-                .or_else(|| Some(v))
-                .and_then(|e| e.as_array().cloned())
-        })
-        .unwrap_or_default();
+    let rows: Vec<Value> = crate::scoreboard_provider::ledger_rows();
     let entries = match crate::graph_store::read_rows_where(
         &fno_dir.join("graph.db"),
         &crate::backlog::RowQuery {
