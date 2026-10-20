@@ -695,7 +695,13 @@ shoot a root seeded with backlog nodes and leads \
                 l.draft.cursor_chars = "fix the mux composer ".chars().count();
             }
         }
-        None => {}
+        // The messages seam above already opened and positioned the board.
+        Some(ViewKind::MessagesTree)
+        | Some(ViewKind::MessagesChats)
+        | Some(ViewKind::MessagesThread)
+        | Some(ViewKind::MessagesSystem)
+        | Some(ViewKind::MessagesArchive)
+        | None => {}
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
