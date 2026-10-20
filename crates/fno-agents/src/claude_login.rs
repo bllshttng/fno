@@ -282,7 +282,12 @@ mod tests {
 
     #[test]
     fn a_sleeper_hits_the_bound_and_reads_unknown() {
-        let (_dir, cmd) = fake_claude("sleep 30");
+        // The loop, not a bare sleep: when the runner is fork-starved, a
+        // bare `sleep 30` makes bash exit at once with empty output, and
+        // that reads as a parse failure instead of the timeout verdict
+        // this test pins. The loop has no exit, so the kill at the bound
+        // always lands on a live process group.
+        let (_dir, cmd) = fake_claude("while :; do sleep 30; done");
         let started = std::time::Instant::now();
         let verdict = probe(cmd, 1);
         assert!(started.elapsed() < std::time::Duration::from_secs(3));

@@ -190,6 +190,25 @@ pub(super) fn stderr_tail(bytes: &[u8]) -> String {
 pub(super) const PR_VIEW_FIELDS: &str =
     "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author";
 
+/// The metadata set plus `url`: the one field outside the REST adapter's
+/// metadata routing, so the same argv over the same adapter binary hands the
+/// read to the quota-brokered GraphQL executor - the fallback transport when
+/// the core bucket is spent. Real gh serves every metadata key beside it, so
+/// the reply parses through the identical consumer path. A literal, because
+/// `concat!` takes literals only; the graphql_field_set drift test below is
+/// the guard.
+pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str =
+    "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url";
+
+/// The stop gate's set plus the four the info payload maps but the gate
+/// never reads: body, mergedAt, mergeCommit, autoMergeRequest. The info op's
+/// fallback asks for THIS set - asking for the gate's would promise keys the
+/// read never fetched, and a body mapped from an absent key reads as a real
+/// empty body downstream. Routing still rides the outside-the-set fields
+/// (url is the first); the drift test pins both supersets.
+pub(crate) const PR_INFO_FALLBACK_FIELDS: &str =
+    "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url,body,mergedAt,mergeCommit,autoMergeRequest";
+
 pub(super) fn pr_head_oid(pr_json: &Value) -> Option<String> {
     pr_json
         .get("headRefOid")
@@ -225,10 +244,84 @@ pub(super) fn failed_read_tail(out: &BoundedOutput) -> String {
     }
 }
 
+/// Whether a failed REST read earns the GraphQL retry: the wording smells
+/// rate limit, the failure is an ordinary one (a killed or refused read gets
+/// no second spawn), and the live exempt probe explains the refusal by the
+/// CORE bucket alone - a secondary refusal is the request rate, which a
+/// second transport only sustains, and an unreadable probe backs off rather
+/// than trust the wording.
+fn graphql_fallback_earned(err: &GhReadError, gh_bin: &str, cwd: &Path) -> bool {
+    if err.kind != ReadErrorKind::Failed || !stderr_smells_rate_limit(&err.stderr_tail) {
+        return false;
+    }
+    let probe = probe_graphql_quota(gh_bin, cwd);
+    !refusal_is_secondary(&err.stderr_tail, probe.as_ref(), false)
+}
+
+/// One `pr view` read: the argv build, the bounded spawn, and the reply's
+/// status/parse mapping under the read and parse names the caller picks.
+/// `repo` pins the repository when the caller resolved one itself - real gh
+/// otherwise picks the base repo by its own remote priority, which in a
+/// fork checkout can differ from the origin slug the REST legs read.
+fn read_pr_view_once(
+    gh_bin: &str,
+    cwd: &Path,
+    selector: Option<&str>,
+    fields: &str,
+    repo: Option<&str>,
+    read_name: &str,
+    parse_name: &str,
+    timeout: std::time::Duration,
+) -> Result<Option<Value>, GhReadError> {
+    let mut args = vec!["pr", "view"];
+    if let Some(selector) = selector {
+        args.push(selector);
+    }
+    if let Some(repo) = repo {
+        args.extend(["--repo", repo]);
+    }
+    args.extend(["--json", fields]);
+    let out = bounded_read(gh_bin.as_ref(), &args, cwd, read_name, timeout)?;
+    if !out.status.success() {
+        return if is_no_pr_stderr(&out.stderr_tail) {
+            Ok(None)
+        } else {
+            Err(GhReadError::failed(read_name, failed_read_tail(&out)))
+        };
+    }
+    serde_json::from_slice(&out.stdout)
+        .map(Some)
+        .map_err(|_| GhReadError::parse_failed(parse_name))
+}
+
+/// The gate's `pr view` read: the metadata field set over REST, with the
+/// earned broker-field-set fallback when the core bucket is spent.
 pub(super) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<Option<Value>, GhReadError> {
+    read_pr_view_fields(gh_bin, cwd, selector, PR_VIEW_FIELDS_GRAPHQL, None, timeout)
+}
+
+/// The earned-fallback read, parametrized for callers whose payload needs
+/// more fields than the gate maps. The primary read is the metadata field
+/// set over REST; a refusal that is ordinary, smells rate limit, and is
+/// explained by the CORE bucket alone retries as the same argv over
+/// `fallback_fields`, which routes to the quota-brokered GraphQL executor
+/// (any field outside the REST metadata set is what does the routing). A
+/// fallback that answers nothing hands back the ORIGINAL REST refusal,
+/// carrying the fallback's own cause appended after it: the REST wording
+/// stays first because the classifiers and quota parks read it, and the
+/// appended cause is what tells the operator a second transport ran and
+/// why it answered nothing.
+pub(crate) fn read_pr_view_fields(
+    gh_bin: &str,
+    cwd: &Path,
+    selector: Option<&str>,
+    fallback_fields: &str,
+    repo: Option<&str>,
     timeout: std::time::Duration,
 ) -> Result<Option<Value>, GhReadError> {
     let rest_adapter = internal_gh_adapter(gh_bin);
@@ -242,22 +335,45 @@ pub(super) fn read_pr_view(
     } else {
         "pr_view_parse"
     };
-    let mut args = vec!["pr", "view"];
-    if let Some(selector) = selector {
-        args.push(selector);
+    match read_pr_view_once(
+        gh_bin,
+        cwd,
+        selector,
+        PR_VIEW_FIELDS,
+        repo,
+        metadata_read,
+        metadata_parse,
+        timeout,
+    ) {
+        Ok(value) => Ok(value),
+        Err(err) if rest_adapter && graphql_fallback_earned(&err, gh_bin, cwd) => {
+            // The REST budget is spent and only the core bucket explains it;
+            // the GraphQL bucket is a separate one. The retry is the same
+            // argv with the caller's broker-routing field set, named pr_view
+            // so the event rows read the transport they paid for.
+            match read_pr_view_once(
+                gh_bin,
+                cwd,
+                selector,
+                fallback_fields,
+                repo,
+                "pr_view",
+                "pr_view_parse",
+                timeout,
+            ) {
+                Ok(value) => Ok(value),
+                Err(fallback_err) => {
+                    let mut err = err;
+                    err.stderr_tail.push_str(&format!(
+                        " | graphql fallback also failed: {}",
+                        fallback_err.cause_line()
+                    ));
+                    Err(err)
+                }
+            }
+        }
+        Err(err) => Err(err),
     }
-    args.extend(["--json", PR_VIEW_FIELDS]);
-    let out = bounded_read(gh_bin.as_ref(), &args, cwd, metadata_read, timeout)?;
-    if !out.status.success() {
-        return if is_no_pr_stderr(&out.stderr_tail) {
-            Ok(None)
-        } else {
-            Err(GhReadError::failed(metadata_read, failed_read_tail(&out)))
-        };
-    }
-    serde_json::from_slice(&out.stdout)
-        .map(Some)
-        .map_err(|_| GhReadError::parse_failed(metadata_parse))
 }
 
 /// Resolve a numeric PR selector without consulting the checkout branch.

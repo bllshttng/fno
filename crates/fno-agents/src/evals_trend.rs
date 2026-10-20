@@ -782,6 +782,32 @@ fn qualification_report(
 }
 
 pub fn run_evals_trend(args: &[String]) -> i32 {
+    // `--mode stability` rides this verb in any argument position rather
+    // than growing the over-cap fno-agents root; stability_report owns the
+    // remaining flags.
+    let mut mode_index: Option<usize> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        if args[i] == "--mode" || args[i].starts_with("--mode=") {
+            mode_index = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    if let Some(index) = mode_index {
+        let inline = args[index].split_once('=').map(|(_, v)| v.to_string());
+        let skip = if inline.is_some() { 1 } else { 2 };
+        let value = match &inline {
+            Some(v) => Some(v.as_str()),
+            None => args.get(index + 1).map(String::as_str),
+        };
+        if value == Some("stability") {
+            let mut rest: Vec<String> = Vec::new();
+            rest.extend_from_slice(&args[..index]);
+            rest.extend_from_slice(&args[index + skip..]);
+            return crate::stability_report::run(&rest);
+        }
+    }
     if args.is_empty() {
         // stdin summary: a JSON payload on stdin (the verb_call shape),
         // `{"op": "summary", "history": "...", "stale_days": N}`; the flags

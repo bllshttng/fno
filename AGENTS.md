@@ -171,7 +171,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **Curated CLI menu** - `fno doctor lint menu-caps` caps the first three levels of `fno` and `fno-agents` at 12 verbs each; hidden verbs count. Over-cap groups sit in shrink-only `scripts/ci/menu-caps-debt.tsv`. Group actions are arguments not leaves.
 - **Post-merge ritual** - `/fno:ship pr merged` runs reconcile + retro. Follow-ups: `config.post_merge.parking_lot_path`.
 - **Target self-handoff** - `/target` can hand the execute phase to a fresh-context successor, generation-capped. [target-self-handoff](docs/architecture/target-self-handoff.md).
-- **Self-improvement** - autocorrect (git-post-commit + verifier + `/insights` -> monthly review), two memory-pass checkpoints, stuck terminals write postmortems. See [memory-system](docs/architecture/memory-system.md) and [self-improvement-loops](docs/architecture/self-improvement-loops.md) (the loop map: triggers, config keys, where output lands).
+- **Self-improvement** - autocorrect (git-post-commit + verifier + `/insights` -> weekly review), two memory-pass checkpoints, stuck terminals write postmortems. See [memory-system](docs/architecture/memory-system.md) and [self-improvement-loops](docs/architecture/self-improvement-loops.md) (the loop map: triggers, config keys, where output lands).
 
 ## Skill / agent development
 
