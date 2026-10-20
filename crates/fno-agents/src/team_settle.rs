@@ -1518,3 +1518,4 @@ mod tests {
         assert_eq!(answer["vacate_rows"], json!([0]));
         assert_eq!(answer["reown_rows"], json!([1]));
     }
+}
