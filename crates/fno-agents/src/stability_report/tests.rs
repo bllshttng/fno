@@ -45,13 +45,6 @@ fn write(repo: &Path, rel: &str, body: &str) {
     std::fs::write(path, body).expect("write");
 }
 
-fn kinds_from(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    pairs
-        .iter()
-        .map(|(id, kind)| (id.to_string(), kind.to_string()))
-        .collect()
-}
-
 fn graph_fixture(path: &Path, pairs: &[(&str, &str)]) {
     let connection = rusqlite::Connection::open(path).expect("open fixture");
     connection
@@ -70,6 +63,7 @@ fn args(repo: &Path, days: i64, fix_window_days: i64, graph: Option<&Path>) -> A
         days,
         fix_window_days,
         graph: graph.map(Path::to_path_buf),
+        graph_explicit: false,
         now: Some(super::DateTime::parse_from_rfc3339("2026-10-05T12:00:00Z").expect("now")),
         json: true,
     }
@@ -167,13 +161,57 @@ fn merge_delivery_joins_the_backlog_node_kind() {
 
     let parsed = args(&repo, 30, 7, Some(&graph_db));
     let now = parsed.now.expect("now");
-    let report = compute(&parsed, now, &super::load_node_kinds(&graph_db)).expect("report");
+    let kinds = super::load_node_kinds(&graph_db).expect("graph kinds");
+    let report = compute(&parsed, now, &kinds).expect("report");
     assert_eq!(report.rows.len(), 1);
     let row = &report.rows[0];
     assert_eq!(row.delivery.kind, "fix");
     assert_eq!(row.delivery.classified_by, "node-kind");
     // crates/ reads fleet.
     assert_eq!(row.surface, "fleet");
+}
+
+#[test]
+fn merge_title_outranks_the_node_kind() {
+    let (_dir, repo) = init_repo();
+    let graph = tempfile::tempdir().expect("graphdir");
+    let graph_db = graph.path().join("graph.db");
+    graph_fixture(&graph_db, &[("x-cccc", "feature")]);
+
+    write(&repo, "gate.rs", "x\n");
+    git(&repo, &["add", "."], OLD_DATE);
+    git(&repo, &["commit", "-q", "-m", "init"], OLD_DATE);
+    git(
+        &repo,
+        &["checkout", "-q", "-b", "feature/x-cccc-stop-gate"],
+        FEAT_DATE,
+    );
+    write(&repo, "gate.rs", "y\n");
+    git(&repo, &["add", "."], FEAT_DATE);
+    git(&repo, &["commit", "-q", "-m", "stop the gate"], FEAT_DATE);
+    git(&repo, &["checkout", "-q", "main"], FEAT_DATE);
+    // A fix-titled merge body over a feature-kind node: the title wins. The
+    // merge message is the GitHub shape: subject, blank, title, bullets.
+    git(
+        &repo,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge pull request #8 from owener/feature/x-cccc-stop-gate\n\nfix(stop-gate): repair the gate\n\n* stop the gate\n",
+            "bugfix/x-cccc-stop-gate",
+        ],
+        FIX_DATE,
+    );
+
+    let parsed = args(&repo, 30, 7, Some(&graph_db));
+    let now = parsed.now.expect("now");
+    let kinds = super::load_node_kinds(&graph_db).expect("graph kinds");
+    let report = compute(&parsed, now, &kinds).expect("report");
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].delivery.kind, "fix");
+    assert_eq!(report.rows[0].delivery.classified_by, "merge-title");
 }
 
 #[test]
@@ -210,7 +248,8 @@ fn without_the_graph_the_branch_prefix_classifies() {
     graph_fixture(&graph_db, &[("x-zzzz", "bug")]);
     let parsed = args(&repo, 30, 7, Some(&graph_db));
     let now = parsed.now.expect("now");
-    let report = compute(&parsed, now, &super::load_node_kinds(&graph_db)).expect("report");
+    let kinds = super::load_node_kinds(&graph_db).expect("graph kinds");
+    let report = compute(&parsed, now, &kinds).expect("report");
     assert_eq!(report.rows[0].delivery.kind, "feat");
     assert_eq!(report.rows[0].delivery.classified_by, "branch-prefix");
     // skills/ reads product.
@@ -290,6 +329,41 @@ index 333..444 100644
 fn run_rejects_unknown_flags_with_the_usage_exit() {
     assert_eq!(super::run(&["--nope".to_string()]), EXIT_USAGE);
     assert_eq!(super::run(&["--days".to_string()]), EXIT_USAGE);
+}
+
+#[test]
+fn explicit_graph_read_failure_is_an_error_not_an_opt_out() {
+    // EXIT_ENV = 3; the code value stays literal here so the test does not
+    // import a second const for one assertion.
+    assert_eq!(
+        super::run(&["--graph", "/nonexistent/fno-test/graph.db"].map(String::from)),
+        3
+    );
+}
+
+#[test]
+fn add_only_fix_is_measured_clean_and_reported_apart() {
+    let (_dir, repo) = init_repo();
+    write(&repo, "m.rs", "a\n");
+    git(&repo, &["add", "."], OLD_DATE);
+    git(&repo, &["commit", "-q", "-m", "feat: seed (#30)"], OLD_DATE);
+    write(&repo, "m.rs", "a\nb\n");
+    git(&repo, &["add", "."], FIX_DATE);
+    git(
+        &repo,
+        &["commit", "-q", "-m", "fix: add a line (#31)"],
+        FIX_DATE,
+    );
+
+    let parsed = args(&repo, 30, 7, None);
+    let now = parsed.now.expect("now");
+    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
+    let row = &report.rows[1];
+    assert_eq!(row.fix_of_fix, Some(false));
+    assert_eq!(row.removed_lines, 0);
+    let stats = aggregate(&report);
+    assert_eq!((stats.fix, stats.measured, stats.no_removed), (1, 1, 1));
+    assert_eq!(stats.unmeasured, 0);
 }
 
 #[test]

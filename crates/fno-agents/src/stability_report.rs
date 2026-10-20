@@ -1,9 +1,10 @@
-//! `stability-report`: the stability eval's first slice, native under
-//! d-b6cc1a2a (all new code lands in crates). One transport-only early arm,
-//! daemon-free like evals-macro, so the shrink gate sees no new action:
-//! `fno-agents stability-report` computes, from one repo's git history plus
-//! the backlog graph, the fix-of-fix rate and the product-path vs
-//! fleet-machinery surface split for a window of merged PRs.
+//! `evals-trend --mode stability`: the stability eval's first slice, native
+//! under d-b6cc1a2a (all new code lands in crates). It rides the existing
+//! evals-trend verb rather than growing the over-cap fno-agents root, so
+//! the menu-caps lint sees no new action:
+//! `fno-agents evals-trend --mode stability` computes, from one repo's git
+//! history plus the backlog graph, the fix-of-fix rate and the product-path
+//! vs fleet-machinery surface split for a window of merged PRs.
 //!
 //! Definitions the report owns (they travel with every output):
 //!
@@ -11,12 +12,15 @@
 //!   either shape this repo produces: squash (`... (#123)`) or merge
 //!   (`Merge pull request #123 from owner/branch`). A repeated delivery
 //!   keeps its newest landing.
-//! - **Kind ladder** (first hit wins): backlog node kind joined through the
-//!   node id embedded in the branch name (`bugfix/x-aaaa-...` carries
-//!   `x-aaaa`), then the conventional squash subject (`fix(scope): ...`),
-//!   then the branch prefix (`bugfix|fix|hotfix`, `feature|feat`), then
-//!   other. The backlog read is read-only and optional: an absent or
-//!   unreadable graph degrades to the git-only ladder and says so.
+//! - **Kind ladder** (first hit wins): the conventional subject
+//!   (`fix(scope): ...`; for merge deliveries the PR title on the first
+//!   body line, which this repo's merge commits carry), then the backlog
+//!   node kind joined through the node id in the branch leaf
+//!   (`bugfix/x-aaaa-crash` carries `x-aaaa`), then the branch prefix
+//!   (`bugfix|fix|hotfix`, `feature|feat`), then other. The backlog read is
+//!   read-only and optional: an absent graph degrades to the git-only
+//!   ladder and says so; an explicit `--graph` that fails to read is an
+//!   error, not an opt-out.
 //! - **Surface split**: per-file first-match prefix globs (product = the
 //!   plugin surface a user installs and exercises; fleet = the runtime and
 //!   CI that runs the agent fleet). A PR lands on the side holding more of
@@ -25,8 +29,10 @@
 //!   whose introducing commit is a PR delivery merged within
 //!   `--fix-window-days` (default 7) before the fix itself. Introduced-at
 //!   comes from `git blame --first-parent` on the fix's first parent, so a
-//!   blame sha is always a mainline delivery commit. Rate = of-fix / fix
-//!   PRs; this is regressions per fix PR, the honest stability number.
+//!   blame sha is always a mainline delivery commit. The rate's denominator
+//!   is the measured fix PRs only: a fix whose diff or blame read failed is
+//!   `unmeasured`, never clean; fix PRs with no removed lines are counted
+//!   and reported apart.
 //!
 //! Output is a human summary, or the full JSON (per-PR rows included) under
 //! `--json`. The 30-day baseline this shipped with is in the PR body.
@@ -41,7 +47,7 @@ const EXIT_OK: i32 = 0;
 const EXIT_USAGE: i32 = 2;
 const EXIT_ENV: i32 = 3;
 
-const USAGE: &str = "usage: fno-agents stability-report [--repo <path>] [--days <30>] \
+const USAGE: &str = "usage: fno-agents evals-trend --mode stability [--repo <path>] [--days <30>] \
 [--fix-window-days <7>] [--graph <path> | --no-backlog] [--json] [--now <rfc3339>]";
 
 /// Product = what a plugin user installs and exercises: the CLI, the skill
@@ -65,6 +71,7 @@ struct Args {
     days: i64,
     fix_window_days: i64,
     graph: Option<PathBuf>,
+    graph_explicit: bool,
     now: Option<DateTime<Utc>>,
     json: bool,
 }
@@ -87,9 +94,11 @@ struct Row {
     delivery: Delivery,
     surface: &'static str,
     changed_lines: u64,
-    /// None for non-fix rows; Some for every fix PR.
+    /// None for non-fix rows and unmeasured fix rows; Some for measured ones.
     fix_of_fix: Option<bool>,
     young_lines: u64,
+    /// Removed lines the fix diff carries; 0 means an add-only fix.
+    removed_lines: u64,
 }
 
 struct Report {
@@ -117,11 +126,25 @@ pub fn run(args: &[String]) -> i32 {
     }
     let now = parsed.now.unwrap_or_else(Utc::now);
     let node_kinds = match &parsed.graph {
-        Some(path) => load_node_kinds(path),
+        Some(path) => match load_node_kinds(path) {
+            Ok(kinds) => kinds,
+            Err(error) => {
+                if parsed.graph_explicit {
+                    // An explicit --graph that cannot read is an error, not
+                    // an opt-out: the operator asked for the join.
+                    eprintln!("stability-report: graph read failed: {error}");
+                    return EXIT_ENV;
+                }
+                eprintln!(
+                    "stability-report: default graph unreadable, degrading to the git-only ladder: {error}"
+                );
+                BTreeMap::new()
+            }
+        },
         None => BTreeMap::new(),
     };
-    // The join is "on" only when nodes actually loaded: an empty or failed
-    // read degrades to the git-only ladder either way.
+    // The join is "on" only when nodes actually loaded: an empty graph
+    // degrades to the git-only ladder either way.
     let backlog_loaded = !node_kinds.is_empty();
     let report = match compute(&parsed, now, &node_kinds) {
         Ok(report) => report,
@@ -144,6 +167,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, ()> {
         days: 30,
         fix_window_days: 7,
         graph: default_graph_path(),
+        graph_explicit: false,
         now: None,
         json: false,
     };
@@ -169,8 +193,12 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, ()> {
             "--graph" => {
                 i += 1;
                 parsed.graph = Some(PathBuf::from(args.get(i).ok_or(())?));
+                parsed.graph_explicit = true;
             }
-            "--no-backlog" => parsed.graph = None,
+            "--no-backlog" => {
+                parsed.graph = None;
+                parsed.graph_explicit = false;
+            }
             "--now" => {
                 i += 1;
                 let raw = args.get(i).ok_or(())?;
@@ -198,32 +226,36 @@ fn default_graph_path() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// id -> kind for every node in the graph. A read failure is an empty map:
-/// the report degrades to the git-only ladder and notes it.
-fn load_node_kinds(path: &std::path::Path) -> BTreeMap<String, String> {
+/// id -> kind for every node in the graph. The `kind` column is nullable:
+/// NULL-kind rows skip the join. A read failure is an error, so the caller
+/// can tell a refused read from an opt-out.
+fn load_node_kinds(path: &std::path::Path) -> Result<BTreeMap<String, String>, String> {
     let mut kinds = BTreeMap::new();
-    let Ok(connection) = crate::store_conn::open_read(path) else {
-        return kinds;
-    };
-    let Ok(mut statement) = connection.prepare("SELECT id, kind FROM nodes") else {
-        return kinds;
-    };
-    let Ok(rows) = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0), row.get::<_, String>(1)))
-    }) else {
-        return kinds;
-    };
+    let connection = crate::store_conn::open_read(path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut statement = connection
+        .prepare("SELECT id, kind FROM nodes")
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     for row in rows.flatten() {
-        kinds.insert(row.0, row.1);
+        if let Some(kind) = row.1 {
+            kinds.insert(row.0, kind);
+        }
     }
-    kinds
+    Ok(kinds)
 }
 
 /// The node id embedded in a branch name, validated against the graph so a
 /// branch word like `id-cannot` cannot masquerade: `bugfix/x-aaaa-slug`
-/// carries `x-aaaa`.
+/// carries `x-aaaa`. The prefix segments are stripped first, so the split
+/// never sees a `/` inside a token.
 fn branch_node_kind<'a>(branch: &str, node_kinds: &'a BTreeMap<String, String>) -> Option<&'a str> {
-    let tokens: Vec<&str> = branch.split('-').collect();
+    let leaf = branch.rsplit('/').next().unwrap_or(branch);
+    let tokens: Vec<&str> = leaf.split('-').collect();
     for window in tokens.windows(2) {
         let head = window[0];
         let tail = window[1];
@@ -289,18 +321,44 @@ fn delivery_pr(subject: &str) -> Option<(u64, Option<String>)> {
     Some((digits.parse().ok()?, None))
 }
 
+/// The PR title a merge-delivered PR carries: the first non-empty body line
+/// that is not the subject, not a `* ` commit-list bullet, and not another
+/// merge header. This repo's merge commits put the title there.
+fn merge_title<'a>(body: &'a str, subject: &str) -> Option<&'a str> {
+    let mut lines = body.lines().filter(|line| !line.trim().is_empty());
+    while let Some(line) = lines.next() {
+        if line.trim() == subject.trim() {
+            continue;
+        }
+        if line.trim_start().starts_with("* ") {
+            continue;
+        }
+        if line.trim().starts_with("Merge pull request") {
+            continue;
+        }
+        return Some(line.trim());
+    }
+    None
+}
+
 fn classify(
     subject: &str,
+    title: Option<&str>,
     branch: Option<&str>,
     node_kinds: &BTreeMap<String, String>,
 ) -> (&'static str, &'static str) {
+    if let Some(kind) = conventional_kind(subject) {
+        return (kind, "subject");
+    }
+    if let Some(title) = title {
+        if let Some(kind) = conventional_kind(title) {
+            return (kind, "merge-title");
+        }
+    }
     if let Some(branch) = branch {
         if let Some(kind) = branch_node_kind(branch, node_kinds) {
             return (node_kind_bucket(kind), "node-kind");
         }
-    }
-    if let Some(kind) = conventional_kind(subject) {
-        return (kind, "subject");
     }
     if let Some(branch) = branch {
         if let Some(kind) = branch_prefix_kind(branch) {
@@ -345,7 +403,7 @@ fn compute(
             "log",
             "--first-parent",
             &format!("--since={since_iso}"),
-            "--format=%H%x1f%cI%x1f%P%x1f%s%x1e",
+            "--format=%H%x1f%cI%x1f%P%x1f%s%x1f%b%x1e",
         ],
     )?;
 
@@ -357,8 +415,8 @@ fn compute(
             continue;
         }
         let fields: Vec<&str> = record.split('\u{1f}').collect();
-        let (sha, iso, subject) = match fields.as_slice() {
-            [sha, iso, _parents, subject] => (*sha, *iso, *subject),
+        let (sha, iso, subject, body) = match fields.as_slice() {
+            [sha, iso, _parents, subject, body] => (*sha, *iso, *subject, *body),
             _ => continue,
         };
         let time = match DateTime::parse_from_rfc3339(iso) {
@@ -373,7 +431,8 @@ fn compute(
             // the newest one; keep it.
             continue;
         }
-        let (kind, classified_by) = classify(subject, branch.as_deref(), node_kinds);
+        let title = merge_title(body, subject);
+        let (kind, classified_by) = classify(subject, title, branch.as_deref(), node_kinds);
         by_sha.insert(sha.to_string(), (pr, time));
         deliveries.push(Delivery {
             pr,
@@ -405,7 +464,7 @@ fn compute(
                 ("fleet", 0)
             }
         };
-        let (fix_of_fix, young_lines) = if delivery.kind == "fix" {
+        let (fix_of_fix, young_lines, removed_lines) = if delivery.kind == "fix" {
             match fix_of_fix(
                 &parsed.repo,
                 &parent,
@@ -417,11 +476,11 @@ fn compute(
                 Ok(verdict) => verdict,
                 Err(_) => {
                     report.diff_failures += 1;
-                    (None, 0)
+                    (None, 0, 0)
                 }
             }
         } else {
-            (None, 0)
+            (None, 0, 0)
         };
         report.rows.push(Row {
             delivery: delivery.clone(),
@@ -429,6 +488,7 @@ fn compute(
             changed_lines,
             fix_of_fix,
             young_lines,
+            removed_lines,
         });
     }
     Ok(report)
@@ -461,7 +521,10 @@ fn surface_split(
 }
 
 /// The fix-of-fix verdict for one fix PR: any removed line whose introducing
-/// mainline commit is a PR delivery merged within the youth window.
+/// mainline commit is a PR delivery merged within the youth window. Returns
+/// (verdict, young lines, removed lines); the verdict is None (unmeasured)
+/// when the diff read fails or any blame run fails - a partial blame read
+/// must never read as clean.
 fn fix_of_fix(
     repo: &std::path::Path,
     parent: &str,
@@ -469,10 +532,15 @@ fn fix_of_fix(
     by_sha: &BTreeMap<String, (u64, DateTime<Utc>)>,
     fix_window_days: i64,
     blame_failures: &mut u64,
-) -> Result<(Option<bool>, u64), String> {
+) -> Result<(Option<bool>, u64, u64), String> {
     let diff = git_out(repo, &["diff", "--unified=0", parent, &delivery.sha])?;
     let removed = removed_runs(&diff);
+    let removed_lines: u64 = removed
+        .iter()
+        .map(|(_, runs)| runs.iter().map(|(start, end)| end - start + 1).sum::<u64>())
+        .sum();
     let mut young_lines: u64 = 0;
+    let mut failures: u64 = 0;
     for (path, runs) in &removed {
         for (start, end) in runs {
             let range = format!("{start},{end}");
@@ -492,6 +560,7 @@ fn fix_of_fix(
             ) {
                 Ok(blame) => blame,
                 Err(_) => {
+                    failures += 1;
                     *blame_failures += 1;
                     continue;
                 }
@@ -514,7 +583,15 @@ fn fix_of_fix(
             }
         }
     }
-    Ok((Some(young_lines > 0), young_lines))
+    // A fix with no removed lines is measured clean and reported apart; a
+    // fix whose blame partially failed is unmeasured, never clean.
+    if removed.is_empty() {
+        return Ok((Some(false), 0, 0));
+    }
+    if failures > 0 {
+        return Ok((None, young_lines, removed_lines));
+    }
+    Ok((Some(young_lines > 0), young_lines, removed_lines))
 }
 
 /// Removed-line runs per pre-image path, from a unified diff. Removed lines
@@ -591,6 +668,12 @@ struct Totals {
     fleet_prs: u64,
     fleet_lines: u64,
     fix_of_fix: u64,
+    /// Fix PRs whose diff and blame reads both completed.
+    measured: u64,
+    /// Fix PRs left out of the rate: diff or blame read failed.
+    unmeasured: u64,
+    /// Measured-clean fix PRs whose diff removed no lines.
+    no_removed: u64,
 }
 
 fn aggregate(report: &Report) -> Totals {
@@ -604,14 +687,30 @@ fn aggregate(report: &Report) -> Totals {
         fleet_prs: 0,
         fleet_lines: 0,
         fix_of_fix: 0,
+        measured: 0,
+        unmeasured: 0,
+        no_removed: 0,
     };
     for row in &report.rows {
         t.total += 1;
         match row.delivery.kind {
             "fix" => {
                 t.fix += 1;
-                if row.fix_of_fix == Some(true) {
-                    t.fix_of_fix += 1;
+                match row.fix_of_fix {
+                    Some(true) => {
+                        t.measured += 1;
+                        t.fix_of_fix += 1;
+                        if row.removed_lines == 0 {
+                            t.no_removed += 1;
+                        }
+                    }
+                    Some(false) => {
+                        t.measured += 1;
+                        if row.removed_lines == 0 {
+                            t.no_removed += 1;
+                        }
+                    }
+                    None => t.unmeasured += 1,
                 }
             }
             "feat" => t.feat += 1,
@@ -656,10 +755,16 @@ fn render_text(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool
     ));
     if stats.fix > 0 {
         out.push_str(&format!(
-            "fix-of-fix: {}/{} = {:.1}%\n",
+            "fix-of-fix: {}/{} measured = {:.1}%   unmeasured {}   no-removed-lines {}\n",
             stats.fix_of_fix,
-            stats.fix,
-            100.0 * stats.fix_of_fix as f64 / stats.fix as f64
+            stats.measured,
+            if stats.measured > 0 {
+                100.0 * stats.fix_of_fix as f64 / stats.measured as f64
+            } else {
+                0.0
+            },
+            stats.unmeasured,
+            stats.no_removed
         ));
     } else {
         out.push_str("fix-of-fix: no fix PRs in window\n");
@@ -675,8 +780,8 @@ fn render_text(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool
 
 fn render_json(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool) -> String {
     let stats = aggregate(report);
-    let rate = if stats.fix > 0 {
-        json!(stats.fix_of_fix as f64 / stats.fix as f64)
+    let rate = if stats.measured > 0 {
+        json!(stats.fix_of_fix as f64 / stats.measured as f64)
     } else {
         json!(null)
     };
@@ -693,6 +798,7 @@ fn render_json(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool
                 "changed_lines": row.changed_lines,
                 "fix_of_fix": row.fix_of_fix,
                 "young_lines": row.young_lines,
+                "removed_lines": row.removed_lines,
                 "subject": row.delivery.subject,
             })
         })
@@ -719,7 +825,10 @@ fn render_json(parsed: &Args, now: DateTime<Utc>, report: &Report, backlog: bool
         },
         "fix_of_fix": {
             "fix_prs": stats.fix,
+            "measured": stats.measured,
             "of_fix": stats.fix_of_fix,
+            "unmeasured": stats.unmeasured,
+            "no_removed_lines": stats.no_removed,
             "rate": rate,
             "window_days": parsed.fix_window_days,
         },
