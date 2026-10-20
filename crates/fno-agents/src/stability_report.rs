@@ -210,7 +210,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, ()> {
                         .with_timezone(&Utc),
                 );
             }
-            "--json" => parsed.json = true,
+            _ if crate::json_output::is_flag(args[i].as_str()) => parsed.json = true,
             _ => return Err(()),
         }
         i += 1;

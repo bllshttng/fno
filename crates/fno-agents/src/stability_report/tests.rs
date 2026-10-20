@@ -46,15 +46,13 @@ fn write(repo: &Path, rel: &str, body: &str) {
 }
 
 fn graph_fixture(path: &Path, pairs: &[(&str, &str)]) {
-    let connection = rusqlite::Connection::open(path).expect("open fixture");
-    connection
-        .execute_batch("CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT);")
-        .expect("create nodes");
-    for (id, kind) in pairs {
-        connection
-            .execute("INSERT INTO nodes VALUES (?1, ?2)", [id, kind])
-            .expect("insert node");
-    }
+    // Seed through the store's own fixture door: SQL writes to nodes outside
+    // the backlog owner fail the table-ownership contract.
+    let rows: Vec<serde_json::Value> = pairs
+        .iter()
+        .map(|(id, kind)| serde_json::json!({"id": id, "slug": id, "status": "done", "kind": kind}))
+        .collect();
+    crate::graph_store::seed_rows(path, &rows).expect("seed graph fixture");
 }
 
 fn args(repo: &Path, days: i64, fix_window_days: i64, graph: Option<&Path>) -> Args {
