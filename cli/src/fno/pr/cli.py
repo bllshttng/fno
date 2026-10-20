@@ -16,7 +16,6 @@ dependency. Each module preserves the bash exit-code / output contract.
 from __future__ import annotations
 
 import enum
-import functools
 import json
 import os
 import subprocess
