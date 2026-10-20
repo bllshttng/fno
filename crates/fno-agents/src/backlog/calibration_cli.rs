@@ -237,7 +237,7 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
                 .unwrap_or_else(|| "n/a".to_string())
         };
         println!(
-            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10.2}{:>10}{:>9}{bounce:>9}{:>7}{:>7}",
+            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10.2}{:>10}{:>9}{:>9}{:>7}{:>7}",
             c["kind"].as_str().unwrap_or_default(),
             c["harness"].as_str().unwrap_or_default(),
             c["provider"].as_str().unwrap_or_default(),
@@ -247,7 +247,7 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
             c["spend_usd"].as_f64().unwrap_or(0.0),
             fmt(&c["cost_per_merged_usd"]),
             fmt(&c["median_work_hours"]),
-            bounce = fmt(&c["bounce_pct"]),
+            fmt(&c["bounce_pct"]),
             c["ci_failure_per_node"]
                 .as_f64()
                 .map(|f| format!("{f:.2}"))
