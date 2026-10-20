@@ -14,8 +14,9 @@ own_list = true        # `opencode models --pure` is the ready list
 
 [vendor.zai]
 catalog = "zai"
-builtin = true         # mirrors model_routing.py _DEFAULT_PROVIDERS["zai"]
+builtin = true         # the built-in preset `provider_route.rs` serves
 anthropic = { base_url = "https://api.z.ai/api/anthropic", key_env = "ZAI_API_KEY", key_file = "~/.fno/.env" }
+haiku_model = "glm-4.7"
 
 [vendor.deepseek]
 catalog = "deepseek"

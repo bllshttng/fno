@@ -851,6 +851,7 @@ pub(crate) fn share_reading(
     registry_path: &Path,
     cap: usize,
     caller: Option<&str>,
+    terminal_runs: Option<&Path>,
 ) -> ShareReading {
     let registry = match load_registry(registry_path) {
         Ok(registry) => registry,
@@ -867,6 +868,7 @@ pub(crate) fn share_reading(
     let mut teamed: HashSet<String> = HashSet::new();
     let mut held_rows: Vec<String> = Vec::new();
     let mut unattributed: Vec<String> = Vec::new();
+    let terminal = terminal_runs.map(crate::terminal_run::read_keys);
     for e in &registry.entries {
         // A team counts until it is cleared or its row is permanently dead.
         // A reboot leaves every teamed row reading exited while the team
@@ -882,6 +884,18 @@ pub(crate) fn share_reading(
         }
         if !status_is_liveish(&e.status) || e.role_level.is_some() {
             continue;
+        }
+        // A row whose run reported a releasing terminal reason is a parked
+        // finished worker, not active work: it stops charging its lead's
+        // share while it stays alive for late review mail. No session id or
+        // an unreadable dir keeps today's counting.
+        if let Some(set) = &terminal {
+            if e.harness_session_id
+                .as_deref()
+                .is_some_and(|sid| set.contains(sid))
+            {
+                continue;
+            }
         }
         match e.spawned_by_session.as_deref() {
             Some(spawner) if Some(spawner) == caller => held_rows.push(e.name.clone()),
@@ -1279,13 +1293,14 @@ pub(crate) fn check_lead_share(
     registry_path: &Path,
     learned: &crate::capacity::Effective,
     caller_session: Option<&str>,
+    terminal_runs: Option<&Path>,
     _axes_read: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), crate::spawn_gate::Refusal> {
     let cap = learned.cap;
     let Some(caller) = caller_session.filter(|c| !c.is_empty()) else {
         return Ok(());
     };
-    let reading = share_reading(registry_path, cap, Some(caller));
+    let reading = share_reading(registry_path, cap, Some(caller), terminal_runs);
     let (Some(leads), Some(share), Some(held)) = (reading.leads, reading.share, reading.held)
     else {
         // An unreadable registry leaves every count unknown; nothing to
@@ -1368,6 +1383,93 @@ mod tests {
         format!(
             r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"{sid}"}}"#
         )
+    }
+
+    /// A live spawned worker row carrying its harness session id and spawner.
+    fn spawned_row(name: &str, sid: &str, spawner: &str) -> String {
+        format!(
+            r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"{sid}","spawned_by_session":"{spawner}"}}"#
+        )
+    }
+
+    /// A live caller-spawned row with a terminal-run receipt stops counting
+    /// toward lead_share, and counts again once the receipt clears.
+    #[test]
+    fn a_terminal_receipt_row_stops_counting_toward_lead_share() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-share-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let sid = "c79bce5b-1682-4a8c-97f4-d6254cf18112";
+        write_registry(&reg, &[spawned_row("t-w-done", sid, "lead-1")]);
+
+        let home = crate::paths::AgentsHome::at(&dir);
+        let runs = home.terminal_runs_dir();
+
+        // No receipt: the row counts (today's refusal fires unchanged).
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(reading.held, Some(1), "no receipt: the row counts");
+
+        // DonePRGreen receipt dropped: the same row stops counting.
+        crate::terminal_run::write_receipt(&home, sid, "DonePRGreen").unwrap();
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(reading.held, Some(0), "receipt: the finished row skips");
+        assert!(
+            reading
+                .held_rows
+                .unwrap_or_default()
+                .iter()
+                .all(|n| n != "t-w-done"),
+            "the skipped row is not named as held"
+        );
+
+        // Receipt cleared (the loop went live again): the row counts again.
+        crate::terminal_run::remove_receipt(&home, sid);
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(
+            reading.held,
+            Some(1),
+            "cleared receipt: the row counts again"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The skip keys on the row, not the caller; a missing dir reads as no
+    /// receipts (count everything).
+    #[test]
+    fn the_receipt_skip_is_keyed_on_the_row_not_the_caller() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-share2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let sid = "c79bce5b-1682-4a8c-97f4-d6254cf18112";
+        write_registry(
+            &reg,
+            &[
+                spawned_row("t-w-lead2", sid, "lead-2"),
+                spawned_row("t-w-lead1", "aaaaaaaa-bb-cc-dd-eeeeeeeeeeee", "lead-1"),
+            ],
+        );
+        let home = crate::paths::AgentsHome::at(&dir);
+        let runs = home.terminal_runs_dir();
+        crate::terminal_run::write_receipt(&home, sid, "DonePRGreen").unwrap();
+
+        // lead-2's own finished row skips; lead-1's live row still counts.
+        let reading = share_reading(&reg, 3, Some("lead-2"), Some(&runs));
+        assert_eq!(reading.held, Some(0), "lead-2's finished row skips");
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(reading.held, Some(1), "lead-1's working row still counts");
+
+        // A nonexistent dir reads as no receipts: lead-2's row counts.
+        let reading = share_reading(&reg, 3, Some("lead-2"), Some(&dir.join("nope")));
+        assert_eq!(reading.held, Some(1), "missing dir: count everything");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// AC1-HP's counting rule: live rows of the provider count, dead pids and

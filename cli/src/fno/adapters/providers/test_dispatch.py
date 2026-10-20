@@ -153,7 +153,12 @@ def test_dispatch_env_api_key_keychain(
 def test_dispatch_env_route_uses_repository_model_settings(
     tmp_path: Path, staging_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A route account resolves against the account repository's settings."""
+    """A route account resolves against the account repository's settings: the
+    repository's model_routing.providers overlay rides the route-builder
+    payload as the caller-pinned ``block`` (the smoke shard runs without the
+    route-builder binary), and its answer is the env dispatch applies."""
+    import os
+
     monkeypatch.setenv("ZAI_API_KEY", "wrong-repository-token")
     monkeypatch.setenv("PROJECT_ZAI_KEY", "project-token")
     record = ProviderRecord(
@@ -175,11 +180,32 @@ def test_dispatch_env_route_uses_repository_model_settings(
             }
         },
     )
+    seen: dict = {}
+
+    def overlay_transport(payload: dict) -> dict:
+        seen.update(payload)
+        zai = payload["block"]["providers"]["zai"]
+        assert zai["base_url"] == "https://project.example/anthropic"
+        assert zai["api_key_env"] == "PROJECT_ZAI_KEY"
+        return {
+            "route": {
+                "ANTHROPIC_BASE_URL": zai["base_url"],
+                "ANTHROPIC_AUTH_TOKEN": os.environ["PROJECT_ZAI_KEY"],
+            },
+            "notices": [],
+        }
+
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", overlay_transport
+    )
 
     env = dispatch_env(record.id, repo_root=repo_root, root=staging_root)
 
     assert env["ANTHROPIC_BASE_URL"] == "https://project.example/anthropic"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "project-token"
+    assert seen["provider"] == "zai"
+    assert seen["ctx"] == {"kind": "peer", "name": "zai"}
+    assert seen["block"]["extra_env"] == {}
 
 
 # ---------------------------------------------------------------------------

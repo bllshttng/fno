@@ -52,6 +52,7 @@ fn run_pane(sock: &Path, cwd: &Path) -> Result<u64, String> {
                 claim: false,
                 placement: PanePlacement::default(),
                 worker: None,
+                fno_id: None,
             },
         },
     )

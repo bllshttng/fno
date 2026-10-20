@@ -152,6 +152,7 @@ pub(super) async fn run_with(
         claim: false,
         placement: PanePlacement::default(),
         worker: None,
+        fno_id: None,
     };
     let reply = tokio::task::spawn_blocking(move || roundtrip(verb))
         .await
