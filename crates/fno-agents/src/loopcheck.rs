@@ -2458,17 +2458,7 @@ pub(crate) fn decide_with_payload(
                     )
                 } else {
                     match &quota {
-                        // The rate-limit shape at graphql 0 parked above, so
-                        // this arm now only renders on a non-quota failure
-                        // that raced an empty bucket - a blip the next fire
-                        // can survive. The exhausted wording's "stop retrying
-                        // this window" is wrong advice there, so require the
-                        // rate-limit smell to render it at all.
-                        Some(q)
-                            if q.remaining == 0
-                                && is_graphql_read
-                                && stderr_smells_rate_limit(&failed_stderr) =>
-                        {
+                        Some(q) if q.remaining == 0 && is_graphql_read => {
                             graphql_exhausted_reason(q)
                         }
                         _ => format!(
