@@ -546,13 +546,13 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
                             // A separate value must sit inside the fence: with
                             // --take-over last, the next token is the --argv
                             // fence or a payload word, and neither is a reason.
-                            reason = if i + 1 < cut {
-                                argv[i + 1].clone()
+                            // A flag-shaped token is never a reason either:
+                            // eating one would silently rewrite the ask.
+                            if i + 1 < cut && !argv[i + 1].starts_with("--") {
+                                reason = argv[i + 1].clone();
+                                argv.remove(i);
+                                argv.remove(i);
                             } else {
-                                String::new()
-                            };
-                            argv.remove(i);
-                            if i + 1 < cut {
                                 argv.remove(i);
                             }
                         }
@@ -561,6 +561,17 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
                 }
             }
             seam.take_over = reason.trim().to_string();
+        }
+        if seam.take_over.is_empty() {
+            // The flag without a usable value must not degrade to a plain
+            // promote: the settle's own refusal would never see the ask,
+            // and the colleague would launch unjournaled.
+            seam.refuse(
+                "--take-over needs a reason: --take-over \"why the \
+                 paused lead is unreachable\""
+                    .to_string(),
+            );
+            return;
         }
     }
     let (verb, profile_verb, profile) = match resolve_profile(inputs, &scan) {
@@ -1727,8 +1738,10 @@ mod tests {
         // reason rides the answer to the in-process seam.
         assert!(!ok.argv.iter().any(|t| t == "--take-over"), "{:?}", ok.argv);
         assert_eq!(ok.take_over, "why");
-        // With the flag last before the fence, the fence and the payload
-        // survive: the next token is never a reason.
+        // With the flag last before the fence, the ask refuses: the answer
+        // carries the input argv untouched (the fence and the payload were
+        // never eaten) and the door names the missing reason instead of
+        // silently degrading to a plain promote.
         let fenced = compose(&make_inputs(&[
             "--promote",
             "x-aaaa",
@@ -1736,17 +1749,39 @@ mod tests {
             "--",
             "review the ledger",
         ]));
-        assert_ne!(fenced.exit, 2, "{:?}", fenced.stderr);
-        assert_eq!(fenced.take_over, "", "{:?}", fenced.argv);
+        assert_eq!(fenced.exit, 2, "{:?}", fenced.stderr);
         assert!(
             fenced.argv.iter().any(|t| t == "--"),
-            "fence eaten: {:?}",
+            "fence rewritten: {:?}",
             fenced.argv
         );
         assert!(
             fenced.argv.iter().any(|t| t == "review the ledger"),
-            "payload eaten: {:?}",
+            "payload rewritten: {:?}",
             fenced.argv
+        );
+        assert!(
+            fenced
+                .stderr
+                .iter()
+                .any(|line| line.contains("needs a reason")),
+            "{:?}",
+            fenced.stderr
+        );
+        // A flag-shaped token after --take-over is never the reason: the ask
+        // refuses instead of eating --name and launching nameless.
+        let eaten = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(eaten.exit, 2, "{:?}", eaten.stderr);
+        assert!(
+            eaten.argv.iter().any(|t| t == "--name") && eaten.argv.iter().any(|t| t == "Maya"),
+            "name eaten: {:?}",
+            eaten.argv
         );
     }
 

@@ -117,7 +117,15 @@ pub(crate) fn taken_over(scope: &str, pending: &PendingSuccession, take_over: &V
             "{by} moved your team over {scope} to {succ}: {reason}. You no longer lead it. Your workers now report to {succ}.",
             succ = pending.successor_name,
         );
-        if let Err(e) = crate::lead_mail::send_to_name(by, name, &body) {
+        // An agent actor mails as itself; the plan's human label "the user"
+        // is a journal fact, never an addressable row, so the envelope rides
+        // the settle lane stamp and the body carries the attribution.
+        let sender = if by.eq_ignore_ascii_case("the user") {
+            crate::lead_mail::SETTLE_SENDER
+        } else {
+            by
+        };
+        if let Err(e) = crate::lead_mail::send_to_name(sender, name, &body) {
             eprintln!("succession: take-over mail to {name} failed: {e}");
             if let Some(events) = emitter() {
                 let _ = events.emit(
@@ -431,7 +439,7 @@ mod tests {
         };
         let take_over = json!({
             "by": "vellum",
-            "reason": "Alder paused since 10:00 on the x-6004 bug",
+            "reason": "Alder paused since 10:00 on the intake bug",
             "predecessors": [
                 {"name": "alder", "status": "busy", "harness": "codex",
                  "harness_session_id": "sess-alder"}
@@ -460,5 +468,25 @@ mod tests {
             "{}",
             row["body"]
         );
+
+        // A human take-over mails from the settle lane: the plan's "the user"
+        // label is a journal fact, never an addressable sender.
+        let human = json!({
+            "by": "the user",
+            "reason": "Alder paused since 10:00 on the intake bug",
+            "predecessors": [
+                {"name": "alder", "status": "busy", "harness": "codex",
+                 "harness_session_id": "sess-alder"}
+            ],
+        });
+        taken_over("x-aaaa,x-bbbb", &pending, &human);
+        let bus = std::fs::read_to_string(home.path().join("../bus/messages.jsonl")).unwrap();
+        let rows: Vec<serde_json::Value> = bus
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "{bus}");
+        assert_eq!(rows[1]["from"], json!(crate::lead_mail::SETTLE_SENDER));
+        assert!(rows[1]["body"].as_str().unwrap().contains("the user moved"));
     }
 }

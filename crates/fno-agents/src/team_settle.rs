@@ -527,6 +527,17 @@ fn plan_with_projects(
             }
             TakeOverVerdict::Contains => {}
         }
+        if proposed_name.is_empty() {
+            // The colleague is a person, never a drawn slug: a take-over
+            // without --name must not launch and let the entry mint pick.
+            return Ok(plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!("--take-over requires --name <Name>: the colleague takes a fresh person name, distinct from every live lead; the name is required, none is drawn"),
+                caller_value,
+            ));
+        }
         let vacate = holder_names(&occupancy.holders);
         let predecessors: Vec<Value> = occupancy
             .holders
@@ -1115,6 +1126,87 @@ mod tests {
         }
     }
 
+    /// The store path every test hands `resolve_at`: one file at the fixture
+    /// dir root, the layout `AgentsHome::team_names_json` produces.
+    fn team_store(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("team_names.json")
+    }
+
+    /// Seed the store with the stale named record a fresh grant forgets.
+    fn named_record_fixture(dir: &std::path::Path) {
+        std::fs::write(
+            team_store(dir),
+            serde_json::to_string(&json!({
+                "version": 1,
+                "teams": {
+                    "x-aaaa": {"name": "barnaby", "generation": 1,
+                               "holder_session": "sess-old"}
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// The one live recipient the fleet announce needs, shaped like the
+    /// registry's own fixtures.
+    fn agents_with_succession_rows() -> Value {
+        json!([{
+            "name": "Avery", "status": "live", "cwd": "/repo",
+            "log_path": "/repo/lead-successor.log",
+            "harness": "claude", "harness_session_id": "sess-new",
+            "created_at": "2026-10-04T00:00:00Z",
+        }])
+    }
+
+    /// Restores the env `team_registry` touched, or hands off when the home
+    /// was already pinned (the caller owns that home, as `record_rows` does).
+    enum HomeRestore {
+        HandsOff,
+        Remove,
+    }
+
+    impl Drop for HomeRestore {
+        fn drop(&mut self) {
+            match self {
+                HomeRestore::HandsOff => {}
+                HomeRestore::Remove => std::env::remove_var("FNO_AGENTS_HOME"),
+            }
+        }
+    }
+
+    /// Seed one registry under the agents home and make sure a home exists:
+    /// the already-pinned `FNO_AGENTS_HOME` wins (`HandsOff`); an unset one
+    /// points at `dir/home` and is removed on drop. Raw env write, never
+    /// `AgentsHomeEnvGuard`: `record_rows` holds the env lock for its whole
+    /// scope and the guard would deadlock on it.
+    fn team_registry(dir: &std::path::Path, agents: Value) -> HomeRestore {
+        let seed = |home: &std::path::Path| {
+            std::fs::create_dir_all(home).unwrap();
+            std::fs::write(
+                home.join("registry.json"),
+                serde_json::to_string(&json!({
+                    "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                    "agents": agents,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        match std::env::var_os("FNO_AGENTS_HOME") {
+            Some(existing) => {
+                seed(&std::path::PathBuf::from(existing));
+                HomeRestore::HandsOff
+            }
+            None => {
+                let home = dir.join("home");
+                seed(&home);
+                std::env::set_var("FNO_AGENTS_HOME", &home);
+                HomeRestore::Remove
+            }
+        }
+    }
+
     #[test]
     fn record_rows() {
         // The transaction receipts land under a pinned nested home for the
@@ -1356,7 +1448,8 @@ mod tests {
     fn a_superior_lead_takes_over_a_contained_sub_team_and_the_refusal_names_the_door() {
         let payload = json!({
             "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
-            "take_over": {"reason": "Alder paused since 10:00 on the x-6004 bug"},
+            "take_over": {"reason": "Alder paused since 10:00 on the intake bug"},
+            "proposed_name": "Maya",
             "caller": {"kind": "agent", "name": "vellum"},
             "rows": take_over_rows(),
         });
@@ -1366,7 +1459,7 @@ mod tests {
         assert_eq!(out["take_over"]["by"], json!("vellum"));
         assert_eq!(
             out["take_over"]["reason"],
-            json!("Alder paused since 10:00 on the x-6004 bug")
+            json!("Alder paused since 10:00 on the intake bug")
         );
         assert_eq!(
             out["take_over"]["predecessors"].as_array().unwrap().len(),
@@ -1398,6 +1491,7 @@ mod tests {
             json!({
                 "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
                 "take_over": {"reason": "r"},
+                "proposed_name": "Maya",
                 "caller": {"kind": "human"},
                 "rows": take_over_rows(),
             }),
@@ -1405,6 +1499,22 @@ mod tests {
         );
         assert_eq!(out["outcome"], "succeeded");
         assert_eq!(out["take_over"]["by"], json!("the user"));
+
+        // The name is required, none is drawn: a contained superior with no
+        // --name declines before launch instead of launching a minted name.
+        let out = settle(
+            json!({
+                "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                "take_over": {"reason": "r"},
+                "caller": {"kind": "agent", "name": "vellum"},
+                "rows": take_over_rows(),
+            }),
+            take_over_projects(),
+        );
+        assert_eq!(out["outcome"], "declined");
+        let refusal = out["refusal"].as_str().unwrap();
+        assert!(refusal.contains("requires --name"), "{refusal}");
+        assert!(refusal.contains("none is drawn"), "{refusal}");
     }
 
     /// AC2-ERR + AC3-ERR + AC4-HP (incumbent side): an unrelated L2's
