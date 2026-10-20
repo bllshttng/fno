@@ -2703,11 +2703,24 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
 
         // footnote headless: footnote's own loop, run in this process.
         ("footnote", "headless") => emit!(fno_agents::footnote_harness::dispatch_once(
-            home, name, &message, from_name, &cwd, None, timeout, params,
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
+            fno_agents::footnote_harness::fenced_model(params).as_deref(),
+            timeout,
+            params,
         )),
         // footnote thread: an fno-owned host holds fnh's ACP session open.
         ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
-            home, name, &message, from_name, &cwd, None, params,
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
+            fno_agents::footnote_harness::fenced_model(params).as_deref(),
+            params,
         )),
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`

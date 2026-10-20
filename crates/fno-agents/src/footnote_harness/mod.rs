@@ -252,7 +252,7 @@ pub fn write_pane_spec(
 ) -> Result<(PathBuf, String), String> {
     use std::os::unix::fs::OpenOptionsExt;
     if model.is_empty() {
-        return Err("-H footnote needs -m <model>".into());
+        return Err(MODEL_REFUSAL.into());
     }
     let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
     let sid = match fno_id {
@@ -322,6 +322,26 @@ pub(crate) async fn stop_confirmed(pid: u32, started: Option<u64>) -> bool {
 
 /// `fno agents spawn -H footnote --substrate headless`: mint the id, start
 /// the binary, register the row with the child's pid, run, mark it Exited.
+/// The refusal for a footnote spawn that names no model.
+const MODEL_REFUSAL: &str =
+    "-H footnote needs a model: pass it after the fence, `-- -m <provider>/<model>`";
+
+/// The model a footnote spawn names after the `--` fence (`-m X`,
+/// `--model X`, `--model=X`). The spawn door retired `--model`, so the
+/// fenced harness argv is the one place a caller still names it.
+pub fn fenced_model(params: &Value) -> Option<String> {
+    let args: Vec<&str> = params
+        .get("harness_args")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    args.iter().enumerate().find_map(|(i, a)| match *a {
+        "-m" | "--model" => args.get(i + 1).map(|m| m.to_string()),
+        a => a.strip_prefix("--model=").map(str::to_string),
+    })
+}
+
 /// `params` is the spawn request; it supplies `node` and `permission_mode`.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_once(
@@ -338,7 +358,7 @@ pub fn dispatch_once(
         return outcome(2, String::new(), format!("{msg}\n"));
     }
     let Some(model) = model.filter(|m| !m.is_empty()) else {
-        return outcome(2, String::new(), "-H footnote needs -m <model>\n".into());
+        return outcome(2, String::new(), format!("{MODEL_REFUSAL}\n"));
     };
     let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
     match load_registry(&home.registry_json()) {

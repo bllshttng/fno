@@ -1043,15 +1043,17 @@ fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
     );
 }
 
-/// `--once --harness footnote` reaches footnote's own turn loop. No model names
-/// a provider, and with the endpoint env scrubbed the loop refuses "no model
-/// endpoint"; a gate or daemon fall-through would print a thread-lane or
+/// `--once --harness footnote -- -m <model>` reaches footnote's own turn loop.
+/// The fenced model names no provider, and with the endpoint env scrubbed the
+/// loop refuses "no model endpoint"; a gate or daemon fall-through would print a thread-lane or
 /// PTY-hosting refusal instead.
 #[test]
 fn client_spawn_substrate_headless_footnote_reaches_its_turn_loop() {
-    let Some((_, _, stderr)) =
-        run_headless_spawn("footnote", &tmpdir("headless-footnote-fakepath"), &[])
-    else {
+    let Some((_, _, stderr)) = run_headless_spawn(
+        "footnote",
+        &tmpdir("headless-footnote-fakepath"),
+        &["--", "-m", "glm-5.3-flash"],
+    ) else {
         return;
     };
     assert!(stderr.contains("no model endpoint"), "stderr: {stderr}");

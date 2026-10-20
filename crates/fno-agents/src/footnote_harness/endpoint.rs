@@ -127,7 +127,7 @@ pub fn resolve_endpoint(
         record_endpoint(cwd, provider)?
     } else {
         return Err(
-            "no model endpoint: pass -m <provider>/<model> (a config.model_routing.providers name, e.g. zai/glm-5.3-flash), or set ANTHROPIC_BASE_URL and a key"
+            "no model endpoint: pass `-- -m <provider>/<model>` (a config.model_routing.providers name, e.g. zai/glm-5.3-flash), or set ANTHROPIC_BASE_URL and a key"
                 .into(),
         );
     };
