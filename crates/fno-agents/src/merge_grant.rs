@@ -402,7 +402,7 @@ pub fn parse_head_grant_subject(subject: &str) -> Option<(String, i64, String)> 
         .strip_prefix(':')?;
     let (repo, rest) = rest.split_once('#')?;
     let (pr, head) = rest.split_once('@')?;
-    // The slug is whatever the minter held (`bllshttng/footnote` from a
+    // The slug is whatever the minter held (`bllshttng/fno` from a
     // remote URL, a bare `footnote` from a short remote), so any non-empty
     // token between the colon and the `#` is the subject's repo half.
     if repo.is_empty() || head.len() != 40 || !head.bytes().all(|b| b.is_ascii_hexdigit()) {

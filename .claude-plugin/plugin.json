@@ -4,12 +4,12 @@
   "version": "0.4.3",
   "description": "Set a target and walk away. Say f[no] to mostly done.",
   "author": {"name": "Jason Noah Choi"},
-  "homepage": "https://github.com/bllshttng/footnote#readme",
-  "repository": "https://github.com/bllshttng/footnote",
+  "homepage": "https://github.com/bllshttng/fno#readme",
+  "repository": "https://github.com/bllshttng/fno",
   "icon": "./assets/footnote-icon.svg",
-  "documentationUrl": "https://github.com/bllshttng/footnote/tree/main/docs",
-  "supportUrl": "https://github.com/bllshttng/footnote/issues",
-  "privacyPolicyUrl": "https://github.com/bllshttng/footnote/blob/main/PRIVACY.md",
+  "documentationUrl": "https://github.com/bllshttng/fno/tree/main/docs",
+  "supportUrl": "https://github.com/bllshttng/fno/issues",
+  "privacyPolicyUrl": "https://github.com/bllshttng/fno/blob/main/PRIVACY.md",
   "license": "Apache-2.0",
   "keywords": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
 }

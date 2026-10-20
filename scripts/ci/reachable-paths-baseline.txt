@@ -47,7 +47,6 @@ A	auto_merge.require_checks_pass	py=cli/src/fno/config/optouts.py|cli/src/fno/co
 A	backlog.epic_max_open_children	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/backlog/epic_cap.rs|crates/fno-agents/src/graph_store.rs	# CLASSIFY protocol|msg-twin|data
 A	backlog_done_operator_initiated	py=cli/src/fno/done/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	base directory for this skill:	py=scripts/save-session.py;rs=crates/fno-agents/src/skill_drift.rs	# CLASSIFY protocol|msg-twin|data
-A	bllshttng/footnote#stable	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 A	bootstrapped {target}; first run at its scheduled time	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	bounced {target}; awaiting first tick	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/install.rs|crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	brief={n_bytes}b->target_brief	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/backlog/dispatch_resolve.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
@@ -156,7 +155,7 @@ A	http://www.apple.com/dtds/propertylist-1.0.dtd	py=cli/src/fno/pr_watch/_instal
 A	https://api.anthropic.com/api/oauth/profile	py=cli/src/fno/adapters/providers/managed.py;rs=crates/fno-agents/src/claude_vault.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/anthropic	py=evals/harness-fit/run/footnote_agent.py|evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/footnote_harness/tests.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/route_settings.rs|crates/fno-agents/src/spawn_overlay.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/coding/paas/v4	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/codex_route.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
-A	https://github.com/bllshttng/footnote	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
+A	https://github.com/bllshttng/fno	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 A	https://github.com/{slug}/pull/{pr}	py=cli/src/fno/graph/_reconcile.py|cli/src/fno/retro/cli.py;rs=crates/fno-agents/src/backlog/pr_link.rs	# CLASSIFY protocol|msg-twin|data
 A	idea-status nodes accumulating	py=cli/src/fno/health_monitor.py;rs=crates/fno-agents/src/backlog/triage_health.rs	# CLASSIFY protocol|msg-twin|data
 A	insert into outbox (event_id, payload) values (?,?)	py=cli/src/fno/approvals/store.py;rs=crates/fno-agents/src/effect_gate.rs	# CLASSIFY protocol|msg-twin|data

@@ -66,7 +66,7 @@ const BUILD_WAIT_MAX_MINS: i64 = 60;
 const BUILD_WAIT_FILE: &str = "post-merge-sync-build-wait";
 // The release the update leg downloads from. update_prebuilt.rs in the fno
 // crate reads the same asset name, platform names and env override.
-const DEFAULT_RELEASE_REPO: &str = "bllshttng/footnote";
+const DEFAULT_RELEASE_REPO: &str = "bllshttng/fno";
 
 type GhRun = Rc<dyn Fn(&[String], &Path) -> Result<String, GhErr>>;
 type GitOrigin = Rc<dyn Fn(&Path) -> Option<String>>;

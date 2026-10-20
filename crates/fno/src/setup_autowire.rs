@@ -26,8 +26,8 @@ use crate::process_admission::{std_command, std_spawn};
 /// `#stable` pins the add to the `stable` branch (781 files, ~4s); the bare
 /// repo clones `main` (7,949 files, 80s+) and can exceed Claude Desktop's
 /// 120s "Add marketplace" timeout.
-const MARKETPLACE: &str = "bllshttng/footnote#stable";
-const REPO_URL: &str = "https://github.com/bllshttng/footnote";
+const MARKETPLACE: &str = "bllshttng/fno#stable";
+const REPO_URL: &str = "https://github.com/bllshttng/fno";
 /// The skills-dir fallback drop's directory name under ~/.claude/skills.
 /// A named constant rather than a literal: the seam-crossings ratchet reads
 /// a bare join("fno") as a porcelain resolver site, and this joins a

@@ -173,7 +173,7 @@ class _StatefulCodex:
             return _cp(argv, {})
         if argv[1:4] == ["plugin", "marketplace", "add"]:
             added_source = argv[4]
-            source_type = "git" if added_source == "bllshttng/footnote" else "local"
+            source_type = "git" if added_source == "bllshttng/fno" else "local"
             if self.fail_local_marketplace and source_type == "local":
                 return _cp(argv, {}, rc=17, err="injected rollback add failure")
             name = (
@@ -226,7 +226,7 @@ class _StatefulCodex:
 
 
 def test_parse_rejects_enabled_plugin_that_is_not_installed() -> None:
-    row = _plugin("fno@footnote", source="bllshttng/footnote", source_type="git")
+    row = _plugin("fno@footnote", source="bllshttng/fno", source_type="git")
     row["installed"] = False
     with pytest.raises(CodexPluginError, match="enabled plugin is not installed"):
         parse_state('{"marketplaces": []}', json.dumps({"installed": [row]}))
@@ -255,7 +255,7 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
             "plugin",
             "marketplace",
             "add",
-            "bllshttng/footnote",
+            "bllshttng/fno",
             "--ref",
             "stable",
             "--json",
@@ -265,7 +265,7 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
                     "name": "footnote",
                     "marketplaceSource": {
                         "sourceType": "git",
-                        "source": "https://github.com/bllshttng/footnote.git",
+                        "source": "https://github.com/bllshttng/fno.git",
                     },
                 }
             )
@@ -276,7 +276,7 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
             plugins.append(
                 _plugin(
                     "fno@footnote",
-                    source="https://github.com/bllshttng/footnote.git",
+                    source="https://github.com/bllshttng/fno.git",
                     source_type="git",
                 )
             )
@@ -309,7 +309,7 @@ def test_release_convergence_removes_dev_then_installs_and_verifies(tmp_path: Pa
             "plugin",
             "marketplace",
             "add",
-            "bllshttng/footnote",
+            "bllshttng/fno",
             "--ref",
             "stable",
             "--json",
@@ -332,7 +332,7 @@ def test_release_convergence_is_source_aware_noop(tmp_path: Path) -> None:
             {
                 "channel": "release",
                 "marketplace": MARKETPLACE,
-                "source": "bllshttng/footnote",
+                "source": "bllshttng/fno",
                 "ref": "stable",
             }
         ),
@@ -355,7 +355,7 @@ def test_release_convergence_is_source_aware_noop(tmp_path: Path) -> None:
                             "name": "footnote",
                             "marketplaceSource": {
                                 "sourceType": "git",
-                                "source": "https://github.com/bllshttng/footnote.git",
+                                "source": "https://github.com/bllshttng/fno.git",
                             },
                         }
                     ]
@@ -367,7 +367,7 @@ def test_release_convergence_is_source_aware_noop(tmp_path: Path) -> None:
                 "installed": [
                     _plugin(
                         "fno@footnote",
-                        source="https://github.com/bllshttng/footnote.git",
+                        source="https://github.com/bllshttng/fno.git",
                         source_type="git",
                     )
                 ],
@@ -405,7 +405,7 @@ def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
             {
                 "channel": "release",
                 "marketplace": MARKETPLACE,
-                "source": "bllshttng/footnote",
+                "source": "bllshttng/fno",
             }
         ),
         encoding="utf-8",
@@ -415,14 +415,14 @@ def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
             "name": "footnote",
             "marketplaceSource": {
                 "sourceType": "git",
-                "source": "https://github.com/bllshttng/footnote.git",
+                "source": "https://github.com/bllshttng/fno.git",
             },
         }
     ]
     plugins = [
         _plugin(
             RELEASE_PLUGIN_ID,
-            source="https://github.com/bllshttng/footnote.git",
+            source="https://github.com/bllshttng/fno.git",
             source_type="git",
         )
     ]
@@ -447,7 +447,7 @@ def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
             "plugin",
             "marketplace",
             "add",
-            "bllshttng/footnote",
+            "bllshttng/fno",
             "--ref",
             "stable",
             "--json",
@@ -457,7 +457,7 @@ def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
                     "name": "footnote",
                     "marketplaceSource": {
                         "sourceType": "git",
-                        "source": "https://github.com/bllshttng/footnote.git",
+                        "source": "https://github.com/bllshttng/fno.git",
                     },
                 }
             )
@@ -468,7 +468,7 @@ def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
             plugins.append(
                 _plugin(
                     RELEASE_PLUGIN_ID,
-                    source="https://github.com/bllshttng/footnote.git",
+                    source="https://github.com/bllshttng/fno.git",
                     source_type="git",
                 )
             )
@@ -489,7 +489,7 @@ def test_marker_missing_ref_is_not_trusted_as_noop(tmp_path: Path) -> None:
         "plugin",
         "marketplace",
         "add",
-        "bllshttng/footnote",
+        "bllshttng/fno",
         "--ref",
         "stable",
         "--json",
@@ -504,7 +504,7 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
     source = _source(tmp_path)
     row = _plugin(
         RELEASE_PLUGIN_ID,
-        source="https://github.com/bllshttng/footnote.git",
+        source="https://github.com/bllshttng/fno.git",
         source_type="git",
     )
     row["version"] = ""
@@ -514,7 +514,7 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
             "name": "footnote",
             "marketplaceSource": {
                 "sourceType": "git",
-                "source": "https://github.com/bllshttng/footnote.git",
+                "source": "https://github.com/bllshttng/fno.git",
             },
         }
     ]
@@ -537,7 +537,7 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
             "plugin",
             "marketplace",
             "add",
-            "bllshttng/footnote",
+            "bllshttng/fno",
             "--ref",
             "stable",
             "--json",
@@ -547,7 +547,7 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
                     "name": "footnote",
                     "marketplaceSource": {
                         "sourceType": "git",
-                        "source": "https://github.com/bllshttng/footnote.git",
+                        "source": "https://github.com/bllshttng/fno.git",
                     },
                 }
             )
@@ -565,7 +565,7 @@ def test_empty_selected_version_is_repaired_instead_of_verified_noop(
             plugins.append(
                 _plugin(
                     RELEASE_PLUGIN_ID,
-                    source="https://github.com/bllshttng/footnote.git",
+                    source="https://github.com/bllshttng/fno.git",
                     source_type="git",
                 )
             )
@@ -607,7 +607,7 @@ def test_packaged_release_install_does_not_require_local_plugin_source(
             "plugin",
             "marketplace",
             "add",
-            "bllshttng/footnote",
+            "bllshttng/fno",
             "--ref",
             "stable",
             "--json",
@@ -617,7 +617,7 @@ def test_packaged_release_install_does_not_require_local_plugin_source(
                     "name": "footnote",
                     "marketplaceSource": {
                         "sourceType": "git",
-                        "source": "https://github.com/bllshttng/footnote.git",
+                        "source": "https://github.com/bllshttng/fno.git",
                     },
                 }
             )
@@ -635,7 +635,7 @@ def test_packaged_release_install_does_not_require_local_plugin_source(
             plugins.append(
                 _plugin(
                     RELEASE_PLUGIN_ID,
-                    source="https://github.com/bllshttng/footnote.git",
+                    source="https://github.com/bllshttng/fno.git",
                     source_type="git",
                 )
             )
@@ -678,7 +678,7 @@ def test_convergence_preserves_unrelated_fno_named_plugins(tmp_path: Path) -> No
                         "name": "footnote",
                         "marketplaceSource": {
                             "sourceType": "git",
-                            "source": "bllshttng/footnote",
+                            "source": "bllshttng/fno",
                         },
                     }
                 )
@@ -687,7 +687,7 @@ def test_convergence_preserves_unrelated_fno_named_plugins(tmp_path: Path) -> No
             plugins.append(
                 _plugin(
                     RELEASE_PLUGIN_ID,
-                    source="bllshttng/footnote",
+                    source="bllshttng/fno",
                     source_type="git",
                 )
             )
@@ -717,7 +717,7 @@ def test_dev_convergence_switches_from_release_and_writes_requested_marker(
     plugins = [
         _plugin(
             RELEASE_PLUGIN_ID,
-            source="https://github.com/bllshttng/footnote.git",
+            source="https://github.com/bllshttng/fno.git",
             source_type="git",
         )
     ]
@@ -883,7 +883,7 @@ def test_freshness_refuses_legacy_duplicate_state_before_digest(tmp_path: Path) 
                     ),
                     _plugin(
                         RELEASE_PLUGIN_ID,
-                        source="bllshttng/footnote",
+                        source="bllshttng/fno",
                         source_type="git",
                     ),
                 ],
@@ -1214,7 +1214,7 @@ def test_stable_release_noop_skips_offline_preflight_and_only_collects_live_stat
             {
                 "channel": "release",
                 "marketplace": MARKETPLACE,
-                "source": "bllshttng/footnote",
+                "source": "bllshttng/fno",
                 "ref": "stable",
             }
         ),
@@ -1235,7 +1235,7 @@ def test_stable_release_noop_skips_offline_preflight_and_only_collects_live_stat
                             "name": "footnote",
                             "marketplaceSource": {
                                 "sourceType": "git",
-                                "source": "https://github.com/bllshttng/footnote.git",
+                                "source": "https://github.com/bllshttng/fno.git",
                             },
                         }
                     ]
@@ -1248,7 +1248,7 @@ def test_stable_release_noop_skips_offline_preflight_and_only_collects_live_stat
                     "installed": [
                         _plugin(
                             RELEASE_PLUGIN_ID,
-                            source="https://github.com/bllshttng/footnote.git",
+                            source="https://github.com/bllshttng/fno.git",
                             source_type="git",
                         )
                     ],

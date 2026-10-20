@@ -22,7 +22,7 @@ import fno.paths as paths
 MARKETPLACE = "footnote"
 PLUGIN_ID = "fno@footnote"
 RELEASE_MARKETPLACE = MARKETPLACE
-RELEASE_SOURCE = "bllshttng/footnote"
+RELEASE_SOURCE = "bllshttng/fno"
 RELEASE_REF = "stable"  # the bare repo's default branch is slow and can time out
 RELEASE_PLUGIN_ID = PLUGIN_ID
 DEV_MARKETPLACE = MARKETPLACE

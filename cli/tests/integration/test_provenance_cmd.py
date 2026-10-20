@@ -236,18 +236,18 @@ def test_ac1_hp_pr_renders_human_and_json(tmp_graph, tmp_path, monkeypatch):
     _write_node(tmp_graph, _base_node(
         "ab-prv00001",
         pr_number=1234,
-        pr_url="https://github.com/bllshttng/footnote/pull/1234",
+        pr_url="https://github.com/bllshttng/fno/pull/1234",
     ))
 
     r = _invoke("backlog", "provenance", "ab-prv00001")
     assert r.exit_code == 0, r.output
     assert "pr: #1234" in r.output
-    assert "https://github.com/bllshttng/footnote/pull/1234" in r.output
+    assert "https://github.com/bllshttng/fno/pull/1234" in r.output
 
     rj = _invoke("backlog", "provenance", "ab-prv00001", "--json")
     data = json.loads(rj.output)
     assert data["pr"]["number"] == 1234
-    assert data["pr"]["url"] == "https://github.com/bllshttng/footnote/pull/1234"
+    assert data["pr"]["url"] == "https://github.com/bllshttng/fno/pull/1234"
 
 
 def test_ac3_hp_registry_status_live_and_reaped(tmp_graph, tmp_path, monkeypatch):

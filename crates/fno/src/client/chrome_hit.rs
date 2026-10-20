@@ -149,10 +149,7 @@ impl View {
         if !span.contains(&(col as usize)) {
             return None;
         }
-        Some(format!(
-            "https://github.com/bllshttng/footnote/pull/{}",
-            a.pr?
-        ))
+        Some(format!("https://github.com/bllshttng/fno/pull/{}", a.pr?))
     }
 
     fn table_header_hit(&self, row: usize, col: u16) -> Option<ChromeHit> {

@@ -23,8 +23,8 @@ from typing import Callable, Optional
 
 # Marketplace / repo the integrations install from. `#stable`: the bare repo
 # clones `main` and can exceed Claude Desktop's 120s "Add marketplace" timeout.
-_MARKETPLACE = "bllshttng/footnote#stable"
-_REPO_URL = "https://github.com/bllshttng/footnote"
+_MARKETPLACE = "bllshttng/fno#stable"
+_REPO_URL = "https://github.com/bllshttng/fno"
 
 # A subprocess runner: takes an argv list plus subprocess options and returns a
 # CompletedProcess. `...` keeps the optional kwargs in the contract.
