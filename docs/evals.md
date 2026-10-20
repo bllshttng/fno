@@ -118,7 +118,7 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 
 ## The cohort comparison report
 
-`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort: attempts, graded, accepted (graded and passed), pass rate with a deterministic 95% bootstrap interval, `lane_status` counts, exclusions counted by reason (substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`), median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless EVERY scored row carries usage and a price line for its model; it never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
+`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort: attempts, graded, accepted (graded and passed), pass rate with a 95% Wilson interval, `lane_status` counts, exclusions counted by reason (substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`), median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless EVERY scored row carries usage and a price line for its model; it never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
 
 ## Legacy attribution note
 

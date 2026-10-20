@@ -560,7 +560,7 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
         }
     }
     let accepted = scored.iter().filter(|r| r.pass).count();
-    let (rate, lo, hi) = bootstrap_rate(scored.len(), accepted);
+    let (rate, lo, hi) = wilson_rate(scored.len(), accepted);
     let mut durations: Vec<f64> = scored
         .iter()
         .filter_map(|r| r.raw.get("duration_s").and_then(Value::as_f64))
@@ -650,40 +650,24 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     })
 }
 
-/// Deterministic bootstrap over the pass indicator (B = 2000, xorshift64*
-/// seeded once, percentile CI). Same numbers on every run of the same rows:
-/// a report is reproducible evidence, not a die roll.
-fn bootstrap_rate(n: usize, passes: usize) -> (f64, f64, f64) {
+/// The 95% Wilson score interval over the pass indicator (z = 1.96), the
+/// closed form the harness-fit study scored with
+/// (evals/harness-fit/run/score_run1.py). Same numbers on every run of the
+/// same rows: a report is reproducible evidence, not a die roll. Closed form
+/// behaves at small n, where lane cohorts sit; the bootstrap percentile it
+/// replaces bracketed about [0.01, 0.99] at every n and could never
+/// separate two cohorts.
+fn wilson_rate(n: usize, passes: usize) -> (f64, f64, f64) {
     if n == 0 {
         return (0.0, 0.0, 0.0);
     }
+    let z = 1.96_f64;
     let rate = passes as f64 / n as f64;
-    let mut state: u64 = 0x5EED_D00D;
-    let mut next = || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
-    const B: usize = 2000;
-    let mut below = 0usize;
-    let mut above = 0usize;
-    for _ in 0..B {
-        let mut hits = 0usize;
-        for _ in 0..n {
-            // Resample the pass indicator: the first `passes` draws read true.
-            let idx = (next() % n as u64) as usize;
-            if idx < passes {
-                hits += 1;
-            }
-        }
-        let share = hits as f64 / n as f64;
-        below += (share < rate).then_some(1).unwrap_or(0);
-        above += (share > rate).then_some(1).unwrap_or(0);
-    }
-    let lo_q = (below as f64 / B as f64) * 0.025;
-    let hi_q = 1.0 - (above as f64 / B as f64) * 0.025;
-    (rate, lo_q, hi_q)
+    let denom = 1.0 + z * z / n as f64;
+    let center = (rate + z * z / (2.0 * n as f64)) / denom;
+    let half =
+        z * (rate * (1.0 - rate) / n as f64 + z * z / (4.0 * n as f64 * n as f64)).sqrt() / denom;
+    (rate, (center - half).max(0.0), (center + half).min(1.0))
 }
 
 /// The summary document `evals_health_summary` reads: alarm, regressed set,
