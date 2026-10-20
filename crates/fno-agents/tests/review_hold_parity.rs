@@ -41,7 +41,6 @@ fn normalize(s: &str, tmp: &Path) -> String {
     out
 }
 
-
 struct Fixture {
     root: PathBuf,
     repo: PathBuf,
@@ -79,11 +78,24 @@ fn fixture(tag: &str) -> Fixture {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "c0"]);
     git(&repo, &["branch", "feat/a"]);
-    git(&repo, &["remote", "add", "origin", "https://github.com/golden/repo.git"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/golden/repo.git",
+        ],
+    );
     let home = tmp.join("home");
     fs::create_dir_all(&home).unwrap();
     let gh_dir = write_fake_gh(&tmp, repo_head(&repo));
-    Fixture { root: tmp, repo, home, gh_dir }
+    Fixture {
+        root: tmp,
+        repo,
+        home,
+        gh_dir,
+    }
 }
 
 fn git(cwd: &Path, args: &[&str]) {
@@ -92,11 +104,19 @@ fn git(cwd: &Path, args: &[&str]) {
         .current_dir(cwd)
         .output()
         .expect("git");
-    assert!(out.status.success(), "git {args:?} failed: {:?}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn repo_head(repo: &Path) -> String {
-    let out = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo).output().unwrap();
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
@@ -180,7 +200,10 @@ fn seed_hold(fx: &Fixture, ttl_ms: u64) {
 
 fn assert_case(fx: &Fixture, label: &str, args: &[&str], env: &[(&str, String)]) {
     let (rc, out, err) = run(fx, args, env);
-    let rust = Golden { exit: Some(rc), streams: vec![out, err] };
+    let rust = Golden {
+        exit: Some(rc),
+        streams: vec![out, err],
+    };
     common::assert_golden("review_hold", label, &rust, None);
 }
 
@@ -225,7 +248,12 @@ fn claims_db(fx: &Fixture) -> PathBuf {
     for c in resolved.to_string_lossy().trim_start_matches('/').chars() {
         key.push(if c == '/' { '-' } else { c });
     }
-    fx.root.join("state").join("spaces").join(key).join("db").join("graph.db")
+    fx.root
+        .join("state")
+        .join("spaces")
+        .join(key)
+        .join("db")
+        .join("graph.db")
 }
 
 /// The one measured divergence this port fixes: the Rust reader emits the
@@ -267,7 +295,16 @@ fn check_corrupted_hold() {
 #[test]
 fn check_dirty_worktree() {
     let fx = fixture("repo");
-    git(&fx.repo, &["worktree", "add", "-q", fx.root.join("wt1").to_str().unwrap(), "feat/a"]);
+    git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            fx.root.join("wt1").to_str().unwrap(),
+            "feat/a",
+        ],
+    );
     fs::write(fx.root.join("wt1").join("file.txt"), "dirty\n").unwrap();
     assert_case(&fx, "check dirty worktree", &["check", "41"], &[]);
 }
@@ -277,7 +314,16 @@ fn check_head_mismatch() {
     let fx = fixture("repo");
     fs::write(fx.repo.join("file.txt"), "v2\n").unwrap();
     git(&fx.repo, &["commit", "-qam", "c1"]);
-    git(&fx.repo, &["worktree", "add", "-q", fx.root.join("wt1").to_str().unwrap(), "feat/a"]);
+    git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            fx.root.join("wt1").to_str().unwrap(),
+            "feat/a",
+        ],
+    );
     assert_case(&fx, "check head mismatch", &["check", "41"], &[]);
 }
 
@@ -301,7 +347,17 @@ fn acquire_by_branch() {
     assert_case(
         &fx,
         "acquire by branch",
-        &["acquire", "--branch", "feat/a", "--head", &head, "--holder", "review-session:s1", "--verb", "/fno:review"],
+        &[
+            "acquire",
+            "--branch",
+            "feat/a",
+            "--head",
+            &head,
+            "--holder",
+            "review-session:s1",
+            "--verb",
+            "/fno:review",
+        ],
         &[],
     );
 }
@@ -343,12 +399,7 @@ fn acquire_missing_holder() {
 fn release_held() {
     let fx = fixture("repo");
     seed_hold(&fx, 3_600_000);
-    assert_case(
-        &fx,
-        "release held",
-        &["release", "--branch", "feat/a"],
-        &[],
-    );
+    assert_case(&fx, "release held", &["release", "--branch", "feat/a"], &[]);
 }
 
 #[test]
@@ -420,7 +471,20 @@ fn acquire_cap_refusal() {
     let head = repo_head(&fx.repo);
     let other = "1111111111111111111111111111111111111111";
     seed_chain(&fx, [other, "2222222222222222222222222222222222222222"], 0);
-    assert_case(&fx, "acquire cap refusal", &["acquire", "--branch", "feat/a", "--head", &head, "--holder", "review-session:s1"], &[]);
+    assert_case(
+        &fx,
+        "acquire cap refusal",
+        &[
+            "acquire",
+            "--branch",
+            "feat/a",
+            "--head",
+            &head,
+            "--holder",
+            "review-session:s1",
+        ],
+        &[],
+    );
 }
 
 #[test]
@@ -432,7 +496,17 @@ fn acquire_verify_fixes_advisory() {
     assert_case(
         &fx,
         "acquire verify fixes advisory",
-        &["acquire", "--branch", "feat/a", "--head", &head, "--holder", "review-session:s1", "--flags-json", r#"["--verify-fixes"]"#],
+        &[
+            "acquire",
+            "--branch",
+            "feat/a",
+            "--head",
+            &head,
+            "--holder",
+            "review-session:s1",
+            "--flags-json",
+            r#"["--verify-fixes"]"#,
+        ],
         &[],
     );
 }
@@ -449,7 +523,10 @@ fn metadata_fields() {
     assert_eq!(payload["key"], "review:branch:feat/a");
     assert_eq!(payload["state"], "live");
     assert_eq!(payload["holder"], "review-session:s1");
-    assert_eq!(payload["metadata"]["head_sha"], repo_head(&fx.repo).as_str());
+    assert_eq!(
+        payload["metadata"]["head_sha"],
+        repo_head(&fx.repo).as_str()
+    );
     // The volatile identity fields ride along, whatever they read here.
     assert!(payload.get("acquired_at").is_some());
     assert!(payload.get("host").is_some());
@@ -472,7 +549,11 @@ fn stdin_door_acquires_and_answers_registered() {
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
     cmd.env("FGH_MODE", "open");
-    let path = format!("{}:{}", fx.gh_dir.display(), std::env::var("PATH").unwrap_or_default());
+    let path = format!(
+        "{}:{}",
+        fx.gh_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     cmd.env("PATH", path);
     for m in MARKERS {
         cmd.env_remove(m);

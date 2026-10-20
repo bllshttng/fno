@@ -266,6 +266,18 @@ pub(crate) struct Settings {
     pub(crate) done_probes: Option<Result<Vec<String>, String>>,
 }
 
+impl Settings {
+    /// The two review leaves the review-hold verb reads from outside the
+    /// loopcheck module; the fields stay pub(super) like their siblings.
+    pub(crate) fn hold_ttl_minutes_opt(&self) -> Option<f64> {
+        self.hold_ttl_minutes
+    }
+
+    pub(crate) fn carry_interdiff_opt(&self) -> Option<i64> {
+        self.carry_interdiff_lines
+    }
+}
+
 /// Normalize a config.review.reviewers entry / an event's reviewer name: strip a
 /// leading '/' so `/code-review` and `code-review` name the same reviewer
 /// (parity with the Python validator). Quote/comment stripping is the caller's.
@@ -729,7 +741,8 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             // anything else stays None -> the default 90, so a typo cannot
             // shrink or balloon the hold lease.
             let parsed = v
-                .as_f64()
+                .as_float()
+                .or_else(|| v.as_integer().map(|i| i as f64))
                 .or_else(|| v.as_str().and_then(|raw| raw.trim().parse::<f64>().ok()));
             if parsed.is_some_and(|n| n.is_finite()) {
                 s.hold_ttl_minutes = parsed;

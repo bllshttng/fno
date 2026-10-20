@@ -423,6 +423,7 @@ pub mod real_session;
 pub mod reap_release;
 pub mod reap_render;
 pub mod receipt;
+pub mod receipt_policy;
 pub mod reclaim;
 pub mod reentry;
 pub mod refusal_rate;

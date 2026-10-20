@@ -528,7 +528,7 @@ const PREFLIGHT_OPTIONAL_SCOPE: [&str; 4] = [
     "tracker-gates:fno",
 ];
 
-fn gate_eligible_receipt(event: &Value) -> bool {
+pub(crate) fn gate_eligible_receipt(event: &Value) -> bool {
     let Some(data) = event.get("data") else {
         return false;
     };
@@ -693,7 +693,7 @@ fn receipt_decision_all(candidate_sha: &str, paths: &[String]) -> Value {
     })
 }
 
-fn receipt_decision(candidate_sha: &str, paths: &[String]) -> Value {
+pub(crate) fn receipt_decision(candidate_sha: &str, paths: &[String]) -> Value {
     let Some(canonical_path) = paths.first() else {
         return receipt_decision_all(candidate_sha, paths);
     };

@@ -61,13 +61,13 @@ fn config_leaf<T: Default + Copy>(
 /// `config.review.hold_ttl_minutes`, clamped. Falls back on any failure: a
 /// config read must not gate a review.
 pub(crate) fn configured_ttl_ms(cwd: &Path) -> i64 {
-    resolve_ttl_ms(config_leaf(cwd, |s| s.hold_ttl_minutes))
+    resolve_ttl_ms(config_leaf(cwd, |s| s.hold_ttl_minutes_opt()))
 }
 
 /// The carried interdiff budget: `review.carry_interdiff_lines`, default
 /// 100, read with the same global-then-local overlay.
 fn configured_carry_interdiff(cwd: &Path) -> i64 {
-    config_leaf(cwd, |s| s.carry_interdiff_lines).unwrap_or(100)
+    config_leaf(cwd, |s| s.carry_interdiff_opt()).unwrap_or(100)
 }
 
 // ── the chain read the round-cap surfaces share ─────────────────────────────
@@ -78,7 +78,6 @@ fn configured_carry_interdiff(cwd: &Path) -> i64 {
 pub(crate) fn chain_answer(cwd: &Path, branch: &str, head: &str) -> Value {
     crate::loopcheck::coverage_gate::chain_answer(cwd, branch, head)
 }
-
 
 // ── the cap refusal and the advisory ────────────────────────────────────────
 
@@ -93,8 +92,14 @@ pub(crate) fn review_invocation_refusal(
     flags: Option<&[String]>,
 ) -> String {
     let answer = chain_answer(cwd, branch, head);
-    let rounds_used = answer.get("rounds_used").and_then(Value::as_i64).unwrap_or(0);
-    let max_rounds = answer.get("max_rounds").and_then(Value::as_i64).unwrap_or(0);
+    let rounds_used = answer
+        .get("rounds_used")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let max_rounds = answer
+        .get("max_rounds")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     if rounds_used < max_rounds {
         return String::new();
     }
@@ -122,7 +127,10 @@ fn refusal_after_last_row(
     if last_head.is_empty() || head.is_empty() || last_head == head {
         return cap_refusal_line(rounds_used, max_rounds);
     }
-    let base = last.get("reviewed_base_sha").and_then(Value::as_str).unwrap_or("");
+    let base = last
+        .get("reviewed_base_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if base.is_empty() {
         // No base to measure a carry against: the head move alone cannot
         // fund a fresh round, so the refusal stands (the Python leg's
@@ -132,7 +140,7 @@ fn refusal_after_last_row(
     let carry = configured_carry_interdiff(cwd);
     let measured =
         crate::review_freshness::interdiff_lines_between("git", cwd, base, last_head, head);
-    if measured.is_none() || measured.is_some_and(|n| n >= carry) {
+    if measured.is_none() || measured.is_some_and(|n| (n as i64) >= carry) {
         return String::new();
     }
     cap_refusal_line(rounds_used, max_rounds)
@@ -145,7 +153,6 @@ a new hunting round may not start. The review phase is complete: merge on green 
 in the PR conversation. A scoped fix-verification with {VERIFY_FIXES_FLAG} is the one review-shaped act the cap still funds."
     )
 }
-
 
 /// The nudge a driver needs exactly when the default flow misleads: two
 /// careful drivers both fixed findings and re-ran a full pass, spending the
@@ -250,12 +257,28 @@ fn release_hold(branch: &str, holder: Option<&str>) -> bool {
 /// FNO_REVIEW_HOLD_GH; production resolves plain `gh`.
 fn pr_head_ref_and_oid(cwd: &Path, pr: &str) -> Option<(String, String, String)> {
     let gh = std::env::var("FNO_REVIEW_HOLD_GH").unwrap_or_else(|_| "gh".to_string());
-    let pr_json =
-        crate::loopcheck::gh_read::read_pr_view(&gh, cwd, Some(pr), std::time::Duration::from_secs(10))
-            .ok()??;
-    let branch = pr_json.get("headRefName").and_then(Value::as_str).unwrap_or("").to_string();
-    let head = pr_json.get("headRefOid").and_then(Value::as_str).unwrap_or("").to_string();
-    let state = pr_json.get("state").and_then(Value::as_str).unwrap_or("").to_string();
+    let pr_json = crate::loopcheck::gh_read::read_pr_view(
+        &gh,
+        cwd,
+        Some(pr),
+        std::time::Duration::from_secs(10),
+    )
+    .ok()??;
+    let branch = pr_json
+        .get("headRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let head = pr_json
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let state = pr_json
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if branch.is_empty() || head.is_empty() {
         return None;
     }
@@ -336,7 +359,10 @@ pub fn run_capture(args: &[String]) -> (i32, String, String) {
     if args.is_empty() {
         return run_stdin_door();
     }
-    let parsed = Args::parse(args, std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let parsed = Args::parse(
+        args,
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
     match parsed.action.as_str() {
         "check" => check_arm(&parsed),
         "release" => release_arm(&parsed),
@@ -366,7 +392,11 @@ pub fn run(args: &[String]) -> i32 {
 fn check_arm(a: &Args) -> (i32, String, String) {
     let cwd = a.cwd.clone();
     let Some(pr) = &a.pr else {
-        return (1, String::new(), "review-hold check needs a PR number\n".into());
+        return (
+            1,
+            String::new(),
+            "review-hold check needs a PR number\n".into(),
+        );
     };
     let Some((branch, head, _state)) = pr_head_ref_and_oid(&cwd, pr) else {
         return (
@@ -378,8 +408,15 @@ fn check_arm(a: &Args) -> (i32, String, String) {
         );
     };
     let activity = crate::pr_status::reviews::review_activity(&cwd, &branch, &head);
-    if activity.get("blocker").and_then(Value::as_str).is_some_and(|b| !b.is_empty()) {
-        let blocker = activity.get("blocker").and_then(Value::as_str).unwrap_or("");
+    if activity
+        .get("blocker")
+        .and_then(Value::as_str)
+        .is_some_and(|b| !b.is_empty())
+    {
+        let blocker = activity
+            .get("blocker")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let detail = activity.get("detail").and_then(Value::as_str).unwrap_or("");
         return (3, String::new(), format!("{blocker}: {detail}\n"));
     }
@@ -392,7 +429,11 @@ fn check_arm(a: &Args) -> (i32, String, String) {
 
 fn release_arm(a: &Args) -> (i32, String, String) {
     let Some(branch) = &a.branch else {
-        return (1, String::new(), "review-hold release needs --branch\n".into());
+        return (
+            1,
+            String::new(),
+            "review-hold release needs --branch\n".into(),
+        );
     };
     let released = release_hold(branch, a.holder.as_deref());
     let line = if released {
@@ -405,7 +446,11 @@ fn release_arm(a: &Args) -> (i32, String, String) {
 
 fn metadata_arm(a: &Args) -> (i32, String, String) {
     let Some(branch) = &a.branch else {
-        return (1, String::new(), "review-hold metadata needs --branch\n".into());
+        return (
+            1,
+            String::new(),
+            "review-hold metadata needs --branch\n".into(),
+        );
     };
     let key = format!("review:branch:{branch}");
     let (state, record) = crate::claims::status(&key, None);
@@ -425,7 +470,11 @@ fn round_arm(a: &Args) -> (i32, String, String) {
         return (1, String::new(), "review-hold round needs --head\n".into());
     }
     let Some(branch) = &a.branch else {
-        return (1, String::new(), "review-hold round needs --branch\n".into());
+        return (
+            1,
+            String::new(),
+            "review-hold round needs --branch\n".into(),
+        );
     };
     // The instrument must have RUN: an empty chain is an absence with more
     // than one explanation, and journals missing on both mirrors means no
@@ -439,10 +488,18 @@ fn round_arm(a: &Args) -> (i32, String, String) {
 
 fn acquire_arm(a: &Args) -> (i32, String, String) {
     if a.branch.is_none() && a.pr.is_none() {
-        return (1, String::new(), "review-hold acquire needs --branch\n".into());
+        return (
+            1,
+            String::new(),
+            "review-hold acquire needs --branch\n".into(),
+        );
     }
     if a.holder.is_none() {
-        return (1, String::new(), "review-hold acquire needs --holder\n".into());
+        return (
+            1,
+            String::new(),
+            "review-hold acquire needs --holder\n".into(),
+        );
     }
     // A PR-number acquire resolves the branch from GitHub - never on whatever
     // branch this checkout stands on. No hold rather than a guessed one.
@@ -471,15 +528,16 @@ fn acquire_arm(a: &Args) -> (i32, String, String) {
         }
         (None, None) => unreachable!("checked above"),
     };
-    let flags = a
-        .flags_json
-        .as_deref()
-        .and_then(parse_flags_json);
+    let flags = a.flags_json.as_deref().and_then(parse_flags_json);
     // The cap gate: the prefixed line lets the hook surface the denial;
     // policy, not infra, so the one acquire failure that blocks.
     let refusal = review_invocation_refusal(&a.cwd, &branch, &head, flags.as_deref());
     if !refusal.is_empty() {
-        return (3, format!("review-invocation-refused: {refusal}\n"), String::new());
+        return (
+            3,
+            format!("review-invocation-refused: {refusal}\n"),
+            String::new(),
+        );
     }
     let advisory = verify_fixes_advisory(&a.cwd, &branch, &head);
     let stderr = if advisory.is_empty() {
@@ -491,12 +549,30 @@ fn acquire_arm(a: &Args) -> (i32, String, String) {
         Some(m) => resolve_ttl_ms(Some(m)),
         None => configured_ttl_ms(&a.cwd),
     };
-    let ok = acquire_hold(&branch, a.holder.as_deref().unwrap_or(""), &head, ttl, hold_metadata(a, &flags));
+    let ok = acquire_hold(
+        &branch,
+        a.holder.as_deref().unwrap_or(""),
+        &head,
+        ttl,
+        hold_metadata(a, &flags),
+    );
     if !ok {
-        return (0, String::new(), format!("review-hold: not registered on {branch}\n"));
+        return (
+            0,
+            String::new(),
+            format!("review-hold: not registered on {branch}\n"),
+        );
     }
-    let shown = if head.is_empty() { "an unrecorded head" } else { &head };
-    (0, format!("review-hold: holding {branch} at {shown}\n"), stderr)
+    let shown = if head.is_empty() {
+        "an unrecorded head"
+    } else {
+        &head
+    };
+    (
+        0,
+        format!("review-hold: holding {branch} at {shown}\n"),
+        stderr,
+    )
 }
 
 /// The acquire metadata row: head plus every optional telemetry leaf the
@@ -536,9 +612,8 @@ fn parse_flags_json(raw: &str) -> Option<Vec<String>> {
 /// Whether either chain journal exists: the round action fails closed when
 /// no read ever answered.
 fn review_journals_present(cwd: &Path) -> bool {
-    let inputs = crate::loopcheck::review_inputs::resolve_review_inputs(
-        cwd, None, None, None, None, None,
-    );
+    let inputs =
+        crate::loopcheck::review_inputs::resolve_review_inputs(cwd, None, None, None, None, None);
     inputs.project_events.exists() || inputs.global_events.exists()
 }
 
@@ -550,11 +625,21 @@ fn run_stdin_door() -> (i32, String, String) {
     use std::io::Read;
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
-        return (2, String::new(), "review-hold: stdin did not answer\n".into());
+        return (
+            2,
+            String::new(),
+            "review-hold: stdin did not answer\n".into(),
+        );
     }
     let parsed: Value = match serde_json::from_str(&payload) {
         Ok(v) => v,
-        Err(e) => return (2, String::new(), format!("review-hold: unreadable payload: {e}\n")),
+        Err(e) => {
+            return (
+                2,
+                String::new(),
+                format!("review-hold: unreadable payload: {e}\n"),
+            )
+        }
     };
     let action = parsed.get("action").and_then(Value::as_str).unwrap_or("");
     let cwd = PathBuf::from(parsed.get("cwd").and_then(Value::as_str).unwrap_or("."));
@@ -584,7 +669,11 @@ fn run_stdin_door() -> (i32, String, String) {
                 .filter(|f: &Vec<String>| !f.is_empty());
             let refusal = review_invocation_refusal(&cwd, branch, head, flags.as_deref());
             if !refusal.is_empty() {
-                return (3, format!("review-invocation-refused: {refusal}\n"), String::new());
+                return (
+                    3,
+                    format!("review-invocation-refused: {refusal}\n"),
+                    String::new(),
+                );
             }
             let advisory = verify_fixes_advisory(&cwd, branch, head);
             let stderr = if advisory.is_empty() {
