@@ -538,11 +538,28 @@ fn verdict_of(shipped: i64, abandoned: i64, saved: i64, wasted: i64) -> Option<S
     Some("keep-v1".to_string())
 }
 
+/// The stale window the evals folds read: `config.evals.stale_days` when
+/// set positive, else 7 - the same knob the tick passes the evals arm, so
+/// every surface judges stale on one number. A quoted or fractional value
+/// parses like the Python side's int() does; an unreadable value degrades
+/// to the same 7 the default carries.
+fn evals_stale_days() -> i64 {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let raw = crate::agents_config::config_lookup(&cwd, &["evals", "stale_days"]);
+    let parsed = raw.as_ref().and_then(|v| match v {
+        toml::Value::Integer(n) => Some(*n),
+        toml::Value::String(s) => s.trim().parse().ok(),
+        toml::Value::Float(f) => Some(*f as i64),
+        _ => None,
+    });
+    parsed.filter(|d| *d > 0).unwrap_or(7)
+}
+
 /// The evals section payload (evals/report.py evals_health_summary over
 /// the native fold): None when the history is absent or has no rows.
 pub(crate) fn evals_summary() -> Option<Value> {
     let path = evals_history_path()?;
-    let stale_days: i64 = 7;
+    let stale_days: i64 = evals_stale_days();
     // summary_payload takes the history PATH and reads the rows itself.
     let payload =
         crate::evals_trend::summary_payload(path.to_str()?, stale_days, chrono::Utc::now());
