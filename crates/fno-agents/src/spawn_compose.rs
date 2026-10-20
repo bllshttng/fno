@@ -1552,96 +1552,69 @@ mod tests {
         }
     }
 
-    /// The role gate: a config model, a free axis and a role with no
-    /// `facts.role_resolves` answer stops before any side effect and asks
-    /// the transport to resolve. Python's seam resolved the role only
-    /// under this same gate, so a bare role spawn's single cmd_spawn
-    /// resolve is the one the role-wiring contract pins.
+    /// The role gate and the carried answer. A config model, a free axis
+    /// and a role with no `facts.role_resolves` answer stops before any
+    /// side effect and asks the transport to resolve; a carried answer
+    /// composes straight through, and `false` lets the config model
+    /// inject. Python's seam resolved the role only under this same gate,
+    /// so a bare role spawn's single cmd_spawn resolve is the one the
+    /// role-wiring contract pins.
     #[test]
-    fn a_missing_role_answer_gates_the_composition() {
-        let (guard, root, saved) = hermetic();
-        let inputs = Inputs {
-            argv: vec![
-                "spawn".to_string(),
-                "--name".to_string(),
-                "w".to_string(),
-                "--role".to_string(),
-                "tidy".to_string(),
-                "work".to_string(),
-            ],
-            defaults: toml::Value::Table(toml::map::Map::new()),
-            profiles: "[target]\nmodel = \"cfg-m\"\n".parse().unwrap(),
-            dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
-            roster: vec!["target".to_string()],
-            node_verb: None,
-            env_node: None,
-            ambient_harness: "claude".to_string(),
-            apply_permission_builtin: true,
-            scan: serde_json::json!({
-                "has_harness": false, "explicit_harness": null,
-                "has_model": false, "has_effort": false,
-                "explicit_route": false, "role": "tidy",
-                "has_permission": false, "seed": "/fno:target work",
-                "name": "w", "positional_present": true
-            }),
-            facts: serde_json::json!({"role_resolves": null}),
-            node: None,
-            node_row: None,
-            verbose: false,
-        };
-        let answer = compose(&inputs);
-        drop(guard);
-        clear_hermetic(&root, saved);
-        assert!(answer.role_gate_needed, "the gate declares the need");
-        assert_eq!(answer.exit, 0, "no refusal");
-        assert!(answer.stderr.is_empty(), "no lines printed");
-        assert!(!answer.injected, "nothing applied");
-        assert_eq!(answer.argv, inputs.argv, "argv unchanged");
-    }
-
-    /// A carried answer composes straight through: false composes with the
-    /// config model injecting (the billing ask receives it), true skips
-    /// the model injection. Either way no gate fires.
-    #[test]
-    fn a_carried_role_answer_composes_through() {
-        let (guard, root, saved) = hermetic();
-        let inputs = Inputs {
-            argv: vec![
-                "spawn".to_string(),
-                "--name".to_string(),
-                "w".to_string(),
-                "--role".to_string(),
-                "tidy".to_string(),
-                "work".to_string(),
-            ],
-            defaults: toml::Value::Table(toml::map::Map::new()),
-            profiles: "[target]\nmodel = \"cfg-m\"\n".parse().unwrap(),
-            dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
-            roster: vec!["target".to_string()],
-            node_verb: None,
-            env_node: None,
-            ambient_harness: "claude".to_string(),
-            apply_permission_builtin: true,
-            scan: serde_json::json!({
-                "has_harness": false, "explicit_harness": null,
-                "has_model": false, "has_effort": false,
-                "explicit_route": false, "role": "tidy",
-                "has_permission": false, "seed": "/fno:target work",
-                "name": "w", "positional_present": true
-            }),
-            facts: serde_json::json!({"role_resolves": false}),
-            node: None,
-            node_row: None,
-            verbose: false,
-        };
-        let answer = compose(&inputs);
-        drop(guard);
-        clear_hermetic(&root, saved);
-        assert!(!answer.role_gate_needed, "the carried answer composes");
-        assert!(
-            answer.argv.iter().any(|t| t == "--model"),
-            "an unresolved role lets the config model inject"
-        );
+    fn the_role_answer_gates_or_carries_the_composition() {
+        let cases = [
+            (serde_json::json!({"role_resolves": null}), true),
+            (serde_json::json!({"role_resolves": false}), false),
+        ];
+        for (facts, gated) in cases {
+            let (guard, root, saved) = hermetic();
+            let inputs = Inputs {
+                argv: vec![
+                    "spawn".to_string(),
+                    "--name".to_string(),
+                    "w".to_string(),
+                    "--role".to_string(),
+                    "tidy".to_string(),
+                    "work".to_string(),
+                ],
+                defaults: toml::Value::Table(toml::map::Map::new()),
+                profiles: "[target]\nmodel = \"cfg-m\"\n".parse().unwrap(),
+                dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
+                roster: vec!["target".to_string()],
+                node_verb: None,
+                env_node: None,
+                ambient_harness: "claude".to_string(),
+                apply_permission_builtin: true,
+                scan: serde_json::json!({
+                    "has_harness": false, "explicit_harness": null,
+                    "has_model": false, "has_effort": false,
+                    "explicit_route": false, "role": "tidy",
+                    "has_permission": false, "seed": "/fno:target work",
+                    "name": "w", "positional_present": true
+                }),
+                facts,
+                node: None,
+                node_row: None,
+                verbose: false,
+            };
+            let answer = compose(&inputs);
+            drop(guard);
+            clear_hermetic(&root, saved);
+            assert_eq!(
+                answer.role_gate_needed, gated,
+                "facts.role_resolves = {facts}"
+            );
+            if gated {
+                assert_eq!(answer.exit, 0, "no refusal");
+                assert!(answer.stderr.is_empty(), "no lines printed");
+                assert!(!answer.injected, "nothing applied");
+                assert_eq!(answer.argv, inputs.argv, "argv unchanged");
+            } else {
+                assert!(
+                    answer.argv.iter().any(|t| t == "--model"),
+                    "an unresolved role lets the config model inject"
+                );
+            }
+        }
     }
 
     /// AC7-ERR: the take-over front door refuses `--take-over` without

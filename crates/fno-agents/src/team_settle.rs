@@ -1250,14 +1250,11 @@ mod tests {
         let refusal = out["refusal"].as_str().unwrap();
         assert!(refusal.contains("requires --name"), "{refusal}");
         assert!(refusal.contains("none is drawn"), "{refusal}");
-    }
 
-    /// AC2-ERR + AC3-ERR + AC4-HP (incumbent side): an unrelated L2's
-    /// take-over declines with the not-contained text (and the no-key
-    /// refusal keeps the incumbent text), a blank reason declines, and the
-    /// own-team ask declines.
-    #[test]
-    fn take_over_refusals_decline_outside_blank_and_own_team() {
+        // AC2-ERR + AC3-ERR + AC4-HP (incumbent side): an unrelated L2's
+        // take-over declines with the not-contained text (and the no-key
+        // refusal keeps the incumbent text), a blank reason declines, and
+        // the own-team ask declines.
         let rows = json!([
             {"name": "ivy", "status": "busy", "role_scope": "x-bbbb",
              "role_level": 2, "cwd": "/repo", "harness": "claude",
