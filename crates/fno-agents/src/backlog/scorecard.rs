@@ -518,21 +518,21 @@ mod tests {
         let s2 = "sess-2";
         let nodes = vec![
             node(
-                "x-0001",
+                "x-aaaa",
                 json!([session(Some("claude"), None, s1, "2026-10-15T10:00:00Z")]),
                 "medium",
                 Some(10.0),
             ),
             node(
-                "x-0002",
+                "x-bbbb",
                 json!([session(Some("claude"), None, s2, "2026-10-16T10:00:00Z")]),
                 "medium",
                 Some(20.0),
             ),
         ];
         let ledger_rows = vec![
-            ledger_row(&[s1], "anthropic", "sonnet", Some("x-0001"), 1.0),
-            ledger_row(&[s2], "anthropic", "sonnet", Some("x-0002"), 2.0),
+            ledger_row(&[s1], "anthropic", "sonnet", Some("x-aaaa"), 1.0),
+            ledger_row(&[s2], "anthropic", "sonnet", Some("x-bbbb"), 2.0),
         ];
         let recs = records(&nodes, &ledger_rows);
         assert_eq!(recs.len(), 2, "{recs}");
@@ -553,7 +553,7 @@ mod tests {
         // the ledger row tagged with its graph node id.
         let s3 = "sess-3";
         let nodes = vec![node(
-            "x-0003",
+            "x-cccc",
             json!([session(Some("claude"), None, s3, "2026-10-17T10:00:00Z")]),
             "medium",
             None,
@@ -562,7 +562,7 @@ mod tests {
             &[s3],
             "anthropic",
             "sonnet",
-            Some("x-0003"),
+            Some("x-cccc"),
             7.5,
         )];
         let recs = records(&nodes, &ledger_rows);
@@ -578,7 +578,7 @@ mod tests {
         // visible unattributed bucket and coverage.harness_pct drops.
         let nodes = vec![
             node(
-                "x-0004",
+                "x-dddd",
                 json!([session(
                     Some("claude"),
                     None,
@@ -589,7 +589,7 @@ mod tests {
                 Some(5.0),
             ),
             node(
-                "x-0005",
+                "x-eeee",
                 json!([session(None, None, "sess-5", "2026-10-16T10:00:00Z")]),
                 "high",
                 None,
@@ -622,7 +622,7 @@ mod tests {
         // A last execute session 40 days old is outside a 28-day window; a
         // 10-day-old one is inside.
         let old = node(
-            "x-0006",
+            "x-ffff",
             json!([session(
                 Some("claude"),
                 None,
@@ -633,7 +633,7 @@ mod tests {
             None,
         );
         let recent = node(
-            "x-0007",
+            "x-0000",
             json!([session(
                 Some("claude"),
                 None,
@@ -645,7 +645,7 @@ mod tests {
         );
         let recs = records(&[old, recent], &[]);
         assert_eq!(recs.len(), 1, "only the in-window node: {recs}");
-        assert_eq!(recs[0]["id"], "x-0007");
+        assert_eq!(recs[0]["id"], "x-0000");
         assert_eq!(recs[0]["work_hours"], Value::Null, "no span, no hours");
         // A merged node with no measured cost anywhere reads null, not 0.
         assert_eq!(recs[0]["cost_usd"], Value::Null);
