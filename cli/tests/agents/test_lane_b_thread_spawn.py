@@ -674,7 +674,10 @@ def test_lane_b_agy_runs_no_mint_and_binds_at_the_report(lane_b_home, monkeypatc
 
 
     def _no_mint(payload):
-        raise AssertionError(f"no door ask may run at agy spawn: {payload}")
+        # The lane-default posture is the one ask; a mint ask fails the test.
+        if set(payload) == {"keeper_posture"}:
+            return {"tokens": ["--dangerously-skip-permissions"]}
+        raise AssertionError(f"no mint ask may run at agy spawn: {payload}")
 
     monkeypatch.setattr("fno.agents.spawn_axes_client.spawn_axes_call", _no_mint)
     receipt = _lane_b_thread_spawn(name="wk-agy", harness="agy", cwd=lane_b_home)

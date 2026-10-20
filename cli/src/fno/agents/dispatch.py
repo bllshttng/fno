@@ -1023,6 +1023,13 @@ def _lane_b_thread_spawn(
 
             trust_agy_folder(cwd)
         argv = [*argv, *keeper_posture(harness, "thread")]
+        if harness == "pi":
+            # Bare pi defaults to provider google; the pane lane asks the
+            # same route owner.
+            from fno.agents.spawn_axes_client import spawn_axes_call
+
+            route = spawn_axes_call({"pi_route": {"model": "", "effort": "", "tools": "", "deny_tools": ""}})
+            argv = [*argv, *(str(t) for t in route["tokens"])]
         if passthrough:
             argv = [*argv, "--", *passthrough]
 
