@@ -52,7 +52,7 @@ fn write_fake_gh(root: &Path) -> PathBuf {
 }
 
 fn fixture(tag: &str) -> Fixture {
-    let tmp = tempfile::TempDir::new().unwrap().into_path();
+    let tmp = tempfile::TempDir::new().unwrap().keep();
     let repo = tmp.join(tag);
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main", "."]);

@@ -73,7 +73,7 @@ const MARKERS: [&str; 7] = [
 /// the retraction row records), HOME and FNO_STATE_DIR pinned like the
 /// capture's base_env.
 fn fixture(tag: &str) -> Fixture {
-    let tmp = tempfile::TempDir::new().unwrap().into_path();
+    let tmp = tempfile::TempDir::new().unwrap().keep();
     let repo = tmp.join(tag);
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main", "."]);

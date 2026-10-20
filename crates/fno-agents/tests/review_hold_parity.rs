@@ -70,7 +70,7 @@ const MARKERS: [&str; 8] = [
 /// Build the fixture: a temp git repo (branch feat/a at c0, fake origin), a
 /// fake gh keyed by FGH_MODE, and a per-process env the run helper applies.
 fn fixture(tag: &str) -> Fixture {
-    let tmp = tempfile::TempDir::new().unwrap().into_path();
+    let tmp = tempfile::TempDir::new().unwrap().keep();
     let repo = tmp.join(tag);
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main", "."]);
