@@ -1,6 +1,6 @@
 # Troubleshooting
 
-The failures below are the ones real runs hit most often, ordered roughly by how much trouble they cause. For first-install verification see [getting-started.md](getting-started.md); for credentials see [auth.md](auth.md); for the habits that prevent most of these see [best-practices.md](best-practices.md).
+The failures below are the ones real runs hit most often, ordered roughly by how much trouble they cause. For first-install verification see [install.md](install.md#verify-it-worked); for credentials see [auth.md](auth.md); for the habits that prevent most of these see [best-practices.md](best-practices.md).
 
 ## A run runs for a long time and never converges
 

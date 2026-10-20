@@ -516,7 +516,7 @@ When execution agents encounter issues not covered by the plan:
 
 ## Installation
 
-Release installs (marketplace plugin, `fno.sh`, `uv`, Homebrew) are covered in the [README](../README.md) and [getting started](getting-started.md). The forms below are for developing footnote from a clone - they are not the supported release channels.
+Release installs (marketplace plugin, `fno.sh`, `uv`, Homebrew) are covered in the [README](../README.md) and [install](install.md). The forms below are for developing footnote from a clone - they are not the supported release channels.
 
 ### Development Mode (recommended)
 

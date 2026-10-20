@@ -6,7 +6,7 @@ If you decide where a doc goes, or you review the plan to reorganize `docs/`, re
 
 Not for: a user who wants to install or run fno. Start at the root [README.md](../../README.md) instead.
 
-Status: proposed. Nothing under docs/ moves until the user approves the Review section.
+Status: approved as written. Wave 1 landed: the six entry pages exist, `getting-started.md` is split, and `deployment-guide.md`, `guides/execution-modes.md` and `guides/utilities.md` are merged. `docs/README.md` is still hand-kept, not generated. Waves 2 and 3 are open.
 
 ## The problem, measured
 
