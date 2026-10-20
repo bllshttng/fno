@@ -12,7 +12,7 @@ Status: proposed. Nothing under docs/ moves until the user approves the Review s
 
 On 2026-10-19, `git ls-files 'docs/*.md'` counted 267 markdown files and 4 MB of text. Of those, 166 sit under `docs/architecture/`. An earlier measurement counted 161 files on 2026-08-19, so the tree grew by 106 pages in two months.
 
-A reader has three indexes and none of them is complete. The root `README.md` lists 9 doc links under `## Docs`. `docs/README.md` links 42 pages. The `AGENTS.md` `## Deep-dive docs` list is for agents, and `scripts/ci/check-doc-entry-scope.sh` gates it. No page states which reader it serves or what kind of page it is. 31 pages carry a `## Is this page for you?` section. 236 do not.
+A reader has three indexes and none of them is complete. The root `README.md` lists 9 doc links under `## Docs`. `docs/README.md` links 42 pages. The `AGENTS.md` `## Deep-dive docs` list is for agents, and `scripts/ci/check-doc-entry-scope.sh` gates it. No page states what kind of page it is. 31 pages name their reader in a `## Is this page for you?` section. 236 do not.
 
 ## Method
 
@@ -34,7 +34,7 @@ Touchpoints: the root `README.md` (4,976 bytes) and its `## How it works` sectio
 
 Docs that answer today: `README.md`, `docs/security-posture.md`, `docs/project-overview-pdr.md`, `docs/system-architecture.md`.
 
-Pain points: no page inside `docs/` answers "what is fno" for a newcomer. `project-overview-pdr.md` is a product design review last changed on 2026-06-18, and it says 26 skills. `system-architecture.md` says 24 skills at line 48 and 26 skills at line 587, and 12 agents at line 57 and 17 at line 595. `skills/` holds 27 skill folders and `agents/` holds 18 agent files.
+Pain points: the only overview inside `docs/` is `project-overview-pdr.md`. It is a product design review, last changed on 2026-06-18, and it says 26 skills. `system-architecture.md` says 24 skills at line 48 and 26 skills at line 587, and 12 agents at line 57 and 17 at line 595. `skills/` holds 27 skill folders and `agents/` holds 18 agent files.
 
 Entry page: `docs/overview.md`. It draws from `README.md`, `docs/security-posture.md` and the product parts of `docs/project-overview-pdr.md`.
 
@@ -70,7 +70,7 @@ Touchpoints: `/fno:think`, `/fno:blueprint`, `/fno:review`, `/fno:ship`, `/fno:f
 
 Docs that answer today: `docs/backlog-usage.md`, `docs/guides/pr-lifecycle.md`, `docs/guides/review.md`, `docs/guides/fix.md`, `docs/guides/think-and-plan.md`, `docs/configuration-guide.md`, `docs/path-config.md`, `docs/env-vars.md`.
 
-Pain points: `docs/guides/execution-modes.md` names "do" and "operator" modes, and `skills/` has neither. `docs/guides/utilities.md` names a debug skill, and `skills/` has `fix`, not `debug`. `docs/README.md` links `architecture/megawalk-pipeline.md` as "the multi-feature loop", while `docs/guides/megawalk-walker.md` says that walker is deleted. `docs/api-reference.md` says 24 skills and 17 agents. The two reference pages a daily user needs most are the largest: `configuration-guide.md` is 76 KB and `backlog-usage.md` is 47 KB.
+Pain points: `docs/guides/execution-modes.md` names "do" and "operator" modes, and `skills/` has neither. `docs/guides/utilities.md` names a debug skill, and `skills/` has `fix`, not `debug`. `docs/README.md` links `architecture/megawalk-pipeline.md` as "the multi-feature loop", while `docs/guides/megawalk-walker.md` says that walker is deleted. `docs/api-reference.md` says 24 skills and 17 agents. Two pages a daily user opens often are long: `configuration-guide.md` is 76 KB and `backlog-usage.md` is 47 KB.
 
 Entry page: `docs/workflows.md`. It lists the task, the verb, and the guide, in the style of the Claude Code "Common workflows" page.
 
