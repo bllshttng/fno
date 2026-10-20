@@ -70,7 +70,6 @@ from fno.inbox.store import (
     read_all_threads,
     read_thread,
     resolve_project,
-    write_new_thread,
 )
 from fno import paths
 from fno.mail.thread_force import resolve_pane_entry as _resolve_pane_entry
