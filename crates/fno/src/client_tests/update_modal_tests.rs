@@ -752,9 +752,7 @@ fn sideline_menu_shows_update_row_above_keybinds_when_ready() {
     assert_eq!(labels[1], "sweep threads");
     assert_eq!(labels[2], "new agent");
     assert_eq!(labels[3], "backlog");
-    assert_eq!(labels[4], "fleet org board");
-    assert_eq!(labels[5], "pane share");
-    assert_eq!(labels[6], "keybindings");
+    assert_eq!(labels[4], "keybindings");
     assert_eq!(menu.actions[0], AuxAction::OpenUpdate);
 }
 

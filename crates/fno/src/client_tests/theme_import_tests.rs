@@ -237,8 +237,8 @@ async fn settings_modal_body_paints_no_inverse_under_a_named_theme() {
     for tab in [
         SettingsTab::General,
         SettingsTab::Theme,
-        SettingsTab::Keys,
         SettingsTab::Colors,
+        SettingsTab::Experimental,
     ] {
         view.settings_tab = tab;
         if tab == SettingsTab::Colors {

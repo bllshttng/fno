@@ -46,4 +46,4 @@ selector = ";"
 
 The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
 
-You can also rebind from the mux. The menu's `keybindings` row and `settings > keybindings` open the SAME table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button: it opens the key config in your `$EDITOR` (vi when none is set). After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.
+You can also rebind from the mux. The menu's `keybindings` row opens the table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button: it opens the key config in your `$EDITOR` (vi when none is set). After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.

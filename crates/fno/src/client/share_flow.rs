@@ -96,7 +96,7 @@ async fn read_child(
 /// one already running.
 pub(crate) fn chord(view: &mut View) {
     if !view.experimental_pane_share {
-        view.set_notice("pane share is off: sideline menu > experimental".into());
+        view.set_notice("pane share is off: menu > settings > experimental".into());
         return;
     }
     if view.share.is_some() {

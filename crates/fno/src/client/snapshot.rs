@@ -585,9 +585,6 @@ shoot a root seeded with questions, mail or backlog activity \
             view.aux_esc.clear();
         }
         Some(ViewKind::Keys) => {
-            // Opened FROM settings, so the dismiss marker rides: the shot
-            // shows the table exactly as the tab handoff paints it.
-            view.keys_modal_return = true;
             view.open_keys_modal();
         }
         Some(ViewKind::OrgBlock) => {

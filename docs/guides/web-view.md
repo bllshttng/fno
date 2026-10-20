@@ -77,7 +77,7 @@ CAUTION: Do not use `--bind 0.0.0.0`. It opens the port on every interface, incl
 
 ## Share one pane with someone on another network
 
-A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. The share is experimental, so it is off until you turn it on. Open the mux sideline menu and switch on `pane share` under `experimental`.
+A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. The share is experimental, so it is off until you turn it on. Open the mux menu, then `settings`, and switch on `pane share` on the `experimental` tab.
 
 The quick way: focus the pane and press `prefix X`, or pick `share focused pane` in the menu. The mux starts a tunnelled share, copies the join link, and keeps running it until you pick `stop sharing` or close the mux. Press `prefix X` again to copy the link again. This path needs `cloudflared`.
 
