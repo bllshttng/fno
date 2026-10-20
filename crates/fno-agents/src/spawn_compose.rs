@@ -884,13 +884,6 @@ fn read_fields(stage: &Stage) -> Fields {
     }
 }
 
-/// Whether the seed's FIRST token is verb-shaped (Python `is_verb_seed`).
-fn is_seed_verb(seed: &Option<String>) -> bool {
-    seed.as_deref()
-        .and_then(|s| s.split_whitespace().next())
-        .is_some_and(|tok| crate::provider::parse_verb_token(tok).is_some())
-}
-
 /// Whether the argv names a role (`-k` in all three Click spellings, or
 /// `--promote`) before the `--argv` boundary or a bare `--` fence (fenced
 /// tokens are prompt text) - the same boundary rule Python's
