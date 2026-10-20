@@ -507,13 +507,21 @@ fn has_any_marker(text: &str) -> bool {
 
 /// True if a landed-marker heading naming the blocker (id OR PR number) is
 /// already in the doc. Both keys match on a TOKEN boundary.
+///
+/// The Rust regex crate has no look-around, so the boundaries are spelled as
+/// explicit alternations. The `pr` pattern used to build `#{pr}(?!\d)` and
+/// `unwrap()` it, which PANICKED init on any node whose landed-marker check
+/// named a merged PR (a look-around is a compile error, and unwrap turned it
+/// into a crash mid-`fno do target start`).
 fn marker_present(text: &str, blocker_id: &str, pr_number: Option<i64>) -> bool {
     let id_re = Regex::new(&format!(
-        r"(?i)(?<![\w-]){}(?![\w-])",
+        r"(?i)(?:^|[^0-9A-Za-z_-]){}(?:[^0-9A-Za-z_-]|$)",
         regex::escape(blocker_id)
     ))
     .ok();
-    let pr_re = pr_number.map(|pr| Regex::new(&format!(r"#{pr}(?!\d)")).unwrap());
+    let pr_re = pr_number
+        .map(|pr| Regex::new(&format!(r"#{pr}(?:[^\d]|$)")).ok())
+        .flatten();
     for line in text.lines() {
         let s = line.trim();
         if !is_marker_heading(s) {
@@ -1131,4 +1139,39 @@ pub fn report(project_root: &Path) -> String {
         .map(|(label, value)| format!("{:<width$} {}", format!("{label}:"), value))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::marker_present;
+
+    #[test]
+    fn pr_number_marker_matches_without_lookaround() {
+        // The heading the boundary-reconcile step writes when Step 0 ran:
+        // the regex crate has no look-around, so the token boundary must be
+        // an alternation. `#34890` must NOT match `#3489`, and the heading
+        // may name the PR at end-of-line or before a separator.
+        let text = "### x-2b5d landed via #3489 - boundary reconcile\n";
+        assert!(marker_present(text, "x-2b5d", Some(3489)));
+        assert!(!marker_present(text, "x-2b5d", Some(34890)));
+        assert!(marker_present("### #3489 landed\n", "x-none", Some(3489)));
+        assert!(marker_present("### #3489\n", "x-none", Some(3489)));
+    }
+
+    #[test]
+    fn id_marker_matches_on_token_boundaries() {
+        // `x-2b5d1` must not match for blocker x-2b5d; a leading dash is
+        // part of a longer token and excludes the match, as before.
+        assert!(marker_present(
+            "### x-2b5d landed - boundary reconcile\n",
+            "x-2b5d",
+            None
+        ));
+        assert!(!marker_present("### x-2b5d1 landed\n", "x-2b5d", None));
+        assert!(!marker_present(
+            "### prefix-x-2b5d landed\n",
+            "x-2b5d",
+            None
+        ));
+    }
 }
