@@ -80,35 +80,18 @@ attestation_app = typer.Typer(
 @attestation_app.command(
     "retract",
     hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "Revoke a passing review_attestation by naming the pair that passed: "
-        "--reviewer, --attester (the session that emitted the pass), --head. "
-        "Writes a fail verdict carrying retracts_attester and records the "
-        "RETRACTING process's own identity. Refuses when no matching pass "
-        "exists, so a revocation never lands for a pair that never passed."
+        "--reviewer, --attester (the session that emitted the pass), --head, "
+        "--reason/-R. Writes a fail verdict carrying retracts_attester and "
+        "records the RETRACTING process's own identity. Refuses when no "
+        "matching pass exists, so a revocation never lands for a pair that "
+        "never passed."
     ),
 )
-def attestation_retract(
-    reviewer: str = typer.Option(..., "--reviewer", help="Reviewer name of the pass being revoked."),
-    attester: str = typer.Option(..., "--attester", help="The session id that emitted the pass."),
-    head: str = typer.Option(..., "--head", help="The head sha the pass pinned."),
-    reason: str = typer.Option(..., "--reason", "-R", help="Why the pass is revoked (recorded)."),
-    events: Optional[str] = typer.Option(
-        None, "--events", help="Path to events.jsonl (default: the repo project log)."
-    ),
-) -> None:
-    from pathlib import Path
-
-    from fno.pr import _attestation
-
-    rc = _attestation.retract(
-        reviewer,
-        attester,
-        head,
-        reason,
-        events=Path(events) if events else None,
-    )
-    raise typer.Exit(code=rc)
+def attestation_retract(ctx: typer.Context) -> None:
+    _forward_to_binary("attest", ["retract", *ctx.args])
 
 
 pr_app.add_typer(attestation_app, name="attestation", hidden=True)
@@ -624,54 +607,20 @@ def sync_canonical(
 @pr_app.command(
     "publish-review",
     hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "Post a review verdict to GitHub as config.review.bot_identity "
         "(--pr-number N; --verdict defaults to the newest head-pinned "
-        "attestation for HEAD). One bot-review: receipt line; exit 0 posted,"
-        " 1 skipped|refused|failed, 2 no attestation to default from. The "
-        "identity-independent review-round leg also runs on this call "
+        "attestation for HEAD; --dry-run/-N makes no POST). One bot-review: "
+        "receipt line; exit 0 posted, 1 skipped|refused|failed, 2 no "
+        "attestation to default from. The identity-independent review-round "
+        "leg also runs on this call "
         "(crates/fno-agents/src/publish_review.rs::publish_round) but this "
-        "Python door prints only the bot-review receipt; read the verb's "
-        "raw JSON (or the Rust-side caller) for the round leg's own status."
+        "door prints only the bot-review receipt."
     ),
 )
-def publish_review_cmd(
-    pr_number: Optional[int] = typer.Option(None, "--pr-number", help="GitHub PR number"),
-    pr_legacy: Optional[int] = typer.Option(
-        None, "--pr", hidden=True, help="[DEPRECATED] alias for --pr-number."
-    ),
-    verdict: Optional[str] = typer.Option(
-        None, "--verdict", help="pass | fail; default: newest head-pinned attestation for HEAD."
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", "-N", help="Resolve and refuse-check, but make no POST."
-    ),
-) -> None:
-    from fno._flag_aliases import merge_deprecated_alias
-    from fno.pr._publish_review import PublishReviewUnavailable, publish_review_call
-
-    pr_number = merge_deprecated_alias(
-        pr_number, pr_legacy, canonical_flag="--pr-number", legacy_flag="--pr"
-    )
-    if pr_number is None:
-        typer.echo("publish-review: missing option --pr-number", err=True)
-        raise typer.Exit(code=2)
-    try:
-        result = publish_review_call(
-            {
-                "pr_number": pr_number,
-                "head_sha": "",
-                "verdict": verdict or "",
-                "reviewer": "",
-                "cwd": os.getcwd(),
-                "dry_run": dry_run,
-            }
-        )
-    except PublishReviewUnavailable as exc:
-        typer.echo(f"bot-review: failed ({exc})", err=True)
-        raise typer.Exit(code=1)
-    typer.echo(result.get("receipt", ""), err=True)
-    raise typer.Exit(code=int(result.get("exit", 1)))
+def publish_review(ctx: typer.Context) -> None:
+    _forward_to_binary("publish-review", list(ctx.args))
 
 
 @pr_app.command(

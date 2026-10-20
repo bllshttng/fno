@@ -625,10 +625,11 @@ def emit(
         try:
             import os
 
-            from fno.pr._publish_review import publish_review_call
+            from fno.rust_binary import verb_call
 
             _data = event.get("data", {})
-            result = publish_review_call(
+            result = verb_call(
+                "publish-review",
                 {
                     "pr_number": None,
                     "head_sha": str(_data.get("head_sha") or ""),
@@ -636,7 +637,8 @@ def emit(
                     "reviewer": str(_data.get("reviewer") or ""),
                     "cwd": str(repo_root) if repo_root else os.getcwd(),
                     "dry_run": False,
-                }
+                },
+                timeout=45,
             )
             typer.echo(result.get("receipt", "bot-review: skipped (no receipt)"), err=True)
         except Exception as exc:  # noqa: BLE001 - never fail the emit

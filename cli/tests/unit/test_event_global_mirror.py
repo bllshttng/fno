@@ -159,15 +159,14 @@ def test_attestation_emit_fires_the_bot_review_mirror(tmp_path, monkeypatch):
     global_log = _configure(tmp_path, monkeypatch, str(tmp_path / "state"))
     project = tmp_path / "project" / ".fno" / "events.jsonl"
 
-    from fno.pr import _publish_review as pub
-
     calls = []
 
-    def spy(payload):
+    def spy(verb, payload, *args, **kwargs):
+        assert verb == "publish-review"
         calls.append(payload)
         return {"status": "skipped", "reason": "spy", "receipt": "bot-review: skipped (spy)"}
 
-    monkeypatch.setattr(pub, "publish_review_call", spy)
+    monkeypatch.setattr("fno.rust_binary.verb_call", spy)
     result = _emit(project, "review_attestation", ATTESTATION)
     assert result.exit_code == 0, result.output
     assert len(calls) == 1, "the mirror must fire exactly once per attestation"

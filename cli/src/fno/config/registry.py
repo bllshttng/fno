@@ -273,6 +273,12 @@ FIELD_META: dict[str, Meta] = {
     "review.peer_token_env": Meta(
         "advanced", "Optional legacy carrier: env var holding the PAT for peer_identity used to post peer reviews to the PR.",
     ),
+    "review.bot_identity": Meta(
+        "advanced", "The distinct GitHub login the reviewer lane's bot-review mirror posts under (must not be the PR author: GitHub silently demotes an author's approving review to COMMENTED). Unset skips the bot-review leg of publish-review entirely, before any network call.",
+    ),
+    "review.bot_token_env": Meta(
+        "advanced", "Optional env var holding the PAT for review.bot_identity, used to post the verdict to the PR as the bot.",
+    ),
     "review.external_reviewers": Meta(
         "always", "Which AI reviewers /pr requests a review from (the INVOCATION list).",
         question="Which external reviewer(s) should review your PRs (gemini/codex/none)?",

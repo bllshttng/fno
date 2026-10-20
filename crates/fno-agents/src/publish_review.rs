@@ -947,12 +947,24 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
 /// only a transport failure - unreadable or malformed stdin - exits 2).
 /// Two independent legs ride one answer: the verdict mirror under the bot
 /// identity, and the held-findings post under the caller's own auth (`held`).
-pub fn run_publish_review(_args: &[String]) -> i32 {
+pub fn run_publish_review(args: &[String]) -> i32 {
+    // The argv door beside the JSON door (x-1d1e wave 4): the deleted
+    // Python typer command parsed these flags and shelled this verb with
+    // the payload built below, so the port keeps both halves in one place.
+    // Flags mean the argv door; the events-cli caller pipes its payload
+    // with no args and keeps the stdin door.
+    if !args.is_empty() {
+        return run_publish_argv(args);
+    }
+
     use std::io::Read;
 
     let mut payload = String::new();
-    if std::io::stdin().read_to_string(&mut payload).is_err() {
-        eprint!("publish-review: cannot read payload\n");
+    if std::io::stdin().read_to_string(&mut payload).is_err() || payload.trim().is_empty() {
+        // A bare call with nothing piped is the deleted typer door's
+        // no-flag form (verb_call always writes a payload), so it gets the
+        // typer's missing-option refusal, not a malformed-payload error.
+        eprint!("publish-review: missing option --pr-number\n");
         return 2;
     }
     let parsed: Value = match serde_json::from_str(&payload) {
@@ -968,6 +980,71 @@ pub fn run_publish_review(_args: &[String]) -> i32 {
     answer["round"] = publish_round(&parsed, &GhReal, &journals).to_json();
     println!("{answer}");
     0
+}
+
+/// The typer-shaped flags: `--pr-number N`, the hidden deprecated `--pr N`
+/// alias, `--verdict V`, `--dry-run`/`-N`; `--flag=value` spellings work
+/// throughout. Prints only the bot-review receipt on stderr and exits with
+/// the answer's own exit (the deleted Python door's exact contract), though
+/// both legs run on this call like the stdin door.
+fn run_publish_argv(args: &[String]) -> i32 {
+    let mut pr_number: Option<i64> = None;
+    let mut pr_legacy: Option<i64> = None;
+    let mut verdict: Option<String> = None;
+    let mut dry_run = false;
+    let mut it = args.iter();
+    while let Some(tok) = it.next() {
+        let (flag, inline) = match tok.split_once('=') {
+            Some((f, v)) => (f, Some(v.to_string())),
+            None => (tok.as_str(), None),
+        };
+        let value = |inline: &Option<String>| inline.clone().or_else(|| it.next().cloned());
+        match flag {
+            "--pr-number" => pr_number = value(&inline).and_then(|v| v.parse().ok()),
+            "--pr" => pr_legacy = value(&inline).and_then(|v| v.parse().ok()),
+            "--verdict" => verdict = value(&inline),
+            "--dry-run" | "-N" => dry_run = true,
+            _ => {}
+        }
+    }
+    // The alias fold mirrors cli/src/fno/_flag_aliases.py::merge_deprecated_alias:
+    // both-passed refuses even when the values agree; alias-only warns and wins.
+    let pr_number = match (pr_number, pr_legacy) {
+        (Some(_), Some(_)) => {
+            eprint!("error: pass either --pr-number or --pr (deprecated), not both\n");
+            return 2;
+        }
+        (None, Some(legacy)) => {
+            eprint!(
+                "warning: --pr is deprecated; use --pr-number instead. \
+The alias will be removed in a future release.\n"
+            );
+            legacy
+        }
+        (Some(canonical), None) => canonical,
+        (None, None) => {
+            eprint!("publish-review: missing option --pr-number\n");
+            return 2;
+        }
+    };
+    let payload = json!({
+        "pr_number": pr_number,
+        "head_sha": "",
+        "verdict": verdict.unwrap_or_default(),
+        "reviewer": "",
+        "cwd": std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .display()
+            .to_string(),
+        "dry_run": dry_run,
+    });
+    let mut answer = publish(&payload, &GhReal, &|name: &str| std::env::var(name).ok()).to_json();
+    let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
+    let journals = [crate::paths::events_path(cwd)];
+    answer["round"] = publish_round(&payload, &GhReal, &journals).to_json();
+    let receipt = answer.get("receipt").and_then(Value::as_str).unwrap_or("");
+    eprint!("{receipt}\n");
+    answer.get("exit").and_then(Value::as_i64).unwrap_or(1) as i32
 }
 
 #[cfg(test)]
