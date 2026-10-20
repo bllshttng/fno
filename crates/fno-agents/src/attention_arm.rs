@@ -753,7 +753,7 @@ fn answer_text_of(item: &AttentionItem, answer: &FileAnswer) -> String {
 }
 
 /// The settle state for one delivered page, persisted at
-/// `~/.fno/attention/questions.json`.
+/// `~/.fno/state/attention/questions.json`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockState {
     hash: u64,
@@ -794,7 +794,7 @@ fn attention_enabled(cwd: &Path) -> bool {
         != Some(false)
 }
 
-/// Load the settle state from `~/.fno/attention/questions.json`.
+/// Load the settle state from `~/.fno/state/attention/questions.json`.
 fn load_state(path: &Path) -> HashMap<String, BlockState> {
     std::fs::read_to_string(path)
         .ok()
@@ -817,13 +817,14 @@ fn save_state(path: &Path, state: &HashMap<String, BlockState>) {
     }
 }
 
-/// `~/.fno/attention/`, beside `~/.fno` like `questions.jsonl`.
+/// `~/.fno/state/attention/`, folded under `state/` like `notice-route`.
 pub fn attention_dir() -> Result<PathBuf, std::io::Error> {
     let home = crate::paths::AgentsHome::from_env();
-    home.root()
+    let parent = home
+        .root()
         .parent()
-        .map(|p| p.join("attention"))
-        .ok_or_else(|| std::io::Error::other("no agents home parent"))
+        .ok_or_else(|| std::io::Error::other("no agents home parent"))?;
+    Ok(crate::state_layout::place(parent, "attention"))
 }
 
 /// The question folder the arm wrote on its last beat, from items.json's
