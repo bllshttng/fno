@@ -221,13 +221,23 @@ fn bank_task_store(o: &Opts) -> Option<PathBuf> {
 }
 
 fn file_bank_task(o: &Opts, age_days: Option<f64>, reason: &str, detail: &str) {
+    // The attention row tracks an escalation-grade bank only: run-mode
+    // plumbing failures on a fresh bank are journal data, not a chore, and
+    // an unreadable age asserts nothing. The summary, forwarded to run mode
+    // with its argv, supplies the age when the caller has none.
+    let summary = parse_summary(o.summary_json.as_deref());
+    let age = age_days.or(summary.age_days);
+    let escalates = summary.never_ran || age.map_or(false, |a| a > 2.0 * o.stale_days as f64);
+    if !escalates {
+        return;
+    }
     let Some(store) = bank_task_store(o) else {
         return;
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let age_txt = age_days
+    let age_txt = age
         .map(|a| format!("{a:.0}d"))
-        .unwrap_or_else(|| "never".into());
+        .unwrap_or_else(|| "unmeasured".into());
     if let Err(e) = crate::fleet_task::file_once(
         &store,
         TASK_LANE,

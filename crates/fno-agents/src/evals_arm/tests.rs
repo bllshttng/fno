@@ -263,6 +263,46 @@ fn escalated_skip_files_one_task_and_a_bank_run_closes_it() {
     );
 }
 
+// A run-mode plumbing failure on a FRESH bank journals the stale row but
+// files no attention row: the chore tracks an escalation-grade bank only.
+#[test]
+fn fresh_bank_run_failure_journals_but_files_no_task() {
+    let tmp = TempDir::new().unwrap();
+    let events = tmp.path().join("events.jsonl");
+    let notify_log = tmp.path().join("notify.log");
+    let history = tmp.path().join("history.jsonl");
+    // A fixture whose evals run exits nonzero.
+    let mut script = String::from("#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    exit 3\n    ;;\n  inbox/notify)\n    echo \"$*\" >> '");
+    script += &notify_log.to_string_lossy();
+    script += "'\n    ;;\nesac\n";
+    crate::write_exec_stub(tmp.path(), "fno-bin.sh", &script);
+    let store = tmp.path().join("questions.jsonl");
+    let args = base_args(
+        &tmp,
+        &[
+            "--run",
+            "--started",
+            &Utc::now().to_rfc3339(),
+            "--run-timeout-s",
+            "5",
+            "--summary-json",
+            r#"{"age_days": 1.0, "never_ran": false}"#,
+            "--questions-store",
+            &store.to_string_lossy(),
+        ],
+    );
+    let o = parse_args(&args).unwrap();
+
+    run_run_mode(&o);
+
+    assert_eq!(
+        count_kind(&events, "evals_stale"),
+        1,
+        "the plumbing failure journals"
+    );
+    assert!(!store.exists(), "a fresh bank files no attention row");
+}
+
 #[test]
 fn no_notice_when_emit_fails() {
     let tmp = TempDir::new().unwrap();

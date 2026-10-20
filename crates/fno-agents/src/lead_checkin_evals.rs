@@ -52,7 +52,10 @@ pub(crate) fn lines(readings: &[Reading]) -> Vec<String> {
     ));
     match reading.value.get("age_days").and_then(Value::as_f64) {
         Some(age) => line.push_str(&format!(" last run {age:.0}d ago,")),
-        None => line.push_str(" last run never,"),
+        // Rows exist but carry no readable timestamp: that is unmeasured,
+        // never a clean "never" - the bank may be stale past every window
+        // and the line must not hide it.
+        None => line.push_str(" last run unmeasured,"),
     }
     if let Some(window) = reading.value.get("window_days").and_then(Value::as_i64) {
         line.push_str(&format!(" window {window}d,"));
@@ -136,7 +139,9 @@ mod tests {
         });
         assert_eq!(
             lines(&[Reading::took("evals", no_age)]),
-            vec!["evals: regression pass 100%, flakes 0, last run never, window 7d".to_string()]
+            vec![
+                "evals: regression pass 100%, flakes 0, last run unmeasured, window 7d".to_string()
+            ]
         );
     }
 
