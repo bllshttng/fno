@@ -671,6 +671,30 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
     }
 }
 
+/// One locked O_APPEND write, mirroring the Python journal writer's lock
+/// convention: a `<file>.lock.d` mkdir mutex, an owner file, one atomic append.
+pub(crate) fn append_row(path: &Path, line: &str) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("events.jsonl"); // events-discipline:allow: a day-ledger fallback name, not the state-root journal
+    let lock_dir = path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(format!("{name}.lock.d"));
+    let token =
+        crate::claims::acquire_dir_mutex(&lock_dir, std::time::Duration::from_secs(30), true)
+            .ok_or_else(|| format!("lock timeout: {}", lock_dir.display()))?;
+    let result = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+        .map_err(|e| e.to_string());
+    crate::claims::release_dir_mutex(&lock_dir, &token);
+    result
+}
+
 /// The boundary row's fields: ids and counts only, never titles. Full
 /// evidence stays in its owning sources. Sized against the validated limit
 /// so a refusal names the boundary instead of substituting a meta-event.
@@ -729,30 +753,6 @@ fn boundary_event_line(payload: &Value) -> Result<String, String> {
     let mut line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
     line.push('\n');
     Ok(line)
-}
-
-/// One locked O_APPEND write, mirroring the Python journal writer's lock
-/// convention: a `<file>.lock.d` mkdir mutex, an owner file, one atomic append.
-pub(crate) fn append_row(path: &Path, line: &str) -> Result<(), String> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("events.jsonl"); // events-discipline:allow: a day-ledger fallback name, not the state-root journal
-    let lock_dir = path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{name}.lock.d"));
-    let token =
-        crate::claims::acquire_dir_mutex(&lock_dir, std::time::Duration::from_secs(30), true)
-            .ok_or_else(|| format!("lock timeout: {}", lock_dir.display()))?;
-    let result = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| file.write_all(line.as_bytes()))
-        .map_err(|e| e.to_string());
-    crate::claims::release_dir_mutex(&lock_dir, &token);
-    result
 }
 
 /// Commit the fold's boundary row: project journal first, then the
