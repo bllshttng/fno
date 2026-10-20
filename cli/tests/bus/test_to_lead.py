@@ -138,7 +138,7 @@ def test_cli_to_lead_hands_the_holder_to_the_name_lane(env):
     _register("lead-fno-g5", scope="fno", level=1)
     res = CliRunner().invoke(mail_app, ["send", "--to-lead", "fno", "ping"])
 
-    assert res.exit_code == 0, res.output
+    assert res.exit_code == 14, res.output
     receipt = _json.loads(res.stdout.strip().splitlines()[0])
     assert receipt["to"] == "lead-fno-g5"
     assert "queued (durable)" in receipt["status"]

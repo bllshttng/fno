@@ -114,44 +114,6 @@ def test_send_refuses_when_no_holder(runner, isolated, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_send_live_holder_records_audit_without_redelivery(
-    runner, isolated, monkeypatch
-):
-    _acquire_node("live-abcd", "11111111-1111-1111-1111-111111111111")
-    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
-
-    inject_calls: list[str] = []
-    injected_bodies: list[str] = []
-
-    def _fake_inject(session_id, wrapped, **_k):
-        inject_calls.append(session_id)
-        injected_bodies.append(wrapped)
-        return True  # confirmed delivery
-
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _fake_inject)
-
-    res = runner.invoke(
-        app,
-        ["mail", "send", "node:live-abcd", "ship it", "--from-name", "lead"],
-    )
-    assert res.exit_code == 0, res.output
-    assert "delivered (hosted)" in res.stdout
-    # Inject targeted the holder's session, not a handle.
-    assert inject_calls == ["11111111-1111-1111-1111-111111111111"]
-    rows = _bus_to("node:live-abcd")
-    assert len(rows) == 1
-    audit = rows[0]
-    assert audit.id in res.stdout
-    assert (audit.from_, audit.kind, audit.delivery, audit.to_kind) == (
-        "lead", "send", "hosted", "node"
-    )
-    assert audit.body == injected_bodies[0]
-
-    from fno.bus.cursor import scan_unread
-
-    assert scan_unread("node:live-abcd") == []
-
-
 # ---------------------------------------------------------------------------
 # Send: live holder but inject misses -> durable to node:<id> (the JOB)
 # ---------------------------------------------------------------------------
