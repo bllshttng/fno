@@ -8,9 +8,10 @@ struct Selection {
 }
 
 fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>) -> Selection {
-    // A PR runs every lane main runs: a lane a PR skips is a test main can
-    // fail on the merge. Only the bundle freshness job selects; on main it
-    // rides the full lanes, so it stays off there.
+    // Main runs every lane on every push, and the nightly builds only a green
+    // main sha, so a break a narrowed PR misses is caught within the hour and
+    // never ships. Only the bundle freshness job selects on main: it rides
+    // the full lanes there.
     if event != "pull_request" {
         return Selection {
             cargo: true,
@@ -24,11 +25,45 @@ fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>
         (Some(paths), Some(watched)) => paths.iter().any(|path| names_a_bundle_path(path, watched)),
         _ => true,
     };
+    // A PR that touches only prose, skills, hooks or images runs no full
+    // lane. Anything else, or an unreadable diff, runs them all.
+    let full = !paths.is_some_and(|paths| !paths.is_empty() && paths.iter().all(|p| is_light(p)));
     Selection {
-        cargo: true,
-        python_full: true,
+        cargo: full,
+        python_full: full,
         skill_bundles,
     }
+}
+
+/// Files a full lane reads at build or test time although they sit under a
+/// light tree. Keep in step with the include_str! sites under crates/ and
+/// the docs paths cli-ci.yml's push filter names.
+const LANE_INPUTS: &[&str] = &[
+    "docs/architecture/activity-feed.md",
+    "docs/architecture/help-routing.md",
+    "docs/architecture/product-boundaries.md",
+    "docs/env-vars.md",
+    "docs/harnesses/capability-matrix.md",
+    "docs/reaping-faq.md",
+    "docs/state-root-layout.tsv",
+];
+
+const LIGHT_TREES: &[&str] = &["docs/", "skills/", "hooks/"];
+
+const LIGHT_EXTENSIONS: &[&str] = &[".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"];
+
+fn is_light(path: &str) -> bool {
+    if LANE_INPUTS.contains(&path) {
+        return false;
+    }
+    if LIGHT_TREES.iter().any(|tree| path.starts_with(tree)) {
+        return true;
+    }
+    // Prose and images outside the code trees; a crate or cli .md can be a
+    // compiled prompt or a test fixture.
+    !path.starts_with("crates/")
+        && !path.starts_with("cli/")
+        && LIGHT_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
 /// Exact file match, or a change anywhere beneath a directory-valued
@@ -126,18 +161,34 @@ mod tests {
     }
 
     #[test]
-    fn every_pr_diff_runs_the_lanes_main_runs() {
-        // Main went red on a test a PR lane had skipped; a PR now runs every
-        // lane main runs, whatever it changed.
+    fn a_light_only_diff_skips_the_full_lanes() {
+        for changed in [
+            paths(&["docs/usage.md", "README.md", "docs/img/flow.png"]),
+            paths(&["skills/target/SKILL.md", "skills/target/scripts/x.sh"]),
+            paths(&["hooks/context-nudge.sh"]),
+        ] {
+            let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
+            assert!(!sel.cargo && !sel.python_full, "{changed:?}: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn any_code_or_lane_input_runs_every_lane() {
         for changed in [
             paths(&["docs/usage.md", "cli/tests/unit/test_example.py"]),
-            paths(&["skills/target/SKILL.md"]),
             paths(&["crates/fno-agents/src/lib.rs"]),
+            paths(&["crates/fno-agents/src/pr_steward_prompt.md"]),
+            paths(&["docs/env-vars.md"]),
+            paths(&["skills/x/SKILL.md", "scripts/ci/check.sh"]),
             paths(&[]),
         ] {
             let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
             assert!(sel.cargo && sel.python_full, "{changed:?}: {sel:?}");
             assert_eq!(sel.skill_bundles, changed.is_empty(), "{changed:?}");
+        }
+        for event in ["push", "schedule", "workflow_dispatch"] {
+            let sel = select_jobs(event, None, None);
+            assert!(sel.cargo && sel.python_full, "{event}");
         }
         assert_eq!(
             select_jobs("pull_request", None, Some(&[])),
