@@ -23,7 +23,6 @@ from typing import List, Optional
 
 import typer
 
-from fno.pr._proc import run
 
 
 pr_app = typer.Typer(
