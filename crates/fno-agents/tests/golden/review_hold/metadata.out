@@ -1,0 +1,1 @@
+{"key": "review:branch:feat/a", "state": "live", "basis": "live", "holder": "review-session:s1", "schema_version": 1, "pid": 89250, "pid_unavailable": false, "host": "iMac2D2.local", "machine_id": "6219ED9C-AC92-542C-AE74-E95C55C08C1D", "acquired_at": 1792464939878, "expires_at": 1792468539878, "expired": false, "reason": "golden", "metadata": {"head_sha": "<SHA40>"}}

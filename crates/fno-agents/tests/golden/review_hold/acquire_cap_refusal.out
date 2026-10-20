@@ -1,0 +1,1 @@
+review-invocation-refused: review refused: the configured round cap is spent for this head (2 of 2 rounds used); a new hunting round may not start. The review phase is complete: merge on green CI - open findings stay in the PR conversation. A scoped fix-verification with --verify-fixes is the one review-shaped act the cap still funds.
