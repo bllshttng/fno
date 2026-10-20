@@ -2208,15 +2208,6 @@ pub(crate) fn merge_slot_holder(cwd: &Path, base_ref: &str) -> Option<u64> {
     slot_holder_read(cwd, base_ref).ok().flatten()
 }
 
-fn probe_detail(stdout: &[u8], stderr: &[u8]) -> String {
-    let err = String::from_utf8_lossy(stderr).trim().to_string();
-    if err.is_empty() {
-        String::from_utf8_lossy(stdout).trim().to_string()
-    } else {
-        err
-    }
-}
-
 /// The graph tag that declares a repair lane: a node carrying it may merge
 /// through a red main, because it IS the repair. The visual gate reads it
 /// too: the lane's whole point is merging without further ceremony.
