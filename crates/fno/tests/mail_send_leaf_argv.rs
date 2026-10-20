@@ -2,9 +2,11 @@
 //! word intact. The classifier hands `Role::MailSend` the tail WITHOUT the
 //! verb, so the exec prefix must re-add it: dropping it made an 8-hex or
 //! UUID target read as the leaf's verb ("unknown verb <id>", exit 2) while
-//! plain names, which route through the Python leg, kept working. The pin
-//! reads the argv a stub leaf actually receives, so it fails if the claim
-//! OR the reconstruction drifts.
+//! plain names, which route through the Python leg, kept working. The
+//! machine-mail door (`fno backlog note` notify, events push) rides the
+//! same front leg with a flag-led send. The pin reads the argv a stub leaf
+//! actually receives, so it fails if the claim OR the reconstruction
+//! drifts.
 //!
 //! The front is driven as a SUBPROCESS with `env_clear`, mirroring
 //! squad_prune.rs: no cross-test env races, and `FNO_AGENTS_BIN` points the
@@ -128,5 +130,38 @@ fn plain_name_target_stays_off_the_native_leg() {
     assert!(
         !record.exists(),
         "a plain-name target must not reach the native leaf"
+    );
+}
+
+/// The machine-mail door (`fno backlog note` notify, events push) execs the
+/// front with a flag-led send: `agents mail send --from-name <sender> --
+/// <recipient> <body>`. The flag-led target claims the native leg, so the
+/// reconstruction must still open with the send pair; dropping it made the
+/// leaf read `--from-name` as the verb.
+#[test]
+fn flag_led_machine_mail_send_reconstructs_the_send_pair() {
+    let s = LeafStub::new("flagled");
+    let (argv, stderr) = s.leaf_argv(&[
+        "agents",
+        "mail",
+        "send",
+        "--from-name",
+        "note-pointer",
+        "--",
+        "abcdef12",
+        "probe",
+    ]);
+    assert_eq!(
+        argv,
+        vec![
+            "mail",
+            "send",
+            "--from-name",
+            "note-pointer",
+            "--",
+            "abcdef12",
+            "probe"
+        ],
+        "flag-led send argv must open with the send pair: {stderr}"
     );
 }
