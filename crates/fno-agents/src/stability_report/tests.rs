@@ -47,11 +47,19 @@ fn write(repo: &Path, rel: &str, body: &str) {
 
 fn graph_fixture(path: &Path, pairs: &[(&str, &str)]) -> std::path::PathBuf {
     // Seed through the store's own fixture door: SQL writes to nodes outside
-    // the backlog owner fail the table-ownership contract. The store seeds
-    // through the layout resolver, so the caller reads the path it returns.
+    // the backlog owner fail the table-ownership contract. The row needs the
+    // representable shape (title, type, priority): a row the model cannot
+    // parse is carried verbatim in nodes_raw and never reaches the typed
+    // nodes table the kind loader reads. The store seeds through the layout
+    // resolver, so the caller reads the path it returns.
     let rows: Vec<serde_json::Value> = pairs
         .iter()
-        .map(|(id, kind)| serde_json::json!({"id": id, "slug": id, "status": "done", "kind": kind}))
+        .map(|(id, kind)| {
+            serde_json::json!({
+                "id": id, "slug": id, "title": id, "type": kind,
+                "status": "done", "priority": "p2",
+            })
+        })
         .collect();
     crate::graph_store::seed_rows(path, &rows).expect("seed graph fixture");
     crate::backlog::database_path(path)
@@ -274,7 +282,12 @@ fn fix_renaming_the_file_blames_the_pre_image_path() {
     // The seed commit sits outside the window; the rename fix is the only row.
     assert_eq!(report.rows.len(), 1);
     let row = &report.rows[0];
-    assert_eq!(row.fix_of_fix, Some(true));
+    // The removed line blames the 31-day-old seed, so the row reads measured
+    // and not a fix-of-fix. `Some` is the point: the blame found the line
+    // through the pre-image path (old.txt), where the post-image path would
+    // have failed the read and marked the row unmeasured.
+    assert_eq!(row.fix_of_fix, Some(false));
+    assert_eq!(row.young_lines, 0);
     assert_eq!(row.surface, "product");
 }
 
