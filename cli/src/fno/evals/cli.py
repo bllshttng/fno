@@ -108,6 +108,11 @@ def run_command(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=2)
 
+    # The split covers the whole bank, so the gate's membership check reads
+    # every bank id - a --tier or --task selection must not narrow it, or no
+    # subset run could ever pass.
+    bank_ids = [t.id for t in tasks]
+
     if task is not None:
         tasks = [t for t in tasks if t.id == task]
     if tier is not None:
@@ -146,7 +151,7 @@ def run_command(
     if cohorts_yaml.exists():
         rc, gate = _cohort_door([
             "--cohorts-yaml", str(cohorts_yaml),
-            "--known-ids", json.dumps([t.id for t in tasks]),
+            "--known-ids", json.dumps(bank_ids),
             "--repo", str(repo_root),
         ])
         if gate.get("error"):
