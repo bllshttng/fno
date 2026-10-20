@@ -261,6 +261,14 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-attempt") {
         std::process::exit(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
     }
+    // `stability-report`: the stability eval's first slice (fix-of-fix rate
+    // and the product/fleet surface split) over one repo's git history plus
+    // the backlog graph. Transport-only early arm like evals-trend: a
+    // daemon-free read, registered nowhere, so the shrink gate sees no new
+    // action.
+    if args.first().map(String::as_str) == Some("stability-report") {
+        std::process::exit(fno_agents::stability_report::run(&args[1..]));
+    }
     // `pr-park` and `pr-watch`: the two verb families behind `fno do pr
     // watch`; both dispatch here like evals-arm because the shrink law bars
     // a new `run` arm. Their module docs carry the per-verb contract.
