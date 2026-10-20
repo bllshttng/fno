@@ -1134,10 +1134,10 @@ def cmd_spawn(
             "claude peers are persistent bg threads; use plain spawn."
         ),
     ),
-    lane: str = typer.Option(
-        "", "--as", help="Where the worker runs: thread (default), pane, headless, or cloud."
+    substrate: str = typer.Option(
+        "", "--as", "--substrate",
+        help="Where the worker runs: thread (default), pane, headless, or cloud.",
     ),
-    substrate: str = typer.Option("", "--substrate", hidden=True),
     print_mode: bool = typer.Option(
         False,
         "--print",
@@ -1466,9 +1466,9 @@ def cmd_spawn(
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
     uncarried = fence_uncarried(harness, passthrough)
-    if substrate:
+    if any(t == "--substrate" or t.startswith("--substrate=") for t in sys.argv[1:]):
         print("--substrate is now --as; the old spelling answers for one release.", file=sys.stderr)
-    substrate = lane or substrate or ("headless" if once else "thread")
+    substrate = substrate or ("headless" if once else "thread")
     if substrate not in ("thread", "pane", "headless", "cloud"):
         print(f"--as must be thread, pane, headless, or cloud (got {substrate!r})", file=sys.stderr)
         raise typer.Exit(code=2)
