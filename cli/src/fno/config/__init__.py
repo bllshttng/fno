@@ -1304,9 +1304,8 @@ class ReviewBlock(BaseModel):
     # the env var holding that identity's PAT.
     peer_identity: Optional[str] = None
     peer_token_env: Optional[str] = None
-    # The bot-review poster: the login the publish-review door posts as and
-    # the env var holding that identity's PAT. Read by
-    # crates/fno-agents/src/publish_review.rs; empty means no bot posting.
+    # The bot-review poster: the login the publish-review door posts as and the
+    # env var holding its PAT (publish_review.rs); empty means no bot posting.
     bot_identity: Optional[str] = None
     bot_token_env: Optional[str] = None
     # Reviewer logins honored-if-present but NOT required: the gate
@@ -4364,11 +4363,6 @@ WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
         "project.id",
     }
 )
-
-
-# ---------------------------------------------------------------------------
-# Loader
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
