@@ -208,6 +208,7 @@ A	post_merge_noninteractive	py=cli/src/fno/hermetic.py|cli/src/fno/pr/cli.py;rs=
 A	we looked and found nothing	py=cli/src/fno/cost/_register.py|cli/src/fno/observer/fold.py;rs=crates/fno-agents/src/ledger_axes.rs	# CLASSIFY protocol|msg-twin|data the shared unresolved-sentinel sentence
 A	postmortem_corrections_log	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/finalize.rs|crates/fno-agents/src/finalize_pointer_tests.rs	# CLASSIFY protocol|msg-twin|data
 A	pr #{first_pr_number}: no merged evidence	py=cli/src/fno/graph/_reconcile.py|cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
+A	pr number must be positive	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/pr_info.rs	# CLASSIFY protocol|msg-twin|data the walk facts reader and the pr-info op refuse the same malformed selector on their own legs
 A	pr_status_cache_retain_days	py=cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	preassigned-or-session-start	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	project/cwd disagree on pending nodes; producer regression?	py=cli/src/fno/health_monitor.py;rs=crates/fno-agents/src/backlog/triage_health.rs	# CLASSIFY protocol|msg-twin|data
