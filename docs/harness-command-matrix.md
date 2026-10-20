@@ -126,7 +126,7 @@ The field replaced `stop_hook`, which read `native` on every row and had no cons
 | the spawn permission axis | RETIRED | RETIRED | RETIRED | RETIRED | RETIRED | The spawn permission axis is retired: each lane default owns its posture (the Rust keeper_posture owner; the pane lane's bounded codex default survives as the one literal). |
 | `spawn "<prompt>" -- <flags...>` | pane only (all five) | | | | | Provider-CLI passthrough: every token after `--` is spliced into the harness's own pane argv, so a flag fno never declared needs no code change. Refused on bg/headless (those builders carry none of the pane's guards). The tokens ride the composed argv through the same refusals that govern fno's own flags: `-p`/`--print` (claude, agy), `--settings`/`--session-id` (happy lane), codex's bare `exec` and opencode's bare `run` (headless subcommands); a token duplicating a flag fno already emitted (`--model`, `--permission-mode`, `--name`, or an alias of a permission flag fno emitted, e.g. gemini `--yolo` vs `--approval-mode`) is a named refusal, not a silent last-wins. The parser stays strict: a typo'd fno flag before `--` still fails locally instead of being forwarded. |
 
-Retired creation verbs (each prints a pointer and exits non-zero, never a silent success): `host` and `promote` are gone - agent panes live in the mux now; use `fno agents spawn --name <n> --as pane`.
+Retired creation commands (each prints a pointer and exits non-zero, never a silent success): `host` and `promote` are gone - agent panes live in the mux now; use `fno agents spawn --name <n> --as pane`.
 
 ## Verbs: talking to and observing workers
 

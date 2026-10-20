@@ -1,7 +1,7 @@
 ---
 name: agent
 description: Control Footnote workers by spawning, handing off, inspecting, messaging, driving, or stopping sessions.
-argument-hint: "<verb> [args]  |  [handoff] <ab-xxxxxxxx | feature | doc-path | /command> [provider] [drive] [as <name>] [merge]"
+argument-hint: "<command> [args]  |  [handoff] <ab-xxxxxxxx | feature | doc-path | /command> [provider] [drive] [as <name>] [merge]"
 metadata:
   internal: false
   requires:
@@ -12,7 +12,7 @@ metadata:
       - spawn
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Agents
 
 **Describe the agent outcome you want; this skill remembers the command.**
@@ -20,23 +20,23 @@ metadata:
 `/fno:agent` is the natural-language front door over the shipped `fno agents`
 mesh. The CLI is intentionally precise, but its provider, substrate, lifecycle,
 and receipt shapes are too much syntax to keep in working memory. State the
-intent in ordinary language; the skill selects the real verb and arguments.
+intent in ordinary language; the skill selects the real command and arguments.
 
 **You (the agent) are the runner.** Read the user's desired outcome, route it to
-the right verb, normalize it, confirm only costed or destructive operations, run
+the right command, normalize it, confirm only costed or destructive operations, run
 the **genuine** `fno agents` command, and report the **real** captured receipt -
 never a fabricated one.
 
 This skill REUSES the shipped `fno agents` primitives. It does not reimplement
-spawn, the addressed bus, or session observation. Its value is verb routing +
+spawn, the addressed bus, or session observation. Its value is command routing +
 input normalization + confirmation policy + honest reporting. Smart-quote and
 dashless parsing also keep it reliable from remote or runner-less controls.
 
 `SKILL_DIR` below is `skills/agent` inside this plugin.
 
-## Verb router
+## Command router
 
-The first whitespace token of the argument is the **verb**. An unrecognized
+The first whitespace token of the argument is the **command**. An unrecognized
 leading token means the whole argument is a `spawn` payload (this preserves the
 bare `/agents <task>` ergonomics the former dispatch front door had). `spawn`
 means start a session with what you pass, nothing more : an explicit
@@ -44,7 +44,7 @@ means start a session with what you pass, nothing more : an explicit
 via `/target`, and any other free text is sent **verbatim as the session seed** -
 no `/target` wrap, no build inference. The focused core:
 
-> **Retired verbs :** `bare` and `discuss` are gone. A conversational
+> **Retired commands :** `bare` and `discuss` are gone. A conversational
 > session is just `spawn "<seed>"` (the default); a one-shot Q&A to a NEW
 > worker is `spawn "<question>" headless`. (The `--ask`/`--discuss` normalize
 > flags remain hard errors.)
@@ -56,7 +56,7 @@ no `/target` wrap, no build inference. The focused core:
 > 600s), and prints it on stdout. Async fire-and-receipt stays on `send`
 > (`fno agents mail send`). See the `ask` section for the boundary.
 
-| Verb | Envelope | Routes to | Cost |
+| Command | Envelope | Routes to | Cost |
 |------|----------|-----------|------|
 | `spawn` (default) | normalize + honest-receipt (no confirm: free lane) | `fno agents spawn` - substrate axis : default `thread` where the harness seats one (persistent, portal view; `pane` placement flags or a `--` fence imply pane); `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot (`claude -p` / `codex --exec` / `agy -p`) | free (claude subscription) |
 | `handoff <doc>` | normalize `--handoff` + honest-receipt (free lane) | `fno agents spawn` (Claude/Codex/Gemini continuation seed, NO `/target`; default `thread`) | free (provider subscription) |
@@ -69,7 +69,7 @@ no `/target` wrap, no build inference. The focused core:
 | `stop <name>` | confirm (destructive) + pass-through | `fno agents session stop` | free |
 
 Advanced lifecycle intents (`drive`/`grid`/`attach`/`resume`/`reconcile`/`rm`/
-`ack`/`promote`) map to their corresponding raw `fno agents` verbs; the skill
+`ack`/`promote`) map to their corresponding raw `fno agents` commands; the skill
 resolves their arguments and runs them rather than reimplementing them. The
 capability matrix at `docs/harness-command-matrix.md` remains the per-provider
 truth. For the full subcommand map - which are human-facing vs
@@ -78,7 +78,7 @@ machine-internal vs exploratory channel infra - see
 
 Machine and targeted loop halts use existing `fno agents audit incident stop|clear` commands. Matching sessions refuse watchdog resumes and PR nudges until clear or expiry.
 
-Route on the verb, then run the matching section below.
+Route on the command, then run the matching section below.
 
 ## Launch a worker
 
@@ -98,10 +98,10 @@ fno gates, records and adopts every native line. The PreToolUse Bash hook asks t
 
 ---
 
-## `spawn` (default verb) - launch a worker or seed a session
+## `spawn` (default command) - launch a worker or seed a session
 
 Start a session with what you pass : a `/skill` passthrough, a node-id
-build, or a verbatim free-text seed. Strip a leading `spawn` verb if present;
+build, or a verbatim free-text seed. Strip a leading `spawn` command if present;
 otherwise the whole argument is the spawn payload.
 
 A harness-native launch is first-class. [Launch a worker](#launch-a-worker) picks the form per harness.
@@ -129,7 +129,7 @@ see below):
 - **one-shot Q&A**: append the `headless` substrate (: it replaced the
   old one-shot ask and `bare`) - `spawn "<question>" headless` returns a
   single reply. (Messaging an EXISTING worker for an inline reply is the
-  `ask` verb, not a spawn.)
+  `ask` command, not a spawn.)
 - **provider** (optional, trailing bareword): any non-claude harness in the
   supported set - today `codex`, `gemini`, `agy`, `opencode`, with more coming.
   `spawn ab-X codex` -> provider `codex`; `spawn ab-X opencode` -> `opencode`.
@@ -144,7 +144,7 @@ see below):
   `host` session instead of an autonomous `spawn`. No-op for claude. "drive it"
   / "interactive" map here.
 - **`as <name>`** (optional): explicit agent name. Default is derived
-  (`<verb>-<node-id>-<slug>` / `<verb>-<slug>`). "call it X" / "name it X" map here.
+  (`<command>-<node-id>-<slug>` / `<command>-<slug>`). "call it X" / "name it X" map here.
 - **`merge`** (optional): do NOT inject the no-merge intent. Default injects it
   so a fire-from-phone autonomous worker lands a PR for review, not an
   auto-merge. (`merge` only omits the no-merge intent; true auto-merge stays a
@@ -193,7 +193,7 @@ Run the normalizer with the spawn payload text exactly as given (pass it as ONE
 argument). You may pass trailing posture barewords inside `--input` and let the
 helper extract them, or pass the fields you inferred from natural language as the
 internal flags below - the helper resolves both to identical fields, so either
-path is safe. ALWAYS pass `--handoff` for a `handoff` verb, so the verbatim doc
+path is safe. ALWAYS pass `--handoff` for a `handoff` command, so the verbatim doc
 path skips posture parsing.
 
 ```bash
@@ -204,7 +204,7 @@ bash "${SKILL_DIR}/scripts/normalize.sh" --input "<raw payload [posture bareword
 
 It strips smart quotes, parses the trailing dashless posture run, canonicalizes a
 token-initial em/en-dash to `--`,
-derives the agent name (`<verb>-<node-id>-<slug>` for a node, `<verb>-<slug>` for free text),
+derives the agent name (`<command>-<node-id>-<slug>` for a node, `<command>-<slug>` for free text),
 resolves the provider (explicit -> `config.accounts` via the shipped
 `resolve_dispatch_target` -> `claude`), detects the node id, resolves a
 `-C`/`--project` target to its work-map `resolved_cwd`, picks the payload
@@ -259,7 +259,7 @@ the harness and `-P` the vendor); z.ai is a model route selected via
   guardrail against autonomous outward/irreversible actions. Supports Claude,
   Codex, and Gemini; NO `/target`, NO `no-merge`. See the `handoff` section.
 - **passthrough** (leading `/`): the explicit command, normalized per harness for
-  ANY footnote verb - `/verb` verbatim on claude/agy, `/fno:verb` on
+  ANY footnote command - `/verb` verbatim on claude/agy, `/fno:verb` on
   opencode, `$fno:verb` on codex (so `/agent spawn /blueprint -H codex` runs the
   real skill). gemini is deprecated and refused (route to claude/codex/opencode/agy).
 
@@ -376,7 +376,7 @@ It emits `confirm_required` (0|1), `caveat` (0|1), `caveat_text`, a `warn` line,
 | config read fails / invalid | no confirm (auto) + one staleness warning line |
 
 **When `confirm_required=1`,** show the EXACT command you will run - including the
-chosen `spawn|host` verb and `--yolo` when set - plus `caveat_text` when
+chosen `spawn|host` command and `--yolo` when set - plus `caveat_text` when
 `caveat=1`, and wait for `[y/N]`. On anything other than yes, STOP without
 spawning. **When `confirm_required=0`,** skip straight to SPAWN; if `warn` is
 non-empty, print it. The exact command is NOT hidden - REPORT echoes it on every
@@ -386,7 +386,7 @@ skip path.
 
 Run the spawn helper with the normalized fields - reached straight from a
 `confirm_required=0` skip, or after a yes when `confirm_required=1`. It re-checks
-for a live duplicate, picks the verb from `provider`/`mode`/`payload_mode`, runs
+for a live duplicate, picks the command from `provider`/`mode`/`payload_mode`, runs
 the real `fno agents` command (name POSITIONAL, `--provider`, NEVER `-p`/`--bare`),
 and parses the receipt deterministically:
 
@@ -400,7 +400,7 @@ bash "${SKILL_DIR}/scripts/spawn.sh" --name "$name" --provider "$provider" \
 Pass `--self "$self_holder"` only for a confirmed self-handoff (your `target_claim_holder` matched the live `.holder` in the collision pre-check); it makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. Pass `--role "$role"` / `--timeout "$timeout"` only when normalize emitted a non-empty value; pass `--fresh` only when `fresh=1` and `--here` only when `here=1` (spawn.sh forwards each to `fno agents spawn`, which validates values fail-closed). A normalized `substrate=headless` rides `--once` (the one-shot); thread and pane are the native lane's own defaults. The model/effort/yolo/permission-mode forwards are gone: those axes are retired and the lane template owns the launch line.
 
 An empty `substrate` is the built-in default: `thread` where the harness seats one (else `pane`), injected explicitly by the spawn seam. A spawn with no placement flag opens no view. A default never creates one. When the work needs a screen, the mux thread door tunes one.
-Pass `--node` whenever `node` is non-empty. The spawn derives the verb from the node, so a build message need not name one; a typed `/fno:target` or `/fno:blueprint` that disagrees with the node's verb is refused. Choose the `--cwd` source in this priority order, so launch cwd
+Pass `--node` whenever `node` is non-empty. The spawn derives the command from the node, so a build message need not name one; a typed `/fno:target` or `/fno:blueprint` that disagrees with the node's command is refused. Choose the `--cwd` source in this priority order, so launch cwd
 follows the work-map root:
 
 1. normalize's `resolved_cwd` when non-empty (a `-C`/`--project` target, including
@@ -485,7 +485,7 @@ Read `spawn.sh`'s single outcome line and relay it faithfully:
 - `result=failed reason="<...>"` -> report **FAILED** with the real reason. NEVER
   emit a short-id, fabricate a reply, or claim a worker launched.
 
-### Receipt families (keyed by the verb spawn.sh ran)
+### Receipt families (keyed by the command spawn.sh ran)
 
 `spawn.sh` branches the receipt parse on the verb/mode it ran - never on
 sniffing output (Group 1 put claude creation on `spawn`, so claude
@@ -539,7 +539,7 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
 
 ### Flow: NORMALIZE -> VALIDATE -> SPAWN -> REPORT (no confirm: free lane)
 
-1. **NORMALIZE.** Strip the leading `handoff` verb; pass the rest as the doc path.
+1. **NORMALIZE.** Strip the leading `handoff` command; pass the rest as the doc path.
    Run `normalize.sh --input "<doc-path>" --handoff` (carry `--provider`/`as
    <name>`/`model <name>`/`yolo` only if given). Provider resolution is
    explicit -> configured -> Claude, constrained to Claude/Codex/Gemini. It emits
@@ -560,11 +560,11 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
 
 ---
 
-> **Retired verbs :** `discuss` no longer exists - a verbatim
+> **Retired commands :** `discuss` no longer exists - a verbatim
 > conversational session is the default free-text **seed** (`spawn "<seed>"`
 > opens a drivable pane with the words as its opening turn). The OLD one-shot
 > `ask` is gone too; that shape is the **`headless` substrate**
-> (`spawn "<question>" headless` returns a single reply). Today's `ask` verb
+> (`spawn "<question>" headless` returns a single reply). Today's `ask` command
 > is the sync request-reply lane to an existing worker (its own section
 > above). `handoff` stays: its guardrail preamble and
 > continue-don't-re-derive contract are content, not routing.
@@ -609,7 +609,7 @@ destructive).
 ## `send` - message an agent or project over the bus
 
 > Prefer the dedicated **`/mail`** skill for messaging (send / reply / unread / ack), which is the runner-less front door over `fno agents mail`.
-> This convenience verb keeps a spawn-and-message flow inside one skill.
+> This convenience command keeps a spawn-and-message flow inside one skill.
 
 The accepted forms are explicit and positional:
 
@@ -640,7 +640,7 @@ An unknown agent heads-up exits 16 and writes nothing, so report that exact fail
 
 ## `watch` / `list` / `whoami` / `logs` - observe (thin pass-through)
 
-Run the raw verb and relay its output faithfully. These are reads; no confirm.
+Run the raw command and relay its output faithfully. These are reads; no confirm.
 
 ```bash
 fno agents session watch "<name>"     # follow a worker's output (claude-only)
@@ -657,7 +657,7 @@ top-level session. Distinct from top-level `fno whoami`, which reports operating
 context (fleet -> walker -> session), not the mesh name.
 
 For a stream-json (headless) thread there is no TUI - observe via `watch`/`logs`,
-never a terminal. If the raw verb errors, relay the real error; do not invent
+never a terminal. If the raw command errors, relay the real error; do not invent
 output.
 
 ---
@@ -700,7 +700,7 @@ STOP without stopping the worker.
    it; never infer it from the payload or provider.
 5. **Do not reinvent provider routing or the bus.** Provider resolution lives in
    `normalize.sh`; addressed delivery lives in `fno agents mail send`. This skill
-   routes verbs and reports honestly; it does not duplicate that machinery.
+   routes commands and reports honestly; it does not duplicate that machinery.
 
 ## Multi-CLI
 

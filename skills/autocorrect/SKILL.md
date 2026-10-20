@@ -7,7 +7,7 @@ description: Review corrections, triage proposed patches, and audit the agent se
 
 The meta-improvement layer: passive capture, fresh-API review, human triage in 20 minutes per month.
 
-**Harness boundary:** the capture wiring is Claude-specific. The git post-commit hook, verifier wrapper paths, and watermarks live under `~/.claude/`, and the cron registers launchd jobs on this machine. On another harness only the manual `/autocorrect review` verb runs. The passive writers are absent, and the skill says so rather than pretending the loop is armed.
+**Harness boundary:** the capture wiring is Claude-specific. The git post-commit hook, verifier wrapper paths, and watermarks live under `~/.claude/`, and the cron registers launchd jobs on this machine. On another harness only the manual `/autocorrect review` command runs. The passive writers are absent, and the skill says so rather than pretending the loop is armed.
 
 ## Three writers, one log, one consumer
 
