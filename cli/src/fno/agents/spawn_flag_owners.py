@@ -103,7 +103,6 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     ),
     "--output-format": FlagOwner(FNO, "headless JSON contract fno parses the reply out of"),
     "--workspace": FlagOwner(FNO, "mux pane placement; fno owns the mux"),
-    "--squad": FlagOwner(FNO, "deprecated alias of --workspace"),
     "--split": FlagOwner(FNO, "mux pane placement"),
     "--at": FlagOwner(FNO, "mux exact-origin placement"),
     "--tab": FlagOwner(FNO, "mux tab placement"),

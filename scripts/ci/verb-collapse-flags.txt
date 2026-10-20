@@ -17,7 +17,6 @@ agents mail send !--provider
 agents spawn !--output-format
 agents spawn !--bounded-placement
 agents spawn !--recorded-provider
-agents spawn !--squad
 agents spawn !--mux-session
 agents worker external !--pr
 approvals decide !--db

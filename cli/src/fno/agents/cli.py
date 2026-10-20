@@ -1286,16 +1286,11 @@ def cmd_spawn(
         None,
         "--workspace",
         "-s",
+        "--squad",
         help=(
             "Pane placement: send the new pane to a workspace by its visible "
             "name instead of the cwd-derived default. Pane lane only."
         ),
-    ),
-    squad_compat: str | None = typer.Option(
-        None,
-        "--squad",
-        hidden=True,
-        help="Deprecated alias for --workspace.",
     ),
     split: str | None = typer.Option(
         None,
@@ -1416,8 +1411,6 @@ def cmd_spawn(
     docs/guides/agents-spawn-flags.md.
     """
     pane = ctx.meta.get("fno_spawn_existing_pane")
-    # --squad is a hidden back-compat alias for --workspace (US2); --workspace wins.
-    squad = squad if squad is not None else squad_compat
 
     if prompt_file is not None:
         from fno.text_or_file import read_text_arg
