@@ -2003,7 +2003,7 @@ fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), Strin
         );
     }
     if at.is_some() && substrate == "bg" {
-        return Err("--at applies only to the pane lane (a thread has no calling pane)".into());
+        return Err("--at needs --as pane (a thread has no calling pane)".into());
     }
     let placement_requested = squad.is_some() || split.is_some() || at.is_some() || tab.is_some();
     if placement_requested && substrate == "bg" && portal.is_none() {
