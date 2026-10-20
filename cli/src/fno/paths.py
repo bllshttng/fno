@@ -1086,9 +1086,9 @@ def repo_identity_from_remote_url(url: str) -> Optional[str]:
 
     Lives HERE, at the platform layer, because both writers of a global-log event
     need it and they sit on opposite sides of the runtime boundary:
-    ``fno.pr._reviews`` reads coverage, and ``fno.events.cli`` stamps the mirrored
-    attestation. A copy in each is two parsers to keep in parity with Rust
-    instead of one.
+    the Rust coverage reader (``crates/fno-agents/src/pr_status.rs``) and
+    ``fno.events.cli`` stamps the mirrored attestation. A copy in each is two
+    parsers to keep in parity with Rust instead of one.
 
     Mirrors ``repo_identity_from_remote_url`` in ``crates/fno-agents/src/finalize.rs``.
     The two MUST agree or the reader stops finding the writer's events; the

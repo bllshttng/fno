@@ -1310,9 +1310,9 @@ def run_execute_queue(
     from fno.pr import _merge
     from fno.pr_watch._state import WatermarkStore
 
-    # The worktree blocker vocabulary, spelled here once the _review_hold
-    # module retired: callers map these onto their own surface and never
-    # invent a second spelling (the Rust owner lives in
+    # The worktree blocker vocabulary, spelled here once the review-hold
+    # port retired its Python module: callers map these onto their own
+    # surface and never invent a second spelling (the Rust owner lives in
     # crates/fno-agents/src/pr_status/reviews.rs).
     WORKTREE_DIRTY = "worktree_dirty"
     WORKTREE_HEAD_MISMATCH = "worktree_head_mismatch"

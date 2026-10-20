@@ -3,8 +3,8 @@
 //! GraphQL because REST carries no resolved or outdated state), the
 //! review-coverage row (journal reads plus at one recompute through the
 //! producer verb), the review-lane predicate, and review activity (the
-//! claims hold plus the worktree probe). The `fno.pr._reviews` optional-review
-//! twin is deleted; the module still serves the merge and review verbs that
+//! claims hold plus the worktree probe). The optional-review aggregation
+//! lives here now, and the module serves the merge and review verbs that
 //! import its survivors.
 
 use crate::loopcheck::{resolve_review_inputs, ReviewInputs};

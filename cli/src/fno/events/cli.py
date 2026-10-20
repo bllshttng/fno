@@ -607,9 +607,9 @@ def emit(
     # `config.state_dir` resolves into the repo checkout, while the global
     # journal deliberately falls back to `~/.fno` - which is also the path the
     # Rust writer hardcodes. Writing via state_dir() on exactly those configs
-    # puts the row in a file nobody opens. `fno/pr/_reviews.py` carries the same
-    # warning on the READ side; the two must name one path or the mirror is a
-    # write with no reader by construction.
+    # puts the row in a file nobody opens. The Rust readers (pr_status.rs
+    # coverage and verify_evidence.rs) carry the same warning; the two must
+    # name one path or the mirror is a write with no reader by construction.
     #
     # Best-effort: the durable project append above already succeeded, so a
     # failure here must not fail the emit and lose that record.

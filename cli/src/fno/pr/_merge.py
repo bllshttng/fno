@@ -236,16 +236,6 @@ def _read_state_field(state_file: str, field: str) -> str:
 
 
 
-def _pr_head_oid(pr_number: int, repo: str) -> Optional[str]:
-    """The PR's current ``headRefOid`` for a staleness check, or None."""
-    from fno.rust_binary import VerbUnavailable, verb_call
-    try:
-        info = verb_call("authorized-merge", {"op": "pr-head", "pr": pr_number, "cwd": repo})
-    except VerbUnavailable:
-        return None
-    return info.get("head")
-
-
 def _pr_head_ref_and_oid(
     pr_number: int, repo: str, runner: Callable = run
 ) -> Optional[Tuple[str, str, str]]:
@@ -272,29 +262,6 @@ def _pr_head_ref_and_oid(
 
 
 
-def _safe_int(val, default=0):
-    """int() that returns default on ValueError/TypeError (finding 7)."""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
-
-
-
-
-def _is_documentation_path(path: str) -> bool:
-    """A documentation path: `*.md` anywhere or anything under `docs/`.
-
-    Mirrors is_documentation_path in loopcheck.rs - the two must agree on what
-    'documentation' means or the merge gate and the stop gate classify the same
-    PR differently. A single leading `./` is stripped once (lstrip would strip a
-    char set and mangle `.github`/`.md`)."""
-    p = (path or "").strip()
-    if p.startswith("./"):
-        p = p[2:]
-    if not p:
-        return False
-    return p.endswith(".md") or p.startswith("docs/")
 
 
 # Short-lived memo for the PR files probe: the floored lane predicate runs on

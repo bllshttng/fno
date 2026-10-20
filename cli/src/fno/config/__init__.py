@@ -1189,8 +1189,8 @@ class ApprovalsBlock(BaseModel):
 
 
 #: The optional-reviewer logins an UNSET `review.optional_apps` resolves to.
-#: One default, read by both sides that measure optional lanes - Python
-#: (`fno.pr._reviews.optional_reviewer_names`) and the Rust gate
+#: One default, read by both sides that measure optional lanes - the Rust
+#: status reader (`pr_status/reviews.rs`) and the loop gate
 #: (`resolved_optional_bots`) - so `fno do pr status` and the loop gate cannot
 #: measure different lanes on one PR, which is what a remedy printed by one and
 #: refused by the other looked like. Parity is pinned against the shared golden
@@ -1369,8 +1369,8 @@ class ReviewBlock(BaseModel):
     # review is unbounded, so this is a wedge bound rather than an estimate:
     # long enough that a real review never expires under itself, short enough
     # that a crashed reviewer does not hold the lane for a working day. Clamped
-    # into the claim TTL bounds at use (`_review_hold.resolve_ttl_ms`), never at
-    # parse: a misconfigured TTL must not make the merge guard unreadable.
+    # into the claim TTL bounds at use (`review_hold.rs resolve_ttl_ms`), never
+    # at parse: a misconfigured TTL must not make the merge guard unreadable.
     hold_ttl_minutes: int = 90
     # How long a merge-gating opt-out claim remains valid. The claim layer caps
     # the same value at 24 hours, so a writer cannot create an unbounded lease.

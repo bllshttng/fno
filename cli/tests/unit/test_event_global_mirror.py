@@ -7,7 +7,7 @@ it is where a cross-checkout reader looks.
 These tests drive the REAL path resolution through ``FNO_CONFIG``. An earlier
 version monkeypatched ``fno.paths.state_dir`` and passed against either
 implementation, which pinned nothing: the whole defect it was written for is
-that the writer used ``state_dir()`` while the reader in ``fno/pr/_reviews.py``
+that the writer used ``state_dir()`` while the Rust reader (``pr_status.rs``)
 uses ``global_events_json()``, and those two diverge on exactly the configs a
 monkeypatch erases. ``test_relative_state_dir_still_mirrors_where_the_reader_looks``
 is the one that fails against the old code.
