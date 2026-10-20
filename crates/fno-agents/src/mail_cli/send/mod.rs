@@ -214,11 +214,47 @@ fn resolve_self_harness() -> Option<String> {
     own_identity().map(|(_, h)| h)
 }
 
-/// The sender's model string, or "unknown". Python greps its own transcript
-/// tail; the Rust session-truth reader answers the same question off the
-/// ambient row without a second transcript parse.
+/// Python `resolve_self_model`: the sender's own model from its transcript
+/// (claude: the last `message.model`; codex: the last `turn_context`
+/// payload), or "unknown" on any miss so a send never blocks on it.
 fn resolve_self_model() -> String {
-    "unknown".to_string()
+    let model = match own_identity() {
+        Some((sid, harness)) if harness == "claude" => crate::claude_adopt::transcript_model(&sid),
+        Some((sid, harness)) if harness == "codex" => codex_turn_context_model(&sid),
+        _ => None,
+    };
+    model.unwrap_or_else(|| "unknown".to_string())
+}
+
+/// The last `turn_context` model in a codex rollout. An unterminated tail
+/// line is an uncommitted write, so it is skipped like Python skips it.
+fn codex_turn_context_model(session_id: &str) -> Option<String> {
+    let root = std::env::var_os("FNO_CODEX_SESSIONS_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    codex_turn_context_model_in(root.as_deref(), session_id)
+}
+
+fn codex_turn_context_model_in(root: Option<&Path>, session_id: &str) -> Option<String> {
+    let path = crate::codex_store::codex_rollout_path(root, session_id)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let committed = match text.rfind('\n') {
+        Some(end) => &text[..end],
+        None => return None,
+    };
+    committed
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record.get("type").and_then(Value::as_str) == Some("turn_context"))
+        .filter_map(|record| {
+            record
+                .get("payload")
+                .and_then(|p| p.get("model"))
+                .and_then(Value::as_str)
+                .filter(|m| !m.is_empty())
+                .map(str::to_string)
+        })
+        .last()
 }
 
 /// One bounded, captured child of this same binary (`mail-receipt`, the
@@ -2046,6 +2082,29 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod self_address_tests {
     use super::*;
+
+    /// The sender model rides every bus row: the last committed
+    /// `turn_context` wins, and an unterminated tail line never counts.
+    #[test]
+    fn codex_model_is_the_last_committed_turn_context() {
+        let root =
+            std::env::temp_dir().join(format!("fno-send-codex-model-{}", std::process::id()));
+        let day = root.join("2026/10/20");
+        std::fs::create_dir_all(&day).unwrap();
+        let sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4";
+        std::fs::write(
+            day.join(format!("rollout-2026-10-20T00-00-00-{sid}.jsonl")),
+            concat!(
+                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-old\"}}\n",
+                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-new\"}}\n",
+                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-partial\"}}",
+            ),
+        )
+        .unwrap();
+        let model = codex_turn_context_model_in(Some(&root), sid);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(model.as_deref(), Some("gpt-new"));
+    }
 
     /// The moved guard of the deleted Python test that patched
     /// `_forward_mail_send_raw`: `--to-self` derives its address, so the codex
