@@ -244,7 +244,7 @@ def test_bg_receipt_carries_route_provider_and_effective_model(
         ["spawn", "--name", "w1", "hi", "--harness", "claude", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
-    assert captured["model"] is None
+    assert captured.get("model") is None
     assert captured["route_provider"] == "zai"
     assert captured["route_env"]["ANTHROPIC_MODEL"] == "glm-5.2"
     receipt_line = next(

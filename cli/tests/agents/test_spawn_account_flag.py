@@ -288,7 +288,7 @@ def test_codex_one_shot_refuses_a_pinned_account(monkeypatch, tmp_path):
             account_env={"HOME": "/accounts/zai-1/home"},
         )
     assert "one-shot" in str(exc.value)
-    assert "--substrate thread" in str(exc.value)
+    assert "drop --once" in str(exc.value)
 
 
 def test_account_non_claude_provider_refused(monkeypatch, runner):

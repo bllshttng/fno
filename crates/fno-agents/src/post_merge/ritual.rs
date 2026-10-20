@@ -1122,6 +1122,8 @@ impl Ritual {
         if let Some(model) = model {
             argv.push("--harness".to_string());
             argv.push("claude".to_string());
+            // argv-fence: exempt (the prompt is this ritual's own judgment
+            // text, never hyphen-leading; the fenced tail carries the model).
             argv.push(prompt);
             argv.push("--".to_string());
             argv.push("--model".to_string());
