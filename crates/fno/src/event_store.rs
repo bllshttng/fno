@@ -2132,17 +2132,25 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
 /// [`journal_text`] for a full [`EventQuery`], with a failed read reported as
 /// `Err` instead of the live-file fallback. A journal with neither a live
 /// file nor a store reads as empty and creates nothing; a live file or store
-/// that exists and cannot be read is `Err` naming it, except a routed
-/// state-root journal, which reads empty wherever a read would otherwise
-/// touch raw bytes.
+/// that exists and cannot be read is `Err` naming it. A routed state-root
+/// journal never serves raw bytes: a stray file imports into the store
+/// first, and whatever the store still cannot answer reads as empty.
 pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, String> {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
     let store = store_path(&live);
     if !store.is_file() {
         if routed {
-            // A retired family's raw file is a stray the migrate pass will
-            // import and park; its bytes never serve a read.
+            // A routed family's raw file is a stray. Until its own retire
+            // lane parks it, the read imports those bytes first, so a
+            // pre-store writer's rows reach the store this read would have
+            // served them from. With no raw file there is nothing to create.
+            if live.is_file() {
+                let _ = import_all(&live);
+                if store.is_file() {
+                    return journal_text_checked(journal, q);
+                }
+            }
             return Ok(String::new());
         }
         return read_journal_text_direct(journal, &live);
