@@ -1156,7 +1156,10 @@ pub(super) fn kind_lane_send(
         // An agent-scoped heads-up resolves to a canonical session handle.
         let reach = resolve_reachable(recipient_in);
         let Some(resolved) = reach.hit else {
-            eprintln!("unknown agent or live-session handle: {}.", py_repr(recipient_in));
+            eprintln!(
+                "unknown agent or live-session handle: {}.",
+                py_repr(recipient_in)
+            );
             return Err(UNKNOWN_AGENT_EXIT);
         };
         crate::identity::canonical_handle(&resolved.session_id)
