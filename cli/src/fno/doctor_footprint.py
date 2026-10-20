@@ -386,10 +386,10 @@ def _live_root_pids(
                     continue
                 roots.add(row.pid)
                 continue
-            if row.pid is None:
+            if row.pid is None or row.pid_start_time is None:
+                # A pid with no start token is unverified (an adopt can copy a
+                # bg daemon spare's pid); the pidless routes below judge it.
                 continue
-            if row.pid_start_time is None:
-                return roots, f"worker root liveness unavailable: registry row {getattr(row, 'name', '?')} carries no pid start token"
             root_live = _root_pid_is_live(row.pid, row.pid_start_time)
             if root_live is None:
                 return roots, f"worker root liveness unavailable: pid {row.pid} start time could not be read for row {getattr(row, 'name', '?')}"
@@ -400,7 +400,10 @@ def _live_root_pids(
                     return roots, f"worker root liveness unavailable: row {getattr(row, 'name', '?')} pid {row.pid} is dead, sits in the ps snapshot, and recycling is unproven"
                 recycled_rows.append(row)
         pidless_rows = [
-            row for row in rows if row.status in LIVE_STATUSES and row.pid is None
+            row
+            for row in rows
+            if row.status in LIVE_STATUSES
+            and (row.pid is None or row.pid_start_time is None)
         ]
         serves = serves or {}
         # A row whose work runs inside a shared daemon is attributed by that
