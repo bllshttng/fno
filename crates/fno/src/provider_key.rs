@@ -33,7 +33,7 @@ pub fn key_present(key_env: &str, api_key_file: Option<&str>) -> bool {
 /// Port of Python's `read_var_from_env_file` (`cli/src/fno/env_file.py`):
 /// skip `#` lines, allow an `export ` prefix, trim, strip the quotes Python's
 /// `str.strip` would strip. A missing file or key is None, never fatal.
-fn read_var_from_env_file(path_str: &str, key_name: &str) -> Option<String> {
+pub(crate) fn read_var_from_env_file(path_str: &str, key_name: &str) -> Option<String> {
     let path = expand_tilde(path_str)?;
     let text = std::fs::read_to_string(path).ok()?;
     for line in text.lines() {

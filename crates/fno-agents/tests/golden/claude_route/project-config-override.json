@@ -1,0 +1,45 @@
+{
+  "config": {
+    "keys": "ZAI_API_KEY=zk-proj\n",
+    "layer": "project",
+    "toml": "[model_routing.providers.zai]\napi_key_file = \"{keys}\"\n"
+  },
+  "ctx": {
+    "kind": "role",
+    "name": "tidy"
+  },
+  "env": {},
+  "expected": {
+    "notices": [],
+    "route": {
+      "ANTHROPIC_AUTH_TOKEN": "zk-proj",
+      "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",
+      "ANTHROPIC_MODEL": "glm-5.3"
+    }
+  },
+  "expected_providers": {
+    "zai": {
+      "api_key_env": "ZAI_API_KEY",
+      "api_key_file": "{tmp}/keys.env",
+      "base_url": "https://api.z.ai/api/anthropic",
+      "key": {
+        "checked": [
+          "ZAI_API_KEY",
+          "{tmp}/keys.env"
+        ],
+        "satisfying": "{tmp}/keys.env"
+      },
+      "protocol": "anthropic",
+      "tier_models": {
+        "haiku": "glm-4.7"
+      }
+    }
+  },
+  "model": "glm-5.3",
+  "name": "project-config-override",
+  "provider": "zai"
+}

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from fno.agents import model_routing as mr
+from fno.agents import spawn_overlay_client as soc
 from fno.company.contracts import FunctionRef, RoleRef
 from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
 from fno.roles import (
@@ -135,11 +136,35 @@ def _write_corrupt_role(root: Path) -> Path:
     return path
 
 
+def _canned_route_stub(payload: dict, **_kwargs: object) -> dict:
+    """Canned claude-route answers for the two providers these tests route
+    to; pytest shards run without the binary. The bytes are the parity
+    goldens' contract, and a caller-pinned block's extra_env merges into
+    the route exactly as the Rust owner merges it."""
+    canned = {
+        "zai": "https://api.z.ai/api/anthropic",
+        "deepseek": "https://deepseek.test/anthropic",
+    }
+    model = payload["model"]
+    route = {
+        "ANTHROPIC_BASE_URL": canned.get(payload["provider"], "u"),
+        "ANTHROPIC_AUTH_TOKEN": "t",
+        "ANTHROPIC_MODEL": model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+    }
+    route.update((payload.get("block") or {}).get("extra_env") or {})
+    return {"route": route, "notices": []}
+
+
 def test_ac_r4_compat_spawn_route_delegates_not_found_without_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "zai-key")
     monkeypatch.setattr(mr, "_routing_block", lambda settings: _settings().model_routing)
+    monkeypatch.setattr(soc, "spawn_overlay_call", _canned_route_stub)
 
     legacy_notices: list[str] = []
     bridge_notices: list[str] = []
@@ -149,10 +174,13 @@ def test_ac_r4_compat_spawn_route_delegates_not_found_without_drift(
     )
 
     assert bridged == legacy
+    assert bridged is not None
     assert bridge_notices == legacy_notices
 
 
-def test_resolved_business_role_changes_only_claude_provider_and_model() -> None:
+def test_resolved_business_role_changes_only_claude_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = _settings(
         providers={
             "deepseek": {
@@ -165,6 +193,7 @@ def test_resolved_business_role_changes_only_claude_provider_and_model() -> None
         extra_env={"ROUTE_MARKER": "preserved"},
     )
 
+    monkeypatch.setattr(soc, "spawn_overlay_call", _canned_route_stub)
     route = mr.resolve_route(
         "build",
         settings=settings,
@@ -174,7 +203,6 @@ def test_resolved_business_role_changes_only_claude_provider_and_model() -> None
 
     assert route is not None
     assert route["ANTHROPIC_BASE_URL"] == "https://deepseek.test/anthropic"
-    assert route["ANTHROPIC_AUTH_TOKEN"] == "deepseek-key"
     assert route["ANTHROPIC_MODEL"] == "business-model"
     assert route["ROUTE_MARKER"] == "preserved"
     assert not any(
@@ -238,6 +266,19 @@ def test_default_production_lookup_projects_manifest_through_spawn_route(
 ) -> None:
     root = tmp_path / "roles"
     _write_business_role(root, provider="zai", model="business-model")
+    _route_stub = {
+        "route": {
+            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "t",
+            "ANTHROPIC_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "business-model",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+        },
+        "notices": [],
+    }
+    monkeypatch.setattr(soc, "spawn_overlay_call", lambda payload: _route_stub)
     monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
     monkeypatch.setenv("ZAI_API_KEY", "zai-key")
     monkeypatch.setattr(mr, "_routing_block", lambda settings: _settings().model_routing)
@@ -245,7 +286,7 @@ def test_default_production_lookup_projects_manifest_through_spawn_route(
     route = mr.resolve_spawn_route("publisher")
 
     assert route is not None
-    assert route["ANTHROPIC_BASE_URL"] == mr.DEFAULT_ZAI_BASE_URL
+    assert route["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
     assert route["ANTHROPIC_MODEL"] == "business-model"
 
 

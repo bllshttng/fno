@@ -50,6 +50,7 @@ def rows():
 BYTE_COPY_SOURCES = (
     "crates/fno-agents/src/harness_capabilities.toml",
     "crates/fno-agents/src/registry_schema.toml",
+    "crates/fno-agents/src/model_reach.toml",
 )
 
 

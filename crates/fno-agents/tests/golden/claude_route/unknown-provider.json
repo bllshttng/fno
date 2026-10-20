@@ -1,0 +1,18 @@
+{
+  "ctx": {
+    "kind": "role",
+    "name": "build"
+  },
+  "env": {
+    "ZAI_API_KEY": "zk"
+  },
+  "expected": {
+    "notices": [
+      "model-routing: provider 'nope' for role 'build' is not configured; using the primary model"
+    ],
+    "route": null
+  },
+  "model": "glm-5.3",
+  "name": "unknown-provider",
+  "provider": "nope"
+}

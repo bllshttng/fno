@@ -116,6 +116,7 @@ fn pane_run_receipt_reports_committed_tab_for_selector_placements() {
             fit: false,
         },
         worker: None,
+        fno_id: None,
         reply: tx,
     });
     match rx.try_recv().unwrap() {
@@ -154,6 +155,7 @@ fn pane_run_receipt_reports_committed_tab_for_selector_placements() {
             fit: false,
         },
         worker: None,
+        fno_id: None,
         reply: tx,
     });
     match rx.try_recv().unwrap() {
