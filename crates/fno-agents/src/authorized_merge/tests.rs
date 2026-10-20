@@ -30,7 +30,8 @@ struct Fake {
     optional_unresolved: Option<Option<i64>>,
     /// Rerun-recovery answer for the PR under decision.
     rerun_recovered: Option<bool>,
-    /// The coverage verb's exit for the PR under decision; None reads 0.
+    /// The coverage verdict's exit for the PR under decision, armed into
+    /// `coverage_verdict`; None reads 0.
     coverage_exit: Option<i32>,
     /// The plan-fidelity gate's verdict for a test-armable refusal.
     plan_fidelity_refused: bool,
@@ -397,23 +398,37 @@ impl Probes for Fake {
                 Vec::new(),
             ));
         }
+        // The only other fno-shell ask in these tests is the plan-fidelity
+        // probe: the verdict answer reads `refused` from the test arm.
         let covered = if self.plan_fidelity_refused {
             br#"{"refused": true, "reason": "test"}"#.to_vec()
         } else {
             br#"{"refused": false}"#.to_vec()
         };
-        // The coverage ask is the `do pr coverage-check` shell; any other
-        // fno-shell call is a fidelity ask in these tests.
-        let is_coverage = args.len() >= 3 && args[2] == "coverage-check";
-        Ok((
-            if is_coverage {
-                self.coverage_exit.or(Some(0))
-            } else {
-                Some(0)
-            },
-            if is_coverage { Vec::new() } else { covered },
-            Vec::new(),
-        ))
+        Ok((Some(0), covered, Vec::new()))
+    }
+
+    fn coverage_verdict(
+        &self,
+        _cwd: &Path,
+        _pr: u64,
+    ) -> crate::loopcheck::coverage_gate::GateVerdict {
+        use crate::loopcheck::coverage_gate::{GateState, GateVerdict};
+        let (state, refusal, note) = match self.coverage_exit {
+            None | Some(0) => (GateState::Covered, "", ""),
+            Some(3) => (
+                GateState::Refused,
+                "no review coverage row at this head",
+                "",
+            ),
+            _ => (GateState::Unanswered, "", "coverage read unavailable"),
+        };
+        GateVerdict {
+            state,
+            refusal: refusal.to_string(),
+            covered_head: String::new(),
+            note: note.to_string(),
+        }
     }
 }
 
@@ -1296,6 +1311,67 @@ fn a_secondary_rate_limit_behind_a_config_warning_reads_retryable_not_merge_meth
     assert!(detail.contains("secondary rate limit"), "{detail}");
     assert!(!detail.contains("merge method"), "{detail}");
     assert!(!detail.contains("guards.preset"), "{detail}");
+}
+
+#[test]
+fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_banner() {
+    // Specimen 2026-10-19: the gh proxy prints its admit banner to stderr
+    // right before os.execve hands off to the real gh, so both land in one
+    // combined stream and the banner is line one. Three merge attempts on a
+    // green, mergeable PR all surfaced the generic fallback reason with the
+    // banner instead of gh's own refusal.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh: GraphQL: Pull request is not in a mergeable state"
+            .to_string(),
+        ..clean()
+    };
+    let authorized = Authorized {
+        facts: open_facts(),
+        head: "abc123".to_string(),
+        strategy: "squash".to_string(),
+        merge_grant: None,
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "failed");
+    let detail = outcome.detail();
+    assert!(
+        detail.contains("Pull request is not in a mergeable state"),
+        "{detail}"
+    );
+    assert!(!detail.contains("draft guard unavailable"), "{detail}");
+}
+
+#[test]
+fn a_gh_proxy_refusal_behind_its_own_admit_banner_is_never_skipped_as_noise() {
+    // Review finding on this fix's own first draft: when the proxy admits
+    // the draft-guard RPC (prints the "admitting" banner) and then re-enters
+    // itself on the execve (a `resolve_real_gh()` failure, see gh_proxy.py's
+    // ProxyIdentityError), both lines share the "gh proxy:" prefix and the
+    // SAME stderr stream, but only the first is noise. The proxy's own
+    // refusal is the entire story here - nothing real ever ran - so
+    // skipping every "gh proxy:" line by prefix alone would report "no
+    // error output" instead of the refusal.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh proxy: re-entered itself. resolve_real_gh() gave back \
+                    the proxy shim instead of a real gh binary. Refusing to loop."
+            .to_string(),
+        ..clean()
+    };
+    let authorized = Authorized {
+        facts: open_facts(),
+        head: "abc123".to_string(),
+        strategy: "squash".to_string(),
+        merge_grant: None,
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "failed");
+    let detail = outcome.detail();
+    assert!(detail.contains("re-entered itself"), "{detail}");
+    assert!(!detail.contains("draft guard unavailable"), "{detail}");
 }
 
 #[test]

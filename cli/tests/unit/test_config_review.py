@@ -44,6 +44,25 @@ def _load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str):
     return config_mod.load_settings()
 
 
+def test_review_defaults_to_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Absent block -> required_bots is None (code default applies Rust-side)."""
+    settings = _load(tmp_path, monkeypatch, "schema_version: 1\n")
+    assert settings.review.required_bots is None
+
+
+def test_review_required_bots_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    required_bots:\n"
+        "      - chatgpt-codex-connector\n      - gemini-code-assist\n",
+    )
+    assert settings.review.required_bots == [
+        "chatgpt-codex-connector",
+        "gemini-code-assist",
+    ]
+
+
 def test_review_required_bots_explicit_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -85,6 +104,89 @@ def test_review_bare_key_fails_closed(
 # --- Cross-model review panel: agent_providers + cross_model (ab-6c8f4c61) ---
 
 
+def test_review_agent_providers_defaults_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent block -> agent_providers is an empty dict (faithful empty map)."""
+    settings = _load(tmp_path, monkeypatch, "schema_version: 1\n")
+    assert settings.review.agent_providers == {}
+
+
+def test_review_agent_providers_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent->provider mapping is read verbatim (AC2-HP)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    agent_providers:\n"
+        "      ux_flow_tester: gemini\n      type_design_analyzer: gemini\n",
+    )
+    assert settings.review.agent_providers == {
+        "ux_flow_tester": "gemini",
+        "type_design_analyzer": "gemini",
+    }
+
+
+def test_review_agent_providers_scalar_fails_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-mapping agent_providers coerces to {} (no cross-model opt-in)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    agent_providers: gemini\n",
+    )
+    assert settings.review.agent_providers == {}
+
+
+def test_review_agent_routes_empty_stays_legal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key retired with the sigma panel it routed: absent or empty loads
+    clean, so a config that never used it is untouched."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    agent_routes: {}\n",
+    )
+    assert settings.review.agent_routes == {}
+
+
+def test_review_agent_routes_configured_refuses_with_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC8-ERR: a stale sigma routing config fails loud and names the rung
+    vocabulary as the replacement, never silently routing nothing."""
+    with pytest.raises(ValueError, match="review-posture"):
+        _load(
+            tmp_path,
+            monkeypatch,
+            "schema_version: 1\nconfig:\n  review:\n    agent_routes:\n"
+            "      code_reviewer:\n        harness: claude\n        provider: zai\n"
+            "        model: glm-5.2\n",
+        )
+
+
+def test_review_cross_model_defaults_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent block -> cross_model.enabled is False (existing review unchanged)."""
+    settings = _load(tmp_path, monkeypatch, "schema_version: 1\n")
+    assert settings.review.cross_model.enabled is False
+
+
+def test_review_cross_model_enabled_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    cross_model:\n      enabled: true\n",
+    )
+    assert settings.review.cross_model.enabled is True
+
+
 def test_review_cross_model_enabled_non_bool_fails_safe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -97,7 +199,46 @@ def test_review_cross_model_enabled_non_bool_fails_safe(
     assert settings.review.cross_model.enabled is False
 
 
+def test_review_cross_model_non_mapping_fails_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-mapping `cross_model:` degrades to the default disabled block."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    cross_model: 42\n",
+    )
+    assert settings.review.cross_model.enabled is False
+
+
 # --- github_apps rename + required_bots alias (x-4baa US1) ---
+
+
+def test_github_apps_canonical_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """github_apps is read verbatim and mirrored onto the required_bots alias."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    github_apps:\n"
+        "      - chatgpt-codex-connector\n",
+    )
+    assert settings.review.github_apps == ["chatgpt-codex-connector"]
+    assert settings.review.required_bots == ["chatgpt-codex-connector"]
+
+
+def test_required_bots_aliases_github_apps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy required_bots-only config populates github_apps identically (AC2-HP)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    required_bots:\n"
+        "      - chatgpt-codex-connector\n",
+    )
+    assert settings.review.github_apps == ["chatgpt-codex-connector"]
 
 
 def test_github_apps_wins_over_required_bots(
@@ -123,6 +264,48 @@ def test_github_apps_absent_is_no_gate(
 
 
 # --- peers / peer_identity / peer_token_env (x-4baa US2) ---
+
+
+def test_peers_scalar_coerces_to_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n"
+        "    peers: codex\n    peer_identity: fno-peer-bot\n",
+    )
+    assert settings.review.peers == ["codex"]
+    assert settings.review.peer_identity == "fno-peer-bot"
+
+
+def test_peers_list_and_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n"
+        "    peers: [codex, gemini]\n    peer_identity: fno-peer-bot\n"
+        "    peer_token_env: GH_PEER_TOKEN\n",
+    )
+    assert settings.review.peers == ["codex", "gemini"]
+    assert settings.review.peer_token_env == "GH_PEER_TOKEN"
+
+
+def test_peers_map_entry_with_own_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A per-peer identity map does not require the shared peer_identity."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    peers:\n"
+        "      - provider: codex\n        identity: fno-codex-bot\n",
+    )
+    assert settings.review.peers == [
+        {"provider": "codex", "identity": "fno-codex-bot"}
+    ]
 
 
 def test_peers_map_missing_provider_fails_loud(
@@ -168,6 +351,22 @@ def test_routed_claude_peer_without_identity_loads_for_local_attestation(
 # --- claude->routed-model peer lane (x-ef41) ---
 
 
+def test_peers_claude_with_model_route_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-HP: a claude peer that names a model route loads (GLM via claude CLI)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    peers:\n"
+        '      - provider: claude\n        model: "zai,glm-5.2"\n'
+        "    peer_identity: fno-peer-bot\n",
+    )
+    assert settings.review.peers == [
+        {"provider": "claude", "model": "zai,glm-5.2"}
+    ]
+
+
 def test_peers_bare_claude_no_model_fails_loud(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -179,6 +378,34 @@ def test_peers_bare_claude_no_model_fails_loud(
             monkeypatch,
             "schema_version: 1\nconfig:\n  review:\n    peers:\n"
             "      - provider: claude\n    peer_identity: fno-peer-bot\n",
+        )
+
+
+def test_peers_scalar_claude_fails_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scalar `peers: claude` is also a routeless claude peer -> rejected."""
+    with pytest.raises(Exception, match="distinct-model"):
+        _load(
+            tmp_path,
+            monkeypatch,
+            "schema_version: 1\nconfig:\n  review:\n    peers: [claude]\n"
+            "    peer_identity: fno-peer-bot\n",
+        )
+
+
+def test_peers_claude_malformed_route_fails_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A claude peer whose model is not `route_provider,route_model` is rejected
+    (a bare `zai` with no model half is not a valid distinct route)."""
+    with pytest.raises(Exception, match="distinct-model"):
+        _load(
+            tmp_path,
+            monkeypatch,
+            "schema_version: 1\nconfig:\n  review:\n    peers:\n"
+            '      - provider: claude\n        model: "zai"\n'
+            "    peer_identity: fno-peer-bot\n",
         )
 
 
@@ -199,7 +426,47 @@ def test_peers_claude_same_model_route_fails_loud(
         )
 
 
+def test_peers_codex_with_model_key_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-EDGE: a `model` key on a codex/gemini entry is accepted (ignored by
+    those lanes); the guard is claude-only, so back-compat holds."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    peers:\n"
+        '      - provider: codex\n        model: "zai,glm-5.2"\n'
+        "    peer_identity: fno-peer-bot\n",
+    )
+    assert settings.review.peers == [
+        {"provider": "codex", "model": "zai,glm-5.2"}
+    ]
+
+
 # --- optional_apps: honored-if-present, never required (x-4baa) ---
+
+
+def test_optional_apps_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    optional_apps:\n"
+        "      - chatgpt-codex-connector\n",
+    )
+    assert settings.review.optional_apps == ["chatgpt-codex-connector"]
+
+
+def test_optional_apps_scalar_coerces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    optional_apps: chatgpt-codex-connector\n",
+    )
+    assert settings.review.optional_apps == ["chatgpt-codex-connector"]
 
 
 def test_optional_apps_defaults_empty(
@@ -231,7 +498,66 @@ def test_github_apps_numeric_scalar_gates_closed(
     assert settings.review.github_apps == ["123"]
 
 
+def test_github_apps_mapping_degrades_like_rust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mapping is not a login list -> None, agreeing with the Rust reader
+    (which rejects a `{...}` scalar via scalar_as_singleton)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    github_apps: {login: codex}\n",
+    )
+    assert settings.review.github_apps is None
+
+
+def test_optional_apps_scalar_and_mapping_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    numeric = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    optional_apps: 123\n",
+    )
+    assert numeric.review.optional_apps == ["123"]
+    mapping = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    optional_apps: {a: b}\n",
+    )
+    assert mapping.review.optional_apps == []
+
+
 # --- reviewers: local-attestation gate (x-e703, Phase 2) ---
+
+
+def test_reviewers_defaults_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent -> [] (no reviewers gate)."""
+    settings = _load(tmp_path, monkeypatch, "schema_version: 1\n")
+    assert settings.review.reviewers == []
+
+
+def test_reviewers_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A one-entry reviewers list is exposed verbatim (AC2-HP)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    reviewers:\n      - sigma\n",
+    )
+    assert settings.review.reviewers == ["sigma"]
+
+
+def test_reviewers_scalar_coerces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    reviewers: sigma\n",
+    )
+    assert settings.review.reviewers == ["sigma"]
 
 
 def test_reviewers_strips_leading_slash(
@@ -263,6 +589,34 @@ def test_reviewers_unresolvable_fails_loud(
 # --- agent_harnesses rename + agent_providers alias ---
 
 
+def test_agent_harnesses_canonical_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """agent_harnesses is read verbatim and mirrored onto the legacy alias."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    agent_harnesses:\n"
+        "      code-reviewer: codex\n",
+    )
+    assert settings.review.agent_harnesses == {"code-reviewer": "codex"}
+    assert settings.review.agent_providers == {"code-reviewer": "codex"}
+
+
+def test_agent_providers_aliases_agent_harnesses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy agent_providers-only config populates agent_harnesses (AC6-HP)."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    agent_providers:\n"
+        "      code-reviewer: codex\n",
+    )
+    assert settings.review.agent_harnesses == {"code-reviewer": "codex"}
+    assert settings.review.agent_providers == settings.review.agent_harnesses
+
+
 def test_agent_harnesses_wins_over_agent_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -278,6 +632,27 @@ def test_agent_harnesses_wins_over_agent_providers(
     assert "silent-failure-hunter" not in settings.review.agent_harnesses
 
 
+def test_agent_harnesses_absent_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither key set stays an empty map, so cross-model stays off."""
+    settings = _load(tmp_path, monkeypatch, "schema_version: 1\nconfig:\n  review: {}\n")
+    assert settings.review.agent_harnesses == {}
+    assert settings.review.agent_providers == {}
+
+
+def test_agent_harnesses_malformed_degrades_to_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-mapping value degrades to {} rather than raising out of the load."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    agent_harnesses: nonsense\n",
+    )
+    assert settings.review.agent_harnesses == {}
+
+
 # --- AC6: a non-author GitHub approval is a sufficient producer ---
 
 
@@ -290,52 +665,44 @@ def test_github_approval_satisfies_defaults_on(
     assert settings.review.github_approval_satisfies is True
 
 
-def _verdict(name: str, author_approval: bool | None) -> dict:
-    row = {
-        "producer": "github_app",
-        "name": name,
-        "verdict": "reviewed",
-        "human_approval": True,
-        "reviewed_sha": "h1",
-        "freshness": "fresh",
-    }
-    if author_approval is not None:
-        row["author_approval"] = author_approval
-    return row
-
-
-def test_ac6_hp_non_author_approval_derives_reviewed() -> None:
-    """bob's approval on alice's PR, flag on: the state derivation counts it."""
-    from fno.pr._reviews import _derive_review_state
-
-    assert (
-        _derive_review_state("covered", [_verdict("bob", False)], set(), True) == "reviewed"
+def test_github_approval_satisfies_explicit_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit false keeps today's recorded-but-never-counted behavior."""
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    github_approval_satisfies: false\n",
     )
+    assert settings.review.github_approval_satisfies is False
 
 
-def test_ac6_err_author_approval_is_never_counted() -> None:
-    """alice approving her own PR stays recorded and never derives reviewed,
-    so a run where no approval was collected at all cannot pass this either."""
-    from fno.pr._reviews import _derive_review_state
+def test_github_approval_registry_row_documents_the_key() -> None:
+    """The registry carries the row, so `fno config` teaches the knob."""
+    from fno.config.registry import FIELD_META
 
-    assert (
-        _derive_review_state("covered", [_verdict("alice", True)], set(), True)
-        == "unreviewed"
-    )
-
-
-def test_ac6_pre_field_row_stays_excluded_even_with_flag_on() -> None:
-    """A verdict serialized before author_approval existed carries no marker;
-    the absent marker reads as the exclude side (fail-closed), flag or not."""
-    from fno.pr._reviews import _derive_review_state
-
-    assert (
-        _derive_review_state("covered", [_verdict("bob", None)], set(), True)
-        == "unreviewed"
-    )
+    assert "review.github_approval_satisfies" in FIELD_META
 
 
 # --- AC7: the round budget config ---
+
+
+def test_max_rounds_defaults_to_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(tmp_path, monkeypatch, "schema_version: 1\nconfig:\n  review: {}\n")
+    assert settings.review.max_rounds == 2
+
+
+def test_max_rounds_explicit_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _load(
+        tmp_path,
+        monkeypatch,
+        "schema_version: 1\nconfig:\n  review:\n    max_rounds: 3\n",
+    )
+    assert settings.review.max_rounds == 3
 
 
 def test_max_rounds_below_one_fails_loud(
@@ -349,6 +716,12 @@ def test_max_rounds_below_one_fails_loud(
             monkeypatch,
             "schema_version: 1\nconfig:\n  review:\n    max_rounds: 0\n",
         )
+
+
+def test_max_rounds_registry_row_documents_the_key() -> None:
+    from fno.config.registry import FIELD_META
+
+    assert "review.max_rounds" in FIELD_META
 
 
 # --- review.posture: the nine-rung ladder ---
@@ -376,6 +749,16 @@ def test_posture_defaults_unset_and_bare_install_is_default_floor() -> None:
     assert resolved.source == "default"
     assert resolved.migration is None
     assert not resolved.automerge_blocked
+
+
+def test_posture_explicit_leaf_wins() -> None:
+    from fno.config import resolve_review_posture
+
+    resolved = resolve_review_posture(_review("posture: peer_review\n"))
+    assert resolved.value == "peer_review"
+    assert resolved.rank == 6
+    assert resolved.source == "explicit"
+    assert resolved.migration is None
 
 
 def test_posture_typo_fails_loud() -> None:
@@ -427,6 +810,35 @@ def test_posture_legacy_explicit_floor_optout_infers_no_review() -> None:
     assert resolved.migration == "fno config set review.posture no_review --local"
 
 
+def test_posture_legacy_corroboration_is_ignored() -> None:
+    """Origin never gates, so require_corroboration no longer feeds the
+    legacy inference: setting it changes nothing the posture reports."""
+    from fno.config import resolve_review_posture
+
+    with_it = resolve_review_posture(_review("require_corroboration: true\n"))
+    without = resolve_review_posture(_review("optout_ttl_minutes: 30\n"))
+    assert with_it.value == without.value == "self_review"
+    assert "require_corroboration" not in with_it.signals
+
+
+def test_posture_legacy_peers_infers_self_and_peer() -> None:
+    from fno.config import resolve_review_posture
+
+    resolved = resolve_review_posture(_review("peers: [codex]\n"))
+    assert resolved.value == "self_and_peer"
+    assert resolved.migration == "fno config set review.posture self_and_peer --local"
+
+
+def test_posture_legacy_github_plus_peers_infers_top_rung() -> None:
+    from fno.config import resolve_review_posture
+
+    resolved = resolve_review_posture(
+        _review("github_apps: [codex]\npeers: [gemini]\n")
+    )
+    assert resolved.value == "self_github_and_peer"
+    assert resolved.rank == 9
+
+
 def test_posture_legacy_floor_off_downgrades_composition() -> None:
     """An explicit floor opt-out keeps the inference from claiming a self lane
     the config explicitly declined."""
@@ -447,3 +859,26 @@ def test_posture_sigma_and_declare_never_count_as_a_self_lane() -> None:
     assert resolved.value == "self_review"
     assert resolved.source == "default"
     assert "reviewers" not in resolved.signals
+
+
+def test_posture_descriptors_cover_nine_rungs_with_costs() -> None:
+    """The ladder is exactly nine rungs, ranked 1..9, each carrying the cost
+    string a receipt prints."""
+    from fno.config import REVIEW_POSTURES
+
+    assert len(REVIEW_POSTURES) == 9
+    ranks = sorted(d.rank for d in REVIEW_POSTURES.values())
+    assert ranks == list(range(1, 10))
+    for name, d in REVIEW_POSTURES.items():
+        assert d.value == name
+        assert d.cost
+        assert d.summary
+
+
+def test_require_corroboration_registry_row_names_the_deprecation() -> None:
+    """The row teaches the retirement: the key loads but changes nothing."""
+    from fno.config.registry import FIELD_META
+
+    doc = FIELD_META["review.require_corroboration"].doc.casefold()
+    assert "deprecated" in doc
+    assert "origin never gates" in doc
