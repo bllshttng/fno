@@ -181,8 +181,9 @@ fn staged_sweep(
 /// done node and owns a clean linked worktree: it retires with its basis,
 /// its tree is pruned, and the branch-shaped protections (transcript on
 /// disk, no graph mutation) hold. Row B is named on one done and one
-/// open node: kept, naming the open node. Row C is named nowhere: kept,
-/// no provenance.
+/// open node: kept, naming the open node. Row C is named nowhere and
+/// exited: the registry's terminal stamp is its finished marker, so it
+/// retires past the idle hour like a reported-done row.
 #[test]
 fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let home = tmp_home("gc-ac4");
@@ -247,10 +248,13 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
 
     assert_eq!(
         summary.retired,
-        vec![(
-            "rowa".to_string(),
-            "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
-        )],
+        vec![
+            (
+                "rowa".to_string(),
+                "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
+            ),
+            ("rowc".to_string(), "done".to_string()),
+        ],
         "{:?}",
         summary.retired
     );
@@ -264,7 +268,11 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
             "sessions".to_string()
         )]
     );
-    assert_eq!(summary.kept_no_provenance, vec!["rowc".to_string()]);
+    assert!(
+        summary.kept_no_provenance.is_empty(),
+        "{:?}",
+        summary.kept_no_provenance
+    );
     // The retired vocabulary: none of the exit-stamp words appears.
     let rendered = format!("{summary:?}");
     for word in [
@@ -281,7 +289,7 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let reg = state::load_registry(&home.registry_json()).unwrap();
     assert!(reg.entries.iter().all(|e| e.name != "row-a"));
     assert!(reg.entries.iter().any(|e| e.name == "row-b"));
-    assert!(reg.entries.iter().any(|e| e.name == "row-c"));
+    assert!(reg.entries.iter().all(|e| e.name != "row-c"));
     let receipts = home.root().join("reap-receipts");
     assert!(
         receipts.join("claude-sess-a.json").exists(),

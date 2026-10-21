@@ -502,7 +502,9 @@ fn a_row_fno_stopped_keeps_for_open_work() {
     let _swap = EnvSwap::to(&fake.bin_dir(), &fake.daemon_dir(), home.root(), None);
     let store_dir = home.root().join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
-    let quiet = quiet_transcript(&store_dir, "q.jsonl", 2 * 3600);
+    // Inside the origin ruling's one idle hour: past it, open work no
+    // longer keeps and the row takes the idle gate instead.
+    let quiet = quiet_transcript(&store_dir, "q.jsonl", 1800);
     let summary = production_sweep(&home, quiet);
 
     assert!(
