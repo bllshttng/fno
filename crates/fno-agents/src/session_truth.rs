@@ -1390,7 +1390,17 @@ fn transcript_for<C: CursorAccess>(
     }
     match session.agent.as_str() {
         "claude" | "codex" if !session.session_id.is_empty() => {
-            lookup_path(cursors, stores, &session.agent, &session.session_id)
+            // A registry row with no transcript yet costs one store lookup
+            // per beat, not one relist per ask.
+            let key = format!("{}:{}", session.agent, session.session_id);
+            if cursors.with(|c| c.recent_miss(&key)) {
+                return None;
+            }
+            let found = lookup_path(cursors, stores, &session.agent, &session.session_id);
+            if found.is_none() {
+                cursors.with(|c| c.note_miss(&key));
+            }
+            found
         }
         _ => None,
     }
