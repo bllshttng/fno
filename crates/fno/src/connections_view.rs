@@ -1575,8 +1575,22 @@ pub async fn load_all(tx: tokio::sync::mpsc::UnboundedSender<(u64, ReadOutcome)>
     // Opening the modal (and R) re-measures every account, so a row never
     // shows a number older than this open.
     let live = async {
-        let args = ["config", "accounts", "usage", "--refresh", "-J"];
-        let outcome = match read_json(&args, USAGE_REFRESH_TIMEOUT).await {
+        // One live refresh at a time: a repeated R waits out the one running,
+        // then reads the cache it just wrote instead of probing again.
+        static LAST_LIVE: std::sync::OnceLock<tokio::sync::Mutex<Option<std::time::Instant>>> =
+            std::sync::OnceLock::new();
+        let mut last = LAST_LIVE.get_or_init(Default::default).lock().await;
+        let fresh = last.is_some_and(|at| at.elapsed() < Duration::from_secs(10));
+        let args: &[&str] = if fresh {
+            &["config", "accounts", "usage", "-J"]
+        } else {
+            &["config", "accounts", "usage", "--refresh", "-J"]
+        };
+        let read = read_json(args, USAGE_REFRESH_TIMEOUT).await;
+        if !fresh && read.is_ok() {
+            *last = Some(std::time::Instant::now());
+        }
+        let outcome = match read {
             Ok(bytes) => match parse_usage(&bytes) {
                 Some(cells) => ReadOutcome::Usage(cells),
                 None => ReadOutcome::UsageFailed("unparseable output".into()),

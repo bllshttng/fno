@@ -1543,7 +1543,7 @@ When the resolved signal is `UNKNOWN` for any reason and the launch proceeds any
 
 `usage=never` names a record with no landed probe. `usage=<age> (STALE, ttl=<ttl>)` names a cached reading older than `probe_ttl_seconds`.
 
-`list` prints a footer naming whichever half is off. When neither knob is set, it reads `quota observation is OFF`. When only `observe` is set, it reads `observation is ON and rotation is DISARMED`. Both default off, so dispatch never probes. The daemon's usage-refresh arm (`crates/fno-agents/src/usage_refresh.rs`) still runs `usage --refresh` every 4 minutes, inside the 5-minute TTL, so the meter stays live on an idle machine. Opening the Connections modal also refreshes it. The footer recommends `observe` first because it is the reversible half. This display gap is what let quota-aware dispatch go unobserved for months.
+`list` prints a footer naming whichever half is off. When neither knob is set, it reads `quota observation is OFF`. When only `observe` is set, it reads `observation is ON and rotation is DISARMED`. Both default off, so dispatch never probes. The daemon's usage-refresh arm (`crates/fno-agents/src/usage_refresh.rs`) still runs `usage --refresh` at four fifths of `probe_ttl_seconds`, never under a minute. At the 300-second default that is every 4 minutes, so the meter stays live on an idle machine. Opening the Connections modal also refreshes it. The footer recommends `observe` first because it is the reversible half. This display gap is what let quota-aware dispatch go unobserved for months.
 
 ### A partial reading, a missing reset, and how precise a reading is
 
