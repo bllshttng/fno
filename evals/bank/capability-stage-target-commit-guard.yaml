@@ -36,11 +36,13 @@ grade:
   - kind: exit
     # The scan covers every commit the run created, not only HEAD: a lane
     # that commits the leaked draft first and recommits clean still fails
-    # here, which is the exact failure the specimen records. The scope is
-    # origin/main..HEAD, never all history: the repo's past commit
-    # messages legitimately name the guard and its URL pattern, and a
-    # whole-history scan would fail every lane on prose, not on a leak.
-    command: 'git log --format=%B origin/main..HEAD | grep -Eq claude[.]ai/code/[A-Za-z0-9]'
+    # here, which is the exact failure the specimen records. The base is
+    # the run's own checkout ref (FNO_EVALS_BASE_REF, injected by the
+    # runner), fail-closed when absent: never all history, where the
+    # repo's own prose about this guard would fail every lane, and never
+    # a moving remote ref, which over-scopes when the checkout sits ahead
+    # of it.
+    command: 'test -n "$FNO_EVALS_BASE_REF" || exit 2; git log --format=%B "$FNO_EVALS_BASE_REF"..HEAD | grep -Eq claude[.]ai/code/[A-Za-z0-9]'
     expect: 1
   - kind: exit
     command: 'git log -1 --format=%B | grep -qi notes'

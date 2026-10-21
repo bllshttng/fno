@@ -184,6 +184,24 @@ fn cell_rate(cell: &Value) -> f64 {
     cell.get("pass_rate").and_then(Value::as_f64).unwrap_or(0.0)
 }
 
+/// The underpowered reason names the exclusion, not just the shortfall:
+/// "trial 0" hides WHY rows dropped, and a lane that substituted every
+/// attempt needs more rows the way a hole needs more water. Sourced from
+/// the same cell the power gate reads.
+fn subst_note(cell: &Value) -> String {
+    let substituted = cell
+        .get("lane_status_counts")
+        .and_then(|c| c.get("substituted"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if substituted == 0 {
+        return String::new();
+    }
+    let attempts = cell.get("attempts").and_then(Value::as_u64).unwrap_or(0);
+    let scored = cell.get("scored").and_then(Value::as_u64).unwrap_or(0);
+    format!("; {substituted} of {attempts} substituted, scored {scored}")
+}
+
 fn cell_scored(cell: &Value) -> usize {
     cell.get("scored").and_then(Value::as_u64).unwrap_or(0) as usize
 }
@@ -315,9 +333,11 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
         (
             "underpowered",
             format!(
-                "held-out needs {MIN_ROWS} scored rows per cohort (baseline {}, trial {})",
+                "held-out needs {MIN_ROWS} scored rows per cohort (baseline {}, trial {}){}{}",
                 cell_scored(&base_heldout),
                 cell_scored(&trial_heldout),
+                subst_note(&base_heldout),
+                subst_note(&trial_heldout),
             ),
         )
     } else if cell_rate(&base_heldout) - cell_rate(&trial_heldout) > NOISE
@@ -398,6 +418,20 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
         "trial": args.trial,
         "train": {"baseline": base_train, "trial": trial_train},
         "heldout": {"baseline": base_heldout, "trial": trial_heldout},
+        // Lane verification at a glance per cell: a baseline scored on
+        // unverified rows while the trial is excluded on verified mismatch
+        // is an asymmetric comparison, and the payload must say so where a
+        // reader of one cell will not look for it.
+        "lane_status_by_cell": {
+            "train": {
+                "baseline": base_train.get("lane_status_counts").cloned().unwrap_or(json!({})),
+                "trial": trial_train.get("lane_status_counts").cloned().unwrap_or(json!({})),
+            },
+            "heldout": {
+                "baseline": base_heldout.get("lane_status_counts").cloned().unwrap_or(json!({})),
+                "trial": trial_heldout.get("lane_status_counts").cloned().unwrap_or(json!({})),
+            },
+        },
         "wrong_rev": wrong_rev,
         "unsplit": unsplit,
     });
