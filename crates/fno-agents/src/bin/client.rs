@@ -2723,16 +2723,32 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         // JSON events to the log. The spawn returns immediately - the session
         // on the serve IS the worker (steering/mail over the API is a filed
         // follow-up).
-        ("opencode", "bg") => emit!(fno_agents::opencode_serve::dispatch_opencode_serve(
-            home,
-            name,
-            &message,
-            from_name,
-            &cwd,
-            None,
-            None,
-            params.get("node").and_then(|v| v.as_str()),
-        )),
+        ("opencode", "bg") => {
+            // The serve lane carries one harness flag, the model. Any other
+            // token refuses by name: a dropped flag runs a worker that is
+            // not what the spawn asked for.
+            let model = fno_agents::claude_ask::passthrough_model(&harness_args);
+            if let Some(extra) = fno_agents::opencode_serve::uncarried_flag(&harness_args) {
+                eprintln!(
+                    "refused: the opencode thread lane carries only --model; {extra} cannot ride it. \
+                     Spawn on the pane lane (--split) to pass other opencode flags."
+                );
+                if let Some(g) = gate_guard.as_mut() {
+                    g.release();
+                }
+                return Some(2);
+            }
+            emit!(fno_agents::opencode_serve::dispatch_opencode_serve(
+                home,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                model,
+                None,
+                params.get("node").and_then(|v| v.as_str()),
+            ))
+        }
 
         ("agy", "headless") => {
             // agy is stateless (plain text, no session id): a one-shot `agy -p`

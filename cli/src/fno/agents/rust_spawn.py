@@ -31,6 +31,7 @@ def _opencode_serve_spawn(
     cwd: Path,
     from_name: str,
     node: Optional[str] = None,
+    passthrough: Optional[list[str]] = None,
 ) -> str:
     """Delegate an opencode thread spawn to the Rust serve lane; return short_id.
 
@@ -69,6 +70,8 @@ def _opencode_serve_spawn(
         argv += [f"--from-name={from_name}"]
     if node:
         argv += ["--node", node]
+    # The binary carries the model and refuses any other token by name.
+    argv += [f"--harness-arg={token}" for token in passthrough or ()]
     # The seed rides as the fenced positional tail, never a bare flag value:
     # with --name set the whole tail is the message, and a hyphen-leading
     # message as the value of `--message <msg>` would die as an unknown flag
