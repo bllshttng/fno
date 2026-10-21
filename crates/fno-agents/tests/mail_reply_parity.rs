@@ -94,7 +94,13 @@ fn base_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
         .env_remove("FNO_MAIL_LOCAL_FORWARD")
 }
 
-fn run_case(root: &Path, style_on: bool, no_identity: bool, argv: &[&str]) -> Leg {
+fn run_case(
+    root: &Path,
+    style_on: bool,
+    no_identity: bool,
+    inbox_project: Option<&str>,
+    argv: &[&str],
+) -> Leg {
     let root_str = root.display().to_string();
     let argv: Vec<String> = argv
         .iter()
@@ -102,6 +108,16 @@ fn run_case(root: &Path, style_on: bool, no_identity: bool, argv: &[&str]) -> Le
         .collect();
     let mut cmd = Command::new(binary_path());
     let cmd = base_env(&mut cmd, root);
+    // The capture driver pointed inbox_project cases at the fixture root;
+    // without it the child's default inbox root lands under inbox/agents and
+    // the seeded parent thread is never found (the reply orphans instead of
+    // appending).
+    let cmd = match inbox_project {
+        Some(project) => cmd
+            .env("FNO_INBOX_ROOT", root.join("inbox"))
+            .env("FNO_INBOX_KNOWN_PROJECTS", project),
+        None => cmd,
+    };
     let cmd = if style_on {
         cmd.env_remove("FNO_STYLE_ENFORCE")
     } else {
@@ -557,7 +573,7 @@ fn mail_reply_matches_captured_goldens() {
             argv.push("--json".to_string());
         }
         let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let leg = run_case(&root, case.style_on, false, &refs);
+        let leg = run_case(&root, case.style_on, false, case.inbox_project, &refs);
         // Characterization: the frozen bytes ARE the contract; the oracle
         // slot stays None (the capture driver owns the lineage).
         assert_golden("mail_reply", case.label, &leg.golden(&root), None);
