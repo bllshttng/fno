@@ -5,7 +5,7 @@
 //! refusal, merge and close, board refresh, and the no-mirror check. It runs
 //! only on purpose, against a scratch repo and team the user created
 //! (docs/architecture/external-tracker.md, "Live gate"):
-//! `cargo test -p fno-agents --test tracker_live -- --ignored --nocapture`
+//! `cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture`
 //!
 //! The gate reads its own `FNO_LIVE_*` names and maps them onto the
 //! `FNO_TRACKER_*` family in child processes only, so a tracker env already in

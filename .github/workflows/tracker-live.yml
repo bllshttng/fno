@@ -39,8 +39,10 @@ jobs:
       - name: Install fno from this checkout
         if: steps.live.outputs.configured == 'true'
         run: |
+          cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
           cargo build --quiet --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
-          uv tool install --editable ./cli
+          (cd cli && uv sync)
+          echo "$PWD/crates/fno/target/debug" >> "$GITHUB_PATH"
           echo "$PWD/crates/fno-agents/target/debug" >> "$GITHUB_PATH"
 
       - name: Run the live journeys
@@ -51,7 +53,7 @@ jobs:
           FNO_LIVE_GITHUB_TOKEN: ${{ secrets.FNO_LIVE_GITHUB_TOKEN }}
           FNO_LIVE_LINEAR_API_KEY: ${{ secrets.FNO_LIVE_LINEAR_API_KEY }}
           FNO_LIVE_LINEAR_TEAM: ${{ vars.FNO_LIVE_LINEAR_TEAM }}
-        run: cargo test -p fno-agents --test tracker_live -- --ignored --nocapture --test-threads=1
+        run: cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture --test-threads=1
 
       - name: Upload receipts
         if: always() && steps.live.outputs.configured == 'true'

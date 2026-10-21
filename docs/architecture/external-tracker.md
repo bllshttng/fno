@@ -159,7 +159,7 @@ Under an external backend, `fno backlog update <id> cwd=<checkout> plan_path=<pl
 `crates/fno-agents/tests/tracker_live.rs` holds two ignored tests, `github_journey` and `linear_journey`. Each drives the public `fno` verbs through one disposable issue: read, list next, bind, target start, PR bind, a bad-credential refusal, merge and close, board refresh, and a no-mirror check. Run them on purpose:
 
 ```bash
-cargo test -p fno-agents --test tracker_live -- --ignored --nocapture
+cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture
 ```
 
 The gate needs a scratch repo and a scratch team that hold no real work. Create them once:
