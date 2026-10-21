@@ -567,7 +567,7 @@ def test_rust_client_verbs_match_client_rs() -> None:
         )
     routable |= set(rr._STATUS_ARG_LEAVES)
 
-    assert routable == set(rr.RUST_CLIENT_VERBS) | set(rr.RUST_VERB_ALIASES), (
+    assert routable == set(rr.RUST_CLIENT_VERBS), (
         "RUST_CLIENT_VERBS is out of sync with client.rs routable verbs.\n"
         f"  only in client.rs: {sorted(routable - set(rr.RUST_CLIENT_VERBS))}\n"
         f"  only in RUST_CLIENT_VERBS: {sorted(set(rr.RUST_CLIENT_VERBS) - routable)}"

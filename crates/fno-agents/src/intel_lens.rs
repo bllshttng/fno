@@ -114,32 +114,31 @@ pub(crate) fn extract_decision_ids(text: &str) -> Vec<String> {
     out
 }
 
-/// Sessions named by the succession check-in journal rows: the row's `session`
-/// data field, or an envelope source that is itself session-shaped. An
-/// issuer absent from this set reads no succession grant; the class never
-/// infers one.
-fn succession_sessions(journal: &Path) -> HashSet<String> {
-    let text = crate::event_store::journal_text(
-        journal,
-        &[crate::role_migration::SUCCESSION_CHECKIN_EVENT],
-    );
+/// Sessions named by `lead_checkin` rows in the project journal, the one the
+/// check-in writer emits to. Each `data.holder_session` goes in whole and as
+/// its 8-char prefix, because rulings name the issuer by short id. An issuer
+/// absent from this set reads no succession grant; the class never infers one.
+fn lead_checkin_sessions(journal: &Path) -> HashSet<String> {
+    let text = crate::event_store::journal_text(journal, &[crate::lead_history::LEAD_CHECKIN]);
+    lead_checkin_sessions_in(&text)
+}
+
+fn lead_checkin_sessions_in(text: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v.get("type").and_then(Value::as_str)
-            != Some(crate::role_migration::SUCCESSION_CHECKIN_EVENT)
-        {
+        if v.get("type").and_then(Value::as_str) != Some(crate::lead_history::LEAD_CHECKIN) {
             continue;
         }
-        if let Some(session) = v.pointer("/data/session").and_then(Value::as_str) {
+        if let Some(session) = v
+            .pointer("/data/holder_session")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            out.insert(session.chars().take(8).collect());
             out.insert(session.to_string());
-        }
-        if let Some(source) = v.get("source").and_then(Value::as_str) {
-            if source.len() == 8 {
-                out.insert(source.to_string());
-            }
         }
     }
     out
@@ -377,7 +376,8 @@ pub fn run_lens(days: u64, json: bool) -> i32 {
         }
     };
     let witness = SubmitIndex::load(&journal);
-    let succession = succession_sessions(&journal);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let succession = lead_checkin_sessions(&crate::paths::events_path(&cwd));
     // Guard spans land in the project journal (emit_span's target), not the
     // agents-home journal the submit witness reads.
     let span_journal = crate::law_match::project_events_journal();
@@ -629,6 +629,39 @@ mod tests {
             classify_authority("chat_attested", true, false, false),
             Authority::WitnessedOperator
         );
+    }
+
+    #[test]
+    fn intel_lens_reads_lead_checkin_holder_session() {
+        let text = concat!(
+            r#"{"type":"lead_checkin","source":"loop","data":{"holder_session":"abcd1234-5678-90ab-cdef-000000000000"}}"#,
+            "\n",
+            r#"{"type":"other_checkin","source":"loop","data":{"holder_session":"eeee5555-0000-0000-0000-000000000000"}}"#,
+            "\n",
+            r#"{"type":"lead_checkin","source":"hook","data":{}}"#,
+            "\n",
+        );
+        let sessions = lead_checkin_sessions_in(text);
+        assert!(sessions.contains("abcd1234"));
+        assert!(!sessions.contains("eeee5555"));
+        let rows = vec![row(
+            "d-cccc3333",
+            "agent",
+            "abcd1234",
+            "2026-10-15T10:00:00Z",
+            "promoted lead rules",
+        )];
+        let (out, _u, _p) = lens_rows(&rows, &SubmitIndex::empty(), &sessions, &[], None);
+        assert_eq!(out[0].authority, "succession_event");
+        let none = lead_checkin_sessions_in(concat!(
+            r#"{"type":"other_checkin","data":{"holder_session":"abcd1234-0000"}}"#,
+            "\n",
+            r#"{"type":"lead_checkin","data":{"session":"abcd1234"}}"#,
+            "\n",
+        ));
+        assert!(none.is_empty());
+        let (out, _u, _p) = lens_rows(&rows, &SubmitIndex::empty(), &none, &[], None);
+        assert_ne!(out[0].authority, "succession_event");
     }
 
     #[test]
