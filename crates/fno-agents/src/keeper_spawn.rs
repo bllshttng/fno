@@ -885,7 +885,6 @@ mod tests {
         for field in [
             "harness_session_id",
             "keeper_child_pid",
-            "pid_start_time",
             "messaging_socket_path",
             "substrate",
             "origin",
@@ -896,6 +895,13 @@ mod tests {
         ] {
             assert!(row.get(field).is_some(), "row field {field} missing");
         }
+        // pid_start_time skips when absent (the RegistryEntry serde contract,
+        // mirrored from Python's AgentEntry): the fake keeper pid 4242 has no
+        // readable start time, so the row must omit the field, not null it.
+        assert!(
+            row.get("pid_start_time").is_none(),
+            "a fake keeper pid carries no start time; the field skips when absent"
+        );
         assert_eq!(row["substrate"], "thread");
         assert_eq!(row["harness_session_id"], SID);
         assert_eq!(row["keeper_child_pid"], 4243);
