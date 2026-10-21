@@ -15,6 +15,8 @@ struct CalibrationArgs {
     by_lane: bool,
     since: Option<i64>,
     kind_depth: Option<u8>,
+    propose: bool,
+    stage: Option<String>,
 }
 
 impl CalibrationArgs {
@@ -24,6 +26,8 @@ impl CalibrationArgs {
         let mut by_lane = false;
         let mut since = None;
         let mut kind_depth = None;
+        let mut propose = false;
+        let mut stage = None;
         let mut i = 0;
         while i < tail.len() {
             match tail[i].as_str() {
@@ -41,6 +45,11 @@ impl CalibrationArgs {
                     i += 1;
                     kind_depth = Some(tail.get(i)?.parse().ok()?);
                 }
+                "--propose" => propose = true,
+                "--stage" => {
+                    i += 1;
+                    stage = Some(tail.get(i)?.clone());
+                }
                 // No positional arguments: any other token (flag-shaped or
                 // not) is a usage error.
                 _ => return None,
@@ -49,8 +58,13 @@ impl CalibrationArgs {
         }
         // --since alone names no view the plain read takes, so it is a usage
         // error rather than a silently ignored flag. The kind depth shapes
-        // the by-lane kind the same way.
-        if (since.is_some() || kind_depth.is_some()) && !by_lane {
+        // the by-lane kind the same way; the router rides the by-lane fold.
+        if (since.is_some() || kind_depth.is_some() || propose || stage.is_some()) && !by_lane {
+            return None;
+        }
+        // The two router flags travel together: a stage without a proposal
+        // read names nothing, and a proposal without a stage has no verb.
+        if propose != stage.is_some() {
             return None;
         }
         Some(CalibrationArgs {
@@ -59,11 +73,13 @@ impl CalibrationArgs {
             by_lane,
             since,
             kind_depth,
+            propose,
+            stage,
         })
     }
 }
 
-const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 verb/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  -h, --help             Print help";
+const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 verb/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  --propose --stage <verb>  One verdict per candidate lane per kind under the verb: target or blueprint (requires --by-lane, with --stage)\n  -h, --help             Print help";
 
 pub fn run(tail: &[String]) -> i32 {
     if tail.iter().any(|t| t == "--help" || t == "-h") {
@@ -101,11 +117,22 @@ external tracker backend it is refused rather than computed over a non-authorita
                 return 2;
             }
         }
+        if let Some(stage) = args.stage.as_deref() {
+            if stage != "target" && stage != "blueprint" {
+                eprintln!(
+                    "fno backlog calibration: --stage takes target or blueprint; \
+the seat laws name no other stage"
+                );
+                return 2;
+            }
+        }
         return run_by_lane(
             since_days,
             args.json_out,
             args.domain.as_deref(),
             args.kind_depth.unwrap_or(1),
+            args.propose,
+            args.stage.as_deref(),
         );
     }
     let graph_path = super::settings::graph_path();
@@ -175,7 +202,14 @@ external tracker backend it is refused rather than computed over a non-authorita
 /// The by-lane scorecard path: every live node, the native ledger read and
 /// the friction journal, folded per lane cell. The lane axes and the cell
 /// shape live in `scorecard`; this stays argv, reads and render.
-fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>, kind_depth: u8) -> i32 {
+fn run_by_lane(
+    since_days: i64,
+    json_out: bool,
+    domain: Option<&str>,
+    kind_depth: u8,
+    propose: bool,
+    stage: Option<&str>,
+) -> i32 {
     let graph_path = super::settings::graph_path();
     let query = super::RowQuery {
         filter: super::api::NodeFilter::default(),
@@ -230,6 +264,16 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>, kind_depth
     }
     let cells = scorecard::fold_cells(&built.records);
     let cov = scorecard::coverage(&built.records, built.dropped_unparsed);
+    // The router folds its verdicts from the same cells the table reads;
+    // proposals ride the output and write nothing to config.
+    let proposals = if propose {
+        Some(super::scorecard_router::propose(
+            &cells,
+            stage.unwrap_or_default(),
+        ))
+    } else {
+        None
+    };
     if json_out {
         println!(
             "{}",
@@ -237,6 +281,7 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>, kind_depth
                 "since_days": since_days,
                 "coverage": cov,
                 "cells": cells,
+                "proposals": proposals,
             }))
         );
         return 0;
@@ -333,6 +378,44 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>, kind_depth
                 .map(|f| format!("{f}"))
                 .unwrap_or_else(|| "n/a".to_string()),
         );
+    }
+    if let Some(props) = &proposals {
+        println!(
+            "\nProposals (stage {})\n",
+            props["stage"].as_str().unwrap_or_default()
+        );
+        for p in props["proposals"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            println!(
+                "  {:<28}{:<18}{:<10}{:>6}  {}",
+                p["kind"].as_str().unwrap_or_default(),
+                p["lane"].as_str().unwrap_or_default(),
+                p["verdict"].as_str().unwrap_or_default(),
+                p["nodes"].as_i64().unwrap_or(0),
+                p["note"].as_str().unwrap_or(""),
+            );
+            if let Some(accept) = p["accept_line"].as_str() {
+                println!("    accept: {accept}");
+            }
+            if let Some(climb) = p["climb_cmd"].as_str() {
+                println!("    prove:  {climb}");
+            }
+            if let Some(spawn) = p["spawn_line"].as_str() {
+                println!("    seat:   {spawn}");
+            }
+            for law in p["laws"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+                if law["contradicted"] == json!(true) {
+                    println!(
+                        "    law:    {} contradicts {}",
+                        law["id"].as_str().unwrap_or_default(),
+                        law["gist"].as_str().unwrap_or_default()
+                    );
+                }
+            }
+        }
     }
     0
 }

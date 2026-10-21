@@ -516,8 +516,10 @@ fn order_candidates(mut rows: Vec<InvRow>, objective: &str, prefer_harness: &str
 
 /// The no-lanes fallthrough: difficulty and priority join the declared
 /// inventory under a live capacity snapshot. Receipts are the Python
-/// resolver's, verbatim.
-fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>) -> Value {
+/// resolver's, verbatim. The scorecard router calls this with an empty
+/// capacity map, which reads every row unknown-permitted: the incumbent is
+/// the declared pick, never a live-capacity one.
+pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>) -> Value {
     let capacity = match payload.get("capacity") {
         Some(v) => v.clone(),
         None => crate::route_capacity::capacity(

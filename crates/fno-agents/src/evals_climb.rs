@@ -23,13 +23,14 @@ const EXIT_USAGE: i32 = 2;
 
 /// The noise floor the harness-fit preregistration names (about 15 points
 /// at these n): a smaller held-out move reads as flat, never as a win or a
-/// loss.
-const NOISE: f64 = 0.15;
+/// loss. The scorecard router reads the same constant, so one number
+/// decides both folds.
+pub(crate) const NOISE: f64 = 0.15;
 
 /// A `propose` on a flat held-out needs the trial to cost at least this
 /// much less per accepted change (the harness-fit tie rule: a tie counts
 /// only with 30% lower cost per accepted change).
-const COST_CUT: f64 = 0.30;
+pub(crate) const COST_CUT: f64 = 0.30;
 
 /// Scored held-out rows per cohort below which no verdict but
 /// `underpowered` may read. The floor counts scored rows - the rows the
@@ -157,7 +158,7 @@ fn current_lanes(stage: &str) -> Vec<Value> {
 /// project declaration, global otherwise). The user runs the line; the fold
 /// never edits config itself. `None` is the ambiguous case (both scopes
 /// declare): no line prints rather than a line that cannot win.
-fn accept_line(stage: &str, trial_lane: &str) -> Option<String> {
+pub(crate) fn accept_line(stage: &str, trial_lane: &str) -> Option<String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let local_flag = match lanes_scope(&cwd, stage) {
         LanesScope::Ambiguous => return None,
