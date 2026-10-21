@@ -1039,6 +1039,11 @@ mod tests {
 
     #[test]
     fn record_load_raise_surface() {
+        // FNO_CONFIG is process-global: hold the crate-wide env lock so the
+        // pin below never answers a parallel test's config chain read.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         // `valid_route_target` is `model_routing._parse_target`: a comma
         // wins as the separator and must split exactly two, else the FIRST
         // slash splits; both halves non-empty after trim.

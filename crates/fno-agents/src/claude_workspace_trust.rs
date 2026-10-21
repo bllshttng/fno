@@ -238,6 +238,11 @@ mod tests {
 
     #[test]
     fn resolved_config_root_ordering() {
+        // FNO_GLOBAL_SETTINGS_PATH is process-global: hold the crate-wide env
+        // lock so the pin below never answers a parallel test's config read.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         // The account record's own config_dir wins; an account without one
         // and a bare spawn fall through to the ambient root.
         let root = std::env::temp_dir().join("claude-trust-root-ordering");
