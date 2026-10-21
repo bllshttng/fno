@@ -1238,6 +1238,8 @@ pub(crate) fn stamp_command_env(
     for name in AMBIENT_IDENTITY_NAMES {
         command.env_remove(name);
     }
+    // The child is a session, not a hook (crates/fno-agents/src/join_marker.rs).
+    command.env_remove(crate::join_marker::HOOK_CONTEXT_ENV);
     if let Some(name) = agent_self {
         command.env("FNO_AGENT_SELF", name);
     }

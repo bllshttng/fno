@@ -13,7 +13,16 @@ for file in "$USING_FNO" "$MAIL_SKILL"; do
   grep -Fq "Keep technical terms" "$file"
 done
 
-CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null | python3 -c '
+# The hook injects only when fno-agents answers `due` for a joined session.
+STUB_DIR="$(mktemp -d)"
+trap 'rm -rf "$STUB_DIR"' EXIT
+printf '#!/bin/sh\nexit 0\n' >"$STUB_DIR/silent"
+printf '#!/bin/sh\necho due\n' >"$STUB_DIR/due"
+chmod +x "$STUB_DIR/silent" "$STUB_DIR/due"
+unjoined="$(FNO_AGENTS_BIN="$STUB_DIR/silent" CLAUDE_CODE_SESSION_ID=s1 CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null)"
+[[ "$unjoined" == "{}" ]] || { echo "an unjoined session got a preamble: $unjoined"; exit 1; }
+
+FNO_AGENTS_BIN="$STUB_DIR/due" CLAUDE_CODE_SESSION_ID=s1 CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null | python3 -c '
 import json
 import sys
 

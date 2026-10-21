@@ -331,7 +331,7 @@ fallback = {}
 silence_deadline_seconds = 600
 # Agent-launch confirmation policy (auto/always/never).
 confirm = "auto"
-# Auto-join every hand-started session to the roster at SessionStart (default false = opt-in via /fno-me). Spawned workers register regardless.
+# Auto-join every hand-started session to the roster at SessionStart (default false: a session joins at its first fno skill or command, or via /fno-me). Spawned workers register regardless.
 auto_register_sessions = false
 # Launch routed claude panes through happy for remote monitoring; default false and pane-only.
 happy_routed_panes = false

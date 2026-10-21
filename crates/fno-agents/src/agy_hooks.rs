@@ -154,6 +154,9 @@ fn session_state_scripts(adapter: &Path) -> Vec<PathBuf> {
     [
         "agy-session-state-pre-invocation.sh",
         "agy-session-state-stop.sh",
+        // Not a session-state shim, but the same PreInvocation wiring: the
+        // using-fno preamble for a joined session.
+        "agy-using-fno-pre-invocation.sh",
     ]
     .iter()
     .map(|name| dir.join(name))
@@ -677,7 +680,8 @@ mod tests {
         let adapter = stage.join("footnote-agy-target-stop-hook.sh");
         let pre_state = stage.join("agy-session-state-pre-invocation.sh");
         let stop_state = stage.join("agy-session-state-stop.sh");
-        for p in [&adapter, &pre_state, &stop_state] {
+        let pre_using_fno = stage.join("agy-using-fno-pre-invocation.sh");
+        for p in [&adapter, &pre_state, &stop_state, &pre_using_fno] {
             std::fs::write(p, "#!/usr/bin/env bash\n").unwrap();
         }
         install(&path, &adapter, None, None).expect("install");
@@ -698,7 +702,13 @@ mod tests {
         );
         let pre = data["footnote"]["PreInvocation"].as_array().unwrap();
         let pre_cmds: Vec<&str> = pre.iter().map(|h| h["command"].as_str().unwrap()).collect();
-        assert_eq!(pre_cmds, vec![pre_state.display().to_string()]);
+        assert_eq!(
+            pre_cmds,
+            vec![
+                pre_state.display().to_string(),
+                pre_using_fno.display().to_string()
+            ]
+        );
         // An older stage's copy of a shim runs beside the new one and reads
         // superseded, the same contract the reporter and team scripts carry.
         let older_pre = dir
