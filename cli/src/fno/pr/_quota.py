@@ -39,14 +39,40 @@ def quota_lock_path() -> Path:
     return graphql_quota_lock()
 
 
-def _open_locked_path(lock_path: Path):
+class QuotaLockUnavailable(RuntimeError):
+    """The quota lock's folder cannot be resolved (the dir door failed)."""
+
+
+def _quota_lock_fresh() -> Path:
+    """``quota_lock_path()`` with the door's raise named, so the degrade
+    sites can catch one type instead of a bare RuntimeError."""
+    try:
+        return quota_lock_path()
+    except RuntimeError as exc:
+        raise QuotaLockUnavailable(str(exc)) from exc
+
+
+def _open_locked_path(lock_path: Optional[Path], fresh: bool = False):
+    """Hold the machine quota lock, re-resolving the path every attempt.
+
+    ``fresh`` re-derives the lock path from the resolver at the top of every
+    attempt and again after the flock: the whole-dir locks fold renames the
+    folder out from under a pre-fold resolve, so a straddling attempt must
+    land on the folder the resolver answers now, and the inode compare must
+    run against a post-flock resolve, not the string the open rode. An
+    injected ``lock_path`` (tests) keeps the old single-resolve shape.
+    """
     while True:
+        if fresh:
+            lock_path = _quota_lock_fresh()
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_path.open("a+")
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
                 opened = os.fstat(handle.fileno())
-                current = lock_path.stat()
+                current_path = _quota_lock_fresh() if fresh else lock_path
+                current = current_path.stat()
                 same_inode = (opened.st_dev, opened.st_ino) == (
                     current.st_dev,
                     current.st_ino,
@@ -54,7 +80,7 @@ def _open_locked_path(lock_path: Path):
             except OSError:
                 same_inode = False
             if same_inode:
-                return handle
+                return handle, lock_path
             fcntl.flock(handle, fcntl.LOCK_UN)
         except BaseException:
             handle.close()
@@ -63,10 +89,10 @@ def _open_locked_path(lock_path: Path):
 
 
 @contextmanager
-def _locked_path(lock_path: Path):
-    handle = _open_locked_path(lock_path)
+def _locked_path(lock_path: Optional[Path], fresh: bool = False):
+    handle, locked = _open_locked_path(lock_path, fresh=fresh)
     try:
-        yield handle
+        yield handle, locked
     finally:
         handle.close()
 
@@ -523,34 +549,36 @@ def execute_graphql(
         return Result(2, "", proxy_identity_refusal(exc))
     if not gh:
         return Result(127, "", "gh not found on PATH")
-    lock = lock_path or quota_lock_path()
-    cache = (None if any(v in os.environ for v in _TOKEN_ENV)
-             else (probe_cache or lock.with_name("github-quota-probe.json")))
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with _locked_path(lock) as handle:
-        try:
+    injected = lock_path is not None
+    try:
+        with _locked_path(lock_path, fresh=not injected) as (handle, locked):
+            cache = (None if any(v in os.environ for v in _TOKEN_ENV)
+                     else (probe_cache or locked.with_name("github-quota-probe.json")))
             try:
-                env = delegate_environment()
-            except ProxyIdentityError as exc:
-                return Result(2, "", proxy_identity_refusal(exc))
-            remaining, reset = _probe_quota(cache, gh, cwd, runner, env, timeout)
-            if purpose == "discretionary":
-                if remaining is None:
-                    return Result(REFUSED, "", _refusal(gh_args, reset=None, unavailable=True))
-                if remaining <= GRAPHQL_RESERVE:
-                    return Result(REFUSED, "", _refusal(gh_args, reset=reset))
-            budget_refusal = admit(gh_args)
-            if budget_refusal:
-                return Result(REFUSED, "", budget_refusal)
-            result = runner([gh, *gh_args], cwd=cwd, timeout=timeout, env=env)
-            if (
-                result.returncode != 0
-                and "rate limit" in (result.stderr or "").lower()
-                and (remaining is None or remaining > 0)
-            ):
-                # Fail toward backoff, and never record a drained primary
-                # bucket - the same posture as refusal_is_secondary.
-                record_refusal(result.stderr)
-            return result
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+                try:
+                    env = delegate_environment()
+                except ProxyIdentityError as exc:
+                    return Result(2, "", proxy_identity_refusal(exc))
+                remaining, reset = _probe_quota(cache, gh, cwd, runner, env, timeout)
+                if purpose == "discretionary":
+                    if remaining is None:
+                        return Result(REFUSED, "", _refusal(gh_args, reset=None, unavailable=True))
+                    if remaining <= GRAPHQL_RESERVE:
+                        return Result(REFUSED, "", _refusal(gh_args, reset=reset))
+                budget_refusal = admit(gh_args)
+                if budget_refusal:
+                    return Result(REFUSED, "", budget_refusal)
+                result = runner([gh, *gh_args], cwd=cwd, timeout=timeout, env=env)
+                if (
+                    result.returncode != 0
+                    and "rate limit" in (result.stderr or "").lower()
+                    and (remaining is None or remaining > 0)
+                ):
+                    # Fail toward backoff, and never record a drained primary
+                    # bucket - the same posture as refusal_is_secondary.
+                    record_refusal(result.stderr)
+                return result
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+    except QuotaLockUnavailable as exc:
+        return Result(2, "", f"gh proxy: quota lock unavailable, refusing: {exc}")

@@ -707,21 +707,25 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
             return Status::Pending("a waiter holds a ticket".to_string());
         }
-        match new.parent() {
-            Some(parent) => {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    return Status::Refused(format!("refused: {e}"));
+        if !new.exists() {
+            match new.parent() {
+                Some(parent) => {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        return Status::Refused(format!("refused: {e}"));
+                    }
                 }
+                None => return Status::Refused("refused: no destination parent".to_string()),
             }
-            None => return Status::Refused("refused: no destination parent".to_string()),
+            return match std::fs::rename(&legacy, &new) {
+                Ok(()) => Status::Moved,
+                Err(e) => Status::Refused(format!("refused: {e}")),
+            };
         }
-        if new.exists() {
-            return Status::Pending(format!("the destination already holds a {}", row.legacy));
-        }
-        return match std::fs::rename(&legacy, &new) {
-            Ok(()) => Status::Moved,
-            Err(e) => Status::Refused(format!("refused: {e}")),
-        };
+        // Both folders exist: a straddler recreated the legacy spelling
+        // after the fold. The whole-dir rename cannot run (the destination
+        // is taken), so fall through to the per-child fold: its flock probe
+        // covers the legacy children, and its emptied-folder removal drains
+        // the residue the whole-dir rename cannot touch.
     }
     if let Err(e) = std::fs::create_dir_all(&new) {
         return Status::Refused(format!("refused: {e}"));

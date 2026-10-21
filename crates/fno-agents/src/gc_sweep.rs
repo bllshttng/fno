@@ -4015,7 +4015,7 @@ pub fn reap_state_files(
         StateReapRoots {
             claims_root: root.to_path_buf(),
             claims_dir: root.join("claims"),
-            locks_dir: root.join("locks"),
+            locks_dir: crate::state_layout::place(root, "locks"),
             agents_root: root.to_path_buf(),
             agents_dir: root.join("agents"),
             state_root: root.to_path_buf(),
@@ -4386,6 +4386,39 @@ mod tests {
     }
 
     #[test]
+    fn machine_lock_sweep_reaches_a_state_locks_folder() {
+        // The plan-locks family reaps whatever folder the resolver names:
+        // once a slice retargets the locks row, machine_locks_dir() answers
+        // state/locks, and a sweep still spelling the legacy name would
+        // silently stop reaching it. This drives the same roots struct the
+        // production fill passes machine_locks_dir() through.
+        let (base, home) = stale_state_home("state-locks");
+        let state_locks = base.join("state").join("locks");
+        std::fs::create_dir_all(&state_locks).unwrap();
+        let stale = state_locks.join("plan-stale.lock");
+        std::fs::write(&stale, b"").unwrap();
+        age_file(&stale, 8);
+        let keep = state_locks.join("plan-fresh.lock");
+        std::fs::write(&keep, b"").unwrap();
+        reap_state_files_with_roots(
+            StateReapRoots {
+                claims_root: base.clone(),
+                claims_dir: base.join("claims"),
+                locks_dir: state_locks.clone(),
+                agents_root: base.join("agents"),
+                agents_dir: base.join("agents"),
+                state_root: base.clone(),
+                pr_status_dir: base.join("cache/pr-status"),
+            },
+            crate::agents_config::StateReapConfig::default(),
+            true,
+        );
+        assert!(!stale.exists(), "the stale lock at state/locks was reaped");
+        assert!(keep.exists(), "the fresh lock stays");
+        let _ = home;
+    }
+
+    #[test]
     fn expire_stale_locks_keeps_a_path_replaced_before_unlink() {
         let (base, home) = stale_state_home("lock-race");
         let lock_dir = base.join("locks");
@@ -4401,7 +4434,6 @@ mod tests {
                 std::fs::write(candidate, b"").unwrap();
             }
         });
-
         assert!(path.exists());
         assert!(summary
             .kept

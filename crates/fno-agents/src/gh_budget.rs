@@ -367,25 +367,40 @@ impl FileLock {
     }
 }
 
-/// The ledger's flock, with the state-root fold's taker-side guard. The
-/// daemon's whole-dir fold renames the machine locks folder in one step, so
-/// a taker that resolved the ledger before the fold holds a path whose
-/// directory has moved: its open can only land on a stray inode a recreated
-/// folder offers. After the flock the held fd must be the file a fresh
-/// `lock_path(&ledger_path())` names; a mismatch drops the lock and retakes
-/// it there, where every later taker lands. A test's injected ledger path
-/// is not the real one and keeps the plain acquire.
-fn ledger_lock(path: &Path) -> Result<FileLock, String> {
-    if path != ledger_path().as_path() {
-        return FileLock::try_acquire(&lock_path(path));
+/// The ledger's flock and the path it guards. An override names an injected
+/// test ledger verbatim; None means the real ledger, resolved as late as
+/// the lock itself. A lock that cannot be taken degrades to a lock-free
+/// read at the same path (the module's fail-open rule), so the caller
+/// always holds one path for the lock, the read and the write.
+fn ledger_lock(ledger: Option<&Path>) -> (Option<FileLock>, PathBuf) {
+    let Some(path) = ledger else {
+        return ledger_lock_resolving(ledger_path);
+    };
+    let path = lock_path(path);
+    match FileLock::try_acquire(&path) {
+        Ok(lock) => (Some(lock), path),
+        Err(_) => (None, path),
     }
-    let fresh = lock_path(&ledger_path());
-    let lock = FileLock::try_acquire(&fresh)?;
-    if lock.matches(&fresh) {
-        return Ok(lock);
+}
+
+/// The real ledger's taker-side guard. The daemon's whole-dir fold renames
+/// the machine locks folder in one step, so an open that straddled the
+/// rename holds a path whose directory has moved: a stray inode a recreated
+/// folder offered. The verify after the flock re-resolves, and a mismatch
+/// drops the lock and retakes it on the fresh answer, where every later
+/// taker lands.
+fn ledger_lock_resolving(resolve: impl Fn() -> PathBuf) -> (Option<FileLock>, PathBuf) {
+    let fresh = lock_path(&resolve());
+    match FileLock::try_acquire(&fresh) {
+        Ok(lock) if lock.matches(&lock_path(&resolve())) => return (Some(lock), fresh),
+        Ok(lock) => drop(lock),
+        Err(_) => {}
     }
-    drop(lock);
-    FileLock::try_acquire(&lock_path(&ledger_path()))
+    let fresh = lock_path(&resolve());
+    match FileLock::try_acquire(&fresh) {
+        Ok(lock) => (Some(lock), fresh),
+        Err(_) => (None, fresh),
+    }
 }
 
 fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
@@ -488,9 +503,17 @@ fn refusal_line(verdict: &Verdict, core_left: i64) -> String {
 /// May this request go out now? Takes the ledger path, the clock and the cap
 /// so tests pass a temp path, a fixed clock, and a small cap.
 pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
+    admit_with(Some(path), argv, now, cap)
+}
+
+/// The admit body over an optional ledger override: None means the real
+/// ledger, and every read, write and journal below uses the path the lock
+/// returned, so a fold that landed mid-call reads and writes the file the
+/// lock actually holds instead of a straggler copy.
+fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
-    let _lock = ledger_lock(path);
-    let (mut ledger, state) = read_ledger(path);
+    let (_lock, path) = ledger_lock(ledger_override);
+    let (mut ledger, state) = read_ledger(&path);
 
     // Exempt shapes are admitted and write nothing: a version probe is not
     // traffic, and writing would only churn the file under every gh call.
@@ -534,7 +557,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
                 refusal: None,
             };
             verdict.refusal = Some(refusal_line(&verdict, ledger.core_remaining));
-            crate::gh_spend::journal_verdict(path, argv, now, &verdict);
+            crate::gh_spend::journal_verdict(&path, argv, now, &verdict);
             return verdict;
         }
     }
@@ -542,7 +565,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     // The shared hold rides only the REAL ledger: tests stage temp paths,
     // and a test's world must not read (or inherit) the dev machine's fleet
     // hold.
-    let shared_until = if path == ledger_path().as_path() {
+    let shared_until = if ledger_override.is_none() {
         shared_hold(now).0
     } else {
         0
@@ -556,7 +579,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         if ledger.last_half_open_ms == 0 || now - ledger.last_half_open_ms >= HALF_OPEN_MS {
             ledger.last_half_open_ms = now;
             ledger.stamps.push((now, points));
-            write_ledger(path, &ledger, now).ok();
+            write_ledger(&path, &ledger, now).ok();
             let v = Verdict {
                 admitted: true,
                 cause: None,
@@ -566,7 +589,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
                 ledger: state,
                 refusal: None,
             };
-            crate::gh_spend::journal_verdict(path, argv, now, &v);
+            crate::gh_spend::journal_verdict(&path, argv, now, &v);
             return v;
         }
         let retry_after_s = ((backoff_until_ms - now) / 1000).max(1);
@@ -580,7 +603,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             refusal: None,
         };
         verdict.refusal = Some(refusal_line(&verdict, -1));
-        crate::gh_spend::journal_verdict(path, argv, now, &verdict);
+        crate::gh_spend::journal_verdict(&path, argv, now, &verdict);
         return verdict;
     }
 
@@ -598,12 +621,12 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             refusal: None,
         };
         verdict.refusal = Some(refusal_line(&verdict, -1));
-        crate::gh_spend::journal_verdict(path, argv, now, &verdict);
+        crate::gh_spend::journal_verdict(&path, argv, now, &verdict);
         return verdict;
     }
 
     ledger.stamps.push((now, points));
-    write_ledger(path, &ledger, now).ok();
+    write_ledger(&path, &ledger, now).ok();
     let v = Verdict {
         admitted: true,
         cause: None,
@@ -613,17 +636,25 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         ledger: state,
         refusal: None,
     };
-    crate::gh_spend::journal_verdict(path, argv, now, &v);
+    crate::gh_spend::journal_verdict(&path, argv, now, &v);
     v
 }
 
 /// The admit op's origin judgment. An agent-origin caller (a spawned worker,
 /// or an unattended claude thread whose supervisor stripped the identity) is
 /// held by the budget like any transport; the user's own typed verb is never
-/// held, and its verdict is read off the ledger without writing it.
-fn admit_for_origin(path: &Path, argv: &[String], now: i64, cap: u32, agent: bool) -> Verdict {
+/// held, and its verdict is read off the ledger without writing it. An
+/// override names an injected test ledger; None reads the real one.
+fn admit_for_origin(
+    override_path: Option<&Path>,
+    argv: &[String],
+    now: i64,
+    cap: u32,
+    agent: bool,
+) -> Verdict {
     if !agent {
-        let (ledger, state) = read_ledger(path);
+        let path = override_path.unwrap_or_else(ledger_path);
+        let (ledger, state) = read_ledger(&path);
         return Verdict {
             admitted: true,
             cause: None,
@@ -634,7 +665,7 @@ fn admit_for_origin(path: &Path, argv: &[String], now: i64, cap: u32, agent: boo
             refusal: None,
         };
     }
-    admit(path, argv, now, cap)
+    admit_with(override_path, argv, now, cap)
 }
 
 /// GitHub traffic is gh itself or a loop-check adapter that wraps it.
@@ -742,7 +773,27 @@ pub(crate) fn admit_spawn<S: AsRef<OsStr>>(program: &OsStr, args: &[S]) -> Optio
         .iter()
         .map(|a| a.as_ref().to_string_lossy().into_owned())
         .collect();
-    admit_spawn_at(&ledger_path(), now_ms(), cap_from_env(), program, &argv)
+    admit_spawn_real(now_ms(), cap_from_env(), program, &argv)
+}
+
+/// admit_spawn over the REAL ledger: the lock, the read and the write share
+/// one late resolve, so the state-root fold cannot strand them across
+/// spellings. Tests inject through admit_spawn_at instead.
+pub(crate) fn admit_spawn_real(
+    now: i64,
+    cap: u32,
+    program: &OsStr,
+    args: &[String],
+) -> Option<String> {
+    if !is_github_program(program) {
+        return None;
+    }
+    let verdict = admit_with(None, args, now, cap);
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
 }
 
 /// admit_spawn for a caller whose origin is judged first: an agent-origin
@@ -757,7 +808,7 @@ pub(crate) fn admit_spawn_for_origin(argv: &[String]) -> Option<String> {
         return None;
     }
     let verdict = admit_for_origin(
-        &ledger_path(),
+        None,
         argv,
         now_ms(),
         cap_from_env(),
@@ -808,13 +859,7 @@ pub(crate) fn admit_command(cmd: &std::process::Command) -> Option<String> {
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    admit_spawn_at(
-        &ledger_path(),
-        now_ms(),
-        cap_from_env(),
-        cmd.get_program(),
-        &args,
-    )
+    admit_spawn_real(now_ms(), cap_from_env(), cmd.get_program(), &args)
 }
 
 /// The refusal as a finished child: exit 75 (the Python door's REFUSED),
@@ -865,7 +910,18 @@ pub fn record_refusal(path: &Path, now: i64, kind: &str) -> Result<(), String> {
     } else {
         (0, 0, 0)
     };
-    record_refusal_via(path, now, kind, shared)
+    record_refusal_body(Some(path), now, kind, shared)
+}
+
+/// The real-ledger refusal entry: the fleet hold is read live and the
+/// lock, the read and the write share one late resolve, so the state-root
+/// fold cannot strand them on different spellings. Tests inject through
+/// record_refusal instead.
+pub(crate) fn record_refusal_real(now: i64, kind: &str) -> Result<(), String> {
+    let (shared_step, shared_last) =
+        crate::claim_store::budget_hold_history(None).unwrap_or((0, 0));
+    let shared = (shared_hold(now).0, shared_step, shared_last);
+    record_refusal_body(None, now, kind, shared)
 }
 
 /// The record_refusal body with the fleet row injected: `shared` is
@@ -878,8 +934,19 @@ pub(crate) fn record_refusal_via(
     kind: &str,
     shared: (i64, i64, i64),
 ) -> Result<(), String> {
-    let _lock = ledger_lock(path);
-    let (mut ledger, _) = read_ledger(path);
+    record_refusal_body(Some(path), now, kind, shared)
+}
+
+/// The refusal body over an optional ledger override: None means the real
+/// ledger, and the write below lands on the path the lock returned.
+fn record_refusal_body(
+    ledger_override: Option<&Path>,
+    now: i64,
+    kind: &str,
+    shared: (i64, i64, i64),
+) -> Result<(), String> {
+    let (_lock, path) = ledger_lock(ledger_override);
+    let (mut ledger, _) = read_ledger(&path);
     if now < ledger.backoff_until_ms {
         return Ok(());
     }
@@ -906,12 +973,14 @@ pub(crate) fn record_refusal_via(
     let backoff = (BASE_BACKOFF_MS << shift).min(MAX_BACKOFF_MS);
     ledger.backoff_until_ms = now + backoff;
     ledger.last_refusal_ms = now;
-    write_ledger(path, &ledger, now)?;
+    write_ledger(&path, &ledger, now)?;
     // The hold is fleet-wide: GitHub limits the user, not the machine, so
     // the backoff rides the claims store's shared row for the other hosts.
     // Rides only the REAL ledger (tests stage temp paths); store trouble is
-    // a printed note, never a failure of the local record.
-    if path == ledger_path().as_path() {
+    // a printed note, never a failure of the local record. The compare runs
+    // on the locked path: after a retake it names the current answer even
+    // when the caller resolved before the fold.
+    if path == lock_path(&ledger_path()) {
         if let Err(e) = crate::claim_store::budget_hold_write(
             None,
             &crate::claims::machine_id(),
@@ -944,7 +1013,18 @@ pub(crate) fn core_reserve() -> u32 {
 /// reserve) skips the write, so the write rate stays flat while the
 /// bucket is healthy.
 pub(crate) fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
-    let _lock = ledger_lock(path);
+    let (_lock, locked) = ledger_lock(Some(path));
+    record_core_locked(&locked, remaining, reset_epoch_s, now);
+}
+
+/// The real-ledger core stamp: the lock, the read and the write share one
+/// late resolve. Tests inject through record_core_at instead.
+pub(crate) fn record_core_real(remaining: i64, reset_epoch_s: i64, now: i64) {
+    let (_lock, locked) = ledger_lock(None);
+    record_core_locked(&locked, remaining, reset_epoch_s, now);
+}
+
+fn record_core_locked(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
     let (mut ledger, _) = read_ledger(path);
     let reset_ms = reset_epoch_s * 1000;
     if ledger.core_seen_ms > 0
@@ -982,7 +1062,7 @@ pub(crate) fn record_core_observation(remaining: i64, reset_epoch_s: i64) {
     if !core_recording_armed() {
         return;
     }
-    record_core_at(&ledger_path(), remaining, reset_epoch_s, now_ms());
+    record_core_real(remaining, reset_epoch_s, now_ms());
 }
 
 pub(crate) fn core_recording_armed() -> bool {
@@ -1108,7 +1188,7 @@ fn dispatch_op(payload: &Value) -> i32 {
             // the Rust transports stamp only the spawns whose child does
             // not consult (child_charges).
             let v = admit_for_origin(
-                &ledger_path(),
+                None,
                 &argv,
                 now,
                 cap_from_env(),
@@ -1135,7 +1215,7 @@ fn dispatch_op(payload: &Value) -> i32 {
                 Some(k @ ("secondary" | "core" | "abuse")) => k,
                 _ => "unknown",
             };
-            match record_refusal(&ledger_path(), now, kind) {
+            match record_refusal_real(now, kind) {
                 Ok(()) => {
                     println!("{}", json!({"recorded": true, "kind": kind}));
                     0
@@ -1191,6 +1271,42 @@ mod tests {
     }
 
     #[test]
+    fn ledger_lock_retakes_when_the_folder_renames_between_resolve_and_verify() {
+        // The whole-dir fold between the resolve and the open leaves the
+        // first open on a stray recreated inode; the post-flock verify must
+        // notice and retake on the fresh answer, and the returned path must
+        // be the one the lock holds.
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join("locks");
+        let moved = tmp.path().join("state").join("locks");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::create_dir_all(&moved).unwrap();
+        let stray = legacy.join("github-request-budget.json.lock");
+        std::fs::write(&stray, b"").unwrap();
+        let real = moved.join("github-request-budget.json.lock");
+        std::fs::write(&real, b"").unwrap();
+        // First resolve answers the legacy spelling; every later resolve
+        // answers the moved one, the way place() does once the fold ran.
+        let first = std::sync::atomic::AtomicBool::new(true);
+        let resolve = || {
+            if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                legacy.clone()
+            } else {
+                moved.clone()
+            }
+        };
+        let (_lock, path) = ledger_lock_resolving(resolve);
+        use std::os::unix::fs::MetadataExt;
+        let held = path.metadata().expect("the returned path exists").ino();
+        let verified = std::fs::metadata(&real).unwrap().ino();
+        assert_eq!(
+            held, verified,
+            "the lock was retaken on the moved folder, not the stray: {path:?}"
+        );
+        assert_ne!(path, stray, "the stray inode was dropped");
+    }
+
+    #[test]
     fn admit_op_holds_agent_callers_and_never_the_user() {
         // AC1-HP / AC1-ERR: at cap, an agent-origin admit refuses `budget`;
         // the user's read admits and the ledger file is untouched.
@@ -1202,7 +1318,7 @@ mod tests {
         assert!(v.admitted, "the staging read is admitted: {v:?}");
         let before = std::fs::read(&path).unwrap();
 
-        let v = admit_for_origin(&path, &read, now, 1, false);
+        let v = admit_for_origin(Some(&path), &read, now, 1, false);
         assert!(v.admitted);
         assert_eq!(v.points_60s, 1);
         assert_eq!(
@@ -1211,7 +1327,7 @@ mod tests {
             "a user admit writes nothing"
         );
 
-        let v = admit_for_origin(&path, &read, now, 1, true);
+        let v = admit_for_origin(Some(&path), &read, now, 1, true);
         assert!(!v.admitted);
         assert_eq!(v.cause, Some("budget"));
     }

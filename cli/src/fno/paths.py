@@ -1304,7 +1304,9 @@ def _plan_path_door(args: list[str]) -> str:
 
     argv[0] is the resolved binary path, so the pydoor rule stays satisfied.
     A missing binary or a failing chain raises; callers surface the error
-    rather than silently resolving a wrong dir.
+    rather than silently resolving a wrong dir. The door is a fast binary
+    read; a hang (a wedged daemon is not possible here, but a stopped
+    machine is) refuses instead of stalling the caller forever.
     """
     import subprocess
 
@@ -1316,7 +1318,10 @@ def _plan_path_door(args: list[str]) -> str:
             "the fno-agents binary was not found; reinstall footnote "
             "or set FNO_AGENTS_BIN"
         )
-    proc = subprocess.run([str(binary), *args], capture_output=True, text=True)
+    try:
+        proc = subprocess.run([str(binary), *args], capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"plan-path door timed out after 5s: {args}") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or "plan-path verb failed").strip()
         raise RuntimeError(detail)
