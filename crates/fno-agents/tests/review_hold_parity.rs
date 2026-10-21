@@ -158,12 +158,6 @@ fn run(fx: &Fixture, args: &[&str], extra_env: &[(&str, String)]) -> (i32, Strin
     cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
-    // The repo-space claims store resolves through the spaces root, so the
-    // seed and the verb must both land in this tree; without the pin the
-    // binary writes under its own home default and the test's db path (and
-    // the raw sqlite stale-corruption edits below) read a store that was
-    // never created.
-    cmd.env("FNO_SPACES_DIR", fx.root.join("state/spaces"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
     cmd.env("FGH_MODE", "open");
     let path = format!(
@@ -198,7 +192,6 @@ fn seed_hold(fx: &Fixture, ttl_ms: u64) {
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)
         .env("FNO_STATE_DIR", fx.root.join("state"))
-        .env("FNO_SPACES_DIR", fx.root.join("state/spaces"))
         .output()
         .expect("seed claim");
     assert!(
@@ -253,26 +246,31 @@ fn force_stale(fx: &Fixture) {
     .unwrap();
 }
 
-/// The claims SQLite store: <state>/spaces/<spacekey>/db/graph.db.
+/// The claims SQLite store the binary resolves with no spaces pin: the
+/// durable space under $HOME/.fno/spaces, keyed by the canonical repo path
+/// with slashes swapped for dashes (the same slug `paths.space_slug` mints).
 fn claims_db(fx: &Fixture) -> PathBuf {
     let resolved = fs::canonicalize(&fx.repo).unwrap();
-    let mut key = String::from("-");
-    for c in resolved.to_string_lossy().trim_start_matches('/').chars() {
-        key.push(if c == '/' { '-' } else { c });
-    }
-    fx.root
-        .join("state")
-        .join("spaces")
-        .join(key)
+    let slug = resolved.to_string_lossy().replace('/', "-");
+    fx.home
+        .join(".fno/spaces")
+        .join(slug)
         .join("db")
         .join("graph.db")
 }
 
 /// The one measured divergence this port fixes: the Rust reader emits the
 /// review_hold_expired receipt the schema describes, with the fields
-/// `_emit_expired` wrote.
+/// `_emit_expired` wrote. Read through the event store the verb writes
+/// through: the raw .jsonl is a stray the store owns, so a read never
+/// serves the raw bytes.
 fn expired_event_matches(fx: &Fixture) {
-    let text = fs::read_to_string(fx.root.join("events.jsonl")).unwrap_or_default();
+    let journal = fx.root.join("events.jsonl");
+    let text = fno_agents::event_store::journal_text_checked(
+        &journal,
+        &fno_agents::event_store::EventQuery::of_types(&["review_hold_expired"]),
+    )
+    .unwrap_or_else(|e| panic!("journal unreadable at {journal:?}: {e}"));
     let line = text
         .lines()
         .find(|l| l.contains("review_hold_expired"))
