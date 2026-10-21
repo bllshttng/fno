@@ -329,7 +329,7 @@ mod tests {
                         "node": "x-0000",
                         "subject": board_subject,
                         "options": [
-                            {"n": 1, "text": "Yes, merge PR 2911."},
+                            {"n": 1, "text": "Grant the merge at this head."},
                             {"n": 2, "text": "No, keep it held."},
                         ],
                         "context": {"recommendation": {"option": 1, "why": "every gate is met"}},
@@ -344,7 +344,7 @@ mod tests {
         let req = request(
             &tmp,
             "q-echo",
-            Some("1. Yes, merge PR 2911. - notes: worried"),
+            Some("1. Grant the merge at this head. - notes: worried"),
         );
         ask_board(&req, "q-echo");
         let result = run_clear(&req);
@@ -1386,7 +1386,7 @@ fn merge_answer_grants(question_event: &Value, answer: &str) -> bool {
 fn is_affirmative_option_text(text: &str) -> bool {
     let normalized = text.trim().to_lowercase();
     [
-        "yes", "y", "merge", "approve", "approved", "lgtm", "ship it", "go ahead", "do it",
+        "yes", "y", "merge", "grant", "approve", "approved", "lgtm", "ship it", "go ahead", "do it",
     ]
     .iter()
     .any(|lead| {
