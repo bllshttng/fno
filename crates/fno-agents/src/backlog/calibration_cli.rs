@@ -79,7 +79,7 @@ impl CalibrationArgs {
     }
 }
 
-const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 verb/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  --propose --stage <verb>  One verdict per candidate lane per kind under the verb: target or blueprint (requires --by-lane, with --stage)\n  -h, --help             Print help";
+const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 stage/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  --propose --stage <stage>  One verdict per candidate lane per kind under the stage: target or blueprint (requires --by-lane, with --stage)\n  -h, --help             Print help";
 
 pub fn run(tail: &[String]) -> i32 {
     if tail.iter().any(|t| t == "--help" || t == "-h") {
