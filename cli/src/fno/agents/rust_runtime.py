@@ -101,10 +101,6 @@ RUST_CLIENT_VERBS = frozenset(
         "rm",
         "reconcile",
         "worked-nodes",
-        # The lead spellings the dispatch lane rewrites to the lead verbs;
-        # client.rs routes them directly.
-        "lead-checkin",
-        "lead-history",
         # Daemon binary-version drift restart: a Rust-only verb
         # dispatched directly in client.rs before build_request (no daemon RPC).
         # SIGTERMs a stale daemon and lazy-starts a fresh one from the current
@@ -328,9 +324,6 @@ RUST_CLIENT_VERBS = frozenset(
         "sandbox-probe",
     }
 )
-
-#: One-release dispatch aliases the binary answers beside the registered names.
-RUST_VERB_ALIASES = frozenset({"lead-history", "lead-checkin"})
 
 #: Verbs the Python ``agents`` app implements that do NOT auto-route to the
 #: Rust client.
