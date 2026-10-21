@@ -4,7 +4,7 @@
 
 The default lane, run ONCE in a context that is not the builder's. One reviewer subagent executes [single-lane.md](single-lane.md) with only the diff and the plan's acceptance criteria, never the builder's reasoning. The dispatching session keeps ownership: it emits the head-pinned attestation, fixes the findings, and runs any `--verify-fixes`. Width is 1, always. The six-way panel stays retired.
 
-Why a fresh context: the building session grading its own diff shares every blind spot with the build. docs/architecture/review-lanes.md records the forked native review catching a silent data-loss bug that two in-session passes missed. `--fresh` is that lesson as an explicit flag: the operator names the level of independence they want.
+Why a fresh context: the building session grading its own diff shares every blind spot with the build. docs/architecture/review-lanes.md records the forked native review catching a silent data-loss bug that two in-session passes missed. `--fresh` is that lesson as an explicit flag: the user names the level of independence they want.
 
 Inputs from the router: a level, optional `--comment` and `--fix`, and an optional target. `--fresh` composes with both flags. Both stay BUILDER-side. The reviewer never fixes, never posts: `--fix` applies findings after the fresh round lands, and `--comment` posts through the existing hold-and-publish path.
 
@@ -16,7 +16,7 @@ Before anything dispatches:
 fno config assert-subagent-budget --width 1
 ```
 
-Exit 0 (permit) continues. Exit 1 (refusal) ends the fresh attempt: print the refusal reason and `fresh review not run (width gate refused)`, dispatch nothing, emit nothing. Never widen to pass the gate, never run a panel instead. The operator can re-run bare for the inline lane, which records the level as self.
+Exit 0 (permit) continues. Exit 1 (refusal) ends the fresh attempt: print the refusal reason and `fresh review not run (width gate refused)`, dispatch nothing, emit nothing. Never widen to pass the gate, never run a panel instead. The user can re-run bare for the inline lane, which records the level as self.
 
 A harness with no subagent dispatch at all takes the same exit. The fresh attempt is not run and the report says `not reviewed`. The inline lane is the fallback. That round records the level as self. A fresh promise never silently degrades into a self review.
 
@@ -51,7 +51,7 @@ bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review pass fresh fork --fi
 bash "${SKILL_DIR}/scripts/emit-attestation.sh" --refuse fresh_reviewer_silent
 ```
 
-The writer resolves the invocation id, head, and branch itself, journals one refused `review_invocation` row, and exits 1. The exit is the refusal. The row is the record, so the attempt reads as attempted-and-refused, never as never-attempted. Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re-run bare only as an operator decision. That round records the level as self.
+The writer resolves the invocation id, head, and branch itself, journals one refused `review_invocation` row, and exits 1. The exit is the refusal. The row is the record, so the attempt reads as attempted-and-refused, never as never-attempted. Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re-run bare only as a user decision. That round records the level as self.
 
 ## Ownership
 
