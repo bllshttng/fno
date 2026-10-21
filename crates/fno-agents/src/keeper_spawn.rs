@@ -906,11 +906,14 @@ mod tests {
         assert_eq!(row["harness_session_id"], SID);
         assert_eq!(row["keeper_child_pid"], 4243);
         assert_eq!(row["origin"], "spawn");
+        // The golden lists the SpawnResult dataclass fields; the printed
+        // receipt maps "harness" <- provider, and "status" is the printer's
+        // own "live" constant with no field behind it.
         let receipt_keys = g["receipt_fields"].as_array().unwrap();
-        for key in ["name", "short_id", "harness", "status"] {
+        for key in ["name", "provider", "short_id", "effective_message"] {
             assert!(
                 receipt_keys.iter().any(|v| v.as_str() == Some(key)),
-                "receipt field {key} absent from the Python SpawnResult"
+                "SpawnResult field {key} absent from the python leg"
             );
         }
     }
