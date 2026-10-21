@@ -165,7 +165,8 @@ def list_providers(
         if record.auth == "managed":
             line += f"  cred-snapshot={managed.snapshot_age_label(record.id)}"
         line += f"  {_usage_age_col(record.id, ttl=quota.probe_ttl_seconds)}"
-        cell = _identity_cell(record, identities.get(record.id), problems[record.id])
+        off_slot = record.auth == "managed" and not _is_active(record)
+        cell = _identity_cell(record, identities.get(record.id), problems[record.id], off_slot)
         line += f"  identity={cell}"
         typer.echo(line)
 
@@ -175,11 +176,11 @@ def list_providers(
     if not (quota.observe or quota.defer_dispatch):
         typer.echo(
             "\nquota observation is OFF: accounts.quota.observe = false and "
-            "accounts.quota.defer_dispatch = false, so dispatch never probes; "
-            "the daemon still re-measures usage every 4 minutes. Set "
-            "accounts.quota.observe = true in ~/.fno/config.toml under "
-            "[accounts.quota] to probe at dispatch too; add defer_dispatch = "
-            "true to also hold a dispatch on a walled account."
+            "accounts.quota.defer_dispatch = false, so dispatch never probes "
+            "(the daemon still does). Set accounts.quota.observe = true in "
+            "~/.fno/config.toml under [accounts.quota] for a meter that "
+            "changes no dispatch decision; add defer_dispatch = true to also "
+            "hold a dispatch on a walled account."
         )
     elif not quota.defer_dispatch:
         typer.echo(
@@ -266,7 +267,7 @@ def _usage_age_col(record_id: str, *, ttl: Optional[int] = None) -> str:
     return f"usage={label}"
 
 
-def _identity_cell(record: ProviderRecord, got, problems: list) -> str:
+def _identity_cell(record: ProviderRecord, got, problems: list, off_slot: bool = False) -> str:
     """One compact identity token for a list row: matched names the row's own
     record, mismatch names who the credential really serves, anything unproven
     renders ``?<reason>`` and never names an account it did not prove."""
@@ -278,6 +279,8 @@ def _identity_cell(record: ProviderRecord, got, problems: list) -> str:
         cell = "?no-observation"
     elif got.status == MATCHED:
         cell = got.matched_record or got.requested_record or "?"
+    elif got.status == MISMATCH and off_slot:
+        cell = "off-slot"  # a managed record not in the slot: no slot login is its own
     elif got.status == MISMATCH:
         served_by = (got.matched_record or got.observed_label
                      or got.observed_principal or "another-account")

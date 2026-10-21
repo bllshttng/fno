@@ -280,8 +280,7 @@ def _bearer_verdict(record: ProviderRecord, bearer: str, now: float) -> str:
         from fno.adapters.providers import managed
 
         if not _attributed_credential_dir(record)[0]:
-            # A stored copy: ask the profile endpoint directly, so its proof
-            # never evicts the slot's one-entry principal cache.
+            # A stored copy: prove it directly; the slot's principal cache stays put.
             want = managed.identity_key(managed.record_principal(record.id))
             got_id = managed.identity_key(managed.principal_of_bearer(bearer)[0])
             if want is None or got_id is None:
