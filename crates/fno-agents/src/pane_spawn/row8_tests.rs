@@ -8,7 +8,7 @@
 //! footnote plan writes its spec into the sessions root. The cursor-agent
 //! mint and the footnote endpoint resolve need their ambient tools or env;
 //! where they are absent the test names the skip instead of failing.
-use super::claude::{claude_core_argv, ClaudeArm, CLAUDE_ARM};
+use super::claude::{claude_core_argv, CLAUDE_ARM};
 use super::env_wrap::enrich_spawn_payload;
 use super::simple::{
     make_plan, SimpleArm, AGY_ARM, CURSOR_ARM, FOOTNOTE_ARM, GROK_ARM, OPENCODE_ARM, PI_ARM,
@@ -357,19 +357,16 @@ fn normalize_command_and_verb_seed() {
 }
 
 #[test]
-fn claude_arm_owns_claude_only() {
-    assert!(ClaudeArm::owns(&PaneContext::simple("claude", "/repo")));
-    assert!(!ClaudeArm::owns(&PaneContext::simple("codex", "/repo")));
-    assert!(!ClaudeArm::owns(&PaneContext::simple("agy", "/repo")));
+fn claude_argv_parity_row8_golden() {
+    let claude = golden(CLAUDE);
+
+    // The arm table seats claude (the seating assert from the retired
+    // owns-only test; production matches the provider string in the table,
+    // so ClaudeArm::owns has no caller).
     match pane_arm_for(&PaneContext::simple("claude", "/repo")) {
         Some(arm) => assert_eq!(arm.name(), "claude"),
         None => panic!("pane_arm_for must seat the claude arm"),
     }
-}
-
-#[test]
-fn claude_argv_parity_row8_golden() {
-    let claude = golden(CLAUDE);
 
     // The plain capture: exact tail equality from the "claude" token, with
     // the --add-dir VALUE stripped (the grant names the capture sandbox's
