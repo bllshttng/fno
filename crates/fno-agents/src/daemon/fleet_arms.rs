@@ -32,6 +32,7 @@ pub(super) struct FleetArms {
     fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
     provider_cap: crate::provider_cap_commands::Arm,
+    usage_refresh: crate::usage_refresh::Arm,
     slot_cutover: crate::slot_cutover::Arm,
     attention: crate::attention_arm::Arm,
     otlp_export: crate::otlp_export::Arm,
@@ -109,6 +110,7 @@ impl FleetArms {
             fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
             provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
+            usage_refresh: crate::usage_refresh::Arm::new(opts.agents_config_cwd.clone()),
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
             attention: crate::attention_arm::Arm::new(opts.agents_config_cwd.clone()),
             otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
@@ -306,6 +308,8 @@ impl FleetArms {
         crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
         crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());
+        // Every account's usage re-measured inside the cache TTL.
+        crate::usage_refresh::maybe_tick(&self.usage_refresh);
         crate::slot_cutover::maybe_tick(&self.slot_cutover, ctx.home.clone());
         crate::attention_arm::maybe_tick(&self.attention, ctx.home.clone());
         crate::otlp_export::maybe_tick(&self.otlp_export, ctx.home.clone());

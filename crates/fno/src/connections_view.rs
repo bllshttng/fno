@@ -51,17 +51,35 @@ pub struct Account {
     #[serde(default = "unknown_headroom")]
     pub headroom: String,
     /// Snapshot age label for managed accounts; None for oauth/api-key records.
-    #[serde(default)]
+    /// Today's `-J` names it `cred-snapshot`; the alias is what fills SNAP.
+    #[serde(default, alias = "cred-snapshot")]
     pub snapshot: Option<String>,
     /// The identity cell parsed from plain `list`'s own last column (the
     /// phase-2 read), taken verbatim, problems and all. None until it lands.
     #[serde(skip)]
     pub identity_cell: Option<String>,
+    /// The usage cell from `config accounts usage -J`, cached read first and
+    /// the live `--refresh` read after it. None until either lands.
+    #[serde(skip)]
+    pub usage: Option<UsageCell>,
 }
 
 fn unknown_headroom() -> String {
     "unknown".to_string()
 }
+
+/// One account's usage, rendered: each window's used percent, or the reason
+/// there is none in plain words. `relogin` marks a reason only a fresh login
+/// repairs, which turns `r` into the login flow for that row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageCell {
+    pub text: String,
+    pub relogin: bool,
+}
+
+/// Budget for the live usage read. Each claude account costs a profile
+/// call and a usage call, so it gets more room than the cached reads.
+const USAGE_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// One combo, as emitted by `fno config accounts combos list -J` (task 1.1 added the
 /// `active` field).
@@ -109,6 +127,11 @@ pub enum ReadOutcome {
     /// the modal stays Ready, never Degraded (identity is enrichment, not the
     /// list itself).
     IdentityFailed(String),
+    /// A usage read landed: `(id, cell)` pairs merged into the rows by id.
+    Usage(Vec<(String, UsageCell)>),
+    /// The live usage read failed: cells keep the cached reading and the
+    /// footer names the failure.
+    UsageFailed(String),
 }
 
 /// What a key press asks the async wrapper to do. The reducer stays pure by
@@ -325,6 +348,9 @@ pub struct ConnectionsView {
     /// identity cell; Ready shows each row's verdict; Failed shows `?` on
     /// every row while the modal stays Ready.
     pub identity_phase: IdentityPhase,
+    /// Real records whose login pane `r` opened; the next `r` on that row
+    /// saves the new login with `register`.
+    pub relogin: std::collections::BTreeSet<String>,
 }
 
 /// The phase-2 identity read's lifecycle.
@@ -359,6 +385,7 @@ impl ConnectionsView {
             gen: 0,
             active_account: None,
             identity_phase: IdentityPhase::Pending,
+            relogin: Default::default(),
         }
     }
 
@@ -409,12 +436,24 @@ impl ConnectionsView {
     /// notice and clamps selections to the new list lengths.
     pub fn apply_read(&mut self, outcome: ReadOutcome) {
         match outcome {
-            ReadOutcome::Ok { accounts, combos } => {
+            ReadOutcome::Ok {
+                mut accounts,
+                combos,
+            } => {
                 // A pending login that now has a real record has been registered;
                 // drop its synthetic row (register is the durable step).
                 let real: std::collections::HashSet<&str> =
                     accounts.iter().map(|a| a.id.as_str()).collect();
                 self.pending.retain(|p| !real.contains(p.id.as_str()));
+                // Keep the last usage reading on screen until the next one
+                // lands, so a re-read never blanks the percents.
+                for a in &mut accounts {
+                    a.usage = self
+                        .accounts
+                        .iter()
+                        .find(|old| old.id == a.id)
+                        .and_then(|old| old.usage.clone());
+                }
                 self.accounts = accounts;
                 self.combos = combos;
                 self.state = ModalState::Ready;
@@ -440,6 +479,16 @@ impl ConnectionsView {
             }
             ReadOutcome::IdentityFailed(_) => {
                 self.identity_phase = IdentityPhase::Failed;
+            }
+            ReadOutcome::Usage(cells) => {
+                for (id, cell) in cells {
+                    if let Some(a) = self.accounts.iter_mut().find(|a| a.id == id) {
+                        a.usage = Some(cell);
+                    }
+                }
+            }
+            ReadOutcome::UsageFailed(reason) => {
+                self.notice = Some(format!("usage refresh failed: {reason}"));
             }
         }
     }
@@ -857,13 +906,36 @@ impl ConnectionsView {
             self.notice = Some(format!("{} is not a managed account", acct.id));
             return ConnIntent::Redraw;
         }
+        // The stored login is someone else's, or dead: a re-snapshot would
+        // save the wrong login again, so open a real login pane first. The
+        // next `r` on the row saves whatever that pane signed in.
+        let needs_login = acct.usage.as_ref().is_some_and(|u| u.relogin);
+        let (id, harness) = (acct.id.clone(), acct.harness.clone());
+        if needs_login && !self.relogin.contains(&id) {
+            let login: Vec<String> = match harness.as_str() {
+                "claude" => vec!["claude".into(), "/login".into()],
+                "codex" => vec!["codex".into(), "login".into()],
+                _ => {
+                    self.notice = Some(format!("{id}: no login flow for {harness}"));
+                    return ConnIntent::Redraw;
+                }
+            };
+            self.relogin.insert(id.clone());
+            self.notice = Some(format!(
+                "login pane opened: sign in as {id} there (it swaps the shared {harness} login), then press r"
+            ));
+            let mut argv: Vec<String> = vec!["mux".into(), "pane".into(), "run".into()];
+            argv.extend(login);
+            return ConnIntent::SpawnLogin(argv);
+        }
+        self.relogin.remove(&id);
         let argv = vec![
             "config".into(),
             "accounts".into(),
             "register".into(),
-            acct.id.clone(),
+            id,
             "--harness".into(),
-            acct.harness.clone(),
+            harness,
         ];
         self.acting = true;
         self.notice = None;
@@ -1137,7 +1209,7 @@ impl ConnectionsView {
             .chain(self.pending.iter().map(|p| p.cli.clone()))
             .collect();
         let auths: Vec<String> = self.accounts.iter().map(|a| a.auth.clone()).collect();
-        let headrooms: Vec<String> = self.accounts.iter().map(|a| a.headroom.clone()).collect();
+        let headrooms: Vec<String> = self.accounts.iter().map(|a| self.usage_text(a)).collect();
         let snaps: Vec<String> = self
             .accounts
             .iter()
@@ -1158,7 +1230,7 @@ impl ConnectionsView {
         };
         let w_cli = w("CLI", &clis);
         let w_auth = w("AUTH", &auths);
-        let w_head = w("HEADROOM", &headrooms);
+        let w_head = w("USAGE", &headrooms);
         let w_snap = w("SNAP", &snaps);
         // Header is inert: no cursor row ever points at it (selection clamps
         // to data rows), so nothing routes a keypress here.
@@ -1170,7 +1242,7 @@ impl ConnectionsView {
             wcli = w_cli,
             auth = "AUTH",
             wauth = w_auth,
-            head = "HEADROOM",
+            head = "USAGE",
             whead = w_head,
             snap = "SNAP",
             wsnap = w_snap,
@@ -1195,7 +1267,7 @@ impl ConnectionsView {
                 wcli = w_cli,
                 auth = a.auth,
                 wauth = w_auth,
-                head = a.headroom,
+                head = headrooms[i],
                 whead = w_head,
                 snap = snaps[i],
                 wsnap = w_snap,
@@ -1214,6 +1286,17 @@ impl ConnectionsView {
                 cli = clis[self.accounts.len() + j],
                 wcli = w_cli,
             ));
+        }
+    }
+
+    /// The usage cell for one row: the latest reading, or the list's headroom
+    /// word until one lands. A row whose login pane is open says what `r` does.
+    fn usage_text(&self, a: &Account) -> String {
+        let text = a.usage.as_ref().map_or(&a.headroom, |u| &u.text);
+        if self.relogin.contains(&a.id) {
+            format!("{text}; login open, r saves it")
+        } else {
+            text.clone()
         }
     }
 
@@ -1389,6 +1472,62 @@ pub fn parse_identity_cells(stdout: &[u8]) -> Option<Vec<(String, String)>> {
     }
 }
 
+/// Parse `fno config accounts usage -J` into `(id, cell)` pairs. A reading
+/// renders each window's used percent; an unknown renders its reason in plain
+/// words. `None` on output that is not a JSON object.
+pub fn parse_usage(stdout: &[u8]) -> Option<Vec<(String, UsageCell)>> {
+    let map: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(stdout).ok()?;
+    let cells = map
+        .into_iter()
+        .map(|(id, row)| {
+            let windows: Vec<String> = row["windows"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|w| {
+                    Some(format!(
+                        "{} {:.0}%",
+                        w["label"].as_str()?,
+                        w["used_pct"].as_f64()?
+                    ))
+                })
+                .collect();
+            let cell = if windows.is_empty() {
+                unknown_usage(row["reason"].as_str().unwrap_or("no reading"))
+            } else {
+                UsageCell {
+                    text: windows.join(" "),
+                    relogin: false,
+                }
+            };
+            (id, cell)
+        })
+        .collect();
+    Some(cells)
+}
+
+/// The plain-words cell for a usage probe's unknown reason (the slugs
+/// `probe_usage_detail` names). Only a fresh login repairs the first two.
+fn unknown_usage(reason: &str) -> UsageCell {
+    let (text, relogin) = match reason {
+        // A stored login that is another account's, or dead, both land here.
+        "unattributed" => ("no proven login for this account: r to log in", true),
+        "credential-rejected" => ("login expired: r to log in", true),
+        "not-probed" => ("not measured yet", false),
+        "harness-unsupported" | "auth-unsupported" => ("no usage meter for this account", false),
+        other => {
+            return UsageCell {
+                text: format!("no reading ({other})"),
+                relogin: false,
+            }
+        }
+    };
+    UsageCell {
+        text: text.to_string(),
+        relogin,
+    }
+}
+
 /// Run both reads in parallel and fold into a [`ReadOutcome`]. Any read failing
 /// (missing `fno`, nonzero exit, unparseable JSON, timeout) degrades the whole
 /// modal with a named reason (AC2-ERR) - the CLI is the single source, so a
@@ -1402,12 +1541,13 @@ pub fn parse_identity_cells(stdout: &[u8]) -> Option<Vec<(String, String)>> {
 /// client's gen check, and the modal stays usable throughout (identity is
 /// enrichment, never a gate).
 pub async fn load_all(tx: tokio::sync::mpsc::UnboundedSender<(u64, ReadOutcome)>, gen: u64) {
-    let (acc, com) = tokio::join!(
+    let (acc, com, cached) = tokio::join!(
         read_json(&["config", "accounts", "list", "-J"], READ_TIMEOUT),
         read_json(
             &["config", "accounts", "combos", "list", "-J"],
             READ_TIMEOUT
         ),
+        read_json(&["config", "accounts", "usage", "-J"], READ_TIMEOUT),
     );
     let outcome = fold_phase1(acc, com);
     let degraded = matches!(outcome, ReadOutcome::Degraded(_));
@@ -1415,16 +1555,51 @@ pub async fn load_all(tx: tokio::sync::mpsc::UnboundedSender<(u64, ReadOutcome)>
     if degraded {
         return;
     }
-    let identity = match read_json(&["config", "accounts", "list"], IDENTITY_TIMEOUT).await {
-        Ok(bytes) => match parse_identity_cells(&bytes) {
-            Some(cells) => ReadOutcome::Identity(cells),
-            None => ReadOutcome::IdentityFailed(
-                "identity: no identity column in accounts list output".into(),
-            ),
-        },
-        Err(e) => ReadOutcome::IdentityFailed(format!("identity: {e}")),
+    // The cached reading paints at once; a failed cached read is silent
+    // because the live read below follows and names its own failure.
+    if let Some(cells) = cached.ok().and_then(|b| parse_usage(&b)) {
+        let _ = tx.send((gen, ReadOutcome::Usage(cells)));
+    }
+    let identity = async {
+        let outcome = match read_json(&["config", "accounts", "list"], IDENTITY_TIMEOUT).await {
+            Ok(bytes) => match parse_identity_cells(&bytes) {
+                Some(cells) => ReadOutcome::Identity(cells),
+                None => ReadOutcome::IdentityFailed(
+                    "identity: no identity column in accounts list output".into(),
+                ),
+            },
+            Err(e) => ReadOutcome::IdentityFailed(format!("identity: {e}")),
+        };
+        let _ = tx.send((gen, outcome));
     };
-    let _ = tx.send((gen, identity));
+    // Opening the modal (and R) re-measures every account, so a row never
+    // shows a number older than this open.
+    let live = async {
+        // One live refresh at a time: a repeated R waits out the one running,
+        // then reads the cache it just wrote instead of probing again.
+        static LAST_LIVE: std::sync::OnceLock<tokio::sync::Mutex<Option<std::time::Instant>>> =
+            std::sync::OnceLock::new();
+        let mut last = LAST_LIVE.get_or_init(Default::default).lock().await;
+        let fresh = last.is_some_and(|at| at.elapsed() < Duration::from_secs(10));
+        let args: &[&str] = if fresh {
+            &["config", "accounts", "usage", "-J"]
+        } else {
+            &["config", "accounts", "usage", "--refresh", "-J"]
+        };
+        let read = read_json(args, USAGE_REFRESH_TIMEOUT).await;
+        if !fresh && read.is_ok() {
+            *last = Some(std::time::Instant::now());
+        }
+        let outcome = match read {
+            Ok(bytes) => match parse_usage(&bytes) {
+                Some(cells) => ReadOutcome::Usage(cells),
+                None => ReadOutcome::UsageFailed("unparseable output".into()),
+            },
+            Err(e) => ReadOutcome::UsageFailed(e),
+        };
+        let _ = tx.send((gen, outcome));
+    };
+    tokio::join!(identity, live);
 }
 
 /// Fold the two phase-1 reads into one [`ReadOutcome`].
@@ -1563,10 +1738,11 @@ mod tests {
     #[test]
     fn parse_accounts_rows() {
         let canonical = parse_accounts(
-            br#"[{"id":"ccm","name":"CCM","harness":"claude","auth":"managed","priority":10,"active":true,"headroom":"ok","snapshot":"2h"}]"#,
+            br#"[{"id":"ccm","name":"CCM","harness":"claude","auth":"managed","priority":10,"active":true,"headroom":"ok","cred-snapshot":"2h"}]"#,
         )
         .expect("canonical `harness` key must parse");
         assert_eq!(canonical[0].harness, "claude");
+        assert_eq!(canonical[0].snapshot.as_deref(), Some("2h"));
         assert_eq!(sample_accounts()[0].harness, "claude");
 
         let accts = sample_accounts();
@@ -1616,6 +1792,54 @@ mod tests {
         assert!(out.contains("●")); // active badge on ccm
         assert!(out.contains("unknown")); // glm headroom shown, not hidden
         assert!(out.contains("2h")); // snap age cell, no snap= prefix
+    }
+
+    /// Every row shows its percent, or says in plain words why it cannot; a
+    /// re-read keeps the last reading on screen; and a row whose stored login
+    /// is another account turns `r` into a login pane, then a register.
+    #[test]
+    fn usage_rows() {
+        let mut v = ready_view();
+        let usage = br#"{"ccm": {"windows": [{"label": "5h", "used_pct": 26.4}, {"label": "weekly", "used_pct": 99.0}]},
+                         "ccr": {"state": "unknown", "reason": "unattributed"},
+                         "glm": {"state": "unknown", "reason": "auth-unsupported"}}"#;
+        v.apply_read(ReadOutcome::Usage(parse_usage(usage).expect("usage json")));
+        let out = v.render().join("\n");
+        assert!(
+            out.contains("USAGE") && out.contains("5h 26% weekly 99%"),
+            "{out}"
+        );
+        assert!(
+            out.contains("no proven login for this account: r to log in"),
+            "{out}"
+        );
+        assert!(out.contains("no usage meter for this account"), "{out}");
+        assert!(parse_usage(b"[]").is_none());
+
+        v.apply_read(ReadOutcome::Ok {
+            accounts: sample_accounts(),
+            combos: sample_combos(),
+        });
+        assert!(
+            v.render().join("\n").contains("5h 26%"),
+            "re-read blanked usage"
+        );
+        v.apply_read(ReadOutcome::UsageFailed("timed out".into()));
+        assert!(v.render().join("\n").contains("5h 26%"));
+        assert_eq!(v.notice.as_deref(), Some("usage refresh failed: timed out"));
+
+        v.acct_sel = 1; // ccr: its stored login serves another account
+        let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let login = v.on_key(b'r');
+        assert_eq!(
+            login,
+            ConnIntent::SpawnLogin(argv("mux pane run claude /login"))
+        );
+        assert!(v.render().join("\n").contains("login open, r saves it"));
+        let save = v.on_key(b'r');
+        let register = argv("config accounts register ccr --harness claude");
+        assert_eq!(save, ConnIntent::Run(register));
+        assert!(v.relogin.is_empty());
     }
 
     // piece 1: set-active-account (`s`) is a session-local spawn-routing
