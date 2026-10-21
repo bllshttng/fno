@@ -44,7 +44,7 @@ fn inputs_from(case: &Value, config: &toml::Table) -> fno_agents::spawn_compose:
         .get("profiles")
         .cloned()
         .unwrap_or_else(|| empty.clone());
-    let dispatch_commands = subtree(config, &["dispatch", "verbs"]);
+    let dispatch_commands = subtree(config, &["dispatch", "command_registry"]);
     fno_agents::spawn_compose::Inputs {
         argv: case["argv"]
             .as_array()

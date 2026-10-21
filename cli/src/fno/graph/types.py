@@ -9,7 +9,7 @@ import math
 from enum import Enum
 from typing import Optional, Self
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, computed_field, field_validator, model_validator
 
 from fno.company.contracts import CompanyWorkRefs, validate_company_work_for_node
 
@@ -284,7 +284,10 @@ class Node(BaseModel):
     # (`<command> {id}`, allowlist-validated at resolve, not write); dispatch_brief
     # rides TARGET_BRIEF env into cold-start. Both null = the built-in
     # `/target --no-merge {id}` default. Old graph.json entries parse without them.
-    dispatch_command: Optional[str] = None
+    # Rows written before the rename carry the old key; it still reads here.
+    dispatch_command: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("dispatch_command", "dispatch_verb")  # verb-wording: allow
+    )
     dispatch_brief: Optional[str] = None
     plan_path: Optional[str] = None
     company_work: Optional[CompanyWorkRefs] = None

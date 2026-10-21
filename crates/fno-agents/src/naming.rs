@@ -568,7 +568,9 @@ pub fn run_name_mint(args: &[String]) -> i32 {
         value_of(args, "--qualifier").as_deref(),
         value_of(args, "--discriminator").as_deref(),
         value_of(args, "--source").as_deref(),
-        value_of(args, "--command").as_deref(),
+        value_of(args, "--command")
+            .or_else(|| value_of(args, "--verb")) // verb-wording: allow (old flag, one release)
+            .as_deref(),
         value_of(args, "--model").as_deref(),
     ) {
         Ok(name) => {

@@ -234,13 +234,22 @@ pub fn batch_max_nodes() -> i64 {
 /// The configured dispatch-command extension: `(allowed_commands, command_registry
 /// keys)`. Unset `allowed_commands` defaults to the shipped trio, the same
 /// default the Python config model carries.
+/// The pre-rename spellings of `dispatch.allowed_commands` and
+/// `dispatch.command_registry`. A config.toml written before the rename still
+/// loads: readers take the current key first and these second.
+pub const LEGACY_ALLOWED_COMMANDS_KEY: &str = "allowed_verbs"; // verb-wording: allow (config key)
+pub const LEGACY_COMMAND_REGISTRY_KEY: &str = "verb_registry"; // verb-wording: allow (config key)
+
 pub fn dispatch_commands_from_config() -> (Vec<String>, Vec<String>) {
     const DEFAULT_DISPATCH_COMMANDS: [&str; 3] = ["/target", "/think", "/blueprint"];
     if let Some(path) = candidates().first() {
         let doc = read_flat(path);
         let dispatch = doc.get("dispatch");
         let allowed: Vec<String> = dispatch
-            .and_then(|d| d.get("allowed_commands"))
+            .and_then(|d| {
+                d.get("allowed_commands")
+                    .or_else(|| d.get(LEGACY_ALLOWED_COMMANDS_KEY))
+            })
             .and_then(Value::as_array)
             .map(|a| {
                 a.iter()
@@ -255,7 +264,10 @@ pub fn dispatch_commands_from_config() -> (Vec<String>, Vec<String>) {
                     .collect()
             });
         let registry: Vec<String> = dispatch
-            .and_then(|d| d.get("command_registry"))
+            .and_then(|d| {
+                d.get("command_registry")
+                    .or_else(|| d.get(LEGACY_COMMAND_REGISTRY_KEY))
+            })
             .and_then(Value::as_object)
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();

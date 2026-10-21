@@ -125,7 +125,7 @@ pub const RETIRED_FLAGS: &[(&str, &str)] = &[
     ("--difficulty", "difficulty=<band>"),
     ("--tag", "tags+=<tag>"),
     ("--untag", "tags-=<tag>"),
-    ("--dispatch-command", "dispatch_command=<command>"),
+    ("--dispatch-verb", "dispatch_command=<command>"),
     ("--dispatch-brief", "dispatch_brief=<text>"),
     ("--locked-by", "locked_by=<holder>"),
     (

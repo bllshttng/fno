@@ -338,7 +338,8 @@ impl Args {
                 "--branch" => a.branch = it.next().cloned(),
                 "--head" => a.head = it.next().cloned().unwrap_or_default(),
                 "--holder" => a.holder = it.next().cloned(),
-                "--command" => a.command = it.next().cloned().unwrap_or_default(),
+                // --verb: an older hooks/review-hold.sh still passes it.
+                "--command" | "--verb" => a.command = it.next().cloned().unwrap_or_default(), // verb-wording: allow
                 "--invocation-id" => a.invocation_id = it.next().cloned().unwrap_or_default(),
                 "--args-raw" => a.args_raw = it.next().cloned().unwrap_or_default(),
                 "--level" => a.level = it.next().cloned().unwrap_or_default(),

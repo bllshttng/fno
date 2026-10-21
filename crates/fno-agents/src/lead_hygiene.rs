@@ -882,7 +882,7 @@ mod tests {
     fn check2_fires_on_lead() {
         let result = check2_spawn_step_down_rule(&fixture(LEAD), None);
         result.assert_fires("lead-2026-08-05");
-        // The fixture's index-65 entry is the retired `--dispatch-command`
+        // The fixture's index-65 entry is the retired `--dispatch-verb`
         // spelling, which refuses at parse and is no longer a ruling; the
         // first post-departure orchestration action is now the mail send at
         // 111.
@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn backlog_update_dispatch_writes_are_rulings() {
         assert!(!ruling_command(
-            "fno backlog update x-1 --dispatch-command think"
+            "fno backlog update x-1 --dispatch-verb think"
         ));
         assert!(ruling_command(
             "fno backlog update x-1 dispatch_command=think"

@@ -94,7 +94,7 @@ def write_cmd(
     worktree: str = typer.Option(..., "--worktree", help="Absolute worktree path"),
     branch: str = typer.Option(..., "--branch", help="git branch"),
     head: str = typer.Option(..., "--head", help="git HEAD sha (the candidate)"),
-    next_command: str = typer.Option(..., "--next-command", help="Exactly one next action command"),
+    next_command: str = typer.Option(..., "--next-command", "--next-verb", help="Exactly one next action command"),  # verb-wording: allow (old flag, one release)
     next_target: Optional[str] = typer.Option(None, "--next-target", help="Next action target (node/task)"),
     completed_tasks: Optional[str] = typer.Option(None, "--completed-tasks", help="Newline-separated completed task ids"),
     remaining_tasks: Optional[str] = typer.Option(None, "--remaining-tasks", help="Newline-separated remaining task ids"),

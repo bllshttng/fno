@@ -2700,7 +2700,7 @@ def cmd_name(
     qualifier: str = typer.Option("", "--qualifier", help="Lifecycle reason, e.g. retro."),
     discriminator: str = typer.Option("", "--discriminator", help="Uniqueness token; never shaved."),
     source: str = typer.Option("", "--source", help="Dispatch source code; omit when attended."),
-    command: str = typer.Option("", "--command", help="Command code (t|bp|r|th|f) or a work command the bridge maps."),
+    command: str = typer.Option("", "--command", "--verb", help="Command code (t|bp|r|th|f) or a work command the bridge maps."),  # verb-wording: allow (old flag, one release)
 ) -> None:
     """Mechanical bridge to the canonical agent-name owner, for shell dispatchers.
 

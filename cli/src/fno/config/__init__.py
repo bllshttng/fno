@@ -24,6 +24,7 @@ from typing import Any, Literal, Mapping, Optional, cast
 
 import yaml
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -2081,9 +2082,15 @@ class DispatchBlock(BaseModel):
     command: str = ""
     # Registered commands from outside fno (unioned with allowed_commands at resolve;
     # a shipped or allowlisted spelling cannot be redefined here).
-    command_registry: dict[str, DispatchCommandDescriptor] = Field(default_factory=dict)
+    # Both keys read their pre-rename spelling too, so an existing config.toml loads.
+    command_registry: dict[str, DispatchCommandDescriptor] = Field(
+        default_factory=dict, validation_alias=AliasChoices("command_registry", "verb_registry")  # verb-wording: allow
+    )
     # US3 command allowlist: a node dispatch_command must match or the resolver refuses.
-    allowed_commands: list[str] = Field(default_factory=lambda: list(_DEFAULT_DISPATCH_COMMANDS))
+    allowed_commands: list[str] = Field(
+        default_factory=lambda: list(_DEFAULT_DISPATCH_COMMANDS),
+        validation_alias=AliasChoices("allowed_commands", "allowed_verbs"),  # verb-wording: allow
+    )
     # DEPRECATED (/): reads as `auto_merge.grant` for one release;
     # every dispatch path reads the grant key now, no consumer reads this field.
     # An explicit --allow-merge/--no-merge flag always wins.

@@ -373,7 +373,9 @@ pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
             }
             // stdout is only the outcome JSON; the flag is accepted for parity.
             "--json" | "-J" => {}
-            "--ack-command-risk" => {
+            // The old flag name stays accepted for one release.
+            "--ack-command-risk" | "--ack-verb-risk" => {
+                // verb-wording: allow (old flag)
                 ack_command_risk = Some(
                     it.next()
                         .ok_or((

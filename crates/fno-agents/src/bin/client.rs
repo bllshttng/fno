@@ -850,7 +850,7 @@ async fn run(args: Vec<String>) -> i32 {
 
     // `commands`: hidden claim-style (matches!); the action list is
     // shrink-only, so the harness-commands skill teaches the spelling.
-    if matches!(command, "verbs") {
+    if matches!(command, "commands") {
         return fno_agents::harness_commands::run_commands(&args[1..]);
     }
 

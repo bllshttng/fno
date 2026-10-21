@@ -54,7 +54,7 @@ backlog update[^`]* --no-reverted|reverted=false on fno backlog update|the opera
 backlog update[^`]* --difficulty|difficulty=<band> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --tag|tags+=<tag> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --untag|tags-=<tag> on fno backlog update|the operator-form retirement (user 2026-10-02)
-backlog update[^`]* --dispatch-command|dispatch_command=<command> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --dispatch-verb|dispatch_command=<command> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --dispatch-brief|dispatch_brief=<text> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --locked-by|locked_by=<holder> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --locked-by-harness|fno agents claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)

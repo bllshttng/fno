@@ -45,7 +45,7 @@
    "kind": "user_text"
   },
   {
-   "text": "The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/command` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.",
+   "text": "The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/verb` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.",
    "index": 7,
    "kind": "user_text"
   },
@@ -55,7 +55,7 @@
    "kind": "user_text"
   },
   {
-   "text": "The unit of continuity is the **node**, not the phase: one teammate session carries a node from think through blueprint through do. Mailing the next command into the live pane IS the dispatch - no stop, no respawn, no re-explaining context the session already holds:",
+   "text": "The unit of continuity is the **node**, not the phase: one teammate session carries a node from think through blueprint through do. Mailing the next verb into the live pane IS the dispatch - no stop, no respawn, no re-explaining context the session already holds:",
    "index": 9,
    "kind": "user_text"
   },
@@ -75,12 +75,12 @@
    "kind": "user_text"
   },
   {
-   "text": "It looks like a wait and behaves like the heartbeat this section replaced: every pass re-reads a status table into your context, and none of those passes sees a transition sooner than the armed wait would. One lead wrote this 25 times against 4 uses of the real command, which is how the anti-pattern s",
+   "text": "It looks like a wait and behaves like the heartbeat this section replaced: every pass re-reads a status table into your context, and none of those passes sees a transition sooner than the armed wait would. One lead wrote this 25 times against 4 uses of the real verb, which is how the anti-pattern s",
    "index": 13,
    "kind": "user_text"
   },
   {
-   "text": "**This is a wiring gap, not a law, so do not build around it.** The durable push leg for `blocked` already exists on the event bus: `fno doctor event emit -t blocked` auto-pushes a notice to the parent handle, and `fno doctor event push-parent --type blocked` is the manual command. What is missing is an emitter - no",
+   "text": "**This is a wiring gap, not a law, so do not build around it.** The durable push leg for `blocked` already exists on the event bus: `fno doctor event emit -t blocked` auto-pushes a notice to the parent handle, and `fno doctor event push-parent --type blocked` is the manual verb. What is missing is an emitter - no",
    "index": 14,
    "kind": "user_text"
   },
@@ -268,7 +268,7 @@
   },
   {
    "tool": "Bash",
-   "target": "fno backlog update x-5c43 --dispatch-command /fno:think --add-blocker x-2388 2>&1 | tail -3; echo \"=== verify ===\"; fno backlog get x-5c43 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('status:',d['status'],'| blocked_by:',d.get('blocked_by'),'| command:',d.get('dispatch_command'),'| plan:',d.get('plan_path','NONE'))\"",
+   "target": "fno backlog update x-5c43 --dispatch-verb /fno:think --add-blocker x-2388 2>&1 | tail -3; echo \"=== verify ===\"; fno backlog get x-5c43 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('status:',d['status'],'| blocked_by:',d.get('blocked_by'),'| verb:',d.get('dispatch_verb'),'| plan:',d.get('plan_path','NONE'))\"",
    "index": 46,
    "kind": "tool_use"
   },
@@ -381,7 +381,7 @@
   },
   {
    "tool": "Bash",
-   "target": "fno backlog update x-9ae8 --dispatch-command /fno:think 2>&1 | tail -2; echo \"=== verify ===\"; fno backlog get x-9ae8 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('id:',d['id'],'| status:',d['status'],'| p:',d['priority'],'| size:',d.get('size'),'| command:',d.get('dispatch_command'),'| plan:',d.get('plan_path','NONE'))\"",
+   "target": "fno backlog update x-9ae8 --dispatch-verb /fno:think 2>&1 | tail -2; echo \"=== verify ===\"; fno backlog get x-9ae8 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('id:',d['id'],'| status:',d['status'],'| p:',d['priority'],'| size:',d.get('size'),'| verb:',d.get('dispatch_verb'),'| plan:',d.get('plan_path','NONE'))\"",
    "index": 65,
    "kind": "tool_use"
   },
@@ -427,7 +427,7 @@
    "kind": "user_text"
   },
   {
-   "text": "**`$TARGET_BRIEF` (US3):** when a dispatcher launched this `/think` on a node via `dispatch_command: /think`, it may set `$TARGET_BRIEF` in the environment - a plain-text brief (capped at 8 KB, carried via env not the command line) with the scope/\"why\" the dispatcher wanted explored. If it is set, fold",
+   "text": "**`$TARGET_BRIEF` (US3):** when a dispatcher launched this `/think` on a node via `dispatch_verb: /think`, it may set `$TARGET_BRIEF` in the environment - a plain-text brief (capped at 8 KB, carried via env not the command line) with the scope/\"why\" the dispatcher wanted explored. If it is set, fold",
    "index": 74,
    "kind": "user_text"
   },
@@ -452,7 +452,7 @@
    "kind": "user_text"
   },
   {
-   "text": "You are mid-conversation about an fno-touched node and want a deep `/think` to pick it up off the main thread, carrying THIS conversation as context. One command hands the node to a fully interactive `claude --bg` `/think` worker that runs beside this thread in its own agents-view row. Codex and Gemini",
+   "text": "You are mid-conversation about an fno-touched node and want a deep `/think` to pick it up off the main thread, carrying THIS conversation as context. One verb hands the node to a fully interactive `claude --bg` `/think` worker that runs beside this thread in its own agents-view row. Codex and Gemini",
    "index": 79,
    "kind": "user_text"
   },
@@ -517,7 +517,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno do plan validate ~/c3po/internal/fno/plans/20260805-four-axis-vocabulary-cutover-x-9ae8.md 2>&1 | tail -10\necho \"=== link ===\"\nfno backlog update x-9ae8 --plan-path ~/c3po/internal/fno/plans/20260805-four-axis-vocabulary-cutover-x-9ae8.md 2>&1 | tail -3\necho \"=== derived status ===\"\nfno backlog get x-9ae8 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('status:',d['status'],'| p:',d['priority'],'| size:',d.get('size'),'| command:',d.get('dispatch_command')); print('plan:',d.get('plan_path'))\"",
+   "target": "cd .\nfno do plan validate ~/c3po/internal/fno/plans/20260805-four-axis-vocabulary-cutover-x-9ae8.md 2>&1 | tail -10\necho \"=== link ===\"\nfno backlog update x-9ae8 --plan-path ~/c3po/internal/fno/plans/20260805-four-axis-vocabulary-cutover-x-9ae8.md 2>&1 | tail -3\necho \"=== derived status ===\"\nfno backlog get x-9ae8 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('status:',d['status'],'| p:',d['priority'],'| size:',d.get('size'),'| verb:',d.get('dispatch_verb')); print('plan:',d.get('plan_path'))\"",
    "index": 90,
    "kind": "tool_use"
   },
@@ -741,7 +741,7 @@
    "kind": "user_text"
   },
   {
-   "text": "**`$TARGET_BRIEF` (US3):** when a dispatcher launched this `/think` on a node via `dispatch_command: /think`, it may set `$TARGET_BRIEF` in the environment - a plain-text brief (capped at 8 KB, carried via env not the command line) with the scope/\"why\" the dispatcher wanted explored. If it is set, fold",
+   "text": "**`$TARGET_BRIEF` (US3):** when a dispatcher launched this `/think` on a node via `dispatch_verb: /think`, it may set `$TARGET_BRIEF` in the environment - a plain-text brief (capped at 8 KB, carried via env not the command line) with the scope/\"why\" the dispatcher wanted explored. If it is set, fold",
    "index": 129,
    "kind": "user_text"
   },
@@ -766,7 +766,7 @@
    "kind": "user_text"
   },
   {
-   "text": "You are mid-conversation about an fno-touched node and want a deep `/think` to pick it up off the main thread, carrying THIS conversation as context. One command hands the node to a fully interactive `claude --bg` `/think` worker that runs beside this thread in its own agents-view row. Codex and Gemini",
+   "text": "You are mid-conversation about an fno-touched node and want a deep `/think` to pick it up off the main thread, carrying THIS conversation as context. One verb hands the node to a fully interactive `claude --bg` `/think` worker that runs beside this thread in its own agents-view row. Codex and Gemini",
    "index": 134,
    "kind": "user_text"
   },
@@ -838,7 +838,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno mail send <handle> \"EMPIRICAL TEST, requested by the operator. This tests a claim I made to you earlier, and my claim may be WRONG. Do not reason from my earlier message - actually attempt this and report the literal outcome.\n\nTASK: run this, exactly as written, against your current working diff:\n\n  /code-review medium --fix\n\nATTEMPT IT FOR REAL. Do not decide in advance whether it will work. Do not substitute /fno:review, the fno:code-reviewer agent, or any other command. Do not shell out to a Bash approximation. If your harness offers /code-review as an invocable command, invoke it.\n\nREPORT BACK, verbatim and specific, whichever happened:\n- If it RAN: say so, and give the literal first ~10 lines of what came back, how you invoked it (Skill tool? typ",
+   "target": "cd .\nfno mail send <handle> \"EMPIRICAL TEST, requested by the operator. This tests a claim I made to you earlier, and my claim may be WRONG. Do not reason from my earlier message - actually attempt this and report the literal outcome.\n\nTASK: run this, exactly as written, against your current working diff:\n\n  /code-review medium --fix\n\nATTEMPT IT FOR REAL. Do not decide in advance whether it will work. Do not substitute /fno:review, the fno:code-reviewer agent, or any other verb. Do not shell out to a Bash approximation. If your harness offers /code-review as an invocable command, invoke it.\n\nREPORT BACK, verbatim and specific, whichever happened:\n- If it RAN: say so, and give the literal first ~10 lines of what came back, how you invoked it (Skill tool? typ",
    "index": 146,
    "kind": "tool_use"
   },
@@ -913,7 +913,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\necho \"=== context probe mechanisms ===\"; rg -ln \"context_probe|used_pct|context_pct\" --glob '!*.log' hooks/ scripts/ cli/src/fno/ skills/ 2>/dev/null | head -10\necho \"=== any fno command? ===\"; fno help --all 2>&1 | rg -i \"context\" | head -5",
+   "target": "cd .\necho \"=== context probe mechanisms ===\"; rg -ln \"context_probe|used_pct|context_pct\" --glob '!*.log' hooks/ scripts/ cli/src/fno/ skills/ 2>/dev/null | head -10\necho \"=== any fno verb? ===\"; fno help --all 2>&1 | rg -i \"context\" | head -5",
    "index": 159,
    "kind": "tool_use"
   },
@@ -1034,7 +1034,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno agents spawn --name think-x-7685 \"/think x-7685\n\nREAD THE NODE FIRST. Its details were rewritten 2026-08-05 with a live specimen, a placement finding, and a lead-specific requirement. Everything below is context the node already carries or the operator decided in conversation - do not re-derive it.\n\nOPERATOR HAS ALREADY DECIDED THE SURFACE. Do not re-open it, do not run a comparison of alternatives on it: context usage goes on 'fno whoami'. No new command. Rationale, so you can defend it rather than relitigate it: whoami is already the prescribed orientation command (skills/lead/SKILL.md tells a lead to run it after compaction; skills/using-fno/SKILL.md lists it for 'what state am I in after compaction'), it already prints project/run/mail/harn",
+   "target": "cd .\nfno agents spawn --name think-x-7685 \"/think x-7685\n\nREAD THE NODE FIRST. Its details were rewritten 2026-08-05 with a live specimen, a placement finding, and a lead-specific requirement. Everything below is context the node already carries or the operator decided in conversation - do not re-derive it.\n\nOPERATOR HAS ALREADY DECIDED THE SURFACE. Do not re-open it, do not run a comparison of alternatives on it: context usage goes on 'fno whoami'. No new verb. Rationale, so you can defend it rather than relitigate it: whoami is already the prescribed orientation verb (skills/lead/SKILL.md tells a lead to run it after compaction; skills/using-fno/SKILL.md lists it for 'what state am I in after compaction'), it already prints project/run/mail/harn",
    "index": 180,
    "kind": "tool_use"
   },
@@ -1219,7 +1219,7 @@
    "kind": "tool_use"
   },
   {
-   "text": "1. **Falsified the claim instead of building on it.** I asserted succession existed; it read the code and found two independent refusals. Both gates are correct *for a grant* \u2014 the gap is that succession is a **transfer** and no transfer command exists. Its fix (`team --succeed`, atomic, level inherited not +1, gate narrowed to \"any live team other than the caller's own\") is minimal, and **AC11 pin",
+   "text": "1. **Falsified the claim instead of building on it.** I asserted succession existed; it read the code and found two independent refusals. Both gates are correct *for a grant* \u2014 the gap is that succession is a **transfer** and no transfer verb exists. Its fix (`team --succeed`, atomic, level inherited not +1, gate narrowed to \"any live team other than the caller's own\") is minimal, and **AC11 pin",
    "index": 213,
    "kind": "assistant_text"
   },
@@ -1246,7 +1246,7 @@
    "kind": "tool_use"
   },
   {
-   "text": "Three points from my own line. Here's the honest position: I've been the largest live instance of the problem x-7685 describes for most of this session \u2014 three workers, me as their only lead, no successor, and no team-transfer command even if I wanted one (that's exactly what the worker refuted an hour ago).",
+   "text": "Three points from my own line. Here's the honest position: I've been the largest live instance of the problem x-7685 describes for most of this session \u2014 three workers, me as their only lead, no successor, and no team-transfer verb even if I wanted one (that's exactly what the worker refuted an hour ago).",
    "index": 218,
    "kind": "assistant_text"
   },
@@ -1294,7 +1294,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\ncat >> ~/c3po/internal/fno/plans/20260801-solo-founder-company-orchestration.md <<'EOF'\n\n### Session handoff 2026-08-05\n\nThe lead over this epic stepped_down at 38% context after the epic closed (x-2388 merged as PR #738).\nFull state, verified-vs-inherited claims, and four corrections live in\n[20260805-session-handoff-lead-x-d7e4.md](20260805-session-handoff-lead-x-d7e4.md).\n\n- [ ] PR #741 (x-5c43, the boundary burn-down) is OPEN with `smoke` + `changed-smoke` RED and has no owner #jc \ud83d\udcc5 2026-08-06\n- [ ] PR #741 title says \"9 to 2\": confirm what the two surviving violations are before x-5c43 is marked done #jc \ud83d\udcc5 2026-08-06\n- [ ] File the `<fno_mail>` envelope node (spawn payloads unwrapped, leading-command constraint, queued-means-human-typing) #jc \ud83d\udcc5 2026-08-",
+   "target": "cd .\ncat >> ~/c3po/internal/fno/plans/20260801-solo-founder-company-orchestration.md <<'EOF'\n\n### Session handoff 2026-08-05\n\nThe lead over this epic stepped_down at 38% context after the epic closed (x-2388 merged as PR #738).\nFull state, verified-vs-inherited claims, and four corrections live in\n[20260805-session-handoff-lead-x-d7e4.md](20260805-session-handoff-lead-x-d7e4.md).\n\n- [ ] PR #741 (x-5c43, the boundary burn-down) is OPEN with `smoke` + `changed-smoke` RED and has no owner #jc \ud83d\udcc5 2026-08-06\n- [ ] PR #741 title says \"9 to 2\": confirm what the two surviving violations are before x-5c43 is marked done #jc \ud83d\udcc5 2026-08-06\n- [ ] File the `<fno_mail>` envelope node (spawn payloads unwrapped, leading-verb constraint, queued-means-human-typing) #jc \ud83d\udcc5 2026-08-",
    "index": 226,
    "kind": "tool_use"
   },
@@ -1322,7 +1322,7 @@
    "kind": "tool_use"
   },
   {
-   "text": "**No registry team exists at all** \u2014 mine was conversational only. You said \"you are /fno:lead x-d7e4\" and I declared level 0 in my opening line, but nothing was ever stamped via the command.",
+   "text": "**No registry team exists at all** \u2014 mine was conversational only. You said \"you are /fno:lead x-d7e4\" and I declared level 0 in my opening line, but nothing was ever stamped via the verb.",
    "index": 231,
    "kind": "assistant_text"
   },
@@ -1376,7 +1376,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\npython3 - <<'PYEOF'\np='~/c3po/internal/fno/plans/20260805-session-handoff-lead-x-d7e4.md'\ns=open(p).read()\nanchor=\"I asserted the opposite earlier today\"\nadd = \"\"\"### Two further team findings, measured at departure\n\n**The outgoing lead never held a stamped team at all.**\n`fno whoami` printed no team line and `fno agents list` showed zero teamed rows for the entire lead.\nThe team was conversational - the operator said \"you are /fno:lead x-d7e4\" and the session declared level 0 in its opening line - but nothing was ever written by the command.\nThe skill is explicit that \"a team is stamped by a grantor, never self-declared\", so the whole lead ran outside its own provenance discipline and nothing detected it.\nThe practical upside",
+   "target": "cd .\npython3 - <<'PYEOF'\np='~/c3po/internal/fno/plans/20260805-session-handoff-lead-x-d7e4.md'\ns=open(p).read()\nanchor=\"I asserted the opposite earlier today\"\nadd = \"\"\"### Two further team findings, measured at departure\n\n**The outgoing lead never held a stamped team at all.**\n`fno whoami` printed no team line and `fno agents list` showed zero teamed rows for the entire lead.\nThe team was conversational - the operator said \"you are /fno:lead x-d7e4\" and the session declared level 0 in its opening line - but nothing was ever written by the verb.\nThe skill is explicit that \"a team is stamped by a grantor, never self-declared\", so the whole lead ran outside its own provenance discipline and nothing detected it.\nThe practical upside",
    "index": 241,
    "kind": "tool_use"
   },
@@ -1391,7 +1391,7 @@
    "kind": "assistant_text"
   },
   {
-   "text": "**I never held a stamped team.** `fno whoami` printed no team line; `fno agents list` showed zero teamed rows all session. The team was conversational \u2014 you said it, I declared it in my opening line, nothing was ever written by the command. The skill says *\"a team is stamped by a grantor, never self-declared.\"* The entire lead ran outside its own provenance discipline and nothing noticed.",
+   "text": "**I never held a stamped team.** `fno whoami` printed no team line; `fno agents list` showed zero teamed rows all session. The team was conversational \u2014 you said it, I declared it in my opening line, nothing was ever written by the verb. The skill says *\"a team is stamped by a grantor, never self-declared.\"* The entire lead ran outside its own provenance discipline and nothing noticed.",
    "index": 244,
    "kind": "assistant_text"
   },
@@ -1411,7 +1411,7 @@
    "kind": "assistant_text"
   },
   {
-   "text": "It's also already the right home for the team findings, because the worker's design **added `fno agents team --succeed`** \u2014 so the team command is already in its scope, same design doc, likely same PR.",
+   "text": "It's also already the right home for the team findings, because the worker's design **added `fno agents team --succeed`** \u2014 so the team verb is already in its scope, same design doc, likely same PR.",
    "index": 248,
    "kind": "assistant_text"
   },
@@ -1422,13 +1422,13 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\npython3 - <<'PYEOF'\nimport json,subprocess\ncur=json.loads(subprocess.run([\"fno\",\"backlog\",\"get\",\"x-7685\"],capture_output=True,text=True).stdout)\nd=cur.get(\"details\",\"\")\nadd = \"\"\"\n\n=== TEAM-PLUMBING FINDINGS, measured 2026-08-05 at an actual departure ===\n\nFolded here rather than filed beside because this node's design already adds a team command (`fno agents team --succeed`, the succession transfer). Same command family, same design doc, same PR. Do not file these separately.\n\n1. `fno agents spawn --team` IS DOCUMENTED AND NOT IMPLEMENTED. skills/lead/SKILL.md instructs grant-at-spawn via `fno agents spawn ... --team level=N,scope=<scope>`. The fno-agents binary rejects it outright: `fno-agents: unknown flag: --team`. The working path is sp",
+   "target": "cd .\npython3 - <<'PYEOF'\nimport json,subprocess\ncur=json.loads(subprocess.run([\"fno\",\"backlog\",\"get\",\"x-7685\"],capture_output=True,text=True).stdout)\nd=cur.get(\"details\",\"\")\nadd = \"\"\"\n\n=== TEAM-PLUMBING FINDINGS, measured 2026-08-05 at an actual departure ===\n\nFolded here rather than filed beside because this node's design already adds a team verb (`fno agents team --succeed`, the succession transfer). Same verb family, same design doc, same PR. Do not file these separately.\n\n1. `fno agents spawn --team` IS DOCUMENTED AND NOT IMPLEMENTED. skills/lead/SKILL.md instructs grant-at-spawn via `fno agents spawn ... --team level=N,scope=<scope>`. The fno-agents binary rejects it outright: `fno-agents: unknown flag: --team`. The working path is sp",
    "index": 250,
    "kind": "tool_use"
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog update x-7685 --size L 2>&1 | tail -1\nfno mail send <handle> \"AMENDMENT to your brief, from the outgoing lead. Two items, both to prevent duplicate work.\n\n1. DO NOT FILE the 'fno agents spawn --team is documented but unimplemented' drift. I told you to file it; I have instead folded it into x-7685, along with a second team finding. Reason: x-7685's design already adds a team command (fno agents team --succeed, the succession transfer), so the team-plumbing work is one PR, not three nodes. Re-read x-7685's details - there is a new section at the end marked 'TEAM-PLUMBING FINDINGS'. x-7685 is now size L and status ready.\n\nThe second finding in that section is the one that should bother you most: AN UNPROMOTED SESSION ACTING AS LEAD IS UNDET",
+   "target": "cd .\nfno backlog update x-7685 --size L 2>&1 | tail -1\nfno mail send <handle> \"AMENDMENT to your brief, from the outgoing lead. Two items, both to prevent duplicate work.\n\n1. DO NOT FILE the 'fno agents spawn --team is documented but unimplemented' drift. I told you to file it; I have instead folded it into x-7685, along with a second team finding. Reason: x-7685's design already adds a team verb (fno agents team --succeed, the succession transfer), so the team-plumbing work is one PR, not three nodes. Re-read x-7685's details - there is a new section at the end marked 'TEAM-PLUMBING FINDINGS'. x-7685 is now size L and status ready.\n\nThe second finding in that section is the one that should bother you most: AN UNPROMOTED SESSION ACTING AS LEAD IS UNDET",
    "index": 251,
    "kind": "tool_use"
   },
@@ -1451,7 +1451,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno mail send lead-fno-platform \"AMENDMENT to your brief, from the outgoing lead. Two items, both to prevent duplicate work.\n\n1. DO NOT FILE the 'fno agents spawn --team is documented but unimplemented' drift. Your brief told you to; I have instead folded it into x-7685 along with a second team finding. Reason: x-7685's design already adds a team command (fno agents team --succeed, the succession transfer), so team plumbing is one PR rather than three nodes. Re-read x-7685 - there is a new section at the end marked 'TEAM-PLUMBING FINDINGS'. The node is now size L, status ready.\n\nThe second finding there should bother you most: AN UNPROMOTED SESSION ACTING AS LEAD IS UNDETECTABLE. My entire lead ran with no teamed registry row - fno whoami printed n",
+   "target": "cd .\nfno mail send lead-fno-platform \"AMENDMENT to your brief, from the outgoing lead. Two items, both to prevent duplicate work.\n\n1. DO NOT FILE the 'fno agents spawn --team is documented but unimplemented' drift. Your brief told you to; I have instead folded it into x-7685 along with a second team finding. Reason: x-7685's design already adds a team verb (fno agents team --succeed, the succession transfer), so team plumbing is one PR rather than three nodes. Re-read x-7685 - there is a new section at the end marked 'TEAM-PLUMBING FINDINGS'. The node is now size L, status ready.\n\nThe second finding there should bother you most: AN UNPROMOTED SESSION ACTING AS LEAD IS UNDETECTABLE. My entire lead ran with no teamed registry row - fno whoami printed n",
    "index": 255,
    "kind": "tool_use"
   },
@@ -1533,7 +1533,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno mail send lead-fno-platform \"All three corrections ACCEPTED. I verified the load-bearing one myself rather than taking it: cli/src/fno/cli.py:201 routes 'whoami' to fno.agent.cli:whoami_command, that module has ZERO team references, and fno/agents/whoami.py:57 carries team. Ran both on this session one second apart - 'fno whoami' printed no team line, 'fno agents whoami' printed \\\"team\\\": null (correct, I hold none). Your A/B on a TEAMED session is the stronger proof and it settles it.\n\nYou are right that this is my own one-of-N-reachable-paths pitfall occurring inside the command I used to check for that pitfall. And thank you for catching what it would have cost: the candidate fix I recorded on x-7685 would have called 'fno whoami' and refused ",
+   "target": "cd .\nfno mail send lead-fno-platform \"All three corrections ACCEPTED. I verified the load-bearing one myself rather than taking it: cli/src/fno/cli.py:201 routes 'whoami' to fno.agent.cli:whoami_command, that module has ZERO team references, and fno/agents/whoami.py:57 carries team. Ran both on this session one second apart - 'fno whoami' printed no team line, 'fno agents whoami' printed \\\"team\\\": null (correct, I hold none). Your A/B on a TEAMED session is the stronger proof and it settles it.\n\nYou are right that this is my own one-of-N-reachable-paths pitfall occurring inside the verb I used to check for that pitfall. And thank you for catching what it would have cost: the candidate fix I recorded on x-7685 would have called 'fno whoami' and refused ",
    "index": 270,
    "kind": "tool_use"
   },
@@ -1562,7 +1562,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\necho \"=== advertised vs real command count ===\"\necho \"advertised (fno --help):  $(fno --help 2>&1 | grep -cE '^\\s{2}\\w')\"\necho \"real (fno help --all):    $(fno help --all 2>&1 | grep -cE '^\\s{2}\\w')\"\necho \"=== what menu-caps actually gates ===\"\nrg -n \"menu.cap|MAX_TOP|advertised\" cli/src/fno/lint*.py cli/src/fno/*lint* 2>/dev/null | head -6",
+   "target": "cd .\necho \"=== advertised vs real verb count ===\"\necho \"advertised (fno --help):  $(fno --help 2>&1 | grep -cE '^\\s{2}\\w')\"\necho \"real (fno help --all):    $(fno help --all 2>&1 | grep -cE '^\\s{2}\\w')\"\necho \"=== what menu-caps actually gates ===\"\nrg -n \"menu.cap|MAX_TOP|advertised\" cli/src/fno/lint*.py cli/src/fno/*lint* 2>/dev/null | head -6",
    "index": 275,
    "kind": "tool_use"
   },
@@ -1590,7 +1590,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog find \"consolidate cli commands surface\" 2>&1 | head -5\necho \"=== measured ===\"\necho \"advertised: $(fno --help 2>&1 | grep -cE '^\\s{2}\\w') | real: $(fno help --all 2>&1 | grep -cE '^\\s{2}\\w')\"",
+   "target": "cd .\nfno backlog find \"consolidate cli verbs surface\" 2>&1 | head -5\necho \"=== measured ===\"\necho \"advertised: $(fno --help 2>&1 | grep -cE '^\\s{2}\\w') | real: $(fno help --all 2>&1 | grep -cE '^\\s{2}\\w')\"",
    "index": 280,
    "kind": "tool_use"
   },
@@ -1602,13 +1602,13 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog idea \"The fno command count is ratcheted only where it is advertised: 10 shown, 61 real, and nothing caps the real number\" --details \"MEASURED 2026-08-05: 'fno --help' advertises 10 top-level commands; 'fno help --all' lists 61. scripts lint menu-caps (cli/src/fno/lint_cli.py:270) enforces <=10 advertised top-level and <=12 per sub-app, and its own docstring states 'New commands default to hidden'. So the ratchet caps the MENU and nothing caps the KITCHEN.\n\nTHIS IS THE UNFINISHED HALF OF x-71b6 (done, PR #445, 2026-07-16), not a new complaint. That node named the problem correctly ('A new user checking out fno walks into ~60 top-level commands... when a menu is too big, they walk out') and offered TWO remedies: 'plumbing commands nested under an intern",
+   "target": "cd .\nfno backlog idea \"The fno verb count is ratcheted only where it is advertised: 10 shown, 61 real, and nothing caps the real number\" --details \"MEASURED 2026-08-05: 'fno --help' advertises 10 top-level verbs; 'fno help --all' lists 61. scripts lint menu-caps (cli/src/fno/lint_cli.py:270) enforces <=10 advertised top-level and <=12 per sub-app, and its own docstring states 'New verbs default to hidden'. So the ratchet caps the MENU and nothing caps the KITCHEN.\n\nTHIS IS THE UNFINISHED HALF OF x-71b6 (done, PR #445, 2026-07-16), not a new complaint. That node named the problem correctly ('A new user checking out fno walks into ~60 top-level commands... when a menu is too big, they walk out') and offered TWO remedies: 'plumbing verbs nested under an intern",
    "index": 282,
    "kind": "tool_use"
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog update x-a7f0 --dispatch-command /fno:think 2>&1 | tail -1\necho \"=== does an eval system exist? ===\"\nls evals/ 2>/dev/null | head -12 || echo \"  no evals/ dir\"\nfno help --all 2>&1 | rg -i \"eval\" | head -4\necho \"=== evals per skill? ===\"\nfind . -path ./node_modules -prune -o -name \"*.eval.*\" -print -o -type d -name \"evals\" -print 2>/dev/null | grep -v worktrees | head -8",
+   "target": "cd .\nfno backlog update x-a7f0 --dispatch-verb /fno:think 2>&1 | tail -1\necho \"=== does an eval system exist? ===\"\nls evals/ 2>/dev/null | head -12 || echo \"  no evals/ dir\"\nfno help --all 2>&1 | rg -i \"eval\" | head -4\necho \"=== evals per skill? ===\"\nfind . -path ./node_modules -prune -o -name \"*.eval.*\" -print -o -type d -name \"evals\" -print 2>/dev/null | grep -v worktrees | head -8",
    "index": 283,
    "kind": "tool_use"
   },
@@ -1630,13 +1630,13 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog find \"eval skill coverage observer\" 2>&1 | head -4\necho \"---\"\nfno backlog idea \"lead has no evals, and the eval system that would catch its failures has one user out of ~20 skills\" --details \"TWO FINDINGS, filed together because the second explains the first.\n\nFINDING 1 - THE INFRASTRUCTURE EXISTS AND IS BARELY USED. Measured 2026-08-05: three eval surfaces ship today - 'fno doctor evals' (golden-task bank: run/report/graduate/grade), 'fno doctor observer' (skill eval over a RECORDED CORPUS, sweep/replay - i.e. exactly session analysis), and 'fno do delivery' (generic delivery evidence). The bank at evals/bank/ holds FOUR tasks total (capability-add-hello-command, regression-cli-help-smoke, regression-context-pitfalls-reachable, regression-loop-check",
+   "target": "cd .\nfno backlog find \"eval skill coverage observer\" 2>&1 | head -4\necho \"---\"\nfno backlog idea \"lead has no evals, and the eval system that would catch its failures has one user out of ~20 skills\" --details \"TWO FINDINGS, filed together because the second explains the first.\n\nFINDING 1 - THE INFRASTRUCTURE EXISTS AND IS BARELY USED. Measured 2026-08-05: three eval surfaces ship today - 'fno doctor evals' (golden-task bank: run/report/graduate/grade), 'fno doctor observer' (skill eval over a RECORDED CORPUS, sweep/replay - i.e. exactly session analysis), and 'fno do delivery' (generic delivery evidence). The bank at evals/bank/ holds FOUR tasks total (capability-add-hello-verb, regression-cli-help-smoke, regression-context-pitfalls-reachable, regression-loop-check",
    "index": 287,
    "kind": "tool_use"
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog update x-095d --dispatch-command /fno:think 2>&1 | tail -1\nfno mail send lead-fno-platform \"FINAL HANDOFF ADDENDUM from the outgoing lead. Two nodes filed since your brief, both /fno:think-routed, neither started. Then I stop writing.\n\nx-a7f0 (p2, L) - the fno command count is ratcheted only where it is advertised: 10 shown, 61 real. This is the unfinished half of x-71b6 (done, PR #445), which named the problem correctly, offered 'nest under an internal namespace OR hide from default --help', and shipped the cheap one. It also required a keep/kill/nest triage per command before any code; the count was ~60 at filing and is 61 now, so no commands were removed. The missing mechanism is a ratchet on the REAL count - the idiom already runs twice in this rep",
+   "target": "cd .\nfno backlog update x-095d --dispatch-verb /fno:think 2>&1 | tail -1\nfno mail send lead-fno-platform \"FINAL HANDOFF ADDENDUM from the outgoing lead. Two nodes filed since your brief, both /fno:think-routed, neither started. Then I stop writing.\n\nx-a7f0 (p2, L) - the fno verb count is ratcheted only where it is advertised: 10 shown, 61 real. This is the unfinished half of x-71b6 (done, PR #445), which named the problem correctly, offered 'nest under an internal namespace OR hide from default --help', and shipped the cheap one. It also required a keep/kill/nest triage per verb before any code; the count was ~60 at filing and is 61 now, so no verbs were removed. The missing mechanism is a ratchet on the REAL count - the idiom already runs twice in this rep",
    "index": 288,
    "kind": "tool_use"
   },
@@ -1698,7 +1698,7 @@
   },
   {
    "tool": "Bash",
-   "target": "cd .\nfno backlog update x-af92 --dispatch-command /fno:think 2>&1 | tail -1\nfno agents spawn --name think-x-af92 \"/fno:think x-af92\n\nREAD THE NODE FIRST - its details carry today's measurements verbatim, including the exact registry/peek/transcript-path evidence. Do not re-derive them; do verify any you intend to design on.\n\nTHE SEED, in one line: fno models its own agent primitive and is blind to the harness's, so choosing between them is folklore rather than a documented contract.\n\nWHAT IS ALREADY MEASURED, do not re-litigate: an fno-spawned bg session is a mesh citizen (registry row, peek, mail handle, peer-level transcript, survives its spawner, hand-off-able). A harness-native subagent is none of those - not in the registry, 'peer not found' on peek, tran",
+   "target": "cd .\nfno backlog update x-af92 --dispatch-verb /fno:think 2>&1 | tail -1\nfno agents spawn --name think-x-af92 \"/fno:think x-af92\n\nREAD THE NODE FIRST - its details carry today's measurements verbatim, including the exact registry/peek/transcript-path evidence. Do not re-derive them; do verify any you intend to design on.\n\nTHE SEED, in one line: fno models its own agent primitive and is blind to the harness's, so choosing between them is folklore rather than a documented contract.\n\nWHAT IS ALREADY MEASURED, do not re-litigate: an fno-spawned bg session is a mesh citizen (registry row, peek, mail handle, peer-level transcript, survives its spawner, hand-off-able). A harness-native subagent is none of those - not in the registry, 'peer not found' on peek, tran",
    "index": 299,
    "kind": "tool_use"
   },

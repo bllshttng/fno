@@ -88,7 +88,22 @@ pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
             .unwrap_or(true),
         argv,
         defaults: cfg(&["agents", "defaults"]),
-        dispatch_commands: cfg(&["dispatch", "verbs"]),
+        // The registered-command table. The leg this ports read a
+        // `dispatch.verbs` key no config model defines, so it never fired.
+        dispatch_commands: crate::agents_config::config_value_deep(
+            cwd,
+            &["dispatch", "command_registry"],
+        )
+        .or_else(|| {
+            crate::agents_config::config_value_deep(
+                cwd,
+                &[
+                    "dispatch",
+                    crate::backlog::settings::LEGACY_COMMAND_REGISTRY_KEY,
+                ],
+            )
+        })
+        .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new())),
         env_node,
         facts: ask.get("facts").cloned().unwrap_or_else(|| json!({})),
         node,
