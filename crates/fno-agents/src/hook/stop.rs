@@ -583,10 +583,14 @@ fn translate(
             // arm fleet-wide. finalize is idempotent on a re-fire
             // (session_finalized early return), so no new guard is needed.
             // A failure here is a note, never a block: the terminal is real,
-            // only its bookkeeping failed.
-            let rc = crate::finalize::run_finalize(&fargs);
-            if rc != 0 {
-                eprintln!("target stop-hook: finalize note (non-blocking): exit {rc}");
+            // only its bookkeeping failed. Nothing here reads its result, so
+            // it runs detached: inline it was the Stop hook's slow tail
+            // (p90 33 s against a 0.9 s median).
+            if !spawn_finalize_detached(&fargs) {
+                let rc = crate::finalize::run_finalize(&fargs);
+                if rc != 0 {
+                    eprintln!("target stop-hook: finalize note (non-blocking): exit {rc}");
+                }
             }
         }
     }
@@ -596,6 +600,35 @@ fn translate(
         eprintln!("target stop-hook: {message}");
     }
     0
+}
+
+/// Run `fno-agents finalize <fargs>` as the leader of a new session with stdio
+/// on /dev/null, so the harness neither waits on it nor kills it with the hook.
+/// False when it could not spawn (the caller then finalizes inline). Tests run
+/// inline: the test binary has no `finalize` verb.
+fn spawn_finalize_detached(fargs: &[String]) -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("finalize").args(fargs);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid() is async-signal-safe and takes no arguments; it runs
+    // in the child after fork, before exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        })
+    };
+    cmd.spawn().is_ok()
 }
 
 fn parse_reason(s: &str) -> crate::loopcheck::TerminationReason {
