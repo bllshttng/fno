@@ -1633,7 +1633,9 @@ pub fn bg_create(
 
     // This client can lazily birth the claude supervisor; a supervisor born
     // dirty poisons every session it forks for its whole life, so
-    // make sure a clean one is up first. The client command is never touched.
+    // make sure a clean one is up first. The client drops its route keys in
+    // case it wins a birth race anyway; the route rides --settings.
+    crate::claude_supervisor::strip_route_carriers(&mut cmd);
     crate::claude_supervisor::guard_birth(extra_env.iter().copied());
 
     let start = std::time::Instant::now();
