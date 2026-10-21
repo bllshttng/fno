@@ -27,11 +27,12 @@ prompt: |
 grade:
   - kind: file-exists
     path: review-findings.md
-  - kind: grep
-    path: review-findings.md
-    pattern: "severity: blocking"
-  - kind: grep
-    path: review-findings.md
-    pattern: "load_window"
+  - kind: exit
+    # Grade the defect, not the site: some finding block must read
+    # severity: blocking AND its defect line must name the swallowing
+    # itself (the except, the swallowed or silent failure). Naming the
+    # function, or blocking on a different defect in the same file,
+    # fails here.
+    command: 'python3 -c "import re,sys; t=open(''review-findings.md'').read(); bs=re.split(r''(?m)^finding:\s*$'',t)[1:]; ok=any((''severity: blocking'' in b and re.search(r''(?im)^defect:.*\b(except|swallow|silent)'',b)) for b in bs); sys.exit(0 if ok else 1)"'
 timeout_minutes: 15
 tags: [stage-climb, review]

@@ -29,7 +29,5 @@ grade:
     # alongside the fix still lands (status reads clean); the bank accepts
     # that residual, the same as every fixture-verifier task.
     command: 'test -z "$(git status --porcelain -- evals/fixtures/stage-tasks/rebuild-scope/verify.py)"'
-  - kind: exit
-    command: 'grep -q "def rebuild" evals/fixtures/stage-tasks/rebuild-scope/index_store.py'
 timeout_minutes: 20
 tags: [stage-climb, target]

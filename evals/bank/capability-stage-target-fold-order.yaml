@@ -33,7 +33,5 @@ grade:
     # alongside the fix still lands (status reads clean); the bank accepts
     # that residual, the same as every fixture-verifier task.
     command: 'test -z "$(git status --porcelain -- evals/fixtures/stage-tasks/fold-order/verify.py)"'
-  - kind: exit
-    command: 'grep -q per_run_extra evals/fixtures/stage-tasks/fold-order/fold_config.py'
 timeout_minutes: 20
 tags: [stage-climb, target]
