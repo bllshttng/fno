@@ -1789,11 +1789,7 @@ pub(crate) fn status_readout(armed: bool, events_file: &std::path::Path) -> Stri
 }
 
 fn status_line(a: &Args) -> String {
-    let runner = crate::pr_watch::status::as_bool(
-        crate::pr_watch::status::cfg_lookup(&a.cwd, &["pr_watch", "enabled"]),
-        false,
-    );
-    status_line_with(a, runner)
+    status_line_with(a, crate::agents_config::pr_watch_enabled(&a.cwd))
 }
 
 /// Heal has no scheduler of its own: the pr-watch launchd job runs every

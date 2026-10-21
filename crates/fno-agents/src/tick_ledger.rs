@@ -774,10 +774,7 @@ fn mark_starved_rows(values: &[Value], rows: &mut [ArmStatus], now_unix: u64, th
 /// pure fold stays free of config reads; the readout layer owns them, so a
 /// row's unarmed verdict reflects the config the reader actually runs.
 pub fn fill_arm_values(rows: &mut [ArmStatus], cwd: &Path) {
-    let watcher_on = crate::pr_watch::status::as_bool(
-        crate::pr_watch::status::cfg_lookup(cwd, &["pr_watch", "enabled"]),
-        false,
-    );
+    let watcher_on = crate::agents_config::pr_watch_enabled(cwd);
     for row in rows.iter_mut() {
         if let Some(key) = row.arm_key.as_deref() {
             row.arm_value = Some(arm_key_value(cwd, key));
