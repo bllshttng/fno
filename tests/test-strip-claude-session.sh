@@ -184,4 +184,15 @@ git -C "$old_wt" add k.txt
 git -C "$old_wt" commit -q -m "older worktree commit" \
   || fail "AC6: commit aborted in a worktree lacking the checked-out strip script"
 
-echo "PASS: session-URL strip commit-msg hook (6 checks)"
+# --- AC7: the tracked project settings stop Claude Code writing the trailer
+# at all. The hook above misses a commit wherever core.hooksPath bypasses the
+# shared hooks dir; project settings reach every claude session in every
+# checkout, spawned or attended.
+
+project_settings="$REPO_ROOT/.claude/settings.json"
+[[ -f "$project_settings" ]] || fail "AC7: $project_settings is missing"
+session_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["attribution"]["sessionUrl"])' "$project_settings")" \
+  || fail "AC7: $project_settings has no attribution.sessionUrl"
+[[ "$session_url" == "False" ]] || fail "AC7: attribution.sessionUrl is $session_url, want false"
+
+echo "PASS: session-URL strip commit-msg hook (7 checks)"
