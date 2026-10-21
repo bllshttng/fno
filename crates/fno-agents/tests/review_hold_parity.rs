@@ -16,9 +16,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The 40-hex regex-free normalizer: every exactly-40 run of hex bounded by
-/// non-hex becomes <SHA40>, and the fixture root becomes <FIXTURE>.
+/// non-hex becomes <SHA40>, and the fixture root becomes <FIXTURE>. The
+/// macOS canonical prefix (`/private` before the temp root) normalizes too:
+/// the capture recorded it, and a Linux runner spells the same path without
+/// it, so both spellings must fold to one golden.
 fn normalize(s: &str, tmp: &Path) -> String {
-    let replaced = s.replace(tmp.to_str().unwrap(), "<FIXTURE>");
+    let private = format!("/private{}", tmp.to_str().unwrap());
+    let replaced = s
+        .replace(&private, "<FIXTURE>")
+        .replace(tmp.to_str().unwrap(), "<FIXTURE>");
     let mut out = String::with_capacity(replaced.len());
     let chars: Vec<char> = replaced.chars().collect();
     let (mut i, n) = (0, chars.len());
