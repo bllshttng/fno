@@ -214,30 +214,56 @@ pub(crate) fn read_stranded_trees(
             Err(e) if e.over_budget() => return SourceRead::over_budget(e.message().to_string()),
             Err(e) => return SourceRead::err(e.message().to_string()),
         };
-        for (tree, branch) in parse_worktree_porcelain(&listing) {
-            let Some((id, resumable)) = tree_node_id(&tree, branch.as_deref(), candidates) else {
-                continue;
-            };
-            if !candidates.contains_key(&id) {
-                continue;
-            }
-            match probe_tree(&tree, &branch, dl) {
-                Ok(mut row) => {
-                    if let Some(obj) = row.as_object_mut() {
-                        obj.insert("id".to_string(), json!(id));
-                        obj.insert("resumable".to_string(), json!(resumable));
+        let trees: Vec<(PathBuf, Option<String>, String, bool)> =
+            parse_worktree_porcelain(&listing)
+                .into_iter()
+                .filter_map(|(tree, branch)| {
+                    let (id, resumable) = tree_node_id(&tree, branch.as_deref(), candidates)?;
+                    candidates
+                        .contains_key(&id)
+                        .then_some((tree, branch, id, resumable))
+                })
+                .collect();
+        // Probes run PROBE_WIDTH at a time: three git calls per tree in
+        // series cost 12s over 46 trees (measured), enough to lose the
+        // shared deadline to the board's other sources under load.
+        for chunk in trees.chunks(PROBE_WIDTH) {
+            let results: Vec<Result<Value, RunFailure>> = std::thread::scope(|s| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|(tree, branch, _, _)| s.spawn(move || probe_tree(tree, branch, dl)))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| {
+                        h.join().unwrap_or_else(|_| {
+                            Err(RunFailure::Failed("stranded probe panicked".to_string()))
+                        })
+                    })
+                    .collect()
+            });
+            for ((_, _, id, resumable), result) in chunk.iter().zip(results) {
+                match result {
+                    Ok(mut row) => {
+                        if let Some(obj) = row.as_object_mut() {
+                            obj.insert("id".to_string(), json!(id));
+                            obj.insert("resumable".to_string(), json!(resumable));
+                        }
+                        rows.push(row);
                     }
-                    rows.push(row);
+                    Err(e) if e.over_budget() => {
+                        return SourceRead::over_budget(e.message().to_string())
+                    }
+                    Err(_) => continue,
                 }
-                Err(e) if e.over_budget() => {
-                    return SourceRead::over_budget(e.message().to_string())
-                }
-                Err(_) => continue,
             }
         }
     }
     SourceRead::ok(Value::Array(rows))
 }
+
+/// How many trees probe at once.
+const PROBE_WIDTH: usize = 8;
 
 /// The graph-side candidate map: lead-priority nodes that are not terminal
 /// and not deferred, keyed id -> row (the row feeds the branch-shape
