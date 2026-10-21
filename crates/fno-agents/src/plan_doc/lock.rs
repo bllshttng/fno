@@ -24,7 +24,7 @@ pub fn locks_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("fno-locks"))
 }
 
-/// `~/.fno/locks/plan-<sha1(resolved path)>.lock`.
+/// `<machine locks dir>/plan-<sha1(resolved path)>.lock`.
 pub fn lock_path_for(plan_path: &Path) -> PathBuf {
     let resolved = fs::canonicalize(plan_path).unwrap_or_else(|_| {
         // Python resolve(strict=False): normalize without requiring existence.
