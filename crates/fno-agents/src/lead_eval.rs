@@ -1303,6 +1303,60 @@ fn timeline_events(value: &Value) -> Vec<Value> {
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     in_flight: Arc<AtomicBool>,
+    checkins: Arc<Mutex<Option<CheckinCache>>>,
+}
+
+/// The check-in rows the last tick read, and the journals' committed seqs
+/// they were read at. A tick whose journals all hold the same seqs and no
+/// uningested bytes reuses the rows: no import, no write transaction.
+struct CheckinCache {
+    seqs: Vec<(PathBuf, i64)>,
+    rows: Vec<Value>,
+}
+
+/// Each journal's committed seq, or `None` when any journal has bytes the
+/// store has not ingested (or cannot be read): the cache cannot vouch for it.
+fn checkin_seqs(journals: &[PathBuf]) -> Option<Vec<(PathBuf, i64)>> {
+    journals
+        .iter()
+        .map(|journal| {
+            let live = crate::event_store::live_journal(journal);
+            let store = crate::event_store::store_path(&live);
+            // A store with no raw journal beside it has no bytes to ingest.
+            if live.exists() && crate::event_store::stray_has_uningested_bytes(&live, &store) {
+                return None;
+            }
+            Some((live.clone(), crate::event_store::max_seq(&live).ok()?))
+        })
+        .collect()
+}
+
+/// The check-in rows across every journal, read again only when a journal
+/// moved since the cached read.
+fn checkin_rows(
+    journals: &[PathBuf],
+    cache: &Mutex<Option<CheckinCache>>,
+) -> Result<Vec<Value>, String> {
+    let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
+    let seqs = checkin_seqs(journals);
+    if let (Some(seqs), Some(hit)) = (&seqs, cache.as_ref()) {
+        if *seqs == hit.seqs {
+            return Ok(hit.rows.clone());
+        }
+    }
+    let report = crate::lead_history::scan_scopes(journals, None)?;
+    let rows = report
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Read the seqs after the import, so the next tick compares against
+    // what this read actually saw.
+    *cache = checkin_seqs(journals).map(|seqs| CheckinCache {
+        seqs,
+        rows: rows.clone(),
+    });
+    Ok(rows)
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
@@ -1320,9 +1374,10 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         *last = Some(Instant::now());
     }
     let gate = Arc::clone(&arm.in_flight);
+    let cache = Arc::clone(&arm.checkins);
     tokio::task::spawn_blocking(move || {
         let _sweep = crate::daemon::SweepGate(gate);
-        let outcome = run_arm(&home);
+        let outcome = run_arm(&home, &cache);
         let journal = crate::loop_runtime::Journal::new_raw(
             home.events_jsonl(),
             crate::daemon::global_events_path(&home),
@@ -1359,14 +1414,13 @@ pub(crate) fn checkin_journals(home: &AgentsHome) -> Vec<PathBuf> {
     journals
 }
 
-fn run_arm(home: &AgentsHome) -> (u64, Option<String>, String) {
+fn run_arm(
+    home: &AgentsHome,
+    cache: &Mutex<Option<CheckinCache>>,
+) -> (u64, Option<String>, String) {
     let now = chrono::Utc::now();
-    let rows = match crate::lead_history::scan_scopes(&checkin_journals(home), None) {
-        Ok(report) => report
-            .get("events")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+    let rows = match checkin_rows(&checkin_journals(home), cache) {
+        Ok(rows) => rows,
         Err(error) => return (0, Some("checkin_read_failed".into()), error),
     };
     let checkins = rows
@@ -1764,6 +1818,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// AC7: an unmoved journal serves the cached rows with no rescan; a new
+    /// check-in row is read on the next tick.
+    #[test]
+    fn checkin_rows_rescan_only_when_a_journal_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let row = |change: &str| {
+            json!({"ts": chrono::Utc::now().to_rfc3339(), "type": crate::lead_history::LEAD_CHECKIN,
+                   "source": "loop", "data": {"scope": "team", "change": change}})
+        };
+        let append = |value: Value| {
+            let mut fh = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&journal)
+                .unwrap();
+            writeln!(fh, "{value}").unwrap();
+        };
+        append(row("one"));
+        let journals = vec![journal.clone()];
+        let cache = Mutex::new(None);
+        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 1);
+        let seqs = cache.lock().unwrap().as_ref().map(|c| c.seqs.clone());
+        assert!(seqs.is_some(), "a settled read is cached");
+        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 1);
+        append(row("two"));
+        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 2);
+        assert_ne!(cache.lock().unwrap().as_ref().map(|c| c.seqs.clone()), seqs);
     }
 
     #[test]
