@@ -702,7 +702,9 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 
     // This client can lazily birth the claude supervisor; make sure a clean
-    // one is up first. The client command is never touched.
+    // one is up first. The client drops its route keys in case it wins a
+    // birth race anyway.
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     crate::claude_supervisor::guard_birth_for_plan(&plan.env);
 
     // Inherit stdio so the claude TUI takes over; mirror its exit code.

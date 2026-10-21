@@ -2222,6 +2222,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // A claude row's argv is a `claude` client, so this exec can birth the
     // supervisor too.
     if matches!(&route, ResumeRoute::ClientResume) {
+        crate::claude_supervisor::strip_route_carriers(&mut exec_command);
         match &reentry_plan {
             Some(plan) => crate::claude_supervisor::guard_birth_for_plan(&plan.env),
             None => crate::claude_supervisor::guard_birth([]),
@@ -2391,6 +2392,7 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
         exec_command.env(key, value);
     }
     // recover execs a claude client, so it can birth the supervisor too.
+    crate::claude_supervisor::strip_route_carriers(&mut exec_command);
     crate::claude_supervisor::guard_birth_for_plan(&plan.env);
     let err = exec_command.exec();
     // exec only returns on failure.

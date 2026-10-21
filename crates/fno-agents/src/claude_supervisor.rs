@@ -10,9 +10,13 @@
 //! session's identity readable in `ps eww` output.
 //!
 //! Python `bg_create` enters through `run_birth_exec`, which applies this
-//! guard before the client command. The rule is birth-scoped, not key-scoped:
-//! nothing is stripped from the client; only a newly born supervisor is
-//! cleaned. A supervisor that is already running keeps its env until restart.
+//! guard before the client command. The guard is birth-scoped: it cleans a
+//! supervisor fno births itself. A client that runs after the probe and finds
+//! no supervisor (the upgrade self-restart leaves one such window) births it
+//! from its own env, so a daemon-hosted client also drops its route keys
+//! (`strip_route_carriers`): the route rides `--settings` and the client env
+//! never reaches a hosted session. A supervisor that is already running keeps
+//! its env until restart.
 //!
 //! Measured 2026-09-19 (throwaway `CLAUDE_CONFIG_DIR`): no
 //! fno-reachable `claude` verb births a supervisor when the verb itself
@@ -135,6 +139,65 @@ pub(crate) fn held_poison_keys() -> Vec<String> {
         .filter_map(|(k, _)| k.into_string().ok())
         .filter(|k| is_poison(k))
         .collect()
+}
+
+/// The route keys a daemon-hosted `claude` client must not carry, or an empty
+/// list when the launch hosts its session in the client itself. `--bg`,
+/// `respawn` and `attach` run against the supervisor, which a client births
+/// from its own env when none serves; an interactive `claude --resume` runs
+/// the session in the client, so its env is the session env and stays.
+fn route_carriers_to_strip(
+    program: &std::ffi::OsStr,
+    args: &[&std::ffi::OsStr],
+    extra_env_keys: &[String],
+) -> Vec<String> {
+    let is_claude = Path::new(program).file_name().and_then(|n| n.to_str()) == Some("claude");
+    let daemon_hosted = args.iter().any(|a| *a == "--bg")
+        || args
+            .first()
+            .is_some_and(|a| *a == "respawn" || *a == "attach");
+    if !is_claude || !daemon_hosted {
+        return Vec::new();
+    }
+    // CLAUDE_CODE_AUTO_COMPACT_WINDOW: the route injects it for every [1m]
+    // model even when extra_env does not name it.
+    let mut keys: Vec<String> = [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        crate::codex_route::ROUTE_PROVIDER_ENV,
+    ]
+    .into_iter()
+    .chain(MODEL_ENV_KEYS)
+    .map(str::to_string)
+    .collect();
+    for key in extra_env_keys {
+        if !keys.contains(key) {
+            keys.push(key.clone());
+        }
+    }
+    keys
+}
+
+/// Remove every route key from a daemon-hosted `claude` client command, the
+/// configured `[model_routing.extra_env]` keys included. Call it after the
+/// command's last `env()` call so the removal wins. Identity keys stay.
+pub fn strip_route_carriers(cmd: &mut std::process::Command) {
+    let cwd = cmd
+        .get_current_dir()
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    let extra_env_keys: Vec<String> = cwd
+        .and_then(|cwd| {
+            crate::agents_config::config_table_merged(&cwd, &["model_routing", "extra_env"])
+        })
+        .map(|table| table.keys().cloned().collect())
+        .unwrap_or_default();
+    let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+    let keys = route_carriers_to_strip(cmd.get_program(), &args, &extra_env_keys);
+    for key in keys {
+        cmd.env_remove(key);
+    }
 }
 
 /// The `CLAUDE_CONFIG_DIR` an about-to-run client overlay carries, if any.
@@ -316,10 +379,9 @@ fn wait_for_supervisor(config_dir: Option<&Path>) -> bool {
 ///
 /// Arm A (the measured pick): when no supervisor serves that dir, start one
 /// detached with every poison key held back, wait up to 5 s for it to serve,
-/// and print one stderr line naming what was held back. The client's own
-/// command is never touched; only the detached supervisor's birth env is
-/// filtered. `run_birth_exec` leaves the client argv, env, cwd, streams, and
-/// pid intact when it replaces itself with Claude.
+/// and print one stderr line naming what was held back. The client loses only
+/// its route keys (`strip_route_carriers`, called by each site) in case it
+/// wins a birth race after the probe; identity keys stay on the client.
 ///
 /// Every failure degrades to silence and lets the client run: a guard that
 /// refused here would break a working lane over a condition the client cannot
@@ -431,8 +493,9 @@ pub fn run_birth_exec(args: &[String]) -> i32 {
     }
     guard_birth(std::iter::empty::<(&str, &str)>());
     use std::os::unix::process::CommandExt;
-    let argv = &args[1..];
-    let error = client_command(argv).exec();
+    let mut cmd = client_command(&args[1..]);
+    strip_route_carriers(&mut cmd);
+    let error = cmd.exec();
     eprintln!("claude CLI not found: {error}");
     127
 }
@@ -636,5 +699,65 @@ mod tests {
         assert!(error.contains("FNO_ZZ_PROBE"));
         assert!(error.contains("SUPERVISOR_WIDE_FNO_KEYS"));
         assert!(error.contains("claude_supervisor_held_keys.txt"));
+    }
+
+    fn strip_list(argv: &[&str], extra: &[&str]) -> Vec<String> {
+        let args: Vec<&std::ffi::OsStr> = argv[1..].iter().map(std::ffi::OsStr::new).collect();
+        let extra: Vec<String> = extra.iter().map(|k| k.to_string()).collect();
+        route_carriers_to_strip(std::ffi::OsStr::new(argv[0]), &args, &extra)
+    }
+
+    #[test]
+    fn a_daemon_hosted_client_drops_every_route_key_once() {
+        let keys = strip_list(
+            &["/usr/local/bin/claude", "--bg", "--name", "w", "--", "hi"],
+            &["API_TIMEOUT_MS", "ANTHROPIC_BASE_URL"],
+        );
+        let mut expected: Vec<String> = [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            "FNO_ROUTE_PROVIDER",
+        ]
+        .into_iter()
+        .chain(MODEL_ENV_KEYS)
+        .chain(["API_TIMEOUT_MS"])
+        .map(str::to_string)
+        .collect();
+        let mut got = keys.clone();
+        got.sort();
+        expected.sort();
+        assert_eq!(got, expected);
+        for argv in [["claude", "respawn", "abc"], ["claude", "attach", "abc"]] {
+            assert_eq!(strip_list(&argv, &[]).len(), 4 + MODEL_ENV_KEYS.len());
+        }
+    }
+
+    #[test]
+    fn a_client_hosted_session_keeps_its_route() {
+        // An interactive resume runs the session inside the client, so the
+        // client env IS the session env.
+        assert!(strip_list(&["claude", "--resume", "u-1"], &["API_TIMEOUT_MS"]).is_empty());
+        assert!(strip_list(&["codex", "--bg"], &[]).is_empty());
+    }
+
+    #[test]
+    fn the_strip_removes_route_keys_and_keeps_identity() {
+        let mut cmd = std::process::Command::new("claude");
+        cmd.args(["--bg", "--name", "w"])
+            .env("ANTHROPIC_BASE_URL", "https://api.z.ai")
+            .env(MODEL_ENV_KEYS[1], "glm-5.3-flash[1m]")
+            .env("FNO_AGENT_SELF", "w")
+            .env("CLAUDE_CONFIG_DIR", "/tmp/cfg");
+        strip_route_carriers(&mut cmd);
+        let env = env_of(&cmd);
+        let value = |k: &str| env.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(value("ANTHROPIC_BASE_URL"), Some(None));
+        assert_eq!(value(MODEL_ENV_KEYS[1]), Some(None));
+        assert_eq!(value("FNO_AGENT_SELF"), Some(Some("w".to_string())));
+        assert_eq!(
+            value("CLAUDE_CONFIG_DIR"),
+            Some(Some("/tmp/cfg".to_string()))
+        );
     }
 }
