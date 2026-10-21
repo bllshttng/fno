@@ -298,7 +298,7 @@ fn routed_root_journal(live: &Path) -> bool {
 /// taken? No store, no cursor row, a changed head line, or an offset short
 /// of EOF all answer yes. A cursor at EOF under the same head line answers
 /// no, so the read skips import_all and never opens a write transaction.
-fn stray_has_uningested_bytes(live: &Path, store: &Path) -> bool {
+pub(crate) fn stray_has_uningested_bytes(live: &Path, store: &Path) -> bool {
     let Ok(conn) = open_read(store) else {
         return true;
     };
