@@ -2182,6 +2182,11 @@ mod classify_origin_tests {
     /// the flag says.
     #[test]
     fn an_agent_identity_downgrades_declared_origins_to_peer() {
+        // Env is process-wide and cargo runs tests in parallel threads: the
+        // sibling here clears the same markers, so both hold the env lock.
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _sid = EnvVarGuard::set("CODEX_SESSION_ID", "session-origin-1");
         assert_eq!(classify_origin(Some("operator")), Ok("peer".to_string()));
         assert_eq!(classify_origin(Some("scheduler")), Ok("peer".to_string()));
@@ -2194,6 +2199,9 @@ mod classify_origin_tests {
     /// only live.)
     #[test]
     fn without_an_identity_the_unattended_stream_classifies_unknown() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _clear = EnvVarGuard::set("CODEX_SESSION_ID", "");
         let _clear2 = EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "");
         assert_eq!(classify_origin(None), Ok("unknown".to_string()));
