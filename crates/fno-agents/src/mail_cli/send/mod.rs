@@ -629,6 +629,8 @@ struct SendArgs {
     // The front already resolved --to-self: the positional IS this session,
     // and self-addressing is allowed. Never re-derives the recipient.
     self_ok: bool,
+    // Raw-leaf flag only: the front forwards it untouched.
+    review_request: bool,
     force: bool,
     style_exception: Option<String>,
     cwd: Option<PathBuf>,
@@ -660,6 +662,7 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         check: false,
         to_self: false,
         self_ok: false,
+        review_request: false,
         force: false,
         style_exception: None,
         cwd: None,
@@ -722,6 +725,7 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             // the own session id plus --self-ok before the leaf runs).
             "--to-self" => out.to_self = true,
             "--self-ok" => out.self_ok = true,
+            "--review-request" => out.review_request = true,
             "--force" | "-F" => out.force = true,
             "--style-exception" => {
                 out.style_exception = Some(take_arg(args, &mut index, "--style-exception")?)
@@ -1907,6 +1911,9 @@ pub fn run(args: &[String]) -> i32 {
         if args.to_self || args.self_ok {
             raw_args.push("--self-ok".to_string());
         }
+        if args.review_request {
+            raw_args.push("--review-request".to_string());
+        }
         if let Some(reason) = args.style_exception.as_deref() {
             raw_args.push("--style-exception".to_string());
             raw_args.push(reason.to_string());
@@ -2106,6 +2113,24 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod self_address_tests {
     use super::*;
+
+    /// The request-self-review argv must clear the front parser and reach
+    /// the raw leaf; an unknown-argument refusal here broke every request.
+    #[test]
+    fn review_request_parses_on_the_full_raw_argv() {
+        let argv: Vec<String> = [
+            "a1b2c3d4",
+            "/fno:review high",
+            "--raw",
+            "--self-ok",
+            "--review-request",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let parsed = parse_args(&argv).expect("front parser accepts --review-request");
+        assert!(parsed.raw && parsed.self_ok && parsed.review_request);
+    }
 
     /// The sender model rides every bus row: the last committed
     /// `turn_context` wins, and an unterminated tail line never counts.
