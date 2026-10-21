@@ -4082,7 +4082,7 @@ where
                     // Python writes opencode ids to the canonical harness_session_id
                     // and drops `session_id` on write (it is Rust-set only), so
                     // falling through would report null for every opencode row. Same
-                    // resolution as `to_agent_entry` and `client_verbs::session_id_field`.
+                    // resolution as `to_agent_entry` and `client_verbs::resume_session_id`.
                     "opencode" => e
                         .harness_session_id
                         .clone()

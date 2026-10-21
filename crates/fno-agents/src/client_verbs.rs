@@ -958,24 +958,23 @@ pub fn run_trace(rest: &[String], home: &AgentsHome) -> i32 {
 // ---------------------------------------------------------------------------
 
 /// Harness -> session-id registry field, mirroring Python
-/// `registry.HARNESS_SESSION_ID_FIELDS`. claude resolves to the unified `short_id`
-/// transport key (the jobId); v10 resolves codex/gemini to the canonical
-/// `harness_session_id` (their per-provider fields are gone -- load_registry_entries
-/// back-fills it from a legacy row's per-provider key). This is the ONLY place a
-/// verb touches a session-id field; every session-connecting verb reaches a row via
-/// [`find_agent_entry`] instead of its own name-only `.find`.
+/// `registry.HARNESS_SESSION_ID_FIELDS`: claude resolves to the `short_id`
+/// transport key (the jobId) and is the one entry, because it is the one
+/// harness whose transport key differs from its canonical id. Every other
+/// harness resolves `harness_session_id`, which is exactly what
+/// [`resume_session_id`] falls back to when this returns `None`, so the table
+/// carries no per-name arm for them (a new harness edits nothing here). This
+/// is the ONLY place a verb touches a session-id field; every
+/// session-connecting verb reaches a row via [`find_agent_entry`] instead of
+/// its own name-only `.find`.
 ///
-/// This is an EXCEPTION table, not the roster. claude is the one harness
-/// whose transport key differs from its canonical id, so it is the one entry that
-/// changes the answer; every other harness resolves `harness_session_id`, which is
-/// also what [`resume_session_id`] falls back to when this returns `None`. Read it
-/// as "does this harness address differently", never as "is this harness known" --
-/// the second reading is what left pi declaring `interactive_resume` support in
+/// This is an EXCEPTION table, not the roster. Read it as "does this harness
+/// address differently", never as "is this harness known" -- the second
+/// reading is what left pi declaring `interactive_resume` support in
 /// `harness_capabilities.toml` while resume refused it for having no session id.
 fn session_id_field(harness: &str) -> Option<&'static str> {
     match harness {
         "claude" => Some("short_id"),
-        "codex" | "gemini" | "agy" | "opencode" | "cursor-agent" => Some("harness_session_id"),
         _ => None,
     }
 }

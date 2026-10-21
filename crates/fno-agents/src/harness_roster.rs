@@ -9,6 +9,7 @@
 //! `resolve_binary`, like `sync-canonical`.
 
 use crate::client_verbs::to_python_json;
+use crate::harness_capabilities::HarnessContract;
 use crate::provider::{KNOWN_HARNESSES, KNOWN_PROVIDERS};
 use serde_json::json;
 
@@ -22,10 +23,96 @@ pub fn run_harness_roster(rest: &[String]) -> i32 {
     0
 }
 
-fn roster_json() -> serde_json::Value {
-    json!({ "known": KNOWN_HARNESSES, "providers": KNOWN_PROVIDERS })
+/// The thread-seam set, derived from the bundled contract: a row whose
+/// `features.spawn.state` reads `native` seats on the seam with no other
+/// edit, the same answer Python's harness_map.thread_seatable derives from
+/// the same TOML. Roster order, so the rendered accept list is stable across
+/// contract edits.
+fn spawn_set(contract: &HarnessContract) -> Vec<&'static str> {
+    KNOWN_HARNESSES
+        .iter()
+        .copied()
+        .filter(|name| {
+            contract
+                .harness
+                .get(*name)
+                .and_then(|caps| caps.features.get("spawn"))
+                .is_some_and(|claim| claim.state == "native")
+        })
+        .collect()
 }
 
-// The read's substance is pinned on the consumer side: Python's roster
-// content test reads this verb through the real binary, and provider.rs's
-// round-trip test pins the const's subset and name format.
+fn roster_json() -> serde_json::Value {
+    let contract = HarnessContract::packaged().expect("bundled contract parses");
+    let spawn = spawn_set(&contract);
+    json!({ "known": KNOWN_HARNESSES, "providers": KNOWN_PROVIDERS, "spawn": spawn })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Today's Python `SPAWN_HARNESSES` tuple, pinned in roster order: the
+    /// derived set must equal it name for name, so the port serves the same
+    /// seam gate the hand list did.
+    #[test]
+    fn spawn_equals_the_python_seam_roster() {
+        let payload = roster_json();
+        let derived = payload["spawn"].as_array().expect("spawn is a list");
+        let names: Vec<&str> = derived
+            .iter()
+            .map(|v| v.as_str().expect("a name"))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "claude",
+                "codex",
+                "agy",
+                "opencode",
+                "pi",
+                "cursor-agent",
+                "grok",
+                "zcode"
+            ],
+            "the contract's spawn-native set drifted from the seam roster the \
+             Python list held; re-pin both sides together"
+        );
+    }
+
+    /// The seam gate is DERIVED: flipping one row's spawn claim moves that
+    /// harness in or out of the set with no other edit (AC1-HP).
+    #[test]
+    fn spawn_set_follows_the_row_claim() {
+        let native = crate::harness_capabilities::CAPABILITY_TOML.replacen(
+            "[harness.footnote.features.spawn]\nstate = \"capable\"",
+            "[harness.footnote.features.spawn]\nstate = \"native\"",
+            1,
+        );
+        // The replacen above must have hit its row; a missed anchor would
+        // silently pin nothing.
+        assert!(native != crate::harness_capabilities::CAPABILITY_TOML);
+        let contract = HarnessContract::parse(&native).expect("edited contract parses");
+        let derived = spawn_set(&contract);
+        assert!(
+            derived.contains(&"footnote"),
+            "a row flipped to spawn-native must land in the derived set with no other edit"
+        );
+    }
+
+    /// The rendered set and the derivation must agree on the bundled
+    /// contract, so a rendering bug can never silently widen or narrow the
+    /// seam gate the Python side reads.
+    #[test]
+    fn rendered_spawn_matches_the_derivation() {
+        let contract = HarnessContract::packaged().expect("bundled contract parses");
+        let payload = roster_json();
+        let rendered: Vec<&str> = payload["spawn"]
+            .as_array()
+            .expect("spawn is a list")
+            .iter()
+            .map(|v| v.as_str().expect("a name"))
+            .collect();
+        assert_eq!(rendered, spawn_set(&contract));
+    }
+}
