@@ -34,7 +34,7 @@ use crate::claude_ask::py_repr;
 use crate::paths::AgentsHome;
 use crate::process_probe::process_start_time;
 use crate::scrape::fno_bin;
-use crate::state::{self, MuxRef, RegistryEntry};
+use crate::state::{self, Lineage, MuxRef, RegistryEntry};
 use crate::AgentStatus;
 
 /// `DispatchAskError(..., exit_code=2)`: named refusals - a held placement
@@ -48,8 +48,8 @@ pub const EXIT_SPAWN_FAILED: i32 = 1;
 /// through `dispatch.py`'s handler: `DispatchAskError(..., exit_code=11)`.
 pub const EXIT_LOCK_TIMEOUT: i32 = 11;
 /// `_run_mux`'s FileNotFoundError/OSError exits: the front door could not be
-/// run at all, so no pane exists and the line names the binary.
-pub const EXIT_NO_BINARY: i32 = 127;
+/// The shell's command-not-found code, shared with heal's missing-`gh` exit: one allocation name for the one convention (`spawn_gate.rs:45`).
+pub const EXIT_CMD_NOT_FOUND: i32 = 127;
 /// `fno mux pane run`'s exit when the verb reached the server but the control
 /// read was never answered (crates/fno `EXIT_CONTROL_UNANSWERED`). Unlike any
 /// other non-zero code this does NOT prove the pane is absent, so the spine
@@ -979,7 +979,7 @@ pub fn write_pane_row(
         origin: Some("spawn".to_string()),
         substrate: Some("pane".to_string()),
         spawn_trigger: spawn_trigger.clone(),
-        ..Default::default()
+        ..RegistryEntry::new(None, Lineage::captured((None, None, None)))
     };
     write_pane_row_txn(home, name, entry, replacing)
 }
@@ -1175,10 +1175,10 @@ fn spawn_exec_failure_line(exc: &std::io::Error) -> (String, i32) {
                 "the '{bin}' binary was not found on PATH; the pane substrate is hosted by the \
                  fno mux (set FNO_BIN or install fno)"
             ),
-            EXIT_NO_BINARY,
+            EXIT_CMD_NOT_FOUND,
         )
     } else {
-        (format!("could not run '{bin}': {exc}"), EXIT_NO_BINARY)
+        (format!("could not run '{bin}': {exc}"), EXIT_CMD_NOT_FOUND)
     }
 }
 

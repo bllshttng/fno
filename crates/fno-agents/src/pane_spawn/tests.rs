@@ -66,7 +66,7 @@ fn mux_row(name: &str, session: &str, pane_id: u64) -> RegistryEntry {
             session: session.to_string(),
             pane_id,
         }),
-        ..Default::default()
+        ..RegistryEntry::new(None, crate::state::Lineage::captured((None, None, None)))
     }
 }
 
