@@ -25,13 +25,12 @@
 #     capability-stage-review-commit-url-leak
 #     capability-stage-review-decorative-test
 #
-# bank_rev pins 32c8ab67a3f91be3b6b449a26507b6e385de71e0, the origin/main
+# bank_rev pins fcfcbeb545e913b43aa9b70524ba227cc01677f2, the origin/main
 # sha this worker branched from (plan 1.3: the pin names a main commit, so
-# it stays reachable after any merge shape, including a squash). The eight
-# new task files void the pin at this branch head by design: the next
-# declaration (slice 4) re-pins on merged main, where the pin diff is empty
-# again and runs pass the gate.
-bank_rev: 32c8ab67a3f91be3b6b449a26507b6e385de71e0
+# it stays reachable after any merge shape, including a squash). This is
+# the slice-4 re-pin: merged main carries the slice-3 stage tasks, so the
+# pin diff is empty again at this branch head and runs pass the gate.
+bank_rev: fcfcbeb545e913b43aa9b70524ba227cc01677f2
 
 train:
   - capability-lane-blueprint

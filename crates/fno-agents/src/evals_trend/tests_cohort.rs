@@ -121,7 +121,7 @@ fn wilson_interval_pins_20_of_40_and_the_old_math_fails_it() {
 }
 
 #[test]
-fn empty_cohort_scores_zero_and_never_divides() {
+fn empty_cohort_nulls_the_rate_and_never_divides() {
     let tmp = TempDir::new().unwrap();
     let fold = fold_of(
         &tmp,
@@ -137,10 +137,11 @@ fn empty_cohort_scores_zero_and_never_divides() {
     );
     let cohort = &fold["cohorts"]["c"];
     assert_eq!(cohort["graded"], 0);
-    let lo = cohort["pass_rate_ci95"][0].as_f64().unwrap();
-    let hi = cohort["pass_rate_ci95"][1].as_f64().unwrap();
-    assert_eq!(lo, 0.0);
-    assert_eq!(hi, 0.0);
+    // A zero-scored cell has no measured rate: the fold nulls the rate and
+    // the interval instead of wilson(0, 0)'s [0, 0], which reads as a
+    // measured 0 percent to a human.
+    assert!(cohort["pass_rate"].is_null());
+    assert!(cohort["pass_rate_ci95"].is_null());
 }
 
 fn substituted_is_excluded_and_counted_never_scored() {

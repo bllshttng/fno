@@ -343,7 +343,7 @@ def run_task(
                     else:
                         spawned = True
                 if not reason:
-                    outcome = grade(task, workdir)
+                    outcome = grade(task, workdir, base_ref=checkout_ref)
                     if not outcome.passed:
                         reason = outcome.reason
                 _remove_worktree(repo_root, workdir)

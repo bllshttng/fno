@@ -657,8 +657,19 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
         "graded": statuses.get("graded").copied().unwrap_or(0),
         "scored": scored.len(),
         "accepted": accepted,
-        "pass_rate": round4(rate),
-        "pass_rate_ci95": [round4(lo), round4(hi)],
+        // A zero-scored cell has no measured rate: wilson(0, 0) emits a
+        // bracketing [0, 0] that reads as a measured 0 percent to a human,
+        // so the cell nulls the rate and the interval instead.
+        "pass_rate": if scored.is_empty() {
+            Value::Null
+        } else {
+            json!(round4(rate))
+        },
+        "pass_rate_ci95": if scored.is_empty() {
+            Value::Null
+        } else {
+            json!([round4(lo), round4(hi)])
+        },
         "median_wall_s": round4(median_wall_s),
         "lane_status_counts": lane_statuses,
         "status_counts": statuses,

@@ -10,9 +10,11 @@ The same worktree end-state always grades the same (Invariant).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from fno.evals.bank import GradeCheck, TaskSpec
 
@@ -38,12 +40,19 @@ class GradeOutcome:
         return ""
 
 
-def _grade_exit(check: GradeCheck, workdir: Path, timeout_s: int) -> CheckResult:
+def _grade_exit(check: GradeCheck, workdir: Path, timeout_s: int, base_ref: Optional[str] = None) -> CheckResult:
     command = check.command or ""
+    env = None
+    if base_ref is not None:
+        # Graders scope commit scans to the run's own commits through this
+        # ref; a grader that needs it fail-closes on its absence (exit 2),
+        # never on a moving remote ref.
+        env = {**os.environ, "FNO_EVALS_BASE_REF": base_ref}
     try:
         proc = subprocess.run(
             command, shell=True, cwd=str(workdir),
             capture_output=True, text=True, timeout=timeout_s,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return CheckResult("exit", False, f"exit: `{command}` timed out after {timeout_s}s")
@@ -71,17 +80,20 @@ def _grade_grep(check: GradeCheck, workdir: Path) -> CheckResult:
     return CheckResult("grep", ok, f"grep: {pattern!r} in {check.path} -> {'found' if ok else 'absent'}")
 
 
-def grade(task: TaskSpec, workdir: Path) -> GradeOutcome:
+def grade(task: TaskSpec, workdir: Path, base_ref: Optional[str] = None) -> GradeOutcome:
     """Run every check in *task* against *workdir*; passed iff all pass.
 
     The per-check timeout for ``exit`` checks derives from the task's
     ``timeout_minutes`` (the same budget that bounds the worker step).
+    *base_ref* (the run's checkout ref) reaches ``exit`` checks as the
+    ``FNO_EVALS_BASE_REF`` env var, so a grader can scope a commit scan to
+    exactly the commits the run created.
     """
     timeout_s = max(1, task.timeout_minutes * 60)
     results: list[CheckResult] = []
     for check in task.grade:
         if check.kind == "exit":
-            results.append(_grade_exit(check, workdir, timeout_s))
+            results.append(_grade_exit(check, workdir, timeout_s, base_ref=base_ref))
         elif check.kind == "file-exists":
             results.append(_grade_file_exists(check, workdir))
         else:  # grep (validated at load time)
