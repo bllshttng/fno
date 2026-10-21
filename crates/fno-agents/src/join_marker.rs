@@ -107,10 +107,11 @@ pub fn preamble_due(
 
 // ---------------------------------------------------------------------------
 // `fno-agents report --kind join --harness <h> --session-id <id>
-//      [--check] [--preamble-due [--mark] [--transcript <path>]]`
+//      [--check] [--preamble-due [--mark] [--compacted] [--transcript <path>]]`
 //
 // Without --check it joins (refused in hook context, exit 3). --preamble-due
-// prints `due` when the preamble is due, nothing otherwise. Rides the report
+// prints `due` when the preamble is due, nothing otherwise; with --compacted
+// it is due for any joined session. Rides the report
 // action so no verb is added.
 // ---------------------------------------------------------------------------
 
@@ -118,7 +119,7 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
     let mut harness: Option<String> = None;
     let mut session: Option<String> = None;
     let mut transcript: Option<PathBuf> = None;
-    let (mut check, mut due, mut mark) = (false, false, false);
+    let (mut check, mut due, mut mark, mut compacted) = (false, false, false, false);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let slot = match arg.as_str() {
@@ -144,6 +145,10 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
             }
             "--mark" => {
                 mark = true;
+                continue;
+            }
+            "--compacted" => {
+                compacted = true;
                 continue;
             }
             other => {
@@ -178,7 +183,18 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
             }
         }
     }
-    if due && preamble_due(root, &harness, &session, transcript.as_deref(), mark) {
+    // A carrier that fires exactly at a compaction says so: opencode, pi and
+    // agy transcripts carry no boundary shape the stamp could read.
+    let due_now = if compacted {
+        let joined = is_joined(root, &harness, &session) || env_set("FNO_AGENT_SELF");
+        if joined && mark {
+            preamble_due(root, &harness, &session, transcript.as_deref(), true);
+        }
+        joined
+    } else {
+        preamble_due(root, &harness, &session, transcript.as_deref(), mark)
+    };
+    if due && due_now {
         println!("due");
     }
     0

@@ -15,8 +15,9 @@
 #          call clears FNO_HOOK_CONTEXT for that one join.
 # The hook payload on stdin supplies session_id and transcript_path.
 #
-# Output: hookSpecificOutput.additionalContext (claude, codex), or
-# `additional_context` (Cursor) / top-level `additionalContext` (Copilot).
+# Output: hookSpecificOutput.additionalContext (claude, codex, and the
+# opencode and pi carriers), injectSteps (agy), or `additional_context`
+# (Cursor) / top-level `additionalContext` (Copilot).
 #
 # Failure mode: hooks must NEVER block. Any failure emits `{}`.
 
@@ -50,8 +51,12 @@ payload_field() {
     printf '%s' "$PAYLOAD" | jq -r --arg k "$1" '.[$k] // empty' 2>/dev/null || true
 }
 
-# The same harness and session-id env register-session-start.sh reads.
-if [[ "${FNO_PLATFORM:-}" == "codex" || -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
+# The same harness and session-id env register-session-start.sh reads. The
+# opencode, pi and agy carriers name their harness in FNO_HOOK_HARNESS and
+# pass the session id in the payload (agy: camelCase conversationId).
+if [[ -n "${FNO_HOOK_HARNESS:-}" ]]; then
+    HARNESS="$FNO_HOOK_HARNESS"; SESSION_ID=""
+elif [[ "${FNO_PLATFORM:-}" == "codex" || -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
     HARNESS="codex"; SESSION_ID=""
     if [[ -z "${CODEX_THREAD_ID:-}" || -z "${CODEX_SESSION_ID:-}" \
           || "${CODEX_THREAD_ID}" == "${CODEX_SESSION_ID}" ]]; then
@@ -63,6 +68,7 @@ else
     noop
 fi
 [[ -z "$SESSION_ID" ]] && SESSION_ID="$(payload_field session_id)"
+[[ -z "$SESSION_ID" ]] && SESSION_ID="$(payload_field conversationId)"
 [[ -z "$SESSION_ID" ]] && noop
 
 # shellcheck source=lib/agents-bin.sh
@@ -75,6 +81,7 @@ BIN="$(fno_agents_bin "$PLUGIN_ROOT")"
 ARGS=(report --kind join --harness "$HARNESS" --session-id "$SESSION_ID" --preamble-due --mark)
 TRANSCRIPT="$(payload_field transcript_path)"
 [[ -n "$TRANSCRIPT" ]] && ARGS+=(--transcript "$TRANSCRIPT")
+[[ "$(payload_field source)" == "compact" || "$EVENT" == "PostCompact" ]] && ARGS+=(--compacted)
 if [[ "$JOIN" == "join" ]]; then
     DUE="$( unset FNO_HOOK_CONTEXT; with_timeout 3 "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"
 else
@@ -114,7 +121,10 @@ SKILL_ESCAPED="$(escape_for_json "${SKILL_BODY}")"
 CONTEXT="<EXTREMELY_IMPORTANT>\nYou are in a footnote-enabled project.\n\n**Below is the full content of the 'using-fno' skill - your introduction to the two surfaces (slash-command workflows and the fno CLI). Re-read it when in doubt about which surface to use:**\n\n${SKILL_ESCAPED}\n</EXTREMELY_IMPORTANT>"
 
 # We use printf instead of heredoc to dodge a bash 5.3+ heredoc bug.
-if [[ -n "${CURSOR_PLUGIN_ROOT:-}" ]]; then
+if [[ "$HARNESS" == "agy" ]]; then
+    # agy PreInvocation injects through injectSteps (see agy-team-inject.sh).
+    printf '{"injectSteps":[{"ephemeralMessage":"%s"}]}\n' "${CONTEXT}"
+elif [[ -n "${CURSOR_PLUGIN_ROOT:-}" ]]; then
     printf '{\n  "additional_context": "%s"\n}\n' "${CONTEXT}"
 elif [[ -n "${COPILOT_CLI:-}" ]]; then
     printf '{\n  "additionalContext": "%s"\n}\n' "${CONTEXT}"

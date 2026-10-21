@@ -261,18 +261,28 @@ export default function (pi: {
       if (sid && rolePending.delete(sid)) {
         const root = pluginRoot()
         if (root) {
+          const payload = JSON.stringify({
+            hook_event_name: "SessionStart",
+            source: "compact",
+            cwd: process.cwd(),
+            session_id: sid,
+          })
           const out = await runBounded(
             "bash",
             [join(root, "hooks", "lead-postcompact-reinject.sh")],
             5000,
-            JSON.stringify({
-              hook_event_name: "SessionStart",
-              source: "compact",
-              cwd: process.cwd(),
-              session_id: sid,
-            }),
+            payload,
           )
-          const text = contextCarrierText(out)
+          // The using-fno carrier answers only for a session that joined fno.
+          const preamble = await runBounded(
+            "env",
+            ["FNO_HOOK_HARNESS=pi", "bash", join(root, "hooks", "session-start-using-fno.sh")],
+            5000,
+            payload,
+          )
+          const text = [contextCarrierText(out), contextCarrierText(preamble)]
+            .filter(Boolean)
+            .join("\n\n")
           if (text) {
             return {
               message: {

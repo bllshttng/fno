@@ -714,12 +714,14 @@ async function server({ directory, worktree, client, $ }) {
       cwd: dir,
       session_id: sid,
     }
-    for (const script of [
-      "hooks/lead-postcompact-reinject.sh",
-      "hooks/target-postcompact-reinject.sh",
+    // The using-fno carrier answers only for a session that joined fno.
+    for (const [script, env] of [
+      ["hooks/lead-postcompact-reinject.sh", ""],
+      ["hooks/target-postcompact-reinject.sh", ""],
+      ["hooks/session-start-using-fno.sh", "FNO_HOOK_HARNESS=opencode "],
     ]) {
       try {
-        const out = await runProcSh(`bash ${root}/${script}`, JSON.stringify(payload), 10000)
+        const out = await runProcSh(`${env}bash ${root}/${script}`, JSON.stringify(payload), 10000)
         const text = hookContextText(out)
         if (text) {
           const q = contextQueue.get(sid) || []
