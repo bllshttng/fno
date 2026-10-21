@@ -2264,4 +2264,22 @@ mod style_gate_tests {
         assert_eq!(enforce_body_cap(&"x".repeat(50), false), Ok(()));
         assert_eq!(enforce_body_cap(&"x".repeat(1500), false), Err(1));
     }
+
+    // Ported from cli/tests/test_mail_send_style.py when the cap-style call
+    // pairing moved into vet_body: the structural scan has no Python call
+    // sites left to read, so the port pins both legs through that one entry
+    // (dead-seam rule).
+    #[test]
+    fn vet_body_enforces_the_byte_cap_beside_the_style_gate() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _enforce = EnvVarGuard::set("FNO_STYLE_ENFORCE", "");
+        // Over the byte cap the vet refuses; the single word cannot be what
+        // tripped it. In warn-only mode the same body passes: the refusal is
+        // the byte gate, and the kill switch reaches it.
+        assert_eq!(vet_body(&"x".repeat(6000), None), Err(1));
+        let _warn_only = EnvVarGuard::set("FNO_MAIL_BODY_REFUSE", "0");
+        assert_eq!(vet_body(&"x".repeat(6000), None), Ok(()));
+    }
 }

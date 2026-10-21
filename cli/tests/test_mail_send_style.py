@@ -1,15 +1,10 @@
 """The style gate on ``fno agents mail send``.
 
-Two claims, tested two ways:
-
-1. STRUCTURAL: every authored-body entry point runs the style check. The guard
-   is the lockstep between ``_enforce_body_cap`` and ``_enforce_style`` in
-   ``cli/src/fno/mail/cli.py``: a new body-cap call without a paired style check
-   fails this test rather than a review. This is NOT a snapshot of today's
-   callers (that would pass forever); it is a relation between two calls.
-2. DYNAMIC: a subprocess ``fno agents mail send`` with a violating body exits 1 and
-   names the rule, before any delivery. The escape (``--style-exception``) and
-   the kill switch (``FNO_STYLE_ENFORCE=0``) let a violating body through.
+A subprocess ``fno agents mail send`` with a violating body exits 1 and
+names the rule, before any delivery. The escape (``--style-exception``) and
+the kill switch (``FNO_STYLE_ENFORCE=0``) let a violating body through.
+The structural cap-style pairing guard moved with the gate into the native
+leaf (crates/fno-agents mail_cli send::vet_body and its tests).
 """
 from __future__ import annotations
 
@@ -19,7 +14,6 @@ import sys
 from pathlib import Path
 
 REPO_CLI = Path(__file__).resolve().parents[1]
-MAIL_CLI = REPO_CLI / "src" / "fno" / "mail" / "cli.py"
 
 STYLE_REFUSED = "message blocked by the style rules"
 
@@ -52,29 +46,6 @@ def _run(args: list[str], env_extra: dict[str, str], tmp_path: Path):
         cwd=str(tmp_path),
         timeout=120,
     )
-
-
-def test_every_body_cap_call_is_paired_with_a_style_check():
-    """The structural guard: adding a body-cap site without a style check fails here.
-
-    Enumerates every ``_enforce_body_cap(...)`` CALL (not the def) and asserts
-    the next non-blank line calls ``_enforce_style(...)``. A new authored-body
-    path that caps bytes but skips style breaks this, which is the point: the
-    byte gate and the structure gate must not drift apart on a path.
-    """
-    lines = MAIL_CLI.read_text(encoding="utf-8").splitlines()
-    call_lines = [
-        i
-        for i, line in enumerate(lines)
-        if "_enforce_body_cap(" in line and not line.lstrip().startswith("def ")
-    ]
-    assert call_lines, "expected at least one _enforce_body_cap call site"
-    for i in call_lines:
-        following = next(lines[j] for j in range(i + 1, len(lines)) if lines[j].strip())
-        assert "_enforce_style(" in following, (
-            f"_enforce_body_cap at line {i + 1} is not followed by _enforce_style: "
-            f"{following!r}"
-        )
 
 
 OVER_CAP = " ".join(["w"] * 81)
