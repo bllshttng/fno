@@ -498,12 +498,19 @@ fn remote_delete_cleanup(number: u64, cwd: &Path, run: RunProbe, err: &mut dyn W
         .map(|r| r.stdout.trim().split('\t').map(str::to_string).collect())
         .unwrap_or_default();
     let branch = fields.first().map(String::as_str).unwrap_or_default();
+    let head_repo = fields.get(1).map(String::as_str).unwrap_or_default();
     let base_repo = fields.get(2).map(String::as_str).unwrap_or_default();
     if branch.is_empty() || base_repo.is_empty() {
         let _ = writeln!(
             err,
             "verify-pr-merged: post-merge cleanup failed: remote branch name unreadable (non-fatal)"
         );
+        return;
+    }
+    // A fork owns its head branch: deleting a same-named base branch would be
+    // data loss, so a cross-repo head is a silent no-delete terminal (the
+    // queue-merge finisher emits no failure event on an empty sink).
+    if !head_repo.is_empty() && head_repo != base_repo {
         return;
     }
     let deleted = run(
