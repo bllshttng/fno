@@ -23,6 +23,8 @@
 //! ambient values through and synthesizes the Python defaults when absent;
 //! a custom config value rides only if the caller exported it. That bridge
 //! lands with the Rust settings reader, not here.
+pub mod codex;
+
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -89,6 +91,16 @@ pub struct PaneContext {
     pub at: Option<String>,
     /// The bounded lane's stable `id:<n>` tab token.
     pub tab_id: Option<String>,
+    /// The worker's registry name: the codex identity leaf renders from it
+    /// (`mux_spawn.py:3506`).
+    pub worker_name: String,
+    /// A `--node` dispatch target: makes the seed a code payload for the
+    /// git-grant gate however the message is spelled (`rust_runtime.py:632`).
+    pub node: Option<String>,
+    /// Provider passthrough: the fenced spawn tail and `--harness-arg`, which
+    /// the client door folds into one list. The arms append it where the
+    /// Python leg appends `passthrough` (`mux_spawn.py:970`).
+    pub passthrough: Vec<String>,
 }
 
 impl PaneContext {
@@ -107,6 +119,9 @@ impl PaneContext {
             tab: None,
             at: None,
             tab_id: None,
+            worker_name: String::new(),
+            node: None,
+            passthrough: Vec::new(),
         }
     }
 
@@ -153,6 +168,22 @@ impl PaneContext {
             tab: opt_str("tab"),
             at: opt_str("at"),
             tab_id: opt_str("tab_id"),
+            worker_name: params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            node: opt_str("node"),
+            passthrough: params
+                .get("harness_args")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|token| token.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -186,6 +217,12 @@ pub enum ArmBind {
         session_id: String,
     },
     Unbound {
+        reason: String,
+    },
+    /// The pane was confirmed dead before any id bound (the arm's death
+    /// oracle saw it absent from a non-empty listing): the row records the
+    /// failure the Python leg records, never a still-spawning pane.
+    Died {
         reason: String,
     },
     /// The harness binds no session at all (gemini, agy): a receipt with
@@ -239,11 +276,13 @@ pub trait PaneArm {
     }
 }
 
-/// The arm table. PR 1 seats no arm: every pane spawn falls through and the
-/// client door keeps the Python bounce, byte-identical to main. PR 2 adds the
-/// codex entry here (and only for the plain/bounded lanes - explicit geometry
-/// stays on the Python leg).
-pub fn pane_arm_for(_ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
+/// The arm table. The codex arm answers the plain and bounded lanes only:
+/// explicit geometry, existing-pane attach and python-mode fall through and
+/// the client door keeps the Python bounce.
+pub fn pane_arm_for(ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
+    if codex::CodexArm::owns(ctx) {
+        return Some(&codex::CODEX_ARM);
+    }
     None
 }
 
@@ -951,6 +990,7 @@ pub fn write_pane_row(
     let (status, session_id) = match bind {
         ArmBind::Bound { session_id } => (AgentStatus::Live, Some(session_id.clone())),
         ArmBind::Unbound { .. } => (AgentStatus::Spawning, None),
+        ArmBind::Died { .. } => (AgentStatus::Failed, None),
         ArmBind::NotApplicable => (AgentStatus::Live, None),
     };
     let pid_start_time = pane.child_pid.and_then(process_start_time);
@@ -1202,6 +1242,7 @@ impl PaneReceipt {
                 match bind {
                     ArmBind::Bound { .. } | ArmBind::NotApplicable => "live",
                     ArmBind::Unbound { .. } => "spawning",
+                    ArmBind::Died { .. } => "failed",
                 }
                 .to_string(),
             ),
@@ -1218,6 +1259,7 @@ impl PaneReceipt {
             match bind {
                 ArmBind::Bound { .. } => Value::Bool(true),
                 ArmBind::Unbound { .. } => Value::Bool(false),
+                ArmBind::Died { .. } => Value::Bool(false),
                 ArmBind::NotApplicable => Value::Null,
             },
         );
@@ -1235,6 +1277,10 @@ impl PaneReceipt {
             }
             ArmBind::Unbound { reason } => {
                 obj.insert("pane_alive".into(), Value::Bool(true));
+                obj.insert("unbound_reason".into(), Value::String(reason.clone()));
+            }
+            ArmBind::Died { reason } => {
+                obj.insert("pane_alive".into(), Value::Bool(false));
                 obj.insert("unbound_reason".into(), Value::String(reason.clone()));
             }
             ArmBind::NotApplicable => {}
