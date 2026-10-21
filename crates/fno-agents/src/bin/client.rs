@@ -178,6 +178,12 @@ fn main() {
     {
         std::process::exit(fno_agents::pr_front::run(&args[2..]));
     }
+    // The bare `fno pr` compatibility spelling answers through the same
+    // dispatcher: the wheel's hidden lazy entry died with the Python pr_app,
+    // and the muscle-memory spelling survives natively (pr port 7).
+    if args.first().map(String::as_str) == Some("pr") {
+        std::process::exit(fno_agents::pr_front::run(&args[1..]));
+    }
     // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
     // base-lineage reach it through verb_call; transport-only.
     if args.first().map(String::as_str) == Some("gh-cache") {

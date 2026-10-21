@@ -830,6 +830,17 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoPr;
     }
+    // The bare `fno pr` legacy spelling claims natively too: the wheel's
+    // hidden lazy entry points at the deleted Python pr_app, so a claim here
+    // keeps the muscle-memory spelling answering instead of a traceback.
+    if args.first().and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(1).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1428,6 +1439,10 @@ mod tests {
         assert_eq!(decide_role(&os(&["do", "pr", "--help"]), false), Role::DoPr);
         // Bare `fno do pr` claims too: the grouped help is native.
         assert_eq!(decide_role(&os(&["do", "pr"]), false), Role::DoPr);
+        // The bare `fno pr` legacy spelling claims natively as well: the
+        // wheel's hidden lazy entry died with the Python pr_app.
+        assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
+        assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
         // The two Python mounts stay unclaimed: they forward to the wheel.
         assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
         assert_ne!(
