@@ -488,20 +488,6 @@ def normalize_spawn_args(
     return ["spawn", *toks, *payload]
 
 
-def _default_resolver(short_id: str) -> Optional[str]:
-    """Resolve an 8-hex claude short-id to its full session uuid (bg sessions).
-
-    Uses the bounded-retry lane so a short-id issued while claude is still writing
-    the session entry is not rejected on a transient miss (blueprint Concurrency).
-    """
-    try:
-        from fno.agents.harnesses.claude import resolve_session_uuid_at_spawn
-
-        return resolve_session_uuid_at_spawn(short_id)
-    except Exception:
-        return None
-
-
 # --------------------------------------------------------------------------- #
 # Per-verb profile resolution: a pure string rule over the seed's first
 # token selects `config.agents.profiles.<verb>`, layered over `agents.defaults`.
@@ -575,20 +561,6 @@ def _role_of(toks: Sequence[str]) -> Optional[str]:
         if t.startswith("--role="):
             return t.split("=", 1)[1]
     return None
-
-
-def _role_resolves(role: str, settings: object, env: Optional[Mapping[str, str]]) -> bool:
-    """Whether ``role`` resolves to a real spawn route (a non-None env overlay).
-
-    resolve_route is fail-SAFE, so this is True only when the role is routed AND
-    its provider is configured with an anthropic endpoint AND a key is present.
-    Any resolution error degrades to False (never bricks the spawn)."""
-    from fno.agents.model_routing import resolve_route
-
-    try:
-        return resolve_route(role, settings=settings, env=env) is not None  # type: ignore[arg-type]
-    except Exception:
-        return False
 
 
 def _has_permission_mode(toks: Sequence[str]) -> bool:
