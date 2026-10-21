@@ -710,8 +710,8 @@ mod tests {
         );
         assert_eq!(
             action(&mut e, &t, 4000, true, true),
-            Action::Wait,
-            "a live own claim outranks a gone pid"
+            Action::Nudge(1),
+            "a live own claim outranks a gone pid: the quiet ladder runs, not recovery"
         );
         assert_eq!(action(&mut e, &t, 4000, false, true), Action::Recover);
         t.touched = 3900;
