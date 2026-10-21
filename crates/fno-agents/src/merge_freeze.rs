@@ -81,7 +81,7 @@ impl Record {
 fn pin_key(sha: Option<&str>, prs: &[u64]) -> String {
     let mut parts = Vec::new();
     if let Some(sha) = sha {
-        parts.push(format!("sha:{}", &sha[..sha.len().min(12)]));
+        parts.push(format!("sha:{}", sha.chars().take(12).collect::<String>()));
     }
     if !prs.is_empty() {
         let mut sorted = prs.to_vec();
