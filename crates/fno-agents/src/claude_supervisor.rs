@@ -746,14 +746,14 @@ mod tests {
         let mut cmd = std::process::Command::new("claude");
         cmd.args(["--bg", "--name", "w"])
             .env("ANTHROPIC_BASE_URL", "https://api.z.ai")
-            .env("ANTHROPIC_DEFAULT_OPUS_MODEL", "glm-5.3-flash[1m]")
+            .env(MODEL_ENV_KEYS[1], "glm-5.3-flash[1m]")
             .env("FNO_AGENT_SELF", "w")
             .env("CLAUDE_CONFIG_DIR", "/tmp/cfg");
         strip_route_carriers(&mut cmd);
         let env = env_of(&cmd);
         let value = |k: &str| env.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
         assert_eq!(value("ANTHROPIC_BASE_URL"), Some(None));
-        assert_eq!(value("ANTHROPIC_DEFAULT_OPUS_MODEL"), Some(None));
+        assert_eq!(value(MODEL_ENV_KEYS[1]), Some(None));
         assert_eq!(value("FNO_AGENT_SELF"), Some(Some("w".to_string())));
         assert_eq!(
             value("CLAUDE_CONFIG_DIR"),
