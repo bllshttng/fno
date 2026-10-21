@@ -299,15 +299,24 @@ def test_terminal_row_stamp_compares_at_stored_precision() -> None:
     assert changed(row("not-a-stamp"), base.timestamp() + 0.5)
 
 
-def test_live_root_pids_refuses_incomplete_registry(monkeypatch) -> None:
+def test_footprint_reads_a_registry_one_schema_ahead_but_refuses_a_skipped_row(
+    monkeypatch, tmp_path
+) -> None:
     from fno import doctor_footprint
-    from fno.agents.registry import LoadedRegistry
+    from fno.agents.registry import SCHEMA_VERSION, LoadedRegistry
+
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path))
+    (tmp_path / "registry.json").write_text(
+        json.dumps({"schema_version": SCHEMA_VERSION + 1, "agents": []}),
+        encoding="utf-8",
+    )
+    assert doctor_footprint.live_registry_rows() == ([], None)
+    assert doctor_footprint._live_root_pids() == (set(), None)
 
     monkeypatch.setattr(
         "fno.agents.registry.load_registry",
-        lambda: LoadedRegistry([], complete=False),
+        lambda: LoadedRegistry([], complete=False, rows_complete=False),
     )
-
     assert doctor_footprint._live_root_pids() == (
         set(),
         "worker registry incomplete",

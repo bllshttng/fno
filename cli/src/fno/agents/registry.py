@@ -1708,11 +1708,19 @@ def spawn_row_session_ids(harness: str, registry_path: Optional[Path] = None) ->
 
 
 class LoadedRegistry(list[AgentEntry]):
-    """Registry rows, whether a forward read kept every raw row, and the read revision."""
+    """Registry rows, whether a forward read kept every raw row, and the read revision.
 
-    def __init__(self, rows=(), *, complete: bool = True, revision=None) -> None:
+    ``complete`` is false on any forward read: a row may lack a newer field.
+    ``rows_complete`` is false only when a row was skipped, so a reader that
+    counts rows by fields this fno knows (pid, status) can trust a forward read.
+    """
+
+    def __init__(
+        self, rows=(), *, complete: bool = True, rows_complete: bool | None = None, revision=None
+    ) -> None:
         super().__init__(rows)
         self.complete = complete
+        self.rows_complete = complete if rows_complete is None else rows_complete
         self.revision = revision
 
 
@@ -1973,7 +1981,12 @@ def load_registry(path: Optional[Path] = None) -> list[AgentEntry]:
             "are invisible to this process until it is upgraded.",
             file=sys.stderr,
         )
-    return LoadedRegistry(entries, complete=not read_forward and not skipped_rows, revision=rev)
+    return LoadedRegistry(
+        entries,
+        complete=not read_forward and not skipped_rows,
+        rows_complete=not skipped_rows,
+        revision=rev,
+    )
 
 
 def register_existing_session(
