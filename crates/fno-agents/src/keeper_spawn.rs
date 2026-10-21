@@ -464,6 +464,11 @@ pub(crate) fn dispatch_with(
             ));
         }
     }
+    // The Python lane releases the per-agent flock after the registry write
+    // and pastes the seed outside it; the seed can wait out two minutes of
+    // paint, and holding the name that long would queue every other
+    // same-name operation behind it.
+    drop(_lock);
     let rendered = crate::provider::render_verb_seed(message, harness);
     if !rendered.trim().is_empty() {
         let ready_marker: &[u8] = if arm.ready_marker.is_empty() {

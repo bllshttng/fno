@@ -3554,12 +3554,13 @@ fn apply_interactive_defaults(params: &mut Map<String, Value>) -> Result<(), Str
 /// `fno agents spawn` front door) resolves the SAME default in its own body
 /// and opens the thread's default view through the mux thread verb, so this
 /// helper only answers for a DIRECT binary call.
-/// It seats only the three lanes this client itself routes (claude/codex
-/// bg, opencode serve); a keeper-lane harness (pi, cursor-agent, grok, agy)
-/// keeps the pane default here and seats its thread through the Python seam's
-/// keeper carve-out instead. The harness default matches the daemon's
-/// `handle_spawn` provider default (codex) so a bare direct call and the
-/// daemon route cannot disagree.
+/// It seats only the lanes this client itself routes (claude/codex bg,
+/// opencode serve, and the keeper rows through `keeper_spawn.rs`); a
+/// keeper-lane harness (pi, cursor-agent, grok, agy) keeps the pane default
+/// here for a DIRECT call, and the Python seam resolves its explicit thread
+/// spawn through the client's keeper arm. The harness default matches the
+/// daemon's `handle_spawn` provider default (codex) so a bare direct call and
+/// the daemon route cannot disagree.
 fn default_substrate(params: &Value) -> &'static str {
     let harness = params
         .get("provider")
