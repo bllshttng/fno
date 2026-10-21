@@ -401,6 +401,7 @@ pub mod pr_list;
 pub mod pr_merge_result;
 pub mod pr_nudge;
 pub mod pr_park;
+pub mod pr_front;
 pub mod pr_push;
 pub mod pr_rebase;
 pub mod pr_status;

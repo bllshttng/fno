@@ -1525,6 +1525,21 @@ pub fn run_sync_canonical_verb(_args: &[String]) -> i32 {
     0
 }
 
+/// The in-process sync leg the `do pr` dispatcher rides: parse the payload
+/// (the verb's own shape), run the sync, return the triple the verb prints.
+pub(crate) fn run_sync_payload(parsed: &Value) -> (i32, String, String) {
+    let deps = Deps::real();
+    let cwd = PathBuf::from(parsed.get("cwd").and_then(|v| v.as_str()).unwrap_or("."));
+    let Some(pr) = parsed.get("pr").and_then(|v| v.as_u64()) else {
+        return (
+            2,
+            String::new(),
+            "sync-canonical: sync requires an integer pr".to_string(),
+        );
+    };
+    run_sync_with_shell(&deps, &cwd, pr, &deps.shell)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

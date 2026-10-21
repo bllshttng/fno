@@ -168,6 +168,16 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr-worktree") {
         std::process::exit(fno_agents::pr_worktree::run());
     }
+    // `do pr <subverb>`: the native namespace dispatcher (pr port 7). The
+    // fno front door claims `do pr` lexically and hands the argv over
+    // byte-verbatim, the backlog namespace's contract; watch and
+    // stub-manifest stay Python mounts, so this arm never sees them from
+    // the front door (a hand-typed sibling invocation is refused by name).
+    if args.first().map(String::as_str) == Some("do")
+        && args.get(1).map(String::as_str) == Some("pr")
+    {
+        std::process::exit(fno_agents::pr_front::run(&args[2..]));
+    }
     // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
     // base-lineage reach it through verb_call; transport-only.
     if args.first().map(String::as_str) == Some("gh-cache") {
