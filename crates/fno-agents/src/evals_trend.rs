@@ -684,7 +684,7 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
 /// behaves at small n, where lane cohorts sit; the bootstrap percentile it
 /// replaces bracketed about [0.01, 0.99] at every n and could never
 /// separate two cohorts.
-fn wilson_rate(n: usize, passes: usize) -> (f64, f64, f64) {
+pub(crate) fn wilson_rate(n: usize, passes: usize) -> (f64, f64, f64) {
     if n == 0 {
         return (0.0, 0.0, 0.0);
     }

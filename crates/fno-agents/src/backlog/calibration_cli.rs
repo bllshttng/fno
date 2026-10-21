@@ -175,14 +175,32 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
     // An unreadable friction store stays None down the fold, so the
     // friction columns read null instead of a measured zero.
     let (friction_by_node, friction_readable) = friction_counts_by_node_checked(&journal);
-    let built = scorecard::build_records(
+    // The review feed: one batched read over the same journal, keyed by PR.
+    let (review_fails_by_pr, review_readable) = scorecard::review_fails_by_pr(&journal);
+    let feeds = scorecard::OutcomeFeeds {
+        review_fails_by_pr: review_readable.then_some(&review_fails_by_pr),
+    };
+    // The fold joins PR numbers only within the cwd's own repo: the origin
+    // remote's host/owner/repo, or None when no remote reads (every node
+    // then keeps the slice-1 in-scope read).
+    let repo_scope = crate::finalize::repo_identity_from_git_remote(&cwd);
+    let mut built = scorecard::build_records(
         &nodes,
         &ledger,
         friction_readable.then_some(&friction_by_node),
+        &feeds,
+        repo_scope.as_deref(),
         since_days,
         chrono::Local::now().naive_local(),
         domain,
     );
+    // The fix-of-fix feed walks the merged line once, narrowed to the PRs
+    // this fold carries; a read failure or a non-repo cwd leaves the column
+    // null with its coverage saying so.
+    let fix_by_pr = scorecard::fix_by_pr(&built.records, &cwd, since_days);
+    if let Some(fix_by_pr) = &fix_by_pr {
+        scorecard::stamp_fix_of_fix(&mut built.records, fix_by_pr);
+    }
     let cells = scorecard::fold_cells(&built.records);
     let cov = scorecard::coverage(&built.records, built.dropped_unparsed);
     if json_out {
@@ -218,19 +236,22 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
         println!("  dropped, session time unparseable: {dropped}");
     }
     println!(
-        "\n  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}",
+        "\n  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
         "kind",
         "harness",
         "provider",
         "model",
         "nodes",
         "merged",
+        "ci95",
         "spend$",
         "$/merged",
         "med hrs",
         "bounce%",
         "ci/n",
-        "rev/n"
+        "red%",
+        "find/n",
+        "fof%"
     );
     for c in &cells {
         let fmt = |v: &Value| -> String {
@@ -245,13 +266,21 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
                 .unwrap_or_else(|| "n/a".to_string())
         };
         println!(
-            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}",
+            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
             c["kind"].as_str().unwrap_or_default(),
             c["harness"].as_str().unwrap_or_default(),
             c["provider"].as_str().unwrap_or_default(),
             c["model"].as_str().unwrap_or_default(),
             c["nodes"].as_i64().unwrap_or(0),
             c["merged"].as_i64().unwrap_or(0),
+            c["merged_ci95"]
+                .as_array()
+                .map(|a| format!(
+                    "[{:.2} {:.2}]",
+                    a.first().and_then(Value::as_f64).unwrap_or(0.0),
+                    a.last().and_then(Value::as_f64).unwrap_or(0.0)
+                ))
+                .unwrap_or_else(|| "n/a".to_string()),
             // An unmeasured spend prints n/a, never a fake 0.00.
             c["spend_usd"]
                 .as_f64()
@@ -264,9 +293,17 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
                 .as_f64()
                 .map(|f| format!("{f:.2}"))
                 .unwrap_or_else(|| "n/a".to_string()),
-            c["review_round_per_node"]
+            c["ci_red_pct"]
+                .as_f64()
+                .map(|f| format!("{f}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            c["review_findings_per_node"]
                 .as_f64()
                 .map(|f| format!("{f:.2}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            c["fix_of_fix_pct"]
+                .as_f64()
+                .map(|f| format!("{f}"))
                 .unwrap_or_else(|| "n/a".to_string()),
         );
     }
