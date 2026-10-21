@@ -866,7 +866,10 @@ pub fn pane_ls(session: &str, mux: &dyn MuxCli) -> Option<Vec<Value>> {
 pub fn lookup_child_pid(session: &str, pane_id: u64, mux: &dyn MuxCli) -> Option<u32> {
     for row in pane_ls(session, mux)? {
         if row.get("pane_id").and_then(Value::as_u64) == Some(pane_id) {
-            return row.get("child_pid").and_then(Value::as_u64);
+            return row
+                .get("child_pid")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32);
         }
     }
     None
@@ -1023,7 +1026,7 @@ fn write_pane_row_txn_inner(
     entry: RegistryEntry,
     replacing: bool,
 ) -> Result<(), TxnFailure> {
-    let outcome: Result<bool, String> = state::update_registry(&home.registry_json(), |registry| {
+    let outcome = state::update_registry(&home.registry_json(), |registry| {
         race_checked_append(name, entry, replacing, registry)
     });
     outcome
@@ -1127,12 +1130,13 @@ pub fn stamp_late_bind(
     let _ = stamped;
     state::load_registry(&path)
         .ok()
-        .and_then(|registry| {
+        .map(|registry| {
             registry
                 .find(name)
                 .filter(|row| row.harness_session_id.as_deref() == Some(session_id))
+                .is_some()
         })
-        .is_some()
+        .unwrap_or(false)
 }
 
 /// Python `_RECLAIMABLE_STATUSES`: a row in one of these statuses does not own
