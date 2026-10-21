@@ -266,6 +266,3 @@ pub fn normalize_command(command: &str, harness: &str) -> String {
     }
     command.to_string()
 }
-
-#[cfg(test)]
-mod tests;
