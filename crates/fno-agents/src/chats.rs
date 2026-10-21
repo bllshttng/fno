@@ -555,7 +555,7 @@ pub(crate) fn message_sender(id: &str) -> Option<String> {
 
 /// The answered message's raw `from` address, with no registry
 /// substitution: the value the cross-host reply parses for
-/// `<user>@<host>/<name>`. `None` when no row holds the id or the row
+/// `<user>:<host>/<name>`. `None` when no row holds the id or the row
 /// names no sender.
 pub(crate) fn message_from(id: &str) -> Option<String> {
     let chat_id = chat_of_message(&chats_dir(), &index_path(), id).ok()??;

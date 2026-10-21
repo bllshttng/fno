@@ -138,7 +138,7 @@ fn local_send_pass_argv(target: &str, rest: &[String]) -> Vec<OsString> {
 }
 
 /// The ssh fallback's remote argv, with the sender resolved and stamped on
-/// the SENDING machine in the full `<user>@<host>/<name>` form the bus lane
+/// the SENDING machine in the full `<user>:<host>/<name>` form the bus lane
 /// passes (`local_send_argv`, consumed at mail_arm.rs:457), so the remote
 /// registry read degrades nothing: the @host part carries provenance. Pure,
 /// so the both-lanes-same-form contract is testable.
@@ -310,10 +310,11 @@ fn os_user() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-/// `<user>@<host>/<name>`: the sender identity stamped into `from_id`
-/// (informational provenance; a reply addresses `<name>@<host>`).
+/// `<user>:<host>/<name>`: the sender identity stamped into `from_id`
+/// (informational provenance; a reply addresses `<name>@<host>`). The
+/// colon keeps the label to no `@`, so it never reads as a send target.
 pub fn sender_id(user: &str, host: &str, name: &str) -> String {
-    format!("{user}@{}/{}", mail_bus::normalize_host(host), name)
+    format!("{user}:{}/{}", mail_bus::normalize_host(host), name)
 }
 
 /// Resolve the `fno` front door to exec on this machine. The daemon's pull
@@ -416,7 +417,7 @@ fn cmd_send(args: &[String]) -> i32 {
             // Message shape: the caller passes the message as the last
             // positional arg (the local verb's shape), and it rides the relay
             // verbatim. The sender is resolved HERE, on the sending machine,
-            // and stamped in the full `<user>@<host>/<name>` form the bus
+            // and stamped in the full `<user>:<host>/<name>` form the bus
             // lane passes (local_send_argv); the remote registry read then
             // degrades nothing - the @host part carries provenance.
             let from_name = match resolve_from_name(&tail) {
@@ -627,7 +628,8 @@ fn cmd_peek(args: &[String]) -> i32 {
 }
 
 /// Where a reply to `from` (the answered message's raw sender address)
-/// goes. The cross-host form `<user>@<host>/<name>` answers at
+/// goes. The cross-host form `<user>:<host>/<name>` (or the older
+/// `<user>@<host>/<name>` still on the bus) answers at
 /// `<name>@<host>`; an OS-user label (`name` equals `user`) predates role
 /// names, so it refuses naming the send form instead of guessing; every
 /// other shape forwards to the Python reply, which owns local routing.
@@ -642,16 +644,16 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     let Some((head, name)) = from.rsplit_once('/') else {
         return ReplyRoute::Forward;
     };
-    let Some((user, host)) = head.split_once('@') else {
+    let Some((user, host)) = head.split_once(':').or_else(|| head.split_once('@')) else {
         return ReplyRoute::Forward;
     };
-    // Strictness: only the form sender_id writes. Anything else (a bare
-    // handle, a nested slash, a second @) is not the relay's label, so the
-    // Python reply decides.
+    // Strictness: only the forms sender_id writes or wrote. Anything else (a
+    // bare handle, a nested slash, a second separator) is not the relay's
+    // label, so the Python reply decides.
     if user.is_empty() || name.is_empty() || host.is_empty() {
         return ReplyRoute::Forward;
     }
-    if host.contains('/') || host.contains('@') || user.contains('/') {
+    if host.contains(['/', '@', ':']) || user.contains(['/', '@']) {
         return ReplyRoute::Forward;
     }
     let host = mail_bus::normalize_host(host);
@@ -996,7 +998,7 @@ mod tests {
         // The default label tiers: --from-name wins over both identity
         // tiers, the ambient session's own name wins over the registry row,
         // and the row wins over the OS user. A shell with none of the
-        // three keeps the plain `<user>@<host>/<user>` form.
+        // three keeps the plain `<user>:<host>/<user>` form.
         let plain = SendTail::default();
         assert_eq!(
             resolve_from_name_with(None, Some("Quinlan"), &plain),
@@ -1013,7 +1015,7 @@ mod tests {
             "no identity tiers resolves to the OS user"
         );
         // The ssh fallback stamps the sender locally in the full
-        // `<user>@<host>/<name>` form, the same shape the bus lane passes,
+        // `<user>:<host>/<name>` form, the same shape the bus lane passes,
         // and keeps the caller's flags and message in order after it.
         let words = relay_words_with_sender(
             "Quinlan",
@@ -1034,7 +1036,7 @@ mod tests {
                 "send".to_string(),
                 "Quinlan".to_string(),
                 "--from-name".to_string(),
-                "bb16@mbp3/Ellery".to_string(),
+                "bb16:mbp3/Ellery".to_string(),
                 "--subject".to_string(),
                 "hi".to_string(),
                 "hello".to_string(),
@@ -1048,7 +1050,7 @@ mod tests {
             "bb16",
             "mbp3",
         );
-        assert_eq!(floored[5], "bb16@mbp3/operator");
+        assert_eq!(floored[5], "bb16:mbp3/operator");
         let named = SendTail {
             from_name: Some("rowan".to_string()),
             ..SendTail::default()
@@ -1066,7 +1068,7 @@ mod tests {
         // Sender identity normalizes the host part.
         assert_eq!(
             sender_id("bb16", "iMac2D2.local", "nemo"),
-            "bb16@imac2d2/nemo"
+            "bb16:imac2d2/nemo"
         );
         // The pull arm's argv carries the name, the sender, and the payload.
         let argv = local_send_argv("nemo", "hello there", false, "rowan@mbp3/r");
@@ -1333,6 +1335,14 @@ mod tests {
                 name: "nemo".to_string(),
                 host: "some-remote".to_string()
             }
+        );
+        assert_eq!(
+            reply_route("bb16:some-remote/nemo"),
+            ReplyRoute::Send {
+                name: "nemo".to_string(),
+                host: "some-remote".to_string()
+            },
+            "the colon label sender_id writes routes the same"
         );
         assert_eq!(
             reply_route(&format!("a@{test_host}/b")),

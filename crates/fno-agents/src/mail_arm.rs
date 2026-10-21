@@ -515,8 +515,14 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
 
 /// The raw allowlist: `agents.remote.raw_senders`, a list of `user@host`
 /// sender heads. Empty is the default and refuses every cross-host raw row.
+/// The label writes `user:host`; the head reads back as `user@host`, so the
+/// config spelling holds for both label forms.
 fn raw_sender_allowed(from_id: &str) -> bool {
-    let head = from_id.split('/').next().unwrap_or("");
+    let head = from_id
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .replacen(':', "@", 1);
     crate::agents_config::config_lookup_global(&["agents", "remote", "raw_senders"])
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
