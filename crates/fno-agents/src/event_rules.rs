@@ -1047,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn relayed_open_question_and_reply_mentions_do_not_block() {
+    fn relayed_open_question_counts_as_filed() {
         let lock = crate::claims::test_env_lock();
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let rig = Rig::new(true);
@@ -1079,17 +1079,10 @@ mod tests {
             named_qids("see q-1f456994, not q-1f4569941 or xq-1f456994"),
             ["q-1f456994"]
         );
-
-        let status = "The reply from codex landed.\n1. PR 3376 open\n2. CI green";
-        assert!(
-            !decision_ask(status),
-            "mentioning a reply is not a reply ask"
-        );
-        assert!(decision_ask("Reply 1 or 2.\n1. merge\n2. hold"));
     }
 
     #[test]
-    fn confirmed_status_report_is_not_a_decision_ask() {
+    fn status_reports_are_not_decision_asks() {
         // 2026-10-12: the ASK marker "confirm" substring-matched "confirmed",
         // so a numbered status report blocked Stop as an unfiled ask. The
         // confirm asks that remain are the pointed ones.
@@ -1098,10 +1091,13 @@ mod tests {
         assert!(!decision_ask(status));
         let ask = "Please confirm the pick.\n1. merge now\n2. hold";
         assert!(decision_ask(ask));
-    }
-
-    #[test]
-    fn status_reports_with_no_question_are_not_decision_asks() {
+        // A bare "reply " cue matched every sentence that mentioned a reply.
+        let reply = "The reply from codex landed.\n1. PR 3376 open\n2. CI green";
+        assert!(
+            !decision_ask(reply),
+            "mentioning a reply is not a reply ask"
+        );
+        assert!(decision_ask("Reply 1 or 2.\n1. merge\n2. hold"));
         let table = "| node | state |\n|---|---|\n| x-1 | ? |\n1. PR open\n2. CI pending";
         assert!(!decision_ask(table));
         let next = "1. merged\n2. reconciled\nNext: nothing from you.";
