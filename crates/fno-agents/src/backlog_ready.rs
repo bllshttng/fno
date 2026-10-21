@@ -2619,6 +2619,7 @@ mod tests {
         // A plan written on another host names the path and the sync verb;
         // a malformed file that exists keeps the plain refusal.
         let absent = dir.path().join("written-elsewhere.md");
+        let absent = absent.to_str().unwrap();
         let refusal = effective_verb(&row_with(&absent, serde_json::Map::new())).unwrap_err();
         assert!(
             refusal.contains("plan file absent on this host")
