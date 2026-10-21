@@ -89,7 +89,7 @@ fn fixture(tag: &str) -> Fixture {
     );
     let home = tmp.join("home");
     fs::create_dir_all(&home).unwrap();
-    let gh_dir = write_fake_gh(&tmp, repo_head(&repo));
+    let gh_dir = write_fake_gh(&tmp);
     Fixture {
         root: tmp,
         repo,
@@ -124,20 +124,21 @@ fn repo_head(repo: &Path) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// The fake gh the Python capture used, behaviorally byte-for-byte except the
-/// one seam the port moved: the reader now asks `gh pr view` for the
-/// headRefName/headRefOid/state field set (the REST pulls shape the Python
-/// leg parsed), so the payload carries that field set, keyed by FGH_MODE.
-fn write_fake_gh(root: &Path, oid: String) -> PathBuf {
+/// The fake gh the Python capture used, behaviorally byte-for-byte except two
+/// seams: the reader now asks `gh pr view` for the headRefName/headRefOid/state
+/// field set (the REST pulls shape the Python leg parsed), and the head answers
+/// LIVE, `git rev-parse HEAD` in the checkout the verb runs from - the
+/// head-mismatch case commits after the fixture builds, and a frozen oid would
+/// read match where the golden demands a mismatch. Keyed by FGH_MODE.
+fn write_fake_gh(root: &Path) -> PathBuf {
     let dir = root.join("fakegh");
     fs::create_dir_all(&dir).unwrap();
-    let open =
-        format!(r#"{{"headRefName":"feat/a","headRefOid":"{oid}","state":"open","number":41}}"#);
-    let closed =
-        format!(r#"{{"headRefName":"feat/a","headRefOid":"{oid}","state":"closed","number":41}}"#);
-    let script = format!(
-        "#!/bin/sh\ncase \"$FGH_MODE\" in\n  fail) echo 'gh: api error' >&2; exit 1 ;;\n  closed) echo '{closed}' ;;\n  *) echo '{open}' ;;\nesac\n"
-    );
+    let script = "#!/bin/sh\n\
+         case \"$FGH_MODE\" in\n\
+         \x20 fail) echo 'gh: api error' >&2; exit 1 ;;\n\
+         \x20 closed) echo \"{\\\"headRefName\\\":\\\"feat/a\\\",\\\"headRefOid\\\":\\\"$(git rev-parse HEAD)\\\",\\\"state\\\":\\\"closed\\\",\\\"number\\\":41}\" ;;\n\
+         \x20 *) echo \"{\\\"headRefName\\\":\\\"feat/a\\\",\\\"headRefOid\\\":\\\"$(git rev-parse HEAD)\\\",\\\"state\\\":\\\"open\\\",\\\"number\\\":41}\" ;;\n\
+         esac\n";
     let gh = dir.join("gh");
     fs::write(&gh, script).unwrap();
     #[cfg(unix)]
@@ -158,6 +159,11 @@ fn run(fx: &Fixture, args: &[&str], extra_env: &[(&str, String)]) -> (i32, Strin
     cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
+    // Pin the spaces root into the fixture tree: the repo-space claims store
+    // and the project journal both resolve through it, and the CI job exports
+    // FNO_AGENTS_HOME, so the unpinned durable root lands outside the fixture
+    // where the test's store path (and the raw sqlite edits below) never look.
+    cmd.env("FNO_SPACES_DIR", fx.root.join("state/spaces"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
     cmd.env("FGH_MODE", "open");
     let path = format!(
@@ -192,6 +198,7 @@ fn seed_hold(fx: &Fixture, ttl_ms: u64) {
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)
         .env("FNO_STATE_DIR", fx.root.join("state"))
+        .env("FNO_SPACES_DIR", fx.root.join("state/spaces"))
         .output()
         .expect("seed claim");
     assert!(
@@ -246,17 +253,33 @@ fn force_stale(fx: &Fixture) {
     .unwrap();
 }
 
-/// The claims SQLite store the binary resolves with no spaces pin: the
-/// durable space under $HOME/.fno/spaces, keyed by the canonical repo path
-/// with slashes swapped for dashes (the same slug `paths.space_slug` mints).
+/// The claims SQLite store under the pinned spaces root, keyed by the
+/// canonical repo path with slashes swapped for dashes (the same slug
+/// `paths.space_slug` mints).
 fn claims_db(fx: &Fixture) -> PathBuf {
     let resolved = fs::canonicalize(&fx.repo).unwrap();
     let slug = resolved.to_string_lossy().replace('/', "-");
-    fx.home
-        .join(".fno/spaces")
+    fx.root
+        .join("state")
+        .join("spaces")
         .join(slug)
         .join("db")
         .join("graph.db")
+}
+
+/// The project journal the port reads: the repo's space on the pinned spaces
+/// root. The capture seeded the checkout-era paths; the port resolved the
+/// project journal onto the space and refuses to migrate into a pinned root,
+/// so the chain seeds write the space journal directly and the routed read
+/// imports their bytes.
+fn space_journal(fx: &Fixture) -> PathBuf {
+    let resolved = fs::canonicalize(&fx.repo).unwrap();
+    let slug = resolved.to_string_lossy().replace('/', "-");
+    fx.root
+        .join("state")
+        .join("spaces")
+        .join(slug)
+        .join("events.jsonl")
 }
 
 /// The one measured divergence this port fixes: the Rust reader emits the
@@ -431,10 +454,9 @@ fn round_with_journals() {
     let row = format!(
         r#"{{"ts":"2026-10-15T00:00:00+00:00","type":"review_attestation","source":"target","data":{{"branch":"feat/a","head_sha":"{head}"}}}}"#
     );
-    fs::write(fx.root.join("events.jsonl"), format!("{row}\n")).unwrap();
-    let dotfno = fx.repo.join(".fno");
-    fs::create_dir_all(&dotfno).unwrap();
-    fs::write(dotfno.join("events.jsonl"), format!("{row}\n")).unwrap();
+    let journal = space_journal(&fx);
+    fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    fs::write(journal, format!("{row}\n")).unwrap();
     assert_case(
         &fx,
         "round with journals",
@@ -469,10 +491,9 @@ fn seed_chain(fx: &Fixture, heads: [&str; 2], blocking: i64) {
         })
         .collect();
     let text = format!("{}\n", rows.join("\n"));
-    fs::write(fx.root.join("events.jsonl"), text.clone()).unwrap();
-    let dotfno = fx.repo.join(".fno");
-    fs::create_dir_all(&dotfno).unwrap();
-    fs::write(dotfno.join("events.jsonl"), text).unwrap();
+    let journal = space_journal(fx);
+    fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    fs::write(journal, text).unwrap();
 }
 
 #[test]
