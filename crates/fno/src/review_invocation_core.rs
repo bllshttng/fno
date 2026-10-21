@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// the cap gate derives its spelling from [`VERIFY_FIXES`].
 pub const VERIFY_FIXES: &str = "verify-fixes";
 
-const KNOWN_REVIEW_FLAGS: [&str; 3] = ["comment", "fix", VERIFY_FIXES];
+const KNOWN_REVIEW_FLAGS: [&str; 4] = ["comment", "fix", VERIFY_FIXES, "fresh"];
 const REVIEW_VERBS: [&str; 4] = ["code-review", "review", "review-changes", "sigma-review"];
 const REVIEW_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -315,6 +315,8 @@ mod tests {
             canonical_flag("verify-fixes").as_deref(),
             Some("--verify-fixes")
         );
+        assert_eq!(canonical_flag("--fresh").as_deref(), Some("--fresh"));
+        assert_eq!(canonical_flag("\u{2014}fresh").as_deref(), Some("--fresh"));
 
         let parsed = p("/fno:review high --comment 123");
         assert_eq!(parsed.verb, "/review");
@@ -343,6 +345,12 @@ mod tests {
         // the skipped flags is still the target (the Python leg's rule the
         // goldens pin).
         assert_eq!(p("/review fix").flags, vec!["--fix".to_string()]);
+        let fresh = p("/review --fresh 55");
+        assert_eq!(fresh.flags, vec!["--fresh".to_string()]);
+        assert_eq!(fresh.target.as_deref(), Some("55"));
+        let bare_fresh = p("/review fresh 55");
+        assert_eq!(bare_fresh.flags, vec!["--fresh".to_string()]);
+        assert_eq!(bare_fresh.target.as_deref(), Some("55"));
         let novel = p("/review high --novel 55");
         assert_eq!(novel.flags, vec!["--novel".to_string()]);
         assert_eq!(novel.target.as_deref(), Some("55"));

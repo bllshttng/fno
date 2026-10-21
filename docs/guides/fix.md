@@ -70,4 +70,4 @@ fno config doctor                   # what resolved, and any suspicious values
 ## Related
 
 - [Troubleshooting](../troubleshooting.md) covers the stuck-run cases this verb does not fix.
-- [Getting started](../getting-started.md) covers install and first-run failures.
+- [Install](../install.md) covers install and first-run failures.

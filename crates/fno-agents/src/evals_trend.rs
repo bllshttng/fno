@@ -18,24 +18,25 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
 /// unparseable, missing `tier` is "unknown"). `raw` is kept so the attempt
 /// verdict comes from the ONE native classifier, never a second fold.
 #[derive(Clone)]
-struct Row {
-    task_id: String,
+pub(crate) struct Row {
+    pub(crate) task_id: String,
     tier: String,
     pass: bool,
     ts: Option<DateTime<Utc>>,
     variant: Option<String>,
-    bank_rev: Option<String>,
+    pub(crate) bank_rev: Option<String>,
+    pub(crate) experiment_id: Option<String>,
     raw: Value,
 }
 
-fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
+pub(crate) fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
     let text = std::fs::read_to_string(history).unwrap_or_default();
     let mut rows: Vec<Row> = Vec::new();
     for line in text.lines() {
@@ -76,6 +77,10 @@ fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<
             variant: v.get("variant").and_then(Value::as_str).map(str::to_string),
             bank_rev: v
                 .get("bank_rev")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            experiment_id: v
+                .get("experiment_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             raw: v,
@@ -506,17 +511,16 @@ fn compare_variants(rows: &[Row], variant: &str) -> Value {
 /// Scored rows are natively `graded` rows that the lane evidence does not
 /// exclude (not `substituted`, no `excluded_reason`); everything else is
 /// counted by reason and never scored. Cost is priced only when every scored
-/// row carries usage and a price line: `unmeasured` otherwise, never a
-/// partial sum (AC3-EDGE).
+/// row carries usage and a complete price line (input and output rates, plus
+/// a cache rate for any cache tokens the row carries): `unmeasured`
+/// otherwise, never a partial sum (AC3-EDGE).
 fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     let mut cohorts: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
     for r in rows {
         let id = r
-            .raw
-            .get("experiment_id")
-            .and_then(Value::as_str)
-            .unwrap_or("(no cohort)")
-            .to_string();
+            .experiment_id
+            .clone()
+            .unwrap_or_else(|| "(no cohort)".into());
         cohorts.entry(id).or_default().push(r);
     }
     let mut out = Map::new();
@@ -526,7 +530,7 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     json!({ "cohorts": Value::Object(out) })
 }
 
-fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
+pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut lane_statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
@@ -609,11 +613,33 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             measured = false;
             continue;
         };
-        let per_m = |k: &str| price.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-        cost_total += (input as f64 * per_m("input_per_m")
-            + output as f64 * per_m("output_per_m")
-            + cache_read as f64 * per_m("cache_read_per_m")
-            + cache_write as f64 * per_m("cache_write_per_m"))
+        // A price line missing a rate the row's usage needs prices that token
+        // class at $0 silently. Treat it like no price line at all: a cell
+        // reads unmeasured rather than measured-cheap (a partial line once
+        // let a typo'd key read `propose` on near-zero cost).
+        let rate_of = |k: &str| price.get(k).and_then(Value::as_f64);
+        let (Some(in_rate), Some(out_rate)) = (rate_of("input_per_m"), rate_of("output_per_m"))
+        else {
+            measured = false;
+            continue;
+        };
+        let cache_rate = |k: &str, tokens_used: u64| -> Option<f64> {
+            if tokens_used == 0 {
+                return Some(0.0);
+            }
+            rate_of(k)
+        };
+        let (Some(read_rate), Some(write_rate)) = (
+            cache_rate("cache_read_per_m", cache_read),
+            cache_rate("cache_write_per_m", cache_write),
+        ) else {
+            measured = false;
+            continue;
+        };
+        cost_total += (input as f64 * in_rate
+            + output as f64 * out_rate
+            + cache_read as f64 * read_rate
+            + cache_write as f64 * write_rate)
             / 1_000_000.0;
     }
     if usage_missing > 0 {
@@ -629,6 +655,7 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     json!({
         "attempts": rows.len(),
         "graded": statuses.get("graded").copied().unwrap_or(0),
+        "scored": scored.len(),
         "accepted": accepted,
         "pass_rate": round4(rate),
         "pass_rate_ci95": [round4(lo), round4(hi)],
@@ -657,7 +684,7 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
 /// behaves at small n, where lane cohorts sit; the bootstrap percentile it
 /// replaces bracketed about [0.01, 0.99] at every n and could never
 /// separate two cohorts.
-fn wilson_rate(n: usize, passes: usize) -> (f64, f64, f64) {
+pub(crate) fn wilson_rate(n: usize, passes: usize) -> (f64, f64, f64) {
     if n == 0 {
         return (0.0, 0.0, 0.0);
     }
@@ -844,6 +871,12 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
     let mut prices: Option<Value> = None;
+    let mut climb = false;
+    let mut climb_baseline: Option<String> = None;
+    let mut climb_trial: Option<String> = None;
+    let mut cohorts_yaml: Option<String> = None;
+    let mut stage: Option<String> = None;
+    let mut trial_lane: Option<String> = None;
     let mut now: Option<DateTime<Utc>> = None;
     let mut i = 0usize;
     while i < args.len() {
@@ -936,6 +969,27 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--climb" => climb = true,
+            "--baseline" => match value("--baseline") {
+                Ok(v) => climb_baseline = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--trial" => match value("--trial") {
+                Ok(v) => climb_trial = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--cohorts-yaml" => match value("--cohorts-yaml") {
+                Ok(v) => cohorts_yaml = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--stage" => match value("--stage") {
+                Ok(v) => stage = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--trial-lane" => match value("--trial-lane") {
+                Ok(v) => trial_lane = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
             "--prices" => {
                 match value("--prices")
                     .and_then(|v| serde_json::from_str::<Value>(&v).map_err(|_| ()))
@@ -975,6 +1029,10 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
 
     if mode == "summary" {
         return print_summary(&history, stale_days, now);
+    }
+    if climb && (mode != "report" || qualification.is_some() || by_cohort || compare.is_some()) {
+        eprintln!("evals-trend: --climb is a report-mode fold and refuses other views (got mode '{mode}')");
+        return EXIT_USAGE;
     }
 
     if mode == "trend" {
@@ -1032,6 +1090,26 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     }
 
     // --mode report
+    if climb {
+        let Some(baseline) = &climb_baseline else {
+            eprintln!("evals-trend: --climb needs --baseline <cohort>");
+            return EXIT_USAGE;
+        };
+        let Some(trial) = &climb_trial else {
+            eprintln!("evals-trend: --climb needs --trial <cohort>");
+            return EXIT_USAGE;
+        };
+        return crate::evals_climb::run_climb(&crate::evals_climb::ClimbArgs {
+            history: &history,
+            baseline,
+            trial,
+            cohorts_yaml: cohorts_yaml.as_deref(),
+            stage: stage.as_deref(),
+            trial_lane: trial_lane.as_deref(),
+            prices: prices.as_ref(),
+            json_out,
+        });
+    }
     if let Some(qpath) = &qualification {
         return qualification_report(&history, qpath, json_out, since);
     }

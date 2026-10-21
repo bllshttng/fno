@@ -245,7 +245,7 @@ pub fn classify_rows(text: &str, expected_rev: Option<&str>) -> Value {
 /// Load a `cohorts.yaml` declaration: YAML -> JSON, missing role keys default
 /// to empty lists, `bank_rev` must be a non-empty string. The semantic rules
 /// stay in `validate_cohorts`; this is shape only.
-fn load_cohorts_yaml(path: &str) -> Result<Value, String> {
+pub(crate) fn load_cohorts_yaml(path: &str) -> Result<Value, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let raw: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&text).map_err(|e| format!("malformed YAML in {path}: {e}"))?;
@@ -285,12 +285,24 @@ fn bank_unchanged(dir: &str, rev: &str) -> bool {
         Ok(o) if o.status.success() => {}
         _ => return false,
     }
+    bank_same(dir, rev, "HEAD")
+}
+
+/// True when the bank files at *a* and *b* carry identical task content in
+/// the repo at *dir* (same pathspec exclusion as `bank_unchanged`). Equal
+/// revs short-circuit without a git call: history rows carry the run-time
+/// HEAD, so the climb fold's per-rev cache hits equality only for rows run
+/// at the pin itself, and equality needs no process to prove.
+pub(crate) fn bank_same(dir: &str, a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
     let diff = std::process::Command::new("git")
         .args([
             "diff",
             "--quiet",
-            rev,
-            "HEAD",
+            a,
+            b,
             "--",
             "evals/bank",
             ":(exclude)evals/bank/cohorts.yaml",

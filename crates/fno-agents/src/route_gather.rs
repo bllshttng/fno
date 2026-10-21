@@ -116,8 +116,9 @@ fn profile_fields(table: Option<&toml::Table>) -> Value {
 
 /// One lanes_raw entry: the lane rides VERBATIM (a string stays a string; a
 /// table converts as-is). The padded vocabulary view is `slot_by_verb`'s
-/// business, never the walk's input.
-fn lanes_raw_entry(table: &toml::Value) -> Value {
+/// business, never the walk's input. The climb's accept line reads the same
+/// raw shape, so one mapper feeds both.
+pub(crate) fn lanes_raw_entry(table: &toml::Value) -> Value {
     match table {
         toml::Value::String(name) => json!(name.as_str()),
         _ => serde_json::to_value(table).unwrap_or(Value::Null),

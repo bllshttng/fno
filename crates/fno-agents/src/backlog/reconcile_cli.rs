@@ -1572,13 +1572,19 @@ fn required_bots_for(cwd: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The retro-pending sentinel dir: the configured override, else the state
-/// root's `retro-pending` row, answered by the layout table so a fold
-/// retargets the writer with its readers.
-fn retro_pending_dir() -> Option<PathBuf> {
+/// The state root the retro sentinel resolves against: the configured
+/// override and FNO_STATE_DIR both answer through `agents_config`, and the
+/// folder itself resolves per write through the layout table's `place`
+/// ladder, so a fold retargets the writer with its readers.
+fn retro_pending_root() -> Option<PathBuf> {
     let anchor = std::env::current_dir().ok()?;
-    let state = crate::agents_config::state_dir(&anchor)?;
-    Some(crate::state_layout::place(&state, "retro-pending"))
+    crate::agents_config::state_dir(&anchor)
+}
+
+/// The sentinel folder as readers see it: the `place` ladder's one answer.
+/// The writer re-resolves per write (drift_emit.rs); this is for display.
+fn retro_pending_dir() -> Option<PathBuf> {
+    retro_pending_root().map(|root| crate::state_layout::place(&root, "retro-pending"))
 }
 
 /// The post-lock leg per actually-closed record: plan stamp, retro
@@ -1592,7 +1598,7 @@ fn post_close_leg(
     stderr_log: &mut Vec<String>,
 ) -> Vec<Value> {
     let mut closed_rows: Vec<Value> = Vec::new();
-    let sentinel_dir = retro_pending_dir();
+    let sentinel_root = retro_pending_root();
     let ledger = ledger_path_for_leg();
     for record in &close.actually_closed {
         // The stamp twin is fire-and-forget (best-effort inside), so the
@@ -1610,8 +1616,8 @@ fn post_close_leg(
                 record.pr_url.is_some()
             })
             .unwrap_or(false);
-        let sentinel: Option<String> = match sentinel_dir.as_deref() {
-            Some(dir) => match write_retro_sentinel(record, dir) {
+        let sentinel: Option<String> = match sentinel_root.as_deref() {
+            Some(root) => match write_retro_sentinel(record, root) {
                 Ok(path) => Some(path.to_string_lossy().into_owned()),
                 Err(e) => {
                     stderr_log.push(format!(

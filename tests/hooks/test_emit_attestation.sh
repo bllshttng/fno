@@ -114,6 +114,47 @@ if grep -q '[[:space:]]harness=' <<<"$RECEIPT"; then
 else
   pass "receipt has no bare harness= token"
 fi
+case "$RECEIPT" in
+  *"review_level=self"*) pass "receipt names review_level=self on an inline round" ;;
+  *) fail "receipt lacks review_level=self: $RECEIPT" ;;
+esac
+
+# The receipt level word follows the context stamps: fresh for a fresh-context
+# round, peer for a cross-model peer verdict. A regression to a constant word,
+# or a reorder back onto the invocation's own level variable, reads here.
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass fresh fork 2>&1 >/dev/null)"; RECEIPT_RC=$?
+[[ $RECEIPT_RC -eq 0 ]] || fail "fresh emit exited $RECEIPT_RC"
+case "$RECEIPT" in
+  *"review_level=fresh"*) pass "receipt names review_level=fresh on a fresh round" ;;
+  *) fail "receipt lacks review_level=fresh: $RECEIPT" ;;
+esac
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" peer pass 2>&1 >/dev/null)"; RECEIPT_RC=$?
+[[ $RECEIPT_RC -eq 0 ]] || fail "peer emit exited $RECEIPT_RC"
+case "$RECEIPT" in
+  *"review_level=peer"*) pass "receipt names review_level=peer on a peer round" ;;
+  *) fail "receipt lacks review_level=peer: $RECEIPT" ;;
+esac
+
+# The refusal mode journals one refused review_invocation row (so a silent
+# fresh reviewer reads as attempted-and-refused, never as never-attempted),
+# emits no attestation, and exits 1. No set +e/-e pair here: the script runs
+# without errexit on purpose, and flipping it on kills the refusing captures
+# in the cases below before their assertions run.
+rm -f "$TMP/last-emit.txt"
+REFUSE_OUT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" --refuse fresh_reviewer_silent 2>&1 >/dev/null)"
+REFUSE_RC=$?
+[[ $REFUSE_RC -ne 0 ]] && pass "refusal mode exits nonzero" \
+  || fail "refusal mode exited 0"
+[[ "$(stored '.stage')" == "refused" ]] && pass "refusal row carries stage=refused" \
+  || fail "refusal row stage: want refused, got '$(stored '.stage')'"
+[[ "$(stored '.reason')" == "fresh_reviewer_silent" ]] && pass "refusal row carries the reason" \
+  || fail "refusal row reason: got '$(stored '.reason')'"
+grep -q "review_attestation emitted" <<<"$REFUSE_OUT" \
+  && fail "refusal mode emitted an attestation: $REFUSE_OUT" \
+  || pass "refusal mode emits no attestation"
 rm -f "$REPO/.fno/target-state.md"
 
 # 2. Detached HEAD: the literal "HEAD" names no branch, and an empty branch

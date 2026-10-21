@@ -39,7 +39,6 @@ repro-isolated
 .metadata_never_index
 .path-migration-done
 ledger.md
-attest
 backups
 briefs
 bus
@@ -63,10 +62,7 @@ postmortems
 providers
 cargo-build
 plugin-stage
-push-stamps
 relay-claude
-retro-pending
-review-invocations
 saved-sessions
 sessions
 spaces

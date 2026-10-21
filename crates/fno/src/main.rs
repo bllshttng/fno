@@ -1137,7 +1137,13 @@ fn main() {
             &rest,
         )),
         Role::MailSend(rest) => {
-            std::process::exit(fno_agents_exec("fno agents mail send", &["mail"], &rest))
+            // Role::MailSend carries the tail without the verb; the exec
+            // prefix re-adds `send` or an id-shaped target reads as the verb.
+            std::process::exit(fno_agents_exec(
+                "fno agents mail send",
+                &["mail", "send"],
+                &rest,
+            ))
         }
         Role::MailPanePrepare(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail pane-prepare",

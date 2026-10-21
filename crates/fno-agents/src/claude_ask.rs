@@ -816,6 +816,17 @@ pub struct HarnessFlags<'a> {
     /// message. claude's row carries `["*"]`: the harness argv takes them all.
     /// `&[String]` defaults to the empty slice, so older constructors stay.
     pub passthrough: &'a [String],
+    /// A resolved `--route`: its env rides `extra_env`; this carries the
+    /// settings file the daemon-forked session reads and the row's route axes.
+    pub route: Option<RouteStamp<'a>>,
+}
+
+/// The identity of a routed thread spawn (see `spawn_route::route_seam`).
+#[derive(Clone, Copy, Debug)]
+pub struct RouteStamp<'a> {
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub settings: &'a str,
 }
 
 impl<'a> HarnessFlags<'a> {
@@ -1581,7 +1592,11 @@ pub fn bg_create(
             }
         }
     }
-    if !floor.is_empty() {
+    if let Some(route) = flags.route {
+        // The route owns the settings slot (the floor stood down above), at
+        // the same argv position Python's bg_create puts it.
+        argv.splice(4..4, ["--settings".to_string(), route.settings.to_string()]);
+    } else if !floor.is_empty() {
         match crate::model_env_scrub::write_scrub_settings(&floor) {
             Ok(path) => {
                 let p = path.display().to_string();
@@ -2571,16 +2586,21 @@ pub fn dispatch_claude_spawn(
     };
     // (seventh surface) The model the worker was launched with: an
     // explicit --model reaches claude as its own flag, so it wins the receipt
-    // too - Python's `model or route_model` rule verbatim; this Rust lane is
-    // reached only without a route flag, so no route twin exists here.
+    // too - Python's `model or route_model` rule verbatim. A routed spawn
+    // names the route's vendor and model token, labelled as the request.
     // Absent when none was named: the honest absence, never a defaulted name
     // that reads as a measurement.
     // Placed before `status`, where Python's cmd_spawn puts it, and encoded
     // with the same full JSON-string encode Python's `json.dumps` applies -
     // a `"`-only escape diverges on a backslash and can emit invalid JSON.
-    let model_field = match model.filter(|m| !m.is_empty()) {
-        Some(m) => format!(", \"model\": {}", json_string_ascii(m)),
-        None => String::new(),
+    let model_field = match (flags.route, model.filter(|m| !m.is_empty())) {
+        (Some(r), _) => format!(
+            ", \"provider\": {}, \"model\": {}, \"model_basis\": \"requested\"",
+            json_string_ascii(r.provider),
+            json_string_ascii(r.model)
+        ),
+        (None, Some(m)) => format!(", \"model\": {}", json_string_ascii(m)),
+        (None, None) => String::new(),
     };
     // append the effective launch dir on the default canonical move
     // (surface_cwd, decided by the caller alongside the redirect note), so the
@@ -3174,7 +3194,11 @@ fn create(
     // markers read here name this row's true parent.
     let spawned_by = crate::spawn_lineage::ambient_lineage();
     let (launch_account, launch_account_source) = crate::state::launch_provenance_from_env();
-    let new_entry = RegistryEntry {
+    // A routed spawn stamps the route's vendor and model token where an
+    // unrouted one stamps anthropic and its model (fork_lineage.axis_overrides).
+    let route = flags.route;
+    let model = route.map(|r| r.model).or(model);
+    let mut new_entry = RegistryEntry {
         // client-side mint - this process inherited the spawning
         // session's env, so the exported FNO_NODE names the node THIS spawn
         // is for.
@@ -3202,11 +3226,11 @@ fn create(
             .filter(|m| !m.is_empty())
             .map(|_| "requested".to_string()),
         effort: None,
-        // v23: the request beside the effect. This lane never
-        // resolves a vendor (the binary refuses --provider), so the provider
-        // request stays None; model and effort ride through verbatim.
+        // v23: the request beside the effect. Only a route names a vendor,
+        // so the provider request is the route's or None; model and effort
+        // ride through verbatim.
         requested_model: model.filter(|m| !m.is_empty()).map(str::to_string),
-        requested_provider: None,
+        requested_provider: route.map(|r| r.provider.to_string()),
         requested_effort: effort.filter(|v| !v.is_empty()).map(str::to_string),
         // Canonical identity at birth: the session id rides the
         // struct-update base below. A bounded miss stays a named spawning row,
@@ -3253,7 +3277,7 @@ fn create(
         role_level: None,
         role_scope: None,
         role_grantor: None,
-        route_settings_path: None,
+        route_settings_path: route.map(|r| r.settings.to_string()),
         delivery_policy: None,
         sandbox_posture: None,
         git_grant: None,
@@ -3268,6 +3292,10 @@ fn create(
         // the explicit field above keeps that semantics.
         ..RegistryEntry::new(session_uuid.clone(), spawned_by)
     };
+    if let Some(r) = route {
+        new_entry.provider = Some(r.provider.to_string());
+        new_entry.route_provider_id = Some(r.provider.to_string());
+    }
 
     // Re-check the name UNDER the registry lock before appending. The per-agent
     // flock serializes two Rust-client creates, but a concurrent daemon-PTY
@@ -3701,6 +3729,7 @@ mod tests {
             allowed_tools: Some("Read,Edit"),
             disallowed_tools: Some("Bash"),
             passthrough: &[],
+            route: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),
