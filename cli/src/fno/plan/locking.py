@@ -47,17 +47,14 @@ def plan_doc_lock(path: Path, timeout: float = 2.0) -> Iterator[None]:
     deadline = time.monotonic() + timeout
     fd = -1
     try:
-        while True:
-            # Re-derived every attempt, config-free so bare-python _stamp
-            # works: the whole-dir locks fold renames the folder out from
-            # under a pre-fold resolve, so each retry must land on the path
-            # the resolver answers now. A door failure surfaces as
-            # TimeoutError, the failure the stamp and append callers catch,
-            # never a bare RuntimeError.
+        def _fresh() -> Path:
             try:
-                lock_path = paths.locks_dir() / f"plan-{digest}.lock"
+                return paths.locks_dir() / f"plan-{digest}.lock"
             except RuntimeError as exc:
                 raise TimeoutError(f"plan_doc_lock: locks dir unavailable: {exc}") from exc
+
+        while True:
+            lock_path = _fresh()
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
             while True:
@@ -68,14 +65,7 @@ def plan_doc_lock(path: Path, timeout: float = 2.0) -> Iterator[None]:
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"plan_doc_lock: {lock_path} busy > {timeout}s")
                     time.sleep(0.02)
-            # The fold guard: compare the held fd against a resolve made
-            # after the flock, not the path string the open rode. A mismatch
-            # means the open straddled the rename; unlock and retry there.
-            try:
-                fresh = paths.locks_dir() / f"plan-{digest}.lock"
-            except RuntimeError as exc:
-                raise TimeoutError(f"plan_doc_lock: locks dir unavailable: {exc}") from exc
-            if _same_lock_inode(fd, fresh):
+            if _same_lock_inode(fd, _fresh()):
                 break
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)

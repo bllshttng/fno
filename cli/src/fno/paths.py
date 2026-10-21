@@ -759,21 +759,16 @@ def github_cli_proxy_dir() -> Path:
 
 
 def locks_dir() -> Path:
-    """Advisory-lock sidecar directory (the machine locks folder).
+    """Advisory-lock sidecar directory (``~/.fno/locks``).
 
-    Deliberately config-free: the root chain is ``$FNO_STATE_DIR`` or
-    ``$HOME/.fno`` (no settings load), and the folder itself answers from the
-    Rust ``dir`` door (the layout table is the path's one owner, in step with
-    both Rust takers). The plan-doc lock is keyed by the plan's resolved path,
+    Deliberately config-free (``$HOME``/``FNO_STATE_DIR`` only, no settings load). The plan-doc lock is keyed by the plan's resolved path,
     so the two fno writers only need to agree on this directory; a config
     ``state_dir`` override deliberately does NOT move it (moving it would desync
-    the config-loading append side from the config-free stamp side).
-    """
-    if carrier := os.environ.get("FNO_STATE_DIR"):
-        root = Path(os.path.expanduser(carrier)).resolve()
-    else:
-        root = Path.home() / ".fno"
-    return Path(_plan_path_door(["state", "path", "dir", "locks", "--root", str(root)]))
+    the config-loading append side from the config-free stamp side). The
+    ``FNO_STATE_DIR`` carrier may: it needs no config load, so both writers
+    agree under it, and the seal pins it around a forwarded HOME."""
+    root = os.environ.get("FNO_STATE_DIR") or str(Path.home() / ".fno")
+    return Path(_plan_path_door(["state", "path", "dir", "locks", "--root", root]))
 
 
 def place_anchor(root: Path) -> Path:
@@ -1304,9 +1299,7 @@ def _plan_path_door(args: list[str]) -> str:
 
     argv[0] is the resolved binary path, so the pydoor rule stays satisfied.
     A missing binary or a failing chain raises; callers surface the error
-    rather than silently resolving a wrong dir. The door is a fast binary
-    read; a hang (a wedged daemon is not possible here, but a stopped
-    machine is) refuses instead of stalling the caller forever.
+    rather than silently resolving a wrong dir.
     """
     import subprocess
 
