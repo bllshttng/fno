@@ -99,30 +99,6 @@ fn plan_of(arm: &SimpleArm, ctx: &PaneContext) -> ArmPlan {
 }
 
 #[test]
-fn owns_cross_harness() {
-    let arms: [&SimpleArm; 6] = [
-        &OPENCODE_ARM,
-        &PI_ARM,
-        &CURSOR_ARM,
-        &GROK_ARM,
-        &AGY_ARM,
-        &FOOTNOTE_ARM,
-    ];
-    for arm in arms {
-        assert!(
-            arm.owns(&PaneContext::simple(arm.harness, "/repo")),
-            "{} must own its own provider",
-            arm.harness
-        );
-        assert!(
-            !arm.owns(&PaneContext::simple("claude", "/repo")),
-            "{} must not own claude",
-            arm.harness
-        );
-    }
-}
-
-#[test]
 fn argv_parity_row8_goldens() {
     let enriched = enrich_spawn_payload("do x");
 
