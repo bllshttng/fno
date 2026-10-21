@@ -180,12 +180,12 @@ fn nav_filter_matches_a_portal_index() {
 
 #[test]
 fn nav_filter_finds_an_agent_by_node_pr_harness_and_model() {
-    // The screenshot specimen: `find › 3706` read `no matches` for a live
-    // worker on PR 3706. A squad-hosted row and an orphan row (squad 99 is
+    // The screenshot specimen: `find › 3706` read `no matches` for the live
+    // worker on that PR. A squad-hosted row and an orphan row (squad 99 is
     // not live) both carry the agent's identity tokens.
     let mut v = two_pane_view();
     let mut hosted = agent_row("worker", 11, None, false);
-    hosted.node = Some("x-f420".into());
+    hosted.node = Some("ab-c0de".into());
     hosted.pr = Some(3706);
     hosted.harness = Some("codex".into());
     hosted.model = Some("claude-opus-5-5".into());
@@ -201,7 +201,7 @@ fn nav_filter_finds_an_agent_by_node_pr_harness_and_model() {
     };
     let labels =
         |s: &str| -> Vec<String> { v.nav_filtered(&q(s)).into_iter().map(|r| r.label).collect() };
-    for query in ["x-f420", "codex", "opus", "claude-opus-5-5"] {
+    for query in ["ab-c0de", "codex", "opus", "claude-opus-5-5"] {
         let hits = labels(query);
         assert_eq!(hits.len(), 1, "{query} finds the one worker: {hits:?}");
         assert!(hits[0].contains("worker"));
