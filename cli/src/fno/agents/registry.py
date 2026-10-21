@@ -58,6 +58,7 @@ from fno.harness_identity import (
 )
 from fno.state_fence import refuse_source_ahead_write, running_from_source
 from fno.time_budget import validate_timeout_budget
+from fno.harness_names import known_providers
 
 # registry.status is a projection of state.status (LD10), so it can be ANY
 # AgentStatus variant. The daemon writes "live" on spawn and "exited" on child
@@ -117,33 +118,16 @@ TERMINAL_STATUSES = frozenset({"exited", "orphaned", "failed", "permanent_dead"}
 # stays load_registry-readable from Python instead of bricking the registry.
 KNOWN_HOST_MODES = frozenset({"exec", "interactive", "attached"})
 
-# Single source of truth for "which stored field is a harness's resume
-# target". Consumed by both AgentEntry.session_id (real entries) and
-# resume_cli._session_id_for (duck-typed against test fakes), so the
-# harness -> field mapping lives in exactly one place and cannot drift
-# between the two. Keyed on the row's harness: identity is one axis.
-# At v10 the legacy per-provider id fields are gone, so codex/gemini
-# resume off the canonical harness_session_id; claude still attaches by the
-# 8-hex jobId in short_id (a distinct transport key, not removed).
-# pi joined at. Two consumers reach this map WITHOUT the
-# harness_session_id fallback that AgentEntry.session_id and
-# _session_id_for apply: `register_session` below raises on an unmapped
-# harness, and `discover._discover_from_registry` skips the row. So a
-# harness the capability contract already supports has to be here, not
-# merely rescued by the fallback. Admitting pi puts it exactly where
-# gemini/agy/opencode already sit -- no transcript store of its own, so its
-# rows resolve with truth_state unknown and the shared classify_reachability
-# decides, rather than a new per-harness liveness opinion.
+# The one session-id field EXCEPTION. claude attaches by the 8-hex jobId in
+# `short_id`, a distinct transport key; every other harness stores and resumes
+# by the canonical `harness_session_id`, which AgentEntry.session_id,
+# resume_cli._session_id_for and the events push all fall back to -- so the
+# map carries no per-name arm for them and a new harness edits nothing here.
+# The known-harness GATE that used to live in this map's membership now reads
+# the Rust roster (`fno.harness_names.known_providers()`), so register_session
+# and discovery admit a new harness without a Python edit.
 HARNESS_SESSION_ID_FIELDS = {
     "claude": "short_id",
-    "codex": "harness_session_id",
-    "gemini": "harness_session_id",
-    "agy": "harness_session_id",
-    "opencode": "harness_session_id",
-    "pi": "harness_session_id",
-    "cursor-agent": "harness_session_id",
-    "grok": "harness_session_id",
-    "zcode": "harness_session_id",
 }
 
 # The registry's legacy per-harness session-id keys. Distinct from the
@@ -708,11 +692,12 @@ class AgentEntry:
         Falling back to ``harness_session_id`` keeps such a row resumable
         instead of reporting "no session id" for a row that has one.
 
-        The harness -> field mapping comes from the module-level
-        :data:`HARNESS_SESSION_ID_FIELDS`, which ``resume_cli._session_id_for``
-        also reads, so the two cannot drift. Keyed on ``harness`` (the
-        sole identity axis). As a ``@property`` this is excluded from ``asdict``
-        serialization and never becomes an on-disk storage field.
+        The one field exception comes from the module-level
+        :data:`HARNESS_SESSION_ID_FIELDS` (claude), which
+        ``resume_cli._session_id_for`` also reads, so the two cannot drift;
+        every other harness resolves ``harness_session_id`` below. Keyed on
+        ``harness`` (the sole identity axis). As a ``@property`` this is excluded
+        from ``asdict`` serialization and never becomes an on-disk storage field.
         """
         field_name = HARNESS_SESSION_ID_FIELDS.get(self.harness)
         # `short_id` is a str defaulting to "" (never None); normalize the
@@ -2018,12 +2003,12 @@ def register_existing_session(
     """
     # ``provider`` was the old spelling for the harness. Keep that call shape
     # working, but when both axes are supplied treat it as the model vendor.
-    if harness is None and provider in HARNESS_SESSION_ID_FIELDS:
+    if harness is None and provider in known_providers():
         harness, provider = provider, None
-    if harness not in HARNESS_SESSION_ID_FIELDS:
+    if harness not in known_providers():
         raise ValueError(
             f"unknown harness for registration: {harness or provider!r}; "
-            f"known: {sorted(HARNESS_SESSION_ID_FIELDS)}"
+            f"known: {sorted(known_providers())}"
         )
     if not session_id:
         raise ValueError("session_id must be non-empty")
@@ -2040,7 +2025,7 @@ def register_existing_session(
             "session-start restamp keeps the existing row pointed at this session"
         )
 
-    session_field = HARNESS_SESSION_ID_FIELDS[harness]
+    session_field = "short_id" if harness == "claude" else "harness_session_id"
 
     # A hand-started session has NO live messaging transport (no daemon PTY,
     # no bg jobId/socket): a peer cannot inject into it. Registering it "live"
