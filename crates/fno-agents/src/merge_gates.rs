@@ -848,8 +848,10 @@ fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
     })
 }
 
-/// True when any ANSWERED question page in this project's questions directory
-/// names the PR: the pages the lead check-in reads, parsed the same way.
+/// True when an ANSWERED question page in this project's questions directory
+/// names the PR and its answer picks the approve option: the pages the lead
+/// check-in reads, parsed the same way. "Hold for changes" or "none of these"
+/// is an answer too, and it must keep the hold.
 fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
     let dir = crate::escalation::questions_dir(root);
     // Answered pages are archived into done/ after the fact; an approval
@@ -860,12 +862,27 @@ fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
         crate::lead_answers::read_question_pages(d).is_ok_and(|pages| {
             pages.iter().any(|(_stem, text)| {
                 crate::attention_file::parse_page(text)
-                    .map(|(front, _)| front.status == "answered")
+                    .map(|(front, _)| {
+                        front.status == "answered"
+                            && front.answer.as_deref().is_some_and(answer_approves)
+                    })
                     .unwrap_or(false)
                     && page_names_pr(text, pr)
             })
         })
     })
+}
+
+/// Does a recorded answer pick the approve option? A numbered answer
+/// approves only as option 1 (the filed page's "Merge as painted"). A bare
+/// answer approves when it opens with an approve word. Anything else holds.
+fn answer_approves(answer: &str) -> bool {
+    let a = answer.trim().to_ascii_lowercase();
+    let digits: String = a.chars().take_while(char::is_ascii_digit).collect();
+    if !digits.is_empty() {
+        return digits == "1";
+    }
+    ["merge", "approve", "yes"].iter().any(|w| a.starts_with(w))
 }
 
 /// The page text names the PR: a word-start `pr` (any case), an optional
