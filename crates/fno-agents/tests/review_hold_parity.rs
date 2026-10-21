@@ -201,6 +201,10 @@ fn seed_hold(fx: &Fixture, ttl_ms: u64) {
         .args(["--holder", "review-session:s1"])
         .args(["--ttl-ms", &ttl_ms.to_string()])
         .args(["--metadata", &meta])
+        // The holder pid is the CALLER's, per the verb's own contract: the
+        // seed child exits at once, and an unexpired lease naming that dead
+        // pid classifies suspect instead of live.
+        .args(["--pid", &std::process::id().to_string()])
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)
         .env("FNO_STATE_DIR", fx.root.join("state"))
