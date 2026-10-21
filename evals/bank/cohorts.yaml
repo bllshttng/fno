@@ -25,8 +25,9 @@
 #     capability-stage-review-absence-control
 #     capability-stage-review-swallowed-error
 #
-# bank_rev pins the slice-3 task-authoring commit b700aff599cfb490f62cd728b77d5051b6d1eb1a.
-bank_rev: b700aff599cfb490f62cd728b77d5051b6d1eb1a
+# bank_rev pins the slice-3 task-authoring commits b700aff599cfb490f62cd728b77d5051b6d1eb1a
+# and d968b199b99ec19ece24d8d7d23bbf88e96eacd2 (the verifier-tamper guard).
+bank_rev: d968b199b99ec19ece24d8d7d23bbf88e96eacd2
 
 train:
   - capability-lane-blueprint
