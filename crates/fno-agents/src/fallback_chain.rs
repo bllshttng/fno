@@ -21,7 +21,7 @@ use std::io::{self, Read};
 /// account classified forever (runtime_state.PROVIDER_HEALTH_TTL_SECONDS).
 const PROVIDER_HEALTH_TTL_SECONDS: f64 = 60.0 * 60.0;
 /// A usage snapshot older than this reads as absent (runtime_state.DEFAULT_USAGE_TTL_SECONDS).
-const USAGE_TTL_SECONDS: f64 = 300.0;
+pub(crate) const USAGE_TTL_SECONDS: f64 = 300.0;
 /// A fresh window at or above this share of the quota reads LOW.
 const THRESHOLD_PCT: f64 = 90.0;
 

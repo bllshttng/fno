@@ -175,11 +175,11 @@ def list_providers(
     if not (quota.observe or quota.defer_dispatch):
         typer.echo(
             "\nquota observation is OFF: accounts.quota.observe = false and "
-            "accounts.quota.defer_dispatch = false, so nothing probes and "
-            "headroom stays unknown. Set accounts.quota.observe = true in "
-            "~/.fno/config.toml under [accounts.quota] for a meter that "
-            "changes no dispatch decision; add defer_dispatch = true to also "
-            "hold a dispatch on a walled account."
+            "accounts.quota.defer_dispatch = false, so dispatch never probes; "
+            "the daemon still re-measures usage every 4 minutes. Set "
+            "accounts.quota.observe = true in ~/.fno/config.toml under "
+            "[accounts.quota] to probe at dispatch too; add defer_dispatch = "
+            "true to also hold a dispatch on a walled account."
         )
     elif not quota.defer_dispatch:
         typer.echo(
