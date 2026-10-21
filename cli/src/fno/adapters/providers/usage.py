@@ -328,7 +328,6 @@ def _stored_bearers(record: ProviderRecord) -> list[str]:
     if record.harness != "claude" or not _shares_the_slot(record):
         return []
     from fno.adapters.providers import managed
-
     token = _token_from_blob(managed.read_blob(record.id))
     return [token] if token else []
 
