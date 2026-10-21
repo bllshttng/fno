@@ -570,7 +570,7 @@ fn names_open_question(ctx: &Ctx) -> bool {
     let mut closed = std::collections::HashSet::new();
     for journal in &journals {
         let (a, c) = crate::question_intake::question_rows(journal);
-        asked.extend(a.into_keys());
+        asked.extend(a.keys().cloned());
         closed.extend(c);
     }
     qids.iter()
