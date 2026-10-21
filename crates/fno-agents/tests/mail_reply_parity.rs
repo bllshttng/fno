@@ -333,10 +333,23 @@ fn seed_project_thread(root: &Path) -> &'static str {
         "---\nthread_id: msg-parent1\nfrom: web\nto: web\nkind: send\n---\n\n## msg-parent1 · 2026-10-12T09:00:00Z · from:web\n\nparent ping\n",
     )
     .unwrap();
-    seed_bus(
-        root,
-        &[bus_row("msg-parent1", "web", "web", "send", None, None)],
-    );
+    let row = bus_row("msg-parent1", "web", "web", "send", None, None);
+    seed_bus(root, &[row.clone()]);
+    // The real write path records the chats row before the bus write (the
+    // record seam); the chats-recovery case wipes the bus afterward, leaving
+    // the chats index as the only id -> from binding, exactly as the capture
+    // left it. The dir name is the chat id slot; the resolver reads from_key
+    // off the indexed row, never the dir name.
+    let mut rec = row;
+    if let serde_json::Value::Object(map) = &mut rec {
+        map.insert("type".into(), serde_json::json!("message"));
+        map.insert("chat_id".into(), serde_json::json!("chat-seedparent00000"));
+    }
+    let chat = root.join("chats").join("chat-seedparent00000");
+    std::fs::create_dir_all(&chat).unwrap();
+    let mut line = rec.to_string();
+    line.push('\n');
+    std::fs::write(chat.join("messages.jsonl"), line).unwrap();
     "msg-parent1"
 }
 
