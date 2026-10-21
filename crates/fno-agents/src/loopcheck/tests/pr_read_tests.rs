@@ -160,22 +160,22 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
 #[test]
 fn live_fixes_pr_picks_the_newest_open_or_merged_closure() {
     let found = serde_json::json!({"items": [
-        {"number": 900, "state": "closed", "pull_request": {"merged_at": null}, "body": "Fixes x-gate"},
-        {"number": 940, "state": "closed", "pull_request": {"merged_at": "2026-10-21T00:00:00Z"}, "body": "body\n\nFixes x-gate"},
-        {"number": 950, "state": "open", "pull_request": {"merged_at": null}, "body": "mentions x-gate\n\nFixes x-othr"},
-        {"number": 930, "state": "open", "pull_request": {"merged_at": null}, "body": "Fixes x-gate x-othr"},
+        {"number": 900, "state": "closed", "pull_request": {"merged_at": null}, "body": "Fixes x-aaaa"},
+        {"number": 940, "state": "closed", "pull_request": {"merged_at": "2026-10-21T00:00:00Z"}, "body": "body\n\nFixes x-aaaa"},
+        {"number": 950, "state": "open", "pull_request": {"merged_at": null}, "body": "mentions x-aaaa\n\nFixes x-bbbb"},
+        {"number": 930, "state": "open", "pull_request": {"merged_at": null}, "body": "Fixes x-aaaa x-bbbb"},
     ]});
     assert_eq!(
-        pr_read::pick_live_fixes_pr(&found, "x-gate", 900),
+        pr_read::pick_live_fixes_pr(&found, "x-aaaa", 900),
         Some(940)
     );
     assert_eq!(
-        pr_read::pick_live_fixes_pr(&found, "x-gate", 940),
+        pr_read::pick_live_fixes_pr(&found, "x-aaaa", 940),
         Some(930)
     );
-    assert_eq!(pr_read::pick_live_fixes_pr(&found, "x-none", 900), None);
+    assert_eq!(pr_read::pick_live_fixes_pr(&found, "x-cccc", 900), None);
     assert_eq!(
-        pr_read::pick_live_fixes_pr(&serde_json::json!({}), "x-gate", 900),
+        pr_read::pick_live_fixes_pr(&serde_json::json!({}), "x-aaaa", 900),
         None
     );
 }

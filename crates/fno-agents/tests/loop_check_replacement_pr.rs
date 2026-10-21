@@ -25,7 +25,7 @@ fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 /// PR 900 is the closed one the branch resolves to; PR 940 merged with a
-/// `Fixes x-gate` line. `$SEARCH_HITS` is the REST search answer.
+/// `Fixes x-aaaa` line. `$SEARCH_HITS` is the REST search answer.
 const GH: &str = r#"
 if echo "$*" | grep -q -- "--version"; then
   echo 'gh version 2.x'; exit 0
@@ -82,7 +82,7 @@ fn fire(search_hits: &str) -> Decision {
     let state = cwd.join("target-state.md");
     fs::write(
         &state,
-        "---\nsession_id: sess-replaced\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\n---\ngraph_node_id: x-gate\n",
+        "---\nsession_id: sess-replaced\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\n---\ngraph_node_id: x-aaaa\n",
     )
     .unwrap();
     let transcript = cwd.join("transcript.jsonl");
@@ -132,7 +132,7 @@ fn fire(search_hits: &str) -> Decision {
 #[test]
 fn closed_pr_replaced_by_a_merged_fixes_pr_is_done() {
     let replaced = fire(
-        r#"{"items":[{"number":900,"state":"closed","pull_request":{"merged_at":null},"body":"Fixes x-gate"},{"number":940,"state":"closed","pull_request":{"merged_at":"2026-06-05T00:20:00Z"},"body":"Fixes x-gate"}]}"#,
+        r#"{"items":[{"number":900,"state":"closed","pull_request":{"merged_at":null},"body":"Fixes x-aaaa"},{"number":940,"state":"closed","pull_request":{"merged_at":"2026-06-05T00:20:00Z"},"body":"Fixes x-aaaa"}]}"#,
     );
     assert_eq!(replaced.decision, "allow", "{}", replaced.message);
     assert_eq!(
