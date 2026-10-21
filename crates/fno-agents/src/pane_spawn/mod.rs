@@ -583,7 +583,7 @@ pub fn pane_run_args(ctx: &PaneContext, session: &str, name: &str, plan: &ArmPla
         // The argv carries the group cap explicitly; the env copy (below)
         // latches the same value at server birth.
         "--max-panes".into(),
-        pane_group_max().into(),
+        DEFAULT_PANE_GROUP_MAX.into(),
     ]
     .to_vec();
     if let Some(squad) = &ctx.squad {
@@ -650,10 +650,6 @@ pub fn pane_run_env() -> Vec<(String, String)> {
         }
     }
     env
-}
-
-fn pane_group_max() -> &'static str {
-    DEFAULT_PANE_GROUP_MAX
 }
 
 /// The failed-`pane run` line: non-zero exit means no pane was created, so
