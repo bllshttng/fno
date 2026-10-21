@@ -168,6 +168,8 @@ impl SpawnAxes {
         "--model",
         "-m",
         "--effort",
+        "--resume",
+        "-r",
         "--substrate",
         "--as",
     ];
@@ -239,6 +241,7 @@ impl SpawnAxes {
                     let named = match long {
                         "-P" => "--provider",
                         "-m" => "--model",
+                        "-r" => "--resume",
                         other => other,
                     };
                     return Err(Self::refused_axis(named));
@@ -493,6 +496,24 @@ mod tests {
                 "{err}"
             );
             assert!(err.contains("HARNESSES.md"), "{err}");
+        }
+    }
+
+    #[test]
+    fn spawn_resume_refuses_with_the_python_golden_line() {
+        // The exact line _retired_axis("--resume") prints at the Python door;
+        // the golden pins it so both doors teach one native form.
+        const GOLDEN: &str = "refused: --resume is retired; the lane template owns it. \
+Native form: docs/HARNESSES.md (launch each harness its own way)";
+        assert_eq!(SpawnAxes::refused_axis("--resume"), GOLDEN);
+        for form in [
+            vec!["--resume", "6501096a"],
+            vec!["--resume=6501096a"],
+            vec!["-r", "6501096a"],
+        ] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("a resume-bearing spawn refuses");
+            assert_eq!(err, GOLDEN, "{err}");
         }
     }
 
