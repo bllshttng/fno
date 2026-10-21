@@ -19,6 +19,9 @@ use serde_json::json;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
+/// `announce send` flags that take a value.
+const WRITER_VALUE_FLAGS: [&str; 2] = ["--subject", "--expires"];
+
 const USAGE: &str = "usage: fno agents mail team --scope <all|leads|<role>|project:<p>> <message>";
 
 /// `team`: vet, stamp, and relay one broadcast through `announce send`.
@@ -86,6 +89,29 @@ pub fn run_team(args: &[String]) -> i32 {
         }
         if arg == "--json" || arg == "-J" {
             json_out = true;
+            i += 1;
+            continue;
+        }
+        // The announce writer parses only the space form, so each valued
+        // writer flag relays as one flag-value pair, whichever form came in.
+        if let Some(flag) = WRITER_VALUE_FLAGS.iter().find(|f| *f == arg) {
+            match args.get(i + 1) {
+                Some(v) => {
+                    passthrough.extend([flag.to_string(), v.clone()]);
+                    i += 2;
+                }
+                None => {
+                    eprintln!("Error: Option '{flag}' requires an argument.");
+                    return 2;
+                }
+            }
+            continue;
+        }
+        if let Some((flag, v)) = arg
+            .split_once('=')
+            .filter(|(f, _)| WRITER_VALUE_FLAGS.contains(f))
+        {
+            passthrough.extend([flag.to_string(), v.to_string()]);
             i += 1;
             continue;
         }
@@ -216,7 +242,7 @@ fn print_help() {
     println!("  --scope <all|leads|<role>|project:<p>>  fleet scope for the broadcast");
     println!("  --from-name <name>                      envelope identity (see send)");
     println!("  -J, --json                              send receipt as JSON");
-    println!("  writer flags relay to announce send: --subject=S --expires=45m|24h|7d --urgent");
+    println!("  writer flags relay to announce send: --subject S --expires 45m|24h|7d --urgent");
 }
 
 /// `_team_sender_kind_and_from`: the kind is `agent` only for an owned self
