@@ -397,3 +397,26 @@ def _worktree_count(root: Path) -> int:
     proc = subprocess.run(["git", "worktree", "list", "--porcelain"],
                           cwd=str(root), capture_output=True, text=True)
     return proc.stdout.count("worktree ")
+
+
+def test_lane_account_rides_only_when_the_registry_resolves_it(monkeypatch) -> None:
+    """A lane account rides --account only when the providers registry
+    resolves it; an unregistered alias (a zai-route lane's config-side
+    account) takes the seat-spawn form: the route's own vendor, no
+    --account."""
+    import fno.agents.account_env as account_env
+    from fno.route_resolve import InventoryRow
+
+    def _resolve(account_id, **_):
+        if account_id == "acct-ok":
+            return object()
+        raise account_env.AccountResolutionError(f"account {account_id!r} is not registered")
+
+    monkeypatch.setattr(account_env, "resolve_account_overlay", _resolve)
+    registered = InventoryRow(name="a", harness="claude", model="m", route="v/m", account="acct-ok")
+    unregistered = InventoryRow(name="b", harness="claude", model="m", route="v/m", account="acct-nope")
+    empty = InventoryRow(name="c", harness="claude", model="m", route="v/m", account="")
+
+    assert _runner._resolvable_lane_account(registered) == "acct-ok"
+    assert _runner._resolvable_lane_account(unregistered) is None
+    assert _runner._resolvable_lane_account(empty) is None

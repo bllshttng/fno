@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -129,6 +130,34 @@ def _git_rev(repo_root: Path, ref: str) -> Optional[str]:
         return None
 
 
+def _resolvable_lane_account(lane: Optional[Any]) -> Optional[str]:
+    """The lane's account, only when the providers registry resolves it.
+
+    Seat spawns resolve a routed lane's vendor through the route itself; the
+    ``--account`` axis is the providers registry, and a route row's account
+    may name a config-side alias that registry does not carry (a zai-route
+    lane refused every eval spawn here while seat spawns on the same route
+    worked). Pass ``--account`` only when it would resolve; otherwise the
+    spawn rides the route exactly like a seat spawn, and the row's lane
+    identity still reads back from the transcript.
+    """
+    account = getattr(lane, "account", None)
+    if not account:
+        return None
+    try:
+        from fno.agents.account_env import resolve_account_overlay
+
+        resolve_account_overlay(account)
+    except Exception:  # noqa: BLE001 - unresolvable reads as seat-form: route only
+        print(
+            f"lane account {account!r} is not in the providers registry; "
+            "spawning on the route's own vendor (the seat-spawn form)",
+            file=sys.stderr,
+        )
+        return None
+    return account
+
+
 def _default_spawn(
     prompt: str, workdir: Path, timeout_s: int, *,
     provider: Optional[str] = None, lane: Optional[Any] = None
@@ -153,8 +182,9 @@ def _default_spawn(
     harness = (lane.harness if lane else None) or provider
     if harness:
         cmd += ["--harness", harness]
+    account_flag = _resolvable_lane_account(lane)
     if lane:
-        for flag, val in (("--route", lane.route), ("--account", lane.account)):
+        for flag, val in (("--route", lane.route), ("--account", account_flag)):
             if val:
                 cmd += [flag, val]
     # Behind `--` (fno's own click parser honors it, verified both
