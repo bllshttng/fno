@@ -1076,10 +1076,21 @@ def build_pane_argv(
         return argv
     if provider == "footnote":
         # The TUI takes one launch spec, not a session flag; the Rust owner
-        # resolves the endpoint and writes the 0600 file.
+        # resolves the endpoint and writes the 0600 file. The model rides the
+        # fence (`-- -m <provider>/<model>`), read the way the headless lane's
+        # `fenced_model` reads it, and goes into the spec, never the TUI argv.
         from fno.agents.spawn_axes_client import footnote_pane_spec
 
-        return [*identity, footnote_pane_spec(str(cwd), None, None, session_uuid)]
+        fenced = list(passthrough or [])
+        model = None
+        for i, tok in enumerate(fenced):
+            if tok in ("-m", "--model") and i + 1 < len(fenced):
+                model = fenced[i + 1]
+                break
+            if tok.startswith("--model="):
+                model = tok.split("=", 1)[1]
+                break
+        return [*identity, footnote_pane_spec(str(cwd), model, None, session_uuid)]
     if provider == "grok":
         # grok's pane hosts the plain TUI; the declared form carries only the
         # caller-assigned `--session-id`. The bypass, model and effort axes
