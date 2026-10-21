@@ -332,7 +332,7 @@ def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
     assert expected.endswith("future"), "the monkeypatched name must be rendered"
     # The pane sentence derives too: it names the refused harness, never a
     # hardcoded roster that the tuple can outgrow.
-    assert "gemini has no measured thread lane yet; use --substrate pane." in str(caught.value)
+    assert "gemini has no measured thread lane yet; use --as pane." in str(caught.value)
 
 
 def test_spawn_pi_passes_the_seam_on_both_lanes_and_unmeasured_headless_refuses(

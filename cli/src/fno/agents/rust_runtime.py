@@ -971,37 +971,6 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     return substrate == "pane"
 
 
-def _is_keeper_thread_spawn(verb: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` on the ``thread`` substrate naming a keeper-lane
-    harness.
-
-    The Rust client's thread match handles claude/codex/opencode and refuses
-    every other name, while the keeper arms (``_lane_b_thread_spawn``: pi,
-    cursor-agent, grok, agy) live only in the Python dispatch. Without this
-    carve-out an installed binary answers a working lane with "fno has not
-    built this harness's keeper lane spawn arm yet". The substrate scan
-    mirrors :func:`_is_pane_substrate_spawn` (absent routes to Python, whose
-    body resolves the built-in default; the headless spellings opt out; the
-    scans stop at ``--argv`` and a bare ``--``), and a headless spawn of these
-    harnesses is NOT carved out: its honest refusal is the stance check.
-    """
-    if verb != "spawn":
-        return False
-    harness = (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower()
-    if harness not in _KEEPER_THREAD_HARNESSES:
-        return False
-    it = iter(_args_before_argv(args))
-    substrate = "pane"
-    for a in it:
-        if a in ("--once", "-o"):
-            return False
-        if a == "--substrate":
-            substrate = next(it, "")
-        elif a.startswith("--substrate="):
-            substrate = a.split("=", 1)[1]
-    return substrate == "thread"
-
-
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     """The fno-arg head, stopping at the ``--argv`` provider-payload boundary
     and at a bare ``--`` seed fence.
@@ -1396,6 +1365,33 @@ def _is_retired_axis_spawn(verb: str, args: Sequence[str]) -> bool:
     )
 
 
+def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
+    """Spell a footnote ``--as headless`` spawn as ``--once`` for the binary.
+
+    footnote's headless lane lives only in the Rust client
+    (``footnote_harness::dispatch_once``), which reads ``--once``; its axis scan
+    refuses ``--as`` for every lane but cloud. Left as ``--as headless``, the
+    pane predicate keeps the spawn on the Python door, whose dispatch has no
+    footnote arm and refuses it as an unknown thread harness.
+    """
+    if not args or args[0] != "spawn":
+        return list(args)
+    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() != "footnote":
+        return list(args)
+    head = _args_before_argv(args)
+    out: list[str] = []
+    i = 0
+    while i < len(head):
+        a = head[i]
+        if a == "--as" and i + 1 < len(head) and head[i + 1] == "headless":
+            out.append("--once")
+            i += 2
+            continue
+        out.append("--once" if a == "--as=headless" else a)
+        i += 1
+    return out + list(args[len(head):])
+
+
 def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--node``/``--slug``/``--plan``.
 
@@ -1653,6 +1649,7 @@ def make_agents_group_cls() -> type:
                             args, existing_pane = extract_existing_pane(
                                 compose_spawn_argv(args, node_verb=node_verb)
                             )
+                            args = _footnote_headless_as_once(args)
                         except ValueError as exc:
                             print(f"fno agents spawn: {exc}", file=sys.stderr)
                             raise SystemExit(2) from exc

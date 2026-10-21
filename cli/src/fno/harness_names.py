@@ -87,6 +87,6 @@ def unknown_thread_harness_message(name: str) -> str:
         f"the CLI BINARY); accepted here: {accepted}.",
     ]
     if name in known_harnesses():
-        lines.append(f"{name} has no measured thread lane yet; use --substrate pane.")
+        lines.append(f"{name} has no measured thread lane yet; use --as pane.")
     lines.append("If you meant a model VENDOR, that is -P/--provider.")
     return "\n".join(lines)
