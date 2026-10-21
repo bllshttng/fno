@@ -47,6 +47,36 @@ fn fresh_ts() -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// AC8: a store opened once skips the schema work on the next open; a
+/// replaced file (new inode) gets it again.
+#[test]
+fn the_schema_is_ensured_once_per_store_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("events.db");
+    let first = open_store(&store).unwrap();
+    let key = schema_key(&first, &store).unwrap();
+    assert!(schema_ensured(&key), "the first open records the identity");
+    drop(first);
+    let again = open_store(&store).unwrap();
+    assert_eq!(
+        schema_key(&again, &store),
+        Some(key.clone()),
+        "same identity, no new work"
+    );
+    drop(again);
+    std::fs::rename(&store, dir.path().join("old.db")).unwrap();
+    let swapped = open_store(&store).unwrap();
+    let tables: i64 = swapped
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 1, "a replaced store gets its schema again");
+    assert!(schema_ensured(&schema_key(&swapped, &store).unwrap()));
+}
+
 #[test]
 fn store_path_strips_generation_suffix() {
     let dir = tempfile::tempdir().unwrap();
