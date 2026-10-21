@@ -934,44 +934,6 @@ mod tests {
         );
         assert_eq!(err.exit, 2);
     }
-        let minted = "74db359a-1111-4111-8111-111111111111";
-        let cursor = |_h: &str, _cwd: &Path, _req: Option<&str>| Ok(minted.to_string());
-        assert_eq!(
-            production_mint_with(&cursor, "cursor-agent", dir.path(), None).unwrap(),
-            minted
-        );
-        let agy = production_mint_with(&cursor, "agy", dir.path(), None).unwrap();
-        assert!(is_full_uuid(&agy), "{agy}");
-        let truncated = production_mint_with(&cursor, "agy", dir.path(), Some("abc"));
-        assert!(truncated.is_err());
-        let no_mint = production_mint_with(&cursor, "zcode", dir.path(), None);
-        let err = no_mint.unwrap_err();
-        assert!(
-            err.message.contains("callee-minted-read-back"),
-            "{}",
-            err.message
-        );
-        assert_eq!(err.exit, 2);
-    }
-        let minted = "74db359a-1111-4111-8111-111111111111";
-        let cursor = |_h: &str, _cwd: &Path, _req: Option<&str>| Ok(minted.to_string());
-        assert_eq!(
-            production_mint_with(&cursor, "cursor-agent", dir.path(), None).unwrap(),
-            minted
-        );
-        let agy = production_mint_with(&cursor, "agy", dir.path(), None).unwrap();
-        assert!(is_full_uuid(&agy), "{agy}");
-        let truncated = production_mint_with(&cursor, "agy", dir.path(), Some("abc"));
-        assert!(truncated.is_err());
-        let no_mint = production_mint_with(&cursor, "zcode", dir.path(), None);
-        let err = no_mint.unwrap_err();
-        assert!(
-            err.message.contains("callee-minted-read-back"),
-            "{}",
-            err.message
-        );
-        assert_eq!(err.exit, 2);
-    }
 
     /// The whole flow against a fake keeper: launch argv, Identify proof,
     /// live row, seed paste + echo proof, and the created receipt.
@@ -1169,7 +1131,6 @@ mod tests {
             keeper_arm("pi").unwrap().once_refusal
         );
     }
-
 
     /// A keeper socket that speaks the frame protocol enough for the arm:
     /// Identify gets the reply that proves the launch, a seed connection
