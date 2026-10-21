@@ -49,7 +49,7 @@ fn ls_rows(rows: &[Value]) -> String {
 }
 
 fn live_row(name: &str, cwd: &str, pane_id: u64) -> Value {
-    serde_json::json!({"pane_id": pane_id, "cwd": cwd, "child_pid": std::process::id()})
+    serde_json::json!({"pane_id": pane_id, "cwd": cwd, "name": name, "child_pid": std::process::id()})
 }
 
 fn registry_with(rows: Vec<RegistryEntry>) -> state::Registry {
