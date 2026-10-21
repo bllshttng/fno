@@ -1053,13 +1053,12 @@ def _is_role_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     return _has_flag(args, longs=("--role",))
 
 
-#: The keeper-lane harnesses whose thread spawn arm lives in the Python
-#: dispatch (``_lane_b_thread_spawn``) and nowhere in the Rust client: the
-#: client's thread match handles claude/codex/opencode and refuses every
-#: other name, so a keeper thread spawn that auto-routed would exit 2 with
-#: "fno has not built this harness's keeper lane spawn arm yet" - a false
-#: statement the moment the Python arm ships. Kept in sync with the rows by
-#: a parity test, like the client.rs verb list.
+#: The keeper-lane harnesses whose thread spawn arm lives in the Rust client
+#: (`keeper_spawn.rs`) in rust mode; the Python leg (`_lane_b_thread_spawn`)
+#: still serves python mode until the dispatch_spawn port deletes it. Kept in
+#: sync with the capability rows by a parity test, like the client.rs verb
+#: list. The py_spawn carve-out is gone (this list no longer routes), so the
+#: tuple remains only as the roster the parity test reads.
 _KEEPER_THREAD_HARNESSES = ("pi", "cursor-agent", "grok", "agy")
 
 
@@ -1697,7 +1696,6 @@ def make_agents_group_cls() -> type:
                     or _is_monitor_bearing_spawn(verb, args)
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_pane_substrate_spawn(verb, args)
-                    or _is_keeper_thread_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
                     or _is_provenance_bearing_spawn(verb, args)
                     or _is_resume_bearing_spawn(verb, args)
