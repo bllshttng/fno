@@ -1294,6 +1294,32 @@ pub fn production_roster_sweep(
     crate::roster_reap::roster_reap(home, cwd, grace_secs, scope, false)
 }
 
+/// The state-file sweep's own cadence. Its retention is counted in days
+/// (`StateReapConfig`), so the retire pass's minutes buy nothing, and each
+/// pass stats every lock, pr-status and state file.
+pub const STATE_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+
+/// The daemon tick's state-file sweep: throttled to `STATE_SWEEP_INTERVAL`,
+/// one in flight, off the loop. Same shape as `maybe_retirement_sweep`.
+pub fn maybe_state_sweep(
+    last_sweep: &mut Instant,
+    in_flight: &Arc<AtomicBool>,
+    home: AgentsHome,
+    cwd: PathBuf,
+    events: PathBuf,
+) {
+    if last_sweep.elapsed() < STATE_SWEEP_INTERVAL || in_flight.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    *last_sweep = Instant::now();
+    let flag = Arc::clone(in_flight);
+    tokio::task::spawn_blocking(move || {
+        let _gate = crate::daemon::SweepGate(flag);
+        let emitter = EventEmitter::new(events, "daemon");
+        let _ = state_file_sweep(&home, &emitter, &cwd);
+    });
+}
+
 pub fn maybe_retirement_sweep(
     last_sweep: &mut Instant,
     in_flight: &Arc<AtomicBool>,
@@ -1322,7 +1348,6 @@ pub fn maybe_retirement_sweep(
         let emitter = EventEmitter::new(events, "daemon");
         let grace_secs = crate::agents_config::retire_grace_secs(&grace_cwd) as i64;
         let retain_days = crate::agents_config::reap_receipt_retain_days(&grace_cwd);
-        let _ = state_file_sweep(&home, &emitter, &grace_cwd);
         // The dead-team sweep runs BEFORE the registry sweep: a vacated
         // team frees the territory this tick, so the registry pass reads a
         // world that already answers for it.

@@ -56,6 +56,9 @@ pub(super) struct FleetArms {
     // verdict pattern), so the tick reads a mutex instead of config files.
     last_gc_sweep: Instant,
     retire_interval_next: Arc<crate::gc::RetireIntervalCell>,
+    // The state-file sweep: its own hourly stamp and one-in-flight gate.
+    last_state_sweep: Instant,
+    state_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
     // Dead-row GC gate: its dormant check shells out to the truth
     // probe, so it gets the same one-in-flight discipline as its neighbors.
     gc_in_flight: Arc<std::sync::atomic::AtomicBool>,
@@ -125,6 +128,11 @@ impl FleetArms {
             board_render: crate::board_render_arm::Arm::default(),
             last_gc_sweep: Instant::now(),
             retire_interval_next: crate::gc::seed_retire_interval_cell(&opts.agents_config_cwd),
+            // Due on the first tick, so a daemon that restarts often still sweeps.
+            last_state_sweep: now
+                .checked_sub(crate::gc::STATE_SWEEP_INTERVAL)
+                .unwrap_or(now),
+            state_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gc_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stale_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             park_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -171,6 +179,13 @@ impl FleetArms {
             },
             crate::gc::production_roster_sweep,
             crate::gc::production_team_sweep,
+        );
+        crate::gc::maybe_state_sweep(
+            &mut self.last_state_sweep,
+            &self.state_sweep_in_flight,
+            ctx.home.clone(),
+            ctx.opts.agents_config_cwd.clone(),
+            ctx.home.events_jsonl(),
         );
         // Worktree sweep + merge reaper: the sweep backstops
         // what the reaper cannot reach; the reaper is the merge-triggered
