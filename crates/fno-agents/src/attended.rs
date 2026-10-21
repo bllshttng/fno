@@ -122,26 +122,25 @@ fn typed_age_in_file(
     newest
 }
 
-/// The LAST readable turn in ONE transcript decides: the newest user-shaped
-/// row whose reminder-stripped text is non-empty, classified once. Empty
-/// rows are the harness delivering tool results - machinery, never a turn
-/// a person made, and never the turn that answers "did the person speak
-/// last". `Some(age)` when that turn is typed; `None` when the file holds
-/// no readable turn or the last one is machine-shaped. A row without a
-/// parseable timestamp cannot testify; a future stamp reads as now.
-fn last_typed_age_in_file(
+/// The LAST readable turn in ONE transcript: the newest user-shaped row
+/// whose reminder-stripped text is non-empty, as `(ts, Some(age))` when it
+/// typed and `(ts, None)` when it did not; `None` when the file holds no
+/// readable turn. Empty rows are the harness delivering tool results -
+/// machinery, never a turn a person made, and never the turn that answers
+/// "did the person speak last". A row without a parseable timestamp cannot
+/// testify; a future stamp reads as now.
+fn last_turn_in_file(
     path: &PathBuf,
     bus: &BusIndex,
     session: &str,
     now: i64,
     spawn_payload: Option<&str>,
-) -> Option<i64> {
+) -> Option<(f64, Option<i64>)> {
     let Ok(file) = std::fs::File::open(path) else {
         return None;
     };
-    // The newest readable turn so far: `(ts, Some(age))` when it typed,
-    // `(ts, None)` when it did not. `>=` so the row written later wins a
-    // shared stamp - append order is event order.
+    // The newest readable turn so far. `>=` so the row written later wins
+    // a shared stamp - append order is event order.
     let mut last: Option<(f64, Option<i64>)> = None;
     for line in std::io::BufReader::new(file).split(b'\n') {
         let Ok(line) = line else { continue };
@@ -177,7 +176,7 @@ fn last_typed_age_in_file(
         };
         last = Some((ts, verdict));
     }
-    last.and_then(|(_, verdict)| verdict)
+    last
 }
 
 /// Age in seconds of the newest typed user turn across `paths`, `None`
@@ -217,17 +216,20 @@ pub(crate) fn newest_typed_turn_age_s(
 /// is the fact the retirement policy reads, and the mtime short-circuit
 /// cannot answer it - the incident row sat quiet 17 minutes when the sweep
 /// retired it, past every window here. Across files, the newest readable
-/// turn decides, wherever it lives. The read's one process-lifetime memo,
-/// keyed by the file's stat trio (path, len, mtime secs) PLUS the recorded
-/// seed the read exempts by: two rows can resolve to one transcript with
-/// different payloads, and a memo keyed without it would answer one row
-/// with another row's exemption. An appended transcript misses (new len or
-/// mtime) and rescans; an unchanged one never pays the full read twice in
-/// this process - without it, a held row's transcript is read end-to-end
-/// on every sweep pass.
-fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>> {
-    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>>> =
-        OnceLock::new();
+/// turn decides, wherever it lives: a resumed session's CURRENT transcript
+/// answers, not whichever file happens to end on a person. The read's one
+/// process-lifetime memo, keyed by the file's stat trio (path, len, mtime
+/// secs) PLUS the recorded seed the read exempts by: two rows can resolve
+/// to one transcript with different payloads, and a memo keyed without it
+/// would answer one row with another row's exemption. An appended
+/// transcript misses (new len or mtime) and rescans; an unchanged one
+/// never pays the full read twice in this process - without it, a held
+/// row's transcript is read end-to-end on every sweep pass.
+fn scan_memo(
+) -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<(f64, Option<i64>)>>> {
+    static MEMO: OnceLock<
+        Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<(f64, Option<i64>)>>>,
+    > = OnceLock::new();
     MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -238,11 +240,12 @@ pub(crate) fn last_turn_typed_age_ever(
     now: i64,
     spawn_payload: Option<&str>,
 ) -> Option<i64> {
-    // Across files: a typed last turn in ANY file testifies, and the age
-    // is the youngest such answer. A None from one file cannot outweigh a
-    // typed answer from another - over-keep is the safe direction, and the
-    // done gate rules the row the scan would over-keep.
-    let mut newest: Option<i64> = None;
+    // Across files the NEWEST readable turn decides: the winner's
+    // typed-ness is the session's answer, so a resumed session whose
+    // current transcript ends on a machine turn reads machine whatever an
+    // older file ends on. Ties keep the later-scanned file's row (append
+    // order is event order), matching the in-file rule.
+    let mut best: Option<(f64, Option<i64>)> = None;
     for path in paths {
         // A file that cannot stat cannot form a key: it reads fresh and
         // answers None on the open failure, never from a stale entry.
@@ -267,19 +270,22 @@ pub(crate) fn last_turn_typed_age_ever(
         {
             *hit
         } else {
-            let age = last_typed_age_in_file(path, bus, session, now, spawn_payload);
+            let fact = last_turn_in_file(path, bus, session, now, spawn_payload);
             let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
             if memo.len() >= 1024 {
                 memo.clear();
             }
-            memo.insert(key, age);
-            age
+            memo.insert(key, fact);
+            fact
         };
-        if let Some(age) = file_fact {
-            newest = Some(newest.map_or(age, |n| n.min(age)));
+        let Some((ts, verdict)) = file_fact else {
+            continue;
+        };
+        if best.is_none_or(|(prev, _)| ts >= prev) {
+            best = Some((ts, verdict));
         }
     }
-    newest
+    best.and_then(|(_, verdict)| verdict)
 }
 
 /// The sweep's one-row gate: `Some(hold)` when the row's transcript
@@ -413,6 +419,38 @@ mod tests {
             last_turn_typed_age_ever(&[path], &bus, "s3", now, None),
             None,
             "a machine turn after the person's turn is the last turn"
+        );
+        // A resumed session: the older file ends on a person turn, the
+        // CURRENT transcript ends on a machine turn. The newest readable
+        // turn decides, wherever it lives, so the answer is None - and it
+        // stays None whichever order the files arrive in.
+        let older = dir.path().join("resume-a.jsonl");
+        std::fs::write(
+            &older,
+            format!(
+                "{}\n",
+                json!({"type":"user","timestamp":ts(300),"message":{"role":"user","content":"finish the thought"}})
+            ),
+        )
+        .unwrap();
+        let current = dir.path().join("resume-b.jsonl");
+        std::fs::write(
+            &current,
+            format!(
+                "{}\n",
+                json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":"<task-notification><task-id>x</task-id></task-notification>"}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            last_turn_typed_age_ever(&[older.clone(), current.clone()], &bus, "s4", now, None),
+            None,
+            "the current transcript's machine tail decides over the older file's person tail"
+        );
+        assert_eq!(
+            last_turn_typed_age_ever(&[current, older], &bus, "s4b", now, None),
+            None,
+            "the answer never depends on the order the files arrive in"
         );
     }
 
