@@ -620,6 +620,12 @@ fn apply_sets(
     changes: &mut Vec<Change>,
 ) -> Result<(), PatchRefusal> {
     for (field, raw) in sets {
+        // The pre-rename spelling still writes dispatch_command, for one release.
+        let field: &str = if field == super::model::LEGACY_DISPATCH_COMMAND_KEY {
+            "dispatch_command"
+        } else {
+            field
+        };
         let policy = policy_for(field).ok_or_else(|| {
             PatchRefusal::refused(format!(
                 "refused: {id} unknown field '{field}'. Settable fields: {}",

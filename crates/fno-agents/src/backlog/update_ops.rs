@@ -184,6 +184,12 @@ pub fn parse_op_token(raw: &str) -> Option<FieldOp> {
     if !shaped {
         return None;
     }
+    // The pre-rename spelling still writes dispatch_command, for one release.
+    let field = if field == super::model::LEGACY_DISPATCH_COMMAND_KEY {
+        "dispatch_command"
+    } else {
+        field
+    };
     Some(FieldOp {
         field: field.to_string(),
         op,
@@ -248,6 +254,25 @@ pub fn append_text(existing: Option<&str>, add: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pre_rename_dispatch_key_reads_and_writes_as_dispatch_command() {
+        use crate::backlog::model::{Node, LEGACY_DISPATCH_COMMAND_KEY};
+        let op =
+            parse_op_token(&format!("{LEGACY_DISPATCH_COMMAND_KEY}=/fno:think")).expect("operator");
+        assert_eq!(op.field, "dispatch_command");
+        let mut row = serde_json::json!({
+            "id": "x-1", "slug": "x-1", "title": "t", "type": "feature",
+            "status": "ready", "priority": "p2", "domain": "code",
+            "created_at": "2026-09-11T00:00:00+00:00"
+        });
+        row[LEGACY_DISPATCH_COMMAND_KEY] = serde_json::json!("/fno:think");
+        let node = Node::from_json(&row).expect("row");
+        assert_eq!(node.dispatch.command.as_deref(), Some("/fno:think"));
+        let out = node.to_json();
+        assert_eq!(out["dispatch_command"], "/fno:think");
+        assert!(out.get(LEGACY_DISPATCH_COMMAND_KEY).is_none());
+    }
 
     #[test]
     fn parse_splits_on_the_first_equals() {
