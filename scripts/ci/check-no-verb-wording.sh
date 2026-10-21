@@ -11,6 +11,7 @@
 # Passes:
 #   - words that are not the fno concept: verbatim, verbose, verbosity,
 #     verbal, adverb, proverb, verbiage, reverb.
+#   - a camel-case join that only spells "verB": FailoverBlock, NeverBinds.
 #   - a line carrying `verb-wording: allow`, for text that must keep the old
 #     word: a read-both migration key, an old flag accepted for one release.
 #   - the wire keys the events schema and the harness capability table still
@@ -66,7 +67,8 @@ scan() {
         $s =~ s/$sql//g if $f eq "crates/fno-agents/src/backlog/nodes.rs";
         my $hit = 0;
         while ($s =~ /([A-Za-z0-9_]*verb[A-Za-z0-9_]*)/gi) {
-            $hit = 1 unless $1 =~ $not;
+            my $w = $1;
+            $hit = 1 unless $w =~ $not || ($w =~ /verB/ && $w !~ /verb|Verb|VERB/);
         }
         print "$_\n" if $hit;
     '
@@ -86,6 +88,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
     rows+=$'crates/fno-agents/src/backlog/nodes.rs:11:SELECT verb, brief FROM node_dispatch\n'
     rows+=$'crates/fno-agents/src/backlog/nodes.rs:12:let verb = 1;\n'
     rows+=$'crates/x/src/a.rs:13:"--ack-command-risk" | "--ack-verb-risk" => {\n'
+    rows+=$'cli/src/a.py:14:failover: Optional[FailoverBlock] = NeverBinds\n'
     got="$(printf '%s' "$rows" | scan)"
     want=$'docs/a.md:1:run the verb.\ncrates/x/src/a.rs:4:let v = dispatch_verb(x);\ncrates/x/src/a.rs:10:enum Kind { VerbMeta }\ncrates/fno-agents/src/backlog/nodes.rs:12:let verb = 1;'
     if [[ "$got" != "$want" ]]; then
