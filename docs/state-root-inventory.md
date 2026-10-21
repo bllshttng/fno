@@ -262,6 +262,21 @@ Every pruned row leaves a count in the `event_rollup` table, per UTC day, kind, 
 
 Retros read none of these kinds. `fno backlog retro` folds `gate_escape` only, and that kind is durable. The self-improvement loops in [self-improvement-loops](architecture/self-improvement-loops.md) read none of them either: autocorrect, the S2 corrections path, the evals regression banks, and pr-watch heal. The one evals reader is the `evals macro` fold. By default it drops `guard_decision` and `control_plane_tick` as noise, so only `--all` meets the one open gap.
 
+## Store contracts
+
+The rows above say where a file lives. A contract says how a store behaves. The SQL cutover kept every caller-visible interface and lost the properties nobody wrote down. The registry sat at revision 0 for days. Mail serialized on one registry lock. One graph write held its lock 16 to 26 s while it re-read the whole export. The Stop hook loaded 1.3M event rows. The tests ran against a 34-row registry while the live one held 227.
+
+Each store gets one row. A PR that changes a store's writer, reader, lock or read pattern accounts for each cell in its body. A port PR proves each cell still holds. An "unmeasured" size is a debt: measure it on a real install before the port lands, and write the number here.
+
+| Store | Owner and writers | Readers and their read pattern | Lock scope | Expected size | Health signal |
+|---|---|---|---|---|---|
+| Backlog graph (`db/graph.db`) | `crates/fno-agents/src/backlog/`; every write goes through `fno backlog` | board, groom, dispatch: indexed row reads. No reader loads the whole export on a hot path | one write transaction per mutation, never a whole-export re-read under the lock | unmeasured | no budget yet; the live-scale check sets one |
+| Agent registry (the `registry` table in `db/graph.db`) | `crates/fno-agents/src/registry_store.rs`, compare-and-set through `registry_commit.rs` | `fno agents status`, mux doctor, the stop gate: `registry_read::registry_text` reads the rows once per call | the write transaction only. Mail and claims must not take the registry lock | 227 rows on one live install; fixtures must match that scale | `registry_meta` `revision` grows while sessions run. `fno mux doctor` warns on revision 0 with rows, and on live sessions with no row stamp in the last hour |
+| Event journals (`events.db`, project, global and agents) | `crates/fno-agents/src/event_store/` | the stop hook, `fno doctor event`, evals: windowed reads by kind and time, never every row | one append transaction per event | 1.3M rows seen on one live install | rows keep arriving while sessions run; the prune leaves its counts in `event_rollup` |
+| Claims (`claims/*.lock`) | `crates/fno-agents/src/claims.rs` | claim status, the spawn gate: one lockfile per key | one atomic lockfile per key | one file per live claim | no claim outlives its holder pid past its TTL |
+
+The hot-path budgets these stores serve live in `crates/fno-agents/tests/hook_latency.rs`: Stop, Bash PreToolUse and the other hooks, each with a p90 budget. CI enforces them on Linux. Their fixtures still use small stores, so a budget there does not yet prove the live scale above.
+
 ## Adding a new root writer
 
 You do not. The root rows are shrink-only (see The rule). The runtime guard refuses a new top-level write, and the CI gate fails a PR that adds a row. The remedy for a new surface is a subfolder:
