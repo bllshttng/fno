@@ -2048,10 +2048,7 @@ mod tests {
             .unwrap();
         crate::backlog::open(&a.graph)
             .unwrap()
-            .execute(
-                "INSERT INTO node_dispatch (node_id, verb) VALUES ('x-del', 'do')",
-                [],
-            )
+            .execute("INSERT INTO node_dispatch (node_id) VALUES ('x-del')", [])
             .unwrap();
         let refusal = flush(&a.graph).unwrap_err();
         route_to_primary(None);
