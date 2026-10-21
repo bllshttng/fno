@@ -1,12 +1,11 @@
 //! The per-id sidecar file reader, the Rust twin of `fno.tracker.sidecar.load`
 //! external mode.
 //!
-//! The writer is the Python pydantic `Sidecar` with `extra="forbid"`, so the
-//! partition is enforced where the file is written; this reader passes every
-//! key through except `id` and keeps no second field list. `SIDECAR_KEYS`
-//! exists for the graph backend, which stores sidecar fields in the row and
-//! must project only the sidecar-side names. Both lists answer for readers;
-//! the inventory (dual-implementation-inventory.md) carries the dual row.
+//! [`save`] is the only writer of the per-id file; the Python
+//! `_save_to_file` calls it through the tracker door. It refuses any key
+//! outside `SIDECAR_KEYS`, so the partition is enforced where the file is
+//! written; the reader passes every key through except `id`. The graph
+//! backend also projects only `SIDECAR_KEYS` from its row.
 
 use crate::claims::encode_key;
 use crate::tracker::TrackerError;
@@ -50,11 +49,14 @@ pub(crate) fn root(cwd: &Path) -> std::path::PathBuf {
 /// read failure is `Backend` naming the id. Every key passes through except
 /// `id` - no second field list here.
 pub fn load(root: &Path, id: &str) -> Result<serde_json::Map<String, Value>, TrackerError> {
-    let path = root.join(format!("{}.json", encode_key(id)));
+    read_file(&root.join(format!("{}.json", encode_key(id))), id)
+}
+
+fn read_file(path: &Path, id: &str) -> Result<serde_json::Map<String, Value>, TrackerError> {
     if !path.exists() {
         return Ok(serde_json::Map::new());
     }
-    let raw = std::fs::read_to_string(&path)
+    let raw = std::fs::read_to_string(path)
         .map_err(|e| TrackerError::Backend(format!("sidecar unreadable for {id}: {e}")))?;
     let v: Value = serde_json::from_str(&raw)
         .map_err(|e| TrackerError::Backend(format!("sidecar unreadable for {id}: {e}")))?;
@@ -67,4 +69,56 @@ pub fn load(root: &Path, id: &str) -> Result<serde_json::Map<String, Value>, Tra
         }
     }
     Ok(out)
+}
+
+/// Merge `fields` into the per-id sidecar file and return its path. A key
+/// outside `SIDECAR_KEYS` refuses before any write: the tracker owns it.
+/// Temp file plus rename in the same dir, so a reader never sees half a file.
+pub fn save(
+    root: &Path,
+    id: &str,
+    fields: &serde_json::Map<String, Value>,
+) -> Result<std::path::PathBuf, TrackerError> {
+    save_at(&root.join(format!("{}.json", encode_key(id))), id, fields)
+}
+
+/// [`save`] at an explicit file path: the Python client passes the path its
+/// own `sidecar_path` resolves, so both legs name one file.
+pub fn save_at(
+    path: &Path,
+    id: &str,
+    fields: &serde_json::Map<String, Value>,
+) -> Result<std::path::PathBuf, TrackerError> {
+    if let Some(bad) = fields
+        .keys()
+        .find(|k| k.as_str() != "id" && !SIDECAR_KEYS.contains(&k.as_str()))
+    {
+        return Err(TrackerError::Refused(format!(
+            "{bad:?} is not a sidecar key; the tracker owns it. Sidecar keys: {}",
+            SIDECAR_KEYS.join(", ")
+        )));
+    }
+    let mut merged = read_file(path, id)?;
+    for (k, v) in fields {
+        if k != "id" {
+            merged.insert(k.clone(), v.clone());
+        }
+    }
+    let mut body = serde_json::Map::new();
+    body.insert("id".into(), Value::String(id.to_string()));
+    body.extend(merged);
+    let fail = |e: &dyn std::fmt::Display| {
+        TrackerError::Backend(format!("sidecar write failed for {id}: {e}"))
+    };
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| fail(&e))?;
+    let mut text = serde_json::to_string_pretty(&Value::Object(body)).map_err(|e| fail(&e))?;
+    text.push('\n');
+    let tmp = tempfile::Builder::new()
+        .prefix(".sidecar-tmp-")
+        .tempfile_in(dir)
+        .map_err(|e| fail(&e))?;
+    std::fs::write(tmp.path(), text).map_err(|e| fail(&e))?;
+    tmp.persist(path).map_err(|e| fail(&e.error))?;
+    Ok(path.to_path_buf())
 }
