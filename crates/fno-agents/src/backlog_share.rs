@@ -11,11 +11,13 @@
 //! update and delete matches every old column and each insert must not
 //! collide. The statements run parent table first, so a parent row exists
 //! before the update that names it. A row a peer changed first refuses the
-//! whole batch, and the replica takes the primary's rows back for every row
-//! the batch touched. The take-back keeps the refused statements in
+//! whole batch. The take-back covers only the node the refusal named: the
+//! primary's copy comes back for that node's rows, every other change in the
+//! batch re-queues for the next flush, and an INSERT the primary refuses
+//! keeps its local row. The take-back keeps the refused statements in
 //! `backlog_refused`, and an operator notice (stderr plus a
 //! `backlog_refused_flush` journal event) names the nodes and columns it
-//! reverted. So the primary decides, and no machine overwrites a peer's
+//! touched. So the primary decides, and no machine overwrites a peer's
 //! change it never saw.
 //!
 //! Read: reads stay local. One daemon arm per machine runs [`flush`] and then
@@ -524,9 +526,17 @@ fn parse_ops(text: &str) -> Result<Vec<Change>, String> {
     rows.iter().map(Change::from_json).collect()
 }
 
+/// Why [`publish`] gave up: the operator-facing refusal text, and the index
+/// of the change a batch statement refused. The index is `None` when the
+/// request itself failed rather than a statement in it.
+struct Refusal {
+    message: String,
+    change: Option<usize>,
+}
+
 /// Send one outbox batch: every change as a conditional statement with its
 /// row-count check, then the change-log row, in one request.
-fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Result<(), String> {
+fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Result<(), Refusal> {
     let mut steps = vec![(
         "SELECT 1 FROM backlog_seed".to_string(),
         Vec::<SqlValue>::new(),
@@ -554,14 +564,23 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
     ));
     owner.push(None);
     remote.transaction(&steps).map(drop).map_err(|(step, error)| {
+        let change = step.and_then(|s| owner.get(s).copied().flatten());
         let hint = if unseeded(&error) {
             " The primary holds no seeded backlog: run `fno agents claim backlog seed` on one machine first.".to_string()
         } else if crate::store_remote::is_unreachable(&error) || landed_before(&error) {
             String::new()
         } else {
-            match step.and_then(|s| owner.get(s).copied().flatten()) {
+            match change {
+                Some(i) if orphaned(&error) && changes[i].op == Op::Insert => format!(
+                    " The {} write names a parent row the primary does not hold. This machine kept the local row; a retry sends the same write, so report this refusal.",
+                    changes[i].table
+                ),
                 Some(i) if orphaned(&error) && changes[i].op != Op::Delete => format!(
                     " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
+                    changes[i].table
+                ),
+                Some(i) if changes[i].op == Op::Insert => format!(
+                    " The {} row already exists on the primary. This machine kept its own row; the refused statements are kept in backlog_refused.",
                     changes[i].table
                 ),
                 Some(i) => format!(
@@ -571,7 +590,10 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
                 None => String::new(),
             }
         };
-        format!("{REFUSED}: {error}.{hint}")
+        Refusal {
+            message: format!("{REFUSED}: {error}.{hint}"),
+            change,
+        }
     })
 }
 
@@ -617,12 +639,13 @@ fn replica(graph: &Path) -> Result<Connection, String> {
 
 /// Send this machine's outbox to the primary. Runs under its own lock file,
 /// never the graph lock, so a slow primary holds up no writer. `Ok(n)` is the
-/// number of row changes the primary took. A refusal takes the primary's
-/// rows back for every row the batch touched, keeps the refused statements
-/// in `backlog_refused`, names the revert in an operator notice (stderr plus
-/// a `backlog_refused_flush` journal event), clears the batch, and returns
-/// the refusal. An unreachable or unseeded primary keeps the outbox for the
-/// next flush.
+/// number of row changes the primary took. A refusal takes the primary's rows
+/// back for the node the refusal named, re-queues the batch's other writes
+/// for the next flush, keeps the refused statements in `backlog_refused`,
+/// names the take-back in an operator notice (stderr plus a
+/// `backlog_refused_flush` journal event), clears the batch, and returns the
+/// refusal. An unreachable or unseeded primary keeps the outbox for the next
+/// flush.
 pub fn flush(graph: &Path) -> Result<usize, String> {
     let Some(remote) = primary_for(graph)? else {
         return Ok(0);
@@ -698,14 +721,27 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
             clear(&connection)?;
             Ok(changes.len())
         }
-        Err(error) if landed_before(&error) => {
+        Err(refusal) if landed_before(&refusal.message) => {
             clear(&connection)?;
             Ok(changes.len())
         }
-        Err(error) if crate::store_remote::is_unreachable(&error) || unseeded(&error) => Err(error),
-        Err(error) => {
-            repair(&remote, &mut connection, &changes, last, &batch, &error)?;
-            Err(error)
+        Err(refusal)
+            if crate::store_remote::is_unreachable(&refusal.message)
+                || unseeded(&refusal.message) =>
+        {
+            Err(refusal.message)
+        }
+        Err(refusal) => {
+            repair(
+                &remote,
+                &mut connection,
+                &changes,
+                refusal.change,
+                last,
+                &batch,
+                &refusal.message,
+            )?;
+            Err(refusal.message)
         }
     }
 }
@@ -717,21 +753,48 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Take the primary's rows back for every row a refused batch touched, keep
-/// the refused statements for retry or inspection, and clear the batch from
-/// the outbox, in one local transaction. The primary reads run first,
-/// outside the transaction. After the commit, the operator notice (stderr
-/// plus a `backlog_refused_flush` journal event) names what was reverted.
+/// Take the primary's rows back for the nodes the refusal named, re-queue
+/// the batch's other writes for the next flush, keep the refused statements
+/// for retry or inspection, and clear the batch from the outbox, in one
+/// local transaction. The primary reads run first, outside the transaction.
+/// An INSERT the take-back covers keeps its local row whether the primary
+/// holds the id (a collision) or lacks it: reverting it would delete a node
+/// this machine minted, the loss this repair exists to stop. The same guard
+/// covers an UPDATE whose target the primary returns nothing for: a row the
+/// primary never received must not die one write later; a real peer delete
+/// reaches the local row through sync instead. When the refusal names no
+/// node (a global table, or the request itself failed), the take-back covers
+/// the whole batch and its INSERTs re-queue instead of dying with it.
+/// Newer queued writes to the refused node ride outbox rows past the
+/// snapshot; the take-back already reverted their effects locally, so they
+/// drop with the batch. After the commit, the operator notice (stderr plus a
+/// `backlog_refused_flush` journal event) names what the refusal touched.
 fn repair(
     remote: &Remote,
     connection: &mut Connection,
     changes: &[Change],
+    refused: Option<usize>,
     last: i64,
     batch: &str,
     error: &str,
 ) -> Result<(), String> {
-    let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>)> = Vec::new();
-    for change in changes {
+    // The take-back set is every change naming a node the refusal named;
+    // the rest re-queues.
+    let refused_ids: Vec<String> = refused
+        .and_then(|i| changes.get(i))
+        .map(node_ids_of)
+        .unwrap_or_default();
+    let taken_back = |change: &Change| {
+        refused_ids.is_empty()
+            || node_ids_of(change)
+                .iter()
+                .any(|id| refused_ids.contains(id))
+    };
+    let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>, bool)> = Vec::new();
+    for change in changes
+        .iter()
+        .filter(|c| taken_back(c) && c.op != Op::Insert)
+    {
         let info = column_info(connection, &change.table)?;
         let mut key: Vec<(usize, i64)> = change
             .columns
@@ -751,6 +814,9 @@ fn repair(
             key.into_iter().map(|(i, _)| i).collect()
         };
         let names: Vec<String> = key.iter().map(|&i| change.columns[i].clone()).collect();
+        // An update whose target the primary lacks keeps its local row; a
+        // delete completed there, so its absence removes the local row.
+        let keep_on_empty = change.op == Op::Update;
         for row in [&change.old, &change.new] {
             if row.is_empty() {
                 continue;
@@ -761,6 +827,7 @@ fn repair(
                 change.columns.clone(),
                 names.clone(),
                 values,
+                keep_on_empty,
             );
             if !targets.contains(&target) {
                 targets.push(target);
@@ -768,7 +835,7 @@ fn repair(
         }
     }
     let mut fetched = Vec::new();
-    for (table, columns, names, values) in &targets {
+    for (table, columns, names, values, _) in &targets {
         let reply = remote.execute(
             &format!(
                 "SELECT {} FROM \"{table}\" WHERE {}",
@@ -782,7 +849,12 @@ fn repair(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    for ((table, columns, names, values), rows) in targets.iter().zip(fetched) {
+    let mut kept_unlanded = 0usize;
+    for ((table, columns, names, values, keep_on_empty), rows) in targets.iter().zip(fetched) {
+        if rows.is_empty() && *keep_on_empty {
+            kept_unlanded += 1;
+            continue;
+        }
         remove(&transaction, table, &match_all(names, 1), values)?;
         for row in &rows {
             replace(&transaction, table, columns, row)?;
@@ -805,18 +877,88 @@ fn repair(
              DELETE FROM graph_meta WHERE key = '{SENDING}';"
         ))
         .map_err(|e| e.to_string())?;
+    // An unnamed refusal takes the whole batch back, so its INSERTs would
+    // die with it; they re-queue instead, since the primary either takes
+    // them (no row there) or refuses them again as a recorded clash.
+    let requeued: Vec<&Change> = changes
+        .iter()
+        .filter(|c| {
+            if refused_ids.is_empty() {
+                c.op == Op::Insert
+            } else {
+                !taken_back(c)
+            }
+        })
+        .collect();
+    for change in &requeued {
+        transaction
+            .execute(
+                "INSERT INTO backlog_outbox (change) VALUES (?1)",
+                [&change.to_json().to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    let mut dropped_newer = 0usize;
+    if !refused_ids.is_empty() {
+        let stale: Vec<i64> = {
+            let mut statement = transaction
+                .prepare("SELECT id, change FROM backlog_outbox WHERE id > ?1")
+                .map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map([last], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<(i64, String)>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows.into_iter()
+                .filter(|(_, text)| {
+                    serde_json::from_str::<Value>(text)
+                        .ok()
+                        .and_then(|v| Change::from_json(&v).ok())
+                        .map(|c| node_ids_of(&c).iter().any(|id| refused_ids.contains(id)))
+                        .unwrap_or(false)
+                })
+                .map(|(id, _)| id)
+                .collect()
+        };
+        for id in stale {
+            transaction
+                .execute("DELETE FROM backlog_outbox WHERE id = ?1", [id])
+                .map_err(|e| e.to_string())?;
+            dropped_newer += 1;
+        }
+    }
     stamp_fresh(&transaction, "repair")?;
     transaction.commit().map_err(|e| e.to_string())?;
-    notice_refusal(changes, batch, error);
+    let taken: Vec<Change> = changes.iter().filter(|c| taken_back(c)).cloned().collect();
+    notice_refusal(
+        &taken,
+        requeued.len(),
+        dropped_newer,
+        kept_unlanded,
+        batch,
+        error,
+    );
     Ok(())
 }
 
 /// The refused flush's operator notice: stderr, then a best-effort
 /// `backlog_refused_flush` journal event in the space this process resolves.
-/// Both name the nodes and columns the take-back reverted. A notice failure
-/// never fails the repair that already committed.
-fn notice_refusal(changes: &[Change], batch: &str, error: &str) {
-    eprintln!("backlog-share: {}", refusal_notice(changes));
+/// Both name the nodes and columns the take-back covered, the writes that
+/// re-queued, the newer queued writes dropped with the batch, and the local
+/// rows kept because the primary never received them. A notice failure never
+/// fails the repair that already committed.
+fn notice_refusal(
+    taken: &[Change],
+    requeued: usize,
+    dropped_newer: usize,
+    kept_unlanded: usize,
+    batch: &str,
+    error: &str,
+) {
+    eprintln!(
+        "backlog-share: {}",
+        refusal_notice(taken, requeued, dropped_newer, kept_unlanded)
+    );
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let Some(space) = crate::paths::space_dir_opt(&cwd) else {
         return;
@@ -828,16 +970,38 @@ fn notice_refusal(changes: &[Change], batch: &str, error: &str) {
     let emitter = crate::events::EventEmitter::new(path, "backlog");
     let _ = emitter.emit(
         "backlog_refused_flush",
-        &refused_flush_data(changes, batch, error),
+        &refused_flush_data(taken, batch, error),
     );
 }
 
 /// The operator notice for one refused flush: the nodes and columns the
-/// take-back reverted, then the other tables' row counts.
-fn refusal_notice(changes: &[Change]) -> String {
+/// take-back covered, the writes that re-queued, the newer queued writes
+/// dropped with the batch, and the rows kept for a primary that never held
+/// them, then the other tables' row counts.
+fn refusal_notice(
+    taken: &[Change],
+    requeued: usize,
+    dropped_newer: usize,
+    kept_unlanded: usize,
+) -> String {
+    let requeue_part = if requeued > 0 {
+        format!(", re-queued {requeued} write(s) the refusal did not name for the next flush")
+    } else {
+        String::new()
+    };
+    let dropped_part = if dropped_newer > 0 {
+        format!(", dropped {dropped_newer} newer queued write(s) to the refused node")
+    } else {
+        String::new()
+    };
+    let kept_part = if kept_unlanded > 0 {
+        format!(", kept {kept_unlanded} local row(s) the primary never received")
+    } else {
+        String::new()
+    };
     let mut nodes: Vec<String> = Vec::new();
     let mut others: BTreeMap<&str, usize> = BTreeMap::new();
-    for change in changes {
+    for change in taken {
         if change.table == "nodes" {
             let id = id_of(change);
             if let Some(id) = id {
@@ -861,12 +1025,12 @@ fn refusal_notice(changes: &[Change]) -> String {
     };
     if nodes.is_empty() {
         format!(
-            "the primary refused a batch and took this machine's rows back{}. The refused statements are kept in backlog_refused for retry or inspection.",
+            "the primary refused a batch and took the named rows back{requeue_part}{dropped_part}{kept_part}{}. The refused statements are kept in backlog_refused for retry or inspection.",
             others_part
         )
     } else {
         format!(
-            "the primary refused a batch and took this machine's rows back: {}{}. The refused statements are kept in backlog_refused for retry or inspection.",
+            "the primary refused a batch and took the named rows back{requeue_part}{dropped_part}{kept_part}: {}{}. The refused statements are kept in backlog_refused for retry or inspection.",
             nodes.join("; "),
             others_part
         )
@@ -914,6 +1078,34 @@ fn id_of(change: &Change) -> Option<String> {
         .or_else(|| change.new.get(i))
         .and_then(SqlValue::text)
         .map(str::to_string)
+}
+
+/// Every node id a change names: the `id` column, plus the node-scoped
+/// columns the child tables key on (`node_id`, and relations'
+/// `related_node_id` and `listed_on`). `id_of` alone missed every child row,
+/// so a refused node's provenance or dispatch row re-queued instead of
+/// taking back with it, and a re-queued stale child row refused the next
+/// flush again.
+fn node_ids_of(change: &Change) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in ["id", "node_id", "related_node_id", "listed_on"] {
+        let Some(i) = change.columns.iter().position(|c| c == name) else {
+            continue;
+        };
+        let Some(id) = change
+            .old
+            .get(i)
+            .or_else(|| change.new.get(i))
+            .and_then(SqlValue::text)
+        else {
+            continue;
+        };
+        let id = id.to_string();
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// After a write through `mutate_rows`, once the graph lock is gone: flush
@@ -1507,14 +1699,36 @@ mod tests {
         transaction
             .execute(
                 &format!(
-                    "INSERT INTO {NODES} (id, ordinal, slug, title, status, priority)
-                     VALUES (?1, 1, ?1, 'draft', 'idea', 'p2')"
+                    "INSERT INTO {NODES} (id, ordinal, slug, title, kind, status, priority)
+                     VALUES (?1, 1, ?1, 'draft', 'task', 'idea', 'p2')"
                 ),
                 params![id],
             )
             .unwrap();
         set_title(&transaction, id, title);
         transaction.commit().unwrap();
+    }
+
+    /// A node-scoped child row, the shape `id_of` missed: provenance keys on
+    /// `node_id`, so a refused node's take-back set must reach it. Written
+    /// through the owning module's save, like any writer.
+    fn add_provenance(m: &Machine, node_id: &str) {
+        let connection = crate::backlog::open(&m.graph).unwrap();
+        let mut node = crate::backlog::nodes::load(&connection, node_id)
+            .unwrap()
+            .expect("fixture node exists");
+        node.provenance.source = Some("fixture".into());
+        crate::backlog::nodes::save(&connection, &node).unwrap();
+    }
+
+    /// A node_dispatch row for the orphan test, through the owning module.
+    fn add_dispatch(m: &Machine, node_id: &str) {
+        let connection = crate::backlog::open(&m.graph).unwrap();
+        let mut node = crate::backlog::nodes::load(&connection, node_id)
+            .unwrap()
+            .expect("fixture node exists");
+        node.dispatch.brief = Some("fixture brief".into());
+        crate::backlog::nodes::save(&connection, &node).unwrap();
     }
 
     #[test]
@@ -1715,6 +1929,151 @@ mod tests {
                 .any(|c| c.table == NODES && c.columns.iter().any(|name| name == "plan_path")),
             "{ops}"
         );
-        assert!(refusal_notice(&parsed).contains("fb-4908"), "{ops}");
+        assert!(
+            refusal_notice(&parsed, 0, 0, 0).contains("fb-4908"),
+            "{ops}"
+        );
+    }
+
+    /// The take-back a refusal must perform: the refused update takes the
+    /// primary's copy back, and a node minted alongside it in the same batch
+    /// survives with its insert re-queued for the next flush. A second case
+    /// covers the id clash: the insert itself refused, the local mint
+    /// survives, and the refused batch names it.
+    #[test]
+    fn a_refused_flush_keeps_rows_the_refusal_did_not_name() {
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-1", "shared");
+        flush(&a.graph).unwrap();
+
+        // A peer moved x-1 on the primary behind this machine's back.
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                &format!("UPDATE {NODES} SET title = 'peer' WHERE id = 'x-1'"),
+                [],
+            )
+            .unwrap();
+
+        // One batch: the stale x-1 update and a fresh node's rows (the
+        // nodes insert plus its node-scoped provenance row).
+        retitle(&a, "x-1", "from a");
+        add_node(&a, "x-new", "brand new");
+        add_provenance(&a, "x-new");
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(refusal.starts_with(REFUSED), "{refusal}");
+
+        // The refused update took the primary's copy back.
+        assert_eq!(title(&a, "x-1").as_deref(), Some("peer"));
+        // The rows the refusal did not name survive, still queued: the
+        // provenance row takes back with its node, not alone.
+        assert_eq!(title(&a, "x-new").as_deref(), Some("brand new"));
+        assert_eq!(outbox(&a), 2, "the new node's rows re-queue");
+
+        // The next flush sends them, and the primary holds both.
+        on(&primary, &a);
+        flush(&a.graph).unwrap();
+        assert_eq!(outbox(&a), 0);
+        let (landed, prov): (String, i64) = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT title FROM nodes WHERE id = 'x-new'),
+                        (SELECT COUNT(*) FROM node_provenance WHERE node_id = 'x-new')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(landed, "brand new");
+        assert_eq!(prov, 1, "the provenance row landed with its node");
+
+        // A second case: the refused change is itself the insert, and the
+        // id already lives on the primary. The local mint and its child
+        // rows survive, nothing re-queues (a retry would refuse forever),
+        // and the refused batch names the node.
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                &format!(
+                    "INSERT INTO {NODES} (id, ordinal, slug, title, status, priority)
+                     VALUES ('x-clash', 2, 'x-clash', 'peer mint', 'idea', 'p2')"
+                ),
+                [],
+            )
+            .unwrap();
+        add_node(&a, "x-clash", "mine");
+        add_provenance(&a, "x-clash");
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(refusal.contains("kept its own row"), "{refusal}");
+        assert_eq!(title(&a, "x-clash").as_deref(), Some("mine"));
+        assert_eq!(outbox(&a), 0, "the refused insert does not re-queue");
+        let connection = crate::backlog::open(&a.graph).unwrap();
+        let (ops, prov_kept): (String, i64) = connection
+            .query_row(
+                "SELECT (SELECT ops FROM backlog_refused ORDER BY id DESC LIMIT 1),
+                        (SELECT COUNT(*) FROM node_provenance WHERE node_id = 'x-clash')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(ops.contains("x-clash"), "{ops}");
+        assert_eq!(
+            prov_kept, 1,
+            "the refused node's child row stays local, unattached to the primary's row"
+        );
+    }
+
+    /// The chain that lost the lost nodes a second way: a child-row insert
+    /// the primary orphans (the peer deleted the node the row names) stays
+    /// local and unsent, then the node's next write refuses with the primary
+    /// holding no row. The take-back must keep the local row it cannot
+    /// replace, or the node dies one write later.
+    #[test]
+    fn an_update_the_primary_has_no_row_for_keeps_the_local_row() {
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-del", "doomed");
+        flush(&a.graph).unwrap();
+
+        // The peer deletes the node on the primary; this machine has not
+        // synced the delete. A child-row write naming that node then
+        // refuses: node_dispatch.node_id references nodes(id). Whether the
+        // refusal lands on the child insert or the base row's rewritten
+        // stamp, the batch rolls back whole and the take-back keeps every
+        // local row of the node.
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute(&format!("DELETE FROM {NODES} WHERE id = 'x-del'"), [])
+            .unwrap();
+        add_dispatch(&a, "x-del");
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(refusal.starts_with(REFUSED), "{refusal}");
+        assert_eq!(title(&a, "x-del").as_deref(), Some("doomed"));
+        assert_eq!(outbox(&a), 0, "the refused batch does not re-queue");
+
+        // The node's next write refuses with the primary holding no row.
+        // The take-back fetches nothing and must keep the local row.
+        on(&primary, &a);
+        retitle(&a, "x-del", "still here");
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(refusal.starts_with(REFUSED), "{refusal}");
+        assert_eq!(title(&a, "x-del").as_deref(), Some("still here"));
+        assert_eq!(outbox(&a), 0);
     }
 }

@@ -1497,8 +1497,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
-    // A refused shared-backlog flush took this machine's rows back: the
-    // operator notice beside the retained batch (backlog_share::repair).
+    // A refused shared-backlog flush: the operator notice beside the
+    // retained batch (backlog_share::repair).
     "backlog_refused_flush",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
