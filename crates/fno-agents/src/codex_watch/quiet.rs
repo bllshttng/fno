@@ -124,7 +124,7 @@ fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) 
         if tail.read {
             episode.read_stage = *stage;
             episode.pending = None;
-        } else if live || fresh {
+        } else if fresh {
             return Action::Wait;
         } else {
             return if episode.recovered {
@@ -683,12 +683,15 @@ mod tests {
         };
         assert_eq!(action(&mut e, &t, 1000, true, false), Action::Nudge(1));
         e.pending = Some(("marker".into(), 1000, 1));
+        t.touched = 950;
         assert_eq!(
             action(&mut e, &t, 1001, true, false),
             Action::Wait,
-            "an unread nudge never recovers a worker with a live own claim"
+            "an unread nudge never recovers a worker still writing its transcript"
         );
-        assert_eq!(action(&mut e, &t, 1600, false, false), Action::Recover);
+        t.touched = 0;
+        assert_eq!(action(&mut e, &t, 1001, true, false), Action::Recover);
+        assert_eq!(action(&mut e, &t, 1600, true, false), Action::Recover);
         t.read = true;
         assert_eq!(action(&mut e, &t, 1900, true, false), Action::Nudge(2));
         e.pending = Some(("second".into(), 1900, 2));
