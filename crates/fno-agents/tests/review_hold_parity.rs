@@ -486,12 +486,19 @@ fn round_missing_journals() {
 // ── the cap-refusal family (chain journals seeded natively) ─────────────────
 
 /// Two distinct in-scope reviewed heads: the per-PR total reads 2 of 2.
+/// `blocking` seeds that many blocking findings per row as real booleans:
+/// the Python counter summed truthy values, the port counts findings whose
+/// blocking flag is true, so an integer would read zero to the port.
 fn seed_chain(fx: &Fixture, heads: [&str; 2], blocking: i64) {
+    let findings = (0..blocking)
+        .map(|_| r#"{"blocking":true}"#)
+        .collect::<Vec<_>>()
+        .join(",");
     let rows: Vec<String> = heads
         .iter()
         .map(|h| {
             format!(
-                r#"{{"ts":"2026-10-15T00:00:0{}+00:00","type":"review_attestation","source":"target","data":{{"branch":"feat/a","head_sha":"{h}","findings":[{{"blocking":{blocking}}}]}}}}"#,
+                r#"{{"ts":"2026-10-15T00:00:0{}+00:00","type":"review_attestation","source":"target","data":{{"branch":"feat/a","head_sha":"{h}","findings":[{findings}]}}}}"#,
                 if *h == heads[0] { 0 } else { 1 }
             )
         })
