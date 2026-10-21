@@ -10557,7 +10557,7 @@ impl Core {
                 }
                 Flow::Continue
             }
-            Command::BacklogCommand { node, command_name } => {
+            Command::BacklogCommand { node, command } => {
                 // A reorder command from the Backlog section. Fail closed on
                 // a node the server's own card set does not hold: a card that
                 // raced out between menu-open and dispatch must launch no
@@ -10568,7 +10568,7 @@ impl Core {
                     self.notice(client_id, format!("{node}: no longer in the backlog"));
                     return Flow::Continue;
                 }
-                self.backlog_command(client_id, node, command_name);
+                self.backlog_command(client_id, node, command);
                 Flow::Continue
             }
             Command::CopySelection => {
