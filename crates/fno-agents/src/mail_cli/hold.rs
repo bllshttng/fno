@@ -390,7 +390,7 @@ fn entry_for(session_id: &str) -> Option<crate::state::RegistryEntry> {
 /// Stamp bus-only on this session's row, minting one when absent. Port of
 /// the Python register_existing_session: refusal inside a self-spawn, a
 /// known-harness check, idempotent refresh on (harness, harness_session_id).
-fn register_existing_session(harness: &str, session_id: &str) -> Result<(), String> {
+pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Result<(), String> {
     if std::env::var_os("FNO_AGENT_SELF").is_some_and(|v| !v.is_empty()) {
         return Err(
             "refusing to register from inside a session that has FNO_AGENT_SELF set".to_string(),

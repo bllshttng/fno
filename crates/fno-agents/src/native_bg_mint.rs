@@ -1,6 +1,6 @@
 //! The roster adopt: registry rows for `claude --bg` sessions the user
-//! launched outside fno. The sweep already reads the harness listing every
-//! beat, so a listing row no registry row holds is born there - within one
+//! launched outside fno and that joined fno (`join_marker`). The sweep
+//! already reads the harness listing every beat, so a listing row no registry row holds is born there - within one
 //! beat of `claude --bg`. Report minting (`native_adopt`) never sees these
 //! sessions: a hand launch produces no launch record and no `--agent-self`.
 //! Transcript IO runs outside the write lock; the write closure re-decides
@@ -81,7 +81,10 @@ pub(crate) fn mint_missing_native_bg(
         // Two-key dedup, the same shape liveness_sweep's find() runs: a row
         // keyed only by its short id still holds this session.
         let held_by_short = entries.iter().any(|e| e.short_id == session);
-        if held_by_short
+        // Only a session that joined fno is adopted; the listing then only
+        // rescues a joined row that went missing.
+        if !crate::join_marker::is_joined(home.root(), "claude", session)
+            || held_by_short
             || crate::session_report::find_row(&entries, "claude", session, None).is_some()
         {
             continue;
@@ -347,6 +350,14 @@ mod tests {
         std::fs::create_dir_all(&agents).unwrap();
         std::env::set_var("FNO_AGENTS_HOME", &agents);
         let home = crate::paths::AgentsHome::from_env();
+        // The fixture sessions joined fno; `unjoined_listing_row_mints_nothing`
+        // covers the other side.
+        for sid in [
+            "492ccda4-63ff-4736-a02a-8818f63c8b46",
+            "aaaaaaaa-0000-0000-0000-000000000001",
+        ] {
+            crate::join_marker::write_marker(home.root(), "claude", sid).unwrap();
+        }
         let out = f(&home);
         match saved_home {
             Some(v) => std::env::set_var("HOME", v),
@@ -398,6 +409,17 @@ mod tests {
             let slug = listing_name_slug(prompt);
             assert_eq!(slug, "fix-the-login-bug-see-tmp-x.log-then-run-all-the");
             assert!(slug.len() <= 48);
+        });
+    }
+
+    #[test]
+    fn unjoined_listing_row_mints_nothing() {
+        sandbox(|home| {
+            let mut row = listing_row("hand-bg", "working");
+            row.session_id = Some("bbbbbbbb-0000-0000-0000-000000000002".into());
+            row.short_id = "bbbbbbbb".into();
+            let snapshot = ClaudeAgentsSnapshot::known(vec![row]);
+            assert_eq!(mint_missing_native_bg(home, &snapshot, &emitter(home)), 0);
         });
     }
 

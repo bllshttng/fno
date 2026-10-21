@@ -1,9 +1,9 @@
 //! The native adopt: the row a session report mints when no row holds the
 //! session id. A launch-record child joins as the launcher's row (origin
 //! `spawn`, the launcher triple as the parent edge, the record's node on the
-//! row); a session with no record is the user's own (origin `operator`,
-//! decision D3 revised): it counts toward the cap as an occupant and is never
-//! refused, managed, mailed or reaped. A spawned row that went missing before
+//! row); a session with no record is the user's own (origin `operator`): it
+//! mints only once the session joined fno (`join_marker`), counts toward the
+//! cap as an occupant and is never refused, managed, mailed or reaped. A spawned row that went missing before
 //! its first report mints back under its own `--agent-self` name (origin
 //! `spawn`, lineage unproven). Transcript IO (title, model) runs in
 //! [`prepare_mint`], OUTSIDE the registry write lock; the write closure
@@ -66,6 +66,14 @@ pub(crate) fn prepare_mint(
         return None;
     }
     let native = mint_flavor(record.is_some(), agent_self.is_some());
+    // A hand session gets a row only once it joined fno (its first fno skill
+    // or verb), unless `agents.auto_register_sessions` opts every session in.
+    if !native
+        && !crate::join_marker::is_joined(home.root(), harness, session_id)
+        && !auto_register_sessions(report_cwd)
+    {
+        return None;
+    }
     let short = crate::client_verbs::derived_short_id(session_id);
     let origin = if native { "spawn" } else { "operator" };
     // Name precedence: the record's name, then the row the worker lost, then
@@ -129,6 +137,16 @@ pub(crate) fn prepare_mint(
         }
     }
     Some(NativeMint { entry, native })
+}
+
+fn auto_register_sessions(report_cwd: Option<&str>) -> bool {
+    let cwd = report_cwd
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    crate::agents_config::config_lookup(&cwd, &["agents", "auto_register_sessions"])
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// AC9's rule in one helper: every key a spawned birth carries is present on
