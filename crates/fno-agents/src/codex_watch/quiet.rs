@@ -94,6 +94,32 @@ enum Action {
     Nudge(u8),
     Recover,
     Help,
+    /// The node closed under an idle worker: stop it so the seat frees.
+    Stop(&'static str),
+}
+
+/// The reason a node is closed to its worker, or `None` while work remains.
+/// Deferred stays a silent skip: a parked node may come back to the same seat.
+fn closed(row: &Value) -> Option<&'static str> {
+    let field = |k: &str| row.get(k).and_then(Value::as_str);
+    match field("status") {
+        Some("done") => Some("done"),
+        Some("superseded") => Some("superseded"),
+        _ if field("superseded_by").is_some_and(|s| !s.is_empty()) => Some("superseded"),
+        _ if field("merge_status") == Some("merged") => Some("merged"),
+        _ => None,
+    }
+}
+
+/// On a closed node every move past `Wait` would resume or nudge a worker
+/// into work that is already over, so it becomes a stop. A worker still
+/// writing its transcript reads `Wait` and is left to finish.
+fn on_closed(decision: Action, closed: Option<&'static str>) -> Action {
+    match (closed, decision) {
+        (_, Action::Wait) => Action::Wait,
+        (Some(why), _) => Action::Stop(why),
+        (None, decision) => decision,
+    }
 }
 
 fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) -> Action {
@@ -373,6 +399,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                     "id",
                     "status",
                     "merge_status",
+                    "superseded_by",
                     "sessions",
                     "parent",
                     "project",
@@ -425,13 +452,10 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             else {
                 return Ok(());
             };
-            if matches!(
-                row.get("status").and_then(Value::as_str),
-                Some("done" | "superseded" | "deferred")
-            ) || row.get("merge_status").and_then(Value::as_str) == Some("merged")
-            {
+            if row.get("status").and_then(Value::as_str) == Some("deferred") {
                 return Ok(());
             }
+            let closed = closed(row);
             if settle_watches.iter().any(|w| {
                 (w.watch.session_id == sid || w.codex_thread_id.as_deref() == Some(sid))
                     && now * 1000 < w.watch.expires_at_ms
@@ -511,12 +535,15 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 .as_ref()
                 .filter(|_| tail.read)
                 .map(|(marker, _, stage)| (marker.clone(), *stage));
-            let decision = action(
-                &mut episode,
-                &tail,
-                now,
-                own && claim_state == crate::claims::ClaimState::Live,
-                dead,
+            let decision = on_closed(
+                action(
+                    &mut episode,
+                    &tail,
+                    now,
+                    own && claim_state == crate::claims::ClaimState::Live,
+                    dead,
+                ),
+                closed,
             );
             if decision != Action::Wait {
                 acted += 1;
@@ -601,6 +628,17 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                         episode.recovery_reason = Some(reason.clone());
                         episode.pending = Some((marker, now, 3));
                     }
+                }
+                Action::Stop(why) => {
+                    let (code, out, error) = command(&["fno", "agents", "stop", sid], &entry.cwd);
+                    episode.escalated = true;
+                    emitter
+                        .emit(
+                            "quiet_worker_stop",
+                            &json!({"session_id": sid, "node": node, "reason": why,
+                        "exit": code, "receipt": out, "error": error}),
+                        )
+                        .map_err(|e| e.to_string())?;
                 }
                 Action::Help => {
                     handoff = Some(episode.recovery_reason.clone().unwrap_or_else(|| {
@@ -749,6 +787,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tail(&path, None).unwrap().activity, 1767226500);
+    }
+
+    #[test]
+    fn closed_node_stops_an_idle_worker_instead_of_resuming_it() {
+        let superseded = json!({"id": "x-1", "status": "in_progress", "superseded_by": "x-2"});
+        assert_eq!(closed(&superseded), Some("superseded"));
+        assert_eq!(
+            on_closed(Action::Recover, closed(&superseded)),
+            Action::Stop("superseded")
+        );
+        assert_eq!(
+            on_closed(Action::Nudge(1), closed(&json!({"status": "done"}))),
+            Action::Stop("done")
+        );
+        assert_eq!(
+            on_closed(Action::Wait, Some("merged")),
+            Action::Wait,
+            "a worker still writing on a merged node finishes its ritual"
+        );
+        let open = json!({"status": "in_progress", "superseded_by": null});
+        assert_eq!(on_closed(Action::Recover, closed(&open)), Action::Recover);
     }
 
     #[test]
