@@ -51,11 +51,12 @@ After a main merge, every open PR with older CI is stale. A stale PR can prove i
 5. **Node binding.** The graph must see the PR. Three keys decide, in order. A node id the branch names. A node whose own back-pointer carries the PR. A closure line in the body (`Fixes <id> [<id>...]`. The retired `Backlog-Closure:` spelling still reads). The same predicate answers the lead board's untracked warning, so the board and the gate cannot disagree. When all three miss, the merge refuses. The remedy is to bind it: pick or file the node, write the closure trailer onto the body, retry. A revert or a hotfix binds the same way. There is no bypass flag. The team merges, and not only the operator. A bypass flag is one the agents pass to themselves. The gate stays silent where the repo keeps no backlog. A graph with no node under the canonical root has nothing to bind to. A graph or a body that cannot be read is `Unknown`, never a verdict.
 6. **The dispatch hold** (`fno do pr hold-check`), fail-closed.
 7. **The per-PR hold**, an operator law row at `pr-hold:<owner/repo>#<n>`, fail-closed beside the dispatch hold. Held, not refused: the owner releasing it clears it. The section below carries the exact commands.
-8. **The in-flight review hold** (`fno do pr review-hold check`), fail-closed. Coverage answers what verdicts EXIST for a head. It cannot say that a review runs right now with its findings uncommitted.
-9. **The pin.** The covered head comes from the caller's own coverage gate, or from the `review_coverage` journal. An unreadable head is `Unknown`. There is no unpinned fallback. A head that no longer matches the PR's is `HeadChanged`.
-10. **Base lineage** (`fno do pr base-lineage-check`), fail-open. A refusal on a gh hiccup makes auto-merge silently never work. That reads exactly like nobody opting in.
-11. **Merge result** (`fno do pr merge-result-check`), fail-open. The merge tree is computed locally and the repo-wide ruff + mypy step runs on it. The same merge tree also runs the repo's preamble budget from its own copy. Two PRs that each pass their own base can no longer merge into a main over the byte ceiling. When git joins hunks that never met on one machine, two green parents merge red. Held, not refused: the remedy is rebase, fix, push, retry.
-12. **Checks**. The caller asks for these or leaves them out. `--auto` IS the wait for the checks, so the arm path leaves them out and the queue enforces them server-side.
+8. **The merge freeze**, fail-closed beside the per-PR hold. An off-pin PR holds until the user lifts the pin. The section below carries the record and the lift.
+9. **The in-flight review hold** (`fno do pr review-hold check`), fail-closed. Coverage answers what verdicts EXIST for a head. It cannot say that a review runs right now with its findings uncommitted.
+10. **The pin.** The covered head comes from the caller's own coverage gate, or from the `review_coverage` journal. An unreadable head is `Unknown`. There is no unpinned fallback. A head that no longer matches the PR's is `HeadChanged`.
+11. **Base lineage** (`fno do pr base-lineage-check`), fail-open. A refusal on a gh hiccup makes auto-merge silently never work. That reads exactly like nobody opting in.
+12. **Merge result** (`fno do pr merge-result-check`), fail-open. The merge tree is computed locally and the repo-wide ruff + mypy step runs on it. The same merge tree also runs the repo's preamble budget from its own copy. Two PRs that each pass their own base can no longer merge into a main over the byte ceiling. When git joins hunks that never met on one machine, two green parents merge red. Held, not refused: the remedy is rebase, fix, push, retry.
+13. **Checks**. The caller asks for these or leaves them out. `--auto` IS the wait for the checks, so the arm path leaves them out and the queue enforces them server-side.
 
 ## The head-scoped operator merge grant
 
@@ -112,6 +113,34 @@ Uncovered cases, kept on purpose: a hand bind of a fork PR with `fno backlog upd
 Heal's apply pass ends with one steward walk over the same open-PR pages it already read. The walk is `run_pass` in `pr_steward.rs`, called from `heal.rs` before the tick event. The gate is an operator law row under the `outside-contributions` subject with a `global` scope, read through `fno backlog decisions outside-contributions --lane law --state live --json`. Any read or parse failure turns the steward off (`steward_off_no_law`), never on. A GitHub budget backoff also turns it off.
 
 Per outside, non-bot PR the steward takes one action per pass, tracked in stage files at `cache/pr-steward/<owner>/<repo>--<pr>.json` inside the state root. With no stage: it reads the PR comments once. When no earlier steward marker is there, it posts the issue-first comment asking the contributor to open an issue and link it with `Closes #<n>`. It then reads the PR body for the issue link: a URL, an `owner/repo#<n>` shorthand, or a bare `#<n>` that is not a self-reference. It files the issue as an intake node with `fno backlog idea --source-kind from_observation`. The origin evidence is the issue URL, and the details carry a `Co-authored-by` credit trailer. Later passes hand the pull request diff, the linked issue, the contributor identity and a capped backlog-find view to a tool-less reader model. The view arrives as `UNTRUSTED` nonce-fenced blocks. The reader returns one verdict: `pursue`, `decline`, or `needs_clarity` with a sanitized question. The note lands on the intake node and, for `needs_clarity`, the question is posted to the PR. Every comment carries an HTML marker, so a rebuilt or wiped stage file costs at most one comments read and never a duplicate comment.
+
+## The merge freeze
+
+A merge freeze holds a release window. The team sets it, and only the user lifts it. The record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. The code is `merge_freeze.rs`.
+
+The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` verb:
+
+```
+fno-agents authorized-merge '{"op": "freeze-set", "subject": "rc 0.4", "set_by": "lead", "repo": "owner/repo", "sha": "<40 hex>", "prs": [3170]}'
+```
+
+The pin key is `sha:<first 12 hex>` and `prs:<n>+<n>` in ascending order, joined by a comma. A PR on the pin's PR list merges. A PR of another repo merges. Every other PR of the frozen repo holds. Version 1 records (an `allow` list with no repo) still read, as a PR pin over every repo.
+
+Four doors read the freeze. `fno do pr merge`, the pr-watch merge arm and the finalize auto-merge arm all reach `authorized_merge::run`, which reads the freeze as the `merge_freeze` probe beside the per-PR hold. The decision answers `held`, and `fno do pr status` lists a `merge_freeze` blocker. The fourth door is GitHub's own queue. A freeze set disarms every open armed PR of the repo that is off the pin, and the receipt lists them under `disarmed`. A failed disarm never fails the set. The receipt names the PR and the `gh pr merge <n> --repo <owner/repo> --disable-auto` command. The probe also disarms an armed off-pin PR at its next gate read. The pr-watch pre-check sends no repo, so it reads every PR as inside the frozen repo. That is an early skip, never a leak.
+
+Only a live superuser ruling (operator or chat_attested) at the lift subject lifts the freeze:
+
+```
+fno inbox decide 'merge-freeze:<owner/repo>@<pin key>' 'lift' --authority operator
+```
+
+The user records that row at a terminal, or types `/fno:law` in chat with the same subject. A team or agent row at the subject does not lift it. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
+
+The `freeze-clear` op only tidies the file. Its `evidence` must be the decision id of a live superuser ruling at the current lift subject. Free text refuses, and the refusal names both user doors.
+
+A new pin re-arms the freeze. While the current pin is unlifted, a set refuses. After the user lifts it, a set with the same pin refuses, and a set with a new pin writes the record. The new pin has its own lift subject and no ruling there, so it holds again.
+
+The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agents incident stop --hold merges`) stays separate.
 
 ## The effect
 
