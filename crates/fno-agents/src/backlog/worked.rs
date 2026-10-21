@@ -847,6 +847,15 @@ fn worker_reachability(row: &FleetRow, listing: &[Hit]) -> Reach {
 /// Node id -> names of its REACHABLE roster workers. An unread roster is an
 /// Err naming why, so a reaper holds instead of reading "no worker".
 pub(crate) fn reachable_workers_by_node() -> Result<BTreeMap<String, Vec<String>>, String> {
+    reachable_workers_by_node_excluding(None)
+}
+
+/// The same read, minus one caller's own row: a succession's departing
+/// worker spawns its replacement while its own roster row is still live, so
+/// the spawn gate's occupancy arm must not charge the caller to its node.
+pub(crate) fn reachable_workers_by_node_excluding(
+    caller_session: Option<&str>,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
     let reading = read_roster();
     if !reading.consulted {
         return Err(reading.reason);
@@ -856,6 +865,7 @@ pub(crate) fn reachable_workers_by_node() -> Result<BTreeMap<String, Vec<String>
     for (node, rows) in &reading.workers_by_node {
         let names: Vec<String> = rows
             .iter()
+            .filter(|r| Some(r.row_id.as_str()) != caller_session)
             .filter(|r| worker_reachability(r, &listing).verdict == REACHABLE)
             .map(|r| r.name.clone())
             .collect();
