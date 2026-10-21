@@ -571,6 +571,10 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
             String::new()
         } else {
             match change {
+                Some(i) if orphaned(&error) && changes[i].op == Op::Insert => format!(
+                    " The {} write names a parent row the primary does not hold. This machine kept the local row; a retry sends the same write, so report this refusal.",
+                    changes[i].table
+                ),
                 Some(i) if orphaned(&error) && changes[i].op != Op::Delete => format!(
                     " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
                     changes[i].table
