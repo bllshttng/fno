@@ -591,11 +591,9 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
             let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
             assert_eq!(axes.substrate.as_deref(), Some(word));
         }
-        for form in [["--as", "pane"], ["--as=pane"]] {
-            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
-            let (axes, _) = SpawnAxes::scan(&toks).expect("the joined spelling is admitted");
-            assert_eq!(axes.substrate.as_deref(), Some("pane"));
-        }
+        let joined: Vec<String> = vec!["--as=pane".to_string()];
+        let (axes, _) = SpawnAxes::scan(&joined).expect("the joined spelling is admitted");
+        assert_eq!(axes.substrate.as_deref(), Some("pane"));
         for other in ["bg"] {
             let toks: Vec<String> = ["--substrate", other]
                 .iter()
