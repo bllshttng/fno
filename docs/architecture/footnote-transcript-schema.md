@@ -15,17 +15,20 @@ The orchestrator writes one `LaunchSpec` to the harness's stdin. Its `v` is 2. T
 | field | meaning |
 |---|---|
 | `v` | 2 |
-| `mode` | `create` or `resume` |
+| `mode` | `create`, `resume` or `fork` |
 | `fno_id` | the session id; the orchestrator mints it |
 | `session_dir`, `cwd` | where the session lives and runs |
 | `model`, `message`, `timeout_secs` | the run |
 | `node`, `plan_path` | the backlog work, if any |
 | `cost_cap_usd`, `wall_cap_minutes` | the caps |
 | `plugin_root`, `parent_session_id`, `permission_mode` | the context |
+| `fork_from`, `fork_seq` | the source session id and its last copied `seq`. Null unless `mode` is `fork` |
 | `price_cache`, `context_window` | the cost and compaction inputs |
 | `endpoint` | `base_url`, `key`, `bearer`, `wire`, `provider_id`, `route` |
 
 v2 adds `permission_mode`: `default`, `acceptEdits`, `plan`, `dontAsk` or `bypassPermissions`, from the capability row's `permission_modes`. Null runs the harness's own default. A resume sends the mode the registry row recorded at spawn. The key rides stdin, so it never reaches argv or the environment.
+
+A `fork` makes a new session `fno_id` from records `0` through `fork_seq` of the session `fork_from`. The source sidecar dir sits beside `session_dir`. The harness copies each record with its `seq`, `id` and `ts`, and sets its `session_id` to `fno_id`. The source does not change. Then the harness resumes the new session with `message`. It refuses a `fork_seq` past the source's last record, and a `fno_id` that exists. A harness that does not know `fork` refuses the mode.
 
 ## 2. Session record, v1
 
@@ -51,7 +54,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 
 | type | data |
 |---|---|
-| `header` | `session_id`, `cwd`, `harness`, `commit`, `branch`, `fno_version`, `parent_session_id`, `forked_from` (reserved, null), `node`, `plugin_root`, `model`, `wire`, `system_prompt`, `hook_sources` (`[{path, kind, status, error}]`; kind `user`, `project`, `local` or `plugin`; status `absent`, `loaded` or `broken`), `permission_mode`, `permission_mode_source` (`launch_spec`, `settings:<path>`, `built_in`), `permission_sources` (`[{path, status, allow, deny, ask}]`, rule counts per file), `agent` (child sessions only: `{name, path, tools, model_requested}`), `mcp_servers` (one row per configured MCP server, see `mcp_servers`), `plugins` (`[{name, version, path, source, key, status, error}]` per plugin root, in load order; source `launch`, `footnote` (the `~/.footnote/plugins` drop-ins) or `claude`; status `loaded`, `shadowed` or `broken`; `key` is null on a `footnote` row) |
+| `header` | `session_id`, `cwd`, `harness`, `commit`, `branch`, `fno_version`, `parent_session_id`, `forked_from` (null, or `{session_id, seq, record_id}` of the last record a fork copied), `node`, `plugin_root`, `model`, `wire`, `system_prompt`, `hook_sources` (`[{path, kind, status, error}]`; kind `user`, `project`, `local` or `plugin`; status `absent`, `loaded` or `broken`), `permission_mode`, `permission_mode_source` (`launch_spec`, `settings:<path>`, `built_in`), `permission_sources` (`[{path, status, allow, deny, ask}]`, rule counts per file), `agent` (child sessions only: `{name, path, tools, model_requested}`), `mcp_servers` (one row per configured MCP server, see `mcp_servers`), `plugins` (`[{name, version, path, source, key, status, error}]` per plugin root, in load order; source `launch`, `footnote` (the `~/.footnote/plugins` drop-ins) or `claude`; status `loaded`, `shadowed` or `broken`; `key` is null on a `footnote` row) |
 | `turn_context` | `turn`, `model`, `cwd`, `spent_usd`, `wall_secs`, `cost_cap_usd`, `wall_cap_secs`, `permission_mode` |
 | `user_input` | `text`, `origin` (`operator`, `hook`, `skill`, `agent`, `footnotes`, `mail`). Origin `mail` also carries `sender_session_id`, `message_id` and `reply_to`. |
 | `model_request` | `turn`, `provider_id`, `endpoint_host`, `wire`, `route`, `requested_model`, `message_count`, `estimated_input_tokens`, `body_sha256`. Never the body, key or headers. |
