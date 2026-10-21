@@ -594,6 +594,9 @@ fn stdin_door_acquires_and_answers_registered() {
     cmd.current_dir(&fx.repo);
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
+    // The same spaces pin run() applies: the door's acquire and the metadata
+    // read that follows must land in one store.
+    cmd.env("FNO_SPACES_DIR", fx.root.join("state/spaces"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
     cmd.env("FGH_MODE", "open");
     let path = format!(
