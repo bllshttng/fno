@@ -688,7 +688,12 @@ pub(crate) fn body_is_control(body: &str) -> bool {
     let Some(first) = lines.next() else {
         return false;
     };
-    let rest = if first.len() >= 9 && first[..9].eq_ignore_ascii_case("<fno_mail") {
+    // `get`, not a slice: a stamp like "`@Hazel · " puts a multibyte char
+    // across byte 9, and slicing there panics every send.
+    let rest = if first
+        .get(..9)
+        .is_some_and(|p| p.eq_ignore_ascii_case("<fno_mail"))
+    {
         match first.find('>') {
             Some(gt) => &first[gt + 1..],
             None => first,
@@ -1938,6 +1943,12 @@ pub(crate) mod tests {
             assert!(!v.deliver, "an unbacked header is not a control pass");
             let v = gate(SID, Some("`@j · msg-7 · control note`\ncontrol: stop"), now);
             assert!(!v.deliver, "a mismatched sender is not a control pass");
+            // A five-letter sender puts the middle dot across byte 9.
+            let v = gate(SID, Some("`@Hazel · msg-7 · note`\nhello"), now);
+            assert!(
+                !v.deliver,
+                "a multibyte char at byte 9 is prose, not a panic"
+            );
             // ...and never from the second body line.
             let v = gate(
                 SID,
