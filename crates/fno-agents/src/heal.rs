@@ -1789,10 +1789,23 @@ pub(crate) fn status_readout(armed: bool, events_file: &std::path::Path) -> Stri
 }
 
 fn status_line(a: &Args) -> String {
+    status_line_with(a, crate::agents_config::pr_watch_enabled(&a.cwd))
+}
+
+/// Heal has no scheduler of its own: the pr-watch launchd job runs every
+/// tick. An armed heal under a disabled watcher never runs, so the line says
+/// so instead of reading as a heal that is merely waiting.
+const NO_RUNNER: &str =
+    "no runner (pr_watch.enabled=false; enable with: fno config set pr_watch.enabled true)";
+
+fn status_line_with(a: &Args, runner: bool) -> String {
     if !a.armed {
         return "Heal: unarmed (auto_heal.enabled=false; arm with: fno config set auto_heal.enabled true)".to_string();
     }
     let Some((ts, data)) = newest_heal_tick(&journal_path(a)) else {
+        if !runner {
+            return format!("Heal: armed; never ran; {NO_RUNNER}");
+        }
         return "Heal: armed; never ran".to_string();
     };
     let healed = data.get("healed").and_then(Value::as_u64).unwrap_or(0);
@@ -1829,10 +1842,15 @@ fn status_line(a: &Args) -> String {
         .get("root")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    format!(
+    let line = format!(
         "Heal: armed; last run {ts} ({}, root {root}); healed {healed}, rebased {rebased}, reran {reran}, escalated {escalated}; {acted_clause}; in-flight {in_flight}",
         age_phrase(&ts)
-    )
+    );
+    if runner {
+        line
+    } else {
+        format!("{line}; {NO_RUNNER}")
+    }
 }
 
 /// True when a prior `pr_heal_tick` row names `key` in `rerun_keys`: the
