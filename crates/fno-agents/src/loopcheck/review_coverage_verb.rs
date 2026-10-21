@@ -149,8 +149,8 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
     let mut global_events_path: Option<PathBuf> = None;
     let mut settings_path: Option<PathBuf> = None;
     let mut global_settings_path: Option<PathBuf> = None;
-    let mut gh_bin =
-        std::env::var("FNO_LOOPCHECK_GH_BIN").unwrap_or_else(|_| "fno-gh-coverage".to_string());
+    let mut gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
+        .unwrap_or_else(|_| crate::pr_status::quota::helper_bin("fno-gh-coverage"));
     let mut git_bin = std::env::var("FNO_LOOPCHECK_GIT_BIN").unwrap_or_else(|_| "git".to_string());
     let fno_bin = loopcheck_fno_bin();
     let mut author_harness_override: Option<String> = None;

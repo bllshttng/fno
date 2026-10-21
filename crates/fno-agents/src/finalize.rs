@@ -2101,7 +2101,7 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    let mut cmd = Command::new("fno-gh-coverage");
+    let mut cmd = Command::new(crate::pr_status::quota::helper_bin("fno-gh-coverage"));
     cmd.args([
         "pr",
         "view",

@@ -1272,9 +1272,16 @@ pub(crate) fn status_ci_rows<P: GhProbe>(
 
 pub(crate) mod cache;
 pub(crate) mod compose;
+pub(crate) mod gh_run;
+pub(crate) mod lists;
 pub(crate) mod logs;
 pub(crate) mod reviews;
 pub(crate) mod seams;
 #[cfg(test)]
 mod tests;
 pub(crate) mod wait;
+// The two the binaries exec through: fno-gh-loopcheck / fno-gh-coverage /
+// fno-gh-proxy, and the pr namespace dispatcher in client.rs's main.
+pub mod adapter;
+pub mod proxy;
+pub mod quota;
