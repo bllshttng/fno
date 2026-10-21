@@ -1448,7 +1448,7 @@ fn gather_checks() -> Vec<Check> {
     checks.push(clipboard_check(crate::clipboard::available_tool()));
     checks.push(doctor::squad_store_check());
     checks.push(doctor::board_scope_check());
-    checks.push(doctor::canonical_venv_check());
+    checks.extend(doctor::store_checks());
     checks
 }
 
