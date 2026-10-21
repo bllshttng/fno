@@ -1581,6 +1581,12 @@ fn retro_pending_root() -> Option<PathBuf> {
     crate::agents_config::state_dir(&anchor)
 }
 
+/// The sentinel folder as readers see it: the `place` ladder's one answer.
+/// The writer re-resolves per write (drift_emit.rs); this is for display.
+fn retro_pending_dir() -> Option<PathBuf> {
+    retro_pending_root().map(|root| crate::state_layout::place(&root, "retro-pending"))
+}
+
 /// The post-lock leg per actually-closed record: plan stamp, retro
 /// sentinel, session-satisfied, human touch, ledger backstop, the
 /// dead-bot escape, and merge-triggered auto-continue (still the Python
