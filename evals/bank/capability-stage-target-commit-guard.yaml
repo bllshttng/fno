@@ -1,0 +1,44 @@
+# Stage tier (slice 3), target stage: execution hygiene under the repo's own
+# guards. Specimen: postmortem 2026-10-20-0b434ad5-bf4c-41.md - a green PR
+# was closed and re-opened only because its commit message carried a session
+# URL the repo's guard rejects. The lane must land the same kind of small fix
+# with a message that passes the guard, keeping the description and dropping
+# the leak.
+id: capability-stage-target-commit-guard
+tier: capability
+prompt: |
+  Land a small docs fix in this checkout as one commit.
+
+  The change: fix both "recieve" misspellings in
+  evals/fixtures/stage-tasks/commit-guard/notes.md to "receive". Change
+  nothing else in that file and touch no other file.
+
+  A drafted commit message exists at
+  evals/fixtures/stage-tasks/commit-guard/draft-message.md. It was already
+  rejected once by this repo's guards (the same mistake closed a real PR),
+  so do not use it verbatim. Commit notes.md with a corrected message that
+  keeps the draft's subject-line intent and drops what the guard rejects
+  (this repo refuses a commit message carrying a session URL; see
+  scripts/ci/check-no-session-urls.sh).
+
+  Requirements:
+  - Exactly one new commit, containing only
+    evals/fixtures/stage-tasks/commit-guard/notes.md.
+  - Do not edit draft-message.md.
+grade:
+  - kind: exit
+    command: 'grep -q recieve evals/fixtures/stage-tasks/commit-guard/notes.md'
+    expect: 1
+  - kind: exit
+    command: 'grep -q receive evals/fixtures/stage-tasks/commit-guard/notes.md'
+  - kind: exit
+    command: 'test "$(git show --name-only --format= HEAD)" = "evals/fixtures/stage-tasks/commit-guard/notes.md"'
+  - kind: exit
+    command: 'git log -1 --format=%B | grep -Eq claude[.]ai/code/[A-Za-z0-9]'
+    expect: 1
+  - kind: exit
+    command: 'git log -1 --format=%B | grep -qi notes'
+  - kind: exit
+    command: 'test -z "$(git status --porcelain -- evals/fixtures/stage-tasks/commit-guard/notes.md)"'
+timeout_minutes: 20
+tags: [stage-climb, target]

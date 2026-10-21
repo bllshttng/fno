@@ -1,0 +1,29 @@
+# Stage tier (slice 3), target stage: fix-scope judgment. Specimen:
+# postmortem 2026-10-20-914c3ca1-f107-49.md - a replica sync rebuilt the
+# whole search index under the write lock on every changed row, and the
+# real fix moved it to a per-row update. The lane must make single-row
+# updates stop paying the rebuild without breaking lookups or removing the
+# rebuild the snapshot path still needs.
+id: capability-stage-target-rebuild-scope
+tier: capability
+prompt: |
+  Work only inside evals/fixtures/stage-tasks/rebuild-scope/.
+
+  index_store.py is a row store whose update() rebuilds the whole index on
+  every single-row change. A sync fold calls update() once per changed row,
+  so a 200-row sync pays 200 full rebuilds. Fix index_store.py so:
+
+  - 200 single-row updates trigger at most one rebuild.
+  - lookups always see current text after an update.
+  - rebuild() still exists and still works: the sync snapshot path calls
+    it once when it replaces all rows at once.
+
+  Do not modify verify.py. Do not rename the public methods. Do not touch
+  any file outside evals/fixtures/stage-tasks/rebuild-scope/.
+grade:
+  - kind: exit
+    command: 'cd evals/fixtures/stage-tasks/rebuild-scope && python3 verify.py'
+  - kind: exit
+    command: 'grep -q "def rebuild" evals/fixtures/stage-tasks/rebuild-scope/index_store.py'
+timeout_minutes: 20
+tags: [stage-climb, target]

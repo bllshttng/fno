@@ -1,0 +1,37 @@
+# Stage tier (slice 3), review stage: a decorative test. Specimen: the
+# slice-1 interval fix in the hillclimb plan - the only test over the cohort
+# interval asserted bracketing, which the wrong bounds also pass, so the
+# broken math shipped green. The lane must flag a replacement test that can
+# never fail as blocking, not bless it because it runs green.
+id: capability-stage-review-decorative-test
+tier: capability
+prompt: |
+  Review a proposed test change the way you would review a real PR on this
+  repo.
+
+  The material is in evals/fixtures/stage-tasks/review-decorative-test/:
+  clamp.py is the function under test and test_clamp.py is the suite that
+  would replace the current tests after this change. Review whether the
+  suite still tests clamp_repeat's documented behavior. Do not fix
+  anything and do not modify the fixture directory.
+
+  Write your findings to review-findings.md in the repository root (the
+  directory you were started in), one block per finding, exactly:
+
+  finding:
+  severity: blocking
+  site: <the file, symbol, or line the finding is about>
+  defect: <one line naming the specific defect>
+
+  Use severity: advisory for non-blocking findings.
+grade:
+  - kind: file-exists
+    path: review-findings.md
+  - kind: grep
+    path: review-findings.md
+    pattern: "severity: blocking"
+  - kind: grep
+    path: review-findings.md
+    pattern: "test_clamp_result_is_int"
+timeout_minutes: 15
+tags: [stage-climb, review]

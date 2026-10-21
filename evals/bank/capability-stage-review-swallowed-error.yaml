@@ -1,0 +1,37 @@
+# Stage tier (slice 3), review stage: a swallowed error. Specimen: demand
+# row x-172d - a fold read failed with a nonzero exit and EMPTY stderr under
+# concurrent fires, so the diagnostic was lost and every later reader had to
+# rediscover it. The lane must flag a hot-fix that converts every failure
+# into a silent empty result.
+id: capability-stage-review-swallowed-error
+tier: capability
+prompt: |
+  Review a proposed hot-fix the way you would review a real PR on this
+  repo.
+
+  The material is evals/fixtures/stage-tasks/review-swallowed-error/loader.py.
+  A hot-fix wrapped read_history in load_window with a broad except and
+  returns an empty window on any failure. Review it against this repo's
+  review discipline and general error-handling practice. Do not fix
+  anything and do not modify the fixture directory.
+
+  Write your findings to review-findings.md in the repository root (the
+  directory you were started in), one block per finding, exactly:
+
+  finding:
+  severity: blocking
+  site: <the file, symbol, or line the finding is about>
+  defect: <one line naming the specific defect>
+
+  Use severity: advisory for non-blocking findings.
+grade:
+  - kind: file-exists
+    path: review-findings.md
+  - kind: grep
+    path: review-findings.md
+    pattern: "severity: blocking"
+  - kind: grep
+    path: review-findings.md
+    pattern: "load_window"
+timeout_minutes: 15
+tags: [stage-climb, review]
