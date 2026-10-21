@@ -358,7 +358,9 @@ def _live_root_pids(
         from fno.agents.spawn_gate import LIVE_STATUSES
 
         rows = load_registry()
-        if not getattr(rows, "complete", True):
+        # A schema ahead of ours still holds every row; only a skipped row
+        # hides a worker from the count.
+        if not getattr(rows, "rows_complete", True):
             return roots, "worker registry incomplete"
         # A broken import below (a renamed spawn_gate private) is a programming
         # error, not an environment state: swallowing it here would report
@@ -781,7 +783,7 @@ def live_registry_rows() -> tuple[list | None, str | None]:
         rows = load_registry()
     except Exception as exc:
         return None, f"roster unavailable: registry unreadable ({exc})"
-    if not getattr(rows, "complete", True):
+    if not getattr(rows, "rows_complete", True):
         # Incomplete is not unreadable: the rows present are real, but a count
         # over them undercounts. Name the registry, not a dead timeout.
         return None, "roster unavailable: worker registry incomplete"
