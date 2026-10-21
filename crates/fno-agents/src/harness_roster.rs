@@ -120,7 +120,7 @@ mod tests {
                 .get("spawn")
                 .is_some_and(|claim| claim.state == "native");
             assert_eq!(
-                rendered.contains(name.as_str()),
+                rendered.contains(&name.as_str()),
                 native,
                 "harness {name} renders/native disagreement"
             );
