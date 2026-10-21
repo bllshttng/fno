@@ -3441,17 +3441,14 @@ mod reap_tests {
     use super::*;
 
     /// The scope contract the merge hold names: a scoped `--done` run runs
-    /// the done/eval pass alone. The unscoped verb keeps both sidelines.
+    /// the done/eval pass alone. The unscoped run keeps both sidelines.
     #[test]
     fn a_done_scoped_reap_runs_neither_sideline_sweep() {
         let plan = reap_plan(true);
         assert!(!plan.teams, "a scoped run never sweeps teams");
         assert!(!plan.mux_tabs, "a scoped run never sweeps mux tabs");
         let plain = reap_plan(false);
-        assert!(
-            plain.teams && plain.mux_tabs,
-            "the unscoped verb keeps both"
-        );
+        assert!(plain.teams && plain.mux_tabs, "the unscoped run keeps both");
     }
 }
 
