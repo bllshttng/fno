@@ -776,7 +776,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
     if !args.force {
         let candidates: Vec<Value> = rows
             .iter()
-            .find(|e| text_at(e, "id") == Some(task_id.as_str()))
+            .find(|e| text_at(e, "id") == Some(task_id))
             .and_then(|trigger| text_at(trigger, "parent"))
             .and_then(|pid| {
                 rows.iter()
@@ -789,7 +789,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
             resolve_promise_evidence(parent, super::promise::gate_cwd_for(parent).as_deref(), &[])
         });
         for (pid, verdict) in verdicts {
-            if let Some(reason) = verdict.reason {
+            if let Some(reason) = &verdict.reason {
                 let first = reason.lines().next().unwrap_or("");
                 eprintln!("warning: parent {pid} stays open: {first}");
             }
@@ -1328,7 +1328,7 @@ fn restore_pruned_dependents(rows: &mut [Value], reopened_id: &str) -> Vec<Strin
         }
         let obj = rows[idx].as_object_mut().expect("row is an object");
         let edge = obj
-            .entry("blocked_by".into())
+            .entry("blocked_by".to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
         edge.as_array_mut()
             .expect("blocked_by is an array")
