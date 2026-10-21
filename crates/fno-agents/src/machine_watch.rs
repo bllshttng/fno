@@ -103,7 +103,7 @@ pub fn decide(
         .is_some_and(|level| level >= MEMORY_PRESSURE_CRITICAL);
     let compressor_full = memory
         .as_ref()
-        .is_some_and(|m| m.used_fraction > MEMORY_RUNAWAY_FRACTION);
+        .is_some_and(|m| m.compressor_fraction() > MEMORY_RUNAWAY_FRACTION);
     let memory_runaway = pressure_critical || compressor_full;
     let process_runaway = sample
         .processes
