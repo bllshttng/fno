@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: UserPromptSubmit / PostToolUse(Skill) - session join trigger
+# fno hook: UserPromptSubmit and PostToolUse Skill - session join trigger
 # A prompt that names an fno command (/fno:<verb> or $fno:<verb>), or a Skill
 # call of an fno:* skill, joins this session to fno and lands the using-fno
 # preamble on the same turn. A joined session's later prompt carries the
