@@ -1699,8 +1699,8 @@ mod tests {
         transaction
             .execute(
                 &format!(
-                    "INSERT INTO {NODES} (id, ordinal, slug, title, status, priority)
-                     VALUES (?1, 1, ?1, 'draft', 'idea', 'p2')"
+                    "INSERT INTO {NODES} (id, ordinal, slug, title, kind, status, priority)
+                     VALUES (?1, 1, ?1, 'draft', 'task', 'idea', 'p2')"
                 ),
                 params![id],
             )
