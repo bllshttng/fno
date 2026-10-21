@@ -366,7 +366,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // The rollup close paths (epic self-heal + parent cascade) hold on the
     // same plan promise, judged pre-lock (gh I/O stays outside the store
     // mutation): a parent whose plan promises more than has merged never
-    // closes on its children's closes (x-0b13). The verdicts ride the
+    // closes on its children's closes. The verdicts ride the
     // promise_held roll so the report names them. Absent = held, so the
     // warm covers every plan-having rollup candidate this pass can close:
     // strandable epics, plus the direct parent of each closeable trigger.

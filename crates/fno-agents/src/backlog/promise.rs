@@ -402,8 +402,8 @@ fn promise_refusal_c(node_id: &str, plan_display: &str, expected: i64, merged: i
 /// plan_path holds nothing here: `has_own_plan_work` already keeps a
 /// plan-holding parent open on every rollup path, and this fold exists
 /// for its blind spot - a plan plus a merged PR of its own clears that
-/// hold while the plan's `expected_url_count` stays unmet (x-0b13: a
-/// 4-slice parent closed when its one child merged).
+/// hold while the plan's `expected_url_count` stays unmet - the
+/// multi-slice shape this fold exists to hold.
 pub(crate) type RollupVerdicts = BTreeMap<String, PromiseVerdict>;
 
 /// True when the row carries a plan binding: the rollup gate's candidate

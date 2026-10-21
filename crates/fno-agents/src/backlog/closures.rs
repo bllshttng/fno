@@ -50,7 +50,7 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
 /// `promise_held` names epics whose plan's `expected_url_count` is unmet
 /// (gated pre-lock): a plan plus a merged PR clears `has_own_plan_work`,
 /// and without the hold such an epic closed on its children's closes with
-/// the plan's ships unverified (x-0b13).
+/// the plan's ships unverified.
 pub(crate) fn sweep_close_done_epics(
     entries: &mut [Value],
     promise_held: &std::collections::BTreeSet<String>,
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn a_plan_plus_pr_parent_with_an_unmet_promise_holds_the_rollup() {
-        // The x-0b13 shape: plan expected_url_count 4, one slice PR merged
+        // The multi-slice shape: plan expected_url_count 4, one slice PR merged
         // on the parent itself, every child done. has_own_plan_work reads
         // false (the PR clears it), so only the pre-lock rollup hold keeps
         // the parent open; without it the epic sweep closed a 4-slice node
