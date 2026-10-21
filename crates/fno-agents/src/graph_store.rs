@@ -986,6 +986,44 @@ pub fn settle_blocked_by_edges(
                 .insert("blocked_by".to_string(), Value::Array(settled));
         }
     }
+    // The reopen-side trail: a pruned edge is a fact about the
+    // blocker's close that a reopen reverses, so the pruner records each
+    // pruned dependent on the blocker's row. A reopen restores the edge,
+    // consuming its trail row; a stale row (the dependent terminal) is
+    // ignored at restore time.
+    let mut pruned: std::collections::BTreeMap<&str, &str> = Default::default();
+    for receipt in &receipts {
+        if receipt.get("kind").and_then(Value::as_str) != Some("blocked_by_pruned") {
+            continue;
+        }
+        if let (Some(node), Some(blocker)) = (
+            receipt.get("node").and_then(Value::as_str),
+            receipt.get("blocker").and_then(Value::as_str),
+        ) {
+            pruned.entry(blocker).or_insert(node);
+        }
+    }
+    if !pruned.is_empty() {
+        for e in entries.iter_mut() {
+            let Some(id) = entry_id(e) else { continue };
+            let Some(dependent) = pruned.get(id) else {
+                continue;
+            };
+            let now = now_isoformat();
+            let obj = e.as_object_mut().unwrap();
+            let trail = obj
+                .entry("pruned_dependents".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            let rows = trail.as_array_mut().expect("trail is an array");
+            if rows
+                .iter()
+                .any(|r| r.get("node").and_then(Value::as_str) == Some(*dependent))
+            {
+                continue; // already recorded: the sweep is idempotent
+            }
+            rows.push(json!({"node": dependent, "pruned_at": now}));
+        }
+    }
     (entries, receipts, changes)
 }
 
@@ -3752,5 +3790,24 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("superseded by ab-done2"));
+    }
+
+    #[test]
+    fn a_pruned_edge_records_a_trail_row_on_the_blocker() {
+        // The close that prunes an edge records who it disconnected, so the
+        // reopen can undo the disconnect: reopen restores status AND edges.
+        // The pruner records who it disconnected, so the reopen can undo it.
+        let entries = vec![
+            json!({"id": "x-open", "blocked_by": ["x-done"]}),
+            json!({"id": "x-done", "completed_at": "2026-10-21T02:00:00Z"}),
+        ];
+        let (entries, _, _) = settle_blocked_by_edges(entries);
+        let by_id = index_by_id(&entries);
+        let trail = by_id["x-d-4a"]["pruned_dependents"].clone();
+        assert_eq!(
+            trail[0]["node"].as_str(),
+            Some("x-open"),
+            "the close records who it disconnected: {trail}"
+        );
     }
 }

@@ -396,7 +396,7 @@ fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
 /// `promise_held` carries the pre-lock rollup verdicts: a plan plus one
 /// merged PR of its own clears `has_own_plan_work`, and without the hold
 /// the cascade would close a multi-slice parent on its first child's
-/// close (x-0b13). Absent = held (fail closed).
+/// close. Absent = held (fail closed).
 pub(crate) fn cascade_close_parents(
     entries: &mut [Value],
     node_id: &str,
@@ -771,7 +771,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
     // judge the direct parent pre-lock. Its parent (if any) closes one pass
     // later, when it is the direct parent of a just-closed child; a parent
     // the warm never judged holds (fail closed). An ancestor whose plan
-    // promises more than has merged stays open (x-0b13).
+    // promises more than has merged stays open.
     let mut promise_held_parents = super::promise::RollupVerdicts::new();
     if !args.force {
         let candidates: Vec<Value> = rows
@@ -1121,6 +1121,7 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     let canonical: RefCell<Option<String>> = RefCell::new(None);
     let cascade: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let warned: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let restored: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let reason_text = cleaned_reason.clone();
     let applied = mutate_single_row(&graph, "backlog_reopen", |rows| {
         let Some(idx) = rows
@@ -1147,6 +1148,7 @@ pub fn run_reopen(tail: &[String]) -> i32 {
         let (reopened, warned_ids) = cascade_reopen_parents(rows, &canonical_id, &task_id, &rungs);
         cascade.replace(reopened);
         warned.replace(warned_ids);
+        restored.replace(restore_pruned_dependents(rows, &canonical_id));
         canonical.replace(Some(canonical_id));
         Ok(true)
     });
@@ -1177,6 +1179,14 @@ pub fn run_reopen(tail: &[String]) -> i32 {
         println!(
             "Reopened {canonical_id} (cascade: {})",
             cascade_out.join(", ")
+        );
+    }
+    let restored_out = restored.into_inner();
+    if !restored_out.is_empty() {
+        println!(
+            "Restored {} blocked_by edge(s) dropped when {canonical_id} closed: {}",
+            restored_out.len(),
+            restored_out.join(", ")
         );
     }
     emit_event(
@@ -1238,9 +1248,96 @@ fn evidence_pr_number(
     refs.first().map(|(n, _)| *n)
 }
 
+/// Re-add the blocked_by edges the close pruned: the pruner
+/// (graph_store::settle_blocked_by_edges) records each pruned dependent on
+/// the blocker's `pruned_dependents` trail, and the reopen consumes it.
+/// An edge restores only onto a live dependent (a terminal row owes no
+/// edge), never onto an existing edge, and never when the edge would make
+/// the blocked_by graph cyclic: B reaching X through blocked_by edges
+/// means X -> B closes a loop. Consumed and terminal rows leave the trail,
+/// so a trail with no live dependents is cleared.
+fn restore_pruned_dependents(rows: &mut [Value], reopened_id: &str) -> Vec<String> {
+    let trail: Vec<Value> = rows
+        .iter()
+        .find(|e| text_at(e, "id") == Some(reopened_id))
+        .and_then(|e| {
+            e.get("pruned_dependents")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default();
+    if trail.is_empty() {
+        return Vec::new();
+    }
+    let mut restored: Vec<String> = Vec::new();
+    let mut remaining: Vec<Value> = Vec::new();
+    for entry in trail {
+        let Some(dependent_id) = entry.get("node").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(idx) = rows
+            .iter()
+            .position(|e| text_at(e, "id") == Some(dependent_id))
+        else {
+            // A trail row naming a gone dependent is stale: dropped.
+            continue;
+        };
+        let open_dependent = !truthy_field(&rows[idx], "completed_at")
+            && text_at(&rows[idx], "superseded_by").is_none();
+        let already_named = rows[idx]
+            .get("blocked_by")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(reopened_id)));
+        // The cycle probe: adding X -> B creates a cycle exactly when B
+        // reaches X through blocked_by edges.
+        let mut seen = std::collections::BTreeSet::new();
+        let mut stack: Vec<String> = vec![reopened_id.to_string()];
+        let mut cyclic = false;
+        while let Some(id) = stack.pop() {
+            if id == dependent_id {
+                cyclic = true;
+                break;
+            }
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(row) = find_node(rows, &id) {
+                for b in row
+                    .get("blocked_by")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    stack.push(b.to_string());
+                }
+            }
+        }
+        if open_dependent && !already_named && !cyclic {
+            let obj = rows[idx].as_object_mut().expect("row is an object");
+            let edge = obj
+                .entry("blocked_by".into())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            edge.as_array_mut()
+                .expect("blocked_by is an array")
+                .push(json!(reopened_id));
+            restored.push(dependent_id.to_string());
+            continue;
+        }
+        remaining.push(entry);
+    }
+    let obj = rows
+        .iter_mut()
+        .find(|e| text_at(e, "id") == Some(reopened_id))
+        .and_then(|e| e.as_object_mut())
+        .expect("the reopened row is an object");
+    obj.insert("pruned_dependents".into(), Value::Array(remaining));
+    restored
+}
+
 /// Reopen ancestor epics the cascade auto-closed (the
 /// _cascade_reopen_parents twin): auto-closed ancestors clear, done-on-own-
-/// evidence ancestors get the reopen-warning marker and stop the climb.
+/// evidence ancestors get the reopen warning marker and stop the climb.
 fn cascade_reopen_parents(
     entries: &mut [Value],
     node_id: &str,
@@ -2799,7 +2896,7 @@ mod tests {
 
     #[test]
     fn a_held_parent_stops_the_cascade_without_closing_it() {
-        // x-0b13: the plan+PR parent. A warm Unmet verdict holds it, and the
+        // The plan+PR parent. A warm Unmet verdict holds it, and the
         // walk does not close THROUGH it either; the satisfied verdict lets
         // the cascade close it exactly as before the gate existed.
         let verdict = |outcome| super::promise::PromiseVerdict {
