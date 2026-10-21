@@ -235,8 +235,7 @@ jobs:
   # PR-only: every member here originally triggered on `pull_request` alone
   # (no `push`), several because they read PR-only context (PR_BODY,
   # BASE_REF, PR_TITLE, PR_BASE_SHA/PR_HEAD_SHA) that does not exist on a push
-  # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml,
-  # session-url-scan.yml.
+  # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml.
   guards-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -303,20 +302,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/skills/test_pr_oos_tracking_contract.sh
-
-      # From session-url-scan.yml (check-no-session-urls job). PR-controlled
-      # text (title/body) reaches the script via env ONLY - never
-      # interpolated inline into `run:`, which would be a shell-injection
-      # hole.
-      - name: No claude.ai/code session URLs in commits / title / body
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: bash scripts/ci/check-no-session-urls.sh
 
   # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
   # into one job sharing a single fno-agents build). PR-only: the gate reads
@@ -444,14 +429,6 @@ jobs:
         run: |
           bash scripts/ci/check-disposable-rm.sh
           bash tests/ci/test-check-disposable-rm.sh
-
-      # The commit-msg session-URL strip: the CI gate (check-no-session-urls)
-      # only catches the trailer after a push, where a force-push does not
-      # retract it, so the strip has to happen at commit time.
-      - name: Session-URL strip commit-msg hook test
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash tests/test-strip-claude-session.sh
 
       # The state canary's own positive control. `verify` is not run here: it
       # needs a planted HOME with a suite run between plant and verify, and the

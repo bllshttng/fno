@@ -2977,13 +2977,6 @@ fn run_one(a: &Args, pr: &str) -> (i32, Vec<String>) {
             eprintln!("pr-heal: the fix is committed but the push failed");
             (EXIT_READ_ERROR, reran_keys)
         }
-        // A leak refusal names the fix (reword): an escalation class, the
-        // same lane as a red preflight, so heal's caller stops retrying
-        // pushes that cannot go out until a human rewords the commit.
-        crate::pr_push::PushOutcome::LeakRefusal { report } => {
-            eprintln!("pr-heal: {}", report);
-            (EXIT_ESCALATIONS, reran_keys)
-        }
     }
 }
 

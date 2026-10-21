@@ -102,11 +102,10 @@ fn run_verb_with_stdin(cwd: &Path, extra: &[&str], stdin: Option<&str>) -> (i32,
 }
 
 #[test]
-fn all_three_pass_exit_0() {
+fn every_guard_passes_exit_0() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
     for name in [
-        "check-no-session-urls.sh",
         "check-pr-node-closure.sh",
         "check-oos-tracked.sh",
     ] {
@@ -125,24 +124,23 @@ fn all_three_pass_exit_0() {
         ],
     );
     assert_eq!(code, 0, "{out}\n{err}");
-    assert_eq!(out.matches("pass check-").count(), 3, "{out}");
-    assert!(out.contains("4 ran, 0 failed"), "{out}");
+    assert_eq!(out.matches("pass check-").count(), 2, "{out}");
+    assert!(out.contains("3 ran, 0 failed"), "{out}");
 }
 
 #[test]
 fn a_failing_guard_carries_its_own_output_and_exits_1() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
-    write_guard(&work, "check-no-session-urls.sh", FAIL_STUB);
     write_guard(&work, "check-pr-node-closure.sh", PASS_STUB);
-    write_guard(&work, "check-oos-tracked.sh", PASS_STUB);
+    write_guard(&work, "check-oos-tracked.sh", FAIL_STUB);
     let body = body_file(&work, "body\n");
     let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}\n{err}");
-    assert!(out.contains("fail check-no-session-urls.sh"), "{out}");
+    assert!(out.contains("fail check-oos-tracked.sh"), "{out}");
     assert!(out.contains("pass check-pr-node-closure.sh"), "{out}");
     assert!(err.contains("stub violation in the body"), "{err}");
-    assert!(out.contains("4 ran, 1 failed"), "{out}");
+    assert!(out.contains("3 ran, 1 failed"), "{out}");
     assert!(
         err.contains("the PR body is not a commit"),
         "the remedy line: {err}"
@@ -153,25 +151,24 @@ fn a_failing_guard_carries_its_own_output_and_exits_1() {
 fn all_guards_run_even_after_a_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
-    write_guard(&work, "check-no-session-urls.sh", FAIL_STUB);
-    write_guard(&work, "check-pr-node-closure.sh", PASS_STUB);
+    write_guard(&work, "check-pr-node-closure.sh", FAIL_STUB);
     write_guard(&work, "check-oos-tracked.sh", FAIL_STUB);
     let body = body_file(&work, "body\n");
     let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}\n{err}");
-    assert!(out.contains("fail check-no-session-urls.sh"), "{out}");
+    assert!(out.contains("fail check-pr-node-closure.sh"), "{out}");
     assert!(out.contains("fail check-oos-tracked.sh"), "{out}");
-    assert!(out.contains("4 ran, 2 failed"), "{out}");
+    assert!(out.contains("3 ran, 2 failed"), "{out}");
 }
 
 #[test]
-fn a_repo_with_no_guards_skips_all_three() {
+fn a_repo_with_no_guards_skips_every_guard() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
     let body = body_file(&work, "body\n");
     let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}\n{err}");
-    assert_eq!(out.matches("skip check-").count(), 3, "{out}");
+    assert_eq!(out.matches("skip check-").count(), 2, "{out}");
     assert!(out.contains("1 ran, 0 failed"), "{out}");
 }
 
@@ -210,14 +207,13 @@ fn every_guard_gets_the_same_env_contract() {
     let log = tmp.path().join("env.log");
     write_guard(
         &work,
-        "check-no-session-urls.sh",
+        "check-pr-node-closure.sh",
         &format!(
             "#!/bin/sh\nprintf 'BODY=%s\\nTITLE=%s\\nHEADREF=%s\\nHEADSHA=%s\\nBASESHA=%s\\n' \
              \"$PR_BODY\" \"$PR_TITLE\" \"$PR_HEAD_REF\" \"$PR_HEAD_SHA\" \"$PR_BASE_SHA\" > {}\nexit 0\n",
             log.to_str().unwrap().escape_default()
         ),
     );
-    write_guard(&work, "check-pr-node-closure.sh", PASS_STUB);
     write_guard(&work, "check-oos-tracked.sh", PASS_STUB);
     let body = body_file(&work, "the body text\n");
     let (code, out, err) = run_verb(
@@ -248,7 +244,6 @@ fn every_guard_gets_the_same_env_contract() {
 fn dash_reads_the_body_from_stdin() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
-    write_guard(&work, "check-no-session-urls.sh", PASS_STUB);
     write_guard(&work, "check-pr-node-closure.sh", PASS_STUB);
     write_guard(&work, "check-oos-tracked.sh", PASS_STUB);
     let (code, out, err) = run_verb_with_stdin(
@@ -257,7 +252,7 @@ fn dash_reads_the_body_from_stdin() {
         Some("stdin body\n"),
     );
     assert_eq!(code, 0, "{out}\n{err}");
-    assert!(out.contains("4 ran, 0 failed"), "{out}");
+    assert!(out.contains("3 ran, 0 failed"), "{out}");
 }
 
 #[test]
