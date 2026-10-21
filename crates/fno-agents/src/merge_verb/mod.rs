@@ -219,6 +219,15 @@ fn run_hold_check_operand(args: &[String]) -> i32 {
         return 1;
     };
     let mut flow = hold_check_flow(pr, &cwd);
+    // This door is the raw `gh pr merge` hook's only veto, and a raw merge
+    // never reaches `authorized_merge`, so the user's look rides here too.
+    // The status probes call `hold_check_flow` directly and read the visual
+    // gate on their own, so it stays out of the shared flow.
+    if flow.exit_code == 0 {
+        if let Some(why) = visual_hold(pr, &cwd) {
+            hold_refusal(&mut flow, pr, &cwd, &why);
+        }
+    }
     for (err, line) in std::mem::take(&mut flow.lines) {
         if err {
             eprint!("{line}");
@@ -227,6 +236,27 @@ fn run_hold_check_operand(args: &[String]) -> i32 {
         }
     }
     flow.exit_code
+}
+
+/// The visual-approval gate for a raw merge: `Some(detail)` when the PR
+/// touches the paint surface with no clear, or when the gate cannot answer.
+/// The paint list is read first, so a disarmed project spends no GitHub call.
+fn visual_hold(pr: i64, cwd: &Path) -> Option<String> {
+    if crate::agents_config::visual_paint_paths(cwd).is_empty() {
+        return None;
+    }
+    let probes = crate::authorized_merge::RealProbes;
+    let pr = u64::try_from(pr).ok()?;
+    let facts = match crate::authorized_merge::Probes::pr_facts(&probes, cwd, Some(pr)) {
+        Ok(facts) => facts,
+        Err(e) => {
+            return Some(format!(
+                "visual_approval: PR {pr} head is unreadable ({e}), so the visual-approval gate cannot answer"
+            ))
+        }
+    };
+    crate::merge_gates::visual_approval_blocker(&probes, cwd, pr, &facts.head_sha)
+        .map(|b| format!("{}: {}", b.code, b.detail))
 }
 
 /// The plan-hold read the merge guard, the hook and the status probes share:
