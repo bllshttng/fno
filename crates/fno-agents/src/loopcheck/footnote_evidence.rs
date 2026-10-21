@@ -2,10 +2,14 @@
 //!
 //! fnh checks every claim in its final reply against its records and writes
 //! one `footnotes` record per ended run. The done read reports the newest one
-//! beside CI and review. It is advisory: a line on the done reason and a
-//! `footnote_evidence` object on the terminal `loop_check` row, never a block.
-//! The row's `agrees_with_ci_and_review` gives the false-hold rate a
-//! denominator before anyone makes the read blocking.
+//! beside CI and review. It never blocks: a line on the done reason and a
+//! `footnote_evidence` object on the terminal `loop_check` row. A rejected or
+//! missing claim on a passing PR is a half-fail. It goes back to its origin
+//! node, once per session and claim: a note on the node thread, and a reopen
+//! when the node is already done. A claim by the node's own session is in the
+//! node's scope, so it never becomes a bare new node. The row's
+//! `agrees_with_ci_and_review` gives the false-hold rate a denominator before
+//! anyone makes the read blocking.
 
 use crate::footnote_harness::transcript::{find_session_dir, transcript_file};
 use crate::state::RegistryEntry;
@@ -188,6 +192,13 @@ pub(super) fn read_live(
     read_evidence(&records_for(&entries, node, own_session, &root), pr_head)
 }
 
+/// One file name per session and claim text, stable across runs.
+fn half_fail_key(session: &str, claim: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{session}\0{claim}").as_bytes());
+    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
@@ -233,6 +244,77 @@ impl FootnoteEvidence {
             }
         };
         format!("{done_msg}; {line}")
+    }
+
+    /// A half-fail goes back to its origin node: each flagged claim at the PR
+    /// head notes the evidence on the node thread and reopens the node with it
+    /// (a no-op while the node is still open), once per session and claim. A
+    /// claim by the node's own session is in the node's scope, so no bare new
+    /// node is filed; with no origin node there is nowhere to send it, and the
+    /// reason line alone carries it. A marker under `marker_dir`, written only
+    /// after every call lands, is the dedup: a failed or interrupted send
+    /// retries on the next stop. Stops of one session run one at a time, so no
+    /// lock is needed. Returns how many claims were sent this stop.
+    pub(super) fn send_half_fails(
+        &self,
+        marker_dir: &Path,
+        node: Option<&str>,
+        mut run: impl FnMut(&[String]) -> bool,
+    ) -> usize {
+        let (
+            FootnoteEvidence::Counted {
+                session,
+                head_sha,
+                flagged,
+                ..
+            },
+            Some(node),
+        ) = (self, node)
+        else {
+            return 0;
+        };
+        if std::fs::create_dir_all(marker_dir).is_err() {
+            return 0;
+        }
+        let mut sent = 0;
+        for f in flagged {
+            let marker = marker_dir.join(half_fail_key(session, &f.text));
+            if marker.exists() {
+                continue;
+            }
+            let text: String = f.text.chars().take(CLAIM_TEXT_CHARS).collect();
+            let evidence = format!(
+                "Half-fail: footnote session {session} claimed {text:?} at {}. The check read it {}{}, and CI and review passed the PR anyway. Confirm the claim with a command, or fix the work it describes.",
+                short(head_sha),
+                f.verdict,
+                if f.sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (source: {})", f.sources.join(", "))
+                },
+            );
+            let calls: [Vec<String>; 2] = [
+                vec![
+                    "backlog".into(),
+                    "note".into(),
+                    node.into(),
+                    evidence.clone(),
+                ],
+                vec![
+                    "backlog".into(),
+                    "reopen".into(),
+                    node.into(),
+                    "--reason".into(),
+                    evidence,
+                    "--force".into(),
+                ],
+            ];
+            if calls.iter().all(|argv| run(argv)) {
+                let _ = std::fs::write(&marker, node);
+                sent += 1;
+            }
+        }
+        sent
     }
 
     /// `row` with a `footnote_evidence` key, unchanged when absent.
@@ -326,5 +408,42 @@ mod tests {
         let none = FootnoteEvidence::Absent;
         assert_eq!(none.on_reason("done".into()), "done");
         assert_eq!(none.on_row(json!({"a": 1})), json!({"a": 1}));
+        let marks = tmp.path().join("marks");
+        assert_eq!(
+            ev.send_half_fails(&marks, Some("x-aaaa"), |_| panic!("stale sends nothing")),
+            0
+        );
+    }
+
+    /// A half-fail at the PR head goes back to its origin node: a note and a
+    /// forced reopen carrying the failing source, once per session and claim.
+    /// A failed call retries; no origin node sends nothing.
+    #[test]
+    fn a_half_fail_reopens_its_origin_node_once_and_retries_a_failed_send() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ev = read_evidence(&bound_at(tmp.path(), HEAD), HEAD);
+        let marks = tmp.path().join("marks");
+        assert_eq!(ev.send_half_fails(&marks, None, |_| panic!("no origin")), 0);
+        assert_eq!(ev.send_half_fails(&marks, Some("x-aaaa"), |_| false), 0);
+        let mut calls = Vec::new();
+        let sent = ev.send_half_fails(&marks, Some("x-aaaa"), |argv| {
+            calls.push(argv.join(" "));
+            true
+        });
+        assert_eq!(sent, 1);
+        assert!(
+            calls[0].starts_with("backlog note x-aaaa Half-fail:"),
+            "{calls:?}"
+        );
+        assert!(
+            calls[1].starts_with("backlog reopen x-aaaa --reason"),
+            "{calls:?}"
+        );
+        assert!(calls[1].ends_with("--force"), "{calls:?}");
+        assert!(calls[1].contains("source: diff:src/a.rs"), "{calls:?}");
+        assert_eq!(
+            ev.send_half_fails(&marks, Some("x-aaaa"), |_| panic!("deduped")),
+            0
+        );
     }
 }

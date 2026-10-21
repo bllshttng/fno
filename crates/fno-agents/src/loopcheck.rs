@@ -1716,6 +1716,28 @@ pub(crate) fn decide_with_payload(
                         own_footnote_session,
                         &pr_info.head_oid,
                     );
+                    // A claim the check rejected on a PR that passes anyway
+                    // is a half-fail; it goes back to its origin node.
+                    let half_fails = footnotes.send_half_fails(
+                        &cwd.join(".fno").join("footnote-half-fails"),
+                        node_id.as_deref(),
+                        |argv| {
+                            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+                            matches!(
+                                run_bounded(
+                                    parsed.fno_bin.as_ref(),
+                                    &args,
+                                    &cwd,
+                                    read_bounds::stopgate_read_timeout(),
+                                ),
+                                BoundedRun::Completed(out) if out.status.success()
+                            )
+                        },
+                    );
+                    let with_half_fails = |msg: String| match (half_fails, node_id.as_deref()) {
+                        (0, _) | (_, None) => msg,
+                        (n, Some(node)) => format!("{msg}; {n} half-fail(s) sent back to {node}"),
+                    };
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
                     // passing PR nothing reviewed terminates DoneUnreviewed, not
@@ -1772,10 +1794,10 @@ pub(crate) fn decide_with_payload(
                                     "{cov_line}; operator waiver authority unknown (decision probe)"
                                 );
                             }
-                            let done_msg = footnotes.on_reason(format!(
+                            let done_msg = with_half_fails(footnotes.on_reason(format!(
                                 "PR #{} is green but UNREVIEWED - {}. Not mergeable by the autonomous path (DoneUnreviewed); merge by hand or after a review.",
                                 pr_info.number, cov_line
-                            ));
+                            )));
                             term_row("DoneUnreviewed", &done_msg);
                             fire_row(
                                 "allow",
@@ -1822,7 +1844,7 @@ pub(crate) fn decide_with_payload(
                         Some(owner) => format!("{done_msg}; merge owned by {owner}"),
                         None => done_msg,
                     };
-                    let done_msg = footnotes.on_reason(done_msg);
+                    let done_msg = with_half_fails(footnotes.on_reason(done_msg));
                     term_row("DonePRGreen", &done_msg);
                     fire_row(
                         "allow",
