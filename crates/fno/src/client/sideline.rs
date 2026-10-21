@@ -969,17 +969,15 @@ impl View {
                 let prefix_width = prefix.width();
                 let suffix_width = suffix.width();
                 let base_width = name_w.saturating_sub(prefix_width);
-                let label = if card {
-                    // Row 1 carries the role vocabulary: a lead's
-                    // people title after its slug (`sorrel · lead of mux`), a
-                    // worker's lead after its thread slug (`t-x0eee · sorrel`).
-                    let slug = card_line::slug(a, &self.backlog);
-                    match self.lead_label(a) {
-                        Some(role) => format!("{slug} \u{b7} {role}"),
-                        None => slug,
-                    }
-                } else {
-                    a.name.clone()
+                // Row 1 carries the role vocabulary: a lead's people title
+                // after its slug (`sorrel · lead of mux`), a worker's lead
+                // after its thread slug (`t-x0eee · sorrel`).
+                let card_parts =
+                    card.then(|| (card_line::slug(a, &self.backlog), self.lead_label(a)));
+                let label = match &card_parts {
+                    Some((slug, Some(role))) => format!("{slug} \u{b7} {role}"),
+                    Some((slug, None)) => slug.clone(),
+                    None => a.name.clone(),
                 };
                 // (US3, inline) A member with a different project or worktree
                 // path shows it inline in parens after the slug or name, only
@@ -996,12 +994,17 @@ impl View {
                     }
                     None => label,
                 };
+                let fit = |w: usize| match &card_parts {
+                    // A card cuts the role, never the slug it leads with.
+                    Some((slug, role)) if crate::chrome::str_cols(&label) > w => {
+                        card_line::card_label(slug, role.as_deref(), w)
+                    }
+                    _ => crate::chrome::clip_tail(&label, w),
+                };
                 let name = if suffix_width < base_width {
-                    let base = crate::chrome::clip_tail(&label, base_width - suffix_width);
-                    format!("{prefix}{base}{suffix}")
+                    format!("{prefix}{}{suffix}", fit(base_width - suffix_width))
                 } else {
-                    let base = crate::chrome::clip_tail(&label, base_width);
-                    format!("{prefix}{base}")
+                    format!("{prefix}{}", fit(base_width))
                 };
                 // The message column reads the sentence, not the markup, and
                 // leads with the separator. A PR row with no output names the
@@ -1212,14 +1215,7 @@ impl View {
         text_w: usize,
         panel_w: usize,
     ) {
-        let (base, menu, range) = self.footer_labels(panel_w);
-        let label = match range {
-            Some(range) => format!(
-                "{}{menu}",
-                pad_to(&crate::chrome::clip(&base, range.start), range.start)
-            ),
-            None => base,
-        };
+        let label = self.footer_buttons(panel_w).text;
         paint_legacy_row(cells, r, cols, text_w, &label, cell_flags::BOLD);
     }
 
