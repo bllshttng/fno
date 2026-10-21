@@ -14,6 +14,7 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from fno.evals.bank import GradeCheck, TaskSpec
 
