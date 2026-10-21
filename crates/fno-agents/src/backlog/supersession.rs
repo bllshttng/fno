@@ -140,6 +140,9 @@ pub(crate) fn successors_owing_verification(entries: &[Value]) -> BTreeMap<Strin
 }
 
 /// Apply the settlement's `blocked_by` map to rows in place; receipts out.
+/// The pruned-edge trail rides the same receipts onto the LIVE rows (the
+/// sweep's own entries are a throwaway copy, so here is where the commit
+/// is): without it a reopen finds no trail and restores nothing.
 pub(crate) fn apply_edge_settlement(entries: &mut [Value], settlement: &Value) -> Vec<Value> {
     let Some(map) = settlement.get("blocked_by").and_then(Value::as_object) else {
         return Vec::new();
@@ -154,11 +157,13 @@ pub(crate) fn apply_edge_settlement(entries: &mut [Value], settlement: &Value) -
             }
         }
     }
-    settlement
+    let receipts = settlement
         .get("receipts")
         .and_then(Value::as_array)
         .map(|rows| rows.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    crate::graph_store::write_pruned_dependents_trail(entries, &receipts);
+    receipts
 }
 
 /// One line for the sweep report; held edges name why they stay.

@@ -156,6 +156,20 @@ fn x2774_terminal_harness_state_releases_an_open_work_row() {
             .starts_with("session terminal: harness state done (via sessions); node N1 in_review"),
         "basis names the session state: {summary:?}"
     );
+    // The reaper ended the session whose manifest bound the node; the node
+    // itself survives the pass untouched: the sweep's session-end writes
+    // fill session rows only, so a close reads only from the gated close
+    // paths (the plan's ship promise checked against merged refs).
+    let rows = crate::graph_store::read_rows(&dir.path().join("graph.json")).unwrap();
+    let n1 = rows.iter().find(|e| e["id"] == "N1").unwrap();
+    assert_eq!(
+        n1["status"], "in_review",
+        "the reaper never closes the node whose session it ends"
+    );
+    assert!(
+        n1.get("completed_at").map(|v| v.is_null()).unwrap_or(true),
+        "no completion stamp appears on a reaped session's node"
+    );
     std::fs::remove_dir_all(home.root()).ok();
 }
 

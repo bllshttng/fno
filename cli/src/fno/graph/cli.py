@@ -1550,9 +1550,15 @@ def _auto_closed_note(_entry: dict) -> str:
     return "auto-closed: all children complete"
 
 
-def _cascade_close_parents(entries: list[dict], node_id: str) -> list[str]:
+def _cascade_close_parents(
+    entries: list[dict], node_id: str, held: Optional[dict] = None
+) -> list[str]:
     """Close ancestor epics whose children are now all complete .
     Full contract: docs/architecture/backlog-graph-verb-contracts.md
+
+    ``held`` carries pre-lock close-gate verdicts: a plan-having parent
+    with an unmet or unwarmed verdict holds, and absent ``held`` reads
+    fail closed like the native close's warm map.
     """
     from fno.graph._reconcile import cascade_close_should_stop
     id_to_entry = {
@@ -1575,6 +1581,10 @@ def _cascade_close_parents(entries: list[dict], node_id: str) -> list[str]:
         kids = children_by_parent.get(pid) or []
         if cascade_close_should_stop(parent, kids, cur):
             break  # already closed, or a child still open -> stop this branch
+        if parent.get("plan_path") and (
+            held is None or not (verdict := held.get(pid)) or not verdict.satisfied
+        ):
+            break  # unmet or unwarmed close gate: the gated paths close it
         _apply_completion_fields(parent)
         if not parent.get("completion_note"):
             parent["completion_note"] = _auto_closed_note(parent)

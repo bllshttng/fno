@@ -23,7 +23,7 @@
 //!   `LOCK_EX|LOCK_NB` polling idiom in `cli/src/fno/plan/locking.py`. There
 //!   is no unbounded acquire to call.
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -986,7 +986,58 @@ pub fn settle_blocked_by_edges(
                 .insert("blocked_by".to_string(), Value::Array(settled));
         }
     }
+    write_pruned_dependents_trail(&mut entries, &receipts);
     (entries, receipts, changes)
+}
+
+/// The reopen-side trail: a pruned edge is a fact about the blocker's
+/// close that a reopen reverses, so the pruner records EVERY pruned
+/// dependent on the blocker's row. A reopen restores the edge, consuming
+/// its trail row; a stale row (the dependent terminal) is dropped there.
+/// Called by [`settle_blocked_by_edges`] on its own result and by the
+/// reconcile close mutator's `apply_edge_settlement`, which applies the
+/// settlement change map to the LIVE rows under the lock - the sweep's
+/// own copy is a throwaway, so the trail must land where the commit is.
+pub(crate) fn write_pruned_dependents_trail(entries: &mut [Value], receipts: &[Value]) {
+    let mut pruned: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for receipt in receipts {
+        if receipt.get("kind").and_then(Value::as_str) != Some("blocked_by_pruned") {
+            continue;
+        }
+        if let (Some(node), Some(blocker)) = (
+            receipt.get("node").and_then(Value::as_str),
+            receipt.get("blocker").and_then(Value::as_str),
+        ) {
+            let rows = pruned.entry(blocker).or_default();
+            if !rows.contains(&node) {
+                rows.push(node);
+            }
+        }
+    }
+    if pruned.is_empty() {
+        return;
+    }
+    for e in entries.iter_mut() {
+        let Some(id) = entry_id(e) else { continue };
+        let Some(dependents) = pruned.get(id) else {
+            continue;
+        };
+        let now = now_isoformat();
+        let obj = e.as_object_mut().unwrap();
+        let trail = obj
+            .entry("pruned_dependents".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let rows = trail.as_array_mut().expect("trail is an array");
+        for dependent in dependents {
+            if rows
+                .iter()
+                .any(|r| r.get("node").and_then(Value::as_str) == Some(*dependent))
+            {
+                continue; // already recorded: the sweep is idempotent
+            }
+            rows.push(json!({"node": dependent, "pruned_at": now}));
+        }
+    }
 }
 
 fn json_receipt(kind: &str, node: &str, blocker: &str, reason: &str) -> Value {
@@ -3752,5 +3803,36 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("superseded by ab-done2"));
+    }
+
+    #[test]
+    fn a_pruned_edge_records_a_trail_row_on_the_blocker() {
+        // The pruner records who it disconnected, so the reopen can undo it.
+        let original = vec![
+            json!({"id": "x-open", "blocked_by": ["x-done"]}),
+            json!({"id": "x-open2", "blocked_by": ["x-done"]}),
+            json!({"id": "x-done", "completed_at": "2026-10-21T02:00:00Z"}),
+        ];
+        let (entries, receipts, changes) = settle_blocked_by_edges(original.clone());
+        let by_id = index_by_id(&entries);
+        let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
+        assert_eq!(trail.len(), 2, "every pruned dependent rides the trail");
+        assert_eq!(trail[0]["node"].as_str(), Some("x-open"), "{trail:?}");
+        assert_eq!(trail[1]["node"].as_str(), Some("x-open2"), "{trail:?}");
+        // The reconcile path commits through apply_edge_settlement on LIVE
+        // rows: the trail must land there too, or a reopen restores nothing.
+        let settlement = json!({
+            "blocked_by": serde_json::to_value(&changes).unwrap_or_default(),
+            "receipts": receipts,
+        });
+        let mut live = original;
+        crate::backlog::supersession::apply_edge_settlement(&mut live, &settlement);
+        let by_id = index_by_id(&live);
+        let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
+        assert_eq!(
+            trail.len(),
+            2,
+            "the settlement application persists the trail: {trail:?}"
+        );
     }
 }

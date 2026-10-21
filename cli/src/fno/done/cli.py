@@ -689,6 +689,20 @@ def done_command(
         if promise.warning:
             typer.echo(f"warning: {promise.warning}", err=True)
 
+    # -- ancestor rollup gate: the cascade stops at a held parent --
+    # Thin call into the close gate, same shape as the native close's warm
+    # map: an unmet or unwarmed plan promise holds, no new gate logic.
+    cascade_held: dict = {}
+    _pid = node.get("parent")
+    if isinstance(_pid, str) and _pid:
+        _parent = next((e for e in entries if e.get("id") == _pid), None)
+        if isinstance(_parent, dict) and not _parent.get("completed_at"):
+            cascade_held[_pid] = resolve_promise_evidence(_parent, cwd=_parent.get("cwd"), query=_gh_query)
+            _pv = cascade_held[_pid]
+            if not _pv.satisfied and _pv.reason:
+                first = _pv.reason.splitlines()[0]
+                typer.echo(f"warning: parent {_pid} stays open: {first}", err=True)
+
     # Resolve pr_url + ledger rollup outside the mutator so subprocess / disk
     # I/O stays out of the graph lock.
     pr_url_to_write: Optional[str] = None
@@ -827,7 +841,9 @@ def done_command(
                 from fno.graph.cli import _cascade_close_parents
 
                 reparented_box.extend(_reparent_live_children(entries_inner, node_id))
-                cascade_closed.extend(_cascade_close_parents(entries_inner, node_id))
+                cascade_closed.extend(
+                    _cascade_close_parents(entries_inner, node_id, held=cascade_held)
+                )
             break
         return entries_inner
 
