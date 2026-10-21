@@ -69,11 +69,9 @@ pub struct CodexArm;
 pub static CODEX_ARM: CodexArm = CodexArm;
 
 impl CodexArm {
-    /// The shapes this arm answers: the codex provider on the plain and
-    /// bounded lanes only. Explicit geometry (squad/split/tab/at) declines
-    /// back to the Python bounce: the Python leg's post-run group placement
-    /// (`place_pane_in_group_tab`) is not ported, and a shape the arm cannot
-    /// finish must never be half-taken.
+    /// The shapes this arm answers: the codex provider on every lane. Its
+    /// bind wait and late bind are daemon-native; the group-tab move is the
+    /// spine's post-run placement, shared with the simple arms.
     pub fn owns(ctx: &PaneContext) -> bool {
         ctx.provider == "codex"
     }

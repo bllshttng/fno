@@ -80,6 +80,12 @@ const MONITOR_ROUTE_KEYS: [&str; 3] = [
     "ANTHROPIC_MODEL",
 ];
 
+/// `resolve_monitor`'s completeness refusal (mux_spawn.py:344), pinned
+/// locally: spawn_axes' MONITOR_ZAI_GOLDEN is the headless door's different
+/// line, and this gate is pane-only.
+const MONITOR_COMPLETE_GOLDEN: &str =
+    "--monitor happy currently requires a complete resolved zai route";
+
 /// A resolved route for one pane spawn: the parsed target's provider and the
 /// resolved env with the provider stamp - the env the monitor gates read,
 /// the wrapper carries, and the happy wrap forwards.
@@ -240,7 +246,7 @@ fn monitor_gates(ctx: &PaneContext, route: &Option<ResolvedRoute>) -> Result<(),
             format!("; missing {}", missing.join(", "))
         };
         return Err(PaneRefusal {
-            line: format!("{}{}", crate::spawn_axes::MONITOR_ZAI_GOLDEN, detail),
+            line: format!("{}{}", MONITOR_COMPLETE_GOLDEN, detail),
             exit_code: EXIT_REFUSAL,
             after_pane: None,
         });

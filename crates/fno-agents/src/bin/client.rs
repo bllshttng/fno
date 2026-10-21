@@ -1489,15 +1489,12 @@ async fn run(args: Vec<String>) -> i32 {
             );
             return 2;
         }
-        // 4a-G2: the `pane` substrate (the default) is mux-hosted now, and the
-        // Python back half owns it (fno.agents.mux_spawn: front-half reuse +
-        // `fno mux pane run` + the registry mux ref). The Python front door
-        // already carves pane spawns out of the binary route (rust_runtime),
-        // so this arm is only reached by a DIRECT `fno-agents spawn` call -
-        // re-exec the Python CLI rather than falling through to the daemon
-        // PTY host (retiring at G4; a silent daemon fallback is exactly what
-        // AC1-ERR forbids). FNO_AGENTS_RUNTIME=python stops the front door
-        // routing straight back here.
+        // 4a-G2: the `pane` substrate (the default) is mux-hosted, and the
+        // pane spine owns every harness arm (fno.agents.mux_spawn stays the
+        // python-mode twin). The Python front door no longer carves pane
+        // spawns out of the binary route: a pane spawn routes like a thread
+        // spawn, and the spine resolves the provider default itself.
+        // FNO_AGENTS_RUNTIME=python still selects the Python leg.
         let mut substrate = params
             .get("substrate")
             .and_then(|v| v.as_str())
@@ -1522,39 +1519,10 @@ async fn run(args: Vec<String>) -> i32 {
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
         if substrate == "pane" {
-            // The pane spine answers from the binary when a harness arm is
-            // seated; None falls through to the bounce below, which stays the
-            // leg for every harness until its arm lands (the codex arm in PR
-            // 2, claude in the next row).
-            if let Some(code) =
-                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
-            {
-                return code;
-            }
-            use fno_agents::claude_ask::py_repr;
-            // Provider parity with the optional-provider Python resolver: a
-            // MISSING --provider is legal on the pane substrate (the Python
-            // re-exec resolves it from the invoking harness), so let None fall
-            // through. An UNKNOWN provider is still a client-side exit 2 even
-            // where the `fno` front door is absent (CI), matching the resolver's
-            // downstream substrate-aware rejection.
-            match params.get("provider").and_then(|v| v.as_str()) {
-                None => {}
-                Some(p) if !KNOWN_PROVIDERS.contains(&p) => {
-                    eprintln!(
-                        "unknown provider {}; supported: {}",
-                        py_repr(p),
-                        known_providers_csv()
-                    );
-                    return 2;
-                }
-                Some(_) => {}
-            }
-            return bounce_to_python(
-                &args,
-                "substrate 'pane' is mux-hosted via the Python CLI",
-                "Install the fno front door or run `fno agents spawn ...` directly.",
-            );
+            // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
+            // the pane spine answers every harness arm itself - the Python
+            // bounce this branch kept for unseated shapes is deleted.
+            return fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; anything else re-execs Python.

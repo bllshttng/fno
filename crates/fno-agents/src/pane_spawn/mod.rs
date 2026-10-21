@@ -1,15 +1,14 @@
 //! The pane spine: the harness-neutral half of the Python pane back half
 //! (`dispatch_spawn_bounded_pane` + `dispatch_spawn_pane`,
-//! `cli/src/fno/agents/mux_spawn.py`), ported so a bounded/codex pane spawn
-//! can run without the Rust -> Python -> Rust round trip the bounce pays
-//! today.
+//! `cli/src/fno/agents/mux_spawn.py`), ported so every pane spawn is answered
+//! here - one arm per harness, no client bounce, no Python round trip.
 //!
 //! Split shape: this module is PR 1 of the pane-port split - the spine plus
-//! its goldens, wired into the client door behind a no-op arm table. PR 2
-//! seats the codex arm (argv, daemon bind wait, seed, late bind) in a
-//! `codex` submodule; the following row seats the claude arm (`claude`):
-//! argv, session pin, billing guard, monitor/route/happy legs. Deleting the
-//! Python bounce for the shapes the arms own is the row's remaining work.
+//! its goldens behind a no-op arm table. PR 2 seated the codex arm in a
+//! `codex` submodule; the following row seated the claude arm (`claude`):
+//! argv, session pin, billing guard, monitor/route/happy legs. The client
+//! bounce is deleted with the claude arm, and the routing seam no longer
+//! carves any pane shape to Python.
 //!
 //! Ordering is the Python leg's ordering, because the contract it enforces is
 //! the contract reviewers will hold this module to: refusals before the
@@ -94,9 +93,9 @@ pub struct PaneContext {
     pub session: Option<String>,
     /// `--bounded-placement`: hold the placement lease and pass `--fit`.
     pub bounded_placement: bool,
-    /// Geometry flags. The row-7 arms decline every explicit geometry (the
-    /// caller falls back to the Python bounce); they parse here so the spine
-    /// builder stays byte-faithful for row 8 and the golden capture.
+    /// Geometry flags. The arms answer explicit geometry themselves (the
+    /// goldens pin the split, group-move and attach shapes); they parse here
+    /// so the spine builder stays byte-faithful to the Python leg.
     pub squad: Option<String>,
     pub split: Option<String>,
     pub tab: Option<String>,
@@ -149,8 +148,8 @@ impl PaneContext {
         }
     }
 
-    /// None when the params are not a pane spawn this spine owns; the caller
-    /// falls back to the bounce.
+    /// None when the params are not a pane spawn; the door pre-gates the
+    /// substrate, so this is an internal-invariant miss, not a lane.
     pub fn from_params(params: &Value) -> Option<Self> {
         let substrate = params
             .get("substrate")
@@ -309,9 +308,10 @@ pub trait PaneArm {
     }
 }
 
-/// The arm table. The codex arm answers the plain and bounded lanes only:
-/// explicit geometry, existing-pane attach and python-mode fall through and
-/// the client door keeps the Python bounce.
+/// The arm table: one arm per harness, the codex arm checked first (its
+/// daemon bind wait and late bind set it apart), every other provider seated
+/// through the simple table. A provider with no arm is the caller's refusal,
+/// not a fall-through.
 pub fn pane_arm_for(ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
     if codex::CodexArm::owns(ctx) {
         return Some(&codex::CODEX_ARM);
@@ -338,22 +338,59 @@ pub fn pane_refusal_for(provider: &str) -> Option<String> {
     })
 }
 
-/// The binary door's pane entry. `Some(code)` means this process answered the
-/// spawn (receipt or refusal printed); `None` means no arm owns this shape
-/// and the caller keeps its Python bounce.
-pub fn run_pane_spawn(
-    home: &AgentsHome,
-    params: &Value,
-    name: &str,
-    _args: &[String],
-) -> Option<i32> {
-    let ctx = PaneContext::from_params(params)?;
+/// The binary door's pane entry: the spine answers every shape (receipt or
+/// refusal printed). The provider default (dispatch_flags
+/// `resolve_dispatch_harness`: explicit flag > invoking-harness inference >
+/// builtin claude) resolves here, where the deleted client bounce used to
+/// re-exec Python to get it.
+pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[String]) -> i32 {
+    let mut params = params.clone();
+    let provider = params
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if provider.trim().is_empty() {
+        let ident = crate::spawn_context::resolve_self_identity(
+            &|key| std::env::var(key).ok(),
+            None,
+            None,
+            home,
+        );
+        let inferred = ident
+            .harness
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "claude".to_string());
+        params["provider"] = Value::String(inferred);
+    } else if !crate::provider::KNOWN_PROVIDERS.contains(&provider) {
+        eprintln!(
+            "unknown provider {}; supported: {}",
+            crate::claude_ask::py_repr(provider),
+            crate::provider::known_providers_csv()
+        );
+        return EXIT_REFUSAL;
+    }
+    let ctx = match PaneContext::from_params(&params) {
+        Some(ctx) => ctx,
+        None => {
+            eprintln!("run_pane_spawn reached with a non-pane substrate");
+            return EXIT_REFUSAL;
+        }
+    };
     if let Some(line) = pane_refusal_for(&ctx.provider) {
         eprintln!("{line}");
-        return Some(EXIT_REFUSAL);
+        return EXIT_REFUSAL;
     }
-    let arm = pane_arm_for(&ctx)?;
-    Some(spawn_pane(home, &ctx, name, arm))
+    let arm = match pane_arm_for(&ctx) {
+        Some(arm) => arm,
+        None => {
+            eprintln!(
+                "{} has no pane arm",
+                crate::claude_ask::py_repr(&ctx.provider)
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+    spawn_pane(home, &ctx, name, arm)
 }
 
 /// The spine's whole lane: lease, prepare, lock, collision, pane run, parse
