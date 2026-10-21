@@ -39,7 +39,7 @@ pub fn run(rest: &[String]) -> i32 {
         "drain-self" => drain_self::run_drain_self(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | seed-provenance | team | withdraw | sent | send | reply | pane-prepare | unread | ack | drain-self)"
+                "fno-agents mail: unknown command {other:?} (hold | dnd | hold-release | seed-provenance | team | withdraw | sent | send | reply | pane-prepare | unread | ack | drain-self)"
             );
 
             2
