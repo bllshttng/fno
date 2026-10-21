@@ -1349,6 +1349,16 @@ def _is_retired_axis_spawn(verb: str, args: Sequence[str]) -> bool:
     )
 
 
+def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
+    """footnote's headless arm is Rust-only and reads ``--once``, never ``--as``."""
+    head = list(_args_before_argv(args))
+    if head[:1] == ["spawn"] and (_spawn_flag_value(args, "--harness", "-H") or "").lower() == "footnote":
+        for i, a in enumerate(head):
+            if a == "--as=headless" or (a == "--as" and head[i + 1 : i + 2] == ["headless"]):
+                head[i : i + (1 if "=" in a else 2)] = ["--once"]
+    return head + list(args[len(_args_before_argv(args)) :])
+
+
 def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--node``/``--slug``/``--plan``.
 
@@ -1606,6 +1616,7 @@ def make_agents_group_cls() -> type:
                             args, existing_pane = extract_existing_pane(
                                 compose_spawn_argv(args, node_verb=node_verb)
                             )
+                            args = _footnote_headless_as_once(args)
                         except ValueError as exc:
                             print(f"fno agents spawn: {exc}", file=sys.stderr)
                             raise SystemExit(2) from exc
