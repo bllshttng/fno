@@ -473,16 +473,21 @@ pub(crate) fn execute(
         return checks(args, cwd);
     }
     if args.len() >= 2 && args[0] == "pr" && args[1] == "view" {
-        let fields: Vec<&str> = option(args, "--json")
-            .map(|csv| csv.split(',').filter(|s| !s.is_empty()).collect())
+        let fields: Vec<String> = option(args, "--json")
+            .map(|csv| {
+                csv.split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
-        if !fields.is_empty() && fields.iter().all(|f| METADATA_FIELDS.contains(f)) {
+        if !fields.is_empty() && fields.iter().all(|f| METADATA_FIELDS.contains(&f.as_str())) {
             return metadata(args, cwd);
         }
         if purpose == "coverage"
-            && fields.contains(&"reviews")
-            && fields.contains(&"comments")
-            && fields.iter().all(|f| COVERAGE_FIELDS.contains(f))
+            && fields.iter().any(|f| f == "reviews")
+            && fields.iter().any(|f| f == "comments")
+            && fields.iter().all(|f| COVERAGE_FIELDS.contains(&f.as_str()))
         {
             return coverage_reviews(args, cwd, &gh);
         }
