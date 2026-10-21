@@ -2326,16 +2326,6 @@ fn parse_block_sel(s: &str) -> Result<BlockSel, String> {
     }
 }
 
-/// Parse the tokens after `mux pane`. Pure, so the whole grammar (commands, flags,
-/// the exit-code-bearing outcomes) is unit-testable without a socket, and the
-/// agents daemon's tests can feed a refusal's printed command to this real
-/// parser rather than a copy of its grammar.
-/// The `pane` commands, named ONCE. Three surfaces quote this list - the
-/// missing-command message, the unknown-command one, and the `main.rs` usage line -
-/// and the first two had already drifted before the constant existed:
-/// `split` and `break` shipped without reaching the first, so an operator who
-/// typed a bare `fno mux pane` to discover the surface was told commands that
-/// exist do not.
 /// `fno mux pane <command> ...`: parse, resolve the session, run the command over a
 /// one-shot v4 control connection, print machine-readable output, return the
 /// exit code. `env_session` is `FNO_SESSION` (set in every pane).

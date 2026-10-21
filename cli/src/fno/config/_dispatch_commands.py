@@ -108,9 +108,8 @@ class DispatchBlock(BaseModel):
     All three are empty ("") = unset, so a fresh install resolves exactly as the
     built-ins (harness=claude, per-harness substrate, `/target --no-merge {id}`).
 
-    No value validation here (config stays a leaf module): the resolver
-    validates the harness against the map and the substrate against the harness's
-    capabilities at resolve time, fail-loud.
+    No value validation here: the resolver checks harness and substrate at
+    resolve time, fail-loud.
 
     `command` is a template with a single `{id}` placeholder. A node's
     `dispatch_command`/`dispatch_brief` (US3) layer on top: the resolver validates
@@ -120,10 +119,8 @@ class DispatchBlock(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    # DEPRECATED: the harness axis lives in the stage table
-    # (`agents.profiles.<command>.provider`); this key reads as the fallback rung
-    # beneath it for one release. The fold runs at resolution time
-    # (fno.agents.harness_map); the operator-facing surface is `fno config doctor`.
+    # DEPRECATED: the stage table (`agents.profiles.<command>.provider`) owns
+    # the harness axis; this key is its fallback rung for one release.
     harness: str = ""
     substrate: str = ""
     command: str = ""
@@ -138,9 +135,7 @@ class DispatchBlock(BaseModel):
         default_factory=lambda: list(DEFAULT_DISPATCH_COMMANDS),
         validation_alias=AliasChoices("allowed_commands", "allowed_verbs"),  # verb-wording: allow
     )
-    # DEPRECATED (/): reads as `auto_merge.grant` for one release;
-    # every dispatch path reads the grant key now, no consumer reads this field.
-    # An explicit --allow-merge/--no-merge flag always wins.
+    # DEPRECATED: reads as `auto_merge.grant` for one release; no consumer reads it.
     auto_merge: bool = False
     # defer (default, byte-identical to today) or fail over to the next
     # healthy provider in the active combo; an unknown value degrades to "defer".
@@ -148,25 +143,17 @@ class DispatchBlock(BaseModel):
     # Proactive LOW cutover, opt-in, default 0 = off. Deliberately inverted from
     # defer_horizon_minutes: a distant reset means leave now, not wait.
     cutover_low_after_minutes: int = 0
-    # The blueprint floor for a plan-less node (lean dispatch): "high" (the
-    # default) routes a plan-less node to /blueprint only when its difficulty
-    # is high, its size is L, or an open premise question blocks it (the
-    # `premise-question` tag). Every other plan-less node goes straight to
-    # /target, which states its own scope. "medium" restores the pre-lean
-    # table (blueprint for medium and up). "low" blueprints every plan-less
-    # node; "never" targets everything. Read by the lifecycle command table
-    # (fno-agents effective_command) through the dispatch doors, and by the
-    # lead check-in's blueprint reading.
+    # The blueprint floor for a plan-less node. "high" (default) blueprints only
+    # high difficulty, size L, or a `premise-question` tag; the rest go to
+    # /target. "medium" blueprints medium and up, "low" all, "never" none.
+    # Read by fno-agents effective_command and the lead check-in.
     blueprint_floor: str = "high"
 
     @field_validator("auto_merge", mode="before")
     @classmethod
     def _coerce_auto_merge(cls, v: object) -> object:
-        """Only a real TOML boolean grants merge; anything else degrades to
-        no-merge. Locked Decision 6 + Errors invariant: a config error can never
-        grant merge rights, so a lax-coercible string like "yes" (which a plain
-        bool would read as True) resolves False. Mirrors the _coerce_* idiom on
-        AgentsBlock: never raise, always degrade toward safety."""
+        """Only a real TOML boolean grants merge: a string like "yes" resolves
+        False, so a config error never grants merge rights."""
         return v if isinstance(v, bool) else False
 
     @field_validator("on_exhaustion", mode="before")

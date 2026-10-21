@@ -117,6 +117,10 @@ pub(crate) fn anchor_or_refuse(
     }
 }
 
+/// Parse the tokens after `mux pane`. Pure, so the whole grammar (commands, flags,
+/// the exit-code-bearing outcomes) is unit-testable without a socket, and the
+/// agents daemon's tests can feed a refusal's printed command to this real
+/// parser rather than a copy of its grammar.
 pub fn parse_pane_args(
     op: &crate::cli_args::PaneOp,
     args: &[OsString],
