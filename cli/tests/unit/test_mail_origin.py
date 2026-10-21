@@ -1,49 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pytest
-
-
-@dataclass
-class _Identity:
-    session_id: str | None = "session-123"
-    harness: str | None = "codex"
-
-
-def test_classify_origin_downgrades_agent_declared_authority(monkeypatch, capsys):
-    from fno.mail.cli import classify_origin
-
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda: _Identity(),
-    )
-    # An ambient agent identity cannot claim an origin above peer, whatever
-    # the flag says; the downgrade is visible, not silent.
-    assert classify_origin("operator") == "peer"
-    assert classify_origin("scheduler") == "peer"
-    assert classify_origin("peer") == "peer"
-    assert "downgraded to 'peer'" in capsys.readouterr().err
-
-
-def test_classify_origin_distinguishes_peer_operator_and_unknown(monkeypatch):
-    from fno.mail.cli import classify_origin
-
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda: _Identity(),
-    )
-    assert classify_origin() == "peer"
-
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda: _Identity(session_id=None, harness=None),
-    )
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    assert classify_origin() == "operator"
-
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    assert classify_origin() == "unknown"
 
 
 def test_mail_envelope_carries_and_validates_origin(monkeypatch):

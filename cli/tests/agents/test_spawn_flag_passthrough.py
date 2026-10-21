@@ -105,6 +105,19 @@ def test_legacy_flag_shaped_seed_fence_rides_the_thread_as_the_prompt(
     assert not pane, res.output
 
 
+def test_a_seed_after_the_fence_refuses_before_a_flag_seeds_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pane = _capture_pane_dispatch(monkeypatch)
+    res = _run(
+        monkeypatch,
+        ["spawn", "-H", "footnote", "--as", "pane", "--", "-m", "zai/glm", "hi"],
+    )
+    assert res.exit_code == 2, res.output
+    assert not pane, res.output
+    assert "put the prompt before the `--` fence" in res.output, res.output
+
+
 # ---------------------------------------------------------------------------
 # -c stays --cwd; codex config rides the fence (AC8)
 # ---------------------------------------------------------------------------

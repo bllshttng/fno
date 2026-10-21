@@ -11,6 +11,13 @@ use std::time::Instant;
 
 pub(crate) const MIN_INTERVAL: f64 = 5.0;
 
+/// The pending-backoff ceiling: while checks run, the gap between ticks
+/// doubles up to here, then holds. A red or settled verdict is noticed at
+/// the next tick, so the cap is the worst-case wake latency; the fleet's
+/// own check cadence measures gaps in quarters of an hour, so five minutes
+/// buys five times the ticks for a latency the callers already tolerate.
+pub(crate) const PENDING_CAP: f64 = 300.0;
+
 fn duration_re() -> &'static regex::Regex {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"(?i)^(\d+(?:\.\d+)?)([smh])?$").unwrap())
@@ -35,6 +42,19 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64
+}
+
+/// The local HEAD sha, free: the zero-network tick's head guard. The wait
+/// runs from a worktree, so `git rev-parse HEAD` answers without GitHub;
+/// None on any failure sends the tick down the network path.
+fn local_head_sha(cwd: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && sha.len() >= 40).then_some(sha)
 }
 
 /// The deterministic resume offset that spreads a fleet's waiters across
@@ -106,6 +126,7 @@ pub(crate) fn wait_status(
     let deadline = now() + timeout.max(0.0);
     let mut ticks = 0usize;
     let mut calls = 0usize;
+    let mut pending_ticks: i32 = 0;
     loop {
         ticks += 1;
         let (rc, payload, lines, tick_calls) = poll();
@@ -154,7 +175,23 @@ pub(crate) fn wait_status(
             let (stdout, stderr) = emit_tick(&payload, &lines, calls, ticks);
             return (rc, stdout, stderr);
         }
-        if now() + interval > deadline {
+        // While checks run, double the gap up to the cap: a pending PR buys
+        // its live reads on a growing cadence instead of every interval.
+        // Any other payload (red, green, conflicting, degraded, settled)
+        // restores the base interval, so a wake stays one tick away.
+        let pending = payload.get("verdict").and_then(Value::as_str) == Some("pending")
+            && payload.get("settled").and_then(Value::as_bool) != Some(true);
+        pending_ticks = if pending {
+            pending_ticks.saturating_add(1)
+        } else {
+            0
+        };
+        let nap = if pending_ticks > 0 {
+            (interval * 2f64.powi(pending_ticks - 1)).min(interval.max(PENDING_CAP))
+        } else {
+            interval
+        };
+        if now() + nap > deadline {
             let (stdout, stderr) = emit_tick(&payload, &lines, calls, ticks);
             let verdict = payload
                 .get("verdict")
@@ -167,7 +204,7 @@ pub(crate) fn wait_status(
             );
             return (if rc == 0 { 2 } else { rc }, stdout, stderr);
         }
-        sleeper(interval);
+        sleeper(nap);
     }
 }
 
@@ -322,6 +359,18 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
             }
         }
         prev_hold_live = hold_live;
+        // The zero-network tick: a young row minted for the local HEAD
+        // answers with no gh call - the head guard is the sha local git
+        // read for free. A miss (no row, expired, a pushed head) falls to
+        // the network path below, same as today.
+        if !hold_live {
+            if let Some(sha) = local_head_sha(cwd) {
+                if let Some((code, payload, lines)) = super::cache::fresh_tick(cwd, pr, Some(&sha))
+                {
+                    return (code, payload, lines, 0);
+                }
+            }
+        }
         let (head, head_calls) = if hold_live {
             (None, 0)
         } else {
@@ -604,5 +653,72 @@ mod tests {
             None,
             "a non-array body is a no-answer, never a wake"
         );
+    }
+
+    /// While checks are pending, the gap doubles from the base interval up
+    /// to the cap and then holds; a red payload wakes at once and resets
+    /// the growth, so the next sleep would be the base interval.
+    #[test]
+    fn a_pending_verdict_grows_the_gap_to_the_cap_and_a_red_resets_it() {
+        let t = Cell::new(0.0);
+        let payloads: Vec<(i32, Value)> = (0..5)
+            .map(|_| (2, json!({"verdict": "pending", "settled": false})))
+            .chain(std::iter::once((
+                1,
+                json!({"verdict": "red", "settled": false, "head": "abcdef1234"}),
+            )))
+            .collect();
+        let (code, _stdout, _stderr) = wait_status(
+            9,
+            "settled",
+            100_000.0,
+            60.0,
+            staged_poll(payloads),
+            |_| Vec::new(),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 1, "the red payload wakes");
+        assert_eq!(
+            t.get(),
+            60.0 + 120.0 + 240.0 + 300.0 + 300.0,
+            "the pending gaps grow 60, 120, 240, then hold at the 300 cap"
+        );
+    }
+
+    /// An interval already past the cap stays flat: the cap is a ceiling,
+    /// never a pull. The deadline (not the payload list) ends the wait, and
+    /// every gap stays at the base interval.
+    #[test]
+    fn an_interval_past_the_cap_stays_flat() {
+        let t = Cell::new(0.0);
+        let payloads: Vec<(i32, Value)> = (0..2)
+            .map(|_| (2, json!({"verdict": "pending", "settled": false})))
+            .collect();
+        let (code, _stdout, stderr) = wait_status(
+            9,
+            "settled",
+            1500.0,
+            600.0,
+            staged_poll(payloads),
+            |_| Vec::new(),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 2, "the deadline ended the wait");
+        assert!(stderr.contains("still not settled after 1500s"), "{stderr}");
+        assert_eq!(t.get(), 600.0 + 600.0, "two flat 600s gaps, no growth");
+    }
+
+    #[test]
+    fn a_local_head_read_that_fails_degrades_to_none() {
+        assert!(local_head_sha(Path::new("/nonexistent-fno-test-dir")).is_none());
+    }
+
+    #[test]
+    fn the_local_head_read_resolves_in_a_git_checkout() {
+        let sha = local_head_sha(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .expect("a git checkout resolves HEAD");
+        assert!(sha.len() >= 40, "{sha} is a sha, not an error");
     }
 }

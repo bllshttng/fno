@@ -1,0 +1,6 @@
+docs: record the cohort id on attempt rows
+
+Wired through the runner so climb rounds can group their rows.
+
+The session transcript that produced this change is at
+https://claude.ai/code/9f8e7d6c5b4a3210 for context.

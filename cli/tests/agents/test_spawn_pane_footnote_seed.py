@@ -42,6 +42,7 @@ def _stub_spec(monkeypatch) -> dict:
 
     def _fake_spec(cwd, model, permission_mode, fno_id=None):
         captured["fno_id"] = fno_id
+        captured["model"] = model
         return "/tmp/footnote-spec.json"
 
     monkeypatch.setattr(
@@ -91,3 +92,18 @@ def test_non_preassigned_provider_run_keeps_its_transport_unchanged(
     _, runner = _spawn(monkeypatch, tmp_path, provider="claude", message="hi")
     run_call = next(c for c in runner.calls if c[1:4] == ["mux", "pane", "run"])
     assert "--fno-id" not in run_call
+
+
+@pytest.mark.parametrize(
+    "fence", [["-m", "zai/glm-5.3-flash"], ["--model=zai/glm-5.3-flash"]]
+)
+def test_fenced_model_reaches_the_footnote_spec_ask(
+    tmp_path: Path, monkeypatch, fence
+) -> None:
+    spec = _stub_spec(monkeypatch)
+    _, runner = _spawn(
+        monkeypatch, tmp_path, provider="footnote", message="hi", passthrough=fence
+    )
+    assert spec["model"] == "zai/glm-5.3-flash"
+    run_call = next(c for c in runner.calls if c[1:4] == ["mux", "pane", "run"])
+    assert "zai/glm-5.3-flash" not in " ".join(run_call)

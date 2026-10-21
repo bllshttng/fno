@@ -1995,6 +1995,11 @@ mod tests {
             ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
             ("FNO_CLAIMS_ROOT", std::env::var_os("FNO_CLAIMS_ROOT")),
             ("FNO_AGENTS_HOME", std::env::var_os("FNO_AGENTS_HOME")),
+            ("FNO_CONFIG", std::env::var_os("FNO_CONFIG")),
+            (
+                "FNO_GLOBAL_SETTINGS_PATH",
+                std::env::var_os("FNO_GLOBAL_SETTINGS_PATH"),
+            ),
         ]);
         let td = tempfile::tempdir().unwrap();
         let state_dir = td.path().join("state");
@@ -2081,6 +2086,12 @@ mod tests {
             "[work.workspaces.ws]\n[[work.workspaces.ws.projects]]\nname = \"proj-a\"\n",
         )
         .unwrap();
+        // The owner read climbs the config chain, and $FNO_CONFIG is the sole
+        // candidate when set: an ambient FNO_CONFIG a parallel test left
+        // behind makes proj-a unresolvable and the note reads zero. Pin the
+        // chain to this world's config (the lead_history input_tree posture).
+        std::env::set_var("FNO_CONFIG", proj.join(".fno/config.toml"));
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         let mut team = crate::state::RegistryEntry::default();
         team.name = "team-1".into();
         team.status = crate::AgentStatus::Live;

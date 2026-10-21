@@ -1,0 +1,37 @@
+# Stage tier (slice 3), target stage: precedence reasoning in a config fold.
+# Specimen: demand row x-b4cf - spawned target workers stamped auto_merge
+# off although the user's config enabled it, because a per-run stamp of
+# defaults was applied after the user's settings. The lane must make the
+# stamp stop clobbering explicit user config while explicit per-run values
+# still win.
+id: capability-stage-target-fold-order
+tier: capability
+prompt: |
+  Work only inside evals/fixtures/stage-tasks/fold-order/.
+
+  fold_config.py folds three config layers for spawned workers: defaults,
+  the user's config, and per-run values. The dispatcher also applies
+  UNCONDITIONAL_STAMP on every run, and that stamp clobbers an explicit
+  user setting: a worker whose user enabled auto_merge still reads it off.
+
+  Fix fold_config.py so:
+
+  - the unconditional stamp never overrides an explicit user setting;
+  - an explicit per-run value (per_run_extra) still wins over user config
+    in both directions;
+  - total silence still falls back to DEFAULTS;
+  - per-run extras still land.
+
+  Do not modify verify.py. Do not touch any file outside
+  evals/fixtures/stage-tasks/fold-order/.
+grade:
+  - kind: exit
+    command: 'cd evals/fixtures/stage-tasks/fold-order && python3 verify.py'
+  - kind: exit
+    # The verifier must survive the run untouched: a lane that edits the
+    # grader instead of the code grades fail here. A tamper committed
+    # alongside the fix still lands (status reads clean); the bank accepts
+    # that residual, the same as every fixture-verifier task.
+    command: 'test -z "$(git status --porcelain -- evals/fixtures/stage-tasks/fold-order/verify.py)"'
+timeout_minutes: 20
+tags: [stage-climb, target]

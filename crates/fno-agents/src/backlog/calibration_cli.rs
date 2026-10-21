@@ -14,6 +14,7 @@ struct CalibrationArgs {
     json_out: bool,
     by_lane: bool,
     since: Option<i64>,
+    kind_depth: Option<u8>,
 }
 
 impl CalibrationArgs {
@@ -22,6 +23,7 @@ impl CalibrationArgs {
         let mut json_out = false;
         let mut by_lane = false;
         let mut since = None;
+        let mut kind_depth = None;
         let mut i = 0;
         while i < tail.len() {
             match tail[i].as_str() {
@@ -35,6 +37,10 @@ impl CalibrationArgs {
                     i += 1;
                     since = Some(tail.get(i)?.parse().ok()?);
                 }
+                "--kind-depth" => {
+                    i += 1;
+                    kind_depth = Some(tail.get(i)?.parse().ok()?);
+                }
                 // No positional arguments: any other token (flag-shaped or
                 // not) is a usage error.
                 _ => return None,
@@ -42,8 +48,9 @@ impl CalibrationArgs {
             i += 1;
         }
         // --since alone names no view the plain read takes, so it is a usage
-        // error rather than a silently ignored flag.
-        if since.is_some() && !by_lane {
+        // error rather than a silently ignored flag. The kind depth shapes
+        // the by-lane kind the same way.
+        if (since.is_some() || kind_depth.is_some()) && !by_lane {
             return None;
         }
         Some(CalibrationArgs {
@@ -51,11 +58,12 @@ impl CalibrationArgs {
             json_out,
             by_lane,
             since,
+            kind_depth,
         })
     }
 }
 
-const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  -h, --help             Print help";
+const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 verb/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  -h, --help             Print help";
 
 pub fn run(tail: &[String]) -> i32 {
     if tail.iter().any(|t| t == "--help" || t == "-h") {
@@ -87,7 +95,18 @@ external tracker backend it is refused rather than computed over a non-authorita
             eprintln!("fno backlog calibration: --since takes 1 to 36500 days");
             return 2;
         }
-        return run_by_lane(since_days, args.json_out, args.domain.as_deref());
+        if let Some(depth) = args.kind_depth {
+            if !(1..=3).contains(&depth) {
+                eprintln!("fno backlog calibration: --kind-depth takes 1, 2 or 3");
+                return 2;
+            }
+        }
+        return run_by_lane(
+            since_days,
+            args.json_out,
+            args.domain.as_deref(),
+            args.kind_depth.unwrap_or(1),
+        );
     }
     let graph_path = super::settings::graph_path();
     let query = super::RowQuery {
@@ -156,7 +175,7 @@ external tracker backend it is refused rather than computed over a non-authorita
 /// The by-lane scorecard path: every live node, the native ledger read and
 /// the friction journal, folded per lane cell. The lane axes and the cell
 /// shape live in `scorecard`; this stays argv, reads and render.
-fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
+fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>, kind_depth: u8) -> i32 {
     let graph_path = super::settings::graph_path();
     let query = super::RowQuery {
         filter: super::api::NodeFilter::default(),
@@ -201,6 +220,14 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
     if let Some(fix_by_pr) = &fix_by_pr {
         scorecard::stamp_fix_of_fix(&mut built.records, fix_by_pr);
     }
+    // The second kind part needs the merge commits, so the git walk runs
+    // only when the kind runs deeper than verb/difficulty; the default
+    // output stays the slice-1 read with no git dependency.
+    if kind_depth >= 2 {
+        if let Some(parts) = scorecard::kind_parts_by_pr(&built.records, &cwd, since_days) {
+            scorecard::stamp_kind_parts(&mut built.records, &parts, kind_depth);
+        }
+    }
     let cells = scorecard::fold_cells(&built.records);
     let cov = scorecard::coverage(&built.records, built.dropped_unparsed);
     if json_out {
@@ -236,7 +263,7 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
         println!("  dropped, session time unparseable: {dropped}");
     }
     println!(
-        "\n  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
+        "\n  {:<24}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
         "kind",
         "harness",
         "provider",
@@ -266,7 +293,7 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
                 .unwrap_or_else(|| "n/a".to_string())
         };
         println!(
-            "  {:<16}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
+            "  {:<24}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
             c["kind"].as_str().unwrap_or_default(),
             c["harness"].as_str().unwrap_or_default(),
             c["provider"].as_str().unwrap_or_default(),

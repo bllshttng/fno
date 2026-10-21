@@ -8,6 +8,7 @@
 //! normally. `--force --reason` is the operator override.
 
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::merge_evidence::{node_pr_refs, query_pr_state, repo_slug_from_url, PrReadError};
@@ -392,6 +393,69 @@ fn promise_refusal_c(node_id: &str, plan_display: &str, expected: i64, merged: i
     )
 }
 
+/// The rollup close paths' promise hold: candidate id -> the gate verdict.
+/// The epic rollup and the parent cascade run inside the store mutation,
+/// where gh I/O must not, so the caller judges its rollup candidates
+/// BEFORE the lock and passes the verdicts in. Absent = held (fail
+/// closed): a plan-having parent the pre-lock warm never judged stays
+/// open rather than closing on an unseen promise. A candidate with no
+/// plan_path holds nothing here: `has_own_plan_work` already keeps a
+/// plan-holding parent open on every rollup path, and this fold exists
+/// for its blind spot - a plan plus a merged PR of its own clears that
+/// hold while the plan's `expected_url_count` stays unmet - the
+/// multi-slice shape this fold exists to hold.
+pub(crate) type RollupVerdicts = BTreeMap<String, PromiseVerdict>;
+
+/// True when the row carries a plan binding: the rollup gate's candidate
+/// test, shared by the fold and the hold check.
+pub(crate) fn rollup_holds_plan(row: &Value) -> bool {
+    row.get("plan_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+}
+
+pub(crate) fn rollup_hold_set(
+    candidates: &[Value],
+    gate: &mut dyn FnMut(&Value) -> PromiseVerdict,
+) -> RollupVerdicts {
+    let mut held = RollupVerdicts::new();
+    for node in candidates.iter().filter(|n| rollup_holds_plan(n)) {
+        let Some(id) = node.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        held.entry(id.to_string()).or_insert_with(|| gate(node));
+    }
+    held
+}
+
+/// The rollup hold verdict for one parent row under the fail-closed rule:
+/// a plan-having parent with no warm verdict holds.
+pub(crate) fn rollup_holds(parent: &Value, warm: &RollupVerdicts) -> bool {
+    if !rollup_holds_plan(parent) {
+        return false;
+    }
+    let Some(id) = parent.get("id").and_then(Value::as_str) else {
+        return true;
+    };
+    warm.get(id).is_none_or(|v| !v.satisfied())
+}
+
+/// The gate cwd for one node row: the project-resolved cwd when it is a
+/// live directory, else None (the plan resolves repo-relative from the
+/// caller's cwd). Shared by the closeable gate, the rollup warm, and the
+/// done verb's parent warm, so one node reads one verdict everywhere.
+pub(crate) fn gate_cwd_for(node: &Value) -> Option<String> {
+    let resolved = crate::backlog::drift_scan::effective_reconcile_cwd(
+        node.get("cwd").and_then(Value::as_str).unwrap_or(""),
+        node.get("project").and_then(Value::as_str),
+    );
+    if Path::new(&resolved).is_dir() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
 /// Count MERGED refs; return (merged, first typed failure). Stops early at
 /// the ceiling: once enough ships are confirmed, the remaining refs cannot
 /// change the verdict. An unreachable ref is reported separately from a
@@ -620,5 +684,45 @@ mod tests {
         assert!(text.contains("would close with 7 unharvested"), "{text}");
         assert!(text.contains("...and 2 more"), "{text}");
         assert!(!text.contains("c5:"), "{text}");
+    }
+
+    fn verdict(outcome: PromiseOutcome) -> PromiseVerdict {
+        PromiseVerdict {
+            outcome,
+            reason: (outcome != PromiseOutcome::Ok).then(|| "promised N; only M merged".into()),
+            warning: None,
+        }
+    }
+
+    #[test]
+    fn the_rollup_hold_gates_only_plan_having_candidates() {
+        let candidates = vec![
+            serde_json::json!({"id": "ab-planless", "pr_number": 1}),
+            serde_json::json!({"id": "ab-planned", "plan_path": "plans/multi.md", "pr_number": 3606}),
+        ];
+        let mut asked: Vec<String> = Vec::new();
+        let held = rollup_hold_set(&candidates, &mut |node| {
+            asked.push(node["id"].as_str().unwrap_or("").to_string());
+            verdict(PromiseOutcome::Unmet)
+        });
+        // The plan-less candidate never reaches the gate: has_own_plan_work
+        // keeps holding plan-less-PR parents, so gating it would double-hold.
+        assert_eq!(asked, vec!["ab-planned".to_string()]);
+        assert!(held.contains_key("ab-planned"));
+        assert!(!held.contains_key("ab-planless"));
+    }
+
+    #[test]
+    fn a_satisfied_gate_does_not_hold_the_rollup() {
+        let candidates = vec![serde_json::json!({
+            "id": "ab-multi",
+            "plan_path": "plans/multi.md",
+            "pr_number": 3606,
+        })];
+        let held = rollup_hold_set(&candidates, &mut |_node| verdict(PromiseOutcome::Ok));
+        // The map holds every warm verdict, Ok included: the hold reads
+        // verdict.satisfied(), not key presence (rollup_holds).
+        assert!(held["ab-multi"].satisfied());
+        assert!(!rollup_holds(&candidates[0], &held));
     }
 }

@@ -265,6 +265,10 @@ enum Role {
     /// hand-off. The carried tail runs `fno-agents org-remote`; a target
     /// without `@` forwards byte-verbatim to the local verb.
     RemoteOrg(Vec<OsString>),
+    /// `fno agents mail reply ...`: the native reply leaf. The carried tail
+    /// passes through byte-verbatim, re-spelled by the exec action; the
+    /// cross-host lane runs inside the leaf, before local routing.
+    MailReply(Vec<OsString>),
     /// `fno agents mail hold` (alias `dnd`) and `hold-release`: the
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
@@ -663,19 +667,18 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             }
         }
         "reply" => {
-            // Help stays Python's, so `reply --help` still prints the full
-            // local verb's docs; only the routed tail is claimed.
+            // Help stays the forward leaf's, so `reply --help` still prints
+            // the verb's docs; only the routed tail is claimed.
             if tail
                 .iter()
                 .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
             {
                 return None;
             }
-            Some(Role::RemoteMail(
-                std::iter::once(OsString::from("reply"))
-                    .chain(tail.to_vec())
-                    .collect(),
-            ))
+            // The native reply leaf claims the verb now; the cross-host lane
+            // runs inside it (reply_cross_host before local routing), so the
+            // RemoteMail claim this arm replaces never fires for reply.
+            Some(Role::MailReply(tail.to_vec()))
         }
         "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(verb))
@@ -1168,6 +1171,11 @@ fn main() {
             &["mail", "withdraw"],
             &rest,
         )),
+        Role::MailReply(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail reply",
+            &["mail", "reply"],
+            &rest,
+        )),
         Role::MailUnread(rest) => {
             std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
         }
@@ -1516,18 +1524,18 @@ mod tests {
             ),
             Role::MailSeedProvenance(os(&["seed-provenance", "--registry", "r.json"]))
         );
-        // The cross-host reply claims its verb on both mounts, tail
-        // included; help stays with the Python reply.
+        // The native reply claims its verb on both mounts, tail included;
+        // help stays with the Python forward leaf.
         assert_eq!(
             decide_role(
                 &os(&["agents", "mail", "reply", "--to", "fmail-x", "hi"]),
                 false
             ),
-            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+            Role::MailReply(os(&["--to", "fmail-x", "hi"]))
         );
         assert_eq!(
             decide_role(&os(&["mail", "reply", "--to", "fmail-x", "hi"]), false),
-            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+            Role::MailReply(os(&["--to", "fmail-x", "hi"]))
         );
         assert_eq!(
             decide_role(&os(&["agents", "mail", "reply", "--help"]), false),

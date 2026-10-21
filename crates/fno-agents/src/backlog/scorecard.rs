@@ -126,6 +126,63 @@ fn observed_model(session: &Value) -> Option<&str> {
     }
 }
 
+/// The lane axes one session row fills: harness and effort from the row,
+/// model from the row's observed model or the ledger row joined by session
+/// id, provider only ever from that ledger row's own field. The single lane
+/// read; the blueprint credit (slice 3) reuses it verbatim so a credited
+/// lane is built exactly the way the execute lane is.
+fn session_lane(session: &Value, ledger: &LedgerIndex) -> (String, String, String, String) {
+    let harness = session
+        .get("harness")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| UNATTRIBUTED.to_string());
+    let sid = session
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let ledger_row = ledger.first_by_session(sid);
+    let model = observed_model(session)
+        .or_else(|| {
+            ledger_row
+                .and_then(|r| r.get("model"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
+        .map(normalize_model)
+        .unwrap_or_else(|| UNKNOWN.to_string());
+    // Never infer provider from harness or model: only a ledger row's
+    // own provider field fills the axis.
+    let provider = ledger_row
+        .and_then(|r| r.get("provider"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| UNRECORDED.to_string());
+    let effort = session
+        .get("effort")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    (harness, model, provider, effort)
+}
+
+/// One session's elapsed worker hours from its own span: None unstarted or
+/// unended, negative spans excluded, matching the execute-sum read.
+fn session_hours(session: &Value) -> Option<f64> {
+    match (
+        session.get("started_at").and_then(Value::as_str),
+        session.get("ended_at").and_then(Value::as_str),
+    ) {
+        (Some(a), Some(b)) => parse_local(a)
+            .zip(parse_local(b))
+            .map(|(x, y)| (y - x).num_minutes() as f64 / 60.0)
+            .filter(|h| *h > 0.0),
+        _ => None,
+    }
+}
+
 /// One build over the node set: the lane records plus the count of nodes
 /// dropped because their last execute session's timestamps did not parse -
 /// a silent drop would read the coverage denominator as smaller and cleaner
@@ -237,39 +294,7 @@ pub fn build_records(
             continue;
         }
 
-        let harness = last
-            .get("harness")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| UNATTRIBUTED.to_string());
-        let sid = last
-            .get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let ledger_row = ledger.first_by_session(sid);
-        let model = observed_model(last)
-            .or_else(|| {
-                ledger_row
-                    .and_then(|r| r.get("model"))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-            })
-            .map(normalize_model)
-            .unwrap_or_else(|| UNKNOWN.to_string());
-        // Never infer provider from harness or model: only a ledger row's
-        // own provider field fills the axis.
-        let provider = ledger_row
-            .and_then(|r| r.get("provider"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| UNRECORDED.to_string());
-        let effort = last
-            .get("effort")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        let (harness, model, provider, effort) = session_lane(last, ledger);
 
         // Distinct (harness, model) lanes over ALL execute sessions decide
         // `shared`; the by-provider view counts the same way per node.
@@ -286,16 +311,8 @@ pub fn build_records(
                     .map(normalize_model)
                     .unwrap_or_else(|| UNKNOWN.to_string()),
             ));
-            let hours = match (
-                s.get("started_at").and_then(Value::as_str),
-                s.get("ended_at").and_then(Value::as_str),
-            ) {
-                (Some(a), Some(b)) => parse_local(a)
-                    .zip(parse_local(b))
-                    .map(|(x, y)| (y - x).num_minutes() as f64 / 60.0),
-                _ => None,
-            };
-            if let Some(h) = hours.filter(|h| *h >= 0.0) {
+            let hours = session_hours(s);
+            if let Some(h) = hours {
                 work_hours += h;
             }
         }
@@ -402,6 +419,53 @@ pub fn build_records(
             "review_findings": review_findings,
             "shared": lanes.len() > 1,
         }));
+
+        // The blueprint credit: a node with a blueprint session row also
+        // credits that session's lane with the node's downstream outcome,
+        // under a `blueprint/<difficulty>` kind. The population gate stays
+        // the target record's (the last execute session decides the
+        // window); the effort measure is the blueprint session's own span,
+        // not the execute sum.
+        let blueprint = sessions
+            .iter()
+            .filter(|s| s.get("phase").and_then(Value::as_str) == Some("blueprint"))
+            .max_by_key(|s| {
+                s.get("ended_at")
+                    .and_then(Value::as_str)
+                    .or_else(|| s.get("started_at").and_then(Value::as_str))
+                    .and_then(parse_local)
+            });
+        if let Some(bp) = blueprint {
+            let (bp_harness, bp_model, bp_provider, bp_effort) = session_lane(bp, ledger);
+            let bp_hours = session_hours(bp);
+            // The credit carries the downstream outcome, not the node's
+            // whole bill: this lane's own cost is the ledger row joined by
+            // its session id, and null with no row.
+            let bp_cost = bp
+                .get("session_id")
+                .and_then(Value::as_str)
+                .and_then(|sid| ledger.first_by_session(sid))
+                .and_then(|r| num_opt(r.get("cost_usd")));
+            records.push(json!({
+                "id": id,
+                "kind": format!("blueprint/{}",
+                    node.get("difficulty").and_then(Value::as_str).unwrap_or("unknown")),
+                "credit": "blueprint",
+                "harness": bp_harness,
+                "provider": bp_provider,
+                "model": bp_model,
+                "effort": bp_effort,
+                "merged": merged,
+                "pr": pr,
+                "cost_usd": bp_cost,
+                "work_hours": bp_hours.map(round2),
+                "bounce": bounce,
+                "ci_failure": ci_failure,
+                "ci_red": ci_red,
+                "review_findings": review_findings,
+                "shared": lanes.len() > 1,
+            }));
+        }
     }
     RecordSet {
         records,
@@ -449,12 +513,7 @@ pub fn fix_by_pr(
     }
     // The repo root: the nearest ancestor holding .git (a worktree's is a
     // file). Outside a repo the feed is unreadable, not clean.
-    let repo = std::fs::canonicalize(cwd)
-        .unwrap_or_else(|_| cwd.to_path_buf())
-        .ancestors()
-        .find(|p| p.join(".git").exists())
-        .map(|p| p.to_path_buf());
-    let Some(repo) = repo else {
+    let Some(repo) = repo_root(cwd) else {
         eprintln!(
             "fno backlog calibration: no git repo above {}; the fix-of-fix column reads as unknown",
             cwd.display()
@@ -478,6 +537,97 @@ the fix-of-fix column reads as unknown rather than a measured zero."
             );
             None
         }
+    }
+}
+
+/// The repo root for the git-backed feeds: the nearest ancestor holding
+/// .git (a worktree's is a file). `None` outside a repo - the caller owns
+/// the message, since each feed degrades differently.
+fn repo_root(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::canonicalize(cwd)
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .ancestors()
+        .find(|p| p.join(".git").exists())
+        .map(|p| p.to_path_buf())
+}
+
+/// The (commit type, surface) parts per PR behind the second kind part: the
+/// same repo discovery and merged-line walk the fix-of-fix feed uses, read
+/// once per fold when the kind runs deeper than `verb/difficulty`. `None`
+/// on a non-repo cwd or a failed walk - the kinds then keep their depth-1
+/// shape after the caller prints why, never a guessed type.
+pub fn kind_parts_by_pr(
+    records: &[Value],
+    cwd: &std::path::Path,
+    since_days: i64,
+) -> Option<HashMap<u64, Option<(&'static str, &'static str)>>> {
+    let wanted: HashSet<u64> = records
+        .iter()
+        .filter_map(|r| r.get("pr").and_then(Value::as_u64))
+        .collect();
+    if wanted.is_empty() {
+        return Some(HashMap::new());
+    }
+    let Some(repo) = repo_root(cwd) else {
+        eprintln!(
+            "fno backlog calibration: no git repo above {}; the kind stays at its verb/difficulty depth",
+            cwd.display()
+        );
+        return None;
+    };
+    let rev = crate::stability_report::scorecard_rev(&repo);
+    match crate::stability_report::kind_parts_by_pr(
+        &repo,
+        &rev,
+        since_days + 7,
+        chrono::Utc::now(),
+        &wanted,
+    ) {
+        Ok(map) => Some(map.into_iter().collect()),
+        Err(err) => {
+            eprintln!(
+                "fno backlog calibration: could not walk the merged line ({err}); \
+the kind stays at its verb/difficulty depth rather than a guessed type."
+            );
+            None
+        }
+    }
+}
+
+/// Stamps the second kind part onto each record at depth 2 or 3: the merge
+/// commit's conventional type, then the type-surface pair, joined onto the
+/// depth-1 kind with `/` and `-`. A record whose PR is missing from the
+/// parts map (no PR, a foreign repo, a merge outside the walked window)
+/// reads `unknown` - the bucket stays visible, so the deeper grouping never
+/// quietly rewrites the population a cell covers.
+pub fn stamp_kind_parts(
+    records: &mut [Value],
+    parts: &HashMap<u64, Option<(&'static str, &'static str)>>,
+    depth: u8,
+) {
+    if depth < 2 {
+        return;
+    }
+    for r in records.iter_mut() {
+        let (kind_type, kind_surface) = match r
+            .get("pr")
+            .and_then(Value::as_u64)
+            .and_then(|pr| parts.get(&pr))
+        {
+            Some(Some((kind_type, kind_surface))) => (*kind_type, *kind_surface),
+            _ => (UNKNOWN, UNKNOWN),
+        };
+        let base = r
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let suffix = if depth >= 3 {
+            format!("{kind_type}-{kind_surface}")
+        } else {
+            kind_type.to_string()
+        };
+        r["kind"] = json!(format!("{base}/{suffix}"));
     }
 }
 
@@ -671,11 +821,17 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
 /// The coverage block: what share of records carry each lane axis and a
 /// measured cost. The unattributed share is the harness number's gap, and
 /// `dropped_unparsed` counts the nodes excluded because their session time
-/// did not parse.
+/// did not parse. Blueprint credit records are the same node counted twice
+/// by design, so the denominator reads the population once: target records
+/// only.
 pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
-    let total = records.len() as u64;
+    let nodes: Vec<&Value> = records
+        .iter()
+        .filter(|r| r.get("credit").and_then(Value::as_str) != Some("blueprint"))
+        .collect();
+    let total = nodes.len() as u64;
     let axis = |k: &str| -> u64 {
-        records
+        nodes
             .iter()
             .filter(|r| {
                 let v = r[k].as_str().unwrap_or_default();
@@ -689,7 +845,7 @@ pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
         "provider_pct": pct(axis("provider"), total),
         "model_pct": pct(axis("model"), total),
         "cost_pct": pct(
-            records
+            nodes
                 .iter()
                 .filter(|r| num_opt(r.get("cost_usd")).is_some())
                 .count() as u64,
@@ -1309,5 +1465,213 @@ mod tests {
         assert_eq!(c["review_findings_coverage_pct"], 33);
         assert_eq!(c["fix_of_fix_pct"], 0, "measured clean, a real 0%: {c}");
         assert_eq!(c["fix_of_fix_coverage_pct"], 33, "one fix PR walked: {c}");
+    }
+
+    #[test]
+    fn depth_three_reads_type_and_surface_from_the_parts_map() {
+        let mut n = node(
+            "n1",
+            json!([session(
+                Some("claude"),
+                Some("sonnet"),
+                "s1",
+                Some("2026-10-14T11:00:00Z")
+            )]),
+            "medium",
+            None,
+        );
+        n = with_pr_url(n, 4001);
+        let mut recs = records(&[n], &[]);
+        let mut parts = HashMap::new();
+        parts.insert(4001_u64, Some(("fix", "rust")));
+        stamp_kind_parts(&mut recs, &parts, 3);
+        assert_eq!(recs[0]["kind"], json!("target/medium/fix-rust"));
+        // The default depth is the stamp's no-op: the slice-1 kind survives.
+        let mut untouched = records(
+            &[with_pr_url(
+                node(
+                    "n2",
+                    json!([session(
+                        Some("claude"),
+                        Some("sonnet"),
+                        "s2",
+                        Some("2026-10-14T11:00:00Z")
+                    )]),
+                    "medium",
+                    None,
+                ),
+                4002,
+            )],
+            &[],
+        );
+        stamp_kind_parts(&mut untouched, &parts, 1);
+        assert_eq!(untouched[0]["kind"], json!("target/medium"));
+        // The type evidence ladder: a merge delivery's git subject is
+        // GitHub's `Merge pull request #N ...` line, so a named type on the
+        // PR title wins; a squash reads its own subject; a merge with a
+        // plain title reads other, truthfully.
+        assert_eq!(
+            crate::stability_report::kind_commit_type(
+                "Merge pull request #7 from o/b",
+                Some("fix(mux): the thing"),
+            ),
+            "fix"
+        );
+        assert_eq!(
+            crate::stability_report::kind_commit_type("fix: direct", None),
+            "fix"
+        );
+        assert_eq!(
+            crate::stability_report::kind_commit_type(
+                "Merge pull request #7 from o/b",
+                Some("Add widget")
+            ),
+            "other"
+        );
+        assert_eq!(crate::stability_report::commit_type("docs: note"), "docs");
+        // A breaking-change marker keeps the type.
+        assert_eq!(
+            crate::stability_report::named_commit_type("feat!: x"),
+            Some("feat")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs"]),
+            Some("rust")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["docs/x.md", "crates/a.rs"]),
+            Some("rust")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["docs/x.md"]),
+            Some("docs")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs", "cli/src/fno/b.py"]),
+            Some("mixed")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["cli/src/fno/agents/mux_server.py"]),
+            Some("ui")
+        );
+        // A python PR never lands in mixed on its own tests, the lockfile
+        // rides with crates, and support paths carry no vote.
+        assert_eq!(
+            crate::stability_report::surface_class(&["cli/src/fno/a.py", "cli/tests/b.py"]),
+            Some("python")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs", "Cargo.lock"]),
+            Some("rust")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs", "scripts/x.sh"]),
+            Some("rust")
+        );
+    }
+
+    #[test]
+    fn blueprint_session_credits_its_lane_beside_the_target_cell() {
+        let mut bp = session(
+            Some("claude"),
+            Some("claude-opus-5-5"),
+            "bp1",
+            Some("2026-10-14T09:30:00Z"),
+        );
+        bp["phase"] = json!("blueprint");
+        let n = node(
+            "n1",
+            json!([
+                bp,
+                session(
+                    Some("claude"),
+                    Some("glm-5.3-flash"),
+                    "s1",
+                    Some("2026-10-14T11:00:00Z")
+                )
+            ]),
+            "medium",
+            None,
+        );
+        let ledger = vec![ledger_row(
+            &["bp1"],
+            "anthropic",
+            "claude-opus-5-5",
+            Some("n1"),
+            5.0,
+        )];
+        let recs = records(&[n], &ledger);
+        assert_eq!(recs.len(), 2, "{recs:?}");
+        let by_kind: Vec<(&str, &str, &str)> = recs
+            .iter()
+            .map(|r| {
+                (
+                    r["kind"].as_str().unwrap_or_default(),
+                    r["harness"].as_str().unwrap_or_default(),
+                    r["model"].as_str().unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert!(
+            by_kind.contains(&("blueprint/medium", "claude", "claude-opus-5-5")),
+            "{by_kind:?}"
+        );
+        assert!(
+            by_kind.contains(&("target/medium", "claude", "glm-5.3-flash")),
+            "{by_kind:?}"
+        );
+        // The credit mirrors the downstream outcome, merged included, and
+        // bills its own session: 5.0 from the bp1 ledger row, not the node
+        // total twice.
+        assert!(recs.iter().all(|r| r["merged"] == json!(true)));
+        let bp_cell = recs
+            .iter()
+            .find(|r| r["kind"] == json!("blueprint/medium"))
+            .unwrap();
+        assert_eq!(bp_cell["cost_usd"], json!(5.0), "{bp_cell}");
+        // The credit record is the same node twice, so the coverage block
+        // reads the population once.
+        assert_eq!(coverage(&recs, 0)["nodes"], json!(1));
+    }
+
+    #[test]
+    fn unknown_kind_parts_read_unknown_never_a_guess() {
+        let n = node(
+            "n1",
+            json!([session(
+                Some("claude"),
+                Some("sonnet"),
+                "s1",
+                Some("2026-10-14T11:00:00Z")
+            )]),
+            "medium",
+            None,
+        );
+        let mut recs = records(&[n], &[]);
+        let parts: HashMap<u64, Option<(&'static str, &'static str)>> = HashMap::new();
+        stamp_kind_parts(&mut recs, &parts, 3);
+        assert_eq!(recs[0]["kind"], json!("target/medium/unknown-unknown"));
+        // A wanted PR whose diff read failed maps to None and reads the
+        // same visible unknown, not a guessed class.
+        let mut n2 = with_pr_url(
+            node(
+                "n2",
+                json!([session(
+                    Some("claude"),
+                    Some("sonnet"),
+                    "s2",
+                    Some("2026-10-14T11:00:00Z")
+                )]),
+                "medium",
+                None,
+            ),
+            7,
+        );
+        n2["merge_status"] = json!("merged");
+        let mut recs2 = records(&[n2], &[]);
+        let parts2: HashMap<u64, Option<(&'static str, &'static str)>> =
+            HashMap::from([(7_u64, None)]);
+        stamp_kind_parts(&mut recs2, &parts2, 3);
+        assert_eq!(recs2[0]["kind"], json!("target/medium/unknown-unknown"));
     }
 }

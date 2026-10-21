@@ -2,7 +2,8 @@
 use super::*;
 
 /// Python `is_full_session_id` (store_fallback): 32-hex or dashed-uuid shape.
-pub(super) fn is_full_session_id(token: &str) -> bool {
+/// `pub(crate)`: the reply leaf's provenance arm reads it.
+pub(crate) fn is_full_session_id(token: &str) -> bool {
     let stripped: String = token.chars().filter(|c| *c != '-').collect();
     if stripped.len() != 32 {
         return false;
@@ -20,22 +21,24 @@ pub(super) fn is_session_shaped(token: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Python `ReachableSession`: one stored session a token can name.
+/// `pub(crate)`: the reply leaf's ladder reads it.
 #[derive(Clone, Debug)]
-pub(super) struct ReachableSession {
-    pub(super) session_id: String,
-    pub(super) source: &'static str,
-    pub(super) agent: String,
-    pub(super) cwd: Option<String>,
+pub(crate) struct ReachableSession {
+    pub(crate) session_id: String,
+    pub(crate) source: &'static str,
+    pub(crate) agent: String,
+    pub(crate) cwd: Option<String>,
 }
 
 /// The Python `resolve_reachable` result: `Ok((hit, ambiguous))` on clean
 /// reads, `Err((degraded, resolved))` when a store could not be read. A
 /// degraded read with exactly one hit still carries the hit: the caller
 /// refuses before any delivery side effect (unproven uniqueness).
-pub(super) struct ReachResult {
-    pub(super) hit: Option<ReachableSession>,
-    pub(super) ambiguous: Vec<String>,
-    pub(super) degraded: Vec<&'static str>,
+/// `pub(crate)`: the reply leaf's ladder reads it.
+pub(crate) struct ReachResult {
+    pub(crate) hit: Option<ReachableSession>,
+    pub(crate) ambiguous: Vec<String>,
+    pub(crate) degraded: Vec<&'static str>,
 }
 
 /// Python `_token_matches`: full id or 8-hex short, case-folded hex.
@@ -60,7 +63,16 @@ pub(super) fn decode_project_dir(name: &str) -> Option<String> {
     }
 }
 
-pub(super) fn projects_dir() -> PathBuf {
+/// `pub(crate)`: the reply leaf's transcript scan reads the same store.
+pub(crate) fn projects_dir() -> PathBuf {
+    // Python `default_projects_dir` precedence, which the delivery-matrix
+    // cell 6b fixture pins: the fno override leads, and a blank value never
+    // redirects the scan at a cwd-relative path.
+    if let Ok(dir) = std::env::var(crate::claude_drive::PROJECTS_DIR_ENV) {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir).join("projects");
@@ -69,6 +81,27 @@ pub(super) fn projects_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
         .join(".claude")
         .join("projects")
+}
+
+#[cfg(test)]
+mod projects_dir_tests {
+    use super::*;
+
+    /// The delivery-matrix fixtures redirect the transcript store with
+    /// FNO_CLAUDE_PROJECTS_DIR; a reader that misses the override scans the
+    /// operator's real store and a stored-legacy reply never resolves.
+    #[test]
+    fn the_transcript_store_reader_honors_the_fno_projects_override() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let scratch = tempfile::tempdir().unwrap();
+        let _guard = crate::claims::EnvVarGuard::set(
+            crate::claude_drive::PROJECTS_DIR_ENV,
+            scratch.path().to_str().unwrap(),
+        );
+        assert_eq!(projects_dir(), scratch.path().to_path_buf());
+    }
 }
 
 pub(super) fn roster_path() -> PathBuf {
@@ -284,7 +317,8 @@ pub(super) fn reachable_from_harness_stores(_token: &str) -> (Vec<ReachableSessi
 
 /// Python `resolve_reachable`: the union with the same merge, ambiguity and
 /// degradation rules.
-pub(super) fn resolve_reachable(token: &str) -> ReachResult {
+/// `pub(crate)`: the reply leaf's ladder resolves through it.
+pub(crate) fn resolve_reachable(token: &str) -> ReachResult {
     if token.trim().is_empty() {
         return ReachResult {
             hit: None,
@@ -405,7 +439,8 @@ pub(super) fn named_ambiguity(
 // Token exits (cli.py)
 // ---------------------------------------------------------------------------
 
-pub(super) fn ambiguous_token_exit(name: &str, candidates: &[String]) -> i32 {
+/// `pub(crate)`: the reply leaf mirrors the send leaf's refusal exits.
+pub(crate) fn ambiguous_token_exit(name: &str, candidates: &[String]) -> i32 {
     eprintln!(
         "ambiguous session token {}: matches {}. Send to a full session id.",
         py_repr(name),
@@ -426,7 +461,8 @@ pub(super) fn unreachable_token_line(name: &str, candidates: &[String]) -> Strin
     )
 }
 
-pub(super) fn unreachable_token_exit(name: &str, candidates: &[String], code: i32) -> i32 {
+/// `pub(crate)`: the reply leaf mirrors the send leaf's refusal exits.
+pub(crate) fn unreachable_token_exit(name: &str, candidates: &[String], code: i32) -> i32 {
     eprintln!("{}", unreachable_token_line(name, candidates));
     code
 }
@@ -456,7 +492,8 @@ mod token_exit_tests {
     }
 }
 
-pub(super) fn unavailable_token_exit(name: &str, failed: &[String], candidates: &[String]) -> i32 {
+/// `pub(crate)`: the reply leaf mirrors the send leaf's refusal exits.
+pub(crate) fn unavailable_token_exit(name: &str, failed: &[String], candidates: &[String]) -> i32 {
     let visible = if candidates.is_empty() {
         String::new()
     } else {

@@ -47,7 +47,14 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
 }
 
 /// Close every open epic whose children are all done (self-heal/migration).
-pub(crate) fn sweep_close_done_epics(entries: &mut [Value]) -> Vec<String> {
+/// `promise_held` carries the pre-lock rollup verdicts: a plan plus a
+/// merged PR clears `has_own_plan_work`, and without the hold such an epic
+/// closed on its children's closes with the plan's ships unverified.
+/// Absent = held (fail closed), like the cascade.
+pub(crate) fn sweep_close_done_epics(
+    entries: &mut [Value],
+    promise_held: &super::promise::RollupVerdicts,
+) -> Vec<String> {
     let mut closed: Vec<String> = Vec::new();
     for _ in 0..64 {
         // fixpoint, depth-capped against a malformed cycle
@@ -62,6 +69,9 @@ pub(crate) fn sweep_close_done_epics(entries: &mut [Value]) -> Vec<String> {
             else {
                 continue;
             };
+            if super::promise::rollup_holds(&entries[index], promise_held) {
+                continue;
+            }
             let parent = &mut entries[index];
             if parent
                 .get("completed_at")
@@ -393,7 +403,7 @@ mod tests {
             seed("x-epic", Some("x-mission")),
             json!({"id": "x-cccc", "parent": "x-epic", "status": "done", "completed_at": "2026-10-01T00:00:00Z"}),
         ];
-        let closed = sweep_close_done_epics(&mut entries);
+        let closed = sweep_close_done_epics(&mut entries, &Default::default());
         assert_eq!(closed, vec!["x-epic".to_string(), "x-mission".to_string()]);
         assert_eq!(entries[0]["status"], "done");
         let note = entries[0]["completion_note"].as_str().unwrap_or_default();
@@ -415,16 +425,61 @@ mod tests {
             strandable_epic_ids(&entries).is_empty(),
             "the self-heal sweep does not strand-close a plan-having parent"
         );
-        assert_eq!(sweep_close_done_epics(&mut entries), Vec::<String>::new());
-        assert_eq!(entries[0]["status"], "ready");
-        assert!(entries[0].get("completed_at").is_none());
         assert_eq!(
-            cascade_close_parents(&mut entries, "x-kid"),
+            sweep_close_done_epics(&mut entries, &Default::default()),
+            Vec::<String>::new()
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        assert_eq!(entries[0]["status"], "ready");
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-kid", &Default::default()),
             Vec::<String>::new(),
             "the done cascade leaves the plan-having parent open"
         );
         assert!(entries[0].get("completed_at").is_none());
         assert_eq!(entries[0]["status"], "ready");
+    }
+
+    #[test]
+    fn a_plan_plus_pr_parent_with_an_unmet_promise_holds_the_rollup() {
+        // The multi-slice shape: plan expected_url_count 4, one slice PR merged
+        // on the parent itself, every child done. has_own_plan_work reads
+        // false (the PR clears it), so only the pre-lock rollup hold keeps
+        // the parent open; without it the epic sweep closed a 4-slice node
+        // on its one child's close.
+        let mut entries = vec![
+            json!({
+                "id": "x-multi", "plan_path": "plans/multi-slice.md",
+                "pr_number": 3606, "status": "in_progress",
+            }),
+            json!({
+                "id": "x-slice2", "parent": "x-multi", "status": "done",
+                "completed_at": "2026-10-01T00:00:00Z",
+            }),
+        ];
+        assert!(
+            strandable_epic_ids(&entries).contains("x-multi"),
+            "the plan+PR parent is a rollup candidate: its own hold is cleared"
+        );
+        let verdict = |outcome, reason: &str| super::super::promise::PromiseVerdict {
+            outcome,
+            reason: (!reason.is_empty()).then(|| reason.to_string()),
+            warning: None,
+        };
+        let held: super::super::promise::RollupVerdicts = [(
+            "x-multi".to_string(),
+            verdict(
+                super::super::promise::PromiseOutcome::Unmet,
+                "promised 4 ships; only 1 merged",
+            ),
+        )]
+        .into();
+        assert_eq!(
+            sweep_close_done_epics(&mut entries, &held),
+            Vec::<String>::new()
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        assert_eq!(entries[0]["status"], "in_progress");
     }
 
     #[test]

@@ -1,0 +1,37 @@
+# Stage tier (slice 3), review stage: values interpolated into a command
+# line without quoting. Source: demand row x-bcdb - the mail team relay
+# splits a flag from its value when it hands the line to the Rust writer,
+# so a value carrying spaces never arrives whole. The lane must flag the
+# unquoted interpolation as blocking, not the style of the f-string.
+id: capability-stage-review-argv-split
+tier: capability
+prompt: |
+  Review a proposed helper the way you would review a real PR on this
+  repo.
+
+  The material is evals/fixtures/stage-tasks/review-argv-split/relay.py.
+  It relays one mail send to a native writer that splits its input line
+  on whitespace. Review it against this repo's review discipline and
+  general command-handling practice. Do not fix anything and do not
+  modify the fixture directory.
+
+  Write your findings to review-findings.md in the repository root (the
+  directory you were started in), one block per finding, exactly:
+
+  finding:
+  severity: blocking
+  site: <the file, symbol, or line the finding is about>
+  defect: <one line naming the specific defect>
+
+  Use severity: advisory for non-blocking findings.
+grade:
+  - kind: file-exists
+    path: review-findings.md
+  - kind: exit
+    # Grade the defect, not the site: some finding block must read
+    # severity: blocking AND its defect line must name the splitting or
+    # quoting problem itself. Naming the symbol, or blocking on style,
+    # fails here.
+    command: 'python3 -c "import re,sys; t=open(''review-findings.md'').read(); bs=re.split(r''(?m)^finding:\s*$'',t)[1:]; ok=any((''severity: blocking'' in b and re.search(r''(?im)^defect:.*\b(split|quote|escape|shlex|space|argv)'',b)) for b in bs); sys.exit(0 if ok else 1)"'
+timeout_minutes: 15
+tags: [stage-climb, review]
