@@ -367,19 +367,21 @@ impl FileLock {
     }
 }
 
-/// The ledger's flock and the path it guards. An override names an injected
-/// test ledger verbatim; None means the real ledger, resolved as late as
-/// the lock itself. A lock that cannot be taken degrades to a lock-free
-/// read at the same path (the module's fail-open rule), so the caller
-/// always holds one path for the lock, the read and the write.
+/// The ledger's flock and the LEDGER path it guards: the lock lives at the
+/// `.lock` sidecar and the caller reads and writes the returned ledger
+/// path. An override names an injected test ledger verbatim; None means the
+/// real ledger, resolved as late as the lock itself. A lock that cannot be
+/// taken degrades to a lock-free read at the same path (the module's
+/// fail-open rule), so the caller always holds one path for the lock, the
+/// read and the write.
 fn ledger_lock(ledger: Option<&Path>) -> (Option<FileLock>, PathBuf) {
     let Some(path) = ledger else {
         return ledger_lock_resolving(ledger_path);
     };
-    let path = lock_path(path);
-    match FileLock::try_acquire(&path) {
-        Ok(lock) => (Some(lock), path),
-        Err(_) => (None, path),
+    let lock = lock_path(path);
+    match FileLock::try_acquire(&lock) {
+        Ok(l) => (Some(l), path.to_path_buf()),
+        Err(_) => (None, path.to_path_buf()),
     }
 }
 
@@ -390,16 +392,18 @@ fn ledger_lock(ledger: Option<&Path>) -> (Option<FileLock>, PathBuf) {
 /// drops the lock and retakes it on the fresh answer, where every later
 /// taker lands.
 fn ledger_lock_resolving(resolve: impl Fn() -> PathBuf) -> (Option<FileLock>, PathBuf) {
-    let fresh = lock_path(&resolve());
+    let ledger = resolve();
+    let fresh = lock_path(&ledger);
     match FileLock::try_acquire(&fresh) {
-        Ok(lock) if lock.matches(&lock_path(&resolve())) => return (Some(lock), fresh),
+        Ok(lock) if lock.matches(&lock_path(&resolve())) => return (Some(lock), ledger),
         Ok(lock) => drop(lock),
         Err(_) => {}
     }
-    let fresh = lock_path(&resolve());
+    let ledger = resolve();
+    let fresh = lock_path(&ledger);
     match FileLock::try_acquire(&fresh) {
-        Ok(lock) => (Some(lock), fresh),
-        Err(_) => (None, fresh),
+        Ok(lock) => (Some(lock), ledger),
+        Err(_) => (None, ledger),
     }
 }
 
@@ -946,9 +950,9 @@ fn record_refusal_body(
     // the backoff rides the claims store's shared row for the other hosts.
     // Rides only the REAL ledger (tests stage temp paths); store trouble is
     // a printed note, never a failure of the local record. The compare runs
-    // on the locked path: after a retake it names the current answer even
-    // when the caller resolved before the fold.
-    if path == lock_path(&ledger_path()) {
+    // on the returned ledger path: after a retake it names the current
+    // answer even when the caller resolved before the fold.
+    if path == ledger_path().as_path() {
         if let Err(e) = crate::claim_store::budget_hold_write(
             None,
             &crate::claims::machine_id(),
@@ -1295,14 +1299,22 @@ mod tests {
             }
         };
         let (_lock, path) = ledger_lock_resolving(resolve);
+        assert_eq!(
+            path.parent(),
+            Some(moved.as_path()),
+            "the retake landed on the moved folder, not the stray: {path:?}"
+        );
         use std::os::unix::fs::MetadataExt;
-        let held = path.metadata().expect("the returned path exists").ino();
+        let held = lock_path(&path)
+            .metadata()
+            .expect("the locked file exists")
+            .ino();
         let verified = std::fs::metadata(&real).unwrap().ino();
         assert_eq!(
             held, verified,
-            "the lock was retaken on the moved folder, not the stray: {path:?}"
+            "the lock was retaken on the moved folder, not the stray"
         );
-        assert_ne!(path, stray, "the stray inode was dropped");
+        assert_ne!(lock_path(&path), stray, "the stray inode was dropped");
     }
 
     #[test]
