@@ -1,0 +1,152 @@
+{
+  "verdict": "underpowered",
+  "reason": "held-out needs 20 scored rows per cohort (baseline 5, trial 0)",
+  "baseline": "x-82c4-base",
+  "trial": "x-82c4-trial",
+  "train": {
+    "baseline": {
+      "attempts": 20,
+      "graded": 20,
+      "scored": 20,
+      "accepted": 15,
+      "pass_rate": 0.75,
+      "pass_rate_ci95": [
+        0.5313,
+        0.8881
+      ],
+      "median_wall_s": 51.114,
+      "lane_status_counts": {
+        "unverified": 20
+      },
+      "status_counts": {
+        "graded": 20
+      },
+      "excluded": {
+        "total": 0,
+        "by_reason": {},
+        "usage_missing": 20
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    },
+    "trial": {
+      "attempts": 20,
+      "graded": 20,
+      "scored": 0,
+      "accepted": 0,
+      "pass_rate": 0.0,
+      "pass_rate_ci95": [
+        0.0,
+        0.0
+      ],
+      "median_wall_s": 0.0,
+      "lane_status_counts": {
+        "substituted": 20
+      },
+      "status_counts": {
+        "graded": 20
+      },
+      "excluded": {
+        "total": 20,
+        "by_reason": {
+          "substituted": 20
+        },
+        "usage_missing": 0
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    }
+  },
+  "heldout": {
+    "baseline": {
+      "attempts": 5,
+      "graded": 5,
+      "scored": 5,
+      "accepted": 5,
+      "pass_rate": 1.0,
+      "pass_rate_ci95": [
+        0.5655,
+        1.0
+      ],
+      "median_wall_s": 88.564,
+      "lane_status_counts": {
+        "unverified": 5
+      },
+      "status_counts": {
+        "graded": 5
+      },
+      "excluded": {
+        "total": 0,
+        "by_reason": {},
+        "usage_missing": 5
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    },
+    "trial": {
+      "attempts": 5,
+      "graded": 5,
+      "scored": 0,
+      "accepted": 0,
+      "pass_rate": 0.0,
+      "pass_rate_ci95": [
+        0.0,
+        0.0
+      ],
+      "median_wall_s": 0.0,
+      "lane_status_counts": {
+        "substituted": 5
+      },
+      "status_counts": {
+        "graded": 5
+      },
+      "excluded": {
+        "total": 5,
+        "by_reason": {
+          "substituted": 5
+        },
+        "usage_missing": 0
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    }
+  },
+  "wrong_rev": 0,
+  "unsplit": 0
+}
