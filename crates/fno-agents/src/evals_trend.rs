@@ -511,8 +511,9 @@ fn compare_variants(rows: &[Row], variant: &str) -> Value {
 /// Scored rows are natively `graded` rows that the lane evidence does not
 /// exclude (not `substituted`, no `excluded_reason`); everything else is
 /// counted by reason and never scored. Cost is priced only when every scored
-/// row carries usage and a price line: `unmeasured` otherwise, never a
-/// partial sum (AC3-EDGE).
+/// row carries usage and a complete price line (input and output rates, plus
+/// a cache rate for any cache tokens the row carries): `unmeasured`
+/// otherwise, never a partial sum (AC3-EDGE).
 fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     let mut cohorts: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
     for r in rows {
@@ -612,11 +613,33 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             measured = false;
             continue;
         };
-        let per_m = |k: &str| price.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-        cost_total += (input as f64 * per_m("input_per_m")
-            + output as f64 * per_m("output_per_m")
-            + cache_read as f64 * per_m("cache_read_per_m")
-            + cache_write as f64 * per_m("cache_write_per_m"))
+        // A price line missing a rate the row's usage needs prices that token
+        // class at $0 silently. Treat it like no price line at all: a cell
+        // reads unmeasured rather than measured-cheap (a partial line once
+        // let a typo'd key read `propose` on near-zero cost).
+        let rate_of = |k: &str| price.get(k).and_then(Value::as_f64);
+        let (Some(in_rate), Some(out_rate)) = (rate_of("input_per_m"), rate_of("output_per_m"))
+        else {
+            measured = false;
+            continue;
+        };
+        let cache_rate = |k: &str, tokens_used: u64| -> Option<f64> {
+            if tokens_used == 0 {
+                return Some(0.0);
+            }
+            rate_of(k)
+        };
+        let (Some(read_rate), Some(write_rate)) = (
+            cache_rate("cache_read_per_m", cache_read),
+            cache_rate("cache_write_per_m", cache_write),
+        ) else {
+            measured = false;
+            continue;
+        };
+        cost_total += (input as f64 * in_rate
+            + output as f64 * out_rate
+            + cache_read as f64 * read_rate
+            + cache_write as f64 * write_rate)
             / 1_000_000.0;
     }
     if usage_missing > 0 {
@@ -632,6 +655,7 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     json!({
         "attempts": rows.len(),
         "graded": statuses.get("graded").copied().unwrap_or(0),
+        "scored": scored.len(),
         "accepted": accepted,
         "pass_rate": round4(rate),
         "pass_rate_ci95": [round4(lo), round4(hi)],

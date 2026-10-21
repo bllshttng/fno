@@ -58,10 +58,10 @@ A live trial runs only with an explicit configured budget and an account that ca
 
 ## Climb round
 
-A climb round turns one comparison into a verdict the user can accept in one step. The fold reads the declared split and applies the harness-fit preregistration's decision rules (evals/harness-fit/README.md). The verdicts: underpowered (under 20 graded held-out rows per cohort), regression (trial held-out 15 points down), overfit (train up 15 points, held-out flat), propose, hold.
+A climb round turns one comparison into a verdict the user can accept in one step. The fold reads the declared split and applies the harness-fit preregistration's decision rules (evals/harness-fit/README.md). The verdicts: underpowered (under 20 scored held-out rows per cohort), regression (trial held-out 15 points down), overfit (train up 15 points, held-out flat), propose, hold. If a difference is real, the cells' 95 percent intervals separate. If overfit is judged, both train cells hold 20 or more scored rows.
 
 1. Pick one stage and one candidate lane from `fno config route inventory`. For the blueprint stage the candidates are only the blueprint-floor models: opus, fable, gpt-5.6-sol, gpt-6-astra. A cheaper model never drafts a plan.
-2. Run that stage's train and held-out tasks for baseline and trial under one cohort id each, same `--repeat`. Command shape: `fno doctor evals run --lane <baseline lane> --cohort <baseline id>`. The trial run repeats the shape with its own lane and id.
+2. Run each task of that stage separately. Command shape: `fno doctor evals run --task <task id> --lane <baseline lane> --cohort <baseline id> --repeat K`. The trial arm repeats the shape with the trial lane and trial cohort id. Cover the stage's train and held-out tasks in both arms. The fold scores every split task present in the cohort.
 3. Fold it: `fno doctor evals report --climb --baseline <baseline id> --trial <trial id> [--stage <verb> --trial-lane <trial lane>] --json`.
 4. On `propose`, write the JSON to `evals/climbs/<date>-<stage>.json` and ask the user with the printed accept line. On `overfit` or `regression`, read the reason and stop.
 5. Choosing the next candidate reads only train transcripts. Held-out rows are never inspected to steer the climb. The held-out set stays a test, not a tuning surface.

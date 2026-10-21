@@ -31,12 +31,16 @@ const NOISE: f64 = 0.15;
 /// only with 30% lower cost per accepted change).
 const COST_CUT: f64 = 0.30;
 
-/// Graded held-out rows per cohort below which no verdict but
-/// `underpowered` may read. At this n a 15-point difference sits inside the
-/// Wilson interval, so any other label would be noise wearing a name; this
-/// gate also keeps a gate-blocked run (few graded rows) from ever reading
-/// `regression` or `propose`.
-const MIN_HELDOUT: usize = 20;
+/// Scored held-out rows per cohort below which no verdict but
+/// `underpowered` may read. The floor counts scored rows - the rows the
+/// rates actually read - so substituted or otherwise excluded attempts
+/// cannot satisfy it, and a gate-blocked run can never read past it. The
+/// floor is the minimum evidence a comparison needs, not a noise cure: at
+/// this n a 15-point difference still sits inside the Wilson interval,
+/// which is why the verdict rules decide on interval separation, never on
+/// the point move alone. The same floor applies to a train cell before the
+/// overfit rule reads its rate.
+const MIN_ROWS: usize = 20;
 
 pub(crate) struct ClimbArgs<'a> {
     pub history: &'a str,
@@ -85,6 +89,46 @@ fn git_toplevel() -> Option<String> {
     }
 }
 
+/// Which config scope declares a stage's `lanes`. The merged read lets a
+/// project declaration outrank global (config_candidates order), and
+/// `fno config set` defaults to global, so an accept line that copies
+/// project-scoped lanes into global would change nothing and duplicate the
+/// list. Both scopes declaring is ambiguous and prints no accept line.
+enum LanesScope {
+    None,
+    Global,
+    Project,
+    Ambiguous,
+}
+
+fn lanes_scope(cwd: &std::path::Path, stage: &str) -> LanesScope {
+    let global_declares =
+        crate::agents_config::config_lookup_global(&["agents", "profiles", stage, "lanes"])
+            .is_some();
+    let global_path = crate::agents_config::global_config_path();
+    let project_declares = crate::agents_config::config_candidates(cwd)
+        .iter()
+        .filter(|p| Some(p.as_path()) != global_path.as_deref())
+        .any(|p| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|c| crate::agents_config::parse_config(&c))
+                .is_some_and(|t| {
+                    t.get("agents")
+                        .and_then(|a| a.get("profiles"))
+                        .and_then(|p| p.get(stage))
+                        .and_then(|s| s.get("lanes"))
+                        .is_some()
+                })
+        });
+    match (project_declares, global_declares) {
+        (false, false) => LanesScope::None,
+        (false, true) => LanesScope::Global,
+        (true, false) => LanesScope::Project,
+        (true, true) => LanesScope::Ambiguous,
+    }
+}
+
 /// The declared lanes of one stage profile, verbatim (a string stays a
 /// string; a table converts), across global and project config. No lanes is
 /// an empty list: the accept line then sets the list fresh, which the route
@@ -109,8 +153,17 @@ fn current_lanes(stage: &str) -> Vec<Value> {
 /// `on_exhausted = degrade`: an exhausted lane defaults to refusing spawns,
 /// which would turn the promoted lane into a wall the next time the account
 /// runs dry. Both writes ride `fno config set`, schema-validated and
-/// atomic; the user runs the line, the fold never edits config itself.
-fn accept_line(stage: &str, trial_lane: &str) -> String {
+/// atomic, into the scope that declares the lanes today (`--local` for a
+/// project declaration, global otherwise). The user runs the line; the fold
+/// never edits config itself. `None` is the ambiguous case (both scopes
+/// declare): no line prints rather than a line that cannot win.
+fn accept_line(stage: &str, trial_lane: &str) -> Option<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let local_flag = match lanes_scope(&cwd, stage) {
+        LanesScope::Ambiguous => return None,
+        LanesScope::Project => " --local",
+        LanesScope::None | LanesScope::Global => "",
+    };
     let mut lanes = vec![json!(trial_lane)];
     lanes.extend(
         current_lanes(stage)
@@ -121,18 +174,28 @@ fn accept_line(stage: &str, trial_lane: &str) -> String {
     // The array travels single-quoted; JSON's only single-quote is inside a
     // lane name, so the standard escape keeps the line paste-safe.
     let quoted = arr.replace('\'', "'\\''");
-    format!(
-        "fno config set agents.profiles.{stage}.lanes '{quoted}' && \
-         fno config set agents.profiles.{stage}.on_exhausted degrade"
-    )
+    Some(format!(
+        "fno config set{local_flag} agents.profiles.{stage}.lanes '{quoted}' && \
+         fno config set{local_flag} agents.profiles.{stage}.on_exhausted degrade"
+    ))
 }
 
 fn cell_rate(cell: &Value) -> f64 {
     cell.get("pass_rate").and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-fn cell_graded(cell: &Value) -> usize {
-    cell.get("graded").and_then(Value::as_u64).unwrap_or(0) as usize
+fn cell_scored(cell: &Value) -> usize {
+    cell.get("scored").and_then(Value::as_u64).unwrap_or(0) as usize
+}
+
+/// The cell's Wilson bounds as (lo, hi); `None` below the scored floor,
+/// where an interval comparison would decide on noise.
+fn cell_ci(cell: &Value) -> Option<(f64, f64)> {
+    if cell_scored(cell) < MIN_ROWS {
+        return None;
+    }
+    let ci = cell.get("pass_rate_ci95")?.as_array()?;
+    Some((ci.first()?.as_f64()?, ci.get(1)?.as_f64()?))
 }
 
 /// Cost per accepted change of a cell; `None` is unmeasured or zero
@@ -230,27 +293,45 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
     // The verdict chain. The power gate reads first: every later label is a
     // claim about a difference, and below the floor a difference is not
     // measurable (the regression and propose shapes below can only fire on
-    // 20+ graded rows per held-out cell).
-    let (verdict, reason): (&str, String) = if cell_graded(&base_heldout) < MIN_HELDOUT
-        || cell_graded(&trial_heldout) < MIN_HELDOUT
+    // 20+ scored rows per held-out cell). A difference also reads only when
+    // the cells' 95 percent intervals separate: at this n the 15-point move
+    // alone still sits inside the intervals, so the point move never
+    // decides by itself.
+    let train_readable =
+        cell_scored(&base_train) >= MIN_ROWS && cell_scored(&trial_train) >= MIN_ROWS;
+    let base_ci = cell_ci(&base_heldout);
+    let trial_ci = cell_ci(&trial_heldout);
+    // True when the first cell's lower bound sits above the second cell's
+    // upper bound: the two intervals do not overlap and the move is real.
+    let separated = |higher: Option<(f64, f64)>, lower: Option<(f64, f64)>| {
+        matches!(
+            (higher, lower),
+            (Some((hi_lo, _)), Some((_, lo_hi))) if hi_lo > lo_hi
+        )
+    };
+    let (verdict, reason): (&str, String) = if cell_scored(&base_heldout) < MIN_ROWS
+        || cell_scored(&trial_heldout) < MIN_ROWS
     {
         (
             "underpowered",
             format!(
-                "held-out needs {MIN_HELDOUT} graded rows per cohort (baseline {}, trial {})",
-                cell_graded(&base_heldout),
-                cell_graded(&trial_heldout),
+                "held-out needs {MIN_ROWS} scored rows per cohort (baseline {}, trial {})",
+                cell_scored(&base_heldout),
+                cell_scored(&trial_heldout),
             ),
         )
-    } else if cell_rate(&base_heldout) - cell_rate(&trial_heldout) > NOISE {
+    } else if cell_rate(&base_heldout) - cell_rate(&trial_heldout) > NOISE
+        && separated(base_ci, trial_ci)
+    {
         (
             "regression",
             format!(
-                "trial held-out fell {:.0} points below baseline, past the noise floor",
+                "trial held-out fell {:.0} points below baseline and the intervals separate",
                 (cell_rate(&base_heldout) - cell_rate(&trial_heldout)) * 100.0,
             ),
         )
-    } else if cell_rate(&trial_train) - cell_rate(&base_train) > NOISE
+    } else if train_readable
+        && cell_rate(&trial_train) - cell_rate(&base_train) > NOISE
         && cell_rate(&trial_heldout) - cell_rate(&base_heldout) <= NOISE
     {
         (
@@ -271,8 +352,16 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
             cell_cost(&base_heldout).unwrap_or_default(),
             cell_cost(&trial_heldout).unwrap_or_default(),
         );
-        let flat_and_cheaper = heldout_move >= -NOISE && trial_cost <= base_cost * (1.0 - COST_CUT);
-        let better_not_pricier = heldout_move > NOISE && trial_cost <= base_cost;
+        // The tie arm accepts a trial up to the noise floor BELOW the
+        // baseline rate only when even its interval's lower end stays
+        // within that floor: a trial whose lower bound sits far under the
+        // baseline rate cannot read as a win.
+        let trial_lo = trial_ci.map(|(lo, _)| lo).unwrap_or_default();
+        let flat_and_cheaper = heldout_move >= -NOISE
+            && trial_lo >= cell_rate(&base_heldout) - NOISE
+            && trial_cost <= base_cost * (1.0 - COST_CUT);
+        let better_not_pricier =
+            heldout_move > NOISE && separated(trial_ci, base_ci) && trial_cost <= base_cost;
         if flat_and_cheaper || better_not_pricier {
             // A zero baseline cost has no percent cut to name; the reason
             // then carries the absolute dollars per accepted instead.
@@ -292,10 +381,13 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
                 ),
             )
         } else {
-            (
-                "hold",
-                "held-out flat and the cost per accepted is not lower enough to count a tie as a win".into(),
-            )
+            let mut why = "held-out flat and the cost per accepted is not lower enough to count a tie as a win".to_string();
+            if !train_readable {
+                why.push_str(&format!(
+                    "; train cells under {MIN_ROWS} scored rows, so overfit is not judged"
+                ));
+            }
+            ("hold", why)
         }
     };
 
@@ -311,7 +403,9 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
     });
     if verdict == "propose" {
         if let (Some(stage), Some(lane)) = (args.stage, args.trial_lane) {
-            payload["accept"] = json!(accept_line(stage, lane));
+            if let Some(line) = accept_line(stage, lane) {
+                payload["accept"] = json!(line);
+            }
         }
     }
     Ok(payload)
@@ -339,8 +433,9 @@ fn print_verdict(v: &Value) {
                 None => "cost unmeasured".to_string(),
             };
             println!(
-                "  {label:8} {side:8} graded={} rate={:.1}% [{:.1},{:.1}] {cost}",
+                "  {label:8} {side:8} graded={} scored={} rate={:.1}% [{:.1},{:.1}] {cost}",
                 cell["graded"],
+                cell["scored"],
                 cell_rate(cell) * 100.0,
                 lo * 100.0,
                 hi * 100.0,

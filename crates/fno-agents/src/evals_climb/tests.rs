@@ -9,10 +9,17 @@ use tempfile::TempDir;
 
 const PIN: &str = "1111111111111111111111111111111111111111";
 
-fn row(task: &str, pass: bool, cohort: &str, model: &str, usage: Value) -> String {
+fn row(
+    task: &str,
+    pass: bool,
+    cohort: &str,
+    model: &str,
+    lane_status: &str,
+    usage: Value,
+) -> String {
     let mut v = json!({
         "ts": "2026-10-20T12:00:00Z", "task_id": task, "tier": "capability",
-        "pass": pass, "status": "graded", "lane_status": "ok",
+        "pass": pass, "status": "graded", "lane_status": lane_status,
         "experiment_id": cohort, "bank_rev": PIN, "observed_model": model,
     });
     if !usage.is_null() {
@@ -25,8 +32,8 @@ fn priced_usage() -> Value {
     json!({"input": 1_000_000, "output": 0})
 }
 
-/// Held-out rows spread over the declared qualification tasks, `passes` of
-/// `total` passing, one row per list entry.
+/// Held-out rows over the declared qualification tasks, `passes` of
+/// `total` passing, every row `ok` (scored).
 fn heldout_rows(
     cohort: &str,
     model: &str,
@@ -42,10 +49,47 @@ fn heldout_rows(
                 i < passes,
                 cohort,
                 model,
+                "ok",
                 usage.clone(),
             )
         })
         .collect()
+}
+
+/// Trial-shaped rows for the power gate: `ok_total` scored rows, then
+/// `subst_total` graded-but-substituted rows the rates never read.
+fn substituted_rows(
+    cohort: &str,
+    model: &str,
+    ok_passes: usize,
+    ok_total: usize,
+    subst_total: usize,
+    usage: Value,
+) -> Vec<String> {
+    let tasks = ["h1", "h2", "h3", "h4"];
+    let mut out: Vec<String> = (0..ok_total)
+        .map(|i| {
+            row(
+                tasks[i % tasks.len()],
+                i < ok_passes,
+                cohort,
+                model,
+                "ok",
+                usage.clone(),
+            )
+        })
+        .collect();
+    out.extend((0..subst_total).map(|i| {
+        row(
+            tasks[i % tasks.len()],
+            true,
+            cohort,
+            model,
+            "substituted",
+            usage.clone(),
+        )
+    }));
+    out
 }
 
 fn train_rows(cohort: &str, model: &str, passes: usize, total: usize) -> Vec<String> {
@@ -56,6 +100,7 @@ fn train_rows(cohort: &str, model: &str, passes: usize, total: usize) -> Vec<Str
                 i < passes,
                 cohort,
                 model,
+                "ok",
                 Value::Null,
             )
         })
@@ -90,18 +135,21 @@ fn climb_of(tmp: &TempDir, lines: &[String], prices: Option<Value>) -> Value {
 #[test]
 fn propose_within_noise_and_cheaper_prints_the_accept_line() {
     let tmp = TempDir::new().unwrap();
+    // Trial 17 of 20 puts its Wilson lower bound (about 0.64) above the
+    // baseline rate minus the noise floor (0.75 - 0.15), so the tie arm's
+    // interval condition holds; the intervals never need to separate here.
     let prices = json!({
         "m-base": {"input_per_m": 2.0},
         "m-trial": {"input_per_m": 1.0},
     });
     let mut lines = heldout_rows("base", "m-base", 15, 20, priced_usage());
-    lines.extend(heldout_rows("trial", "m-trial", 16, 20, priced_usage()));
+    lines.extend(heldout_rows("trial", "m-trial", 17, 20, priced_usage()));
     lines.extend(train_rows("base", "m-base", 2, 4));
     lines.extend(train_rows("trial", "m-trial", 2, 4));
     let v = climb_of(&tmp, &lines, Some(prices));
     assert_eq!(v["verdict"], "propose", "reason: {}", v["reason"]);
-    assert_eq!(v["heldout"]["baseline"]["graded"], 20);
-    assert_eq!(v["heldout"]["trial"]["graded"], 20);
+    assert_eq!(v["heldout"]["baseline"]["scored"], 20);
+    assert_eq!(v["heldout"]["trial"]["scored"], 20);
     assert_eq!(v["wrong_rev"], 0);
     assert_eq!(v["unsplit"], 0);
     let accept = v["accept"].as_str().unwrap_or_default();
@@ -118,12 +166,12 @@ fn propose_within_noise_and_cheaper_prints_the_accept_line() {
 #[test]
 fn train_up_heldout_flat_reads_overfit_without_an_accept_line() {
     let tmp = TempDir::new().unwrap();
-    // Train +20 points while held-out is flat is the article's revert shape;
-    // it fires before the cost rules, so no prices are needed.
+    // Train +20 points on 20 scored train rows per cohort, held-out flat at
+    // the same cost: the revert shape, decided before any cost rule.
     let mut lines = heldout_rows("base", "m-base", 15, 20, Value::Null);
     lines.extend(heldout_rows("trial", "m-trial", 15, 20, Value::Null));
-    lines.extend(train_rows("base", "m-base", 5, 10));
-    lines.extend(train_rows("trial", "m-trial", 7, 10));
+    lines.extend(train_rows("base", "m-base", 10, 20));
+    lines.extend(train_rows("trial", "m-trial", 14, 20));
     let v = climb_of(&tmp, &lines, None);
     assert_eq!(v["verdict"], "overfit", "reason: {}", v["reason"]);
     assert!(
@@ -135,14 +183,27 @@ fn train_up_heldout_flat_reads_overfit_without_an_accept_line() {
 #[test]
 fn few_graded_heldout_rows_read_underpowered_never_propose() {
     let tmp = TempDir::new().unwrap();
-    // A gate-blocked run shape: the trial cohort mostly never graded, and
-    // the rows that did are perfect. The verdict stays underpowered.
-    let prices = json!({"m-base": {"input_per_m": 2.0}, "m-trial": {"input_per_m": 0.001}});
+    // The run-lane-dries-up shape: 20 graded trial rows, 16 of them
+    // substituted. Only 4 rows score, so the floor reads underpowered. On
+    // the old graded-count floor this run reached the cost rules and read
+    // hold, so the assertion discriminates the two floors.
+    let prices = json!({
+        "m-base": {"input_per_m": 2.0},
+        "m-trial": {"input_per_m": 1.0},
+    });
     let mut lines = heldout_rows("base", "m-base", 15, 20, priced_usage());
-    lines.extend(heldout_rows("trial", "m-trial", 12, 12, priced_usage()));
+    lines.extend(substituted_rows(
+        "trial",
+        "m-trial",
+        4,
+        4,
+        16,
+        priced_usage(),
+    ));
     lines.extend(train_rows("base", "m-base", 2, 4));
     lines.extend(train_rows("trial", "m-trial", 2, 2));
     let v = climb_of(&tmp, &lines, Some(prices));
     assert_eq!(v["verdict"], "underpowered", "reason: {}", v["reason"]);
+    assert_eq!(v["heldout"]["trial"]["scored"], 4);
     assert!(v.get("accept").is_none());
 }
