@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from fno.agents import account_env as _account_env
 from fno.agents.naming import mint_or_none
 from fno.evals import history as _history
 from fno.evals.bank import TaskSpec
@@ -132,23 +133,19 @@ def _git_rev(repo_root: Path, ref: str) -> Optional[str]:
 
 
 def _lane_account(lane: Optional[Any]) -> tuple[Optional[str], str, str]:
-    """The lane's --account decision: (flag, refusal, drop_note). A registered
-    account rides. An unregistered alias drops only on a routed lane, which
-    carries its own route credential (the seat form). Every other refusal -
-    a registered-but-unresolvable account, a broken registry - fails the
-    spawn closed instead of silently re-seating it on ambient auth."""
+    """(flag, refusal, drop_note). A registered account rides; an unregistered
+    alias drops only on a routed lane, which carries its own credential (the
+    seat form); every other refusal fails the spawn closed, never re-seats it."""
     account = getattr(lane, "account", None)
     if not account:
         return None, "", ""
     try:
-        from fno.agents import account_env as _env
-
-        if account not in _env.load_providers().by_id:
+        if account not in _account_env.load_providers().by_id:
             if str(getattr(lane, "route", "") or "").strip():
                 print(f"lane account {account!r} is not registered; the routed lane rides its own route credential (the seat-spawn form)", file=sys.stderr)
                 return None, "", f"lane account {account!r} dropped; routed lane rides its route credential"
             return None, f"lane account {account!r} is not registered and the lane names no route; refusing the spawn (fail closed)", ""
-        _env.resolve_account_overlay(account)
+        _account_env.resolve_account_overlay(account)
     except Exception as exc:  # noqa: BLE001 - any resolver refusal fails the spawn closed, never re-seats it
         return None, f"lane account {account!r} refused: {exc}", ""
     return account, "", ""
@@ -163,11 +160,9 @@ def _default_spawn(
     sweep crash. A *lane* is a complete coordinate: its harness wins over *provider*.
     The worker name is the ``ev-th-evals-<run>``: typed non-node identity,
     per-invocation run token as the never-shaved discriminator."""
-    account_flag, refusal, drop_note = None, "", ""
-    if lane:
-        account_flag, refusal, drop_note = _lane_account(lane)
-        if refusal:
-            return SpawnResult(False, refusal)
+    account_flag, refusal, drop_note = _lane_account(lane) if lane else (None, "", "")
+    if refusal:
+        return SpawnResult(False, refusal)
     name = mint_or_none(
         "ev", "th", "evals", discriminator=f"{os.getpid()}-{int(time.time())}"
     )
