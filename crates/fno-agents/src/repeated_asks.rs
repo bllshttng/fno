@@ -48,7 +48,7 @@ const NOT_ASK: &[&str] = &[
     "no decision needed",
     "nothing from you",
     "you ruled",
-    "you already",
+    "you already ruled",
     "you decided",
     "was your call",
 ];
