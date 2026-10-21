@@ -264,7 +264,11 @@ pub(crate) fn sync_with(
             }
             (Some(body), Some((row, seen))) => {
                 let mine = sha(&body);
-                if mine == row.sha {
+                if row.plan_path != *plan_path {
+                    // The node row is the synced binding: a rebind moves the carried body.
+                    push(remote, node, plan_path, &body, host)?;
+                    out.pushed.push(node.clone());
+                } else if mine == row.sha {
                     if seen.as_deref() != Some(mine.as_str()) {
                         mark_seen(remote, node, host, &mine)?;
                     }
@@ -422,6 +426,16 @@ mod tests {
         let out = sync_with(&b, &primary.remote, "b", home.path()).unwrap();
         assert_eq!(out.pulled, vec!["x-1"]);
         assert_eq!(std::fs::read_to_string(&plan).unwrap(), "v3");
+        // A rebind to a new path moves the carried body, never a standing conflict.
+        let moved = home.path().join("plans/q.md");
+        write_atomic(&moved, "v4").unwrap();
+        let (_c, c) = replica(&[("x-1", moved.to_str().unwrap())]);
+        let out = sync_with(&c, &primary.remote, "b", home.path()).unwrap();
+        assert_eq!(out.pushed, vec!["x-1"]);
+        assert_eq!(
+            sync_with(&c, &primary.remote, "b", home.path()).unwrap(),
+            Outcome::default()
+        );
     }
 
     #[test]
