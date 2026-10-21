@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fno.config import load_settings_for_repo
 from fno.config_cli import get_cmd
-from fno.pr import _merge
 
 
 def _patch_chain(monkeypatch, worktree: Path, canonical: Path, tmp_path: Path):
@@ -46,7 +46,7 @@ def test_project_false_vetoes_a_global_true_for_both_readers(
 
     captured = capsys.readouterr()
     assert captured.out == "False\n"
-    assert _merge._load_auto_merge(str(worktree)).enabled is False
+    assert load_settings_for_repo(worktree).auto_merge.enabled is False
 
 
 def test_seeded_merge_read_climbs_to_the_canonical_project_from_a_worktree(
@@ -61,4 +61,4 @@ def test_seeded_merge_read_climbs_to_the_canonical_project_from_a_worktree(
     _write_enabled(canonical / ".fno" / "config.toml", True)
     _patch_chain(monkeypatch, worktree, canonical, tmp_path)
 
-    assert _merge._load_auto_merge(str(worktree)).enabled is True
+    assert load_settings_for_repo(worktree).auto_merge.enabled is True

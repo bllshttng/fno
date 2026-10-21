@@ -88,6 +88,33 @@ class TickResult:
 # from schema.yaml), leaving envelope headroom, so the two budgets move together.
 _INLINE_RECEIPT_MAX_BYTES = _EVENT_MAX_DATA_BYTES - _EVENT_MAX_DATA_BYTES // 4
 
+# The durable-grant merge queue's receipt surface, ported with the residue
+# when the pr/_merge module died (pr port 7): the terminal-exemption reason
+# prefix, the last receipt the queue printed, and the reason renderer that
+# strips a leading "<outcome>: " so bare-prefix matchers keep matching.
+_OUTCOME_EMIT = {
+    "merged": ("merged", 0, False),
+    "armed": ("skipped", 2, False),
+    "authorized": ("skipped", 2, False),
+    "held": ("held", 2, False),
+    "refused": ("skipped", 2, False),
+    "head_changed": ("held", 2, False),
+    "unknown": ("held", 2, False),
+    "failed": ("failed", 1, True),
+}
+
+ALREADY_TERMINAL = "PR already "
+LAST_RECEIPT: dict = {}
+
+
+def reason_after_outcome(reason: str) -> str:
+    """The reason past a leading "<outcome>: " prefix: the authorized-merge
+    renderer writes "<outcome>: <detail>", so readers matching bare prefixes
+    ("checks are red", ALREADY_TERMINAL) must match past the word.
+    """
+    word, sep, rest = reason.partition(": ")
+    return rest if sep and word in _OUTCOME_EMIT else reason
+
 
 def _compact_keys(keys: list[str] | set[str]) -> dict[str, list[Any]]:
     """Name many PRs compactly as ``repo -> [numbers]`` for event receipts."""
@@ -167,10 +194,19 @@ def _finish_queue_merge(repo_dir: Path, pr: int, emit: Callable) -> None:
     """
     try:
         from fno.config import load_settings_for_repo
-        from fno.pr._merge import _post_merge_remote_delete
+        from fno.rust_binary import VerbUnavailable, verb_call
 
         auto_merge = load_settings_for_repo(Path(repo_dir)).auto_merge
-        cleanup = _post_merge_remote_delete(pr, str(repo_dir), auto_merge)
+        if not getattr(auto_merge, "delete_branch_on_merge", False):
+            return
+        cleanup = verb_call(
+            "authorized-merge",
+            {"op": "merge-remote-delete", "pr": pr, "cwd": str(repo_dir)},
+            timeout=120,
+        ).get("cleanup", "")
+    except VerbUnavailable as exc:
+        log.warning("pr-watch: queue-merge cleanup for PR #%d unavailable: %s", pr, exc)
+        return
     except Exception as exc:  # noqa: BLE001 - cleanup never blocks the ritual
         log.warning("pr-watch: queue-merge cleanup for PR #%d failed: %s", pr, exc)
         return
@@ -1304,7 +1340,6 @@ def run_execute_queue(
     claim: Any,
 ) -> dict[str, int]:
     """Drain granted rows; executed, held, failed, skipped and budget sum to len(queue)."""
-    from fno.pr import _merge
     from fno.pr_watch._state import WatermarkStore
 
     # The worktree blocker vocabulary, spelled here once the review-hold
@@ -1372,7 +1407,7 @@ def run_execute_queue(
             store.set(key, entry)
             set_tick_phase("merge:execute")
             started = time.monotonic()
-            _merge.LAST_RECEIPT.clear()
+            LAST_RECEIPT.clear()
             try:
                 # The operand door answers exit 0 with the flow receipt even
                 # when the merge held or failed; the flow's own exit rides the
@@ -1385,13 +1420,13 @@ def run_execute_queue(
                      "authority": "durable_grant", "cwd": str(cand.repo_dir)},
                     timeout=900,
                 )
-                _merge.LAST_RECEIPT.update(receipt)
+                LAST_RECEIPT.update(receipt)
                 rc = int(receipt.get("exit") or 0)
             except Exception as exc:  # noqa: BLE001 - a crash is a failed attempt
                 log.warning("pr-watch: durable-grant merge for PR #%d crashed: %s", pr, exc)
-                rc, _merge.LAST_RECEIPT["reason"] = 1, f"crashed: {exc}"
+                rc, LAST_RECEIPT["reason"] = 1, f"crashed: {exc}"
             slowest = max(slowest, time.monotonic() - started)
-            reason = str(_merge.LAST_RECEIPT.get("reason") or "no reason printed")[:300]
+            reason = str(LAST_RECEIPT.get("reason") or "no reason printed")[:300]
             if rc == 0:
                 counts["executed"] += 1
                 entry["merge_dispatched"] = True
@@ -1402,16 +1437,16 @@ def run_execute_queue(
                 # Retryable, no failure budget; an already-terminal PR never retries.
                 counts["held"] += 1
                 entry["retries"] = prior_retries
-                bare = _merge.reason_after_outcome(reason)
+                bare = reason_after_outcome(reason)
                 # Terminal answers: decide's wording and the retired pre-gate's.
-                if (bare.startswith(_merge.ALREADY_TERMINAL)
+                if (bare.startswith(ALREADY_TERMINAL)
                         or "already merged" in bare or "already closed" in bare):
                     entry["last_seen_state"] = "NOT_OPEN"
                 store.set(key, entry)
                 _grant("held", pr, cand, grant_fields, reason=reason)
                 if bare.startswith(("checks are red", WORKTREE_HEAD_MISMATCH, WORKTREE_DIRTY)):
                     entry["parked"] = park = "checks-red" if bare.startswith("checks are red") else bare.split(":", 1)[0]
-                    entry["parked_head"] = _merge.LAST_RECEIPT.get("observed_head")
+                    entry["parked_head"] = LAST_RECEIPT.get("observed_head")
                     store.set(key, entry)
                     emit("pr_watch_parked", {"pr": pr, "reason": park})
                     _notify_parked_pr(
@@ -1471,9 +1506,14 @@ def _default_read_tracked_states(keys: set[str]):  # pragma: no cover
 
 
 def _default_graphql_remaining() -> tuple[Optional[int], Optional[str]]:  # pragma: no cover
-    from fno.pr._rest import graphql_remaining
+    from fno.rust_binary import verb_call
 
-    return graphql_remaining()
+    answer = verb_call(
+        "authorized-merge",
+        {"op": "status-quota-graphql", "cwd": os.getcwd()},
+        timeout=60,
+    )
+    return answer.get("remaining"), answer.get("reset_iso")
 
 
 def _tracked_states_from_reader(keys: set[str], reader: Callable) -> tuple[dict[str, str], int]:
@@ -1544,10 +1584,13 @@ def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
         if obs_state != "MERGED" or getattr(cand, "repo_dir", None) is None \
                 or not Path(str(cand.repo_dir), ".git").exists():
             return
-        from fno.agents.events import daemon_lifecycle_log
-        from fno.pr._merge import _emit_merge_cleanup_request, _manifest_file, \
-            _merge_request_repo_and_project
-        repo, _ = _merge_request_repo_and_project(str(cand.repo_dir))
+        import subprocess as _subprocess
+
+        from fno.agents.events import daemon_lifecycle_log, emit_merge_cleanup_skipped
+        from fno.claims.self_identity import resolve_self_identity
+        from fno.rust_binary import verb_call
+
+        repo, project = _cleanup_request_repo_and_project(str(cand.repo_dir))
         for line in daemon_lifecycle_log().read_text(errors="replace").splitlines():
             if '"merge_cleanup_requested"' not in line:
                 continue
@@ -1559,10 +1602,97 @@ def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
             if isinstance(data, dict) and record.get("type") == "merge_cleanup_requested" \
                     and data.get("repo") == repo and data.get("pr") == cand.pr_number:
                 return
-        _emit_merge_cleanup_request(cand.pr_number, str(cand.repo_dir),
-            _manifest_file(str(cand.repo_dir)), [cand.node_id] if cand.node_id else [])
+        # The mint's own read: state and branch straight from gh, the same
+        # gate the deleted pr/_merge emitter held. Refusals emit the skip row
+        # the journal contract requires (a request or a skip, never silence).
+        meta_read = _subprocess.run(
+            ["gh", "pr", "view", str(cand.pr_number), "--json",
+             "state,headRefName,url,mergedAt"],
+            cwd=str(cand.repo_dir), capture_output=True, text=True, timeout=30,
+        )
+        if meta_read.returncode != 0:
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number, reason="gh-unavailable",
+                detail=(meta_read.stderr or "").strip()[:200],
+            )
+            return
+        try:
+            meta = json.loads(meta_read.stdout or "{}")
+            if not isinstance(meta, dict):
+                raise ValueError("pr json is not an object")
+        except ValueError as exc:
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number,
+                reason="unparseable-pr-json", detail=type(exc).__name__,
+            )
+            return
+        if meta.get("state") != "MERGED":
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number, reason="not-merged",
+                detail=f"state={meta.get('state')}",
+                branch=meta.get("headRefName") or None,
+            )
+            return
+        branch = meta.get("headRefName")
+        if not branch:
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number, reason="no-branch",
+            )
+            return
+        ident = resolve_self_identity()
+        verb_call(
+            ["pr-watch", "merge-cleanup-mint"],
+            {
+                "pr": cand.pr_number,
+                "branch": branch,
+                "repo": repo,
+                "project": project,
+                "node_ids": [cand.node_id] if cand.node_id else [],
+                "session_id": ident.session_id or None,
+                "harness": ident.harness or None,
+            },
+            timeout=120,
+        )
     except Exception as exc:  # noqa: BLE001 - a mint never fails the tick
         log.warning("pr-watch: merge-cleanup mint for PR #%d failed: %s", cand.pr_number, exc)
+
+
+def _cleanup_request_repo_and_project(cwd: str) -> tuple[str, str]:
+    """``(repo, project)`` resolved the ritual's way, so both mints share one
+    fold key. Local port of the deleted pr/_merge helper."""
+    import subprocess
+
+    from fno.config import load_settings_for_repo
+
+    repo = ""
+    try:
+        gcd = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=cwd, capture_output=True, text=True, timeout=10,
+        )
+        raw = gcd.stdout.strip() if gcd.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        raw = ""
+    if raw:
+        p = Path(raw)
+        p = p if p.is_absolute() else Path(cwd) / p
+        if p.exists():
+            repo = str(p.parent)
+    if not repo:
+        try:
+            top = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=cwd, capture_output=True, text=True, timeout=10,
+            )
+            repo = top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else cwd
+        except (OSError, subprocess.TimeoutExpired):
+            repo = cwd
+    try:
+        settings = load_settings_for_repo(Path(repo))
+        project = getattr(getattr(settings, "project", None), "id", "") or ""
+    except Exception:  # noqa: BLE001 - an unreadable config degrades to empty
+        project = ""
+    return repo, project
 
 
 def _default_read_pr_state(

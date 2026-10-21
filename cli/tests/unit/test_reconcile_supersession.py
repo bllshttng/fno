@@ -55,46 +55,20 @@ def test_truncated_evidence_blames_the_truncation_not_the_surface():
     assert entries[0]["supersession"]["verified_at"] is None
 
 
-def test_query_runner_guard_sees_only_routed_rest_argv():
-    from fno.graph._reconcile import query_pr_merge_state
-    from fno.pr._proc import Result
-
-    calls: list[list[str]] = []
-    pull = {
-        "number": 5,
-        "html_url": "https://github.com/o/r/pull/5",
-        "state": "closed",
-        "merged": True,
-        "merged_at": "2026-08-25T12:00:00Z",
-        "merge_commit_sha": "merge",
-        "head": {"sha": "head", "ref": "feature/test"},
-        "base": {"ref": "main"},
-    }
-
-    def runner(cmd, **kwargs):
-        calls.append(list(cmd))
-        assert cmd[:2] == ["gh", "api"], f"unrouted PR read: {cmd}"
-        if "/files?" in cmd[-1]:
-            return Result(0, '[{"filename":"cli/a.py"}]', "")
-        return Result(0, json.dumps(pull), "")
-
-    state = query_pr_merge_state(5, repo="o/r", runner=runner, include_files=True)
-
-    assert state.state == "MERGED"
-    assert state.changed_files == ["cli/a.py"]
-    assert all(cmd[:3] != ["gh", "pr", "view"] for cmd in calls)
-
-
-def test_query_rest_timeout_is_retryable_availability_failure():
-    import subprocess
+def test_query_rest_timeout_is_retryable_availability_failure(monkeypatch):
+    from fno.rust_binary import VerbUnavailable
 
     from fno.graph._reconcile import ReconcileError, query_pr_merge_state
 
-    def runner(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, 30)
+    def _door(verb, payload, timeout=None):
+        raise VerbUnavailable(
+            "fno-agents authorized-merge status-pr-info failed: "
+            "timed out after 30.0s"
+        )
 
+    monkeypatch.setattr("fno.rust_binary.verb_call", _door)
     with pytest.raises(ReconcileError) as raised:
-        query_pr_merge_state(5, repo="o/r", runner=runner)
+        query_pr_merge_state(5, repo="o/r")
 
     assert raised.value.kind == "availability"
     assert raised.value.retryable is True

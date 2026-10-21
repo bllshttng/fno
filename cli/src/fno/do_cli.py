@@ -13,7 +13,6 @@ from fno.delivery.cli import delivery_app
 from fno.loops import loops_app
 from fno.phase import phase_app
 from fno.plan import plan_app
-from fno.pr import pr_app
 from fno.pr_watch.cli import cli as pr_watch_app
 from fno.provenance.cli import think_app
 from fno.research import research_command
@@ -29,18 +28,15 @@ do_app = typer.Typer(
     no_args_is_help=True,
 )
 
-# These two former roots are PR lifecycle operations, so they live below the
-# existing PR group instead of minting one-child intermediate groups. Copy the
-# registrations rather than mutating ``pr_app``: the old top-level PR app is a
-# compatibility spelling and its collapse allocation must stay unchanged.
+# The pr namespace's 29 spellings answer natively now (the fno front door
+# claims `do pr` and the fno-agents pr dispatcher routes them); the wheel
+# keeps only the two Python mounts under the same group.
 do_pr_app = typer.Typer(
     name="pr",
-    help=pr_app.info.help,
+    help="PR lifecycle operations (native verbs; watch and stub-manifest stay here).",
     no_args_is_help=True,
     add_completion=False,
 )
-do_pr_app.registered_commands.extend(pr_app.registered_commands)
-do_pr_app.registered_groups.extend(pr_app.registered_groups)
 do_pr_app.add_typer(pr_watch_app, name="watch")
 do_pr_app.add_typer(stub_manifest_app, name="stub-manifest")
 

@@ -3,14 +3,15 @@
 ``fno do pr merge`` mints the reap order at the merge; a merge through
 ``gh pr merge`` or the web button mints nothing, so its worktree waited on
 the 6h sweep instead of the 30-minute grace. The tick is the detector that
-sees the merged arm, so it mints through the merge verb's own mint, gated
-once per merge by a journal check. The test pins the default mint's gates:
-a standing request, a checkout with no .git, no checkout, and an open PR
-each hold the mint.
+sees the merged arm, so it mints through the native ``pr-watch
+merge-cleanup-mint`` verb, gated once per merge by a journal check. The test
+pins the default mint's gates: a standing request, a checkout with no .git,
+no checkout, and an open PR each hold the mint.
 """
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from fno.pr_watch._discover import PrCandidate
@@ -37,23 +38,37 @@ def _request(repo: str, pr: int) -> dict:
 
 
 class TestDefaultEnsureMergeCleanup:
-    """The default mint: the merge verb's mint, gated once per merge."""
+    """The default mint: the native pr-watch mint, gated once per merge."""
 
-    def _patch_parts(self, monkeypatch, minted: list, journal_rows: list, tmp_path: Path) -> None:
-        monkeypatch.setattr(
-            "fno.pr._merge._merge_request_repo_and_project", lambda cwd: ("/repo", "proj")
-        )
-        monkeypatch.setattr(
-            "fno.pr._merge._manifest_file", lambda cwd: str(cwd) + "/.fno/target-state.md"
-        )
+    def _patch_parts(
+        self,
+        monkeypatch,
+        minted: list,
+        journal_rows: list,
+        tmp_path: Path,
+        *,
+        pr_json: str = '{"state": "MERGED", "headRefName": "feature/x"}',
+    ) -> None:
         journal = tmp_path / "events.jsonl"
         _write_journal(journal, journal_rows)
         monkeypatch.setattr("fno.agents.events.daemon_lifecycle_log", lambda: journal)
+        monkeypatch.setattr(
+            "fno.pr_watch._dispatch._cleanup_request_repo_and_project",
+            lambda cwd: ("/repo", "proj"),
+        )
 
-        def fake_mint(pr_number, cwd, state_file, bound_node_ids):
-            minted.append((pr_number, cwd, state_file, list(bound_node_ids)))
+        def fake_run(cmd, **_kwargs):
+            if cmd[:1] == ["gh"]:
+                return subprocess.CompletedProcess(cmd, 0, pr_json, "")
+            raise AssertionError(f"unexpected subprocess: {cmd}")
 
-        monkeypatch.setattr("fno.pr._merge._emit_merge_cleanup_request", fake_mint)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        def fake_mint(verb, payload, timeout=None):
+            assert verb == ["pr-watch", "merge-cleanup-mint"], verb
+            minted.append(payload)
+
+        monkeypatch.setattr("fno.rust_binary.verb_call", fake_mint)
 
     def test_every_closed_gate_holds_the_mint(self, tmp_path, monkeypatch):
         from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
@@ -79,3 +94,46 @@ class TestDefaultEnsureMergeCleanup:
         _default_ensure_merge_cleanup(open_obs, "OPEN")
 
         assert minted == []
+
+    def test_a_merged_pr_with_no_standing_request_mints_once(
+        self, tmp_path, monkeypatch
+    ):
+        from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
+
+        minted: list = []
+        self._patch_parts(monkeypatch, minted, journal_rows=[], tmp_path=tmp_path)
+        repo_dir = tmp_path / "wt"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        _default_ensure_merge_cleanup(_make_candidate(repo_dir=repo_dir), "MERGED")
+
+        assert len(minted) == 1
+        payload = minted[0]
+        assert payload["pr"] == 1
+        assert payload["branch"] == "feature/x"
+        assert payload["repo"] == "/repo"
+        assert payload["node_ids"] == ["x-abc12345"]
+
+    def test_an_unmerged_gh_row_skips_with_a_journal_row(self, tmp_path, monkeypatch):
+        """A request or a skip, never silence: the journal contract requires
+        the skip row so the next tick's gate reads a decided state."""
+        from fno.agents.events import daemon_lifecycle_log
+
+        from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
+
+        minted: list = []
+        self._patch_parts(
+            monkeypatch, minted, journal_rows=[], tmp_path=tmp_path,
+            pr_json='{"state": "OPEN", "headRefName": "feature/x"}',
+        )
+        repo_dir = tmp_path / "wt"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        _default_ensure_merge_cleanup(_make_candidate(repo_dir=repo_dir), "MERGED")
+
+        assert minted == []
+        rows = daemon_lifecycle_log().read_text().splitlines()
+        skips = [json.loads(r) for r in rows if "merge_cleanup_skipped" in r]
+        assert any(s["data"]["reason"] == "not-merged" for s in skips)
