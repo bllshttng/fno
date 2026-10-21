@@ -97,29 +97,15 @@ pub fn thresholds(cwd: &std::path::Path) -> CapacityThresholds {
     }
 }
 
-/// The one memory figure: RAM used plus swap used over RAM plus swap, written
-/// by the tick and printed by the meter and the org overlay so the two can
-/// never disagree. The compressor share alone read half full while RAM sat at
-/// 85% and swap at 98%, so it stays a field, not the headline.
+/// The one memory figure: the vm_stat compressor-occupied share of physical
+/// RAM, written by the tick and printed by the meter and the org overlay so
+/// the two can never disagree. macmon keeps CPU and watts only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryFigure {
     pub used_fraction: f64,
     pub total_gb: f64,
-    #[serde(default)]
-    pub ram_used_gb: f64,
-    #[serde(default)]
-    pub swap_used_gb: f64,
-    #[serde(default)]
-    pub swap_total_gb: f64,
     pub compressor_occupied_gb: f64,
     pub compressor_stored_gb: f64,
-}
-
-impl MemoryFigure {
-    /// The compressor-occupied share of physical RAM.
-    pub fn compressor_fraction(&self) -> f64 {
-        (self.compressor_occupied_gb / self.total_gb).clamp(0.0, 1.0)
-    }
 }
 
 /// One provider quota window folded from the ledger.
@@ -509,16 +495,9 @@ pub(crate) fn memory_figure(sample: &MachineSample) -> Option<MemoryFigure> {
     if total <= 0.0 {
         return None;
     }
-    // No RAM-used reading (a Linux host): the compressor share stands in.
-    let ram_used = sample.ram_used_gb.unwrap_or(occupied);
-    let swap_used = sample.swap_used_gb.unwrap_or(0.0).max(0.0);
-    let swap_total = sample.swap_total_gb.unwrap_or(0.0).max(swap_used);
     Some(MemoryFigure {
-        used_fraction: ((ram_used + swap_used) / (total + swap_total)).clamp(0.0, 1.0),
+        used_fraction: (occupied / total).clamp(0.0, 1.0),
         total_gb: total,
-        ram_used_gb: ram_used,
-        swap_used_gb: swap_used,
-        swap_total_gb: swap_total,
         compressor_occupied_gb: occupied,
         compressor_stored_gb: sample.compressed_gb.unwrap_or(0.0),
     })
@@ -855,45 +834,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         AgentsHome::at(dir)
-    }
-
-    /// The 2026-10-21 machine: compressor at half of RAM, RAM 85% used,
-    /// swap 98% full. The headline must read the swapping machine as full.
-    #[test]
-    fn the_memory_figure_counts_ram_used_and_swap_not_the_compressor_alone() {
-        let page = 16384.0_f64;
-        let pages = |gb: f64| (gb * 1024.0 * 1024.0 * 1024.0 / page) as u64;
-        let vm_stat = format!(
-            "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
-             Pages free:                {}.\n\
-             Pages active:              {}.\n\
-             Pages inactive:            {}.\n\
-             Pages speculative:         0.\n\
-             Pages wired down:          {}.\n\
-             Pages purgeable:           0.\n\
-             \"Translation faults\":      123.\n\
-             File-backed pages:         {}.\n\
-             Pages stored in compressor: {}.\n\
-             Pages occupied by compressor: {}.\n",
-            pages(2.0),
-            pages(20.0),
-            pages(6.0),
-            pages(6.0),
-            pages(5.0),
-            pages(90.0),
-            pages(48.0),
-        );
-        let (occupied, _, used) = crate::machine_sample::parse_vm_stat_memory(&vm_stat).unwrap();
-        assert!((used - 75.0).abs() < 0.01, "{used}");
-        let mut s = MachineSample::default();
-        s.total_mem_gb = Some(96.0);
-        s.compressor_gb = Some(occupied);
-        s.ram_used_gb = Some(81.6);
-        s.swap_used_gb = Some(26.5);
-        s.swap_total_gb = Some(27.0);
-        let m = memory_figure(&s).unwrap();
-        assert!((m.compressor_fraction() - 0.5).abs() < 0.01);
-        assert_eq!((m.used_fraction * 100.0).round(), 88.0);
     }
 
     /// The ceiling comes from CONFIG, not the test: a runner without an

@@ -111,11 +111,7 @@ pub fn load_average() -> Option<(f64, f64, f64)> {
     (count == 3).then_some((values[0], values[1], values[2]))
 }
 
-/// `(compressor occupied, compressor stored, RAM used)` in GiB. RAM used is
-/// macmon's own sum (active + inactive + wired + speculative + compressor,
-/// less purgeable and file-backed pages), so the meter quotes the number
-/// macmon and Activity Monitor show.
-pub fn parse_vm_stat_memory(text: &str) -> Option<(f64, f64, f64)> {
+pub fn parse_vm_stat_memory(text: &str) -> Option<(f64, f64)> {
     let page_size = text
         .lines()
         .next()?
@@ -127,7 +123,6 @@ pub fn parse_vm_stat_memory(text: &str) -> Option<(f64, f64, f64)> {
         .ok()?;
     let mut occupied = None;
     let mut stored = None;
-    let mut used: i64 = 0;
     for line in text.lines().skip(1) {
         let (label, value) = line.split_once(':')?;
         let pages = value.trim().trim_end_matches('.').parse::<u64>().ok()?;
@@ -136,22 +131,9 @@ pub fn parse_vm_stat_memory(text: &str) -> Option<(f64, f64, f64)> {
             "Pages stored in compressor" => stored = Some(pages),
             _ => {}
         }
-        match label.trim() {
-            "Pages active"
-            | "Pages inactive"
-            | "Pages wired down"
-            | "Pages speculative"
-            | "Pages occupied by compressor" => used += pages as i64,
-            "Pages purgeable" | "File-backed pages" => used -= pages as i64,
-            _ => {}
-        }
     }
     let scale = page_size as f64 / 1024.0 / 1024.0 / 1024.0;
-    Some((
-        occupied? as f64 * scale,
-        stored? as f64 * scale,
-        used.max(0) as f64 * scale,
-    ))
+    Some((occupied? as f64 * scale, stored? as f64 * scale))
 }
 
 pub fn parse_swapusage_mb(text: &str) -> Option<(f64, f64)> {
@@ -239,8 +221,6 @@ pub struct MachineSample {
     pub test_processes: Option<u64>,
     pub compressor_gb: Option<f64>,
     pub compressed_gb: Option<f64>,
-    #[serde(default)]
-    pub ram_used_gb: Option<f64>,
     pub swap_used_gb: Option<f64>,
     pub swap_total_gb: Option<f64>,
     pub total_mem_gb: Option<f64>,
@@ -321,7 +301,6 @@ pub fn read(
         ),
         compressor_gb: None,
         compressed_gb: None,
-        ram_used_gb: None,
         swap_used_gb: None,
         swap_total_gb: None,
         total_mem_gb: None,
@@ -364,12 +343,11 @@ pub fn read(
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = std::process::Command::new("vm_stat").output() {
-            if let Some((occupied, stored, used)) =
+            if let Some((occupied, stored)) =
                 parse_vm_stat_memory(&String::from_utf8_lossy(&out.stdout))
             {
                 sample.compressor_gb = Some(occupied);
                 sample.compressed_gb = Some(stored);
-                sample.ram_used_gb = Some(used);
             }
         }
         if let Ok(out) = std::process::Command::new("sysctl")

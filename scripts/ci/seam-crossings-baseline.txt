@@ -67,8 +67,6 @@ crossing	crates/fno-agents/src/merge_close.rs	let output = std::process::Command
 crossing	crates/fno-agents/src/merge_gates.rs	let out = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/operator_notice.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/operator_notice.rs	let fno = crate::scrape::fno_bin();
-crossing	crates/fno-agents/src/pane_spawn/mod.rs	Command::new(fno_bin())
-crossing	crates/fno-agents/src/pane_spawn/mod.rs	let bin = fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/pane_stop.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/pane_stop.rs	let mut child = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/post_merge/ritual.rs	let mut cmd = Command::new(crate::scrape::fno_bin());

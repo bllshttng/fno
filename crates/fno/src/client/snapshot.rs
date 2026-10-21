@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -84,10 +84,6 @@ pub enum ViewKind {
     /// The Messages board with column 2's System or Archive tab active.
     MessagesSystem,
     MessagesArchive,
-    /// The backlog board full screen in list view, details pane beside it.
-    BacklogList,
-    /// The backlog board full screen in kanban view, details pane beside it.
-    BacklogKanban,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -116,8 +112,6 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-thread" => Some(ViewKind::MessagesThread),
         "messages-system" => Some(ViewKind::MessagesSystem),
         "messages-archive" => Some(ViewKind::MessagesArchive),
-        "backlog-list" => Some(ViewKind::BacklogList),
-        "backlog-kanban" => Some(ViewKind::BacklogKanban),
         _ => None,
     }
 }
@@ -190,7 +184,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list or backlog-kanban")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system or messages-archive")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -679,29 +673,6 @@ shoot a root seeded with backlog nodes and leads \
                 );
             }
         }
-        Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
-            // The V-cycle backlog board, full screen so the board and
-            // details panes lay out side by side. Set the sideline field
-            // directly: the shot never writes the view prefs.
-            view.sideline_view = crate::view_store::SidelineView::Backlog;
-            runtime.block_on(super::backlog_board::fold_once(&mut view));
-            view.board_full = true;
-            let b = view
-                .backlog_board
-                .as_mut()
-                .ok_or("the backlog board did not open")?;
-            b.query.view = match kind {
-                Some(ViewKind::BacklogList) => crate::backlog_model::View::List,
-                _ => crate::backlog_model::View::Kanban,
-            };
-            if !b.body.as_ref().is_some_and(|body| !body.lanes.is_empty()) {
-                return Err(
-                    "backlog view rendered empty: this root has no backlog nodes; \
-shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
-                );
-            }
-        }
         Some(ViewKind::TabMenu) => {
             let tid = view
                 .layout
@@ -860,8 +831,6 @@ mod tests {
             ("messages-thread", ViewKind::MessagesThread),
             ("messages-system", ViewKind::MessagesSystem),
             ("messages-archive", ViewKind::MessagesArchive),
-            ("backlog-list", ViewKind::BacklogList),
-            ("backlog-kanban", ViewKind::BacklogKanban),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
@@ -869,7 +838,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list or backlog-kanban"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system or messages-archive"
             ),
             "{e}"
         );

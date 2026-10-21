@@ -762,7 +762,7 @@ pub(crate) const EXIT_ESCALATIONS: i32 = 1;
 pub(crate) const EXIT_IN_FLIGHT: i32 = 2;
 pub(crate) const EXIT_CWD_REFUSAL: i32 = 3;
 pub(crate) const EXIT_READ_ERROR: i32 = 4;
-pub(crate) const EXIT_CMD_NOT_FOUND: i32 = 127;
+pub(crate) const EXIT_NO_GH: i32 = 127;
 
 /// A remedy. `cargo fmt` over a large crate is the long pole.
 const REMEDY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
@@ -2865,7 +2865,7 @@ fn run_one(a: &Args, pr: &str) -> (i32, Vec<String>) {
         Err(msg) => {
             eprintln!("pr-heal: {msg}");
             let code = if msg.contains("No such file") || msg.contains("NotFound") {
-                EXIT_CMD_NOT_FOUND
+                EXIT_NO_GH
             } else {
                 EXIT_READ_ERROR
             };
