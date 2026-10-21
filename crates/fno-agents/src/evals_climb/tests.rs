@@ -141,8 +141,8 @@ fn propose_within_noise_and_cheaper_prints_the_accept_line() {
     // baseline rate minus the noise floor (0.75 - 0.15), so the tie arm's
     // interval condition holds; the intervals never need to separate here.
     let prices = json!({
-        "m-base": {"input_per_m": 2.0},
-        "m-trial": {"input_per_m": 1.0},
+        "m-base": {"input_per_m": 2.0, "output_per_m": 0.0},
+        "m-trial": {"input_per_m": 1.0, "output_per_m": 0.0},
     });
     let mut lines = heldout_rows("base", "m-base", 15, 20, priced_usage());
     lines.extend(heldout_rows("trial", "m-trial", 17, 20, priced_usage()));
@@ -190,8 +190,8 @@ fn few_graded_heldout_rows_read_underpowered_never_propose() {
     // the old graded-count floor this run reached the cost rules and read
     // hold, so the assertion discriminates the two floors.
     let prices = json!({
-        "m-base": {"input_per_m": 2.0},
-        "m-trial": {"input_per_m": 1.0},
+        "m-base": {"input_per_m": 2.0, "output_per_m": 0.0},
+        "m-trial": {"input_per_m": 1.0, "output_per_m": 0.0},
     });
     let mut lines = heldout_rows("base", "m-base", 15, 20, priced_usage());
     lines.extend(substituted_rows(
