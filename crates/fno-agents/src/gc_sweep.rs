@@ -919,17 +919,15 @@ pub(crate) fn settle_stale_do_rows_with(
 ) -> (Vec<StaleDoRow>, Vec<(String, String)>) {
     let mut refusals = crate::additional_prs::stamp_pass(home, read);
     let path = graph_path(home);
-    const SETTLE_ATTEMPTS: usize = 5;
-    for attempt in 0..SETTLE_ATTEMPTS {
+    for attempt in 0..TX_ATTEMPTS {
         match settle_attempt(&path) {
             Ok(settled) => return (settled, refusals),
-            Err(SettleRefusal::Retry(err)) if attempt + 1 < SETTLE_ATTEMPTS => {
+            Err(SettleRefusal::Retry(err)) if attempt + 1 < TX_ATTEMPTS => {
                 let _ = err;
-                std::thread::sleep(std::time::Duration::from_millis(settle_backoff_ms(attempt)));
+                std::thread::sleep(std::time::Duration::from_millis(tx_backoff_ms(attempt)));
             }
             Err(SettleRefusal::Retry(err)) => {
-                let reason =
-                    format!("settle write refused: {err} (after {SETTLE_ATTEMPTS} attempts)");
+                let reason = format!("settle write refused: {err} (after {TX_ATTEMPTS} attempts)");
                 refusals.push((String::new(), reason));
                 return (Vec::new(), refusals);
             }
@@ -942,15 +940,18 @@ pub(crate) fn settle_stale_do_rows_with(
     unreachable!("every loop arm returns")
 }
 
-/// Full-jitter exponential delay before settle retry attempt `attempt + 1`,
-/// the shape landed on the Python side (`_tx_backoff_secs`): sweepers
-/// are correlated by construction, so the flat 250 ms re-lined every loser
-/// up at the same instant. Uniform in [0, min(cap, base << attempt)].
-const SETTLE_BACKOFF_BASE_MS: u64 = 250;
-const SETTLE_BACKOFF_CAP_MS: u64 = 4_000;
+/// The whole-graph tx retry policy, one contract with the Python tx loop
+/// (`_TX_ATTEMPTS`, `_tx_backoff_secs` in `cli/src/fno/graph/store.py`):
+/// sweepers are correlated by construction, so a flat delay re-lines every
+/// loser up at the same instant. Full-jitter exponential delay before retry
+/// attempt `attempt + 1`, uniform in [0, min(cap, base << attempt)]. A test
+/// pins these values to the Python constants.
+const TX_ATTEMPTS: usize = 5;
+const TX_BACKOFF_BASE_MS: u64 = 50;
+const TX_BACKOFF_CAP_MS: u64 = 2_000;
 
-fn settle_backoff_ms(attempt: usize) -> u64 {
-    let bound = SETTLE_BACKOFF_CAP_MS.min(SETTLE_BACKOFF_BASE_MS << attempt);
+fn tx_backoff_ms(attempt: usize) -> u64 {
+    let bound = TX_BACKOFF_CAP_MS.min(TX_BACKOFF_BASE_MS << attempt);
     let mut buf = [0u8; 8];
     // A failed entropy draw sleeps 0: the immediate retry this replaces,
     // never a panic in a sweep thread.
@@ -1016,10 +1017,9 @@ enum SettleRefusal {
 /// caller keeps the row either way.
 fn settle_one_do_row(home: &AgentsHome, node: &str, session_id: &str) -> Result<bool, String> {
     let store = crate::backlog::api::Store::new(&graph_path(home));
-    const ATTEMPTS: usize = 5;
     // The tail instant is stable across attempts; probe once, not per retry.
     let tail = crate::claude_adopt::transcript_stamp(session_id);
-    for attempt in 0..ATTEMPTS {
+    for attempt in 0..TX_ATTEMPTS {
         // The same eligibility the batch settle applies: the pair must sit
         // in the current stale set, re-read fresh each attempt. The matching
         // row also hands the settle its harness, so the fill names the exact
@@ -1043,13 +1043,13 @@ fn settle_one_do_row(home: &AgentsHome, node: &str, session_id: &str) -> Result<
         ) {
             Ok(payload) if payload.success => return Ok(true),
             Ok(_) => return Ok(false),
-            Err(err) if attempt + 1 < ATTEMPTS => {
-                std::thread::sleep(std::time::Duration::from_millis(250));
+            Err(err) if attempt + 1 < TX_ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(tx_backoff_ms(attempt)));
                 let _ = err;
             }
             Err(err) => {
                 return Err(format!(
-                    "settle write refused: {} (after {ATTEMPTS} attempts)",
+                    "settle write refused: {} (after {TX_ATTEMPTS} attempts)",
                     err.0
                 ))
             }
@@ -4125,6 +4125,35 @@ pub(crate) fn default_ledger_path() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tx_retry_policy_matches_the_python_tx_loop() {
+        let store = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../cli/src/fno/graph/store.py"),
+        )
+        .expect("python store source");
+        let value = |name: &str| -> f64 {
+            let line = store
+                .lines()
+                .find(|l| l.starts_with(&format!("{name} = ")))
+                .unwrap_or_else(|| panic!("{name} missing from store.py"));
+            line.split('=').nth(1).unwrap().trim().parse().unwrap()
+        };
+        assert_eq!(value("_TX_ATTEMPTS") as usize, TX_ATTEMPTS);
+        assert_eq!(
+            (value("_TX_BACKOFF_BASE_S") * 1000.0).round() as u64,
+            TX_BACKOFF_BASE_MS
+        );
+        assert_eq!(
+            (value("_TX_BACKOFF_CAP_S") * 1000.0).round() as u64,
+            TX_BACKOFF_CAP_MS
+        );
+        for attempt in 0..TX_ATTEMPTS {
+            let bound = TX_BACKOFF_CAP_MS.min(TX_BACKOFF_BASE_MS << attempt);
+            assert!(tx_backoff_ms(attempt) <= bound);
+        }
+    }
 
     #[test]
     fn worker_finished_reads_three_witnesses() {
