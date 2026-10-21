@@ -131,7 +131,7 @@ pub fn mesh_env_pairs(
     // the way Python's composed block appends after them (mux_spawn.py:1242):
     // env(1) is left-to-right last-wins, so the overlay wins over anything an
     // inherited assignment would say.
-    pairs.extend(overlay.iter().cloned());
+    pairs.extend(overlay.iter().map(|(k, v)| format!("{k}={v}")));
     let mut unset: Vec<String> = AMBIENT_IDENTITY_ENV
         .iter()
         .flat_map(|name| ["-u".to_string(), name.to_string()])
@@ -168,7 +168,7 @@ pub fn mesh_env_pairs(
             unset.extend(["-u".to_string(), key.to_string()]);
         }
     }
-    pairs.extend(seed_prov.iter().cloned());
+    pairs.extend(seed_prov.iter().map(|(k, v)| format!("{k}={v}")));
     (unset, pairs)
 }
 

@@ -183,7 +183,7 @@ fn ensure_agy_folder_trust(cwd: &std::path::Path) -> bool {
     }
     let mut data = data;
     data.insert(key, serde_json::Value::String("TRUST_FOLDER".to_string()));
-    write_json_atomic(&trust_file, &data)
+    crate::state::write_json_atomic(&trust_file, &data).is_ok()
 }
 
 /// A parent directory of cwd already carries TRUST_PARENT.
@@ -287,7 +287,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
         "footnote" => build_footnote(ctx, uuid.as_deref())?,
         _ => unreachable!("no pane arm for {h}", h = arm.harness),
     };
-    let typed = matches!(arm.harness, "agy" | "cursor-agent" | "grok" | "footnote");
+    let typed = types_seed(arm.harness);
     let wrapped = {
         let seed_prov = seed_provenance_env(&seed);
         let qos_argv = qos_wrap_for(ctx, argv);
@@ -300,7 +300,6 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
             qos_argv,
         )
     };
-    let _ = typed;
     Ok(ArmPlan {
         wrapped,
         held_seed: (typed && !seed.is_empty()).then(|| seed.clone()),
@@ -329,11 +328,11 @@ impl PaneArm for SimpleArm {
 
 /// cursor-agent (mux_spawn.py:1063): the declared form joins the chat the
 /// create-chat mint ran in make_plan; the worktree is fno's.
-fn build_cursor(ctx: &PaneContext, uuid: &str) -> Vec<String> {
+fn build_cursor(ctx: &PaneContext, uuid: Option<&str>) -> Vec<String> {
     let contract =
         crate::harness_capabilities::HarnessContract::packaged().expect("embedded contract");
     let mut argv = contract
-        .render_session_argv_raw("cursor-agent", "interactive_create", Some(uuid))
+        .render_session_argv_raw("cursor-agent", "interactive_create", uuid)
         .expect("embedded cursor-agent interactive_create");
     argv.extend(grant_tokens("cursor-agent"));
     argv.extend(ctx.passthrough.iter().cloned());
@@ -344,7 +343,7 @@ fn build_cursor(ctx: &PaneContext, uuid: &str) -> Vec<String> {
 /// appends the may-still-exist wording when its own reap misses. `pub(crate)`
 /// for the claude arm, which fails the spawn on the same Python line.
 pub(crate) fn spawn_failed_refusal(
-    ctx: &PaneContext,
+    _ctx: &PaneContext,
     pane: &PaneFacts,
     head: String,
 ) -> PaneRefusal {
@@ -365,6 +364,13 @@ pub(crate) fn spawn_failed_refusal(
 
 /// The post-run bind for the simple arms: the readiness gate, the seed, then
 /// the harness's bind answer.
+/// The harnesses whose seed is typed into the pane after the readiness gate
+/// (the rest commit it in argv). `make_plan` gates the held seed on it and
+/// `seed_phase` gates the typed submit on it - one predicate, two readers.
+fn types_seed(harness: &str) -> bool {
+    matches!(harness, "agy" | "cursor-agent" | "grok" | "footnote")
+}
+
 fn bind_simple(
     arm: &SimpleArm,
     ctx: &PaneContext,
@@ -425,7 +431,7 @@ fn seed_phase(
         outcome = second.outcome;
     }
     match outcome {
-        SeedOutcome::Submitted | SeedOutcome::Unknown => bind_answer(arm, ctx, pane, plan),
+        SeedOutcome::Submitted | SeedOutcome::Unknown { .. } => bind_answer(arm, ctx, pane, plan),
         SeedOutcome::Unconfirmed { detail } => Err(spawn_failed_refusal(
             ctx,
             pane,

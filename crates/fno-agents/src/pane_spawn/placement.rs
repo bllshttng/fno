@@ -263,7 +263,7 @@ pub fn pane_placement_conflict(
     tab_id: Option<&str>,
     bounded: bool,
 ) -> Option<String> {
-    let pane = pane?;
+    pane?;
     let labels = [
         (workspace.is_some(), "--workspace"),
         (split.is_some(), "--split"),

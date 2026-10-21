@@ -79,7 +79,7 @@ fn pin_uuid(tail: &[String], uuid: &str) -> Vec<String> {
 }
 
 /// The value following the first `flag` occurrence in an argv tail.
-fn value_of(tail: &[String], flag: &str) -> Option<&String> {
+fn value_of<'a>(tail: &'a [String], flag: &str) -> Option<&'a String> {
     tail.iter()
         .position(|t| t == flag)
         .and_then(|i| tail.get(i + 1))

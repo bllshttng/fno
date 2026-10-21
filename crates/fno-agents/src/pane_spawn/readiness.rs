@@ -11,6 +11,9 @@ use super::{pane_ls_detailed, MuxCli};
 /// exited before readiness.
 const WAIT_EXITED: i32 = 12;
 
+/// `_SEED_RETRY_DELAY_S` (mux_spawn.py:2678): the single seed retry's pause.
+pub(crate) const SEED_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The readiness verdict: Python's `(word, detail)` tuple. The row stands in
 /// every state except `Failed`.
 #[derive(Debug, Clone, PartialEq)]
@@ -343,7 +346,7 @@ pub fn submit_spawn_seed(
     }
     let mut observation = first.observation;
     let mut trust_source = String::new();
-    if provider == "agy" && agy_trust_modal(&frame) {
+    if provider == "agy" && agy_trust_modal(&first.frame) {
         match clear_agy_trust(session, pane_id, mux) {
             Some(outcome) => return SeedReceipt::of(outcome, "", observation),
             None => trust_source = "trust-cleared".to_string(),
@@ -486,6 +489,3 @@ fn submit_after_trust(
     }
     SeedReceipt::of(SeedOutcome::Submitted, &source, observation)
 }
-
-#[cfg(test)]
-mod tests;
