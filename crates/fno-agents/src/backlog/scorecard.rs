@@ -401,25 +401,6 @@ pub fn build_records(
             }
         }
 
-        records.push(json!({
-            "id": id,
-            "kind": format!("{TARGET_VERB}/{}",
-                node.get("difficulty").and_then(Value::as_str).unwrap_or("unknown")),
-            "harness": harness,
-            "provider": provider,
-            "model": model,
-            "effort": effort,
-            "merged": merged,
-            "pr": pr,
-            "cost_usd": cost_usd,
-            "work_hours": if work_hours > 0.0 { Some(round2(work_hours)) } else { None },
-            "bounce": bounce,
-            "ci_failure": ci_failure,
-            "ci_red": ci_red,
-            "review_findings": review_findings,
-            "shared": lanes.len() > 1,
-        }));
-
         // The blueprint credit: a node with a blueprint session row also
         // credits that session's lane with the node's downstream outcome,
         // under a `blueprint/<difficulty>` kind. The population gate stays
@@ -435,17 +416,49 @@ pub fn build_records(
                     .or_else(|| s.get("started_at").and_then(Value::as_str))
                     .and_then(parse_local)
             });
+        let bp_cost = blueprint.and_then(|bp| {
+            bp.get("session_id")
+                .and_then(Value::as_str)
+                .and_then(|sid| ledger.first_by_session(sid))
+                .and_then(|r| num_opt(r.get("cost_usd")))
+        });
+        // The target lane bills its own work: the blueprint session's
+        // ledger cost rides the blueprint credit, so it comes back off the
+        // node sum. A sum that nets zero or negative under the subtraction
+        // reads unmeasured - an unmeasured cost never reads as free.
+        let target_cost = match (cost_usd, bp_cost) {
+            (Some(total), Some(bp)) => {
+                let net = total - bp;
+                (net > 0.0).then_some(net)
+            }
+            _ => cost_usd,
+        };
+        records.push(json!({
+            "id": id,
+            "kind": format!("{TARGET_VERB}/{}",
+                node.get("difficulty").and_then(Value::as_str).unwrap_or("unknown")),
+            "harness": harness,
+            "provider": provider,
+            "model": model,
+            "effort": effort,
+            "merged": merged,
+            "pr": pr,
+            "cost_usd": target_cost,
+            "work_hours": if work_hours > 0.0 { Some(round2(work_hours)) } else { None },
+            "bounce": bounce,
+            "ci_failure": ci_failure,
+            "ci_red": ci_red,
+            "review_findings": review_findings,
+            "shared": lanes.len() > 1,
+        }));
+
         if let Some(bp) = blueprint {
             let (bp_harness, bp_model, bp_provider, bp_effort) = session_lane(bp, ledger);
             let bp_hours = session_hours(bp);
             // The credit carries the downstream outcome, not the node's
-            // whole bill: this lane's own cost is the ledger row joined by
-            // its session id, and null with no row.
-            let bp_cost = bp
-                .get("session_id")
-                .and_then(Value::as_str)
-                .and_then(|sid| ledger.first_by_session(sid))
-                .and_then(|r| num_opt(r.get("cost_usd")));
+            // whole bill: this lane's own cost comes back off the node sum
+            // above, so this lane bills only its own ledger row, and null
+            // with no row.
             records.push(json!({
                 "id": id,
                 "kind": format!("blueprint/{}",
@@ -1629,6 +1642,14 @@ mod tests {
             .find(|r| r["kind"] == json!("blueprint/medium"))
             .unwrap();
         assert_eq!(bp_cell["cost_usd"], json!(5.0), "{bp_cell}");
+        // The target lane bills its own work: the blueprint session's cost
+        // came back off the node sum, which nets zero here, so the target
+        // cost reads unmeasured rather than the whole bill twice.
+        let target_cell = recs
+            .iter()
+            .find(|r| r["kind"] == json!("target/medium"))
+            .unwrap();
+        assert_eq!(target_cell["cost_usd"], Value::Null, "{target_cell}");
         // The credit record is the same node twice, so the coverage block
         // reads the population once.
         assert_eq!(coverage(&recs, 0)["nodes"], json!(1));
