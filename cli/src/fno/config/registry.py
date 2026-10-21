@@ -272,6 +272,12 @@ FIELD_META: dict[str, Meta] = {
     "review.peer_token_env": Meta(
         "advanced", "Optional legacy carrier: env var holding the PAT for peer_identity used to post peer reviews to the PR.",
     ),
+    "review.bot_identity": Meta(
+        "advanced", "The distinct GitHub login the reviewer lane's bot-review mirror posts under (must not be the PR author: GitHub silently demotes an author's approving review to COMMENTED). Unset skips the bot-review leg of publish-review entirely, before any network call.",
+    ),
+    "review.bot_token_env": Meta(
+        "advanced", "Optional env var holding the PAT for review.bot_identity, used to post the verdict to the PR as the bot.",
+    ),
     "review.external_reviewers": Meta(
         "always", "Which AI reviewers /pr requests a review from (the INVOCATION list).",
         question="Which external reviewer(s) should review your PRs (gemini/codex/none)?",
@@ -313,7 +319,7 @@ FIELD_META: dict[str, Meta] = {
     "agents.a2a.auto": Meta("advanced", "Allow agents to auto-open agent-to-agent threads."),
     "agents.a2a.turn_ceiling": Meta("advanced", "Max turns in an agent-to-agent thread."),
     "agents.confirm": Meta("never", "Agent-launch confirmation policy (auto/always/never)."),
-    "agents.auto_register_sessions": Meta("advanced", "Auto-join every hand-started session to the roster at SessionStart (default false = opt-in via /fno-me). Spawned workers register regardless.", default_source="default"),
+    "agents.auto_register_sessions": Meta("advanced", "Auto-join every hand-started session to the roster at SessionStart (default false: a session joins at its first fno skill or command, or via /fno-me). Spawned workers register regardless.", default_source="default"),
     "agents.happy_routed_panes": Meta("advanced", "Launch routed claude panes through happy for remote monitoring; default false and pane-only.", default_source="default"),
     "agents.defaults.provider": Meta("advanced", "Default HARNESS for bare `fno agents spawn` / `/agent spawn` (claude/codex/gemini/agy/opencode). The key NAME says provider but the values are harness values and an explicit -H flag wins; the vendor axis in config is agents.defaults.route (-P/--provider as a flag). Empty = unset (harness inference then claude). Validated at the spawn seam.", default_source="default"),
     "agents.defaults.model": Meta("advanced", "Default model for bare spawns, forwarded as --model but provider-scoped: an unbound model (no agents.defaults.provider) is scoped to the builtin default provider (claude), NOT the ambient harness, so a spawn resolving to a different provider (e.g. a codex-ambient session, or an explicit -H codex) leaves the model to that harness rather than forcing an incompatible one that 400s after the round-trip. Bind agents.defaults.provider (or set a per-provider model) to apply a model under a non-claude harness. An explicit -m flag always wins; empty = unset (provider default). Passthrough (provider CLIs own model names).", default_source="default"),

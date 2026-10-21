@@ -18,7 +18,7 @@
 use crate::finalize::repo_identity_from_git_remote;
 use crate::store_remote::{configured, Remote, SqlValue};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) const TABLE: &str = "review_attestation";
 
@@ -130,8 +130,11 @@ pub fn dispatch(rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
         Some("push") => run_push(&cwd),
         Some("pull") => run_pull(&rest[1..], &cwd),
+        Some("retract") => run_retract(&rest[1..], &cwd),
         _ => {
-            eprintln!("usage: fno-agents attest push|pull [--repo <slug>]  (push reads one envelope line on stdin)");
+            eprintln!(
+                "usage: fno-agents attest push|pull|retract [--repo <slug>]  (push reads one envelope line on stdin)"
+            );
             2
         }
     }
@@ -329,4 +332,278 @@ mod tests {
             Some("abc123")
         );
     }
+
+    /// The conflict refusal byte-matches the Python exception text the
+    /// attest_retract golden froze (repr-style single quotes); real ancestry
+    /// cannot be faked from an integration process.
+    #[test]
+    fn retraction_conflict_message_matches_the_python_text() {
+        assert_eq!(
+            retraction_conflict_message(
+                "CLAUDE_CODE_SESSION_ID",
+                "ancestor-session",
+                "env-session"
+            ),
+            "error: attester identity conflict on CLAUDE_CODE_SESSION_ID: process ancestry \
+carries 'ancestor-session', the emitting environment carries 'env-session'. No retraction \
+emitted under an identity the caller overrode."
+        );
+    }
+}
+
+// ── retraction: revoke a forged pass by naming the pair that passed ───────
+
+fn resolve_retractor_identity(
+) -> Result<(Option<String>, crate::spawn_context::AttesterWitness), String> {
+    if std::env::var("FNO_ATTEST_ENV_ONLY").as_deref() == Ok("1") {
+        return Ok((None, crate::spawn_context::AttesterWitness::EnvOnly));
+    }
+    let get = |name: &str| std::env::var(name).ok();
+    let (id, witness) = crate::spawn_context::resolve_attester_identity(&get);
+    Ok((id, witness))
+}
+
+/// `fno-agents attest retract --reviewer R --attester A --head H --reason W
+/// [--events <journal>]`. Ports cli/src/fno/pr/_attestation.py (deleted in
+/// the same change): scans the named journal plus the machine-global mirror
+/// for a passing attestation matching the triple, refuses rather than
+/// writing a revocation for a pair that never passed, and records the
+/// RETRACTING process's own identity so the audit trail says who revoked.
+fn run_retract(args: &[String], cwd: &Path) -> i32 {
+    let mut reviewer = String::new();
+    let mut attester = String::new();
+    let mut head = String::new();
+    let mut reason = String::new();
+    let mut events_arg: Option<PathBuf> = None;
+    let mut it = args.iter();
+    // The deleted typer door refused unknown tokens and missing required
+    // options with a usage exit 2; the Python forwarder hands argv through
+    // raw, so the refusal lives here instead of letting a typo read as
+    // no-pass (exit 1).
+    while let Some(tok) = it.next() {
+        match tok.as_str() {
+            "--reviewer" => reviewer = it.next().cloned().unwrap_or_default(),
+            "--attester" => attester = it.next().cloned().unwrap_or_default(),
+            "--head" => head = it.next().cloned().unwrap_or_default(),
+            "--reason" | "-R" => reason = it.next().cloned().unwrap_or_default(),
+            "--events" => events_arg = it.next().map(PathBuf::from),
+            _ => {
+                eprintln!(
+                    "error: unknown argument {tok} (want --reviewer, --attester, --head, --reason/-R, --events)"
+                );
+                return 2;
+            }
+        }
+    }
+    if reviewer.is_empty() || attester.is_empty() || head.is_empty() || reason.is_empty() {
+        eprintln!("error: --reviewer, --attester, --head and --reason are required");
+        return 2;
+    }
+    retract_body(
+        cwd,
+        &reviewer,
+        &attester,
+        &head,
+        &reason,
+        events_arg.as_deref(),
+    )
+}
+
+fn retract_body(
+    cwd: &Path,
+    reviewer: &str,
+    attester: &str,
+    head: &str,
+    reason: &str,
+    events: Option<&Path>,
+) -> i32 {
+    let journal = match events {
+        Some(p) => p.to_path_buf(),
+        None => crate::paths::events_path(cwd),
+    };
+    let pass = find_pass(&journal, reviewer, attester, head);
+    let Some(pass) = pass else {
+        eprintln!(
+            "no passing attestation for reviewer '{reviewer}' attester '{attester}' at head {} in {}; nothing retracted",
+            head.get(..12).unwrap_or(head),
+            journal.display()
+        );
+        return 1;
+    };
+    let _ = pass;
+    retract_emit(cwd, &journal, reviewer, attester, head, reason)
+}
+
+/// The newest passing attestation matching the (reviewer, attester, head)
+/// triple, over the journal plus the machine-global mirror. A pass the verb
+/// cannot see is one it cannot revoke - the irretractable-forgery shape
+/// the verb exists to close.
+fn find_pass(journal: &Path, reviewer: &str, attester: &str, head: &str) -> Option<Value> {
+    let key = reviewer.trim_start_matches('/');
+    let mut logs = vec![journal.to_path_buf()];
+    if let Ok(global) = crate::paths_cli::global_events_json(Path::new(".")).canonicalize() {
+        if global
+            != journal
+                .canonicalize()
+                .unwrap_or_else(|_| journal.to_path_buf())
+        {
+            logs.push(global);
+        }
+    }
+    let mut found: Option<Value> = None;
+    for log in logs {
+        let Ok(text) = crate::event_store::journal_text_checked(
+            &log,
+            &crate::event_store::EventQuery::of_types(&["review_attestation"]),
+        ) else {
+            continue;
+        };
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let Ok(val) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if val.get("type").and_then(Value::as_str) != Some("review_attestation") {
+                continue;
+            }
+            let data = val.get("data").cloned().unwrap_or(Value::Null);
+            let row_reviewer = data
+                .get("reviewer")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches('/');
+            if row_reviewer != key
+                || data.get("attester_session_id").and_then(Value::as_str) != Some(attester)
+                || data.get("head_sha").and_then(Value::as_str) != Some(head)
+                || data.get("verdict").and_then(Value::as_str) != Some("pass")
+            {
+                continue;
+            }
+            found = Some(data);
+        }
+    }
+    found
+}
+
+/// Emit the retraction: identity, manifest keys, the fail row, the append,
+/// the global mirror, the receipt. Ports `_attestation.retract`'s second
+/// half; a failed mirror prints the same warning and still exits 0.
+fn retract_emit(
+    cwd: &Path,
+    journal: &Path,
+    reviewer: &str,
+    attester: &str,
+    head: &str,
+    reason: &str,
+) -> i32 {
+    let (resolved_id, witness) = match resolve_retractor_identity() {
+        Ok((id, w)) => (id, w),
+        Err(e) => {
+            eprintln!("error: {e}. No retraction emitted under an identity the caller overrode.");
+            return 1;
+        }
+    };
+    if let crate::spawn_context::AttesterWitness::Conflict(marker, ancestor, env) = witness {
+        eprintln!("{}", retraction_conflict_message(&marker, &ancestor, &env));
+        return 1;
+    }
+    let (session_id, harness) = manifest_identity(cwd);
+    let branch = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let mut data = serde_json::Map::new();
+    data.insert("reviewer".into(), json!(reviewer.trim_start_matches('/')));
+    data.insert("head_sha".into(), json!(head));
+    data.insert("verdict".into(), json!("fail"));
+    data.insert("session_id".into(), json!(session_id));
+    data.insert("retracts_attester".into(), json!(attester));
+    data.insert(
+        "attester_session_id".into(),
+        json!(resolved_id.clone().unwrap_or_default()),
+    );
+    data.insert("attester_witness".into(), json!(witness_name(&witness)));
+    data.insert("retraction_reason".into(), json!(reason));
+    data.insert("branch".into(), json!(branch));
+    if !harness.is_empty() {
+        data.insert("harness".into(), json!(harness));
+    }
+    let source = if session_id.is_empty() {
+        "test"
+    } else {
+        "target"
+    };
+    let event = json!({
+        "ts": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "type": "review_attestation",
+        "source": source,
+        "data": Value::Object(data),
+    });
+    let line = event.to_string();
+    if let Err(e) = crate::event_store::append_envelope(journal, &line, None) {
+        eprintln!("error: failed to append retraction: {e}");
+        return 1;
+    }
+    let global = crate::paths_cli::global_events_json(cwd);
+    if global != journal {
+        if let Err(e) = crate::event_store::append_envelope(&global, &line, None) {
+            eprintln!("warning: retraction not mirrored to the global log: {e}");
+        }
+    }
+    let id_shown = resolved_id.unwrap_or_else(|| "unattributed".into());
+    println!(
+        "retracted: reviewer={reviewer} attester={attester} head={} by={id_shown} reason={reason}",
+        head.get(..12).unwrap_or(head)
+    );
+    0
+}
+
+fn witness_name(w: &crate::spawn_context::AttesterWitness) -> String {
+    match w {
+        crate::spawn_context::AttesterWitness::Process => "process".to_string(),
+        crate::spawn_context::AttesterWitness::EnvOnly => "env_only".to_string(),
+        crate::spawn_context::AttesterWitness::Conflict(..) => "conflict".to_string(),
+    }
+}
+
+/// The conflict refusal, verbatim the Python exception text (repr-style
+/// single quotes) so the golden holds byte-for-byte. Extracted for the unit
+/// test: real ancestry cannot be faked from an integration process.
+fn retraction_conflict_message(marker: &str, ancestor: &str, env: &str) -> String {
+    format!(
+        "error: attester identity conflict on {marker}: process ancestry carries '{ancestor}', \
+the emitting environment carries '{env}'. No retraction emitted under an identity the caller overrode."
+    )
+}
+
+/// session_id/harness from the worktree manifest when one is bound - the
+/// same grep the attestation producer performs. A bare-shell retraction
+/// leaves them empty and the journal stays honest about it.
+fn manifest_identity(cwd: &Path) -> (String, String) {
+    let manifest = cwd.join(".fno/target-state.md");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return (String::new(), String::new());
+    };
+    let mut session_id = String::new();
+    let mut harness = String::new();
+    for line in text.lines() {
+        let stripped = line.trim();
+        for key in ["session_id", "harness"] {
+            let prefix = format!("{key}:");
+            if let Some(value) = stripped.strip_prefix(&prefix) {
+                let value = value.trim();
+                if !value.is_empty() && value != "null" {
+                    if key == "session_id" {
+                        session_id = value.to_string();
+                    } else {
+                        harness = value.to_string();
+                    }
+                }
+            }
+        }
+    }
+    (session_id, harness)
 }

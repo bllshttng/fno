@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# The preflight receipt scope is written by hand in three files, and it has
+# The preflight receipt scope is written by hand in two files, and it has
 # already drifted once, silently.
 #
 # scripts/ci/preflight.sh declares the legs a full run must record;
-# cli/src/fno/pr/_preflight.py and crates/fno-agents/src/verify_evidence.rs
-# each decide whether a receipt is trustworthy by comparing against their own
-# copy. The check is "every required leg present, nothing unknown added", so a
-# rename on one side fails it in BOTH directions: the receipt is DISCARDED
-# rather than rejected, and with preflight.required = true a green preflight can
-# never clear the gate. preflight.sh itself carries the array twice, so all
-# copies are compared, not the first one a search happens to land on.
+# crates/fno-agents/src/verify_evidence.rs decides whether a receipt is
+# trustworthy by comparing against its own copy. The check is "every required
+# leg present, nothing unknown added", so a rename on one side fails it in
+# BOTH directions: the receipt is DISCARDED rather than rejected, and with
+# preflight.required = true a green preflight can never clear the gate.
+# preflight.sh itself carries the array twice, so all copies are compared, not
+# the first one a search happens to land on.
+#
+# The third copy (cli/src/fno/pr/_preflight.py) retired with its port; the
+# Rust side is the one owner left beside the shell.
 #
 # The integration-target lists this also used to guard are gone: both callers
 # now pass `--test '*'`, and a glob cannot drop a file the way the hand-written
@@ -42,7 +45,7 @@ def die(msg):
 preflight = open("scripts/ci/preflight.sh").read()
 
 
-print("== the preflight receipt scope reads the same in all three files ==")
+print("== the preflight receipt scope reads the same in both files ==")
 # EVERY copy, not the first one a search happens to land on. preflight.sh
 # carries the array twice - the void path and the verdict-bearing path - and
 # reading only the first left a rename in the second one invisible while every
@@ -64,8 +67,9 @@ for i, other in enumerate(sets[1:], 2):
 if copies_agree:
     print(f"  ok: {len(copies)} REQUIRED_SCOPE_NAMES copies in preflight.sh, identical")
 
-py = open("cli/src/fno/pr/_preflight.py").read()
 rs = open("crates/fno-agents/src/verify_evidence.rs").read()
+
+RS_FILE = "crates/fno-agents/src/verify_evidence.rs"
 
 
 def literals(text, pattern):
@@ -73,50 +77,41 @@ def literals(text, pattern):
     return set(re.findall(r'"([^"]+)"', m.group(1))) if m else set()
 
 
-PY_FILE = "cli/src/fno/pr/_preflight.py"
-RS_FILE = "crates/fno-agents/src/verify_evidence.rs"
-
-# The OPTIONAL set is checked too, and it is not a lesser case. Both eligibility
-# tests reject an UNKNOWN leg exactly as hard as they reject a missing required
+# The OPTIONAL set is checked too, and it is not a lesser case. The eligibility
+# test rejects an UNKNOWN leg exactly as hard as it rejects a missing required
 # one, so a leg added to one side's optional list and not the other's still
 # untrusts every receipt - and the historical break this guard's header cites,
-# `tracker-gates:fno`, was an optional leg.
+# `tracker-gates:fno`, was an optional leg. preflight.sh names the optional
+# legs at their conditional `REQUIRED_SCOPE_NAMES+=(...)` sites, so the shell
+# side of the optional comparison reads those additions.
+additions = re.findall(r"REQUIRED_SCOPE_NAMES\+=\(([^)]*)\)", preflight)
+shell_optional = set()
+for addition in additions:
+    shell_optional.update(addition.split())
+shell_optional -= declared
+
 groups = [
     ("required", declared,
-     literals(py, r"_PREFLIGHT_BASE_SCOPE = frozenset\(\s*\{(.*?)\}"),
      literals(rs, r"const PREFLIGHT_BASE_SCOPE: \[&str; \d+\] = \[(.*?)\];")),
-    ("optional", None,
-     literals(py, r"_PREFLIGHT_OPTIONAL_SCOPE = frozenset\(\s*\{(.*?)\}"),
+    ("optional", shell_optional,
      literals(rs, r"const PREFLIGHT_OPTIONAL_SCOPE: \[&str; \d+\] = \[(.*?)\];")),
 ]
 
 if not declared:
     die("read 0 required scope names from preflight.sh")
+if not shell_optional:
+    die("read 0 optional legs from preflight.sh's conditional additions")
 
-for kind, from_sh, py_names, rs_names in groups:
-    if not py_names:
-        die(f"{PY_FILE}: could not read the {kind} scope list")
-        continue
+for kind, from_sh, rs_names in groups:
     if not rs_names:
         die(f"{RS_FILE}: could not read the {kind} scope list")
         continue
-    # preflight.sh declares the required set only; the optional legs are named
-    # at their record_leg call sites, so the two language copies are compared
-    # against each other there.
-    pairs = [(PY_FILE, py_names), (RS_FILE, rs_names)] if from_sh is not None else []
-    reference = from_sh if from_sh is not None else py_names
-    ref_label = "preflight.sh" if from_sh is not None else PY_FILE
-    if not pairs:
-        pairs = [(RS_FILE, rs_names)]
-    ok = True
-    for label, names in pairs:
-        if names != reference:
-            die(f"{label} {kind} scope disagrees with {ref_label}: "
-                f"missing {sorted(reference - names) or 'nothing'}, "
-                f"extra {sorted(names - reference) or 'nothing'}")
-            ok = False
-    if ok:
-        print(f"  ok: {len(reference)} {kind} legs, identical across the files that carry them")
+    if rs_names != from_sh:
+        die(f"{RS_FILE} {kind} scope disagrees with preflight.sh: "
+            f"missing {sorted(from_sh - rs_names) or 'nothing'}, "
+            f"extra {sorted(rs_names - from_sh) or 'nothing'}")
+    else:
+        print(f"  ok: {len(from_sh)} {kind} legs, identical across both files")
 
 sys.exit(fail)
 PY

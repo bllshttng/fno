@@ -959,6 +959,83 @@ pub(crate) fn verdict<P: Probes>(probes: &P, cwd: &Path, pr: u64, recompute: boo
     verdict
 }
 
+/// The attestation-chain answer over one repo: shared by the `review-coverage
+/// op chain` server below and the review-hold verb, so the two read ONE
+/// chain implementation (d-e11b2b3e: twins retire first).
+pub(crate) fn chain_answer(cwd: &Path, branch: &str, head: &str) -> Value {
+    let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
+    let events_text = review_journal_text(
+        &inputs.project_events,
+        &inputs.global_events,
+        &inputs.repo_slug,
+    );
+    chain_answer_from(&events_text, &inputs, branch, head)
+}
+
+/// One chain row flattened for the answer surfaces: the head it reviewed,
+/// its base, the blocking-finding count, and whether truncation shed
+/// findings the record could not carry.
+fn flat_row(row: &Value) -> Value {
+    let blocking = row
+        .pointer("/data/findings")
+        .and_then(Value::as_array)
+        .map(|findings| {
+            findings
+                .iter()
+                .filter(|f| f.get("blocking").and_then(Value::as_bool) == Some(true))
+                .count()
+        })
+        .unwrap_or(0);
+    json!({
+        "head_sha": row.pointer("/data/head_sha").and_then(Value::as_str).unwrap_or(""),
+        "reviewed_base_sha": row.pointer("/data/reviewed_base_sha").and_then(Value::as_str).unwrap_or(""),
+        "blocking": blocking,
+        "findings_truncated": row
+            .pointer("/data/findings_truncated")
+            .and_then(Value::as_bool)
+            == Some(true),
+    })
+}
+
+/// The chain answer over an already-resolved events text, shared by the
+/// `op` door above and the review-hold verb (`review_hold::chain_answer`
+/// delegates here): one chain read, no second copy (d-e11b2b3e).
+pub(crate) fn chain_answer_from(
+    events_text: &str,
+    inputs: &crate::loopcheck::review_inputs::ReviewInputs,
+    branch: &str,
+    head: &str,
+) -> Value {
+    let chain = super::local_attestation::in_scope_chain(events_text, branch, head);
+    let last = chain.last().map(flat_row);
+    json!({
+        "rounds_used": rounds_since_last_pass(events_text, branch, head, None),
+        "max_rounds": inputs.settings.max_rounds.unwrap_or(2).max(1),
+        "last": last,
+    })
+}
+
+/// The first in-scope chain row that raised blocking findings (or shed them
+/// to truncation), flattened in the `last` shape. The verify-fixes advisory
+/// names this round: the fixes a pass at the moved head would verify
+/// originate in the oldest blocking round, not the newest verdict. The carry
+/// check keeps `chain_answer_from`'s `last`, the newest reviewed head its
+/// interdiff measures. Ruled by the review_hold parity golden: with two
+/// blocking rounds the advisory names the first.
+pub(crate) fn chain_first_blocking(cwd: &Path, branch: &str, head: &str) -> Option<Value> {
+    let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
+    let events_text = review_journal_text(
+        &inputs.project_events,
+        &inputs.global_events,
+        &inputs.repo_slug,
+    );
+    let chain = super::local_attestation::in_scope_chain(&events_text, branch, head);
+    chain.iter().map(flat_row).find(|row| {
+        row.get("blocking").and_then(Value::as_i64).unwrap_or(0) > 0
+            || row.get("findings_truncated").and_then(Value::as_bool) == Some(true)
+    })
+}
+
 /// The verb bodies behind `fno-agents review-coverage check|publish|waive|op`.
 /// `check`, `publish` and `waive` are the human verbs; `op` reads one JSON
 /// payload on stdin and answers one JSON line on stdout with exit 0, the
@@ -1078,36 +1155,7 @@ fn run_op_door() -> i32 {
                 &inputs.global_events,
                 &inputs.repo_slug,
             );
-            let chain = super::local_attestation::in_scope_chain(&events_text, &branch, &head);
-            let last = chain.last().map(|row| {
-                let blocking = row
-                    .pointer("/data/findings")
-                    .and_then(Value::as_array)
-                    .map(|findings| {
-                        findings
-                            .iter()
-                            .filter(|f| {
-                                f.get("blocking").and_then(Value::as_bool)
-                                    == Some(true)
-                            })
-                            .count()
-                    })
-                    .unwrap_or(0);
-                json!({
-                    "head_sha": row.pointer("/data/head_sha").and_then(Value::as_str).unwrap_or(""),
-                    "reviewed_base_sha": row.pointer("/data/reviewed_base_sha").and_then(Value::as_str).unwrap_or(""),
-                    "blocking": blocking,
-                    "findings_truncated": row
-                        .pointer("/data/findings_truncated")
-                        .and_then(Value::as_bool)
-                        == Some(true),
-                })
-            });
-            json!({
-                "rounds_used": rounds_since_last_pass(&events_text, &branch, &head, None),
-                "max_rounds": inputs.settings.max_rounds.unwrap_or(2).max(1),
-                "last": last,
-            })
+            chain_answer_from(&events_text, &inputs, &branch, &head)
         }
         "lane" => {
             let code_payload = parsed

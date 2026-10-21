@@ -1199,13 +1199,99 @@ fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    read_items_at(&fno_dir, cwd)
+    let mark = inputs_mark(&fno_dir, cwd);
+    let mut cache = PROJECTION.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut items, unreadable, stores) = match (&mark, cache.as_ref()) {
+        (Some(mark), Some((held, items, stores))) if mark == held => {
+            (items.clone(), Vec::new(), stores.clone())
+        }
+        _ => {
+            let read = project_items(&fno_dir, cwd);
+            // Only a complete projection is reused.
+            *cache = match (&mark, read.1.is_empty()) {
+                (Some(mark), true) => Some((mark.clone(), read.0.clone(), read.2.clone())),
+                _ => None,
+            };
+            read
+        }
+    };
+    drop(cache);
+    attach_registry_reach(&mut items);
+    (items, unreadable, stores)
+}
+
+/// The last complete projection and the input mark it was read at. The
+/// projection is pure in its inputs, so an unchanged mark reuses it; reach
+/// still reads a fresh registry every tick.
+static PROJECTION: Mutex<Option<(Vec<String>, Vec<AttentionItem>, Vec<String>)>> = Mutex::new(None);
+
+/// One line per projection input: each question store's committed seq, each
+/// escalation note's mtime, the operator lane's length and mtime. `None`
+/// when a journal holds bytes its store has not ingested, or a store cannot
+/// be read: then only a full read answers.
+fn inputs_mark(fno_dir: &Path, cwd: &Path) -> Option<Vec<String>> {
+    let stamp = |path: &Path| {
+        std::fs::metadata(path).ok().map(|m| {
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{}:{}", m.len(), mtime)
+        })
+    };
+    let mut mark = Vec::new();
+    for journal in crate::needs::question_journals(fno_dir, cwd) {
+        let live = crate::event_store::live_journal(&journal);
+        let store = crate::event_store::store_path(&live);
+        if !live.exists() && !store.exists() {
+            mark.push(format!("j:{}:absent", live.display()));
+            continue;
+        }
+        // A store with no raw journal beside it has no bytes left to ingest.
+        if live.exists() && crate::event_store::stray_has_uningested_bytes(&live, &store) {
+            return None;
+        }
+        let seq = crate::event_store::max_seq(&live).ok()?;
+        mark.push(format!("j:{}:{seq}", live.display()));
+    }
+    let notes = crate::escalation::dir(cwd);
+    if let Ok(entries) = std::fs::read_dir(&notes) {
+        let mut names: Vec<String> = entries
+            .flatten()
+            .map(|e| {
+                let path = e.path();
+                format!("n:{}:{}", path.display(), stamp(&path).unwrap_or_default())
+            })
+            .collect();
+        names.sort();
+        mark.extend(names);
+    }
+    let lane = crate::org_board::scope::operator_lane_path(cwd);
+    mark.push(format!("l:{}", stamp(&lane).unwrap_or_default()));
+    Some(mark)
+}
+
+fn attach_registry_reach(items: &mut [AttentionItem]) {
+    if let Ok(registry) =
+        crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
+    {
+        crate::attention::attach_reach(items, &registry);
+    }
 }
 
 pub(crate) fn read_items_at(
     fno_dir: &Path,
     cwd: &Path,
 ) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
+    let (mut items, unreadable, stores) = project_items(fno_dir, cwd);
+    attach_registry_reach(&mut items);
+    (items, unreadable, stores)
+}
+
+/// The uncached projection, before reach: the read `read_items_at` and
+/// the arm's cache miss share.
+fn project_items(fno_dir: &Path, cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     let mut stores: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     for path in crate::needs::question_journals(fno_dir, cwd) {
@@ -1246,12 +1332,7 @@ pub(crate) fn read_items_at(
     let notes = read_notes(cwd);
     let lane_path = crate::org_board::scope::operator_lane_path(cwd);
     let lane_text = std::fs::read_to_string(lane_path).unwrap_or_default();
-    let mut items = crate::attention::project(&stores.concat(), &notes, &lane_text, now_secs());
-    if let Ok(registry) =
-        crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
-    {
-        crate::attention::attach_reach(&mut items, &registry);
-    }
+    let items = crate::attention::project(&stores.concat(), &notes, &lane_text, now_secs());
     (items, unreadable, stores)
 }
 
@@ -1629,6 +1710,30 @@ mod tests {
             asked.contains("q-arm-1") && asked.contains("q-arm-2"),
             "a store that carries no questions does not block the asks: {asked:?}"
         );
+    }
+
+    /// AC6: unchanged stores, notes and lane keep the input mark, so the
+    /// arm reuses its projection; a new question row moves the mark.
+    #[test]
+    fn the_input_mark_moves_only_when_a_projection_input_moves() {
+        let _root = crate::paths::DeclaredRoot::declare("attention_input_mark");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        let ask = |id: &str| {
+            serde_json::json!({
+                "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+                "data": {"question_id": id, "question": "ship?", "blocks": []}
+            })
+            .to_string()
+        };
+        crate::event_store::append_envelope(&space, &ask("q-mark-1"), None).unwrap();
+        let first = inputs_mark(dir.path(), &cwd).expect("a settled store marks");
+        assert_eq!(inputs_mark(dir.path(), &cwd), Some(first.clone()));
+        crate::event_store::append_envelope(&space, &ask("q-mark-2"), None).unwrap();
+        let second = inputs_mark(dir.path(), &cwd).expect("still settled");
+        assert_ne!(first, second, "a new question row moves the mark");
     }
 
     #[test]

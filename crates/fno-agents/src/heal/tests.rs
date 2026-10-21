@@ -934,9 +934,9 @@ fn rebase_rows() {
     ])
     .unwrap();
     assert!(
-        status_line(&sa).contains("acted on PR 1"),
+        status_line_with(&sa, true).contains("acted on PR 1"),
         "{}",
-        status_line(&sa)
+        status_line_with(&sa, true)
     );
 
     // `mergeable` reads null while GitHub computes; the merge slot is the
@@ -1476,7 +1476,7 @@ exit 0
 fn status_rows() {
     let a = parse_args(&["--status".to_string()]).unwrap();
     assert_eq!(
-        status_line(&a),
+        status_line_with(&a, true),
         "Heal: unarmed (auto_heal.enabled=false; arm with: fno config set auto_heal.enabled true)"
     );
 
@@ -1491,7 +1491,11 @@ fn status_rows() {
             .into_owned(),
     ])
     .unwrap();
-    assert_eq!(status_line(&a), "Heal: armed; never ran");
+    assert_eq!(status_line_with(&a, true), "Heal: armed; never ran");
+    assert_eq!(
+        status_line_with(&a, false),
+        "Heal: armed; never ran; no runner (pr_watch.enabled=false; enable with: fno config set pr_watch.enabled true)"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let events = tmp.path().join("events.jsonl");
@@ -1511,7 +1515,7 @@ fn status_rows() {
         events.to_string_lossy().into_owned(),
     ])
     .unwrap();
-    let line = status_line(&a);
+    let line = status_line_with(&a, true);
     assert!(line.starts_with("Heal: armed; last run "), "{line}");
     assert!(line.contains("(12m ago, root unknown)"), "{line}");
     assert!(
@@ -1538,7 +1542,7 @@ fn status_rows() {
         events.to_string_lossy().into_owned(),
     ])
     .unwrap();
-    let line = status_line(&a);
+    let line = status_line_with(&a, true);
     assert!(
         line.contains("healed 0, rebased 1, reran 2, escalated 1; acted on PR 2155, 2162"),
         "{line}"
@@ -1560,9 +1564,9 @@ fn status_rows() {
     ])
     .unwrap();
     assert!(
-        status_line(&a).contains("(1d ago, root unknown)"),
+        status_line_with(&a, true).contains("(1d ago, root unknown)"),
         "{}",
-        status_line(&a)
+        status_line_with(&a, true)
     );
 
     let tmp = tempfile::tempdir().unwrap();
@@ -1584,9 +1588,9 @@ fn status_rows() {
     std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
     std::fs::write(&pid_file, format!("{}\n", std::process::id())).unwrap();
     assert!(
-        status_line(&a).contains(&format!("in-flight {}", std::process::id())),
+        status_line_with(&a, true).contains(&format!("in-flight {}", std::process::id())),
         "{}",
-        status_line(&a)
+        status_line_with(&a, true)
     );
 
     // One row names one root's run: the line labels whose counts these
@@ -1608,7 +1612,7 @@ fn status_rows() {
         events.to_string_lossy().into_owned(),
     ])
     .unwrap();
-    let line = status_line(&a);
+    let line = status_line_with(&a, true);
     assert!(line.contains("root /srv/repo"), "{line}");
     assert!(line.contains("healed 2"), "{line}");
 }

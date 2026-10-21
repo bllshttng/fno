@@ -1552,6 +1552,18 @@ pub fn notify_arm_starved_after_s(cwd: &Path) -> u64 {
     .min(retention_s)
 }
 
+/// `[pr_watch] enabled` (default false): whether the launchd PR watcher runs,
+/// the one scheduler behind heal and every other launchd arm.
+pub fn pr_watch_enabled(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("pr_watch")?
+            .as_table()?
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+    })
+    .unwrap_or(false)
+}
+
 /// `[auto_heal] enabled` (default false): whether the CI healer drive loop is armed.
 pub fn auto_heal_enabled(cwd: &Path) -> bool {
     resolve(cwd, |t| {

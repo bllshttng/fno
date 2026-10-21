@@ -103,13 +103,18 @@ impl View {
         if let Some(hit) = self.table_header_hit(i, col) {
             return Some(hit);
         }
-        // US4: a click on the footer's `☰ menu` region opens the sideline
-        // MENU popup; the rest of the footer row keeps its `+ new` create action.
+        // The footer's buttons: `+ session` opens the composer, `menu` the
+        // sideline MENU popup; the rest of the row keeps its create action.
         if matches!(self.painted_rows().get(i), Some(DisplayRow::NewSquad)) {
-            if let Some(range) = self.footer_menu_range(panel_w as usize) {
-                if range.contains(&(col as usize)) {
-                    return Some(ChromeHit::OpenSidelineMenu { row, col });
-                }
+            let buttons = self.footer_buttons(panel_w as usize);
+            let at = |r: &Option<std::ops::Range<usize>>| {
+                r.as_ref().is_some_and(|r| r.contains(&(col as usize)))
+            };
+            if at(&buttons.session) {
+                return Some(ChromeHit::ToggleComposer);
+            }
+            if at(&buttons.menu) {
+                return Some(ChromeHit::OpenSidelineMenu { row, col });
             }
         }
         if let Some(id) = self.card_node_hit(i, col) {

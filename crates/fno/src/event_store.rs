@@ -299,7 +299,7 @@ fn routed_root_journal(live: &Path) -> bool {
 /// taken? No store, no cursor row, a changed head line, or an offset short
 /// of EOF all answer yes. A cursor at EOF under the same head line answers
 /// no, so the read skips import_all and never opens a write transaction.
-fn stray_has_uningested_bytes(live: &Path, store: &Path) -> bool {
+pub(crate) fn stray_has_uningested_bytes(live: &Path, store: &Path) -> bool {
     let Ok(conn) = open_read(store) else {
         return true;
     };
@@ -445,10 +445,43 @@ fn open_store(store: &Path) -> Result<Connection, String> {
     // SQLite surfaces page damage as statement errors instead, and
     // `refuse_corrupt_store` turns those into the same loud refusal.
     let mut conn = crate::store_conn::open_write(store)?;
-    ensure_schema(&mut conn, store)?;
-    observation::ensure_observation_tables(&conn)
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+    // Schema work runs once per store identity per process: every append
+    // opens the store, and the ensure steps re-read the schema each time.
+    if schema_key(&conn, store).map_or(true, |key| !schema_ensured(&key)) {
+        ensure_schema(&mut conn, store)?;
+        observation::ensure_observation_tables(&conn)
+            .map_err(|e| format!("{}: {e}", store.display()))?;
+        if let Some(key) = schema_key(&conn, store) {
+            ENSURED_SCHEMAS
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(key);
+        }
+    }
     Ok(conn)
+}
+
+/// A store's identity for the schema memo: path, device, inode and
+/// `user_version`. A recovery swap (new inode) or a migration by another
+/// binary (new `user_version`) ensures the schema again.
+type SchemaKey = (std::path::PathBuf, u64, u64, i64);
+
+static ENSURED_SCHEMAS: std::sync::Mutex<std::collections::BTreeSet<SchemaKey>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn schema_key(conn: &Connection, store: &Path) -> Option<SchemaKey> {
+    let meta = std::fs::metadata(store).ok()?;
+    let version = conn
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .ok()?;
+    Some((store.to_path_buf(), meta.dev(), meta.ino(), version))
+}
+
+fn schema_ensured(key: &SchemaKey) -> bool {
+    ENSURED_SCHEMAS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .contains(key)
 }
 
 /// The SQLite diagnostics that mean stored pages are unreadable. Distinct

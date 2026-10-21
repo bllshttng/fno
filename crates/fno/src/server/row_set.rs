@@ -397,7 +397,7 @@ impl Core {
                             );
                             AgentRow {
                                 harness: a.harness.clone(),
-                                model: a.model.clone(),
+                                model: self.row_model(a),
                                 route: a.route.clone(),
                                 spawned_by_session: a.spawned_by_session.clone(),
                                 lineage_kind: a.lineage_kind.clone(),
@@ -611,7 +611,7 @@ impl Core {
                     );
                     out.push(AgentRow {
                         harness: a.harness.clone(),
-                        model: a.model.clone(),
+                        model: self.row_model(a),
                         route: a.route.clone(),
                         spawned_by_session: a.spawned_by_session.clone(),
                         lineage_kind: a.lineage_kind.clone(),
@@ -701,7 +701,7 @@ impl Core {
                     );
                     out.push(AgentRow {
                         harness: a.harness.clone(),
-                        model: a.model.clone(),
+                        model: self.row_model(a),
                         route: a.route.clone(),
                         spawned_by_session: a.spawned_by_session.clone(),
                         lineage_kind: a.lineage_kind.clone(),

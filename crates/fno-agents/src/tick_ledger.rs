@@ -774,11 +774,24 @@ fn mark_starved_rows(values: &[Value], rows: &mut [ArmStatus], now_unix: u64, th
 /// pure fold stays free of config reads; the readout layer owns them, so a
 /// row's unarmed verdict reflects the config the reader actually runs.
 pub fn fill_arm_values(rows: &mut [ArmStatus], cwd: &Path) {
+    let watcher_on = crate::agents_config::pr_watch_enabled(cwd);
     for row in rows.iter_mut() {
         if let Some(key) = row.arm_key.as_deref() {
             row.arm_value = Some(arm_key_value(cwd, key));
         }
+        mark_runner_off(row, watcher_on);
     }
+}
+
+/// An armed launchd row whose scheduler is switched off by config: the arm
+/// key reads true, yet nothing will run it. The cause names the switch that
+/// is actually off, so the row never reads as a loop that merely waits.
+fn mark_runner_off(row: &mut ArmStatus, watcher_on: bool) {
+    if watcher_on || row.scheduler.as_deref() != Some(SCHED_LAUNCHD) || row_is_unarmed(row) {
+        return;
+    }
+    row.cause = Some("runner_off".to_string());
+    row.detail = Some("pr_watch.enabled=false".to_string());
 }
 
 /// [`read_arms`] plus the arm values and the starved mark: the one read
@@ -1380,7 +1393,7 @@ fn explain_inner(rows: &mut [ArmStatus], daemon: &DaemonFacts, trace: Option<&Ti
     let pm_stale = pm.is_some_and(|r| r.stale);
     let pm_last_ts = pm.and_then(|r| r.last_ts.clone());
     for (i, row) in rows.iter_mut().enumerate() {
-        if row.stale {
+        if row.stale && row.cause.as_deref() != Some("runner_off") {
             let (mut cause, mut hint) =
                 if pm_stale && row.scheduler.as_deref() == Some(SCHED_LAUNCHD) {
                     tick_overdue_cause(pm_last_ts.as_deref(), trace)
@@ -1751,6 +1764,23 @@ mod tests {
         assert!(line.contains(" unarmed "), "{line}");
         assert!(line.contains("key=auto_heal.enabled=false"), "{line}");
         assert!(!needs_attention(&row));
+        mark_runner_off(&mut row, false);
+        assert!(row.cause.is_none(), "an unarmed row stays unarmed");
+
+        let mut row = arm_status("heal", Some(SCHED_LAUNCHD), 600, None, None, 0);
+        row.arm_key = Some("auto_heal.enabled".into());
+        row.arm_value = Some("true".into());
+        mark_runner_off(&mut row, false);
+        let mut rows = vec![row];
+        crate::arm_repair::annotate(&mut rows, &crate::arm_repair::RepairFacts::new(false, &[]));
+        let line = &rows[0].line;
+        assert!(line.contains("cause=runner_off"), "{line}");
+        assert!(line.contains("pr_watch.enabled=false"), "{line}");
+        assert!(
+            line.contains("repair: fno config set pr_watch.enabled true"),
+            "{line}"
+        );
+        assert!(!line.contains("heal="), "{line}");
 
         let dir = temp_dir();
         let path = dir.join("events.jsonl");

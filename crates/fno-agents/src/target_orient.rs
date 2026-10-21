@@ -507,13 +507,21 @@ fn has_any_marker(text: &str) -> bool {
 
 /// True if a landed-marker heading naming the blocker (id OR PR number) is
 /// already in the doc. Both keys match on a TOKEN boundary.
+///
+/// The Rust regex crate has no look-around, so the boundaries are spelled as
+/// explicit alternations. The `pr` pattern used to build `#{pr}(?!\d)` and
+/// `unwrap()` it, which PANICKED init on any node whose landed-marker check
+/// named a merged PR (a look-around is a compile error, and unwrap turned it
+/// into a crash mid-`fno do target start`).
 fn marker_present(text: &str, blocker_id: &str, pr_number: Option<i64>) -> bool {
     let id_re = Regex::new(&format!(
-        r"(?i)(?<![\w-]){}(?![\w-])",
+        r"(?i)(?:^|[^0-9A-Za-z_-]){}(?:[^0-9A-Za-z_-]|$)",
         regex::escape(blocker_id)
     ))
     .ok();
-    let pr_re = pr_number.map(|pr| Regex::new(&format!(r"#{pr}(?!\d)")).unwrap());
+    let pr_re = pr_number
+        .map(|pr| Regex::new(&format!(r"#{pr}(?:[^\d]|$)")).ok())
+        .flatten();
     for line in text.lines() {
         let s = line.trim();
         if !is_marker_heading(s) {
@@ -1131,4 +1139,53 @@ pub fn report(project_root: &Path) -> String {
         .map(|(label, value)| format!("{:<width$} {}", format!("{label}:"), value))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::marker_present;
+
+    #[test]
+    fn pr_number_marker_matches_without_lookaround() {
+        // The heading the boundary-reconcile step writes when Step 0 ran:
+        // the regex crate has no look-around, so the token boundary must be
+        // an alternation. `#34890` must NOT match `#3489`, and the heading
+        // may name the PR at end-of-line or before a separator. Blocker ids
+        // are the allowlisted synthetic pool (x-aaaa), not real nodes.
+        let text = "### x-aaaa landed via #3489 - boundary reconcile\n";
+        assert!(marker_present(text, "x-aaaa", Some(3489)));
+        // The keys are id OR pr (the python twin's contract): the id alone
+        // marks the blocker present, even when the query names another pr.
+        assert!(marker_present(text, "x-aaaa", Some(34890)));
+        // The pr token boundary, decided by the pr leg alone: #3489 does
+        // not satisfy a #34890 query when no id matches.
+        assert!(!marker_present(
+            "### x-bbbb landed via #3489 - boundary reconcile\n",
+            "x-aaaa",
+            Some(34890)
+        ));
+        assert!(marker_present("### #3489 landed\n", "x-none", Some(3489)));
+        // The heading must read as a landed marker: one without the word
+        // never matches, however it names the PR.
+        assert!(!marker_present("### #3489\n", "x-none", Some(3489)));
+    }
+
+    #[test]
+    fn id_marker_matches_on_token_boundaries() {
+        // `x-aaaa1` must not match for blocker x-aaaa; a leading dash is
+        // part of a longer token and excludes the match, as before. The
+        // longer forms are synthetic (built from the allowlisted pool
+        // token), never real node ids.
+        assert!(marker_present(
+            "### x-aaaa landed - boundary reconcile\n",
+            "x-aaaa",
+            None
+        ));
+        assert!(!marker_present("### x-aaaa1 landed\n", "x-aaaa", None));
+        assert!(!marker_present(
+            "### prefix-x-aaaa landed\n",
+            "x-aaaa",
+            None
+        ));
+    }
 }

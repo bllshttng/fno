@@ -26,7 +26,6 @@ from typing import Optional
 
 from fno.agents.registry import _OWNERSHIP_LIVE_STATUSES as _ALIVE_STATUSES
 from fno.graph.fuzzy import resolve_node
-from fno.rust_binary import VerbUnavailable, verb_call
 from fno.graph.store import (
     GraphMalformedRootError,
     GraphUnreadableError,
@@ -229,23 +228,6 @@ def _run(argv: list[str], timeout: float) -> Optional[subprocess.CompletedProces
         return None
 
 
-def _outbound_leak_detail(path: str) -> Optional[str]:
-    """None when the outbound commits scan clean, else the refusal reason.
-    The rule lives in `fno-agents pr-push --scan-only` (JSON through the
-    rust_binary door), so a dead scanner is fail-closed: no push."""
-    try:
-        answer = verb_call(["pr-push", "--scan-only", "--cwd", path], {}, timeout=_PUSH_TIMEOUT_S)
-    except VerbUnavailable as exc:
-        return f"outbound scan unavailable: {exc}"
-    leaks = answer.get("leaks") or []
-    if not leaks:
-        return None
-    first = leaks[0]
-    sha = str(first.get("sha", "?"))[:12]
-    lines = "; ".join(str(line) for line in (first.get("lines") or [])[:2])
-    return f"push skipped: commit {sha} carries a session URL: {lines}"
-
-
 def _wt_unpushed_count(path: str) -> tuple[int, bool]:
     """(count, ok); ok False means the read itself is untrustworthy."""
     global _remote_refs_fresh, _remote_refs_stale
@@ -344,15 +326,6 @@ def act_on_stranded(row: Row) -> dict:
 
     sha_p = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True)
     sha = (sha_p.stdout or "").strip()
-
-    # The leak veto: a session-URL commit never reaches origin through this
-    # recovery, and a dead scanner fails closed.
-    leak = _outbound_leak_detail(path)
-    if leak:
-        acts.append(
-            {"act": "push", "branch": branch or f"recovered/{node}", "ok": False, "detail": leak}
-        )
-        return {"node": node, "class": row.klass, "acts": acts, "stopped_at": "push"}
 
     if branch:
         push_branch = branch

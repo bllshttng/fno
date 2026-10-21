@@ -2020,7 +2020,6 @@ class TestDurableGrantExecution:
             return receipt
 
         monkeypatch.setattr("fno.rust_binary.verb_call", _merge)
-        monkeypatch.setattr("fno.pr._merge._pr_head_oid", lambda _pr, _repo: "headsha")
         return merge_calls
 
     def _queue(self, tmp_path):

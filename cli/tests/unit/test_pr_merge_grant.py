@@ -30,7 +30,7 @@ PR = 42
 @pytest.fixture(autouse=True)
 def _stub_pr_worktree_resolution(monkeypatch):
     monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
+        "fno.pr._merge._resolve_pr_worktree", lambda _pr, repo: repo
     )
 
 

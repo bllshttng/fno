@@ -122,7 +122,7 @@ def test_thread_refusal_renders_from_the_roster_without_the_runtime():
     from fno.harness_names import unknown_thread_harness_message
 
     rostered = unknown_thread_harness_message("hermes")
-    assert "hermes has no measured thread lane yet; use --substrate pane." in rostered
+    assert "hermes has no measured thread lane yet; use --as pane." in rostered
     typo = unknown_thread_harness_message("claud")
     assert "use --substrate pane" not in typo
     assert "accepted here: " in typo

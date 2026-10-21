@@ -129,3 +129,21 @@ def test_dash_c_config_value_stops_before_launch(monkeypatch: pytest.MonkeyPatch
     assert "--cwd" in res.output, res.output
     assert "-- -c key=value" in res.output, res.output
     assert "no worker launched" in res.output, res.output
+
+
+def test_footnote_headless_spawn_routes_to_the_binary_as_once() -> None:
+    """footnote's headless lane lives only in the Rust client, which reads
+    --once; --as headless left the spawn on the Python door, which refused it.
+    Other harnesses and fenced tokens keep their argv."""
+    from fno.agents.rust_runtime import _footnote_headless_as_once, _is_pane_substrate_spawn
+
+    for spelling in (["--as", "headless"], ["--as=headless"]):
+        argv = ["spawn", "--name", "t", "-H", "footnote", *spelling, "seed", "--", "-m", "zai/glm-5.3-flash"]
+        out = _footnote_headless_as_once(argv)
+        assert out == ["spawn", "--name", "t", "-H", "footnote", "--once", "seed", "--", "-m", "zai/glm-5.3-flash"]
+        assert not _is_pane_substrate_spawn("spawn", out)
+    for argv in (
+        ["spawn", "--name", "t", "-H", "claude", "--as", "headless", "seed"],
+        ["spawn", "--name", "t", "-H", "footnote", "seed", "--", "--as", "headless"],
+    ):
+        assert _footnote_headless_as_once(argv) == argv

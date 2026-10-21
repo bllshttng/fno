@@ -295,8 +295,9 @@ fn read_pr_view_once(
 }
 
 /// The gate's `pr view` read: the metadata field set over REST, with the
-/// earned broker-field-set fallback when the core bucket is spent.
-pub(super) fn read_pr_view(
+/// earned broker-field-set fallback when the core bucket is spent. `pub(crate)`
+/// because the ported review-hold read (review_hold.rs) rides the same argv.
+pub(crate) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,

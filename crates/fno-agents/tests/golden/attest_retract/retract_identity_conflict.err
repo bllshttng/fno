@@ -1,0 +1,1 @@
+error: attester identity conflict on CLAUDE_CODE_SESSION_ID: process ancestry carries 'ancestor-session', the emitting environment carries 'env-session'. No retraction emitted under an identity the caller overrode.
