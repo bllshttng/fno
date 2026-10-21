@@ -324,11 +324,8 @@ def _claude_bearer_candidates(record: ProviderRecord) -> list[str]:
 
 
 def _stored_bearers(record: ProviderRecord) -> list[str]:
-    """An off-slot managed claude record's own captured credential.
-
-    The copy can go stale or hold another id's login, so it is only a candidate:
-    :func:`_bearer_verdict` proves its principal before any usage request.
-    """
+    """An off-slot managed claude record's stored login: may be stale or another
+    id's, so :func:`_bearer_verdict` proves it before any usage request."""
     if record.harness != "claude" or not _shares_the_slot(record):
         return []
     from fno.adapters.providers import managed
