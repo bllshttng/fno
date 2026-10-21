@@ -1417,7 +1417,7 @@ struct SearchView {
 /// under an open navigator is reflected at once.
 pub(crate) struct NavView {
     /// Incremental text filter (substring, case-insensitive) over row match
-    /// keys: label + pane id + node id + slug + workspace.
+    /// keys: the label plus the row's identity tokens ([`NavRow::match_key`]).
     query: String,
     /// The active state chip; `None` = all states. `Tab` cycles it.
     state_filter: Option<PaneState>,
