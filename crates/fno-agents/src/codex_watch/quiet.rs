@@ -29,17 +29,27 @@ struct Tail {
     started_at: Option<i64>,
     failed: bool,
     read: bool,
+    touched: i64,
 }
 
 fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
     let mut file = std::fs::File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
+    let meta = file.metadata().ok()?;
+    let size = meta.len();
+    let touched = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
     file.seek(SeekFrom::Start(size.saturating_sub(TAIL_BYTES)))
         .ok()?;
     let mut bytes = Vec::new();
     file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes);
-    let mut out = Tail::default();
+    let mut out = Tail {
+        touched,
+        ..Default::default()
+    };
     for line in text.lines().skip(usize::from(size > TAIL_BYTES)) {
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -74,7 +84,8 @@ fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
             }
         }
     }
-    (out.activity > 0 || out.started_at.is_some() || out.read || out.failed).then_some(out)
+    (out.activity > 0 || out.started_at.is_some() || out.read || out.failed || out.touched > 0)
+        .then_some(out)
 }
 
 #[derive(Debug, PartialEq)]
@@ -98,7 +109,11 @@ fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) 
     if episode.escalated {
         return Action::Wait;
     }
-    if dead {
+    // A pid probe can read a working worker as gone (a launcher pid, a tool
+    // call in flight). A live own claim or a transcript written inside the
+    // first nudge window outranks it: no resume, no salvage, no help.
+    let fresh = now.saturating_sub(tail.activity.max(tail.touched)) < 900;
+    if dead && !live && !fresh {
         return if episode.recovered {
             Action::Help
         } else {
@@ -109,6 +124,8 @@ fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) 
         if tail.read {
             episode.read_stage = *stage;
             episode.pending = None;
+        } else if fresh {
+            return Action::Wait;
         } else {
             return if episode.recovered {
                 Action::Help
@@ -666,6 +683,13 @@ mod tests {
         };
         assert_eq!(action(&mut e, &t, 1000, true, false), Action::Nudge(1));
         e.pending = Some(("marker".into(), 1000, 1));
+        t.touched = 950;
+        assert_eq!(
+            action(&mut e, &t, 1001, true, false),
+            Action::Wait,
+            "an unread nudge never recovers a worker still writing its transcript"
+        );
+        t.touched = 0;
         assert_eq!(action(&mut e, &t, 1001, true, false), Action::Recover);
         assert_eq!(action(&mut e, &t, 1600, true, false), Action::Recover);
         t.read = true;
@@ -679,7 +703,24 @@ mod tests {
         t.activity = 2800;
         assert_eq!(action(&mut e, &t, 2801, true, false), Action::Wait);
         assert_eq!(e.read_stage, 0);
-        assert_eq!(action(&mut e, &t, 2801, false, true), Action::Recover);
+        assert_eq!(
+            action(&mut e, &t, 2801, false, true),
+            Action::Wait,
+            "fresh transcript work outranks a gone pid"
+        );
+        assert_eq!(
+            action(&mut e, &t, 4000, true, true),
+            Action::Nudge(1),
+            "a live own claim outranks a gone pid: the quiet ladder runs, not recovery"
+        );
+        assert_eq!(action(&mut e, &t, 4000, false, true), Action::Recover);
+        t.touched = 3900;
+        e.recovered = false;
+        assert_eq!(
+            action(&mut e, &t, 4000, false, true),
+            Action::Wait,
+            "a transcript file write mid tool call is progress"
+        );
         assert_eq!(action(&mut e, &t, 5000, false, false), Action::Wait);
 
         let dir = tempfile::tempdir().unwrap();
