@@ -716,10 +716,11 @@ def test_rust_only_verb_no_binary_emits_install_hint(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Spawns carrying a Python-only flag (--role, --monitor, --output-format,
-# --resume, --dispatch-account) never route to the binary: the Rust client
-# cannot parse them. `--help` exercises the make_context routing decision
-# without running a real spawn.
+# Spawns carrying a Python-only flag (--role, --promote, --resume,
+# --dispatch-account) never route to the binary: the Rust client cannot
+# parse them. `--help` exercises the make_context routing decision without
+# running a real spawn. --monitor and --output-format left this list in
+# row 9: the binary parses and refuses/launches them natively.
 # --------------------------------------------------------------------------- #
 
 
@@ -734,8 +735,11 @@ def test_role_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch, tmp_path
     assert called == []
 
 
-def test_monitor_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch) -> None:
-    """The public root CLI keeps monitor guards on the Python path."""
+def test_monitor_bearing_spawn_routes_in_rust_mode(monkeypatch) -> None:
+    """Row 9: a non-pane --monitor spawn crosses to the binary (the stub
+    records the routing; the Python body still answers exit 2 with the same
+    line for this once-shaped argv). The Rust door's own golden lives in
+    spawn_axes' monitor_seam tests."""
     from fno.cli import app
 
     called: list = []
@@ -760,11 +764,12 @@ def test_monitor_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch) -> No
 
     assert result.exit_code == 2, result.output
     assert "needs --as pane" in result.output
-    assert called == []
+    assert len(called) == 1 and "--monitor" in called[0]
 
 
-def test_output_format_spawn_not_routed_to_installed_rust(monkeypatch, tmp_path) -> None:
-    """PR-watch's JSON-envelope spawn stays on the Python-owned provider path."""
+def test_output_format_spawn_routes_to_installed_rust(monkeypatch, tmp_path) -> None:
+    """Row 9: PR-watch's JSON-envelope spawn routes to the binary, whose
+    output_format_seam admits the claude-headless-json shape natively."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -788,7 +793,7 @@ def test_output_format_spawn_not_routed_to_installed_rust(monkeypatch, tmp_path)
     )
 
     assert result.exit_code == 0, result.output
-    assert called == []
+    assert len(called) == 1 and "--output-format" in called[0]
 
 
 def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) -> None:

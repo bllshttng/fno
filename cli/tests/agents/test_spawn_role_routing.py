@@ -56,7 +56,7 @@ def test_resume_and_route_detectors_catch_attached_short_forms() -> None:
 
 
 def test_long_only_detectors_detect_and_respect_argv_boundary() -> None:
-    """The detectors with no short form (role, monitor, dispatch-account) route
+    """The detectors with no short form (role, dispatch-account) route
     through the same _has_flag matcher as the short-bearing ones. Two properties
     must hold: they detect their flag in both spellings, and - the bug this pins
     - a flag AFTER the --argv break belongs to the spawned payload, not fno, so
@@ -65,12 +65,10 @@ def test_long_only_detectors_detect_and_respect_argv_boundary() -> None:
     used _args_before_argv); migrating it to _has_flag closes that one-of-N gap."""
     from fno.agents.rust_runtime import (
         _is_dispatch_account_bearing_spawn,
-        _is_monitor_bearing_spawn,
         _is_role_bearing_spawn,
     )
 
     assert _is_role_bearing_spawn("spawn", ["spawn", "w", "--role", "build"])
-    assert _is_monitor_bearing_spawn("spawn", ["spawn", "w", "--monitor"])
     assert _is_dispatch_account_bearing_spawn(
         "spawn", ["spawn", "w", "--dispatch-account", "ci"]
     )
@@ -81,7 +79,6 @@ def test_long_only_detectors_detect_and_respect_argv_boundary() -> None:
     # dispatch-account is the one that used to read past the boundary.
     for det, flag in (
         (_is_role_bearing_spawn, "--role"),
-        (_is_monitor_bearing_spawn, "--monitor"),
         (_is_dispatch_account_bearing_spawn, "--dispatch-account"),
     ):
         assert not det("spawn", ["spawn", "w", "--argv", flag, "x"])

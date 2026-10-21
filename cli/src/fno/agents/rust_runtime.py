@@ -1136,13 +1136,6 @@ def _is_promotion_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     return verb == "spawn" and _has_flag(args, longs=("--promote",))
 
 
-def _is_monitor_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
-    """Keep ``--monitor`` on the Python path that owns its pane-only guards."""
-    if verb != "spawn":
-        return False
-    return _has_flag(args, longs=("--monitor",))
-
-
 def _is_dispatch_account_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--dispatch-account`` (the cutover carrier).
 
@@ -1425,22 +1418,6 @@ def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     )
 
 
-def _is_output_format_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
-    """Keep the internal Claude JSON-envelope flag on the Python spawn path.
-
-    The Rust client does not parse ``--output-format``. PR-watch uses this
-    internal option to preserve ``claude -p``'s result envelope across the
-    canonical headless spawn, so auto-routing it to Rust would reject the flag
-    before any worker starts.
-    """
-    if verb != "spawn":
-        return False
-    return any(
-        a == "--output-format" or a.startswith("--output-format=")
-        for a in _args_before_argv(args)
-    )
-
-
 #: d-fe66560a keeps the binary's action list shrink-only, so these read
 #: leaves have no action of their own: the router rewrites each into an
 #: argument of the `status` action before the exec.
@@ -1693,12 +1670,10 @@ def make_agents_group_cls() -> type:
                     existing_pane is not None
                     or _is_role_bearing_spawn(verb, args)
                     or _is_promotion_bearing_spawn(verb, args)
-                    or _is_monitor_bearing_spawn(verb, args)
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_pane_substrate_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
                     or _is_provenance_bearing_spawn(verb, args)
-                    or _is_output_format_bearing_spawn(verb, args)
                     or _is_dispatch_account_bearing_spawn(verb, args)
                     or _is_anycast_ask(verb, args)
                 )
