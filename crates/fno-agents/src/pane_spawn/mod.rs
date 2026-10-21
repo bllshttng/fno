@@ -1032,6 +1032,7 @@ fn write_pane_row_txn_inner(
     outcome
         .map_err(TxnFailure::State)
         .and_then(|inner| inner.map_err(TxnFailure::Race))
+        .map(|_| ())
 }
 
 fn race_checked_append(
