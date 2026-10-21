@@ -115,6 +115,11 @@ fn entry(
             Some("fno agents incident status"),
             Some(OPERATOR),
         ),
+        "runner_off" => (
+            "the PR watcher is switched off (pr_watch.enabled=false); nothing runs this arm",
+            Some("fno config set pr_watch.enabled true"),
+            None,
+        ),
         "unarmed" => (
             "this loop is off by config; the switch, not a scheduler, owns its silence",
             None,
@@ -263,6 +268,18 @@ pub fn annotate(rows: &mut [ArmStatus], facts: &RepairFacts) {
 }
 
 fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
+    // Checked before the unobserved return: a switched-off watcher is why
+    // the row has no receipt, and turning it on is the user's call.
+    if row.cause.as_deref() == Some("runner_off") {
+        let (hint, verb, _) = entry("runner_off", row.scheduler.as_deref());
+        row.repair = verb.map(str::to_string);
+        row.heal = None;
+        if row.line.is_empty() {
+            row.line = format!("{} cause=runner_off ({hint})", render_row(row));
+        }
+        row.line.push_str(&suffix(row));
+        return;
+    }
     if row.producer_evidence == ProducerEvidence::Unobserved {
         // No receipt, no measured cause.
         return;
