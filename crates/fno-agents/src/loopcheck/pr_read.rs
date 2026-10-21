@@ -205,6 +205,63 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     rows.first().map(|(number, _)| number.to_string())
 }
 
+/// The node's live replacement PR when the bound one reads CLOSED: the
+/// manifest is write-once and a replacement on another branch never reaches
+/// the node row, so the gate asks GitHub for the newest open or merged PR
+/// whose closure line names the node. REST search keeps the read off the
+/// shared GraphQL quota. Any failed read answers None and the gate keeps the
+/// closed PR's verdict.
+pub(super) fn live_fixes_pr(
+    gh_bin: &str,
+    cwd: &Path,
+    repo_slug: &str,
+    node_id: &str,
+    closed: i64,
+) -> Option<String> {
+    if repo_slug.is_empty() || node_id.is_empty() {
+        return None;
+    }
+    let query = format!("q={node_id} in:body type:pr repo:{repo_slug}");
+    let out = bounded_read(
+        gh_bin.as_ref(),
+        &["api", "-X", "GET", "search/issues", "-f", &query],
+        cwd,
+        "pr_fixes_search",
+        stopgate_read_timeout(),
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let found: Value = serde_json::from_slice(&out.stdout).ok()?;
+    pick_live_fixes_pr(&found, node_id, closed).map(|n| n.to_string())
+}
+
+/// The newest open or merged search hit, other than the closed PR, whose
+/// `Fixes` line names the node. A merely mentioned node never binds.
+pub(super) fn pick_live_fixes_pr(found: &Value, node_id: &str, closed: i64) -> Option<i64> {
+    found
+        .get("items")?
+        .as_array()?
+        .iter()
+        .filter(|item| {
+            let merged = item
+                .get("pull_request")
+                .and_then(|pr| pr.get("merged_at"))
+                .is_some_and(|at| !at.is_null());
+            item.get("state").and_then(Value::as_str) == Some("open") || merged
+        })
+        .filter(|item| {
+            let body = item.get("body").and_then(Value::as_str).unwrap_or("");
+            crate::org_board::pr_closure::parse(body)
+                .iter()
+                .any(|id| id == node_id)
+        })
+        .filter_map(|item| item.get("number").and_then(Value::as_i64))
+        .filter(|number| *number != closed)
+        .max()
+}
+
 /// Run done() reads. Returns Ok(PrInfo) or Err((read_name, stderr_tail)) on gh failure.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn read_pr_info(
