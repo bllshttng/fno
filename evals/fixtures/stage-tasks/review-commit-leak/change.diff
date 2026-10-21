@@ -1,0 +1,10 @@
+--- a/docs/evals.md
++++ b/docs/evals.md
+@@ -40,6 +40,8 @@
+ ## Attempts
+
+ Each attempt writes one history row keyed by (task, repeat). The row
+-carries the lane's own verdict and usage read-back.
++carries the lane's own verdict and usage read-back, plus the run's
++cohort id when one was given.
++The cohort id names the climb round.
