@@ -694,14 +694,17 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     if !apply {
         return Status::Pending("fold (dry run)".to_string());
     }
-    // claim-aux folds whole, by lead ruling: a directory rename is atomic,
-    // so no waiter's ticket path ever moves mid-write. The emptiness probe
-    // re-runs right before the rename, and any lane holding a ticket skips
-    // the row for this pass with place() still answering the legacy dir.
-    // Only the destination's parent is created first; the rename carries
-    // every child in one step.
-    if row.legacy == "claim-aux" {
-        if !lane_dirs_empty(&legacy) {
+    // claim-aux and locks fold whole: a directory rename is atomic, so no
+    // waiter's ticket path (claim-aux) or held lock inode (locks) ever moves
+    // mid-write - the kernel carries every child to its new name in one
+    // step, and a taker that already opened the file keeps it. The emptiness
+    // probe re-runs right before the rename (claim-aux only; locks' guard
+    // is the flock sweep above), and any lane holding a ticket skips the
+    // row for this pass with place() still answering the legacy dir. Only
+    // the destination's parent is created first; the rename carries every
+    // child in one step.
+    if row.legacy == "claim-aux" || row.legacy == "locks" {
+        if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
             return Status::Pending("a waiter holds a ticket".to_string());
         }
         match new.parent() {
@@ -713,7 +716,7 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             None => return Status::Refused("refused: no destination parent".to_string()),
         }
         if new.exists() {
-            return Status::Pending("the destination already holds a claim-aux".to_string());
+            return Status::Pending(format!("the destination already holds a {}", row.legacy));
         }
         return match std::fs::rename(&legacy, &new) {
             Ok(()) => Status::Moved,
@@ -1253,6 +1256,8 @@ mod tests {
             root.join("locks").join("plan-abc.lock").exists(),
             "nothing moved past a held lock"
         );
+        use std::os::unix::fs::MetadataExt;
+        let before = std::fs::metadata(root.join("locks")).unwrap();
         drop(held);
         let receipt = migrate_rows(&root, &rows, true, "test");
         assert!(
@@ -1260,6 +1265,12 @@ mod tests {
             "the fold runs once the lock releases: {receipt:?}"
         );
         assert!(!root.join("locks").exists(), "the emptied folder left");
+        let moved = root.join("state").join("locks");
+        let after = std::fs::metadata(&moved).expect("state/locks exists after the fold");
+        assert!(
+            after.dev() == before.dev() && after.ino() == before.ino(),
+            "the fold is one whole-dir rename, not per-child moves: {before:?} -> {after:?}"
+        );
         assert!(
             root.join("state")
                 .join("locks")

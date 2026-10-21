@@ -9,10 +9,10 @@
 //! BEFORE a request leaves - "may this GitHub request go out now?" - from
 //! one JSON ledger every caller shares.
 //!
-//! The ledger lives at `~/.fno/locks/github-request-budget.json`,
-//! config-independent on purpose (same directory contract as
-//! `machine_locks_dir()`): a budget that protects the machine must not move
-//! with a project's config. Each read-modify-write takes a `libc::flock` on
+//! The ledger lives in the machine locks folder (`machine_locks_dir()`,
+//! joined with `github-request-budget.json`), config-independent on
+//! purpose: a budget that protects the machine must not move with a
+//! project's config. Each read-modify-write takes a `libc::flock` on
 //! a `.lock` sidecar and writes through a temp file + rename, so a reader
 //! never sees a torn file.
 //!
@@ -356,6 +356,38 @@ impl Drop for FileLock {
     }
 }
 
+impl FileLock {
+    /// Whether this handle is still the file `path` names now, by (dev, ino).
+    fn matches(&self, path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        let (Ok(held), Ok(current)) = (self.handle.metadata(), std::fs::metadata(path)) else {
+            return false;
+        };
+        held.dev() == current.dev() && held.ino() == current.ino()
+    }
+}
+
+/// The ledger's flock, with the state-root fold's taker-side guard. The
+/// daemon's whole-dir fold renames the machine locks folder in one step, so
+/// a taker that resolved the ledger before the fold holds a path whose
+/// directory has moved: its open can only land on a stray inode a recreated
+/// folder offers. After the flock the held fd must be the file a fresh
+/// `lock_path(&ledger_path())` names; a mismatch drops the lock and retakes
+/// it there, where every later taker lands. A test's injected ledger path
+/// is not the real one and keeps the plain acquire.
+fn ledger_lock(path: &Path) -> Result<FileLock, String> {
+    if path != ledger_path().as_path() {
+        return FileLock::try_acquire(&lock_path(path));
+    }
+    let fresh = lock_path(&ledger_path());
+    let lock = FileLock::try_acquire(&fresh)?;
+    if lock.matches(&fresh) {
+        return Ok(lock);
+    }
+    drop(lock);
+    FileLock::try_acquire(&lock_path(&ledger_path()))
+}
+
 fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
     if !path.exists() {
         return (Ledger::default(), LedgerState::Absent);
@@ -457,7 +489,7 @@ fn refusal_line(verdict: &Verdict, core_left: i64) -> String {
 /// so tests pass a temp path, a fixed clock, and a small cap.
 pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
-    let _lock = FileLock::try_acquire(&lock_path(path));
+    let _lock = ledger_lock(path);
     let (mut ledger, state) = read_ledger(path);
 
     // Exempt shapes are admitted and write nothing: a version probe is not
@@ -846,7 +878,7 @@ pub(crate) fn record_refusal_via(
     kind: &str,
     shared: (i64, i64, i64),
 ) -> Result<(), String> {
-    let _lock = FileLock::try_acquire(&lock_path(path));
+    let _lock = ledger_lock(path);
     let (mut ledger, _) = read_ledger(path);
     if now < ledger.backoff_until_ms {
         return Ok(());
@@ -912,7 +944,7 @@ pub(crate) fn core_reserve() -> u32 {
 /// reserve) skips the write, so the write rate stays flat while the
 /// bucket is healthy.
 pub(crate) fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
-    let _lock = FileLock::try_acquire(&lock_path(path));
+    let _lock = ledger_lock(path);
     let (mut ledger, _) = read_ledger(path);
     let reset_ms = reset_epoch_s * 1000;
     if ledger.core_seen_ms > 0

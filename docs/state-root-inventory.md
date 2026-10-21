@@ -66,7 +66,7 @@ One file per install. These belong at the root.
 
 `graph.json` is retired. A former file moves to `backups/graph.json.retired.*`; an unimported nonempty file makes the store refuse to open so its rows remain recoverable.
 
-`paths.locks_dir()` hardcodes `Path.home() / ".fno" / "locks"` on purpose, and a `config.state_dir` override deliberately does not move it. The config-free plan-stamp path and the config-loading append path have to agree on one directory, and moving it desyncs them. Its docstring says so. Do not "fix" it to match the rest of this page.
+`paths.locks_dir()` answers from the Rust `dir` door (`machine_locks_dir()`), and a `config.state_dir` override deliberately does not move it. The config-free plan-stamp path and the config-loading append path have to agree on one directory, and moving it desyncs them. Its docstring says so. Do not "fix" it to load settings. The root chain stays `FNO_STATE_DIR` or `$HOME/.fno`, and the layout table's `locks` row owns the folder itself.
 
 ## Frozen root rows (2026-09-27 backfill)
 

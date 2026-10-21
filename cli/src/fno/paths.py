@@ -759,17 +759,21 @@ def github_cli_proxy_dir() -> Path:
 
 
 def locks_dir() -> Path:
-    """Advisory-lock sidecar directory (``~/.fno/locks``).
+    """Advisory-lock sidecar directory (the machine locks folder).
 
-    Deliberately config-free (``$HOME``/``FNO_STATE_DIR`` only, no settings load). The plan-doc lock is keyed by the plan's resolved path,
+    Deliberately config-free: the root chain is ``$FNO_STATE_DIR`` or
+    ``$HOME/.fno`` (no settings load), and the folder itself answers from the
+    Rust ``dir`` door (the layout table is the path's one owner, in step with
+    both Rust takers). The plan-doc lock is keyed by the plan's resolved path,
     so the two fno writers only need to agree on this directory; a config
     ``state_dir`` override deliberately does NOT move it (moving it would desync
-    the config-loading append side from the config-free stamp side). The
-    ``FNO_STATE_DIR`` carrier may: it needs no config load, so both writers
-    agree under it, and the seal pins it around a forwarded HOME."""
+    the config-loading append side from the config-free stamp side).
+    """
     if carrier := os.environ.get("FNO_STATE_DIR"):
-        return Path(os.path.expanduser(carrier)).resolve() / "locks"
-    return Path.home() / ".fno" / "locks"
+        root = Path(os.path.expanduser(carrier)).resolve()
+    else:
+        root = Path.home() / ".fno"
+    return Path(_plan_path_door(["state", "path", "dir", "locks", "--root", str(root)]))
 
 
 def place_anchor(root: Path) -> Path:

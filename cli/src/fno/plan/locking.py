@@ -43,14 +43,17 @@ def plan_doc_lock(path: Path, timeout: float = 2.0) -> Iterator[None]:
     it). The lock is held only for one whole-file rewrite, so contention past the
     timeout is not expected in practice.
     """
-    lock_dir = paths.locks_dir()  # ~/.fno/locks; config-free so bare-python _stamp works
-    lock_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()
-    lock_path = lock_dir / f"plan-{digest}.lock"
     deadline = time.monotonic() + timeout
     fd = -1
     try:
         while True:
+            # Re-derived every attempt, config-free so bare-python _stamp
+            # works: the whole-dir locks fold renames the folder out from
+            # under a pre-fold resolve, so each retry must land on the path
+            # the resolver answers now.
+            lock_path = paths.locks_dir() / f"plan-{digest}.lock"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
             while True:
                 try:
@@ -60,7 +63,10 @@ def plan_doc_lock(path: Path, timeout: float = 2.0) -> Iterator[None]:
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"plan_doc_lock: {lock_path} busy > {timeout}s")
                     time.sleep(0.02)
-            if _same_lock_inode(fd, lock_path):
+            # The fold guard: compare the held fd against a resolve made
+            # after the flock, not the path string the open rode. A mismatch
+            # means the open straddled the rename; unlock and retry there.
+            if _same_lock_inode(fd, paths.locks_dir() / f"plan-{digest}.lock"):
                 break
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)

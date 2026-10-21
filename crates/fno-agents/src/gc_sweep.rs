@@ -3921,7 +3921,7 @@ fn state_reap_totals(summary: &StateFilesReapSummary) -> StateReapTotals {
 struct StateReapRoots {
     claims_root: PathBuf,
     claims_dir: PathBuf,
-    locks_root: PathBuf,
+    locks_dir: PathBuf,
     agents_root: PathBuf,
     agents_dir: PathBuf,
     state_root: PathBuf,
@@ -3958,9 +3958,15 @@ fn reap_state_files_with_roots(
         apply,
         &mut summary.claim_tmp,
     );
+    // The machine locks folder is the resolver's answer itself, never a
+    // parent join: after the state-root retarget the join would name the
+    // legacy spelling and the sweep would silently stop reaching the locks.
     reap_lock_family(
-        &roots.locks_root,
-        &roots.locks_root.join("locks"),
+        roots
+            .locks_dir
+            .parent()
+            .unwrap_or(roots.locks_dir.as_path()),
+        &roots.locks_dir,
         config.locks_retain_days,
         apply,
         &mut summary.plan_locks,
@@ -4009,7 +4015,7 @@ pub fn reap_state_files(
         StateReapRoots {
             claims_root: root.to_path_buf(),
             claims_dir: root.join("claims"),
-            locks_root: root.to_path_buf(),
+            locks_dir: root.join("locks"),
             agents_root: root.to_path_buf(),
             agents_dir: root.join("agents"),
             state_root: root.to_path_buf(),
@@ -4043,14 +4049,11 @@ pub fn reap_state_files_for_cwd(
     let Some(pr_status_dir) = crate::agents_config::pr_status_cache_dir(cwd) else {
         return unavailable_state_reap("PR-status cache root unavailable");
     };
-    let Some(locks_root) = locks_dir.parent().map(Path::to_path_buf) else {
-        return unavailable_state_reap("machine locks root unavailable");
-    };
     reap_state_files_with_roots(
         StateReapRoots {
             claims_root,
             claims_dir,
-            locks_root,
+            locks_dir,
             agents_root: home.root().parent().unwrap_or(home.root()).to_path_buf(),
             agents_dir: home.root().to_path_buf(),
             state_root,
