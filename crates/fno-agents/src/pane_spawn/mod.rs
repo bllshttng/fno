@@ -197,6 +197,7 @@ pub enum ArmBind {
 /// once the pane exists: the spine reaps first, then prints, so a failed
 /// spawn never leaves an unowned pane behind (the Python leg's reap wrappers
 /// at mux_spawn.py:3874/:3980).
+#[derive(Debug)]
 pub struct PaneRefusal {
     pub line: String,
     pub exit_code: i32,
@@ -204,6 +205,7 @@ pub struct PaneRefusal {
 }
 
 /// The pane facts every post-run step reads.
+#[derive(Debug)]
 pub struct PaneFacts {
     pub session: String,
     pub pane_id: u64,
@@ -473,6 +475,7 @@ pub fn resolve_mux_session_from(
 /// random half like Python's `mux-placement:<pid>:<uuid4>`; the guard's Drop
 /// releases strictly and loudly (a swallow here is a custody loss the next
 /// holder pays for).
+#[derive(Debug)]
 pub struct PlacementLease {
     key: String,
     holder: String,
@@ -667,6 +670,7 @@ pub fn pane_run_failure_line(session: &str, detail: &str) -> String {
     )
 }
 
+#[derive(Debug)]
 pub enum PaneRunOutcome {
     Created { pane_id: u64 },
     ControlUnanswered,
