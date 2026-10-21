@@ -64,14 +64,18 @@ def _open_locked_path(lock_path: Optional[Path], fresh: bool = False):
     """
     while True:
         if fresh:
-            lock_path = _quota_lock_fresh()
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("a+")
+            resolved = _quota_lock_fresh()
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+        elif lock_path is not None:
+            resolved = lock_path
+        else:
+            raise QuotaLockUnavailable("no lock path given and no fresh resolve")
+        handle = resolved.open("a+")
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
                 opened = os.fstat(handle.fileno())
-                current_path = _quota_lock_fresh() if fresh else lock_path
+                current_path = _quota_lock_fresh() if fresh else resolved
                 current = current_path.stat()
                 same_inode = (opened.st_dev, opened.st_ino) == (
                     current.st_dev,
@@ -80,7 +84,7 @@ def _open_locked_path(lock_path: Optional[Path], fresh: bool = False):
             except OSError:
                 same_inode = False
             if same_inode:
-                return handle, lock_path
+                return handle, resolved
             fcntl.flock(handle, fcntl.LOCK_UN)
         except BaseException:
             handle.close()

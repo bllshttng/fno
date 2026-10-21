@@ -653,7 +653,9 @@ fn admit_for_origin(
     agent: bool,
 ) -> Verdict {
     if !agent {
-        let path = override_path.unwrap_or_else(ledger_path);
+        let path = override_path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(ledger_path);
         let (ledger, state) = read_ledger(&path);
         return Verdict {
             admitted: true,
