@@ -683,6 +683,87 @@ pub fn account_seam_exit(
     }
 }
 
+/// The two remaining spawn-head flags the binary owns end to end (row 9):
+/// the typed parse beside `insert_role_flag`, then the two verdicts. Both
+/// verdicts print the Python door's line bare, so both doors teach one
+/// owner text until row 10 retires the Python stubs (d-19004329).
+pub fn insert_spawn_flag(
+    flag: &str,
+    args: &mut impl Iterator<Item = String>,
+    params: &mut serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    match flag {
+        "--output-format" => {
+            let v = args.next().ok_or("--output-format needs a value")?;
+            params.insert("output_format".into(), Value::from(v));
+        }
+        "--monitor" => {
+            let v = args.next().ok_or("--monitor needs a value")?;
+            params.insert("monitor".into(), Value::from(v));
+        }
+        other => return Err(format!("unknown spawn flag: {other}")),
+    }
+    Ok(())
+}
+
+/// The Python door's refusal lines, pinned as constants (plan change 1):
+/// `agents/cli.py` output-format gate and `spawn_defaults.resolve_spawn_gates`.
+/// The zai line is unreachable at this door (every valid pane monitor spawn
+/// stays Python on the pane predicate), pinned so the parity stays one grep
+/// away.
+pub const OUTPUT_FORMAT_GOLDEN: &str =
+    "--output-format supports only 'json' on claude headless spawns";
+pub const MONITOR_VALUE_GOLDEN: &str = "--monitor must be 'happy'";
+pub const MONITOR_PANE_GOLDEN: &str = "--monitor happy needs --as pane; thread and headless workers do not pass the happy launcher seam";
+pub const MONITOR_CLAUDE_GOLDEN: &str = "--monitor happy requires the claude harness; got harness ";
+pub const MONITOR_ZAI_GOLDEN: &str = "--monitor happy currently supports only the zai provider";
+
+/// The `--monitor` verdict: value gate, pane-only gate, claude-only gate, in
+/// `resolve_spawn_gates`' order. `Launch` answers the one combination the
+/// gate admits; the seam's pane predicate keeps that spawn Python, so this
+/// door only ever fires the `Refuse` half in practice.
+pub enum MonitorSeam {
+    None,
+    Launch,
+    Refuse(String),
+}
+
+pub fn monitor_seam(monitor: Option<&str>, provider: &str, substrate: &str) -> MonitorSeam {
+    let Some(v) = monitor else {
+        return MonitorSeam::None;
+    };
+    if v != "happy" {
+        return MonitorSeam::Refuse(format!("{} (got {})", MONITOR_VALUE_GOLDEN, repr(v)));
+    }
+    if substrate != "pane" {
+        return MonitorSeam::Refuse(MONITOR_PANE_GOLDEN.to_string());
+    }
+    if provider != "claude" {
+        return MonitorSeam::Refuse(format!("{MONITOR_CLAUDE_GOLDEN}{}", repr(provider)));
+    }
+    MonitorSeam::Launch
+}
+
+/// The `--output-format` verdict: admitted only for the one shape PR-watch
+/// fires (claude + headless + json). `Some(v)` carries the validated value
+/// to the claude headless argv builder; `Err` is the golden refusal.
+pub fn output_format_seam(
+    format: Option<&str>,
+    provider: &str,
+    substrate: &str,
+) -> Result<Option<String>, String> {
+    match format {
+        None => Ok(None),
+        Some(v) => {
+            if provider != "claude" || substrate != "headless" || v != "json" {
+                Err(OUTPUT_FORMAT_GOLDEN.to_string())
+            } else {
+                Ok(Some(v.to_string()))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,5 +883,102 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("fno agents spawn: account skipped (accounts are claude-only, resolved provider 'codex')"));
+    }
+
+    #[test]
+    fn monitor_seam_refuses_with_the_python_golden_lines() {
+        // Byte-for-byte the resolve_spawn_gates receipts (spawn_defaults.py),
+        // in its order: value, pane-only, claude-only.
+        match monitor_seam(Some("grumpy"), "claude", "pane") {
+            MonitorSeam::Refuse(line) => {
+                assert_eq!(line, "--monitor must be 'happy' (got 'grumpy')")
+            }
+            _ => panic!("expected Refuse"),
+        }
+        match monitor_seam(Some("happy"), "claude", "thread") {
+            MonitorSeam::Refuse(line) => assert_eq!(line, MONITOR_PANE_GOLDEN),
+            _ => panic!("expected Refuse"),
+        }
+        match monitor_seam(Some("happy"), "codex", "pane") {
+            MonitorSeam::Refuse(line) => assert_eq!(
+                line,
+                "--monitor happy requires the claude harness; got harness 'codex'"
+            ),
+            _ => panic!("expected Refuse"),
+        }
+        assert!(matches!(
+            monitor_seam(Some("happy"), "claude", "pane"),
+            MonitorSeam::Launch
+        ));
+        assert!(matches!(
+            monitor_seam(None, "codex", "thread"),
+            MonitorSeam::None
+        ));
+    }
+
+    #[test]
+    fn output_format_seam_admits_only_claude_headless_json() {
+        // The PR-watch shape (pr_watch/_dispatch.py) is the one admitted
+        // argv; every other combination refuses with the agents/cli.py line.
+        assert_eq!(
+            output_format_seam(Some("json"), "claude", "headless").expect("admitted"),
+            Some("json".to_string())
+        );
+        for (provider, substrate, value) in [
+            ("claude", "headless", "text"),
+            ("codex", "headless", "json"),
+            ("claude", "thread", "json"),
+            ("claude", "pane", "json"),
+        ] {
+            let err = output_format_seam(Some(value), provider, substrate)
+                .expect_err("the non-PR-watch shape refuses");
+            assert_eq!(err, OUTPUT_FORMAT_GOLDEN);
+        }
+        assert_eq!(output_format_seam(None, "codex", "thread"), Ok(None));
+    }
+
+    #[test]
+    fn insert_spawn_flag_parses_and_stores_both_flags() {
+        // The typed parse beside insert_role_flag: value flags refuse a
+        // missing value and store under the params keys the seam verdicts
+        // read.
+        let mut it = ["json"].into_iter();
+        let mut params = Map::new();
+        insert_spawn_flag("--output-format", &mut it, &mut params).expect("parses");
+        assert_eq!(params["output_format"], json!("json"));
+        let err = insert_spawn_flag(
+            "--output-format",
+            &mut Vec::<String>::new().into_iter(),
+            &mut params,
+        )
+        .expect_err("a valueless flag refuses");
+        assert!(err.contains("needs a value"), "{err}");
+        let mut it = ["happy"].into_iter();
+        insert_spawn_flag("--monitor", &mut it, &mut params).expect("parses");
+        assert_eq!(params["monitor"], json!("happy"));
+    }
+
+    #[test]
+    fn monitor_and_zai_goldens_match_the_python_door() {
+        // The five pinned constants (plan change 1): agents/cli.py:1559 and
+        // resolve_spawn_gates' three lines, plus the zai line cli.py pins for
+        // the pane lane this door never sees.
+        assert_eq!(
+            OUTPUT_FORMAT_GOLDEN,
+            "--output-format supports only 'json' on claude headless spawns"
+        );
+        assert_eq!(
+            MONITOR_PANE_GOLDEN,
+            "--monitor happy needs --as pane; thread and headless workers do not pass \
+             the happy launcher seam"
+        );
+        assert_eq!(
+            MONITOR_CLAUDE_GOLDEN,
+            "--monitor happy requires the claude harness; got harness "
+        );
+        assert_eq!(
+            MONITOR_ZAI_GOLDEN,
+            "--monitor happy currently supports only the zai provider"
+        );
     }
 }

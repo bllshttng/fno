@@ -2626,6 +2626,17 @@ pub fn dispatch_claude_spawn(
     }
 }
 
+/// The headless argv tail for `--output-format` (row 9): the same two tokens
+/// the Python builder appends (harnesses/claude.py keeps it after effort,
+/// before passthrough), so PR-watch's json.loads reads the envelope the
+/// `claude -p` run printed.
+fn push_output_format(argv: &mut Vec<String>, output_format: Option<&str>) {
+    if let Some(v) = output_format.filter(|v| !v.is_empty()) {
+        argv.push("--output-format".into());
+        argv.push(v.into());
+    }
+}
+
 /// Dispatch a `claude -p` truly-headless one-shot (`headless` substrate).
 ///
 /// Unlike [`dispatch_claude_spawn`] (the detached `--bg` thread, which returns a
@@ -2651,6 +2662,7 @@ pub fn dispatch_claude_headless(
     model: Option<&str>,
     permission_mode: Option<&str>,
     effort: Option<&str>,
+    output_format: Option<&str>,
     flags: HarnessFlags,
 ) -> AskOutcome {
     use std::io::Write;
@@ -2687,6 +2699,11 @@ pub fn dispatch_claude_headless(
         argv.push("--effort".to_string());
         argv.push(value.to_string());
     }
+    // The PR-watch envelope flag (row 9): the Python builder appends it
+    // after effort and before passthrough (harnesses/claude.py keeps the
+    // same slot), and stdout stays claude's raw reply; the door validated
+    // the shape before this builder ran.
+    push_output_format(&mut argv, output_format);
     // Tier-3 passthrough, same token order as the Python headless_create.
     flags.push_onto(&mut argv);
     if !use_stdin {
@@ -3391,6 +3408,33 @@ fn create(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn headless_output_format_lands_after_effort_before_passthrough() {
+        // The Python builder's slot (harnesses/claude.py): after --effort,
+        // before passthrough, so claude's argv reads the same order both
+        // doors build.
+        let mut argv: Vec<String> = vec![
+            "claude".into(),
+            "-p".into(),
+            "--effort".into(),
+            "high".into(),
+        ];
+        push_output_format(&mut argv, Some("json"));
+        assert_eq!(
+            argv,
+            vec![
+                "claude",
+                "-p",
+                "--effort",
+                "high",
+                "--output-format",
+                "json"
+            ]
+        );
+        push_output_format(&mut argv, None);
+        assert_eq!(argv.len(), 6, "an absent flag appends nothing");
+    }
 
     // --- is_provably_live_report ----------------------------------
 
