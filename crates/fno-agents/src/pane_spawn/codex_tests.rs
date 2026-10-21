@@ -330,7 +330,7 @@ fn confirmed_pane_death_returns_the_death_reason() {
     let bind = await_binding(Duration::from_secs(60), &mux, &pane, &mut probe);
     assert!(matches!(
         bind,
-        ArmBind::Unbound { reason } if reason == "pane-died-before-binding"
+        ArmBind::Died { reason } if reason == "pane-died-before-binding"
     ));
 }
 
