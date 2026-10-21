@@ -637,8 +637,9 @@ where
         command.env(key, value);
     }
     // This relaunch can lazily birth the claude supervisor; make sure a clean
-    // one is up first. The client command is never touched, so the
+    // one is up first. The client drops only its route keys, so the
     // identity stamp above stays the only carrier of the fno name.
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     crate::claude_supervisor::guard_birth_for_plan(&plan.env);
     if bg_resume {
         let out = match command.output() {
@@ -873,6 +874,7 @@ fn relaunch_command(plan: &crate::reentry::ReentryPlan) -> std::process::Command
     for (key, value) in &plan.env {
         command.env(key, value);
     }
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     command
 }
 
