@@ -134,8 +134,7 @@ def _git_rev(repo_root: Path, ref: str) -> Optional[str]:
 
 def _lane_account(lane: Optional[Any]) -> tuple[Optional[str], str, str]:
     """(flag, refusal, drop_note). A registered account rides; an unregistered
-    alias drops only on a routed lane, which carries its own credential (the
-    seat form); every other refusal fails the spawn closed, never re-seats it."""
+    alias drops only on a routed lane (the seat form); every other refusal fails closed, never re-seats it."""
     account = getattr(lane, "account", None)
     if not account:
         return None, "", ""
@@ -383,12 +382,10 @@ def run_task(
                     attempted=bool(task.prompt), spawned=spawned,
                     worker_name=worker_name,
                 ))
-                if getattr(lane, "account", ""):
-                    lane_evidence.setdefault("requested_account", lane.account)
+                lane_evidence.setdefault("requested_account", getattr(lane, "account", ""))
                 if spawn_res is not None and spawn_res.lane_note:
                     lane_evidence.update(account_dropped=True, lane_reason=spawn_res.lane_note)
-                    if lane_evidence.get("lane_status") == "ok":
-                        lane_evidence["lane_status"] = "account-dropped"
+                    lane_evidence["lane_status"] = "account-dropped" if lane_evidence.get("lane_status") == "ok" else lane_evidence.get("lane_status")
 
             duration = round(time.monotonic() - started, 3)
             passed = outcome is not None and outcome.passed
