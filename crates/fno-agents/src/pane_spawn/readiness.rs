@@ -344,7 +344,7 @@ pub fn submit_spawn_seed(
             "unreadable",
         );
     }
-    let mut observation = first.observation;
+    let observation = first.observation;
     let mut trust_source = String::new();
     if provider == "agy" && agy_trust_modal(&first.frame) {
         match clear_agy_trust(session, pane_id, mux) {

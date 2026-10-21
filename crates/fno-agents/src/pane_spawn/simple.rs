@@ -272,7 +272,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
         "pi" | "footnote" => pinned_uuid(arm.harness),
         _ => None,
     };
-    let mut argv = match arm.harness {
+    let argv = match arm.harness {
         "opencode" => build_opencode(ctx, &seed),
         "pi" => build_pi(ctx, &seed, uuid.as_deref()),
         "cursor-agent" => {
@@ -441,7 +441,7 @@ fn seed_phase(
                 detail = detail,
             ),
         )),
-        SeedOutcome::Unattempted { detail } => bind_answer(arm, ctx, pane, plan),
+        SeedOutcome::Unattempted { .. } => bind_answer(arm, ctx, pane, plan),
     }
 }
 
