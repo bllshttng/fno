@@ -302,7 +302,7 @@ def _positional_indices(toks: Sequence[str]) -> List[int]:
 
 
 
-def _fence_model_shorthand(toks: List[str]) -> List[str]:
+def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
     """Move ``--model``/``-m`` from the head behind the ``--`` fence.
 
     Spawn allows every harness flag, and the model is the one an operator
@@ -323,6 +323,9 @@ def _fence_model_shorthand(toks: List[str]) -> List[str]:
             kept.append(tok)
     if not moved:
         return toks
+    if not all(moved[1::2]):
+        print("fno agents spawn: --model needs a value; no worker launched", file=err)
+        raise SystemExit(2)
     if not _positional_indices(kept):
         kept.append("")
     return [*kept, "--", *moved, *toks[cut + 1 :]]
@@ -442,7 +445,7 @@ def normalize_spawn_args(
         toks, payload = body, []
 
     if not payload:
-        toks = _fence_model_shorthand(toks)
+        toks = _fence_model_shorthand(toks, err)
     fence = next((i for i, t in enumerate(toks) if t == "--"), None)
 
     # Pass 3: the NAME axis. `spawn` takes ONE positional and it is the MESSAGE;
@@ -802,6 +805,11 @@ def _scan_projection(tail: Sequence[str]) -> dict:
     scanners answer what the OPERATOR typed; the verb owns every config
     decision over the result."""
     has_harness, explicit_harness, has_model, has_effort = _scan(tail)
+    # A fenced --model (the -m shorthand lands there) occupies the model axis.
+    if "--" in tail and not has_model:
+        from fno.agents.mux_spawn import passthrough_model
+
+        has_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :]) is not None
     explicit_vendor = _flag_value(tail, "--provider", "-P")
     explicit_route = _flag_present(tail, "--route")
     role = _role_of(tail)
