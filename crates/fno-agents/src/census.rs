@@ -1049,7 +1049,13 @@ pub async fn run_verb(args: &[String]) -> i32 {
         return crate::agents_top::run(&args[1..]);
     }
     if args.iter().any(|arg| arg == "--ps") {
-        let (cpu, cpu_reason) = daemon_cpu(daemon_pid().await, Duration::from_secs(1)).await;
+        // The 1 s window is opt-in: the spawn gate reads this table on
+        // every admission and must not wait on it.
+        let (cpu, cpu_reason) = if args.iter().any(|arg| arg == "--daemon-cpu") {
+            daemon_cpu(daemon_pid().await, Duration::from_secs(1)).await
+        } else {
+            (Value::Null, json!("not read: pass --daemon-cpu"))
+        };
         let (rows, unreadable) = process_table();
         println!(
             "{}",
