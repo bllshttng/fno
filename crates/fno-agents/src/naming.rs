@@ -865,14 +865,14 @@ mod tests {
         assert_eq!(worker_name("fix").as_deref(), Some("t-fix"));
         assert_eq!(worker_name("--"), None);
         assert_eq!(
-            target_seed_node("/fno:target x-f850").as_deref(),
-            Some("x-f850")
+            target_seed_node("/fno:target x-aaaa").as_deref(),
+            Some("x-aaaa")
         );
         assert_eq!(
-            target_seed_node("$fno:target L x-f850").as_deref(),
-            Some("x-f850")
+            target_seed_node("$fno:target L x-aaaa").as_deref(),
+            Some("x-aaaa")
         );
-        assert_eq!(target_seed_node("/fno:blueprint x-f850"), None);
+        assert_eq!(target_seed_node("/fno:blueprint x-aaaa"), None);
         assert_eq!(target_seed_node("go"), None);
     }
 
