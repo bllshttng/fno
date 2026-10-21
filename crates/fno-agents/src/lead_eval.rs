@@ -1050,7 +1050,7 @@ fn index_status(path: &Path) -> Option<String> {
         .map(|status| status.trim().to_string())
 }
 
-/// The previous reign over the same scope tag: the sibling eval whose fold
+/// The previous lead over the same scope tag: the sibling eval whose fold
 /// ended last before this fold began.
 fn prior_fold(dir: &Path, value: &Value) -> Option<(String, Value)> {
     let base = dir.file_name()?.to_str()?;
@@ -1083,7 +1083,7 @@ fn prior_fold(dir: &Path, value: &Value) -> Option<(String, Value)> {
     best.map(|(name, _, prior)| (name, prior))
 }
 
-fn reign_measures(value: &Value) -> [(&'static str, u64); 6] {
+fn lead_measures(value: &Value) -> [(&'static str, u64); 6] {
     let len = |key: &str| value[key].as_array().map_or(0, Vec::len) as u64;
     let num = |ptr: &str| value.pointer(ptr).and_then(Value::as_u64).unwrap_or(0);
     [
@@ -1098,12 +1098,12 @@ fn reign_measures(value: &Value) -> [(&'static str, u64); 6] {
 
 fn against_prior(dir: &Path, value: &Value) -> String {
     let Some((name, prior)) = prior_fold(dir, value) else {
-        return "\n## Against the last reign\n\nNo earlier eval over this scope.\n".into();
+        return "\n## Against the last lead\n\nNo earlier eval over this scope.\n".into();
     };
     let mut out = format!(
-        "\n## Against the last reign\n\nLast reign: [{name}](../{name}.md).\n\n| Measure | Last reign | This reign |\n|---|---:|---:|\n"
+        "\n## Against the last lead\n\nLast lead: [{name}](../{name}.md).\n\n| Measure | Last lead | This lead |\n|---|---:|---:|\n"
     );
-    for ((label, then), (_, now)) in reign_measures(&prior).iter().zip(reign_measures(value)) {
+    for ((label, then), (_, now)) in lead_measures(&prior).iter().zip(lead_measures(value)) {
         out.push_str(&format!("| {label} | {then} | {now} |\n"));
     }
     out
@@ -1876,7 +1876,7 @@ mod tests {
     }
 
     #[test]
-    fn an_eagain_fold_stays_retryable_and_the_eval_reads_the_last_reign() {
+    fn an_eagain_fold_stays_retryable_and_the_eval_reads_the_last_lead() {
         let leads = tempfile::tempdir().unwrap();
         let dir = leads.path().join("lead-fno-246866bd");
         let reason = "Resource temporarily unavailable (os error 35)";
