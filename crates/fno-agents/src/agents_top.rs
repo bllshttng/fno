@@ -913,8 +913,12 @@ fn render_pane_stats(section: &Value) -> Vec<String> {
     out
 }
 
-/// `fno-agents top [--json|-J] [--subagents] [--pane-stats]`.
+/// `fno-agents top [--json|-J] [--subagents] [--pane-stats]`; `--machines`
+/// answers the fleet map instead.
 pub fn run(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--machines") {
+        return crate::fleet_beacon::run(args);
+    }
     let mut as_json = false;
     let (mut subagents, mut pane_stats) = (false, false);
     for arg in args {
@@ -924,7 +928,7 @@ pub fn run(args: &[String]) -> i32 {
             "--pane-stats" => pane_stats = true,
             "-h" | "--help" => {
                 println!(
-                    "fno agents top [--json] [--subagents] [--pane-stats]\n\n\
+                    "fno agents top [--json] [--subagents] [--pane-stats]\n       fno agents top --machines --help  (every machine on the shared primary)\n\n\
                      Every live worker process (fno registry and the claude roster) with pid, \
                      tree RSS (MB), served status and node. --subagents adds claude sidechains; \
                      --pane-stats adds per-pane mux counter deltas."
