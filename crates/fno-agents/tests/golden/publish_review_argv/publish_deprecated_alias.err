@@ -1,0 +1,2 @@
+warning: --pr is deprecated; use --pr-number instead. The alias will be removed in a future release.
+bot-review: skipped (no head-pinned attestation for HEAD; pass --verdict explicitly)

@@ -134,12 +134,14 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
 
     // REST `fno do pr info` payload the stubs serve: finalize resolves the
     // branch PR through the CLI's REST reader now, not gh, so the harness
-    // answers from a file a test can delete to play "no open PR".
+    // answers from a file a test can delete to play "no open PR". The head sha
+    // is the one oid the gh fixtures and the git shim all answer with, so the
+    // arm's head pin sees one consistent world.
     let pr_info = cwd.join("pr-info.json");
     fs::write(
         &pr_info,
         "{\"pr\": 358, \"url\": \"https://github.com/o/r/pull/358\", \"state\": \"OPEN\", \
-         \"head_sha\": \"abc\"}",
+         \"head_sha\": \"abc123def456abc123def456abc123def456abc1\"}",
     )
     .unwrap();
 
@@ -1405,6 +1407,23 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
          \x20\x20   echo '{\"decisions\": []}'; exit 0 ;;\n\
          esac\n",
     );
+    // The arm path reads the repo directly now: the merge gate's review-activity
+    // probe answers in process (d-e11b2b3e), the coverage pin resolves HEAD, and
+    // the worktree probe enumerates worktrees. The fixture world has no repo, so
+    // the shim stands in for the two reads the arm makes: HEAD is the one oid
+    // every gh fixture answers with, and the worktree list is empty (no local
+    // worktree on any branch). Every other git read fails like a non-repo,
+    // which keeps the base-lineage probe on its unknown (fail-open) path.
+    write_shim(
+        &bin,
+        "git",
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = 'rev-parse HEAD' ]; then\n\
+         \x20\x20 echo 'abc123def456abc123def456abc123def456abc1'; exit 0\n\
+         fi\n\
+         if [ \"$1 $2 $3\" = 'worktree list --porcelain' ]; then exit 0; fi\n\
+         exit 1\n",
+    );
     let path = format!(
         "{}:{}",
         bin.display(),
@@ -1554,10 +1573,15 @@ fn finalize_skips_stamp_when_no_node() {
 // isolation is the decorative-guard shape: correct, and never called.
 
 /// Like GH_PR_358 but records every argv, so a `pr merge` call is observable.
+/// The headRefOid case answers the merge gate's review-activity probe, which
+/// reads the PR head in process (d-e11b2b3e). That arm exits: falling through
+/// into the `view` case would hand the probe two concatenated JSON bodies,
+/// which parse as nothing and fail the probe closed.
 const GH_PR_358_LOGGING: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
+     case \"$*\" in *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}'; exit 0 ;; esac\n\
      case \"$2\" in view) echo '{\"number\": 358, \"url\": \"https://github.com/o/r/pull/358\"}' ;; esac\n";
 
 const GH_OPTIONAL_REVIEWED: &str = "#!/bin/sh\n\
@@ -1565,6 +1589,7 @@ const GH_OPTIONAL_REVIEWED: &str = "#!/bin/sh\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"abc123def456abc123def456abc123def456abc1\"}}],\"comments\":[]}' ;;\n\
+       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
@@ -1573,6 +1598,7 @@ const GH_OPTIONAL_OUTSTANDING: &str = "#!/bin/sh\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[]}' ;;\n\
+       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
@@ -1581,6 +1607,7 @@ const GH_OPTIONAL_USAGE_LIMITED: &str = "#!/bin/sh\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":\"You have reached your Codex usage limits for code reviews\"}]}' ;;\n\
+       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
@@ -1589,6 +1616,7 @@ const GH_OPTIONAL_REVIEWED_AFTER_USAGE_LIMIT: &str = "#!/bin/sh\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"abc123def456abc123def456abc123def456abc1\"}}],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":\"You have reached your Codex usage limits for code reviews\"}]}' ;;\n\
+       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
@@ -1597,6 +1625,7 @@ const GH_OPTIONAL_READ_FAILS: &str = "#!/bin/sh\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo 'review API unavailable' >&2; exit 1 ;;\n\
+       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
@@ -1605,6 +1634,7 @@ const GH_OPTIONAL_MALFORMED: &str = "#!/bin/sh\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{}' ;;\n\
+       *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
@@ -1666,7 +1696,7 @@ fn write_covered_event(env: &Env) {
         &env.events,
         "{\"ts\":\"2026-08-05T12:00:00Z\",\"type\":\"review_coverage\",\
 \"source\":\"hook\",\"data\":{\"pr\":358,\"coverage\":\"covered\",\
-\"reviewed_count\":1,\"head_sha\":\"abc\"}}\n",
+\"reviewed_count\":1,\"head_sha\":\"abc123def456abc123def456abc123def456abc1\"}}\n",
     )
     .unwrap();
 }
@@ -1818,7 +1848,7 @@ fn finalize_arms_when_coverage_satisfied_despite_usage_limited_optional() {
     configure_optional_codex(&env);
     let covered = "{\"ts\":\"2026-08-05T12:00:00Z\",\"type\":\"review_coverage\",\
 \"source\":\"hook\",\"data\":{\"pr\":358,\"coverage\":\"covered\",\
-\"reviewed_count\":1,\"head_sha\":\"abc\"}}\n";
+\"reviewed_count\":1,\"head_sha\":\"abc123def456abc123def456abc123def456abc1\"}}\n";
     fs::write(&env.events, covered).unwrap();
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_OPTIONAL_USAGE_LIMITED);
     assert!(out.status.success());
@@ -1950,9 +1980,9 @@ fn finalize_optional_review_read_failure_withholds_arm() {
 /// Stale under the shared predicate, and arming on it re-arms the post-green
 /// race this gate exists to close. The old scan counted any non-empty state
 /// review regardless of commit, so finalize armed where loop-check's coverage
-/// refused - the reader-divergence class. The cwd is not a git repo, so the
-/// resolver's non-exact-head arm fails closed to Stale, which is precisely the
-/// behavior under test.
+/// refused - the reader-divergence class. The review commit (999...) sits off
+/// the PR head (abc123...), so the exact-head predicate reads Stale, which is
+/// precisely the behavior under test.
 #[test]
 fn finalize_withholds_arm_when_optional_review_is_stale() {
     let env = setup("S-optional-stale", false);
@@ -1963,6 +1993,7 @@ fn finalize_withholds_arm_when_optional_review_is_stale() {
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
          case \"$*\" in\n\
            *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"9999999999999999999999999999999999999999\"}}],\"comments\":[]}' ;;\n\
+           *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
            *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
          esac\n";
     let out = run_finalize_shimmed(&env, "DonePRGreen", gh);
@@ -1993,6 +2024,7 @@ fn finalize_arms_when_optional_clean_pass_comment_pins_the_head() {
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
          case \"$*\" in\n\
            *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"createdAt\":\"2026-08-17T00:00:00Z\",\"body\":\"Codex Review: Didn’t find any major issues. Bravo. Reviewed commit: abc123def456abc123def456abc123def456abc1\"}]}' ;;\n\
+           *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;;\n\
            *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
          esac\n";
     let out = run_finalize_shimmed(&env, "DonePRGreen", gh);

@@ -35,12 +35,14 @@ def _trailer_ensure_passthrough(monkeypatch):
 @pytest.fixture(autouse=True)
 def _verified_head(monkeypatch):
     monkeypatch.setattr(
-        "fno.pr._preflight.local_verification_required",
-        lambda **_kwargs: (True, "required"),
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"required": True, "reason": "required"}
+        if payload.get("op") == "required"
+        else {"required": False, "reason": "x"},
     )
     monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {
             "satisfied": True,
             "mode": "full",
             "result": "passed",
@@ -68,6 +70,27 @@ def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
     path = state_dir / "target-state.md"
     path.write_text(content)
     return path
+
+
+def _door_stub(**answers):
+    """A verb-aware ``fno.rust_binary.verb_call`` stub.
+
+    Keys name the door as ship reaches it: ``"verb"``, or ``"verb op"`` when
+    the payload's op selects the arm. An unlisted call raises instead of
+    answering another door's shape, so a test fails at the stub it forgot
+    rather than three gates later.
+    """
+
+    def _stub(verb, payload, *a, **k):
+        name = verb if isinstance(verb, str) else " ".join(verb)
+        op = payload.get("op")
+        key = f"{name} {op}" if op and f"{name} {op}" in answers else name
+        if key not in answers:
+            raise AssertionError(f"door stub: unexpected verb_call {verb!r} {payload!r}")
+        answer = answers[key]
+        return answer(payload) if callable(answer) else answer
+
+    return _stub
 
 
 # ---- AC3-EDGE: ship is idempotent (no duplicate PR) ----
@@ -115,8 +138,13 @@ def test_existing_pr_still_requires_current_verification(tmp_path, monkeypatch):
         MagicMock(returncode=0, stdout=json.dumps(existing_pr), stderr=""),
     ]
     monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {"satisfied": False, "mode": "subset", "result": "passed"},
+        "fno.rust_binary.verb_call",
+        _door_stub(
+            **{
+                "verify-evidence required": {"required": True},
+                "verify-evidence check": {"satisfied": False, "mode": "subset", "result": "passed"},
+            }
+        ),
     )
 
     with patch("subprocess.run", mock_run):
@@ -159,7 +187,15 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        "fno.rust_binary.verb_call",
+        _door_stub(
+            **{
+                "verify-evidence required": {"required": False},
+                "pr-base-check": {"code": 0, "message": ""},
+                "pr-closure-ensure": lambda payload: {"body": payload["body"]},
+                "pr-create": {"refusal": ""},
+            }
+        ),
     ):
         from importlib import reload
         import fno.worker.ship as ship_mod
@@ -207,7 +243,15 @@ def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        "fno.rust_binary.verb_call",
+        _door_stub(
+            **{
+                "verify-evidence required": {"required": False},
+                "pr-base-check": {"code": 0, "message": ""},
+                "pr-closure-ensure": lambda payload: {"body": payload["body"]},
+                "pr-create": {"refusal": ""},
+            }
+        ),
     ):
         from fno.worker.ship import ship
         result = ship(
@@ -244,9 +288,12 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
 
     with patch("subprocess.run", mock_run), patch(
         "fno.rust_binary.verb_call",
-        lambda verb, payload, **k: {"code": 3, "message": refusal},
-    ), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
+        _door_stub(
+            **{
+                "verify-evidence required": {"required": False},
+                "pr-base-check": {"code": 3, "message": refusal},
+            }
+        ),
     ):
         from importlib import reload
         import fno.worker.ship as ship_mod
@@ -278,11 +325,14 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
 
     with patch("subprocess.run", mock_run), patch(
         "fno.rust_binary.verb_call",
-        lambda verb, payload, **k: {"code": 0, "message": None}
-        if verb == "pr-base-check"
-        else {"body": payload["body"]},
-    ), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=dup_refusal
+        _door_stub(
+            **{
+                "verify-evidence required": {"required": False},
+                "pr-base-check": {"code": 0, "message": None},
+                "pr-closure-ensure": lambda payload: {"body": payload["body"]},
+                "pr-create": {"refusal": dup_refusal},
+            }
+        ),
     ):
         from fno.worker.ship import ship
 
@@ -308,13 +358,16 @@ def test_non_full_verification_refuses_pr_create(tmp_path, monkeypatch):
         MagicMock(returncode=0, stdout="[]", stderr=""),
     ]
     monkeypatch.setattr(
-        "fno.pr._preflight.check_verification_evidence",
-        lambda **_kwargs: {"satisfied": False, "mode": "subset", "result": "passed"},
+        "fno.rust_binary.verb_call",
+        _door_stub(
+            **{
+                "verify-evidence required": {"required": True},
+                "verify-evidence check": {"satisfied": False, "mode": "subset", "result": "passed"},
+            }
+        ),
     )
 
-    with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_duplicate_pr", return_value=""
-    ):
+    with patch("subprocess.run", mock_run):
         from fno.worker.ship import ship
 
         result = ship(

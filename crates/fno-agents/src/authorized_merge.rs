@@ -1762,28 +1762,37 @@ impl Probes for RealProbes {
     }
 
     fn review_hold(&self, cwd: &Path, pr: u64) -> ProbeOutcome {
-        // `review-hold check` is the one owner of "a review is RUNNING": exit 0
-        // clear, 3 held, 4 the probe could not answer.
-        match Self::fno(cwd, &["do", "pr", "review-hold", "check", &pr.to_string()]) {
-            Ok((code, stdout, stderr)) => {
-                let detail = probe_detail(&stdout, &stderr);
-                match code {
-                    Some(0) => ProbeOutcome::Clear,
-                    Some(3) => ProbeOutcome::Refused(if detail.is_empty() {
-                        "a review is in flight on this PR".to_string()
-                    } else {
-                        detail
-                    }),
-                    other => ProbeOutcome::Inconclusive(format!(
-                        "review-activity-unreadable (exit {other:?}): {detail}; \
-                         refusing to assume no review is running"
-                    )),
-                }
+        // `review-hold check` is the one owner of "a review is RUNNING":
+        // clear, held, or unreadable. The probe reads the PR's head ref
+        // through the trait's gh read and answers IN PROCESS (d-e11b2b3e:
+        // the seam crossing to the Python verb retires with the Python leg).
+        let read = self.run_gh(
+            cwd,
+            &[
+                "pr".to_string(),
+                "view".to_string(),
+                pr.to_string(),
+                "--json".to_string(),
+                "headRefName,headRefOid,state".to_string(),
+            ],
+        );
+        let pr_json: Value = match read {
+            Ok((true, stdout)) => serde_json::from_str(&stdout).unwrap_or(Value::Null),
+            Ok((false, stdout)) => {
+                return ProbeOutcome::Inconclusive(format!(
+                    "review-activity-unreadable (the PR read failed: {}); \
+refusing to assume no review is running",
+                    stdout.trim().chars().take(200).collect::<String>()
+                ));
             }
-            Err(error) => ProbeOutcome::Inconclusive(format!(
-                "review-activity-unreadable ({error}); refusing to assume no review is running"
-            )),
-        }
+            Err(error) => {
+                return ProbeOutcome::Inconclusive(format!(
+                    "review-activity-unreadable ({error}); \
+refusing to assume no review is running"
+                ));
+            }
+        };
+        in_process_review_hold(cwd, &pr_json)
     }
 
     fn base_lineage(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
@@ -2215,15 +2224,6 @@ fn slot_holder_from_record(
 /// Some(self) and the caller filters it.
 pub(crate) fn merge_slot_holder(cwd: &Path, base_ref: &str) -> Option<u64> {
     slot_holder_read(cwd, base_ref).ok().flatten()
-}
-
-fn probe_detail(stdout: &[u8], stderr: &[u8]) -> String {
-    let err = String::from_utf8_lossy(stderr).trim().to_string();
-    if err.is_empty() {
-        String::from_utf8_lossy(stdout).trim().to_string()
-    } else {
-        err
-    }
 }
 
 /// The graph tag that declares a repair lane: a node carrying it may merge
@@ -2795,6 +2795,44 @@ mod preview_receipt;
 pub(crate) use preview_receipt::{
     parse_request, preview_receipt, preview_receipt_payload, read_payload,
 };
+
+/// The in-process review-activity read the merge gate makes: one shared
+/// `pr_status::reviews::review_activity` answer serves the merge probe and
+/// the verb door (d-e11b2b3e: twins retire first). The gh read failure and
+/// the unreadable-activity case both read Inconclusive - the exit-4 shape
+/// the Python verb carried, which blocks rather than guesses.
+pub(crate) fn in_process_review_hold(cwd: &Path, pr_json: &Value) -> ProbeOutcome {
+    let branch = pr_json
+        .get("headRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let head = pr_json
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if branch.is_empty() || head.is_empty() {
+        return ProbeOutcome::Inconclusive(
+            "review-activity-unreadable (the PR read carried no head ref); \
+refusing to assume no review is running"
+                .to_string(),
+        );
+    }
+    let activity = crate::pr_status::reviews::review_activity(cwd, branch, head);
+    if activity
+        .get("blocker")
+        .and_then(Value::as_str)
+        .is_some_and(|b| !b.is_empty())
+    {
+        let blocker = activity
+            .get("blocker")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let detail = activity.get("detail").and_then(Value::as_str).unwrap_or("");
+        ProbeOutcome::Refused(format!("{blocker}: {detail}"))
+    } else {
+        ProbeOutcome::Clear
+    }
+}
 
 #[cfg(test)]
 mod tests;

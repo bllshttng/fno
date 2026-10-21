@@ -1,0 +1,1 @@
+worktree_head_mismatch: /private<FIXTURE>/wt1 is at <SHA40> but the PR would merge <SHA40>; the local branch is not what this merge lands

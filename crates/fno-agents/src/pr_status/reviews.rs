@@ -3,8 +3,8 @@
 //! GraphQL because REST carries no resolved or outdated state), the
 //! review-coverage row (journal reads plus at one recompute through the
 //! producer verb), the review-lane predicate, and review activity (the
-//! claims hold plus the worktree probe). The `fno.pr._reviews` optional-review
-//! twin is deleted; the module still serves the merge and review verbs that
+//! claims hold plus the worktree probe). The optional-review aggregation
+//! lives here now, and the module serves the merge and review verbs that
 //! import its survivors.
 
 use crate::loopcheck::{resolve_review_inputs, ReviewInputs};
@@ -895,7 +895,15 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
         );
     }
     let key = format!("review:branch:{branch}");
-    let (state, record) = crate::claims::status(&key, None);
+    // A direct store read, not `claims::status`: the wrapper eprints the
+    // claim-status verb's diagnostic on a failed read, and this probe stays
+    // silent, the way the Python claim_status never printed on the way to
+    // Corrupted (the review_hold check_corrupted_hold golden is one line).
+    let (state, record) = match crate::claim_store::read(&key, None) {
+        Ok(Some(record)) => (crate::claim_verbs::status_verdict(&record).0, Some(record)),
+        Ok(None) => (crate::claims::ClaimState::Free, None),
+        Err(_) => (crate::claims::ClaimState::Corrupted, None),
+    };
     let hold_json = || -> Value {
         record
             .as_ref()
@@ -906,7 +914,13 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
         crate::claims::ClaimState::Corrupted => {
             return activity(
                 REVIEW_HOLD_UNREADABLE,
-                &format!("review hold on {branch} could not be parsed; refusing to assume unheld"),
+                // Python read `status.get('error', 'unknown error')`; the
+                // corrupted status never carried the key, so the fallback is
+                // the constant the parity golden pins.
+                &format!(
+                    "review hold on {branch} could not be parsed (unknown error); \
+                     refusing to assume unheld"
+                ),
                 hold_json(),
                 not_reached("not reached"),
             );
@@ -939,8 +953,33 @@ now ships the code the review is still fixing. Clear it with `fno do pr review-h
                 .map(|r| r.holder.clone())
                 .unwrap_or_else(|| "unknown".into());
             eprintln!(
-                "note: review hold on {branch} expired (holder {holder}); it no longer blocks. \
-A review hold is a lease: it lapses on its TTL whether or not the holder session still runs."
+                "note: review hold on {branch} expired (holder {holder}, expires_at {}); it no longer blocks. \
+A review hold is a lease: it lapses on its TTL whether or not the holder session still runs.",
+                record.as_ref().and_then(|r| r.expires_at).map(|v| v.to_string()).unwrap_or_else(|| "null".into())
+            );
+            // Ages out, but never silently: a lane that clears with no
+            // receipt is indistinguishable from one that was never held.
+            // Same envelope the Python `_emit_expired` writes, through the
+            // claims audit writer (Branch-A parity, claims.rs:782).
+            crate::claims::emit_audit_event(
+                None,
+                "review_hold_expired",
+                serde_json::Map::from_iter([
+                    ("key".to_string(), json!(key)),
+                    ("holder".to_string(), json!(holder)),
+                    (
+                        "head_sha".to_string(),
+                        json!(record
+                            .as_ref()
+                            .and_then(|r| r.metadata.get("head_sha"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")),
+                    ),
+                    (
+                        "expires_at".to_string(),
+                        json!(record.as_ref().and_then(|r| r.expires_at)),
+                    ),
+                ]),
             );
             let _ = crate::claims::release(
                 &key,

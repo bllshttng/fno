@@ -1,0 +1,1 @@
+review_in_flight: a review is in flight on feat/a: held by review-session:s1 at <SHA40>. Merging now ships the code the review is still fixing. Clear it with `fno do pr review-hold release --branch feat/a` once the review has landed its findings. A clean re-review clears it on its own, through the attestation.

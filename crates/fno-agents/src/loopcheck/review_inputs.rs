@@ -29,7 +29,7 @@ pub(crate) struct ReviewInputs {
     pub(crate) optional_lane_configured: bool,
     pub(crate) nudge_configs: Vec<NudgeConfig>,
     /// The reviewer names that mark a review author as optional (the
-    /// `fno.pr._reviews.optional_reviewer_names` set): resolved optional
+    /// `DEFAULT_OPTIONAL_APPS` set): resolved optional
     /// logins plus every peer posting identity.
     pub(crate) optional_reviewer_names: Vec<String>,
     /// The config half of the merge gate's lane predicate

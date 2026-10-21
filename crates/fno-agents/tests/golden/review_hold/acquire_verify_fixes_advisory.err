@@ -1,0 +1,2 @@
+review-hold: the last round at 11111111 raised 2 blocking finding(s) and the head has moved.
+If this pass verifies those fixes, invoke it with --verify-fixes: a scoped fix-verification declares the round it verifies and does not spend a new one.

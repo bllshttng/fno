@@ -1,0 +1,1 @@
+worktree_dirty: /private<FIXTURE>/wt1 carries uncommitted changes to tracked files; merging would ship the code without them
