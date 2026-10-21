@@ -183,8 +183,7 @@ where
         harness: harness.to_string(),
         session_id: session_id.to_string(),
     };
-    let launched = match launch(&spec) {
-        Ok(pid) => pid,
+    let (launched, outcome) = match launch_and_identify(&spec, probe, launch) {
         Err(reason) => {
             eprintln!(
                 "fno agents resume: {row_name}: failed to launch the keeper on {}: {reason}; \
@@ -195,44 +194,45 @@ where
             crate::resume_gate::release_revival_claims(session_id);
             return 1;
         }
+        Ok(pair) => pair,
     };
     // The keeper binds the socket only after hosting the child, so the first
     // Identify that names BOTH this session id AND this keeper pid proves the
     // launch is ours. Another pid answering the same session id means a
     // concurrent revival won the socket; ours exited refusing to bind a
     // served socket, and the winner owns the row flip.
-    let deadline = std::time::Instant::now() + IDENTIFY_WINDOW;
-    let mut verified: Option<(u32, Option<u32>)> = None;
-    while verified.is_none() {
-        if let crate::daemon::KeeperProbe::Answered(reply) = probe(sock) {
-            let (answered_sid, keeper_pid, child_pid) = reply_parts(&reply);
-            match (answered_sid, keeper_pid) {
-                (Some(s), Some(p)) if s == session_id && p == launched => {
-                    verified = Some((p, child_pid));
-                }
-                (Some(s), Some(_)) if s == session_id => {
-                    println!(
-                        "fno agents resume: {row_name} is live on its keeper at {} \
-                         (a concurrent resume revived it); nothing more was launched",
-                        sock.display()
-                    );
-                    return 0;
-                }
-                (answered, keeper_pid) => {
-                    kill(launched);
-                    eprintln!(
-                        "fno agents resume: {row_name}: the keeper at {} answered session \
-                         {answered:?} pid {keeper_pid:?}, not this revival (pid {launched}); \
-                         see {}",
-                        sock.display(),
-                        keeper_log.display()
-                    );
-                    crate::resume_gate::release_revival_claims(session_id);
-                    return 1;
-                }
-            }
+    let (keeper_pid, child_pid) = match outcome {
+        IdentifyOutcome::Ours {
+            keeper_pid,
+            child_pid,
+        } => (keeper_pid, child_pid),
+        IdentifyOutcome::Wrong {
+            answered_sid: Some(s),
+            ..
+        } if s == session_id => {
+            println!(
+                "fno agents resume: {row_name} is live on its keeper at {} \
+                 (a concurrent resume revived it); nothing more was launched",
+                sock.display()
+            );
+            return 0;
         }
-        if std::time::Instant::now() >= deadline {
+        IdentifyOutcome::Wrong {
+            answered_sid,
+            answered_pid,
+        } => {
+            kill(launched);
+            eprintln!(
+                "fno agents resume: {row_name}: the keeper at {} answered session \
+                 {answered_sid:?} pid {answered_pid:?}, not this revival (pid {launched}); \
+                 see {}",
+                sock.display(),
+                keeper_log.display()
+            );
+            crate::resume_gate::release_revival_claims(session_id);
+            return 1;
+        }
+        IdentifyOutcome::TimedOut => {
             kill(launched);
             eprintln!(
                 "fno agents resume: {row_name}: the keeper at {} never answered Identify \
@@ -244,8 +244,7 @@ where
             crate::resume_gate::release_revival_claims(session_id);
             return 1;
         }
-        std::thread::sleep(IDENTIFY_POLL);
-    }
+    };
     // Proof of life, then the flip: a keeper that exits right after launch
     // unlinks its socket, and a row flipped onto that corpse would read live
     // while hosting nothing.
@@ -270,9 +269,6 @@ where
         crate::resume_gate::release_revival_claims(session_id);
         return 1;
     }
-    let Some((keeper_pid, child_pid)) = verified else {
-        unreachable!("the identify loop leaves only on the verified answer")
-    };
     let outcome = crate::convert::keeper_rebind::RebindOutcome {
         socket: sock.to_string_lossy().into_owned(),
         keeper_pid,
@@ -421,11 +417,81 @@ fn append_resume_event(
     );
 }
 
+/// What the launch-and-Identify step concluded for the keeper it launched.
+/// Killing is the caller's move: the revival and the create arm map these
+/// outcomes onto different refusals (concurrent-won vs collision-vs-identity).
+pub(crate) enum IdentifyOutcome {
+    /// The keeper answered Identify naming BOTH this session id AND this
+    /// keeper pid: the launch is ours.
+    Ours {
+        keeper_pid: u32,
+        child_pid: Option<u32>,
+    },
+    /// A keeper answered but not provably ours. `answered_sid` matching the
+    /// launched session id with a different pid is the revival's
+    /// concurrent-won case; anything else is a collision or an identity bug,
+    /// split by the caller's own pid liveness read.
+    Wrong {
+        answered_sid: Option<String>,
+        answered_pid: Option<u32>,
+    },
+    /// No keeper answered within [`IDENTIFY_WINDOW`].
+    TimedOut,
+}
+
+/// Launch the keeper in `spec` and wait out its first Identify, the step both
+/// keeper launchers share. Extracted from `revive_with` so the create arm
+/// (`keeper_spawn`) launches through the same loop instead of a copy: same
+/// window, same poll cadence, same session-and-pid proof, and no kill here -
+/// every failure leaves the launched pid with the caller, which owns the
+/// refusal text and the autopsy pointer.
+pub(crate) fn launch_and_identify<P, L>(
+    spec: &LaunchSpec,
+    probe: P,
+    mut launch: L,
+) -> Result<(u32, IdentifyOutcome), String>
+where
+    P: Fn(&Path) -> crate::daemon::KeeperProbe,
+    L: FnMut(&LaunchSpec) -> Result<u32, String>,
+{
+    let launched = launch(spec)?;
+    let deadline = std::time::Instant::now() + IDENTIFY_WINDOW;
+    loop {
+        if let crate::daemon::KeeperProbe::Answered(reply) = probe(&spec.sock) {
+            let (answered_sid, keeper_pid, child_pid) = reply_parts(&reply);
+            match (answered_sid, keeper_pid) {
+                (Some(s), Some(p)) if s == spec.session_id && p == launched => {
+                    return Ok((
+                        launched,
+                        IdentifyOutcome::Ours {
+                            keeper_pid: p,
+                            child_pid,
+                        },
+                    ));
+                }
+                (answered_sid, answered_pid) => {
+                    return Ok((
+                        launched,
+                        IdentifyOutcome::Wrong {
+                            answered_sid,
+                            answered_pid,
+                        },
+                    ));
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok((launched, IdentifyOutcome::TimedOut));
+        }
+        std::thread::sleep(IDENTIFY_POLL);
+    }
+}
+
 /// The production launcher: a fresh session for the keeper (the same
 /// detachment `start_new_session=True` gives the Python spawn), stdio dark
 /// except stderr appended to the keeper log the Python lane writes, and the
 /// identity stamp a spawn child carries.
-fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
+pub(crate) fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
     use std::os::unix::process::CommandExt;
     let mut command = std::process::Command::new(&spec.argv[0]);
     command.args(&spec.argv[1..]);
@@ -462,7 +528,7 @@ fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
 
 /// Stop a keeper this revival started or named: SIGTERM, then SIGKILL once
 /// the grace passes, so a wedged keeper never outlives its refusal.
-fn terminate_keeper(pid: u32) {
+pub(crate) fn terminate_keeper(pid: u32) {
     // SAFETY: pid targets the keeper this process launched; SIGTERM carries
     // no payload.
     unsafe {

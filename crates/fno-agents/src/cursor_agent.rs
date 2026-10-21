@@ -7,6 +7,7 @@
 //! session file.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::provider::{AgentEntry, Provider, ReachabilityProbeError, ResumeContext};
@@ -71,6 +72,79 @@ pub fn chat_id_error(value: &str) -> Option<String> {
             "cursor-agent chat id {value:?} is not a full UUIDv4 returned by `cursor-agent create-chat`."
         )
     })
+}
+
+/// Read Cursor's callee-minted chat UUID and terminate `create-chat` (the
+/// port of the Python mint): a bounded read keeps a failed login or broken
+/// binary from wedging the spawn lane, and the killed child is reaped only to
+/// avoid a zombie, never to inspect its exit status.
+pub fn create_chat(cwd: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(CURSOR_AGENT_BINARY)
+        .arg("create-chat")
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cursor-agent create-chat could not start: {e}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or("cursor-agent create-chat returned no stdout; no chat id was captured")?;
+    let mut stderr = child.stderr.take();
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut sink = [0u8; 4096];
+        loop {
+            match stdout.read(&mut sink) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&sink[..n]);
+                    if buf.contains(&b'\n') {
+                        break;
+                    }
+                }
+            }
+        }
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(stderr) = stderr.as_mut() {
+            let mut sink = [0u8; 4096];
+            while matches!(stderr.read(&mut sink), Ok(n) if n > 0) {
+                // Drain: a full stderr pipe must never wedge the mint.
+            }
+        }
+        buf
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let output = loop {
+        if out_reader.is_finished() || std::time::Instant::now() >= deadline {
+            break out_reader.join().unwrap_or_default();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // SIGKILL, then reap: the helper's exit status is nobody's evidence.
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = err_reader.join();
+    let first_line = String::from_utf8_lossy(&output);
+    let chat_id = first_line.lines().next().unwrap_or("").trim();
+    if let Some(error) = chat_id_error(chat_id) {
+        if chat_id.is_empty() {
+            return Err(
+                "cursor-agent create-chat returned no chat id within 15s; the helper was \
+                 terminated."
+                    .to_string(),
+            );
+        }
+        return Err(format!(
+            "cursor-agent create-chat returned invalid chat id {chat_id:?}: {error}"
+        ));
+    }
+    Ok(chat_id.to_string())
 }
 
 pub fn is_cursor_worker_server_command(command: &str) -> bool {
