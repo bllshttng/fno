@@ -6,7 +6,7 @@ The demonstration uses a scratch repository that is not this checkout, a fresh i
 
 ## The protocol
 
-1. Prepare: pick a small real feature in a scratch repository. Create an isolated state root and install Footnote there per [getting-started.md](../getting-started.md). Start no session state in advance.
+1. Prepare: pick a small real feature in a scratch repository. Create an isolated state root and install Footnote there per [install.md](../install.md). Start no session state in advance.
 2. Carry the task: hand the feature to `/target` as one sentence and let the pipeline run. When asked, the operator gives reviews and rulings, nothing more.
 3. Interruption: stop a running worker mid-task (or kill the session) after it has begun implementation. Then resume from persisted state and continue to the same acceptance criteria.
 4. Failed check: at the PR, let CI go red on a real defect. Where local law allows it, break a check deliberately. Let the fix loop drive the branch green. Keep the red run and the green run.

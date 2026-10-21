@@ -276,7 +276,7 @@ When zero candidates pass the bar, write nothing. Silence is fine. An empty memo
 
 ## Deferrals Capture (advisory)
 
-Sibling to the memory pass, but for the *substrate* rather than your memory. Scan this session for small follow-ups that surfaced and were deferred ("replace this lambda with a def", "add a `Literal[]` here", "audit the failure-path emits") - items too small for an idea node but worth not losing. These land in the backlog capture tier (`fno backlog capture`), a markdown holding-pen below idea nodes. See `docs/triage.md` in the footnote repo for the full triage + promotion flow.
+Sibling to the memory pass, but for the *substrate* rather than your memory. Scan this session for small follow-ups that surfaced and were deferred ("replace this lambda with a def", "add a `Literal[]` here", "audit the failure-path emits") - items too small for an idea node but worth not losing. These land in the backlog capture tier (`fno backlog capture`), a markdown holding-pen below idea nodes. See `docs/backlog-triage.md` in the footnote repo for the full triage + promotion flow.
 
 **The pass is advisory** (`deferrals_captured`): run-and-log, never a gate. It writes a `.fno/artifacts/deferrals-${session_id}.md` artifact and emits an `inbox_add`/`inbox_empty_pass` event for the session as an observable record, but its absence never blocks `<promise>` and never re-opens the loop (completion authority is the three external reads plus budget). Skipped entirely when `no_deferrals_capture: true` (S size).
 
