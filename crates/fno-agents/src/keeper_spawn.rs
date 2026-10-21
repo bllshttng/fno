@@ -1043,22 +1043,19 @@ mod tests {
         assert!(killed_ref.lock().unwrap().contains(&4242));
         assert!(read_row(&home, WK).is_none());
 
-        // Leg 2: an existing name refuses before the keeper launches.
+        // Leg 2: an existing name refuses before the keeper launches. Write
+        // through update_registry: the store owns the registry (a fence
+        // directory stands at registry.json once the table exists), so a raw
+        // file write hits EISDIR.
         let existing = RegistryEntry {
             name: WK.to_string(),
             cwd: "/tmp".into(),
             created_at: "2026-10-20T00:00:00Z".into(),
             ..Default::default()
         };
-        std::fs::write(
-            home.registry_json(),
-            serde_json::to_vec(&crate::state::Registry {
-                schema_version: crate::state::REGISTRY_SCHEMA_VERSION,
-                entries: vec![existing],
-                ..Default::default()
-            })
-            .unwrap(),
-        )
+        crate::state::update_registry(&home.registry_json(), |reg| {
+            reg.entries.push(existing);
+        })
         .unwrap();
         let outcome = dispatch_with(
             &home,
