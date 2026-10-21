@@ -538,9 +538,10 @@ mod tests {
             .find(|p| p["lane"] == json!("zai-flash"))
             .unwrap();
         assert_eq!(p["verdict"], json!("propose"), "{p}");
-        // The accept line names the candidate row first.
+        // The accept line names the candidate row first: the lanes array
+        // opens with the trial lane, single-quoted shell-side.
         let line = p["accept_line"].as_str().unwrap();
-        assert!(line.contains("'[\"zai-flash'"), "{line}");
+        assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
         // A glm proposal names the temporary seat law it would contradict.
