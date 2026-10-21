@@ -92,10 +92,33 @@ fn capture_target(
     // alone, the cargo runs on under pid 1 and keeps its admission slot.
     // Deeper descendants join the set. One that exits between the table
     // read and its start-time read is skipped, not refused.
-    let deeper: Vec<u32> = crate::census::descendants(table, pid)
+    let mut deeper: Vec<u32> = crate::census::descendants(table, pid)
         .into_iter()
         .filter(|member| !members.contains(member))
         .collect();
+    // A run_in_background shell can leave the tree (reparented to pid 1)
+    // before the stop, so the tree walk misses it and it keeps polling.
+    // Claude stamps the full session id into such a shell's command line
+    // as an env assignment (`NAME=<sid>`), so those rows join too. A bare
+    // argv mention is not enough: `fno agents session stop <sid>` or a
+    // mail send to the session names it too and is not the session's.
+    if let Some(sid) = session_id.filter(|sid| sid.len() >= 32) {
+        let me = std::process::id();
+        let assigned = format!("={sid}");
+        deeper.extend(
+            table
+                .iter()
+                .filter(|row| row.command.contains(&assigned))
+                .map(|row| row.pid)
+                .filter(|p| {
+                    *p != me
+                        && roster.supervisor_pid != Some(*p)
+                        && !members.contains(p)
+                        && !deeper.contains(p)
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     let mut proved = Vec::with_capacity(members.len() + deeper.len());
     for member in members {
         if member <= 1 {
@@ -492,6 +515,31 @@ mod tests {
             got,
             vec![(5002, 5009), (5100, 5107), (5150, 5157), (5200, 5207)]
         );
+    }
+
+    /// A detached background shell that names the session id in its command
+    /// line joins the stop set, though the tree walk cannot reach it.
+    #[test]
+    fn capture_target_names_a_detached_shell_by_session_id() {
+        let sid = "ee99ff00-7777-8888-9999-aaaabbbbcccc";
+        let roster = roster_with(sid, Some(5002));
+        let table = vec![
+            crate::census::test_proc_row(5002, 1, "claude bg-pty-host"),
+            crate::census::test_proc_row(
+                6000,
+                1,
+                "zsh -c CODEX_COMPANION_SESSION_ID=ee99ff00-7777-8888-9999-aaaabbbbcccc gh run watch 1",
+            ),
+            crate::census::test_proc_row(6100, 1, "zsh -c gh run watch 2"),
+            crate::census::test_proc_row(
+                6200,
+                1,
+                "fno agents session stop ee99ff00-7777-8888-9999-aaaabbbbcccc",
+            ),
+        ];
+        let got = capture_target(&roster, "ee99ff00", Some(sid), &table, &start_of_every)
+            .expect("proved target");
+        assert_eq!(got, vec![(5002, 5009), (6000, 6007)]);
     }
 
     /// AC2-ERR: the supervisor pid and this daemon's pid are never targets.
