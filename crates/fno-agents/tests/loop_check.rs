@@ -430,7 +430,7 @@ fn fire(args: &[&str]) -> (i32, Decision) {
     args_owned.push("--global-settings".to_string());
     args_owned.push("/nonexistent/global-settings.yaml".to_string());
     // Hermeticity, third door: the fleet GitHub request budget ledger
-    // defaults to the developer's real ~/.fno/locks/github-request-budget.json.
+    // defaults to the machine locks folder's github-request-budget.json.
     // This suite runs under a live footnote session whose gh calls stamp that
     // real ledger all session long, so an unisolated test inherits whatever
     // backoff or window pressure the machine is actually under. Default to

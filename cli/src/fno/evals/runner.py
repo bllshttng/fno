@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from fno.agents import account_env as _account_env
 from fno.agents.naming import mint_or_none
 from fno.evals import history as _history
 from fno.evals.bank import TaskSpec
@@ -33,6 +35,7 @@ class SpawnResult:
     reason: str = ""
     worker_name: str = ""  # set on the real spawn; read back for observe()
     timed_out: bool = False  # explicit observation; never inferred from reason text
+    lane_note: str = ""  # row evidence: an account leg this spawn dropped
 
 
 # spawn(prompt, workdir, timeout_s) -> SpawnResult
@@ -129,6 +132,24 @@ def _git_rev(repo_root: Path, ref: str) -> Optional[str]:
         return None
 
 
+def _lane_account(lane: Optional[Any]) -> tuple[Optional[str], str, str]:
+    """(flag, refusal, drop_note). A registered account rides; an unregistered
+    alias drops only on a routed lane (the seat form); every other refusal fails closed, never re-seats it."""
+    account = getattr(lane, "account", None)
+    if not account:
+        return None, "", ""
+    try:
+        if account not in _account_env.load_providers().by_id:
+            if str(getattr(lane, "route", "") or "").strip():
+                print(f"lane account {account!r} is not registered; the routed lane rides its own route credential (the seat-spawn form)", file=sys.stderr)
+                return None, "", f"lane account {account!r} dropped; routed lane rides its route credential"
+            return None, f"lane account {account!r} is not registered and the lane names no route; refusing the spawn (fail closed)", ""
+        _account_env.resolve_account_overlay(account)
+    except Exception as exc:  # noqa: BLE001 - any resolver refusal fails the spawn closed, never re-seats it
+        return None, f"lane account {account!r} refused: {exc}", ""
+    return account, "", ""
+
+
 def _default_spawn(
     prompt: str, workdir: Path, timeout_s: int, *,
     provider: Optional[str] = None, lane: Optional[Any] = None
@@ -138,6 +159,9 @@ def _default_spawn(
     sweep crash. A *lane* is a complete coordinate: its harness wins over *provider*.
     The worker name is the ``ev-th-evals-<run>``: typed non-node identity,
     per-invocation run token as the never-shaved discriminator."""
+    account_flag, refusal, drop_note = _lane_account(lane) if lane else (None, "", "")
+    if refusal:
+        return SpawnResult(False, refusal)
     name = mint_or_none(
         "ev", "th", "evals", discriminator=f"{os.getpid()}-{int(time.time())}"
     )
@@ -154,7 +178,7 @@ def _default_spawn(
     if harness:
         cmd += ["--harness", harness]
     if lane:
-        for flag, val in (("--route", lane.route), ("--account", lane.account)):
+        for flag, val in (("--route", lane.route), ("--account", account_flag)):
             if val:
                 cmd += [flag, val]
     # Behind `--` (fno's own click parser honors it, verified both
@@ -171,7 +195,7 @@ def _default_spawn(
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or [""]
         return SpawnResult(False, f"spawn exit {proc.returncode}: {tail[0]}", worker_name=name)
-    return SpawnResult(True, worker_name=name)
+    return SpawnResult(True, worker_name=name, lane_note=drop_note)
 
 
 def _make_disposable_worktree(repo_root: Path, ref: str, tag: str) -> Path:
@@ -343,7 +367,7 @@ def run_task(
                     else:
                         spawned = True
                 if not reason:
-                    outcome = grade(task, workdir)
+                    outcome = grade(task, workdir, base_ref=checkout_ref)
                     if not outcome.passed:
                         reason = outcome.reason
                 _remove_worktree(repo_root, workdir)
@@ -358,6 +382,10 @@ def run_task(
                     attempted=bool(task.prompt), spawned=spawned,
                     worker_name=worker_name,
                 ))
+                lane_evidence.setdefault("requested_account", getattr(lane, "account", ""))
+                if spawn_res is not None and spawn_res.lane_note:
+                    lane_evidence.update(account_dropped=True, lane_reason=spawn_res.lane_note)
+                    lane_evidence["lane_status"] = "account-dropped" if lane_evidence.get("lane_status") == "ok" else lane_evidence.get("lane_status")
 
             duration = round(time.monotonic() - started, 3)
             passed = outcome is not None and outcome.passed

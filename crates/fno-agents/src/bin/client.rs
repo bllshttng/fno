@@ -1522,6 +1522,15 @@ async fn run(args: Vec<String>) -> i32 {
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
         if substrate == "pane" {
+            // The pane spine answers from the binary when a harness arm is
+            // seated; None falls through to the bounce below, which stays the
+            // leg for every harness until its arm lands (the codex arm in PR
+            // 2, claude in the next row).
+            if let Some(code) =
+                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
+            {
+                return code;
+            }
             use fno_agents::claude_ask::py_repr;
             // Provider parity with the optional-provider Python resolver: a
             // MISSING --provider is legal on the pane substrate (the Python
@@ -2768,6 +2777,37 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         // held app-server process and register its full thread identity.
         ("codex", "bg") => None,
 
+        // The keeper-lane thread spawns (pi, cursor-agent, grok, agy): the
+        // keeper_spawn arm reads the harness's capability row and launches
+        // the keeper from the binary, with no Python crossing. A keeper row
+        // names the harness and the row's refusals answer the unmeasured
+        // stances, so the guard is the row itself.
+        (other, "bg") if fno_agents::keeper_spawn::carries_keeper_row(other) => {
+            let outcome = fno_agents::keeper_spawn::dispatch(
+                home,
+                other,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                &harness_args,
+                &params,
+            );
+            if !outcome.stderr.is_empty() {
+                eprint!("{}", outcome.stderr);
+            }
+            if !outcome.stdout.is_empty() {
+                print!("{}", outcome.stdout);
+            }
+            // The row exists once dispatch returned: release the gate now,
+            // like the claude arm, so a waiter never queues behind this
+            // spawn's post-receipt work.
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            Some(outcome.exit_code)
+        }
+
         // The three arms above stay NAMED rather than lane-routed: claude's
         // thread is hosted by the detached client, codex's by its own
         // app-server, opencode's by a serve-hosted HTTP session. `thread_lane`
@@ -3523,12 +3563,13 @@ fn apply_interactive_defaults(params: &mut Map<String, Value>) -> Result<(), Str
 /// `fno agents spawn` front door) resolves the SAME default in its own body
 /// and opens the thread's default view through the mux thread verb, so this
 /// helper only answers for a DIRECT binary call.
-/// It seats only the three lanes this client itself routes (claude/codex
-/// bg, opencode serve); a keeper-lane harness (pi, cursor-agent, grok, agy)
-/// keeps the pane default here and seats its thread through the Python seam's
-/// keeper carve-out instead. The harness default matches the daemon's
-/// `handle_spawn` provider default (codex) so a bare direct call and the
-/// daemon route cannot disagree.
+/// It seats only the lanes this client itself routes (claude/codex bg,
+/// opencode serve, and the keeper rows through `keeper_spawn.rs`); a
+/// keeper-lane harness (pi, cursor-agent, grok, agy) keeps the pane default
+/// here for a DIRECT call, and the Python seam resolves its explicit thread
+/// spawn through the client's keeper arm. The harness default matches the
+/// daemon's `handle_spawn` provider default (codex) so a bare direct call and
+/// the daemon route cannot disagree.
 fn default_substrate(params: &Value) -> &'static str {
     let harness = params
         .get("provider")

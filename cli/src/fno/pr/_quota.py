@@ -39,14 +39,19 @@ def quota_lock_path() -> Path:
     return graphql_quota_lock()
 
 
-def _open_locked_path(lock_path: Path):
+def _open_locked_path(lock_path: Optional[Path], fresh: bool = False):
+    """Hold the machine quota lock; ``fresh`` re-resolves per attempt and after the flock."""
     while True:
+        if fresh:
+            lock_path = quota_lock_path()
+        assert lock_path is not None
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_path.open("a+")
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
                 opened = os.fstat(handle.fileno())
-                current = lock_path.stat()
+                current = (quota_lock_path() if fresh else lock_path).stat()
                 same_inode = (opened.st_dev, opened.st_ino) == (
                     current.st_dev,
                     current.st_ino,
@@ -54,7 +59,7 @@ def _open_locked_path(lock_path: Path):
             except OSError:
                 same_inode = False
             if same_inode:
-                return handle
+                return handle, lock_path
             fcntl.flock(handle, fcntl.LOCK_UN)
         except BaseException:
             handle.close()
@@ -63,8 +68,8 @@ def _open_locked_path(lock_path: Path):
 
 
 @contextmanager
-def _locked_path(lock_path: Path):
-    handle = _open_locked_path(lock_path)
+def _locked_path(lock_path: Optional[Path], fresh: bool = False):
+    handle, _locked = _open_locked_path(lock_path, fresh=fresh)
     try:
         yield handle
     finally:
@@ -523,11 +528,13 @@ def execute_graphql(
         return Result(2, "", proxy_identity_refusal(exc))
     if not gh:
         return Result(127, "", "gh not found on PATH")
-    lock = lock_path or quota_lock_path()
+    try:
+        lock = lock_path or quota_lock_path()
+    except RuntimeError as exc:
+        return Result(2, "", f"gh proxy: quota lock unavailable, refusing: {exc}")
     cache = (None if any(v in os.environ for v in _TOKEN_ENV)
              else (probe_cache or lock.with_name("github-quota-probe.json")))
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with _locked_path(lock) as handle:
+    with _locked_path(lock, fresh=lock_path is None) as handle:
         try:
             try:
                 env = delegate_environment()

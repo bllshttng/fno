@@ -397,3 +397,145 @@ def _worktree_count(root: Path) -> int:
     proc = subprocess.run(["git", "worktree", "list", "--porcelain"],
                           cwd=str(root), capture_output=True, text=True)
     return proc.stdout.count("worktree ")
+
+
+def _patch_account_env(monkeypatch, registered_ids=()) -> None:
+    """Stub the providers registry: `registered_ids` are known to by_id, and
+    resolve only those; a known-but-unresolvable id and a crashing registry
+    are reachable through the ids below."""
+    import fno.agents.account_env as account_env
+
+    class _Cfg:
+        by_id = {i: object() for i in registered_ids}
+
+    monkeypatch.setattr(account_env, "load_providers", lambda **_: _Cfg())
+
+    def _resolve(account_id, **_):
+        if account_id == "acct-broken":
+            raise account_env.AccountResolutionError(
+                "account 'acct-broken' config_dir does not exist; register a live login there first"
+            )
+        if account_id not in _Cfg.by_id:
+            raise account_env.AccountResolutionError(f"account {account_id!r} is not registered")
+        return object()
+
+    monkeypatch.setattr(account_env, "resolve_account_overlay", _resolve)
+
+
+def test_lane_account_rides_only_for_a_registered_account(monkeypatch) -> None:
+    """A registered, resolvable lane account rides --account; an empty one
+    rides nothing; both return no refusal and no drop note."""
+    from fno.route_resolve import InventoryRow
+
+    _patch_account_env(monkeypatch, registered_ids=["acct-ok"])
+    registered = InventoryRow(name="a", harness="claude", model="m", route="v/m", account="acct-ok")
+    empty = InventoryRow(name="c", harness="claude", model="m", route="v/m", account="")
+
+    assert _runner._lane_account(registered) == ("acct-ok", "", "")
+    assert _runner._lane_account(empty) == (None, "", "")
+
+
+def test_lane_account_drops_only_an_unregistered_id_on_a_routed_lane(monkeypatch) -> None:
+    """The zai case: an alias the registry does not hold drops --account on a
+    routed lane (the seat form) with a drop note for the row. The same alias
+    on a route-less lane refuses the spawn instead."""
+    from fno.route_resolve import InventoryRow
+
+    _patch_account_env(monkeypatch, registered_ids=[])
+    routed = InventoryRow(name="z", harness="claude", model="m", route="zai/glm", account="zai")
+    routeless = InventoryRow(name="n", harness="claude", model="m", route="", account="zai")
+
+    flag, refusal, drop_note = _runner._lane_account(routed)
+    assert flag is None and refusal == "" and "zai" in drop_note
+
+    flag, refusal, drop_note = _runner._lane_account(routeless)
+    assert flag is None and "not registered" in refusal and "fail closed" in refusal
+
+
+def test_lane_account_fails_closed_on_every_other_refusal(monkeypatch) -> None:
+    """A registered account whose login/config_dir is gone, and a crashing
+    registry, refuse the spawn; neither may degrade to the seat form."""
+    from fno.route_resolve import InventoryRow
+
+    _patch_account_env(monkeypatch, registered_ids=["acct-broken"])
+    broken = InventoryRow(name="b", harness="claude", model="m", route="v/m", account="acct-broken")
+    flag, refusal, _ = _runner._lane_account(broken)
+    assert flag is None and "acct-broken" in refusal
+
+    import fno.agents.account_env as account_env
+
+    def _boom(**_):
+        raise ValueError("providers.toml is not valid TOML")
+
+    monkeypatch.setattr(account_env, "load_providers", _boom)
+    flag, refusal, _ = _runner._lane_account(broken)
+    assert flag is None and "refused" in refusal
+
+
+def test_default_spawn_refuses_closed_before_any_worker(monkeypatch, tmp_path) -> None:
+    """The fail-closed refusal is a graded spawn failure, decided before the
+    worker name is minted and before any subprocess runs."""
+    from fno.route_resolve import InventoryRow
+
+    _patch_account_env(monkeypatch, registered_ids=[])
+    row = InventoryRow(name="n", harness="claude", model="m", route="", account="zai")
+    got = _runner._default_spawn("p", tmp_path, 60, lane=row)
+    assert not got.ok
+    assert "not registered" in got.reason
+
+
+def test_lane_row_shows_a_dropped_account(tmp_path) -> None:
+    """A dropped account cannot read as a clean ok row: the row carries
+    requested_account, account_dropped, the drop reason, and a lane_status
+    that is not ok."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        (workdir / "made.txt").write_text("ok\n", encoding="utf-8")
+        return SpawnResult(True, worker_name="w1",
+                           lane_note="lane account 'zai' dropped; routed lane rides its route credential")
+
+    def observe(lane, workdir, started_wall, *, attempted, spawned, worker_name):
+        return {"requested_lane": "zai-flash", "requested_harness": "claude",
+                "requested_model": "glm-5.3-flash[1m]", "observed_harness": "claude",
+                "observed_model": "glm-5.3-flash", "substituted": False,
+                "lane_status": "ok", "usage": None, "usage_source": None}
+
+    from fno.route_resolve import InventoryRow
+
+    lane = InventoryRow(name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+                        route="zai/glm-5.3-flash[1m]", account="zai")
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+             lane=lane, observe=observe)
+    row = _rows(hp)[0]
+    assert row["requested_account"] == "zai"
+    assert row["account_dropped"] is True
+    assert "dropped" in row["lane_reason"]
+    assert row["lane_status"] == "account-dropped"
+
+
+def test_lane_row_keeps_a_registered_account_clean(tmp_path) -> None:
+    """A lane whose account rides shows no drop evidence at all."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        (workdir / "made.txt").write_text("ok\n", encoding="utf-8")
+        return SpawnResult(True, worker_name="w2")
+
+    def observe(lane, workdir, started_wall, *, attempted, spawned, worker_name):
+        return {"requested_lane": "pinned", "observed_model": "m", "substituted": False,
+                "lane_status": "ok", "usage": None, "usage_source": None}
+
+    from fno.route_resolve import InventoryRow
+
+    lane = InventoryRow(name="pinned", harness="claude", model="m", route="v/m", account="acct-ok")
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+             lane=lane, observe=observe)
+    row = _rows(hp)[0]
+    assert row["requested_account"] == "acct-ok"
+    assert "account_dropped" not in row
+    assert row["lane_status"] == "ok"

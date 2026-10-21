@@ -249,6 +249,7 @@ pub mod interrupt_classify;
 pub mod json_output;
 pub mod keep_mark;
 pub(crate) mod keeper_revival;
+pub mod keeper_spawn;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
@@ -369,6 +370,7 @@ pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;
 pub mod pane_relaunch;
+pub mod pane_spawn;
 pub mod pane_stop;
 pub mod paths;
 pub mod paths_cli;
@@ -1499,8 +1501,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
-    // A refused shared-backlog flush took this machine's rows back: the
-    // operator notice beside the retained batch (backlog_share::repair).
+    // A refused shared-backlog flush: the operator notice beside the
+    // retained batch (backlog_share::repair).
     "backlog_refused_flush",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and

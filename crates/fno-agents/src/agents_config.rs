@@ -361,11 +361,16 @@ pub fn state_dir(cwd: &Path) -> Option<PathBuf> {
 }
 
 /// Config-independent plan/quota lock directory used by Python's `locks_dir`.
+/// The root keeps the config-free chain (`FNO_STATE_DIR`, else `$HOME/.fno`);
+/// the folder itself answers from the layout table's `locks` row, so the
+/// state-root fold retargets every taker at once when that row moves.
 pub fn machine_locks_dir() -> Option<PathBuf> {
-    if let Some(root) = non_empty_env("FNO_STATE_DIR") {
-        return Some(PathBuf::from(root).join("locks"));
-    }
-    Some(PathBuf::from(std::env::var_os("HOME")?).join(".fno/locks"))
+    let root = if let Some(root) = non_empty_env("FNO_STATE_DIR") {
+        PathBuf::from(root)
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".fno")
+    };
+    Some(crate::state_layout::place(&root, "locks"))
 }
 
 /// `state-root`: the seal-handshake door. A parent that pins
@@ -1813,7 +1818,7 @@ mod tests {
         );
         assert_eq!(
             machine_locks_dir(),
-            Some(PathBuf::from("/pinned-state/locks"))
+            Some(PathBuf::from("/pinned-state/state/locks"))
         );
 
         match prior {

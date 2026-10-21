@@ -61,6 +61,7 @@ A	bootstrapped {target}; first run at its scheduled time	py=cli/src/fno/pr_watch
 A	bounced {target}; awaiting first tick	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/install.rs|crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	brief={n_bytes}b->target_brief	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/backlog/dispatch_resolve.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	bus claim (recipient read past it)	py=cli/src/fno/mail/landed.py;rs=crates/fno-agents/src/mail_cli/send/verify.rs	# the port froze the golden wording; the python twin is the reply verb kept helper (AC1-EDGE)
+A	bounded mux pane placement	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/mod.rs	# CLASSIFY msg-twin the spine mirrors the Python leg's placement docstring wording: both legs delete with the pane port
 A	cache_creation_input_tokens	py=cli/src/fno/cost/_session_cost.py|scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/context_window.rs|crates/fno-agents/src/eval_attempt/tests_observe.rs|crates/fno-agents/src/model_price.rs|crates/fno-agents/src/session_activity.rs|crates/fno/src/context_used.rs	# CLASSIFY protocol|msg-twin|data
 A	cache_write_input_tokens	py=scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/session_activity.rs	# CLASSIFY protocol|msg-twin|data
 A	caller-assigned-cwd-scoped	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
@@ -154,10 +155,10 @@ A	fno_global_settings_path	py=cli/src/fno/adapters/providers/loader.py|cli/src/f
 A	fno_launch_account_source	py=cli/src/fno/agents/launch_provenance.py;rs=crates/fno-agents/src/state.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_lead_walk_session_key	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno-agents/src/loop_lead.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_mail_landed_settle_s	py=cli/src/fno/mail/landed.py;rs=crates/fno-agents/src/mail_cli/send/verify.rs	# the port froze the golden wording; the python twin is the reply verb kept helper (AC1-EDGE)
-A	fno_mux_shell_integration	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno/src/client/server_spawn.rs|crates/fno/src/pty.rs	# CLASSIFY protocol|msg-twin|data
+A	fno_mux_shell_integration	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/mod.rs|crates/fno-agents/src/pane_spawn/tests.rs|crates/fno/src/client/server_spawn.rs|crates/fno/src/pty.rs	# CLASSIFY protocol|msg-twin|data; the pane spine joined the rs carrier set
 A	fno_opencode_storage_dir	py=cli/src/fno/agents/discover.py;rs=crates/fno-agents/src/backlog/autobrief.rs|crates/fno-agents/src/claude_supervisor.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	fno_operator_capture_dir	py=cli/src/fno/inbox/operator_turns.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/operator_turns.rs	# CLASSIFY protocol|msg-twin|data
-A	fno_process_admission_max	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno/src/bootstrap.rs|crates/fno/src/process_admission.rs	# CLASSIFY protocol|msg-twin|data
+A	fno_process_admission_max	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/mod.rs|crates/fno-agents/src/pane_spawn/tests.rs|crates/fno/src/bootstrap.rs|crates/fno/src/process_admission.rs	# CLASSIFY protocol|msg-twin|data; the pane spine joined the rs carrier set
 A	fno_registry_allow_row_loss	py=cli/src/fno/agents/registry.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/registry_guard.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_seed_prov_from_session	py=cli/src/fno/mail/seed_provenance.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/mail_cli/seed_provenance.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_spawn_origin and fno_spawn_owner must be exported together	py=cli/src/fno/agents/spawn_lineage.py;rs=crates/fno-agents/src/spawn_context.rs	# CLASSIFY protocol|msg-twin|data
@@ -248,6 +249,7 @@ A	pid and pid_unavailable are mutually exclusive	py=cli/src/fno/claims/types.py;
 A	pid_unavailable claims require schema_version=2	py=cli/src/fno/claims/types.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	pid_unavailable requires a ttl claim	py=cli/src/fno/claims/core.py|cli/src/fno/claims/types.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	plan_path_owner_conflict	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
+A	placement:{session}:global	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/mod.rs	# CLASSIFY data the placement lease key format both legs write to the same claims store
 A	plist unchanged; not re-registered ({caller})	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	post_merge_noninteractive	py=cli/src/fno/hermetic.py|cli/src/fno/pr/cli.py;rs=crates/fno-agents/src/post_merge/ritual.rs	# CLASSIFY protocol|msg-twin|data one env-var name read by both the forwarder and the native arm
 A	provider unknown, non-anthropic, or keyless	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/spawn_route.rs	# CLASSIFY protocol|msg-twin|data the --route refusal reason: the Python leg serves pane and account-composed routes until row 2b ports them
@@ -268,7 +270,7 @@ A	reconcile_detected_merge	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agen
 A	refs/remotes/origin/head	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/canonical_check.rs|crates/fno-agents/src/mail_cli/send_raw.rs|crates/fno-agents/src/operator_notice.rs|crates/fno-agents/src/source_pin.rs|crates/fno-agents/src/worktree_reapable.rs	# CLASSIFY protocol|msg-twin|data
 A	refused-newer-than-transcript	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data
 A	refused: {task_id} cross-check failed: {message}	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
-A	registry read failed: {exc}	py=cli/src/fno/agents/dispatch.py|cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/attach.rs|crates/fno-agents/src/mail_cli/send/engine.rs	# CLASSIFY protocol|msg-twin|data
+A	registry read failed: {exc}	py=cli/src/fno/agents/dispatch.py|cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/attach.rs|crates/fno-agents/src/mail_cli/send/engine.rs|crates/fno-agents/src/pane_spawn/mod.rs	# CLASSIFY protocol|msg-twin|data; the pane spine joined the rs carrier set
 A	repos/:owner/:repo/pulls/{source_pr}/comments	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/backlog/maintenance_validity.rs	# CLASSIFY protocol|msg-twin|data
 A	repos/{base_repo}/git/refs/heads/{branch}	py=cli/src/fno/pr/_merge.py;rs=crates/fno-agents/src/pr_verify.rs	# CLASSIFY protocol|msg-twin|data pr-verify remediation mirrors the merge verb's delete-ref path on purpose: the audit exercises the merge path
 A	repos/{slug}/pulls/{pr}/files?per_page=100&page={page}	py=cli/src/fno/pr/_rest.py;rs=crates/fno-agents/src/pr_status/reviews.rs	# CLASSIFY protocol|msg-twin|data
@@ -395,3 +397,6 @@ A	instruments over the harness capability table.	py=cli/src/fno/agents/cli.py;rs
 A	mcp sidecar client verbs.	py=cli/src/fno/mcp/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	scripts/ci/native-command-tree.txt	py=cli/src/fno/lint_verb_ratchet.py;rs=crates/fno/src/menu_caps.rs	# shared-vocabulary: the generated clap tree both verb guards read
 A	worktree lifecycle and worker registration.	py=cli/src/fno/workspace/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
+A	a blocking modal was answered and the composer still never painted.	py=cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/keeper_spawn.rs	# CLASSIFY protocol|msg-twin|data: the keeper arm ports the python lane seed lines verbatim; the python leg stays until the dispatch_spawn port
+A	cursor-agent create-chat returned no stdout; no chat id was captured	py=cli/src/fno/agents/harnesses/cursor_agent.py;rs=crates/fno-agents/src/cursor_agent.rs	# CLASSIFY protocol|msg-twin|data: the keeper arm ports the python mint operator lines verbatim; the python leg stays until the dispatch_spawn port
+A	plan, search, build anything	py=cli/scripts/smoke/cursor-agent-keeper-journey.py|cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/keeper_spawn.rs	# CLASSIFY protocol|msg-twin|data: the port froze the ready marker; the python leg and the smoke journey keep it until the dispatch_spawn port

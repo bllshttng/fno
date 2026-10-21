@@ -4,7 +4,8 @@
 //! The budget ledger (`gh_budget.rs`) stamps `(ms, points)` and prunes at
 //! 60 s, so it can never answer the question an hourly outage asks: WHO
 //! drained the core bucket. This module appends one JSON line per
-//! non-exempt verdict to `machine_locks_dir()/github-request-spend.jsonl`,
+//! non-exempt verdict to the machine locks folder
+//! (`machine_locks_dir()`, file `github-request-spend.jsonl`),
 //! rotated at 8 MiB to one `.1` generation - about 22 hours of rows at the
 //! measured 5,000 lines an hour. Like the ledger, a journal failure never
 //! changes a verdict: append errors are ignored on the admission path.

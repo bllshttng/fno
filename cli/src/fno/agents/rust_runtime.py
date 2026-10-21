@@ -551,7 +551,7 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "fallback-chain": "Failover chain walk: JSON payload on stdin, the {eligible} answer on stdout; invoked by fno.recovery, not `fno agents` routing.",
     "authorized-merge": "The one authorized merge operation: JSON payload on stdin, one receipt (merged|armed|authorized|held|refused|head_changed|unknown|failed) on stdout; invoked by fno.rust_binary.verb_call from the merge and verify verbs, not `fno agents` routing.",
     "census": "One JSON row per long-lived process (daemon, keepers, mux servers) with its build-drift verdict; invoked by the native updater (crates/fno/src/doctor_update.rs), not `fno agents` routing. --workers [--json] [--subagents] [--pane-stats] answers `fno agents top`.",
-    "fleet-incident": "Durable fleet incident breaker: stop --reason T / clear --reason T write the machine-wide record; status [--json] reads it with its typed holds/admits reach (exit 0 clear, 1 stopped or unavailable); check [--scope spawns|tests|merges] is one scope's admission verdict (exit 0 clear, 90 stopped, 91 unavailable). The public surface is `fno agents incident`; the spawn/test/daemon gates read the file before their bypass branches, and the merge primitive refuses while merges are held. The fleet GitHub request budget rides this action as its gh-budget argument (one JSON payload on stdin, {op: admit|refused|status}; ledger at ~/.fno/locks/github-request-budget.json; called via fno.rust_binary.verb_call from pr/_quota.py).",
+    "fleet-incident": "Durable fleet incident breaker: stop --reason T / clear --reason T write the machine-wide record; status [--json] reads it with its typed holds/admits reach (exit 0 clear, 1 stopped or unavailable); check [--scope spawns|tests|merges] is one scope's admission verdict (exit 0 clear, 90 stopped, 91 unavailable). The public surface is `fno agents incident`; the spawn/test/daemon gates read the file before their bypass branches, and the merge primitive refuses while merges are held. The fleet GitHub request budget rides this action as its gh-budget argument (one JSON payload on stdin, {op: admit|refused|status}; ledger in the machine locks folder; called via fno.rust_binary.verb_call from pr/_quota.py).",
     "announce": "Fleet announcements: send --scope S [--subject T] [--expires 24h] [--urgent] reads the body on stdin and appends ONE kind=announce bus line (operator or promoted agent, 6/hour); read --session-id ID --boundary B renders unseen standing announcements once per session; status ID [--json] reads the sender's receipts. The public surface is `fno agents mail team`; hooks call the binary directly.",
     "compaction": "Compaction stamps: mark --session <id> writes the PreCompact stamp the provider-cap actor reads (best-effort, always exits 0); status --session <id> reads the stamp against the transcript's own boundary. The hook calls the binary directly.",
     "capabilities": "One harness's config-independent capability contract: <harness> [--json] prints map_version, harness, then that harness's table; an unknown harness exits 2 naming the declared list.",
@@ -1053,13 +1053,12 @@ def _is_role_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     return _has_flag(args, longs=("--role",))
 
 
-#: The keeper-lane harnesses whose thread spawn arm lives in the Python
-#: dispatch (``_lane_b_thread_spawn``) and nowhere in the Rust client: the
-#: client's thread match handles claude/codex/opencode and refuses every
-#: other name, so a keeper thread spawn that auto-routed would exit 2 with
-#: "fno has not built this harness's keeper lane spawn arm yet" - a false
-#: statement the moment the Python arm ships. Kept in sync with the rows by
-#: a parity test, like the client.rs verb list.
+#: The keeper-lane harnesses whose thread spawn arm lives in the Rust client
+#: (`keeper_spawn.rs`) in rust mode; the Python leg (`_lane_b_thread_spawn`)
+#: still serves python mode until the dispatch_spawn port deletes it. Kept in
+#: sync with the capability rows by a parity test, like the client.rs verb
+#: list. The py_spawn carve-out is gone (this list no longer routes), so the
+#: tuple remains only as the roster the parity test reads.
 _KEEPER_THREAD_HARNESSES = ("pi", "cursor-agent", "grok", "agy")
 
 
@@ -1697,7 +1696,6 @@ def make_agents_group_cls() -> type:
                     or _is_monitor_bearing_spawn(verb, args)
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_pane_substrate_spawn(verb, args)
-                    or _is_keeper_thread_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
                     or _is_provenance_bearing_spawn(verb, args)
                     or _is_output_format_bearing_spawn(verb, args)
