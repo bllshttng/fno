@@ -43,6 +43,20 @@ def fallback_proxy_dir() -> Path:
     return Path(tempfile.gettempdir()) / f"fno-{uid}" / "github-cli"
 
 
+def _bundled_helper(name: str) -> Optional[Path]:
+    """The wheel's co-located gh-transport binary (``fno/_bin/<name>``).
+
+    The Rust spawners reach the same file as sibling-of-their-own-exe; the
+    shim installer needs it spelled out, because a pip-only box has no
+    ``fno-gh-proxy`` on PATH and no venv script sibling."""
+    try:
+        import fno
+    except ImportError:
+        return None
+    candidate = Path(fno.__file__).with_name("_bin") / name
+    return candidate if candidate.is_file() else None
+
+
 def _is_wrapper(path: Path) -> bool:
     # A stock CI runner's gh is a compiled binary, not utf-8 text.
     try:
@@ -63,8 +77,15 @@ def ensure_proxy(
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
     link = root / "fno-gh-proxy"
-    helper = shutil.which("fno-gh-proxy") or str(Path(sys.executable).with_name("fno-gh-proxy"))
-    if not link.exists() and os.path.isfile(helper):
+    helper = shutil.which("fno-gh-proxy")
+    if not helper:
+        bundled = _bundled_helper("fno-gh-proxy")
+        if bundled is not None:
+            helper = str(bundled)
+    if not helper:
+        sibling = Path(sys.executable).with_name("fno-gh-proxy")
+        helper = str(sibling) if sibling.is_file() else None
+    if helper and not link.exists() and os.path.isfile(helper):
         link.unlink(missing_ok=True)
         with suppress(FileExistsError):
             link.symlink_to(helper)

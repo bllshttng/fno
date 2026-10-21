@@ -1506,13 +1506,21 @@ def _default_read_tracked_states(keys: set[str]):  # pragma: no cover
 
 
 def _default_graphql_remaining() -> tuple[Optional[int], Optional[str]]:  # pragma: no cover
-    from fno.rust_binary import verb_call
+    import subprocess
 
-    answer = verb_call(
-        "authorized-merge",
-        {"op": "status-quota-graphql", "cwd": os.getcwd()},
-        timeout=60,
-    )
+    from fno.rust_binary import VerbUnavailable, verb_call
+
+    try:
+        answer = verb_call(
+            "authorized-merge",
+            {"op": "status-quota-graphql", "cwd": os.getcwd()},
+            timeout=60,
+        )
+    except (VerbUnavailable, OSError, subprocess.TimeoutExpired):
+        # The unreadable instrument proceeds: the preflight treats None as
+        # no evidence of a low budget, and the retired _rest read answered
+        # (None, None) on the same degraded path instead of raising.
+        return None, None
     return answer.get("remaining"), answer.get("reset_iso")
 
 
