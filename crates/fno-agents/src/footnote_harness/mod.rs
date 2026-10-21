@@ -100,6 +100,8 @@ fn launch_spec(
             .ok()
             .filter(|v| !v.is_empty()),
         permission_mode: permission_mode.map(str::to_string),
+        fork_from: None,
+        fork_seq: None,
         price_cache: price_cache(),
         context_window: crate::context_window::window_for_model(model),
         endpoint,

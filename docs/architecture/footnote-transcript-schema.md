@@ -15,17 +15,20 @@ The orchestrator writes one `LaunchSpec` to the harness's stdin. Its `v` is 2. T
 | field | meaning |
 |---|---|
 | `v` | 2 |
-| `mode` | `create` or `resume` |
+| `mode` | `create`, `resume` or `fork` |
 | `fno_id` | the session id; the orchestrator mints it |
 | `session_dir`, `cwd` | where the session lives and runs |
 | `model`, `message`, `timeout_secs` | the run |
 | `node`, `plan_path` | the backlog work, if any |
 | `cost_cap_usd`, `wall_cap_minutes` | the caps |
 | `plugin_root`, `parent_session_id`, `permission_mode` | the context |
+| `fork_from`, `fork_seq` | the source session id and its last copied `seq`. Null unless `mode` is `fork` |
 | `price_cache`, `context_window` | the cost and compaction inputs |
 | `endpoint` | `base_url`, `key`, `bearer`, `wire`, `provider_id`, `route` |
 
 v2 adds `permission_mode`: `default`, `acceptEdits`, `plan`, `dontAsk` or `bypassPermissions`, from the capability row's `permission_modes`. Null runs the harness's own default. A resume sends the mode the registry row recorded at spawn. The key rides stdin, so it never reaches argv or the environment.
+
+A `fork` makes a new session `fno_id` from records `0` through `fork_seq` of the session `fork_from`. The source sidecar dir sits beside `session_dir`. The harness copies each record with its `seq`, `id` and `ts`, and sets its `session_id` to `fno_id`. In the header it also sets `data.session_id` to `fno_id` and fills `forked_from`. The source does not change. Then the harness resumes the new session with `message`. It refuses a `fork_seq` past the source's last record, and a `fno_id` that exists. It also refuses a fork with a null `fork_from` or `fork_seq`, or with no source session. It refuses either field on `create` or `resume`. A child session cannot be a fork source, because its transcript sits inside its parent's sidecar dir. A fork's `terminal` totals cover only the records after `fork_seq`, so the copied usage is not counted twice. fnh's headless launch refuses an unknown mode. Other harnesses and lanes can differ.
 
 ## 2. Session record, v1
 
@@ -51,7 +54,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 
 | type | data |
 |---|---|
-| `header` | `session_id`, `cwd`, `harness`, `commit`, `branch`, `fno_version`, `parent_session_id`, `forked_from` (reserved, null), `node`, `plugin_root`, `model`, `wire`, `system_prompt`, `hook_sources` (`[{path, kind, status, error}]`; kind `user`, `project`, `local` or `plugin`; status `absent`, `loaded` or `broken`), `permission_mode`, `permission_mode_source` (`launch_spec`, `settings:<path>`, `built_in`), `permission_sources` (`[{path, status, allow, deny, ask}]`, rule counts per file), `agent` (child sessions only: `{name, path, tools, model_requested}`), `mcp_servers` (one row per configured MCP server, see `mcp_servers`), `plugins` (`[{name, version, path, source, key, status, error}]` per plugin root, in load order; source `launch`, `footnote` (the `~/.footnote/plugins` drop-ins) or `claude`; status `loaded`, `shadowed` or `broken`; `key` is null on a `footnote` row) |
+| `header` | `session_id`, `cwd`, `harness`, `commit`, `branch`, `fno_version`, `parent_session_id`, `forked_from` (null, or `{session_id, seq, record_id}` of the last record a fork copied), `node`, `plugin_root`, `model`, `wire`, `system_prompt`, `hook_sources` (`[{path, kind, status, error}]`; kind `user`, `project`, `local` or `plugin`; status `absent`, `loaded` or `broken`), `permission_mode`, `permission_mode_source` (`launch_spec`, `settings:<path>`, `built_in`), `permission_sources` (`[{path, status, allow, deny, ask}]`, rule counts per file), `agent` (child sessions only: `{name, path, tools, model_requested}`), `mcp_servers` (one row per configured MCP server, see `mcp_servers`), `plugins` (`[{name, version, path, source, key, status, error}]` per plugin root, in load order; source `launch`, `footnote` (the `~/.footnote/plugins` drop-ins) or `claude`; status `loaded`, `shadowed` or `broken`; `key` is null on a `footnote` row) |
 | `turn_context` | `turn`, `model`, `cwd`, `spent_usd`, `wall_secs`, `cost_cap_usd`, `wall_cap_secs`, `permission_mode` |
 | `user_input` | `text`, `origin` (`operator`, `hook`, `skill`, `agent`, `footnotes`, `mail`). Origin `mail` also carries `sender_session_id`, `message_id` and `reply_to`. |
 | `model_request` | `turn`, `provider_id`, `endpoint_host`, `wire`, `route`, `requested_model`, `message_count`, `estimated_input_tokens`, `body_sha256`. Never the body, key or headers. |
@@ -87,7 +90,7 @@ Resume reads from the last `compaction` record forward. For a `tool_call` with n
 These let an orchestrator read liveness and cost as facts instead of guessing from a pid or a file's mtime.
 
 - `heartbeat` (ignorable): `state` (`working`, `waiting_permission`, `idle`), `turn`, `spent_usd`, `wall_secs`, `pid`. A harness writes one every 30 s while its process lives, idle included. It also writes one on each state change. A reader counts a session alive while its newest heartbeat is under 90 s old. A quiet record proves nothing either way: silence never proves a session dead.
-- `terminal`: `state` (`done`, `budget`, `refused`, `interrupted`, `error`), `reason`, `turns`, `tool_calls`, `input_tokens`, `output_tokens`, `cost_usd`. One per run. The totals cover the whole session record, so after a resume the newest `terminal` holds the session's spend so far.
+- `terminal`: `state` (`done`, `budget`, `refused`, `interrupted`, `error`), `reason`, `turns`, `tool_calls`, `input_tokens`, `output_tokens`, `cost_usd`. One per run. The totals cover the whole session record, so after a resume the newest `terminal` holds the session's spend so far. A fork counts only its records after `fork_seq`.
 
 fno reads them this way. When a footnote child exits, fno writes the newest `terminal` to its ledger as one entry per session. The node's cost rolls up from there. The entry's `termination_reason` maps the terminal state. `done` reads `Done`, `budget` reads `Budget`, and `interrupted` reads `Interrupted`. `refused` and `error` read `Aborted`. A merged PR never stamps onto a `Budget`, `Interrupted` or `Aborted` entry. A fresh heartbeat is a positive liveness marker for a footnote row.
 
