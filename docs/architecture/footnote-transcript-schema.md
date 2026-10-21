@@ -37,7 +37,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 - `<fno_id>/` is the sidecar dir. It refuses a second create: an id names one session, never a reused one.
 - `<fno_id>/<fno_id>.lock` holds an exclusive `flock` for the life of the one writer.
 - `<fno_id>/<fno_id>.store.db` is the SQLite event log and the truth for the session. The `.jsonl` record is its export, line for line, with the same bytes. It runs in WAL mode with `synchronous=FULL` and mode 0600. Its `-wal` and `-shm` files sit beside it. Readers read the `.jsonl` record, not this file.
-- `<fno_id>/<fno_id>.index.db` and `<fno_id>/<fno_id>.index.jsonl` are retired. fnh still writes them, but no reader opens them. Do not read them. A later fnh release stops the writes.
+- `<fno_id>/<fno_id>.index.db` and `<fno_id>/<fno_id>.index.jsonl` are retired. fnh still writes them, but no reader opens them. Do not read them.
 - `<fno_id>/<tool_call_uid>.out` holds a tool output over 8 KiB, whole.
 - `<fno_id>/<fno_id>.diag.log` holds diagnostics, rotated to `<fno_id>.diag.log.1`. The API key is redacted. It is never part of the record.
 
