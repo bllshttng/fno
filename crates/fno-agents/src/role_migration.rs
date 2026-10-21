@@ -1,11 +1,6 @@
 //! Upgrade stored role vocabulary before any runtime reader opens it.
 //! This is the sole compatibility boundary; normal readers use only current keys.
 
-/// The journal event type the succession check-in writes: the wire label
-/// predates the vocabulary migration and stays for store compatibility.
-/// This constant is the only quoting of it outside this boundary file.
-pub const SUCCESSION_CHECKIN_EVENT: &str = "reign_checkin";
-
 /// The JSON key old spawn stamps and event rows use for the leadless flag:
 /// the wire label predates the vocabulary migration and stays for row
 /// compatibility. Readers accept it beside `leadless`; this constant is the
