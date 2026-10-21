@@ -153,7 +153,7 @@ No harness exposes a human-origin discriminator, and ruling d-e1eec854 measured 
 
 ## The undeclared lane: any binary on PATH gets a pane
 
-`fno agents spawn -H <name> --substrate pane "<seed>" -- <init flags>` hosts any CLI binary on PATH, not only the harnesses with a capability row. The name must look like a binary name (`^[a-z][a-z0-9._-]{0,31}$`) and must resolve on PATH; each failed check refuses by naming it. fno is the viewport for the result, nothing more.
+`fno agents spawn -H <name> --as pane "<seed>" -- <init flags>` hosts any CLI binary on PATH, not only the harnesses with a capability row. The name must look like a binary name (`^[a-z][a-z0-9._-]{0,31}$`) and must resolve on PATH; each failed check refuses by naming it. fno is the viewport for the result, nothing more.
 
 An undeclared harness gets a mux pane, a registry row, a name, mail by pane-send, and the Drive viewport the moment `.fno/config.toml` declares `[harness.<name>.attach]`. That config block is the only further step. No code change, no roster edit. The lane withholds a thread lane, steering, and `fno agents mail ask`: those need the vendor's own protocol and must be measured (a row in the canonical `crates/fno-agents/src/harness_capabilities.toml`, from which the Python-tree and mux-crate copies are generated) before they can exist.
 
