@@ -557,7 +557,10 @@ except yaml.YAMLError as exc:
         # activity alone (PR open, CI green, reviewed) with nothing checking the
         # goal itself. loop-check holds DonePRGreen on the same absence. A docs
         # or research plan opts out by its domain.
-        if _fm_has '^[[:space:]]*done_probes:'; then
+        if _fm_has '^[[:space:]]*done_probes:[[:space:]]*\[[[:space:]]*\]' \
+            && _fm_has '^[[:space:]]*domain:[[:space:]]*code'; then
+            error "code plan declares an empty done_probes list; add a probe that proves the goal, not the activity"
+        elif _fm_has '^[[:space:]]*done_probes:'; then
             ok "declares done_probes (runtime evidence bound at ship)"
         elif _fm_has '^[[:space:]]*domain:[[:space:]]*code'; then
             error "code plan declares no done_probes; add a probe that proves the goal, not the activity (a docs or research plan sets domain: docs|research instead)"
