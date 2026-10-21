@@ -19,7 +19,6 @@
 //! `unplaced` and keeps no copy.
 
 use crate::store_remote::{Remote, SqlValue};
-use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -140,9 +139,8 @@ fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
 }
 
 /// Open nodes in this host's replica: id -> plan_path (may be empty).
-fn open_nodes(db: &Path) -> Result<BTreeMap<String, String>, String> {
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| e.to_string())?;
+fn open_nodes(graph: &Path) -> Result<BTreeMap<String, String>, String> {
+    let conn = crate::backlog::open(graph)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, COALESCE(plan_path, '') FROM nodes WHERE archived_at IS NULL \
@@ -243,16 +241,15 @@ fn push(
 /// One pass over this host's open nodes: push the bodies this host changed,
 /// write the bodies it lacks or has not touched since its last sync.
 pub(crate) fn sync_with(
-    db: &Path,
+    nodes: &BTreeMap<String, String>,
     remote: &Remote,
     host: &str,
     home: &Path,
 ) -> Result<Outcome, String> {
     ensure_tables(remote)?;
-    let nodes = open_nodes(db)?;
     let mut primary = primary_rows(remote, host)?;
     let mut out = Outcome::default();
-    for (node, plan_path) in &nodes {
+    for (node, plan_path) in nodes {
         let remote_row = primary.remove(node);
         let local = plan_file(plan_path, home)
             .filter(|p| p.is_file())
@@ -341,12 +338,7 @@ pub fn sync(graph: &Path) -> Result<Outcome, String> {
     let Some(remote) = crate::store_remote::share_backlog()? else {
         return Ok(Outcome::default());
     };
-    sync_with(
-        &crate::backlog::database_path(graph),
-        &remote,
-        &host_key(),
-        &home(),
-    )
+    sync_with(&open_nodes(graph)?, &remote, &host_key(), &home())
 }
 
 /// Target init's miss: `Ok(None)` when sharing is off.
@@ -362,23 +354,12 @@ mod tests {
     use super::*;
     use crate::store_remote::test_primary;
 
-    /// One host's replica: a nodes table holding `(id, plan_path)` rows.
-    fn replica(nodes: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("graph.db");
-        let conn = Connection::open(&db).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE nodes (id TEXT PRIMARY KEY, plan_path TEXT, status TEXT, archived_at TEXT)",
-        )
-        .unwrap();
-        for (id, plan) in nodes {
-            conn.execute(
-                "INSERT INTO nodes VALUES (?, NULLIF(?, ''), 'ready', NULL)",
-                rusqlite::params![id, plan],
-            )
-            .unwrap();
-        }
-        (dir, db)
+    /// One host's open nodes as `open_nodes` reads them: id -> plan_path.
+    fn replica(nodes: &[(&str, &str)]) -> BTreeMap<String, String> {
+        nodes
+            .iter()
+            .map(|(id, plan)| (id.to_string(), plan.to_string()))
+            .collect()
     }
 
     #[test]
@@ -390,12 +371,12 @@ mod tests {
         // A 64 KB body rides one statement.
         let body = format!("---\nstatus: ready\n---\n{}", "x".repeat(64 * 1024));
         write_atomic(&plan, &body).unwrap();
-        let (_a, a) = replica(&[("x-1", plan_s)]);
+        let a = replica(&[("x-1", plan_s)]);
         let out = sync_with(&a, &primary.remote, "a", home.path()).unwrap();
         assert_eq!(out.pushed, vec!["x-1"]);
         // B has no file, and its replica lost the binding.
         std::fs::remove_file(&plan).unwrap();
-        let (_b, b) = replica(&[("x-1", "")]);
+        let b = replica(&[("x-1", "")]);
         let out = sync_with(&b, &primary.remote, "b", home.path()).unwrap();
         assert_eq!(out.pulled, vec!["x-1"]);
         assert_eq!(sha(&std::fs::read_to_string(&plan).unwrap()), sha(&body));
@@ -411,7 +392,7 @@ mod tests {
         let plan = home.path().join("plans/p.md");
         let plan_s = plan.to_str().unwrap();
         write_atomic(&plan, "v0").unwrap();
-        let (_b, b) = replica(&[("x-1", plan_s)]);
+        let b = replica(&[("x-1", plan_s)]);
         sync_with(&b, &primary.remote, "b", home.path()).unwrap();
         // The peer pushes v1; B edits its own copy to v2 before it syncs.
         push(&primary.remote, "x-1", plan_s, "v1", "a").unwrap();
@@ -429,7 +410,7 @@ mod tests {
         // A rebind to a new path moves the carried body, never a standing conflict.
         let moved = home.path().join("plans/q.md");
         write_atomic(&moved, "v4").unwrap();
-        let (_c, c) = replica(&[("x-1", moved.to_str().unwrap())]);
+        let c = replica(&[("x-1", moved.to_str().unwrap())]);
         let out = sync_with(&c, &primary.remote, "b", home.path()).unwrap();
         assert_eq!(out.pushed, vec!["x-1"]);
         assert_eq!(
@@ -448,7 +429,7 @@ mod tests {
         );
         ensure_tables(&primary.remote).unwrap();
         push(&primary.remote, "x-1", "/elsewhere/plans/p.md", "v0", "a").unwrap();
-        let (_b, b) = replica(&[("x-1", "/elsewhere/plans/p.md")]);
+        let b = replica(&[("x-1", "/elsewhere/plans/p.md")]);
         let out = sync_with(&b, &primary.remote, "b", home.path()).unwrap();
         assert_eq!(out.unplaced, vec!["x-1"]);
         let err = fetch_with("x-1", &primary.remote, "b", home.path()).unwrap_err();
