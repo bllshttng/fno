@@ -163,8 +163,14 @@ fn retract_args(events: &Path) -> Vec<String> {
 
 /// The retraction row the verb appended: found by retraction_reason, then
 /// asserted field by field (the golden's .events file is the reference).
+/// Read through the event store the verb writes through: the raw .jsonl is
+/// a stray the store owns, so a read never serves the raw bytes.
 fn retraction_row(journal: &Path) -> serde_json::Value {
-    let text = fs::read_to_string(journal).unwrap();
+    let text = fno_agents::event_store::journal_text_checked(
+        journal,
+        &fno_agents::event_store::EventQuery::of_types(&["review_attestation"]),
+    )
+    .unwrap_or_else(|e| panic!("journal unreadable at {journal:?}: {e}"));
     let line = text
         .lines()
         .find(|l| l.contains("retraction_reason"))
@@ -217,9 +223,17 @@ fn retract_no_pass() {
         streams: vec![out, err],
     };
     common::assert_golden("attest_retract", "retract no pass", &rust, None);
-    // Nothing was appended: the refusal prints without writing a row.
-    let text = fs::read_to_string(&events).unwrap();
-    assert_eq!(text.lines().count(), 1, "no retraction may be appended");
+    // Nothing was appended: the refusal prints without writing a row, so
+    // the store view of the journal holds the seed and nothing more.
+    let text = fno_agents::event_store::journal_text_checked(
+        &events,
+        &fno_agents::event_store::EventQuery::of_types(&["review_attestation"]),
+    )
+    .unwrap_or_default();
+    assert!(
+        !text.contains("retraction_reason"),
+        "no retraction may be appended"
+    );
 }
 
 #[test]
