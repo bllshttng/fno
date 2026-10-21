@@ -818,4 +818,5 @@ fn open_file_paths(_pid: i32) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "codex_tests.rs"]
 mod codex_tests;
