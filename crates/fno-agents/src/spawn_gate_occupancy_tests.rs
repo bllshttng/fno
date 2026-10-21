@@ -105,7 +105,7 @@ impl OccupancyFixture {
             ],
         };
         let path_env = std::env::var_os("PATH").unwrap_or_default();
-        let mut paths: Vec<std::ffi::OsString> = vec![bin.into()];
+        let mut paths: Vec<PathBuf> = vec![bin];
         paths.extend(std::env::split_paths(&path_env));
         std::env::set_var("PATH", std::env::join_paths(&paths).unwrap());
         std::env::set_var("CLAUDE_DIR_OVERRIDE", &claude_dir);
