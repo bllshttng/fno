@@ -185,9 +185,8 @@ def _attributed_credential_dir(record: ProviderRecord) -> tuple[bool, Path | Non
 
     A snapshot is filed under a record id only when the bearer that produced it
     provably belongs to that record. Its own dir qualifies; so does the shared
-    slot when this record occupies it (``dir`` is None). Nothing else does, and
-    headroom degrades to UNKNOWN. The managed store's captured blob is never a
-    source: it goes stale and can duplicate across ids.
+    slot when this record occupies it (``dir`` is None). An off-slot managed
+    record falls to :func:`_stored_bearers`, proven per bearer.
     """
     own = credential_root(record)
     if own is not None:
@@ -280,6 +279,14 @@ def _bearer_verdict(record: ProviderRecord, bearer: str, now: float) -> str:
         from fno.adapters.providers import binding as _binding
         from fno.adapters.providers import managed
 
+        if not _attributed_credential_dir(record)[0]:
+            # A stored copy: ask the profile endpoint directly, so its proof
+            # never evicts the slot's one-entry principal cache.
+            want = managed.identity_key(managed.record_principal(record.id))
+            got_id = managed.identity_key(managed.principal_of_bearer(bearer)[0])
+            if want is None or got_id is None:
+                return "unprovable"
+            return "match" if got_id == want else "mismatch"
         got = _binding.resolve_account_binding(
             record, bearer=bearer, root=managed.store_root(), now=now
         )
@@ -303,7 +310,7 @@ def _claude_bearer_candidates(record: ProviderRecord) -> list[str]:
     """
     probeable, src = _attributed_credential_dir(record)
     if not probeable:
-        return []
+        return _stored_bearers(record)
     tokens: list[str] = []
     try:
         blobs = credential_blobs(record.harness, src)
@@ -314,6 +321,20 @@ def _claude_bearer_candidates(record: ProviderRecord) -> list[str]:
         if token and token not in tokens:
             tokens.append(token)
     return tokens
+
+
+def _stored_bearers(record: ProviderRecord) -> list[str]:
+    """An off-slot managed claude record's own captured credential.
+
+    The copy can go stale or hold another id's login, so it is only a candidate:
+    :func:`_bearer_verdict` proves its principal before any usage request.
+    """
+    if record.harness != "claude" or not _shares_the_slot(record):
+        return []
+    from fno.adapters.providers import managed
+
+    token = _token_from_blob(managed.read_blob(record.id))
+    return [token] if token else []
 
 
 def _iso_to_epoch(value: Any) -> float | None:
@@ -869,9 +890,8 @@ def probe_usage_detail(
         # slot may well belong to a different record than this one, in which
         # case this record correctly stays unknown and that one becomes
         # probeable on its own probe.
-        if not _reconcile_tainted_slot(record, now):
-            return None, "unattributed"
-        if not _attributed_credential_dir(record)[0]:
+        _reconcile_tainted_slot(record, now)
+        if not _attributed_credential_dir(record)[0] and not _stored_bearers(record):
             return None, "unattributed"
     try:
         if probe_key == "zai" and repo_root is not None:
