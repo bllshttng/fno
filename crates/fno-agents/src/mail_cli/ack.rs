@@ -130,7 +130,8 @@ pub fn run_ack(args: &[String]) -> i32 {
 /// The bus directory holding messages.jsonl, the shared reader env order
 /// (`intel::bus_log_path`): FNO_BUS_DIR, then FNO_INBOX_ROOT/.bus, then the
 /// state root's bus.
-fn bus_dir() -> Option<PathBuf> {
+/// `pub(crate)`: the reply leaf reads the same bus log through it.
+pub(crate) fn bus_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(dir));
     }
@@ -149,7 +150,8 @@ fn bus_dir() -> Option<PathBuf> {
 /// would refuse a target retained in a rotated segment and silently skip
 /// rotated rows when collecting the acked set. Malformed lines are skipped
 /// (the oracle warns; this reader stays silent).
-fn load_messages(bus: &Path) -> Vec<Value> {
+/// `pub(crate)`: the reply leaf reads the same retained segments through it.
+pub(crate) fn load_messages(bus: &Path) -> Vec<Value> {
     let mut segments: Vec<(u64, PathBuf)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(bus) {
         for entry in entries.flatten() {

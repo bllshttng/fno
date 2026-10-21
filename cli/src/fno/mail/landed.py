@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 from random import shuffle
 from time import monotonic
 from typing import Optional
@@ -19,7 +20,6 @@ from fno.bus.log import (
     record_landed,
     withdrawn_ids,
 )
-from fno.mail.reply_resolve import _transcript_path, mail_ids_in_transcript
 # The nag renders inside hooks/inject-mail-notify.sh's 2s timeout; bound reads.
 _LANDED_READ_BUDGET_S = 0.5
 _VERIFY_TAIL_BYTES = 4 << 20  # the just-sent id sits in the tail; peek bounds the same read
@@ -64,6 +64,38 @@ def _is_self_send(m: Envelope) -> bool:
     """Recipient IS the sender: its own transcript trivially carries the id."""
     to_session = (m.meta or {}).get("to_session")
     return bool(to_session) and to_session == m.from_session
+
+
+def mail_ids_in_transcript(harness: str, session_id: str) -> Optional[set[str]]:
+    """Every delivered-mail id in ``(harness, session_id)``'s own transcript -
+    a header line's middle token, or an old ``<fno_mail id="...">`` tag.
+    ``None`` (not an empty set) means a read failure, never evidence of
+    absence. Moved here from ``reply_resolve`` when the reply leaf ported;
+    the landed check proving a message reached a DIFFERENT session reuses it."""
+    from fno.mail.envelope import mail_shape
+
+    path = _transcript_path(harness, session_id)
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return set(mail_shape([text.replace('\\"', '"')])[0]["ids"])
+
+
+def _transcript_path(harness: str, session_id: str) -> Optional[Path]:
+    """Locate the invoking session's transcript, mirroring self_stamp's resolver
+    (claude: ``<projects>/*/<id>.jsonl``; codex: rollout embedding the id)."""
+    if harness == "claude":
+        from fno.agents.discover import default_projects_dir
+
+        return next(default_projects_dir().glob(f"*/{session_id}.jsonl"), None)
+    if harness == "codex":
+        from fno.agents.discover import default_codex_sessions_dir
+
+        return next(default_codex_sessions_dir().rglob(f"*{session_id}*.jsonl"), None)
+    return None
 
 
 def _landed_map(msgs: list[Envelope], budget_s: float | None = None) -> dict[str, bool | None]:

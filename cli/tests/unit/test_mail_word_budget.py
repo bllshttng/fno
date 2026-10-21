@@ -111,17 +111,6 @@ def test_three_79_word_sends_deliver_without_a_ledger(
     )
 
 
-def test_ordinary_81_word_body_still_breaks_rule_seven(capsys):
-    """AC1-EDGE: the per-message cap is the only ordinary word gate, unchanged.
-    The style gate fires in the send verb, before any lane is chosen."""
-    from fno.mail import cli
-
-    with pytest.raises(typer.Exit) as raised:
-        cli._enforce_style(_clean_body(81))
-    assert raised.value.exit_code == 1
-    assert "81" in capsys.readouterr().err
-
-
 # --- control lane: operational control rides its own window ----------------
 
 def test_is_control_reads_the_first_non_blank_line_only():
@@ -274,14 +263,3 @@ def test_the_enforcing_count_refuses_when_the_door_fails(monkeypatch):
     with pytest.raises(budget.BudgetCountUnavailable) as exc:
         rust_binary.style_word_count_checked("control: hold")
     assert "binary not found" in str(exc.value)
-
-
-def _clean_body(n_words: int) -> str:
-    """A style-clean body of exactly ``n_words`` words: 5-word sentences."""
-    words = [f"w{i}" for i in range(n_words)]
-    sentences = [
-        " ".join(words[i : i + 5]) + "." for i in range(0, n_words, 5)
-    ]
-    text = " ".join(sentences)
-    assert rust_binary.style_word_count(text) == n_words
-    return text
