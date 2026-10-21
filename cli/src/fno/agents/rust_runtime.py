@@ -1022,15 +1022,6 @@ def _is_role_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     return _has_flag(args, longs=("--role",))
 
 
-#: The keeper-lane harnesses whose thread spawn arm lives in the Rust client
-#: (`keeper_spawn.rs`) in rust mode; the Python leg (`_lane_b_thread_spawn`)
-#: still serves python mode until the dispatch_spawn port deletes it. Kept in
-#: sync with the capability rows by a parity test, like the client.rs verb
-#: list. The py_spawn carve-out is gone (this list no longer routes), so the
-#: tuple remains only as the roster the parity test reads.
-_KEEPER_THREAD_HARNESSES = ("pi", "cursor-agent", "grok", "agy")
-
-
 def _has_flag(
     args: Sequence[str], short: str = "", longs: tuple[str, ...] = ()
 ) -> bool:
