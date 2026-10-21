@@ -252,8 +252,10 @@ const FOOTNOTE_NO_MODEL: &str =
     "-H footnote needs a model: pass it after the fence, `-- -m <provider>/<model>`";
 
 /// The plan for one spawn: the wrapped argv, the pinned session id and the
-/// post-readiness seed policy.
-fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal> {
+/// post-readiness seed policy. `pub(crate)` for the row-8 golden-parity
+/// tests, which replay the committed captures through the same entry the
+/// arm trait uses.
+pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal> {
     let seed = seed_text(ctx);
     let uuid = match arm.harness {
         "cursor-agent" => {

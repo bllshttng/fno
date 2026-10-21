@@ -35,11 +35,12 @@ pub fn resolve_group_tab(requested: &str) -> (Option<String>, Option<String>) {
 /// Python leg's DispatchAskError line.
 pub fn group_tab_conflict_line(tab: &str) -> String {
     format!(
-        "--tab {tab:?} is a pane GROUP, which is placed by moving the pane's own tab. \
+        "--tab {} is a pane GROUP, which is placed by moving the pane's own tab. \
          It cannot combine with --split/--at, which put the pane in a tab it does not \
          own; the move would take that tab's other panes with it. Pass an explicit \
          --tab active|new|id:<n>|name:<s> to place into a specific tab, or drop \
-         --split/--at to use the group."
+         --split/--at to use the group.",
+        py_repr(tab)
     )
 }
 

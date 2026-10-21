@@ -2,7 +2,7 @@
 //! against the fakes the spine's injected `MuxCli` seam accepts.
 use super::*;
 
-fn out(code: i32, stdout: &str, stderr: &str) -> Output {
+pub(crate) fn out(code: i32, stdout: &str, stderr: &str) -> Output {
     use std::os::unix::process::ExitStatusExt;
     Output {
         status: std::process::ExitStatus::from_raw(code << 8),
@@ -13,9 +13,9 @@ fn out(code: i32, stdout: &str, stderr: &str) -> Output {
 
 /// A canned transport: `pane ls` answers `ls_ok` with `ls_stdout`; every
 /// other call is a `pane kill` answered from the kill fields.
-struct FakeMux {
-    ls_ok: bool,
-    ls_stdout: String,
+pub(crate) struct FakeMux {
+    pub ls_ok: bool,
+    pub ls_stdout: String,
     kill_ok: bool,
     kill_stdout: String,
     kill_stderr: String,

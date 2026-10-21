@@ -1431,3 +1431,7 @@ impl PaneReceipt {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "row8_tests.rs"]
+mod row8_tests;
