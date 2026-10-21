@@ -582,7 +582,7 @@ fn target_seed_node(seed: &str) -> Option<String> {
 
 /// The slug of the node `token` names (id first, then slug), else None.
 fn node_slug(token: &str) -> Option<String> {
-    let path = crate::graph_get::default_graph_path();
+    let path = crate::graph_get::graph_path_for(std::path::Path::new("."));
     let by_id = crate::backlog::RowQuery {
         filter: crate::backlog::api::NodeFilter {
             id_in: Some(vec![token.to_string()]),
