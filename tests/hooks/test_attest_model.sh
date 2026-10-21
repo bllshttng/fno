@@ -130,8 +130,12 @@ OUT="$(run_hook_env "" "https://open.bigmodel.cn/api/anthropic" "sk-ant-oat-xxxx
 echo "$OUT" | grep -q "OAuth" && pass "oat token on tier-default-only route -> OAuth warning" \
   || fail "expected OAuth warning on tier-default-only route, got: $OUT"
 
-# 6. Sidecar recorded the intended identity.
-[[ -f "$HOME/.fno/attest/${SID}.json" ]] && pass "sidecar written" || fail "sidecar missing"
+# 6. Sidecar recorded the intended identity. The read follows the layout
+#    table through the same door the hook writes through; the marked
+#    fallback covers a runner whose fno-agents predates the door.
+SIDECAR="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${SID}.json" --root "$HOME/.fno" 2>/dev/null || true)"
+[[ -n "$SIDECAR" ]] || SIDECAR="$HOME/.fno/attest/${SID}.json" # state-root: legacy fallback
+[[ -f "$SIDECAR" ]] && pass "sidecar written" || fail "sidecar missing"
 
 # 7. Fail-open: garbage env still exits 0 and never blocks.
 OUT="$(run_hook "!!!bad model!!!" "not-a-url" "" 2>/dev/null)"; RC=$?

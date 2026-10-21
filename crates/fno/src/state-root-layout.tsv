@@ -122,7 +122,7 @@ session-names.json.lock	mux/session-names.json.lock	lock	mux
 # folder with a home still to be ruled, never a park entry.
 announce-cursors	state/announce-cursors	dir	daemon
 attention	state/attention	dir	daemon
-attest	attest	dir	daemon
+attest	state/attest	dir	daemon
 backups	backups	dir	daemon
 bin	bin	dir	daemon
 bus	bus	dir	daemon
@@ -145,11 +145,11 @@ operator-capture	operator-capture	dir	daemon
 pages	cache/pages	dir	daemon
 plugin-stage	plugin-stage	dir	daemon
 postmortems	postmortems	dir	daemon
-push-stamps	push-stamps	dir	daemon
+push-stamps	state/push-stamps	dir	daemon
 reclaim	state/reclaim	dir	daemon
-retro-pending	retro-pending	dir	daemon
-review-invocations	review-invocations	dir	daemon
-route-settings	route-settings	dir	daemon
+retro-pending	state/retro-pending	dir	daemon
+review-invocations	state/review-invocations	dir	daemon
+route-settings	state/route-settings	dir	daemon
 saved-sessions	saved-sessions	dir	daemon
 validity-decks	validity-decks	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
