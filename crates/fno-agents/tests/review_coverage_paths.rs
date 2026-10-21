@@ -91,7 +91,7 @@ fn path_table() -> Vec<(&'static str, &'static str, ProducerReach)> {
             ),
         ),
         (
-            "a human running the verb by hand",
+            "a human running the command by hand",
             "fno-agents review-coverage",
             ProducerReach::Reachable,
         ),
@@ -283,7 +283,7 @@ fn every_reachable_path_produces_an_event() {
                         );
                         proven += 1;
                     }
-                    "a human running the verb by hand" => {
+                    "a human running the command by hand" => {
                         let parent = TempDir::new().unwrap();
                         let (cwd, project, global, gh, git) = fixture(parent.path(), "verb");
                         let args: Vec<String> = vec![
@@ -302,7 +302,7 @@ fn every_reachable_path_produces_an_event() {
                         assert_eq!(code, 0, "{json}");
                         assert!(
                             coverage_exists(&project) || coverage_exists(&global),
-                            "verb path emitted no coverage event"
+                            "command path emitted no coverage event"
                         );
                         assert_eq!(
                             coverage_review_state(&project)
@@ -364,7 +364,7 @@ fn new_reader_sites_must_join_the_table() {
 
     // Python readers: the pr package is the consumer surface. Every file that
     // reads the event must be a table row, and the two gate rows must route
-    // through the shared recompute helper (the verb invocation), not around it.
+    // through the shared recompute helper (the command invocation), not around it.
     let pr_dir = repo_root.join("cli/src/fno/pr");
     let mut reader_files: Vec<String> = Vec::new();
     for entry in fs::read_dir(&pr_dir).unwrap() {
@@ -390,7 +390,7 @@ fn new_reader_sites_must_join_the_table() {
     // _reviews.py owns the last Python reader surface (the sidecar log and
     // graph reads). The gates are native: the merge decision reads the
     // verdict in process (merge_gates::coverage_gate) and the coverage-check
-    // verb forwards to the native operand, so this scan sweeps Python only
+    // command forwards to the native operand, so this scan sweeps Python only
     // for NEW readers. Anything else reading the event is a NEW path: it
     // must join the table here (and get a producer or a safe-direction
     // reason).
@@ -424,9 +424,9 @@ fn new_reader_sites_must_join_the_table() {
 
 /// Row-to-path: a row may not name a path that does not exist. The other two
 /// tests prove reachable rows produce events and readers join the table; this
-/// closes the third direction - a SafeDirection row naming a fictitious verb
+/// closes the third direction - a SafeDirection row naming a fictitious command
 /// or symbol passed both, because nothing checked the row's own path exists
-/// (the PR 917 dual-review finding: a row named a verb that existed on main
+/// (the PR 917 dual-review finding: a row named a command that existed on main
 /// but not on the branch the row was written for, and the drift-catcher could
 /// never fire).
 #[test]
@@ -444,10 +444,10 @@ fn every_table_row_names_a_path_that_exists() {
 
     for (path_name, _, _) in path_table() {
         if let Some(rest) = path_name.strip_prefix("fno do pr ") {
-            let verb = rest.split_whitespace().next().unwrap_or("");
+            let command = rest.split_whitespace().next().unwrap_or("");
             assert!(
-                !verb.is_empty() && cli.contains(&format!("\"{verb}\"")),
-                "row '{path_name}' names verb '{verb}' that cli/src/fno/pr/cli.py does not register"
+                !command.is_empty() && cli.contains(&format!("\"{command}\"")),
+                "row '{path_name}' names command '{command}' that cli/src/fno/pr/cli.py does not register"
             );
             continue;
         }

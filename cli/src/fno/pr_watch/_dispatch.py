@@ -156,7 +156,7 @@ def _finish_queue_merge(repo_dir: Path, pr: int, emit: Callable) -> None:
     This tick is the detector that sees the confirmed merge, so it pays the step
     here rather than growing a second watcher or a second cleanup store.
 
-    The owner is the merge verb's own ``_post_merge_remote_delete``: idempotent
+    The owner is the merge command's own ``_post_merge_remote_delete``: idempotent
     (an already-gone ref is the requested end state), fork-safe (it deletes only
     from the PR's verified BASE repo, and only when the head repo is that same
     repo), and gated on ``auto_merge.delete_branch_on_merge``. Local branches
@@ -279,12 +279,12 @@ def _delivery_state_path(store_path: Optional[Path]) -> Path:
 _ENV_SEAM = "PR_WATCH_FIRE_CMD"
 _DEFAULT_MODEL = "claude-haiku-4-5"
 
-# Per-verb wall-clock ceiling for the headless review fire. A launchd tick never
+# Per-command wall-clock ceiling for the headless review fire. A launchd tick never
 # overlaps, so an unbounded child call wedges every future tick forever;
 # this bound turns a hung fire into a normal failed dispatch the retry/park
 # machinery already handles. The post-merge ritual no longer fires here: pr-watch
-# runs ``fno do pr ritual`` directly, and that verb owns its own judgment leg.
-_TIMEOUT_FOR_VERB: dict[str, float] = {"check": 180.0}
+# runs ``fno do pr ritual`` directly, and that command owns its own judgment leg.
+_TIMEOUT_FOR_COMMAND: dict[str, float] = {"check": 180.0}
 _DEFAULT_FIRE_TIMEOUT = 300.0
 _SPAWN_TIMEOUT_GRACE = 30.0
 # The dispatch loop's two costs are different orders: a rich read (gh pr view,
@@ -310,7 +310,7 @@ def _admission_refused_rcs() -> tuple[int, ...]:
 
 
 def fire_skill(
-    verb: Literal["check"],
+    command: Literal["check"],
     pr_number: int,
     repo_dir: Path,
     *,
@@ -335,13 +335,13 @@ def fire_skill(
 
     This is the review (``check``) fire only. The post-merge ritual no longer
     fires here: pr-watch runs ``fno do pr ritual <n> --autonomous`` directly, and
-    that verb owns its own conditional headless judgment leg - so fire_skill
+    that command owns its own conditional headless judgment leg - so fire_skill
     carries no merged branch, no post-merge model role, and no whole-ritual
     prompt (AC1-HP, AC10-EDGE).
 
     ``timeout_s`` bounds the spawned worker so a hung claude cannot wedge the
     launchd tick forever ; when None it defaults via
-    ``_TIMEOUT_FOR_VERB``. The wrapper deadline includes grace so the canonical
+    ``_TIMEOUT_FOR_COMMAND``. The wrapper deadline includes grace so the canonical
     spawn can reap its child before this process reports failure. A timeout
     surfaces as a normal failed dispatch.
 
@@ -351,11 +351,11 @@ def fire_skill(
     if not node_id:
         log.warning(
             "pr-watch: PR #%d binds no graph node; refusing the %s fire ",
-            pr_number, verb,
+            pr_number, command,
         )
         return DispatchResult(ok=False, rc=-1, is_error=False, raw="")
     worker_timeout = (
-        timeout_s if timeout_s is not None else _TIMEOUT_FOR_VERB.get(verb, _DEFAULT_FIRE_TIMEOUT)
+        timeout_s if timeout_s is not None else _TIMEOUT_FOR_COMMAND.get(command, _DEFAULT_FIRE_TIMEOUT)
     )
     wrapper_timeout = worker_timeout + _SPAWN_TIMEOUT_GRACE
     seam_cmd = os.environ.get(env_seam)
@@ -379,7 +379,7 @@ def fire_skill(
             "--output-format",
             "json",
         ]
-        cmd.append(f"/fno:ship pr {verb} {pr_number}")
+        cmd.append(f"/fno:ship pr {command} {pr_number}")
 
     try:
         result = runner(
@@ -391,10 +391,10 @@ def fire_skill(
             timeout=wrapper_timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        log.warning("fire_skill %s #%d timed out: %s", verb, pr_number, exc)
+        log.warning("fire_skill %s #%d timed out: %s", command, pr_number, exc)
         return DispatchResult(ok=False, rc=-1, is_error=True, raw="")
     except OSError as exc:
-        log.warning("fire_skill %s #%d OSError: %s", verb, pr_number, exc)
+        log.warning("fire_skill %s #%d OSError: %s", command, pr_number, exc)
         return DispatchResult(ok=False, rc=-1, is_error=True, raw="")
 
     raw = result.stdout or ""
@@ -407,7 +407,7 @@ def fire_skill(
     if result.returncode != 0:
         log.warning(
             "fire_skill %s #%d rc=%d stderr=%s",
-            verb,
+            command,
             pr_number,
             result.returncode,
             (result.stderr or "").strip()[:200],
@@ -420,13 +420,13 @@ def fire_skill(
         if not isinstance(envelope, dict):
             envelope = {"is_error": True}
     except json.JSONDecodeError as exc:
-        log.warning("fire_skill %s #%d stdout not JSON: %s", verb, pr_number, exc)
+        log.warning("fire_skill %s #%d stdout not JSON: %s", command, pr_number, exc)
         return DispatchResult(ok=False, rc=result.returncode, is_error=True, raw=raw)
 
     is_error = bool(envelope.get("is_error", False))
     if is_error:
         log.warning(
-            "fire_skill %s #%d rc=0 but is_error=true (skill-level failure)", verb, pr_number
+            "fire_skill %s #%d rc=0 but is_error=true (skill-level failure)", command, pr_number
         )
     return DispatchResult(
         ok=not is_error,
@@ -491,7 +491,7 @@ def current_tick_phase() -> str:
 # The wall-clock deadline of the phase alarm the CLI's runner armed, as a
 # time.monotonic() stamp. Same shape as _tick_phase above: a module global a
 # record sets and deep legs read, so budget checks inside a phase (the
-# watchdog floors, the ritual verb timeout) see THEIR phase's remaining time
+# watchdog floors, the ritual command timeout) see THEIR phase's remaining time
 # instead of re-deriving the tick ceiling. None when no phase alarm is armed.
 _phase_deadline: Optional[float] = None
 
@@ -519,8 +519,8 @@ def _ritual_timeout() -> float:
 def _gh_budget_backoff_left() -> float:
     """Seconds left on the fleet gh budget's backoff; 0.0 when free or unreadable."""
     try:
-        from fno.rust_binary import verb_call
-        answer = verb_call("fleet-incident", {"op": "status"}, timeout=5)
+        from fno.rust_binary import command_call
+        answer = command_call("fleet-incident", {"op": "status"}, timeout=5)
         return max(0.0, float((answer or {}).get("backoff_remaining_s") or 0))
     except Exception:  # noqa: BLE001 - the budget protects the fleet, not the tick
         return 0.0
@@ -972,8 +972,8 @@ def _run_tick(
                 if obs.state == "OPEN" and obs.is_draft:
                     try:
                         from fno.paths import state_dir
-                        from fno.rust_binary import verb_call
-                        verb_call("graph-get", {"pr_draft_ready": {"flip": {
+                        from fno.rust_binary import command_call
+                        command_call("graph-get", {"pr_draft_ready": {"flip": {
                             "pr": cand.pr_number, "repo": cand.repo_slug, "node": cand.node_id,
                             "cwd": str(cand.repo_dir) if cand.repo_dir else None,
                             "journal": str(state_dir() / "events.jsonl")}}}, timeout=60)
@@ -1377,9 +1377,9 @@ def run_execute_queue(
                 # The operand door answers exit 0 with the flow receipt even
                 # when the merge held or failed; the flow's own exit rides the
                 # payload, and observed_head rides it for head-bound parking.
-                from fno.rust_binary import verb_call
+                from fno.rust_binary import command_call
 
-                receipt = verb_call(
+                receipt = command_call(
                     "authorized-merge",
                     {"op": "merge", "argv": [str(pr)],
                      "authority": "durable_grant", "cwd": str(cand.repo_dir)},
@@ -1507,18 +1507,18 @@ def _default_dispatch_ritual(cand: Any, obs: Any, fire_skill_fn: Callable) -> An
     post-merge-dispatch).
 
     The dispatcher decides warm/cold in one place, reserves an attributable
-    receipt, then either live-injects the ritual verb or self-execs it (no bg
+    receipt, then either live-injects the ritual command or self-execs it (no bg
     thread), deduped on the same per-merge-SHA marker reconcile uses. It reads
     ``post_merge.auto_run`` itself, fail closed. ``fire_skill_fn`` stays on the
     signature so the tick's ``dispatch_ritual_fn`` protocol is uniform.
-    VerbUnavailable raises: the tick logs one warning and the merge stays
+    CommandUnavailable raises: the tick logs one warning and the merge stays
     retryable, exactly like a failed dispatch.
     """
     from types import SimpleNamespace
 
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    out = verb_call(
+    out = command_call(
         ["pr-watch", "post-merge-dispatch"],
         {
             "pr_number": cand.pr_number,

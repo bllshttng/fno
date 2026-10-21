@@ -11,7 +11,7 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
                 && scope.is_some()
                 && payload["revive"].as_bool() != Some(true);
             let message = if typed {
-                let lead = crate::provider::render_verb_seed(
+                let lead = crate::provider::render_command_seed(
                     &format!("/fno:lead {}", scope.unwrap()),
                     payload["harness"].as_str().unwrap_or("claude"),
                 );

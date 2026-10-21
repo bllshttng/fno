@@ -4,7 +4,7 @@ Covers:
 - ``parse_files_to_modify`` for quick plans
 - ``find_collisions`` severity scoring + action inference
 - ``_load_thresholds`` layered config
-- ``fno backlog supersede`` CLI verb
+- ``fno backlog supersede`` CLI command
 - ``find_acknowledged_collisions`` resolved-collision reconciliation
 - ``fno backlog triage health`` aggregate report
 - ``superseded`` ``status`` derivation

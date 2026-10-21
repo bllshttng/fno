@@ -85,7 +85,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok());
 
-    // Skip the "loop-check" verb itself if present
+    // Skip the "loop-check" command itself if present
     let args = if args.first().map(|s| s.as_str()) == Some("loop-check") {
         &args[1..]
     } else {

@@ -2,7 +2,7 @@
 
 Acceptance criteria:
   AC3-EDGE: fno --help doesn't import any sub-app body
-  AC3-FR: no functional regression in existing verbs
+  AC3-FR: no functional regression in existing commands
   AC1-ERR: misconfigured lazy entry fails loud
   AC2-HP: fno --help lists all current subcommands
 """
@@ -108,7 +108,7 @@ _ADVERTISED_SUBCOMMANDS = [
 ]
 
 # A sample of the hidden tier - present under `help --all`, absent from `--help`.
-# Distinctive names only: short verbs (pr/cost/state) are substrings of ordinary
+# Distinctive names only: short commands (pr/cost/state) are substrings of ordinary
 # help prose, so a raw substring leak-check on them is unreliable. The old
 # sample (evals/carveout/scoreboard/stub-manifest) was all moved spellings,
 # which render nowhere after d-26002be8; do is unusable for the leak-check

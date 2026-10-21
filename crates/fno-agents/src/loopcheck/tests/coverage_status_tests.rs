@@ -1,11 +1,11 @@
 use super::*;
 
 #[test]
-fn the_published_status_never_names_a_harness_specific_verb() {
-    // The shared commit status is read by every harness. A claude verb
+fn the_published_status_never_names_a_harness_specific_command() {
+    // The shared commit status is read by every harness. A claude command
     // baked in by a claude publisher is a command a codex worker does not
     // have. Measured: the live status on this very PR named the claude
-    // verb at a concrete <level>, because a claude session published it.
+    // command at a concrete <level>, because a claude session published it.
     let d = uncovered_status_description("8411cde1aa2b0000000000000000000000000000", 1201);
 
     // The POSITIVE marker first: assert the neutral command IS present.
@@ -18,12 +18,12 @@ fn the_published_status_never_names_a_harness_specific_verb() {
     assert!(d.contains("8411cde1"), "must name the uncovered head: {d}");
 
     // Then the absence, pinned per harness so a future edit that reaches
-    // for the publisher's own verb fails here rather than in a codex
+    // for the publisher's own command fails here rather than in a codex
     // worker's session.
-    for verb in ["/code-review", "/review", "/fno:review", "--comment"] {
+    for command in ["/code-review", "/review", "/fno:review", "--comment"] {
         assert!(
-            !d.contains(verb),
-            "harness-specific verb `{verb}` leaked into the shared status: {d}"
+            !d.contains(command),
+            "harness-specific command `{command}` leaked into the shared status: {d}"
         );
     }
 
@@ -41,7 +41,7 @@ fn coverage_instrument_status_is_pending_only_when_the_read_is_unknown() {
     let unknown = coverage_instrument_status(&Coverage::Unknown, "abc123456789");
     assert_eq!(unknown.0, "pending");
     assert!(unknown.1.contains("coverage read unavailable"));
-    assert!(unknown.1.contains("retry the review verb"));
+    assert!(unknown.1.contains("retry the review command"));
 
     let known = coverage_instrument_status(&Coverage::Covered(0), "abc123456789");
     assert_eq!(known.0, "success");

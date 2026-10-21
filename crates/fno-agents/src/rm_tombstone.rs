@@ -10,7 +10,7 @@
 //! design: the file is the contract, not a shared constant. Expired entries
 //! are pruned on write; a failed write surfaces on the rm receipt, never a
 //! refused removal. The row's transport short id, name and cwd ride
-//! along on each record, so the stop verb resolves a just-removed
+//! along on each record, so the stop command resolves a just-removed
 //! session straight from the tombstone without the adopting heal whose
 //! grace window refuses exactly this session.
 

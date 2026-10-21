@@ -293,7 +293,7 @@ def enabled(monkeypatch, tmp_path):
     # recovery, so the probe is UNAVAILABLE (flake None, hold skipped); the
     # rerun tests override with their own answer.
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(None),
     )
     # The graph_json hermeticity pin this fixture used to carry is closed at
@@ -302,29 +302,29 @@ def enabled(monkeypatch, tmp_path):
 
 
 def _door_stub(answer, verdict=None):
-    """A verb_call fake answering the status-rerun ask (None = the probe is
+    """A command_call fake answering the status-rerun ask (None = the probe is
     unavailable, the fail-open old default) and, when `verdict` is given, the
     native coverage gate's verdict door; every other ask rides the real
     transport."""
     import fno.rust_binary as rust_binary
 
-    real = rust_binary.verb_call
+    real = rust_binary.command_call
 
-    def _fake(verb, payload, unavailable=None, **kw):
+    def _fake(command, payload, unavailable=None, **kw):
         if (
             verdict is not None
-            and verb == ["review-coverage", "op"]
+            and command == ["review-coverage", "op"]
             and isinstance(payload, dict)
             and payload.get("op") == "verdict"
         ):
             return verdict
         if isinstance(payload, dict) and payload.get("op") == "status-rerun":
             if answer is None:
-                raise (unavailable or rust_binary.VerbUnavailable)(
+                raise (unavailable or rust_binary.CommandUnavailable)(
                     "status-rerun unavailable in tests"
                 )
             return answer
-        return real(verb, payload, unavailable=unavailable, **kw)
+        return real(command, payload, unavailable=unavailable, **kw)
 
     return _fake
 
@@ -393,7 +393,7 @@ def test_merge_immediate_exit_0_uses_pr_worktree(enabled, monkeypatch, capsys, t
 
 def _flake_recovered(monkeypatch, failed=None):
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub({"recovered": True, "failed": failed or ["smoke-pytest (7)"]}),
     )
 
@@ -442,7 +442,7 @@ def _owner_answers(monkeypatch, outcome, detail):
 
 
 def _capture_posture(monkeypatch, outcome="merged"):
-    """Record the posture this verb hands the authorized-merge owner."""
+    """Record the posture this command hands the authorized-merge owner."""
     seen: dict = {}
 
     def _authorized(pr_number, repo, *, effect, approved, source, **kwargs):
@@ -460,7 +460,7 @@ def _capture_posture(monkeypatch, outcome="merged"):
 
 # The posture fold itself - which grant beats which refusal, and the wording of
 # each refusal - belongs to the authorized-merge owner, and is under test in
-# crates/fno-agents/src/authorized_merge.rs. What this verb still owns is
+# crates/fno-agents/src/authorized_merge.rs. What this command still owns is
 # READING the manifest and handing the right posture down, so that is what these
 # pin: a wrong posture here would make the owner decide correctly about the
 # wrong run.
@@ -534,7 +534,7 @@ def test_a_landed_merge_with_a_cleanup_failure_reports_partial(
     """Primary specimen (PR #742). The server-side merge landed and a step
     around it did not - a local branch delete a worktree holds, a base-branch
     checkout, a remote delete. The owner reports that in ``cleanup_failure``;
-    this verb must render it as partial with the reason visible, never as
+    this command must render it as partial with the reason visible, never as
     failed, or an autonomous caller retries a merge that already happened.
     """
     (tmp_path / ".fno").mkdir()
@@ -732,7 +732,7 @@ def _rollup(*conclusions, head="deadbeefcafe"):
 class _AutoMergeRejectingRun(FakeRun):
     """Serves a rollup (default green) and models a racing head at merge time.
 
-    Name predates x-9d11, when gh rejected ``--auto``; the verb no longer sends
+    Name predates x-9d11, when gh rejected ``--auto``; the command no longer sends
     it, so this fake now exists for the checks-verdict fixtures and the
     head-moved discrimination below."""
 
@@ -913,7 +913,7 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
     # The native gate answers covered, pinned to the covered head, so the pin
     # rides down to the merge ask.
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(None, _gate_verdict("coveredSHA")),
     )
     fake = _AutoMergeRejectingRun(
@@ -937,7 +937,7 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
 # consults it is the authorized-merge owner - the same one the terminal's
 # auto-merge arm asks, which is what closed the hole where a queue armed at the
 # terminal shipped code a review was still fixing. What is under test here is
-# that this verb renders the owner's hold, and renders it before any merge.
+# that this command renders the owner's hold, and renders it before any merge.
 
 
 def _held_owner(monkeypatch, reason):
@@ -973,12 +973,12 @@ def test_an_unreachable_owner_holds_rather_than_merging(monkeypatch, capsys, tmp
     The owner lives in the fno-agents binary. An absent or broken one answers
     `unknown`, and `unknown` must never render as a clear merge.
     """
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
-    def _boom(verb, payload, unavailable=VerbUnavailable, **_kw):
+    def _boom(command, payload, unavailable=CommandUnavailable, **_kw):
         raise unavailable("the fno-agents binary was not found")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _boom)
+    monkeypatch.setattr("fno.rust_binary.command_call", _boom)
     monkeypatch.setattr(_merge, "_authorized_merge", _REAL_AUTHORIZED_MERGE)
     receipt = _merge._authorized_merge(
         42, str(tmp_path), effect="merge", approved=None, source=""
@@ -1158,7 +1158,7 @@ def test_early_release_frees_the_lock_for_a_successor(enabled, monkeypatch, tmp_
         assert state == "acquired" and release_now is not None
         assert held_detail is None
         release_now()
-        # the freed lock is takeable right now, before the merge verb returns
+        # the freed lock is takeable right now, before the merge command returns
         acquire_claim(_lock_key(), "pr-merge:successor", reason="next merger")
     assert claim_status(_lock_key()).get("holder") == "pr-merge:successor", (
         "the finally release must not free the successor's claim"
@@ -1216,7 +1216,7 @@ def test_populated_graph_closure_fetch_does_not_hold_the_merge(
     # The native gate answers covered, pinned to the covered head the merge
     # ask carries down.
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(None, _gate_verdict("coveredSHA")),
     )
     # One cwd-less done entry: enough to make the graph non-empty for every
@@ -1237,7 +1237,7 @@ def test_populated_graph_closure_fetch_does_not_hold_the_merge(
 def test_an_open_pr_still_holds_as_unreviewed(enabled, monkeypatch, capsys, tmp_path):
     """The exemption must not become a hole: an OPEN uncovered PR still holds
     as unreviewed - by decide's review verdict now (x-53c5), whose receipt the
-    verb renders verbatim."""
+    command renders verbatim."""
     fake = FakeRun(gh_merge=Result(0, "Merged pull request", ""), toplevel=str(tmp_path))
     monkeypatch.setattr(_merge, "run", fake)
     monkeypatch.setattr(

@@ -1,6 +1,6 @@
 """Tests for the `context:` line on `fno whoami` (x-7685, US1/AC2/AC3).
 
-The line is an enrichment of the confused-agent recovery verb, so it follows
+The line is an enrichment of the confused-agent recovery command, so it follows
 the rule every other enrichment in whoami follows: it must never add a failure
 mode. A None reading (fresh session, no assistant usage row, unreadable store)
 OMITS the line entirely, keeping a fresh SessionStart byte-for-byte unchanged

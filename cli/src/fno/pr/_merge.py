@@ -57,7 +57,7 @@ POST_MERGE_RECONCILE_TIMEOUT_S = 300.0
 # Scope: the lock covers the IMMEDIATE merge path. There is no
 # queued lane anymore (dropped --auto): require_checks_pass is enforced
 # by reading the checks under the lock and merging only on green, so every
-# merge this verb performs is serialized here.
+# merge this command performs is serialized here.
 _MERGE_LOCK_WAIT_S = 120
 _MERGE_LOCK_POLL_S = 5
 
@@ -116,7 +116,7 @@ def _git(args: Sequence[str], cwd: str):
 
 
 def _load_auto_merge(repo: str):
-    # Seeded at the repo this verb merges (ad11eb340's explicit-repo semantics):
+    # Seeded at the repo this command merges (ad11eb340's explicit-repo semantics):
     # the ambient lens can answer a pinned FNO_CONFIG or a foreign cwd, which
     # is not what the durable-grant arm below reads.
     from fno.config import load_settings_for_repo
@@ -162,7 +162,7 @@ def _manifest_file(cwd: str) -> str:
 def _closes_quoted_scalar(raw: str) -> bool:
     """Whether the text after ``key:`` ends its quoted scalar on this line.
 
-    Mirrors ``line_closes_quoted_scalar`` in client_verbs.rs: a trailing
+    Mirrors ``line_closes_quoted_scalar`` in client_commands.rs: a trailing
     quote with no preceding backslash closes, because init prepends exactly
     one backslash to every user quote.
     """
@@ -172,7 +172,7 @@ def _closes_quoted_scalar(raw: str) -> bool:
 
 
 def _approved_true(value: Optional[str]) -> bool:
-    """The truthy spellings this verb accepts for ``auto_merge_approved``.
+    """The truthy spellings this command accepts for ``auto_merge_approved``.
     One helper, not a re-typed literal per read inside ``run_merge``. The
     posture predicate is mirrored, not shared: ``finalize.rs`` accepts only
     the literal ``true`` and the git-protection hook carries its own copy of
@@ -191,7 +191,7 @@ def _read_state_field(state_file: str, field: str) -> str:
     strip that could mangle a value starting/ending with a quote; gemini on
     PR #524). Lines inside a multi-line quoted scalar are VALUE, not fields:
     a target description containing a `harness:` line must not read as the
-    run's harness - the forgery parse_manifest_identity in client_verbs.rs
+    run's harness - the forgery parse_manifest_identity in client_commands.rs
     already guards on the Rust side.
     """
     try:
@@ -235,18 +235,18 @@ def _read_state_field(state_file: str, field: str) -> str:
 def _resolve_pr_worktree(pr_number: int, repo: str) -> str:
     """The PR's local worktree path, or ``""`` when the branch has none here.
 
-    ``""`` is an answer, not a failure: the verb's exit-3 refusal is a
+    ``""`` is an answer, not a failure: the command's exit-3 refusal is a
     successful enumeration of a PR that is simply not checked out locally,
     and a PR with no local worktree carries no worktree hold. Callers read
     it as "no hold" - staying in their own checkout, whose worktree list
     still enumerates every worktree of the repo - never as a blocker. Any
     other failure still raises: a dead instrument blocks.
     """
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        return str(verb_call("pr-worktree", {"pr": pr_number, "cwd": repo})["worktree"])
-    except VerbUnavailable as exc:
+        return str(command_call("pr-worktree", {"pr": pr_number, "cwd": repo})["worktree"])
+    except CommandUnavailable as exc:
         if exc.returncode == 3 and "no local worktree" in str(exc):
             return ""
         raise
@@ -261,7 +261,7 @@ def _pr_head_ref_and_oid(
     which bills the per-user GraphQL quota every watcher on the machine
     shares. The state rides along because it is already in the payload, and the
     in-flight guard needs it to exempt a terminal PR. ``runner`` is injectable
-    so the acquire verb, which runs inside a PreToolUse hook, can bound the
+    so the acquire command, which runs inside a PreToolUse hook, can bound the
     network call it sits inside.
     """
     from fno.pr._rest import fetch_pr_info_rest
@@ -924,7 +924,7 @@ def _emit_merge_cleanup_request(
     Every call writes exactly one journal row, a request or a skip. Silence
     is not a legal outcome: a merge that mints nothing must say why."""
     from fno.graph._reconcile import repo_slug_from_url
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     res = _gh(["pr", "view", str(pr_number), "--json", "state,headRefName,url,mergedAt"], cwd)
     if not res.ok:
@@ -962,7 +962,7 @@ def _emit_merge_cleanup_request(
     # the import that kept a second implementation alive went with it.
     worktree = cwd if (Path(cwd) / ".git").is_file() else None
     try:
-        verb_call(
+        command_call(
             ["pr-watch", "merge-cleanup-mint"],
             {
                 "repo": repo,
@@ -977,7 +977,7 @@ def _emit_merge_cleanup_request(
                 "merged_at": meta.get("mergedAt") or None,
             },
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         # Silence is not a legal outcome: the mint's own refusal is a skip row
         # naming it, the same "every call writes a request or a skip" contract.
         _emit_merge_cleanup_skip(
@@ -1314,7 +1314,7 @@ def run_merge(
     # chain (hooks/helpers/init-target-state.sh, references/auto-merge.md). A
     # `false` is a per-run REFUSAL (--no-merge, the `/target bg` injected
     # default via harness_map._AUTONOMOUS_COMMAND, TARGET_NO_MERGE) and
-    # outranks every grant: without this the sanctioned verb is a WEAKER gate
+    # outranks every grant: without this the sanctioned command is a WEAKER gate
     # than raw `gh pr merge`, which the git-protection hook already guards on
     # this same field. A `true` with `auto_merge_source: env-target-auto-merge`
     # is an explicit per-run GRANT (TARGET_AUTO_MERGE=1 at spawn) that
@@ -1361,7 +1361,7 @@ def run_merge(
             )
             return 2
     # The manifest posture, the standing switch and the automerge floor are the
-    # authorized-merge owner's to fold, so this verb and the terminal arm cannot
+    # authorized-merge owner's to fold, so this command and the terminal arm cannot
     # disagree about who may merge. What is resolved here is only WHICH posture
     # to hand it: the durable arm above replaces the manifest for a parked
     # worker, and everything else rides the manifest fields as written.
@@ -1386,15 +1386,15 @@ def run_merge(
 
     # (2a) Coverage read: the pin and the published receipt. The refusal is
     # decide's now.
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        gate = verb_call(
+        gate = command_call(
             ["review-coverage", "op"],
             {"op": "verdict", "pr": int(pr_number), "cwd": repo, "recompute": True},
             timeout=300,
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         gate = {
             "state": 4,
             "refusal": "",
@@ -1416,9 +1416,9 @@ def run_merge(
     flake = None
     if auto_merge.require_checks_pass:
         try:
-            from fno.rust_binary import verb_call
+            from fno.rust_binary import command_call
 
-            flake = verb_call("authorized-merge", {"op": "status-rerun", "cwd": repo, "pr": int(pr_number), "sha": covered_head or ""}, timeout=120)
+            flake = command_call("authorized-merge", {"op": "status-rerun", "cwd": repo, "pr": int(pr_number), "sha": covered_head or ""}, timeout=120)
         except Exception as exc:  # noqa: BLE001 - the probe must not wedge a merge
             sys.stderr.write(
                 f"pr-merge: rerun-recovery probe unavailable ({exc}); "
@@ -1470,7 +1470,7 @@ def covered_pin(pr_number: int, repo: str, covered_head: str) -> str:
 
     An unreadable head stays empty on purpose. The owner reads that as unknown
     and holds, which is the same fail-closed answer every other unpinnable
-    merge gets. Shared by the merge verb and the verify remediation, because a
+    merge gets. Shared by the merge command and the verify remediation, because a
     second copy of this rule is a second chance for the two to disagree.
     """
     if covered_head:
@@ -1497,13 +1497,13 @@ def _authorized_merge(
 
     The decision - posture fold, standing switch, automerge floor, dispatch
     hold, in-flight review hold, head pin, base lineage - lives in
-    ``crates/fno-agents/src/authorized_merge.rs`` so this verb and the terminal
+    ``crates/fno-agents/src/authorized_merge.rs`` so this command and the terminal
     arm cannot answer it differently. Python is the transport and the renderer.
 
     An unavailable binary is reported as ``unknown``, never as a clear answer: a
     merge whose authorization could not be read has not been authorized.
     """
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     payload = {
         "cwd": repo,
@@ -1524,9 +1524,9 @@ def _authorized_merge(
         # holds, base lineage and the checks verdict, each a `fno` cold start.
         # The door's 30s default reported it UNREACHABLE while it was merely
         # still running, and an unread authorization refuses the merge - so a
-        # slow network made this verb unable to merge at all.
-        return verb_call("authorized-merge", payload, timeout=timeout_s)
-    except VerbUnavailable as exc:
+        # slow network made this command unable to merge at all.
+        return command_call("authorized-merge", payload, timeout=timeout_s)
+    except CommandUnavailable as exc:
         return {
             "outcome": "unknown",
             "detail": (
@@ -1561,7 +1561,7 @@ def reason_after_outcome(reason: str) -> str:
 
 
 def _emit_authorized_outcome(pr_number: int, receipt: dict, strategy: str) -> int:
-    """Render one authorized-merge receipt onto this verb's surface."""
+    """Render one authorized-merge receipt onto this command's surface."""
     outcome = str(receipt.get("outcome") or "unknown")
     word, code, err = _OUTCOME_EMIT.get(outcome, ("held", 2, False))
     detail = str(receipt.get("detail") or "no detail")
@@ -1591,7 +1591,7 @@ def _do_merge(
     head pin, the already-armed stand-down, the checks verdict and the
     worktree-held recovery all live in the Rust owner, which the terminal's
     auto-merge arm calls too. What stays on this side is the coverage receipt
-    (a projection of this verb's own gate) and the post-merge follow-ups.
+    (a projection of this command's own gate) and the post-merge follow-ups.
     """
     strategy = auto_merge.merge_strategy
     ask = {
@@ -1606,7 +1606,7 @@ def _do_merge(
 
     # Authorize BEFORE publishing anything. The coverage status greens the head
     # for the web button, which enforces only the coverage context, so stamping
-    # it ahead of a refusal would open the door this verb is about to close.
+    # it ahead of a refusal would open the door this command is about to close.
     decision = _authorized_merge(pr_number, repo, decide_only=True, timeout_s=timeout_s, **ask)
     if decision.get("outcome") != "authorized":
         return _emit_authorized_outcome(pr_number, decision, strategy)

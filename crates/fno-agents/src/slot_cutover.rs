@@ -216,7 +216,7 @@ fn tick_once(
                 None,
             ),
             Decision::Cutover { from, to } => {
-                let result = crate::provider_cap_verbs::run_fno_output(
+                let result = crate::provider_cap_commands::run_fno_output(
                     &["config", "accounts", "use", &to, "--scope", "global"],
                     Some(config_cwd),
                     Duration::from_secs(30),

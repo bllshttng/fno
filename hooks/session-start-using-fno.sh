@@ -4,7 +4,7 @@
 #
 # It ensures every Claude session opened in a footnote-enabled project
 # starts with the two-surface preamble already loaded, so the agent knows
-# both /fno:* slash commands and the `fno <verb>` CLI exist from
+# both /fno:* slash commands and the `fno <command>` CLI exist from
 # turn one - even on a brand-new project or after a `clear` / `compact`.
 #
 # Modes:

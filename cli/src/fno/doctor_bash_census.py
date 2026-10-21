@@ -12,11 +12,11 @@ from fno.rust_binary import resolve_binary
 
 def bash_census_command(
     days: int = typer.Option(21, "--days", help="Window size in days (0 = every transcript)."),
-    allow: bool = typer.Option(False, "--allow", help="Print Bash(fno <verb>:*) allow lines."),
+    allow: bool = typer.Option(False, "--allow", help="Print Bash(fno <command>:*) allow lines."),
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit the report as one JSON object."),
     cwd: Optional[str] = typer.Option(None, "--cwd", help="Project to read. Default: cwd."),
 ) -> None:
-    """Bash-call compound/cd/heredoc shares and top command/verb tables. Exit 3 when empty."""
+    """Bash-call compound/cd/heredoc shares and top command/command tables. Exit 3 when empty."""
     binary = resolve_binary()
     if binary is None:
         typer.echo(

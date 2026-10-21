@@ -55,7 +55,7 @@ def ensure_task_rows(
 
     Pass ``task_ids`` when the caller already derived them. Re-parsing the
     plan here happens INSIDE the graph flock, where a parse error escapes as a
-    traceback instead of the named refusal every other task-verb failure gets.
+    traceback instead of the named refusal every other task-command failure gets.
     """
     raw = entry.get("tasks")
     if raw is not None and not isinstance(raw, list):

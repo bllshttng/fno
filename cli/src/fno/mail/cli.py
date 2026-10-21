@@ -4,7 +4,7 @@ One namespace over the jsonl-canon bus log. Publish appends a durable envelope;
 consume is a per-recipient cursor scan over the log; the per-recipient markdown
 thread is a derived render (see ``fno.inbox.store`` for the data model).
 This replaces the retired ``inbox`` namespace and the messaging half of
-``agents`` (whose send/inbox/ack verbs moved here).
+``agents`` (whose send/inbox/ack commands moved here).
 
 Commands:
     send           - publish a message to a peer or project (durable-first)
@@ -19,7 +19,7 @@ Commands:
     lint           - check thread render files for malformed shape
     rebuild-render - regenerate a recipient's render from the bus log
 
-Call shape (one rule, because the verbs used to disagree):
+Call shape (one rule, because the commands used to disagree):
     The message BODY is uniform across ``send`` and ``reply``. Both take it
     positionally, or via ``--body``, or via ``--body-file`` -- exactly one of the
     three, with two-at-once an explicit refusal rather than a precedence rule.
@@ -27,9 +27,9 @@ Call shape (one rule, because the verbs used to disagree):
     ``reply`` was flag-only until 2026-08-10, so the positional form that the
     skills taught (and that ``send`` accepts) exited 2 while click echoed the
     body back. An echoed body resembles a delivery receipt closely enough that
-    two agents independently concluded the verb was broken, and one of them
-    reported mail as sent that had never left. Keep the two verbs symmetric: a
-    surface whose call shape depends on which verb you happen to be calling is
+    two agents independently concluded the command was broken, and one of them
+    reported mail as sent that had never left. Keep the two commands symmetric: a
+    surface whose call shape depends on which command you happen to be calling is
     the defect, and correcting the docs alone leaves it live for the next doc
     written from memory.
 
@@ -400,7 +400,7 @@ def _collect_status(project: str, repo_root: Path) -> StatusSnapshot:
 def mail_reply_forward(ctx: typer.Context) -> None:
     """Reply to a message, routed by the answered message's lane.
 
-    The verb lives in the Rust mail front now; Python owns transport only,
+    The command lives in the Rust mail front now; Python owns transport only,
     the same split as the team forward. The cross-host branch runs inside the
     native leaf, before local routing. Flags relay verbatim and are refused
     there if unknown.
@@ -574,7 +574,7 @@ def cmd_pane_prepare_forward(
 
     The renderer's body lives in the Rust mail front now (``fno-agents mail
     pane-prepare``); Python owns the command surface only, the same split as
-    the hold forward. The Rust ``fno mux pane send`` verb calls that binary
+    the hold forward. The Rust ``fno mux pane send`` command calls that binary
     directly and never lands here.
     """
     argv = ["pane-prepare", "--pane", str(pane)]
@@ -680,7 +680,7 @@ def _print_thread_summary(h: ThreadHandle) -> None:
 # log before any live delivery is attempted). `fno agents mail unread`/`ack` are the
 # cursor-based consume over that log: unread lists messages addressed to me
 # after my cursor; ack advances it. These supersede the retired agents
-# send/inbox/ack and inbox unread/ack verbs (the one messaging namespace).
+# send/inbox/ack and inbox unread/ack commands (the one messaging namespace).
 
 
 class AmbiguousTokenError(Exception):
@@ -857,7 +857,7 @@ def _forced_pane_send(
     ``--force`` changes only the TRANSPORT. Every mail semantic is kept: the same
     minted ``msg_id`` rides the envelope, the reply handle and authority footer
     travel with it, and an outbox row records the send. Before this existed, a
-    live-miss forced the sender to switch verbs, and switching verbs is what lost
+    live-miss forced the sender to switch commands, and switching commands is what lost
     all four.
 
     The gate runs. ``_mux_pane_send`` is called non-raw, so it reads the pane
@@ -1048,7 +1048,7 @@ def _reply_session_for(from_name: Optional[str]) -> Optional[str]:
 def _row_hosts_keeper_thread(session_id: str) -> bool:
     """Whether ``session_id``'s registry row carries a keeper thread socket.
 
-    The same predicate the mail-inject verb resolves the row by: a
+    The same predicate the mail-inject command resolves the row by: a
     ``messaging_socket_path`` under ``mux/threads/``. Anything else - a pane
     row, no row, an unreadable registry - reads False, and the caller keeps
     its other lanes. An unreadable registry must not raise here: a send to a
@@ -1248,7 +1248,7 @@ def _name_lane_send(
             _release_budget(reservation)
             print(
                 "error: --force cannot type into this session's own prompt. "
-                "Use --to-self --raw to self-inject a verb, or send without "
+                "Use --to-self --raw to self-inject a command, or send without "
                 "--force to leave yourself a durable note.",
                 file=sys.stderr,
             )
@@ -1405,9 +1405,9 @@ def _name_lane_send(
         _keeper_recipient = thread_lane_or_none(lane_harness) == "keeper"
         # And only when the row really hosts a keeper thread. A keeper-LANE
         # harness can also sit in a live mux pane (opencode, agy): those rows
-        # carry no mux/threads socket, the verb would answer not-injectable,
+        # carry no mux/threads socket, the command would answer not-injectable,
         # and intercepting them here would strand the pane rung below. The
-        # predicate mirrors the verb's own row resolution.
+        # predicate mirrors the command's own row resolution.
         _keeper_thread_row = _keeper_recipient and _row_hosts_keeper_thread(
             resolved.session_id
         )
@@ -1428,8 +1428,8 @@ def _name_lane_send(
         elif _keeper_thread_row:
             # a keeper-hosted lane-B thread has neither lane-A socket.
             # Its live transport is the keeper's own unix socket, resolved by
-            # the verb from the registry row the same resolution above already
-            # read `provider` from. A miss falls through with the verb's own
+            # the command from the registry row the same resolution above already
+            # read `provider` from. A miss falls through with the command's own
             # reason token (no-keeper-listener / not-confirmed / ...), so the
             # durable demotion below names why instead of a bare live-miss.
             _resolved_keeper_reason: list = []
@@ -1534,7 +1534,7 @@ def _name_lane_send(
     )
 
     # a bus-only queue is DESIGNED, not stranded. The recipient polls
-    # the durable bus at each turn boundary (the native verb), so this is
+    # the durable bus at each turn boundary (the native command), so this is
     # delivery on the recipient's terms -- no recovery warning, no escalation,
     # and a receipt that says so instead of reading as a live-miss.
     bus_only = live_reason == BUS_ONLY_POLICY
@@ -1821,7 +1821,7 @@ def mail_send_forward(
             "line, typed verbatim - a command only: it must start with / or $. "
             "A status report or any authored message goes WRAPPED (drop --raw) "
             "so its sender stays visible. A payload starting /fno: or $fno: is "
-            "an fno verb, and the lane rewrites the marker to the form of the "
+            "an fno command, and the lane rewrites the marker to the form of the "
             "receiving harness. A showing prompt is answered with `fno agents "
             "ask`. Never queues durable. An actor OTHER than the model must "
             "supply the trigger; self-injection is barred unless --to-self. "
@@ -1860,11 +1860,11 @@ def mail_send_forward(
         help="Bypass the style check for this body with a stated reason.",
     ),
 ) -> None:
-    """Forward the wrapped send verb to the Rust leaf.
+    """Forward the wrapped send command to the Rust leaf.
 
     The send body lives in the Rust mail front now; Python owns --help and
     this shell. The relay's byte-verbatim forward lands here for a plain
-    name it cannot bind, and this execs the native verb.
+    name it cannot bind, and this execs the native command.
     """
     import subprocess
 
@@ -2046,7 +2046,7 @@ def cmd_sent(
     that the agent read or acted on it -- that fourth state isn't observable.
     """
     # The body lives in the Rust mail front now; Python forwards, the same
-    # split as the hold verbs.
+    # split as the hold commands.
     argv = ["sent"]
     if unclaimed_only:
         argv.append("--unclaimed")
@@ -2111,9 +2111,9 @@ def cmd_bus_ack(
 
 
 def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
-    """Forward one mail-front verb to the bundled fno-agents binary.
+    """Forward one mail-front command to the bundled fno-agents binary.
 
-    The hold, team, sent, withdraw, ack, and drain-self verbs' bodies live in
+    The hold, team, sent, withdraw, ack, and drain-self commands' bodies live in
     the Rust
     mail front now; Python owns transport only, the same split as the claims
     forward.
@@ -2154,7 +2154,7 @@ def _forward_mail_pane_prepare(argv: list[str]) -> None:
     Same split as the hold forward with one deliberate difference: stdout is
     written byte-exact, because the ``fno mux pane send`` caller types these
     bytes at the pane verbatim and an appended newline becomes a submitted
-    blank line. The hold verbs print for an operator, where the extra newline
+    blank line. The hold commands print for an operator, where the extra newline
     is nothing.
     """
     import subprocess
@@ -2250,7 +2250,7 @@ mail_app.command("hold-release", hidden=True)(cmd_hold_release)
 
 
 def cmd_seed_provenance_front() -> None:
-    """Forward the hidden seed-provenance verb to the bundled fno-agents binary.
+    """Forward the hidden seed-provenance command to the bundled fno-agents binary.
 
     The render body lives in the Rust mail front now; Python owns transport
     only, the same split as the hold forward. The launcher
@@ -2301,7 +2301,7 @@ def cmd_drain_self_forward(
     """Drain THIS session's own cross-harness inbox and mark it seen (US5).
 
     Forward-only: the body lives in the Rust mail front, on the same mount as
-    the hold verbs. Python owns transport only. The behavior contract is
+    the hold commands. Python owns transport only. The behavior contract is
     characterized byte-for-byte by the Rust parity suite frozen from this
     leaf's goldens (crates/fno-agents/tests/mail_drain_self_parity.rs).
     """

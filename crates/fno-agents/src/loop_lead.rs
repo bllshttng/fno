@@ -235,7 +235,7 @@ impl LeadQueue {
     }
 
     /// The walk refuses to respawn another lead past the manifest ceiling.
-    /// `run_loop_verb_inner` is the ceiling authority: it terminates the walk
+    /// `run_loop_command_inner` is the ceiling authority: it terminates the walk
     /// on Budget before dispatching. The queue re-checks so a ceiling crossed
     /// by a concurrent walk between preflight and dequeue also stops here
     /// rather than spawning past it. What the ceiling bounds is
@@ -443,12 +443,12 @@ fn mint_walk_discriminator() -> String {
 
 /// `kl-th-<scope>-<walk-discriminator>`, minted through the canonical
 /// `fno agents name` bridge: the kl source names the lead loop as the
-/// spawner, th the think-class walk verb, and the scope the team it belongs
+/// spawner, th the think-class walk command, and the scope the team it belongs
 /// to so a journal read by a human says which lead spawned the unit. A failed
 /// mint REFUSES the walk (Err) rather than falling back to an uncoded key.
 pub(crate) fn mint_walk_key(fno_bin: &str, cwd: &Path, scope: &str) -> Result<String, LoopError> {
     let discriminator = mint_walk_discriminator();
-    // `agents name` is a Python-only verb: an ambient FNO_AGENTS_RUNTIME=rust
+    // `agents name` is a Python-only command: an ambient FNO_AGENTS_RUNTIME=rust
     // routes the whole group to this binary, which has no name port.
     let out = retry_etxtbsy(|| {
         std::process::Command::new(fno_bin)
@@ -457,7 +457,7 @@ pub(crate) fn mint_walk_key(fno_bin: &str, cwd: &Path, scope: &str) -> Result<St
                 "name",
                 "--source",
                 "kl",
-                "--verb",
+                "--command",
                 "th",
                 scope,
                 "--discriminator",

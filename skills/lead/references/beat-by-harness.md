@@ -18,4 +18,4 @@ deepseek has no capability row, so no launch line is verified. Run `fno agents a
 
 ## Triage lane
 
-If the user authorizes model triage, run `claude --bare -p --model haiku --output-format json`. Bare mode skips PreToolUse guards. Keep it read-only or act only through fno verbs. Wake the lead with one line naming the reason. A bare session never meets the spawn gate on a native line, so this lane launches agents only through `fno agents spawn`. No lead step calls this lane today. `--fallback-model sonnet,haiku` / `fallbackModel` is the user's Opus-outage setting, not a new lead arm.
+If the user authorizes model triage, run `claude --bare -p --model haiku --output-format json`. Bare mode skips PreToolUse guards. Keep it read-only or act only through fno commands. Wake the lead with one line naming the reason. A bare session never meets the spawn gate on a native line, so this lane launches agents only through `fno agents spawn`. No lead step calls this lane today. `--fallback-model sonnet,haiku` / `fallbackModel` is the user's Opus-outage setting, not a new lead arm.

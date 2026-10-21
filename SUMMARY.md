@@ -6,13 +6,13 @@ test) and `de9ebd78f2` (front flip, Python body deletion, test re-lensing).
 
 ## What shipped
 
-The wrapped `mail send` verb lives on the Rust leg now. `send/` is a
+The wrapped `mail send` command lives on the Rust leg now. `send/` is a
 directory module split by question: resolution (the five-store reach sweep),
 engine (the dispatch machinery and live transports), lanes (the
 address-shape lanes), and verify (landing, escalation, liveness). The front
 claims flag-led sends and session-shaped targets; @host and plain-name
 targets stay the cross-host relay's, --help stays Python's, and cmd_send is
-a forward shell that execs the native verb so the relay's byte-verbatim
+a forward shell that execs the native command so the relay's byte-verbatim
 forward and the typer route keep working.
 
 26 goldens frozen from the live Python leg replay against the Rust leg in
@@ -37,7 +37,7 @@ internal refs.
   goldens.
 - **dispatch_send stayed in dispatch.py.** The Python orchestrator is now
   dead code there; deleting it was out of this leaf's file list. The Rust
-  twin is the live path for the front-routed verb.
+  twin is the live path for the front-routed command.
 - **Thread-viewport force.** A thread-substrate row (no mux/pane ref)
   refuses the force lane rather than resolving a retask viewport; the
   pane-lane gate (option-prompt refusal) runs client-side over a pane
@@ -78,5 +78,5 @@ Two gaps stay open on purpose, both filed for a follow-up wave:
 the harness-store probe leg (store_fallback's claude/codex/opencode
 scans) reads clean and empty, so a session that only lives in a harness
 store resolves as unknown; and the a2a autonomous relay kickoff stays
-Python-side, with the Rust send verb gating to the observed single hop.
+Python-side, with the Rust send command gating to the observed single hop.
 The node filing retried after the graph's version conflicts clear.

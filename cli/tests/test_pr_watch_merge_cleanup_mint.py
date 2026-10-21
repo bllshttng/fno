@@ -3,7 +3,7 @@
 ``fno do pr merge`` mints the reap order at the merge; a merge through
 ``gh pr merge`` or the web button mints nothing, so its worktree waited on
 the 6h sweep instead of the 30-minute grace. The tick is the detector that
-sees the merged arm, so it mints through the merge verb's own mint, gated
+sees the merged arm, so it mints through the merge command's own mint, gated
 once per merge by a journal check. The test pins the default mint's gates:
 a standing request, a checkout with no .git, no checkout, and an open PR
 each hold the mint.
@@ -37,7 +37,7 @@ def _request(repo: str, pr: int) -> dict:
 
 
 class TestDefaultEnsureMergeCleanup:
-    """The default mint: the merge verb's mint, gated once per merge."""
+    """The default mint: the merge command's mint, gated once per merge."""
 
     def _patch_parts(self, monkeypatch, minted: list, journal_rows: list, tmp_path: Path) -> None:
         monkeypatch.setattr(

@@ -167,7 +167,7 @@ pub struct ReadyReply {
     pub drops: Vec<Drop>,
 }
 
-/// The parent scope resolved to nothing: the verb refuses (AC2-ERR of
+/// The parent scope resolved to nothing: the command refuses (AC2-ERR of
 /// `next`, same contract here).
 #[derive(Debug)]
 pub struct NoSuchParent(pub String);
@@ -510,7 +510,7 @@ pub fn plan_rung(entry: &Value) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// The lifecycle verb decision (harness_map.resolve_effective_verb, ported)
+// The lifecycle command decision (harness_map.resolve_effective_command, ported)
 // ---------------------------------------------------------------------------
 
 /// The frontmatter kinds a build rung may advance on, read across both
@@ -559,9 +559,9 @@ pub fn is_blueprint_doc(entry: &Value) -> bool {
 /// /blueprint only when its difficulty is high, its size is L, or an open
 /// premise question blocks it. Every other plan-less node goes straight to
 /// /target, which states its own scope (it derives its deliverables count
-/// from the node's details at init). Difficulty picks the VERB; the separate
+/// from the node's details at init). Difficulty picks the COMMAND; the separate
 /// ruling on which model runs a /blueprint only applies once blueprint IS the
-/// verb, so a node routed straight to target owes no blueprint lane. The
+/// command, so a node routed straight to target owes no blueprint lane. The
 /// `config.dispatch.blueprint_floor` knob carries "high" (this default),
 /// "medium" (blueprint for medium and up, the pre-lean table), "low"
 /// (blueprint every plan-less node), or "never" (target everything); anything
@@ -585,21 +585,21 @@ fn has_premise_question(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// The ported lifecycle table (`harness_map.resolve_effective_verb`):
-/// `(verb, note)` per node row, or a refusal string. Order: refusals fire
-/// BEFORE the declared verb; a declared target-family verb WINS and is
-/// returned as declared; an out-of-family verb abstains (`None`) to declared
+/// The ported lifecycle table (`harness_map.resolve_effective_command`):
+/// `(command, note)` per node row, or a refusal string. Order: refusals fire
+/// BEFORE the declared command; a declared target-family command WINS and is
+/// returned as declared; an out-of-family command abstains (`None`) to declared
 /// precedence, so the command still routes through the allowlist-checked
-/// `verb` rung. The word "reconciled" never appears.
-pub fn effective_verb(entry: &Value) -> Result<(Option<String>, String), String> {
-    effective_verb_with_floor(entry, DEFAULT_BLUEPRINT_FLOOR)
+/// `command` rung. The word "reconciled" never appears.
+pub fn effective_command(entry: &Value) -> Result<(Option<String>, String), String> {
+    effective_command_with_floor(entry, DEFAULT_BLUEPRINT_FLOOR)
 }
 
-/// [`effective_verb`] with the operator's blueprint floor. `floor` reads
+/// [`effective_command`] with the operator's blueprint floor. `floor` reads
 /// "high" (lean default), "medium" (pre-lean: blueprint for medium and up),
 /// "low" (blueprint every plan-less node), or "never" (target everything);
 /// any other value degrades to the default.
-pub fn effective_verb_with_floor(
+pub fn effective_command_with_floor(
     entry: &Value,
     floor: &str,
 ) -> Result<(Option<String>, String), String> {
@@ -610,12 +610,12 @@ pub fn effective_verb_with_floor(
         _ => DEFAULT_BLUEPRINT_FLOOR,
     };
     let node_id = get_str(entry, "id").unwrap_or("unknown");
-    let raw = get_str(entry, "dispatch_verb")
+    let raw = get_str(entry, "dispatch_command")
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_string);
-    let canonical = |tok: &str| match crate::provider::parse_verb_token(tok) {
-        Some((verb, _namespaced)) => format!("/{verb}"),
+    let canonical = |tok: &str| match crate::provider::parse_command_token(tok) {
+        Some((command, _namespaced)) => format!("/{command}"),
         None => tok.to_string(),
     };
     let declared = raw.as_deref().map(canonical);
@@ -623,13 +623,13 @@ pub fn effective_verb_with_floor(
         if declared != "/target" && declared != "/blueprint" {
             return Ok((
                 None,
-                format!("verb=lifecycle(out-of-family {declared}; declared precedence holds)"),
+                format!("command=lifecycle(out-of-family {declared}; declared precedence holds)"),
             ));
         }
     }
     let refusal = |rung: &str, difficulty: &str| {
         format!(
-            "dispatch verb cannot be derived for node {node_id}: plan rung \
+            "dispatch command cannot be derived for node {node_id}: plan rung \
              {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
         )
     };
@@ -640,7 +640,7 @@ pub fn effective_verb_with_floor(
     let answer = match rung {
         "none" => {
             // A row whose difficulty answers no band still refuses (fail
-            // closed): the verb is derivable only from a stated intake.
+            // closed): the command is derivable only from a stated intake.
             if !matches!(difficulty.as_str(), "low" | "medium" | "high") {
                 return Err(refusal(rung, &difficulty));
             }
@@ -682,7 +682,7 @@ pub fn effective_verb_with_floor(
             return Ok((
                 Some(declared.clone()),
                 format!(
-                    "verb=declared({declared}; lifecycle answers {}: {})",
+                    "command=declared({declared}; lifecycle answers {}: {})",
                     answer.0, answer.1
                 ),
             ));
@@ -690,28 +690,28 @@ pub fn effective_verb_with_floor(
     }
     Ok((
         Some(answer.0.to_string()),
-        format!("verb=lifecycle({} -> {})", answer.1, answer.0),
+        format!("command=lifecycle({} -> {})", answer.1, answer.0),
     ))
 }
 
-/// The keeper's `effective_verb` body: one row in, its ported lifecycle
-/// verb decision out (`{"verb", "note"}`), the refusal as the error so the
+/// The keeper's `effective_command` body: one row in, its ported lifecycle
+/// command decision out (`{"verb", "note"}`), the refusal as the error so the
 /// Python client raises without an unwrapping layer. Pure over the shipped
 /// row and its linked plan doc. Kept beside the table so the decision and
 /// its serving live in one file. `blueprint_floor` rides in params from the
 /// dispatch doors; its absence answers the lean default.
-pub(crate) fn serve_effective_verb(params: &Value) -> Result<Value, String> {
+pub(crate) fn serve_effective_command(params: &Value) -> Result<Value, String> {
     let entry = params
         .get("entries")
         .and_then(Value::as_array)
         .and_then(|entries| entries.first())
-        .ok_or_else(|| "effective_verb needs entries[0]".to_string())?;
+        .ok_or_else(|| "effective_command needs entries[0]".to_string())?;
     let floor = params
         .get("blueprint_floor")
         .and_then(Value::as_str)
         .unwrap_or(DEFAULT_BLUEPRINT_FLOOR);
-    let (verb, note) = effective_verb_with_floor(entry, floor)?;
-    Ok(json!({ "verb": verb, "note": note }))
+    let (command, note) = effective_command_with_floor(entry, floor)?;
+    Ok(json!({ "verb": command, "note": note }))
 }
 
 /// A plan-less idea the autonomous drain may dispatch without a plan
@@ -721,7 +721,7 @@ pub(crate) fn is_cold_dispatchable(e: &Value) -> bool {
     get_str(e, "status") == Some("idea") && plan_rung(e) == "none"
 }
 
-/// The ported lifecycle table ([`effective_verb`]) answers a planless node
+/// The ported lifecycle table ([`effective_command`]) answers a planless node
 /// only from these bands, trimmed and lowercased; any other value refuses.
 fn has_intake_difficulty(e: &Value) -> bool {
     matches!(
@@ -1714,7 +1714,7 @@ pub(crate) fn dispatch_node_summary(e: &Value) -> Value {
         "model",
         "provider",
         "effort",
-        "dispatch_verb",
+        "dispatch_command",
         "dispatch_brief",
         "mission_id",
         "mission_wave",
@@ -1826,7 +1826,7 @@ fn drops_for_filter(
                 &ctx.opts.held,
             )
             .or_else(|| {
-                // A cold idea the verb derivation is certain to refuse must
+                // A cold idea the command derivation is certain to refuse must
                 // not spend a drain tick: drop it where every autonomous
                 // dispatcher reads, attributed for `advance --explain`.
                 // A scoped call (--parent / --mission / --roadmap-id) is an
@@ -2212,7 +2212,7 @@ mod tests {
         assert!(held_back
             .detail
             .contains("missing under its existing plan root"));
-        // The rung answers the same way, so the spawn gate derives a verb.
+        // The rung answers the same way, so the spawn gate derives a command.
         assert_eq!(
             plan_rung(&serde_json::json!({
                 "id": "x-gone", "plan_path": stale.display().to_string(),
@@ -2441,7 +2441,7 @@ mod tests {
         assert_eq!(facts.effective_priority.get("x-loose"), None);
     }
 
-    // -- the ported lifecycle table (effective_verb) + is_blueprint_doc --
+    // -- the ported lifecycle table (effective_command) + is_blueprint_doc --
 
     fn plan_at(dir: &std::path::Path, name: &str, body: &str) -> String {
         let probe = dir.join(name);
@@ -2475,12 +2475,12 @@ mod tests {
         );
         let row = row_with(
             &probe,
-            serde_json::Map::from_iter([("dispatch_verb".to_string(), json!("/fno:blueprint"))]),
+            serde_json::Map::from_iter([("dispatch_command".to_string(), json!("/fno:blueprint"))]),
         );
-        let (verb, note) = effective_verb(&row).unwrap();
-        assert_eq!(verb.as_deref(), Some("/blueprint"));
+        let (command, note) = effective_command(&row).unwrap();
+        assert_eq!(command.as_deref(), Some("/blueprint"));
         assert!(
-            note.contains("verb=declared(/blueprint; lifecycle answers /target: plan ready)"),
+            note.contains("command=declared(/blueprint; lifecycle answers /target: plan ready)"),
             "{note}"
         );
     }
@@ -2488,8 +2488,8 @@ mod tests {
     #[test]
     fn planless_medium_derives_target_under_the_lean_floor() {
         let row = json!({"id": "x-lean", "difficulty": "medium"});
-        let (verb, note) = effective_verb(&row).unwrap();
-        assert_eq!(verb.as_deref(), Some("/target"));
+        let (command, note) = effective_command(&row).unwrap();
+        assert_eq!(command.as_deref(), Some("/target"));
         assert!(note.contains("lean dispatch"), "{note}");
         assert!(note.contains("plans inline"), "{note}");
     }
@@ -2498,18 +2498,18 @@ mod tests {
     fn planless_premise_question_tag_derives_blueprint() {
         let row = json!({"id": "x-q", "difficulty": "low", "tags": ["premise-question"]});
         assert_eq!(
-            effective_verb(&row).unwrap().0.as_deref(),
+            effective_command(&row).unwrap().0.as_deref(),
             Some("/blueprint")
         );
         // A row with no tags array, or an unrelated tag, stays on target.
         let plain = json!({"id": "x-q", "difficulty": "low"});
         assert_eq!(
-            effective_verb(&plain).unwrap().0.as_deref(),
+            effective_command(&plain).unwrap().0.as_deref(),
             Some("/target")
         );
         let other = json!({"id": "x-q", "difficulty": "low", "tags": ["infra"]});
         assert_eq!(
-            effective_verb(&other).unwrap().0.as_deref(),
+            effective_command(&other).unwrap().0.as_deref(),
             Some("/target")
         );
     }
@@ -2517,10 +2517,10 @@ mod tests {
     #[test]
     fn medium_floor_restores_blueprint_for_medium_and_degrades_on_typo() {
         let row = json!({"id": "x-med", "difficulty": "medium"});
-        let (verb, _) = effective_verb_with_floor(&row, "medium").unwrap();
-        assert_eq!(verb.as_deref(), Some("/blueprint"));
-        let (verb, _) = effective_verb_with_floor(&row, "spicy").unwrap();
-        assert_eq!(verb.as_deref(), Some("/target"));
+        let (command, _) = effective_command_with_floor(&row, "medium").unwrap();
+        assert_eq!(command.as_deref(), Some("/blueprint"));
+        let (command, _) = effective_command_with_floor(&row, "spicy").unwrap();
+        assert_eq!(command.as_deref(), Some("/target"));
     }
 
     #[test]
@@ -2528,35 +2528,35 @@ mod tests {
         let low = json!({"id": "x-low", "difficulty": "low"});
         let high = json!({"id": "x-high", "difficulty": "high"});
         for row in [&low, &high] {
-            let (verb, _) = effective_verb_with_floor(row, "low").unwrap();
-            assert_eq!(verb.as_deref(), Some("/blueprint"), "{}", row["id"]);
+            let (command, _) = effective_command_with_floor(row, "low").unwrap();
+            assert_eq!(command.as_deref(), Some("/blueprint"), "{}", row["id"]);
         }
         // "never" overrides every blueprint clause, size L and the
         // premise-question tag included.
         let size_l = json!({"id": "x-big", "difficulty": "low", "size": "L"});
         let premise = json!({"id": "x-q", "difficulty": "low", "tags": ["premise-question"]});
         for row in [&low, &high, &size_l, &premise] {
-            let (verb, _) = effective_verb_with_floor(row, "never").unwrap();
-            assert_eq!(verb.as_deref(), Some("/target"), "{}", row["id"]);
+            let (command, _) = effective_command_with_floor(row, "never").unwrap();
+            assert_eq!(command.as_deref(), Some("/target"), "{}", row["id"]);
         }
     }
 
     #[test]
-    fn dollar_namespaced_declared_verb_canonicalizes_like_the_slash_spelling() {
+    fn dollar_namespaced_declared_command_canonicalizes_like_the_slash_spelling() {
         let dir = tempfile::tempdir().unwrap();
         let probe = plan_at(dir.path(), "idea.md", "---\nstatus: idea\n---\n# idea\n");
         for spelling in ["/fno:blueprint", "$fno:blueprint"] {
             let row = row_with(
                 &probe,
-                serde_json::Map::from_iter([("dispatch_verb".to_string(), json!(spelling))]),
+                serde_json::Map::from_iter([("dispatch_command".to_string(), json!(spelling))]),
             );
-            let (verb, _note) = effective_verb(&row).unwrap();
-            assert_eq!(verb.as_deref(), Some("/blueprint"), "{spelling}");
+            let (command, _note) = effective_command(&row).unwrap();
+            assert_eq!(command.as_deref(), Some("/blueprint"), "{spelling}");
         }
     }
 
     #[test]
-    fn serve_effective_verb_answers_the_row_and_the_refusal_is_the_error() {
+    fn serve_effective_command_answers_the_row_and_the_refusal_is_the_error() {
         let dir = tempfile::tempdir().unwrap();
         let research = plan_at(
             dir.path(),
@@ -2570,10 +2570,10 @@ mod tests {
         );
         let research_row = row_with(
             &research,
-            serde_json::Map::from_iter([("dispatch_verb".to_string(), json!("/fno:blueprint"))]),
+            serde_json::Map::from_iter([("dispatch_command".to_string(), json!("/fno:blueprint"))]),
         );
         let qp_row = row_with(&qp, serde_json::Map::new());
-        let reply = serve_effective_verb(&json!({"entries": [research_row, qp_row]})).unwrap();
+        let reply = serve_effective_command(&json!({"entries": [research_row, qp_row]})).unwrap();
         assert_eq!(reply["verb"], json!("/blueprint"));
         // Declared /blueprint agrees with the not-a-blueprint answer, so the
         // note takes the lifecycle form; the declared form is for a
@@ -2581,17 +2581,17 @@ mod tests {
         assert!(reply["note"]
             .as_str()
             .unwrap()
-            .contains("verb=lifecycle(plan ready not a blueprint -> /blueprint)"));
+            .contains("command=lifecycle(plan ready not a blueprint -> /blueprint)"));
         assert_eq!(
-            serve_effective_verb(&json!({"entries": [qp_row]})).unwrap()["verb"],
+            serve_effective_command(&json!({"entries": [qp_row]})).unwrap()["verb"],
             json!("/target")
         );
-        let refusal = serve_effective_verb(&json!({"entries": [
+        let refusal = serve_effective_command(&json!({"entries": [
             json!({"id": "x-planless", "difficulty": "spicy"})
         ]}))
         .unwrap_err();
         assert!(
-            refusal.starts_with("dispatch verb cannot be derived for node x-planless:"),
+            refusal.starts_with("dispatch command cannot be derived for node x-planless:"),
             "{refusal}"
         );
     }

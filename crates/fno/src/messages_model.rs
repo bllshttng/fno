@@ -1,5 +1,5 @@
 //! The Messages tab's model: the thread projection gathered from the hidden
-//! `fno-agents mail-threads --format json` verb, with org_model's bounded,
+//! `fno-agents mail-threads --format json` command, with org_model's bounded,
 //! fail-open shape. A timeout, a non-zero exit or invalid JSON lands in
 //! [`MessagesSnapshot::error`], never a paint refusal; the view renders its
 //! error line and keeps the last good projection.

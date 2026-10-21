@@ -67,7 +67,7 @@ def _parse_capture_items(text):
 
 # Rows rendered before the footer takes over. A growing pile should read as a
 # number, not as a wall - a block that scrolls the operator's screen gets
-# skipped, which is the failure this verb exists to fix.
+# skipped, which is the failure this command exists to fix.
 RENDER_CAP = 3
 QUESTION_RENDER_CAP = 10
 # A rendered entry is a pointer, not the evidence. The full body is one `-J`
@@ -838,11 +838,11 @@ def collect(root: Path, *, lane: "LaneRead | None" = None) -> Outstanding:
 def _read_open_verdicts() -> "tuple[list[VerdictRow], Optional[str]]":
     """Open prove-it FAIL rows from the Rust reader, or why it could not be
     read. A failed call never raises: that would blank the questions leg."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        payload = verb_call("prove-it-verdicts", {})
-    except (VerbUnavailable, OSError, ValueError) as exc:
+        payload = command_call("prove-it-verdicts", {})
+    except (CommandUnavailable, OSError, ValueError) as exc:
         return [], str(exc)
     rows = [
         VerdictRow(
@@ -928,13 +928,13 @@ def render(
             if age is not None:
                 head += f" ({_plural(age, 'day')} ago)"
         lines.append(head + ".")
-        # Naming the clearing verb IS the fix. The harvest is manual by design
+        # Naming the clearing command IS the fix. The harvest is manual by design
         # (a background hook that mints backlog nodes unattended is the wrong
         # shape) and nothing else ever tells a human what to run.
         #
         # Route by kind. `retro sweep-carveouts` SKIPS backfill rows entirely
         # (they belong to /fno:ship pr merged), so prescribing it against a
-        # backfill-only ledger sends the operator to a verb that clears
+        # backfill-only ledger sends the operator to a command that clears
         # nothing and reports the same count on every later session.
         sweepable = sum(
             n for kind, n in outstanding.carveout_by_kind.items() if kind != BACKFILL_KIND

@@ -68,7 +68,7 @@ enum MatchRequest {
     /// 1 unreadable index, 2 usage), like `record` and `retract`.
     #[serde(rename = "decisions")]
     Decisions(RecordDoorRequest),
-    /// The decide record verb, ported from `_record` + `record_decision`
+    /// The decide record command, ported from `_record` + `record_decision`
     /// (cli/src/fno/decide/cli.py + decide/__init__.py, deleted): `argv` is
     /// the `fno inbox decide` / `fno backlog decide` command line. Same
     /// ownership as `record`: the door owns stdout (the decision id) and the
@@ -480,11 +480,11 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
     }
 }
 
-/// The four review verb names `hooks/review-hold.sh:84` classifies as a
+/// The four review command names `hooks/review-hold.sh:84` classifies as a
 /// review. Named explicitly rather than pattern-matched, for the same reason
 /// the hold does it that way: a substring rule on "review" would fire on
 /// `code-review-attest` and every future skill that merely mentions one.
-const REVIEW_VERBS: &[&str] = &["code-review", "review", "review-changes", "sigma-review"];
+const REVIEW_COMMANDS: &[&str] = &["code-review", "review", "review-changes", "sigma-review"];
 
 /// The stage table: a stage's keywords decide WHICH laws surface, never
 /// their order. Measured against the live corpus 2026-09-14: `review` alone
@@ -517,20 +517,20 @@ const STAGES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// The non-review verb names each stage classifies, next to REVIEW_VERBS.
+/// The non-review command names each stage classifies, next to REVIEW_COMMANDS.
 /// `/fno:execute` classifies as target: it runs a bound plan, the same
-/// governed ground. Named explicitly for the same reason REVIEW_VERBS is.
-const STAGE_VERBS: &[(&str, &str)] = &[
+/// governed ground. Named explicitly for the same reason REVIEW_COMMANDS is.
+const STAGE_COMMANDS: &[(&str, &str)] = &[
     ("blueprint", "blueprint"),
     ("target", "target"),
     ("execute", "target"),
 ];
 
-/// Normalize a skill invocation to the bare verb: strip one leading `/` or
+/// Normalize a skill invocation to the bare command: strip one leading `/` or
 /// `$`, cut at the first whitespace, keep the text after the last `:`. The
 /// order is the one `review-hold.sh:71-76` documents, so a colon inside a
-/// PR URL argument never eats the verb.
-fn normalize_verb(raw: &str) -> String {
+/// PR URL argument never eats the command.
+fn normalize_command(raw: &str) -> String {
     let stripped = raw
         .strip_prefix('/')
         .or_else(|| raw.strip_prefix('$'))
@@ -542,7 +542,7 @@ fn normalize_verb(raw: &str) -> String {
     }
 }
 
-/// The stage classifier's input: the raw verb-carrying token and the full
+/// The stage classifier's input: the raw command-carrying token and the full
 /// text a node id may ride in (skill name plus args, or the whole prompt).
 fn stage_input(hook: &Value) -> Option<(String, String)> {
     let tool = hook.get("tool_name").and_then(Value::as_str).unwrap_or("");
@@ -576,14 +576,14 @@ fn payload_node_id(hook: &Value) -> Option<String> {
 /// whitespace-separated token.
 fn classify_stage(hook: &Value) -> Option<&'static str> {
     let (raw, _) = stage_input(hook)?;
-    let verb = normalize_verb(&raw);
-    REVIEW_VERBS
-        .contains(&verb.as_str())
+    let command = normalize_command(&raw);
+    REVIEW_COMMANDS
+        .contains(&command.as_str())
         .then_some("review")
         .or_else(|| {
-            STAGE_VERBS
+            STAGE_COMMANDS
                 .iter()
-                .find(|(v, _)| *v == verb)
+                .find(|(v, _)| *v == command)
                 .map(|(_, s)| *s)
         })
 }
@@ -757,7 +757,7 @@ fn short_law_line(full: &str) -> Option<String> {
 /// The stage answer. A readable index with zero matching laws renders
 /// nothing (`hook_output: null`), which is the correct answer for that
 /// input; a failed read is a report, never silence. A request carrying edit
-/// targets (`paths`) answers from the edit read instead of the verb
+/// targets (`paths`) answers from the edit read instead of the command
 /// classifier.
 fn stage_answer_with(
     req: StageRequest,
@@ -1002,7 +1002,7 @@ fn validate_answer(req: &ValidateRequest) -> Value {
         Some("subject and decision are required".to_string())
     } else if req.subject.trim().chars().count() < 2 || req.decision.trim().chars().count() < 2 {
         // A one-character subject or decision is a placeholder, not a
-        // statement: a 2026-08-29 smoke run of this verb with x/y/z landed a
+        // statement: a 2026-08-29 smoke run of this command with x/y/z landed a
         // live law nobody could act on or clear. The gate refuses the shape
         // wherever it is invoked from, live session or suite.
         Some(
@@ -1331,7 +1331,7 @@ fn scope_split_answer(req: ScopeSplitRequest) -> Value {
     scope_split_answer_in(None, &settings_sources(), req)
 }
 
-/// The listing's scope read: the same law-only hiding the Python verb got
+/// The listing's scope read: the same law-only hiding the Python command got
 /// from its `scope-split` front-door call, one owner, no second impl.
 pub(crate) fn scope_split_rows(rows: Vec<Value>) -> Value {
     scope_split_answer_in(None, &settings_sources(), ScopeSplitRequest { rows })
@@ -2202,7 +2202,7 @@ pub fn run_backlog_retract(argv: &[String]) -> i32 {
     )
 }
 
-/// `law_only` keeps the law verb's contract: the operator gate before any
+/// `law_only` keeps the law command's contract: the operator gate before any
 /// read, laws-only subject matching, and the pointer refusal for a non-law
 /// target. The backlog entry drops all three, so `fno inbox law retract`
 /// keeps answering exactly what it answered before this door widened.
@@ -2275,7 +2275,7 @@ fn run_retract_labeled(label: &str, usage: &str, argv: &[String], law_only: bool
 /// so both entries share one resolution and the gating stays testable
 /// without env surgery. `Err` carries the refusal message for `door_refuse`.
 /// A subject matches across every lane for the backlog entry; `law_only`
-/// keeps the law verb's laws-only search and its pointer refusal for a
+/// keeps the law command's laws-only search and its pointer refusal for a
 /// non-law target.
 fn retract_target(
     token: &str,
@@ -2471,7 +2471,7 @@ fn write_retraction(target: &Value, reason: &str, caller: &Caller, label: &str) 
 /// The `history` read: one JSON answer over the whole chain behind a subject
 /// or decision id - the live row plus every retired row, each with its
 /// lifecycle. The subject-addressed read `fno inbox decisions` does not
-/// offer; it stays here so the Python verb is untouched.
+/// offer; it stays here so the Python command is untouched.
 fn run_history_read(argv: &[String]) -> i32 {
     let door = match parse_retract_door(argv, HISTORY_USAGE, false, false) {
         Ok(d) => d,
@@ -2740,7 +2740,7 @@ pub fn run_law_match(args: &[String]) -> i32 {
 }
 
 /// The request parser and dispatcher over an in-memory request. The `fno
-/// inbox law` verbs on the fno front call this with their own text; the
+/// inbox law` commands on the fno front call this with their own text; the
 /// record arm owns stdout (the decision id) and returns the door's exit
 /// code, every other arm prints one JSON answer and exits 0.
 pub fn run_law_match_str(input: &str) -> i32 {
@@ -2968,7 +2968,7 @@ pub(crate) mod tests {
         "PR 1847 shrank +207 to +142. Requesting the operator-applied budget-exception label.";
 
     #[test]
-    fn verb_rows() {
+    fn command_rows() {
         let h: Vec<String> = vec!["-h".into()];
         assert_eq!(run_law_match(&h), 0);
         let extra: Vec<String> = vec!["--nope".into()];
@@ -2990,7 +2990,7 @@ pub(crate) mod tests {
         // The three specimens the plan names: texts whose near-miss wording
         // ("finding", "shrink round") must NOT match the keyword table.
         for (id, text) in [
-            ("d-10a72d88", "finding a better place for the verb"),
+            ("d-10a72d88", "finding a better place for the command"),
             ("d-5fff6924", "shrink round stands"),
             ("d-7678146e", "shrink round stands"),
         ] {
@@ -3205,9 +3205,9 @@ pub(crate) mod tests {
         let path = write_index(
             dir.path(),
             &[stage_row(
-                "d-verbs0001",
-                "top-level-verbs",
-                "The root menu caps top-level verbs.",
+                "d-commands0001",
+                "top-level-commands",
+                "The root menu caps top-level commands.",
             )],
         );
         let hook = serde_json::json!({
@@ -3231,7 +3231,7 @@ pub(crate) mod tests {
             .as_str()
             .expect("context present");
         assert!(
-            ctx.contains("- d-verbs0001 (top-level-verbs, project:fno):"),
+            ctx.contains("- d-commands0001 (top-level-commands, project:fno):"),
             "{ctx}"
         );
     }

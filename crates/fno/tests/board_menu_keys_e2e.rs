@@ -80,7 +80,7 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     h.wait_screen(15, |s| s.contains("Search:"));
 
     // leg 2: `^B ?` opens the GLOBAL keybinds menu, not the board's
-    // own keys overlay (its `?` verb, reachable with the bare key).
+    // own keys overlay (its `?` command, reachable with the bare key).
     h.type_bytes(&[PREFIX, b'?']);
     eprintln!("STAGE leg2 keybinds-after-^B?");
     let screen = h.wait_screen(15, |s| s.contains("keybindings"));

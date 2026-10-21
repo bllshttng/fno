@@ -3,7 +3,7 @@
 # (genuine spawn + honest-receipt reporting + collision guards, tasks 1.3/1.4).
 #
 # Hermetic: a mock `fno` on PATH (controlled by MOCK_* env vars) stands in for
-# the real agents/claim verbs, so no real bg worker launches.
+# the real agents/claim commands, so no real bg worker launches.
 #
 # Covers:
 #   AC1-HP   ask returns a real 8-hex short-id -> result=launched short_id=<hex>.
@@ -43,7 +43,7 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 ASK_LOG="$TMP/ask.log"
 cat > "$BIN/fno" <<'MOCK'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -97,7 +97,7 @@ case "$sub" in
   "agents spawn"|"agents host")
     # spawn/host emit PRETTY (multi-line) JSON on captured stdout, never a bare
     # line; MOCK_SPAWN_OUT carries that JSON. Recorded to SPAWN_LOG so a test can
-    # assert the verb/provider/--cwd argv and that ask was NOT called.
+    # assert the command/provider/--cwd argv and that ask was NOT called.
     echo "$*" >> "$SPAWN_LOG"
     if [[ "${MOCK_ACQ_RC:-0}" -eq 1 ]]; then
       previous=""; node=""

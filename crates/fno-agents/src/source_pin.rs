@@ -491,7 +491,7 @@ fn branch_label(branch: Option<&str>, detached: Option<bool>) -> String {
 struct ResolveArgs {
     override_path: Option<String>,
     env_source: Option<String>,
-    /// `<main checkout>/cli` of the repo the process runs in, set by the verb
+    /// `<main checkout>/cli` of the repo the process runs in, set by the command
     /// from its own cwd.
     checkout: Option<String>,
     cache: Option<String>,
@@ -718,7 +718,7 @@ fn record_from_str(raw: &str, cache: &str, companion: &str) -> Result<serde_json
     }))
 }
 
-/// `fno-agents source-pin`: hidden binary-direct verb for update/doctor.
+/// `fno-agents source-pin`: hidden binary-direct command for update/doctor.
 /// Exit 0 whenever an answer was computed (a refusal is data, not an error);
 /// exit 2 on malformed args; exit 1 on a failed record write.
 pub fn run_source_pin(args: &[String]) -> i32 {
@@ -741,7 +741,7 @@ pub fn run_source_pin(args: &[String]) -> i32 {
     match sub {
         "resolve" => match parse_resolve_args(rest) {
             Ok(mut a) => {
-                // The verb fills `checkout` from its own cwd: the cli/ of the
+                // The command fills `checkout` from its own cwd: the cli/ of the
                 // main checkout that owns this process, linked worktree
                 // included, so a bare run inside the repo installs that repo.
                 a.checkout = std::env::current_dir()

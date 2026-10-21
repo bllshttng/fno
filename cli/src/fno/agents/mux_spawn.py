@@ -56,7 +56,7 @@ from fno.agents.codex_rollout import (  # noqa: F401 - re-export: dispatch and t
     _codex_session_id_for_pid,
 )
 from fno.agents.harness_map import DispatchResolveError, normalize_command, render_seed
-from fno.config._dispatch_verbs import is_verb_seed
+from fno.config._dispatch_commands import is_command_seed
 from fno.agents.writable_dirs import (
     ADD_DIR_PROVIDERS,
     add_dir_tokens,
@@ -512,11 +512,11 @@ def permission_pane_tokens(provider: str, mode: str) -> list[str]:
     agy ``skip`` maps to ``[]`` because its argv already carries
     ``--dangerously-skip-permissions`` unconditionally. An empty mode is
     refused by the owner (the same literal, one source)."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        answer = verb_call("permission-tokens", {"provider": provider, "mode": mode}, VerbUnavailable)
-    except VerbUnavailable as exc:
+        answer = command_call("permission-tokens", {"provider": provider, "mode": mode}, CommandUnavailable)
+    except CommandUnavailable as exc:
         raise DispatchAskError(
             f"the permission vocabulary owner (fno-agents) is unavailable: {exc}",
             exit_code=2,
@@ -877,7 +877,7 @@ def build_pane_argv(
     :func:`dispatch_spawn_pane` - so they inherit the same guards fno's own
     flags pass through, rather than appending past them. Absent/empty composes
     a byte-identical argv."""
-    message = normalize_command(message, provider) if is_verb_seed(message) else message
+    message = normalize_command(message, provider) if is_command_seed(message) else message
 
     from fno.agents.harness_map import is_declared, render_session_argv
 
@@ -1521,7 +1521,7 @@ def _group_tab_rows(
     """Tabs in the squad the pane landed in, keyed by name.
 
     Scoped with ``--workspace id:<squad_id>`` and never unscoped. An unscoped
-    ``tab ls`` resolves ``CurrentRoute``, which on the tab verbs means the squad
+    ``tab ls`` resolves ``CurrentRoute``, which on the tab commands means the squad
     the operator happens to be LOOKING at - while the pane run resolved the same
     token by CWD. Two defaults for one token is what put panes at one squad and
     the tabs read for them at another.
@@ -1573,7 +1573,7 @@ def place_pane_in_group_tab(
 
     The old shape pre-read ``tab ls`` to PREDICT where the pane would land, then
     placed it with ``--tab``. The prediction was the wrong half: the pane run
-    resolves its squad from the spawn's cwd and the tab verbs resolve theirs from
+    resolves its squad from the spawn's cwd and the tab commands resolve theirs from
     the operator's gaze, so three panes asking for one tab landed on three.
 
     Here every read is keyed on a pane that already exists. The pane names its own
@@ -1763,7 +1763,7 @@ def _lookup_child_pid(
 _WAIT_EXITED = 12
 
 #: `fno mux pane run` exit code when the mux never answered the control read
-#: (crates/fno EXIT_CONTROL_UNANSWERED). The verb REACHED the server, so
+#: (crates/fno EXIT_CONTROL_UNANSWERED). The command REACHED the server, so
 #: unlike every other non-zero code this does not prove the pane is absent.
 _MUX_CONTROL_UNANSWERED = 20
 
@@ -1794,7 +1794,7 @@ def _reconcile_unanswered_run(
 ) -> int:
     """After ``mux pane run`` exits ``_MUX_CONTROL_UNANSWERED``, decide whether a
     pane exists rather than asserting it does not (LD2/LD3). Never retries the
-    run (LD1): the verb already reached the server, and re-sending it risks a
+    run (LD1): the command already reached the server, and re-sending it risks a
     second pane and a second worker.
 
     Enumerates the session's panes and looks for exactly one candidate that
@@ -1999,7 +1999,7 @@ _BINDING_POLL_S = 0.75
 _PROBE_TIMEOUT_S = 2.0
 #: How long the wait may stay silent before it says what it is doing. A spawn
 #: that used to return in 3s can now take the full window, and a silent block on
-#: an interactive verb reads as a hang, so the wait announces itself once.
+#: an interactive command reads as a hang, so the wait announces itself once.
 _BINDING_ANNOUNCE_S = 3.0
 #: Pane scrollback retained per tick, and the slice echoed to stderr on death.
 _PANE_TAIL_LINES = 200
@@ -2988,9 +2988,9 @@ def _submit_spawn_seed(
             # --raw, and the reason is the seed's own shape, not an oversight.
             # An empty payload is a bare submit (the seed rode in on argv), which
             # has nothing to attribute. A non-empty payload is the SEED, a
-            # leading-slash verb whose routing keys off that first character;
-            # whether an envelope can ride behind the verb line without the
-            # harness REPL swallowing it into the verb's ARGUMENTS is a separate,
+            # leading-slash command whose routing keys off that first character;
+            # whether an envelope can ride behind the command line without the
+            # harness REPL swallowing it into the command's ARGUMENTS is a separate,
             # probe-gated question (node task 5). Until that probe answers,
             # this arm types the seed verbatim rather than forcing a shape the
             # harness may refuse.
@@ -3396,7 +3396,7 @@ def dispatch_spawn_pane(
             model_name = codex_route.model
 
     effective_message: Optional[str] = None
-    if is_verb_seed(message):
+    if is_command_seed(message):
         try:
             message = render_seed(message, provider)
         except DispatchResolveError as exc:
@@ -3465,7 +3465,7 @@ def dispatch_spawn_pane(
     )
     if provider == "cursor-agent":
         # cursor-agent's create-chat mints the full UUID. It is a distinct
-        # create verb, so there is no pi-style create claim to hold: read the
+        # create command, so there is no pi-style create claim to hold: read the
         # id, terminate that non-exiting helper, then launch the pane on it.
         from fno.agents.harnesses.cursor_agent import create_chat
 
@@ -3763,7 +3763,7 @@ def dispatch_spawn_pane(
         if existing_pane is not None:
             pane_id = pane
         elif proc.returncode == _MUX_CONTROL_UNANSWERED:
-            # The verb reached the server; only the reply did not come back
+            # The command reached the server; only the reply did not come back
             # (LD2). Reconcile instead of asserting no pane was created - the
             # reconcile itself never retries the run (LD1).
             #

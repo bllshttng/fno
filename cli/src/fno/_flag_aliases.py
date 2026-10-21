@@ -77,7 +77,7 @@ def merge_deprecated_alias(
 
 
 #: The axis-split tombstone. The harness axis (the CLI binary) was
-#: ``--provider/-p`` on every verb except spawn; it is ``--harness/-H`` everywhere
+#: ``--provider/-p`` on every command except spawn; it is ``--harness/-H`` everywhere
 #: now. A model vendor routes ONLY at spawn, so the retired spelling is a hidden
 #: long-only option whose sole behavior is to exit 2 with this map - a tombstone,
 #: not an alias (one spelling, one meaning).

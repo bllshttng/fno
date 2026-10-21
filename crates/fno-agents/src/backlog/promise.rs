@@ -443,7 +443,7 @@ pub(crate) fn rollup_holds(parent: &Value, warm: &RollupVerdicts) -> bool {
 /// The gate cwd for one node row: the project-resolved cwd when it is a
 /// live directory, else None (the plan resolves repo-relative from the
 /// caller's cwd). Shared by the closeable gate, the rollup warm, and the
-/// done verb's parent warm, so one node reads one verdict everywhere.
+/// done command's parent warm, so one node reads one verdict everywhere.
 pub(crate) fn gate_cwd_for(node: &Value) -> Option<String> {
     let resolved = crate::backlog::drift_scan::effective_reconcile_cwd(
         node.get("cwd").and_then(Value::as_str).unwrap_or(""),

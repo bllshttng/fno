@@ -842,7 +842,7 @@ fn split_semicolons(line: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The hidden `style-check` verb: the full Python `fno doctor lint style`
+// The hidden `style-check` command: the full Python `fno doctor lint style`
 // contract (cli/src/fno/lint_cli.py `style` + its diff helpers). Without
 // --json the byte contract is the frozen goldens; with --json it is the door
 // the Python callers exec.
@@ -1323,7 +1323,7 @@ because every input carried a style-exception.
     );
 }
 
-/// The hidden binary-direct `style-check` verb: the full
+/// The hidden binary-direct `style-check` command: the full
 /// `fno doctor lint style` contract, from `--stdin`/`--text`/`--files`/
 /// `--diff-base` to the receipts and exit codes the goldens freeze.
 pub fn run_cli(args: &[String]) -> i32 {
@@ -1353,7 +1353,7 @@ pub fn run_cli(args: &[String]) -> i32 {
             "--diff-base" => diff_base = it.next().cloned(),
             "--fix" => fix_mode = true,
             // Both spellings: the json_output contract guard requires the
-            // short form beside the long one on every parsing verb.
+            // short form beside the long one on every parsing command.
             "--json" | "-J" => json_mode = true,
             "--word-cap" => match it.next().map(|v| parse_word_cap(v)) {
                 Some(Ok(cap)) => word_cap = cap,

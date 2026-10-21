@@ -3,7 +3,7 @@
 //! every harness; then a harness's own declared attach form, then pi's
 //! join; claude attaches inline under its re-entry plan; every other row is
 //! asked of the capability table's `features.attach` claim and refused by
-//! name. Split out of `client_verbs.rs`, which is over the file budget.
+//! name. Split out of `client_commands.rs`, which is over the file budget.
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::claude_ask::ClaudeHome;
 use crate::claude_resume::claude_attach_pointer;
-use crate::client_verbs::{
+use crate::client_commands::{
     append_agents_event, echo_extra, is_codex_thread_row, py_repr_str, read_registry_entries,
     resolve_entry_with_heal_scoped, trace_events_path, validate_lifecycle_name, which_on_path,
 };
@@ -21,7 +21,7 @@ use crate::paths::AgentsHome;
 /// front door like the pane relaunch above: the fno crate is a dev-only
 /// dependency here, so the reach is a process, not a call. `None` falls
 /// through to the inline path: no live server, usage (a deployed mux older
-/// than the verb), an unanswered verb, or no `fno` binary at all. Any
+/// than the command), an unanswered command, or no `fno` binary at all. Any
 /// other non-zero exit is the server refusing; surface it verbatim and
 /// never double-attach.
 fn attach_via_mux_thread(name: &str, harness: &str, events_path: &Path) -> Option<i32> {
@@ -124,7 +124,7 @@ fn attach_feature_state(harness: &str) -> String {
 /// lane nor a declared form took: `(event reason, exit code, message)`.
 /// `native` means the harness can be attached to and the wired arm is the
 /// mux thread portal the caller already tried, so the lane is down: exit 24,
-/// the same code the portal verb uses for "no live mux server". Any other
+/// the same code the portal command uses for "no live mux server". Any other
 /// state refuses by name with the key, the state and the probe that settles
 /// the row, exit 13.
 fn attach_table_refusal(harness: &str, name: &str) -> (String, i32, String) {
@@ -494,7 +494,7 @@ pub(crate) struct AttachArgs {
 pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, String)> {
     let mut name: Option<String> = None;
     // The store heal's project-confinement refusal prescribes --cross-project;
-    // accept it so the taught remedy is a form this verb takes.
+    // accept it so the taught remedy is a form this command takes.
     let mut cross_project = false;
     for a in rest {
         match a.as_str() {
@@ -599,7 +599,7 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 
     // Every other non-claude harness is asked of the table: features.attach
-    // answers reachability, never the verb inventory and never a gap in this
+    // answers reachability, never the command inventory and never a gap in this
     // file. `!= "claude"` instead of an allowlist so a provider added to the
     // roster inherits the read rather than falling through to a
     // claude-shaped attach (US1).
@@ -876,7 +876,7 @@ fn attach_cloud_teleport(entry: &Value, name: &str, events_path: &Path) -> Optio
 mod tests {
     use super::*;
 
-    // The attach-refusal family, a file of its own beside this verb.
+    // The attach-refusal family, a file of its own beside this command.
     #[path = "x296f_attach_refusals.rs"]
     mod x296f_attach_refusals;
 

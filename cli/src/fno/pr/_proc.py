@@ -1,6 +1,6 @@
 """Subprocess helpers shared by the in-package ``fno do pr`` ports.
 
-The ``fno do pr {merge,verify,rebase}`` verbs were ported from bash to in-package
+The ``fno do pr {merge,verify,rebase}`` commands were ported from bash to in-package
 Python that shells to ``gh`` / ``git``. This module centralises
 the one idiom they all need: run an external tool, capture text output, and
 distinguish "tool not installed" from "tool ran and failed". Centralising it
@@ -18,7 +18,7 @@ from typing import Mapping, Optional, Sequence
 # gh subprocess invocations this process has issued (: no agent could
 # see its own quota spend). Per-process, not per-fleet: it answers "what did
 # THIS call cost", which is the number a poller can act on. Read it from the
-# verbs that shell gh through this helper; reset is never needed because a
+# commands that shell gh through this helper; reset is never needed because a
 # process is one invocation's lifetime.
 GH_CALLS = 0
 

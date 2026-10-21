@@ -2,7 +2,7 @@
 
 Covers the Python half of control-plane step 2 (ab-f1c5a9ed): the
 `config.review.github_apps` schema (x-4baa; `required_bots` is now a legacy
-alias). The authoritative consumer is the Rust `fno-agents loop-check` verb
+alias). The authoritative consumer is the Rust `fno-agents loop-check` command
 (its own hand-rolled parser is tested in crates/fno-agents); this block exists
 so `fno config get` and the Pydantic schema agree on the key's shape and
 fail-closed semantics.

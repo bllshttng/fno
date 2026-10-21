@@ -1043,7 +1043,7 @@ pub async fn census() -> Vec<Value> {
 
 /// Run the daemon-free census subcommand.  The process walk stays in Rust so
 /// Python callers and the machine sample share one table implementation.
-pub async fn run_verb(args: &[String]) -> i32 {
+pub async fn run_command(args: &[String]) -> i32 {
     // `fno agents top`: the worker table, the census of live runs.
     if args.first().map(String::as_str) == Some("--workers") {
         return crate::agents_top::run(&args[1..]);
@@ -1100,7 +1100,7 @@ pub fn census_blocking() -> Vec<Value> {
     rows
 }
 
-/// One store keeper the restart verb cycled (or spared).
+/// One store keeper the restart command cycled (or spared).
 pub struct CycledKeeper {
     pub graph: Option<String>,
     pub old_pid: Option<u32>,

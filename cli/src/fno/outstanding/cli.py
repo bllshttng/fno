@@ -209,7 +209,7 @@ def ask(
     from fno.claims.self_identity import resolve_self_identity
     from fno.harness_identity import canonical_handle
     from fno.paths import project_log, questions_jsonl
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
     from fno.text_or_file import read_text_arg
 
     # 'template' rides --question-file: the Python flag surface is shrink-only.
@@ -244,8 +244,8 @@ def ask(
         "display_name": display_name(),
     }
     try:
-        answer = verb_call("question-intake", payload)
-    except VerbUnavailable:
+        answer = command_call("question-intake", payload)
+    except CommandUnavailable:
         if template:
             typer.echo(
                 "error: --template needs the fno-agents binary; fix the install and retry",
@@ -340,13 +340,13 @@ def clear(
     if answer is not None:
         # One resolver, one law: the native decide door resolves provenance
         # (the deleted Python engine's three states, fail-closed third).
-        from fno.rust_binary import VerbUnavailable, call_front_json
+        from fno.rust_binary import CommandUnavailable, call_front_json
 
         try:
             answer_meta = call_front_json(
                 {"mode": "resolve-provenance", "authority": authority, "origin": origin}
             )
-        except VerbUnavailable as exc:
+        except CommandUnavailable as exc:
             typer.echo(
                 f"outstanding: refused: {exc}. Nothing was closed; all "
                 f"{len(question_ids)} question(s) stay open.",
@@ -365,7 +365,7 @@ def clear(
             typer.echo(f"outstanding: refused: {refusal}. Nothing was closed; all {len(question_ids)} question(s) stay open." + (f"\n{remedy}" if remedy else ""), err=True)
             raise typer.Exit(3)
         provenance = answer_meta
-    result = rust_binary.verb_call("question-clear", {"ids": question_ids, "answer": answer, "cap": events.QUESTION_CAP, "provenance": provenance, "closed_by": _session_id(), "journal_path": str(paths.project_log("events.jsonl")), "index_path": str(paths.questions_jsonl()), "decisions_path": str(paths.decisions_jsonl()), "graph": str(paths.graph_json()), "repo_root": str(Path.cwd())})
+    result = rust_binary.command_call("question-clear", {"ids": question_ids, "answer": answer, "cap": events.QUESTION_CAP, "provenance": provenance, "closed_by": _session_id(), "journal_path": str(paths.project_log("events.jsonl")), "index_path": str(paths.questions_jsonl()), "decisions_path": str(paths.decisions_jsonl()), "graph": str(paths.graph_json()), "repo_root": str(Path.cwd())})
     typer.echo("\n".join(result.get("lines") or ()))
     for item in result.get("deliveries") or ():
         typer.echo(deliver_answer(SimpleNamespace(id=item["qid"], question=item["question"], asker=item["asker"], session_id=item.get("session_id")), answer, item["decision_id"]), err=True)

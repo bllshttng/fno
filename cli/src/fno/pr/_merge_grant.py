@@ -1,8 +1,8 @@
 """Typed durable-grant resolver: one answer for status, merge, and the watcher.
 
 The verdict is owned by ``crates/fno-agents/src/merge_grant.rs``, reached
-through the ``authorized-merge`` verb's ``grant-verdict`` op. This module is
-the transport, so status, the merge verb and the watcher read one owner and
+through the ``authorized-merge`` command's ``grant-verdict`` op. This module is
+the transport, so status, the merge command and the watcher read one owner and
 there is exactly one precedence order.
 """
 
@@ -57,14 +57,14 @@ def resolve_durable_grant(pr_number: int, repo: str) -> GrantVerdict:
     A transport, never a decision: the Rust owner answers, and an unreachable
     owner reads ``unknown`` - an unread grant never grants.
     """
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        out = verb_call(
+        out = command_call(
             "authorized-merge",
             {"op": "grant-verdict", "pr": int(pr_number), "cwd": repo},
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         return GrantVerdict(
             UNKNOWN,
             f"the durable-grant resolver could not be reached ({exc}); "

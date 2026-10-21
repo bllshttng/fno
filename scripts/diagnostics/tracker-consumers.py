@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""The graph-consumer and backlog-verb census (tasks 4.2 + 5.1).
+"""The graph-consumer and backlog-command census (tasks 4.2 + 5.1).
 
 Two modalities, both with a mandatory positive control:
 
---verbs    Enumerate the LIVE backlog registry and verify every verb carries
+--commands    Enumerate the LIVE backlog registry and verify every command carries
            exactly one classification marker (tracker-owned = guarded by the
            shared external refusal; footnote-owned = seam/read side). Positive
-           controls: a known creation verb must be tracker-owned and a known
-           surviving read verb must be footnote-owned, AND the runtime guard
-           must actually refuse a tracker-owned verb under an external
+           controls: a known creation command must be tracker-owned and a known
+           surviving read command must be footnote-owned, AND the runtime guard
+           must actually refuse a tracker-owned command under an external
            backend - a marker without the refusal is decorative.
 
 --reads    (task 5.1) Scan Python direct read_graph call sites plus the Rust
@@ -18,8 +18,8 @@ Two modalities, both with a mandatory positive control:
 --self-test  Inject known-bad inputs into BOTH modalities and print the
            success marker only after each detector names what it must.
 
-Exit 0 clean; exit 1 on any unclassified verb/consumer or failed control.
-No frozen verb counts anywhere: the registry is enumerated at run time.
+Exit 0 clean; exit 1 on any unclassified command/consumer or failed control.
+No frozen command counts anywhere: the registry is enumerated at run time.
 """
 from __future__ import annotations
 
@@ -71,12 +71,12 @@ READ_ALLOWLIST = (
     # The claims store's db-path builder (the layout place of the graph
     # anchor, swapped to its db sibling), never a read.
     "crates/fno-agents/src/claim_store.rs",
-    # The merge verb's store-path builder (the hold-verdict flow hands the
+    # The merge command's store-path builder (the hold-verdict flow hands the
     # resolved anchor to its worker rows read: the FNO_STATE_DIR layout
     # place, else the scope default), never a read.
-    "crates/fno-agents/src/merge_verb/mod.rs",
-    # The refresh verb's plist template names the polled store in its
-    # launchd comment; the verb itself reads no graph.
+    "crates/fno-agents/src/merge_command/mod.rs",
+    # The refresh command's plist template names the polled store in its
+    # launchd comment; the command itself reads no graph.
     "crates/fno-agents/src/pr_watch/refresh.rs",
     # The registry store's db-path builder, the same graph anchor swapped
     # to its db sibling, never a read.
@@ -99,13 +99,13 @@ READ_ALLOWLIST = (
     "crates/fno-agents/src/target_start.rs",
 )
 
-# Known-positive controls (task 4.2 / AC9): verbs the census must FIND in the
+# Known-positive controls (task 4.2 / AC9): commands the census must FIND in the
 # stated class. Absence of either control fails the census - a green run over
-# a registry that silently lost its creation verb is not evidence. The
+# a registry that silently lost its creation command is not evidence. The
 # tracker-owned control moved from `new` (now the native create door) to
 # `contain` when the scoped-create word rode the door.
-KNOWN_TRACKER_OWNED_VERB = "contain"
-KNOWN_FOOTNOTE_OWNED_VERB = "get"
+KNOWN_TRACKER_OWNED_COMMAND = "contain"
+KNOWN_FOOTNOTE_OWNED_COMMAND = "get"
 
 SELF_TEST_OK_MARKER = "tracker-consumers: self-test OK"
 
@@ -124,7 +124,7 @@ def _registry():
     # The classifier's own structural list, never a copy: the census must
     # enumerate the registry the guard actually walked. Classification is
     # lazy (first backlog use), so the census triggers it explicitly.
-    graph_cli.classify_backlog_verbs()
+    graph_cli.classify_backlog_commands()
     return list(graph_cli.iter_backlog_registry())
 
 
@@ -139,45 +139,45 @@ def _marker_of(info) -> str | None:
     return None
 
 
-def census_verbs(verbose: bool = False) -> tuple[int, list[str]]:
-    """Classify every live registry verb. Returns (total, problems)."""
+def census_commands(verbose: bool = False) -> tuple[int, list[str]]:
+    """Classify every live registry command. Returns (total, problems)."""
     problems: list[str] = []
     rows = list(_iter_registry(_registry()))
     seen: dict[str, str] = {}
     for label, info in rows:
         marker = _marker_of(info)
         if marker is None:
-            problems.append(f"unclassified verb: {label}")
+            problems.append(f"unclassified command: {label}")
             continue
-        # Both markers on one verb is a classification bug.
+        # Both markers on one command is a classification bug.
         cb = info.callback
         if (
             getattr(cb, "_fno_tracker_owned", False)
             and getattr(cb, "_fno_footnote_owned", False)
         ):
-            problems.append(f"double-classified verb: {label}")
+            problems.append(f"double-classified command: {label}")
         seen[label] = marker
         if verbose:
             print(f"  {marker:<15} {label}")
-    # Positive controls: the KNOWN verbs must exist AND sit in the stated
+    # Positive controls: the KNOWN commands must exist AND sit in the stated
     # class. A registry that renamed them must update the control, not
     # silently pass.
-    if seen.get(KNOWN_TRACKER_OWNED_VERB) != "tracker-owned":
+    if seen.get(KNOWN_TRACKER_OWNED_COMMAND) != "tracker-owned":
         problems.append(
-            f"positive control failed: {KNOWN_TRACKER_OWNED_VERB!r} must be a "
-            f"tracker-owned verb (found: {seen.get(KNOWN_TRACKER_OWNED_VERB)})"
+            f"positive control failed: {KNOWN_TRACKER_OWNED_COMMAND!r} must be a "
+            f"tracker-owned command (found: {seen.get(KNOWN_TRACKER_OWNED_COMMAND)})"
         )
-    if seen.get(KNOWN_FOOTNOTE_OWNED_VERB) != "footnote-owned":
+    if seen.get(KNOWN_FOOTNOTE_OWNED_COMMAND) != "footnote-owned":
         problems.append(
-            f"positive control failed: {KNOWN_FOOTNOTE_OWNED_VERB!r} must be a "
-            f"footnote-owned verb (found: {seen.get(KNOWN_FOOTNOTE_OWNED_VERB)})"
+            f"positive control failed: {KNOWN_FOOTNOTE_OWNED_COMMAND!r} must be a "
+            f"footnote-owned command (found: {seen.get(KNOWN_FOOTNOTE_OWNED_COMMAND)})"
         )
     return len(rows), problems
 
 
 def _guard_fires_runtime() -> tuple[bool, str]:
     """Runtime proof the shared refusal is installed, not just the marker:
-    invoke a tracker-owned verb's callback under an external backend env and
+    invoke a tracker-owned command's callback under an external backend env and
     expect the named refusal."""
     import typer
 
@@ -185,7 +185,7 @@ def _guard_fires_runtime() -> tuple[bool, str]:
     os.environ["FNO_TRACKER_BACKEND"] = "github"
     try:
         for label, info in _iter_registry(_registry()):
-            if label != KNOWN_TRACKER_OWNED_VERB:
+            if label != KNOWN_TRACKER_OWNED_COMMAND:
                 continue
             try:
                 info.callback("title")  # the wrapper; the guard fires first
@@ -194,7 +194,7 @@ def _guard_fires_runtime() -> tuple[bool, str]:
             except Exception as exc:  # noqa: BLE001 - any other escape is a bug
                 return False, f"guard leaked {type(exc).__name__}: {exc}"
             return False, f"guard did not refuse {label}"
-        return False, f"{KNOWN_TRACKER_OWNED_VERB!r} not found in registry"
+        return False, f"{KNOWN_TRACKER_OWNED_COMMAND!r} not found in registry"
     finally:
         os.environ.pop("FNO_TRACKER_BACKEND", None)
 
@@ -257,7 +257,7 @@ def _classify_site(site, top, *, allow, mach, guarded_names, refusal_calls):
     params = {a.arg for a in top.args.args}
     params |= {a.arg for a in top.args.kwonlyargs}
     if guarded:
-        return "guarded-verb", None
+        return "guarded-command", None
     if switched:
         return "backend-switched", None
     if site.args and isinstance(site.args[0], ast.Name) and site.args[0].id in params:
@@ -270,13 +270,13 @@ def census_reads(verbose: bool = False) -> tuple[int, list[str]]:
 
     Every Python read site must attribute to a VERIFIED class:
       owner             - the named backend/storage modules.
-      guarded-verb      - inside the registered callback of a tracker-owned
-                          verb (cross-checked against the LIVE registry; the
+      guarded-command      - inside the registered callback of a tracker-owned
+                          command (cross-checked against the LIVE registry; the
                           shared refusal wraps it) or a helper that itself
                           calls the shared/create refusal.
       guarded-machinery - a named mutation-machinery module carrying the
                           tracker-owned marker comment (every entry path is a
-                          guarded verb).
+                          guarded command).
       backend-switched  - the enclosing function branches on
                           active_backend_name() before reading, so the local
                           read is unreachable under an external selection.
@@ -296,7 +296,7 @@ def census_reads(verbose: bool = False) -> tuple[int, list[str]]:
     }
     machinery_marker = "tracker-owned machinery"
 
-    # Live registry: function names of tracker-owned verb callbacks.
+    # Live registry: function names of tracker-owned command callbacks.
     guarded_names: set[str] = set()
     for _label, info in _iter_registry(_registry()):
         cb = info.callback
@@ -496,14 +496,14 @@ def self_test() -> int:
     with no control proving the search ran, is not evidence)."""
     failures: list[str] = []
 
-    # Verbs modality: an unmarked verb must be detected.
+    # Commands modality: an unmarked command must be detected.
     class _FakeInfo:
         name = "inject-unmarked"
         callback = lambda: None  # noqa: E731
 
     marker = _marker_of(_FakeInfo())
     if marker is not None:
-        failures.append(f"injected unmarked verb not detected (marker={marker!r})")
+        failures.append(f"injected unmarked command not detected (marker={marker!r})")
 
     # Reads modality: an injected forbidden consumer must be detected.
     bad = "# read_graph()\nx = read_graph(path)"
@@ -634,7 +634,7 @@ def self_test() -> int:
             print(f"tracker-consumers: SELF-TEST FAILURE: {f}", file=sys.stderr)
         return 1
     print(
-        "tracker-consumers: self-test detected the injected unmarked verb, "
+        "tracker-consumers: self-test detected the injected unmarked command, "
         "the injected forbidden reader, the runtime refusal, the "
             "the raw graph parse"
     )
@@ -644,7 +644,7 @@ def self_test() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--verbs", action="store_true", help="Run the backlog-verb census.")
+    ap.add_argument("--commands", action="store_true", help="Run the backlog-command census.")
     ap.add_argument("--reads", action="store_true", help="Run the direct-consumer read census (task 5.1).")
     ap.add_argument("--self-test", action="store_true", help="Prove the detectors detect.")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -654,15 +654,15 @@ def main() -> int:
         return self_test()
 
     rc = 0
-    if args.verbs:
-        total, problems = census_verbs(verbose=args.verbose)
-        print(f"tracker-consumers: verbs census over {total} live registry entries")
+    if args.commands:
+        total, problems = census_commands(verbose=args.verbose)
+        print(f"tracker-consumers: commands census over {total} live registry entries")
         if problems:
             rc = 1
             for p in problems:
                 print(f"tracker-consumers: {p}", file=sys.stderr)
         else:
-            print("tracker-consumers: verbs OK - every verb classified, controls positive")
+            print("tracker-consumers: commands OK - every command classified, controls positive")
     if args.reads:
         total, problems = census_reads(verbose=args.verbose)
         print(f"tracker-consumers: read census over {total} direct site(s)")
@@ -673,7 +673,7 @@ def main() -> int:
                 print(f"tracker-consumers: {p}", file=sys.stderr)
         else:
             print("tracker-consumers: reads OK - zero unclassified consumers")
-    if not (args.verbs or args.reads):
+    if not (args.commands or args.reads):
         ap.print_help()
         return 2
     return rc

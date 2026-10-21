@@ -1,6 +1,6 @@
 """fno do pr watch CLI surface.
 
-Four verbs:
+Four commands:
   tick      - the launchd entry; builds real adapters and calls tick()
   install   - render + gate-confirm + write global LaunchAgent plist
   uninstall - unload (best-effort) + remove plist; preserve watermark store
@@ -58,7 +58,7 @@ def _emit_event(
     """Append a canonical event envelope to events.jsonl.
 
     Uses fno.events._build + fno.events.append_event (the same path the
-    ``fno doctor event emit`` CLI verb uses internally).  On failure, logs a warning
+    ``fno doctor event emit`` CLI command uses internally).  On failure, logs a warning
     instead of silently passing so the failure is observable.
 
     When no explicit ``events_path`` is given, defaults to
@@ -305,7 +305,7 @@ def _run_evals_arm_phase(settings: Any, *, seconds_left_fn) -> None:
 def _watchdog_recovery_roots() -> list[Path]:
     """Resolve every distinct project scope for the launchd watchdog scan.
 
-    One shared resolver with the manual report verb
+    One shared resolver with the manual report command
     (unfinished_work.report_roots): the tick and a hand-run must name the
     same fleet, or the two report surfaces disagree on scope."""
     from fno.agents import unfinished_work as _uw
@@ -1224,20 +1224,20 @@ def tick() -> None:
             from fno.pr_watch._discover import PrCandidate
             from fno.pr_watch._dispatch import run_execute_queue
             from fno.pr_watch._state import make_watermark_key
-            from fno.rust_binary import VerbUnavailable, verb_call
+            from fno.rust_binary import CommandUnavailable, command_call
 
             roots = _tick_roots()
             try:
                 # The read's bound travels to the Rust op as deadline_ms, so
                 # its bounded git reads answer inside it.
                 grant_timeout = min(grant_queue_timeout_s, max(1.0, slice_s - 10.0))
-                out = verb_call("authorized-merge", {"op": "grant-queue",
+                out = command_call("authorized-merge", {"op": "grant-queue",
                                 "rotate": int(time.time() // interval),
                                 "cwd": str(roots[0] if roots else Path.cwd()),
                                 "deadline_ms": int(grant_timeout * 1000)},
                                 timeout=grant_timeout)
                 if out.get("error"):
-                    raise VerbUnavailable(str(out["error"]))
+                    raise CommandUnavailable(str(out["error"]))
                 queue = [
                     (PrCandidate(node_id=r["node_id"], pr_number=int(r["pr"]), pr_url=None,
                                  repo_dir=Path(r["cwd"]), repo_slug=r["repo_slug"]),
@@ -1246,7 +1246,7 @@ def tick() -> None:
                     for r in out.get("queue") or []
                 ]
                 progress["merge"] = f"queue={len(queue)}"
-            except (VerbUnavailable, KeyError, TypeError, ValueError) as exc:
+            except (CommandUnavailable, KeyError, TypeError, ValueError) as exc:
                 reason = "grant_queue_timeout" if "timed out after" in str(exc).lower() else "error"
                 _emit_tick_row("pr_watch_merge", interval_s=interval, skip_reason=reason,
                                detail=f"{head} grant queue unreadable ({exc})")
@@ -1599,9 +1599,9 @@ def refresh() -> None:
     and is safe to run by hand. A no-op when ``pr_watch.enabled`` is false, so
     an install that does not use the watcher gets nothing. Never fails loud:
     the update chain calls it best-effort and a refresh failure must not fail
-    the update. Force and caller identity (doctor --fix) are verb-level
+    the update. Force and caller identity (doctor --fix) are command-level
     flags on ``fno-agents pr-watch refresh`` itself; a new flag is a new
-    verb and belongs in crates.
+    command and belongs in crates.
     """
     from fno.pr.cli import _forward_to_binary
 
@@ -1611,17 +1611,17 @@ def refresh() -> None:
 
 # Single-flight window for the SessionStart self-heal: long enough to cover the
 # render + bounce round-trip, short enough that a crashed heal recovers soon.
-# The window (and the gate itself) live in the heal verb now.
+# The window (and the gate itself) live in the heal command now.
 
 @cli.command()
 def heal() -> None:
     """Revive a previously-enabled-but-dead watcher (idempotent, race-guarded).
 
-    Forward to the fno-agents pr-watch heal verb: the disabled gate, the
+    Forward to the fno-agents pr-watch heal command: the disabled gate, the
     bounce-pending guard and the single-flight live in crates now, and the
     cure is the same re-render + bounce the SessionStart hook always ran.
-    Verb-level flags (--caller, --fno-binary) belong to the verb itself; a
-    new flag is a new verb and belongs in crates.
+    Command-level flags (--caller, --fno-binary) belong to the command itself; a
+    new flag is a new command and belongs in crates.
     """
     from fno.pr.cli import _forward_to_binary
 
@@ -1639,7 +1639,7 @@ def ensure_watcher_activated() -> str:
 
     The config-set hook path: it must never prompt (the interactive install
     confirm would wedge a headless `fno config set`).  Returns the outcome
-    string from the ``fno-agents pr-watch install --ensure`` verb.
+    string from the ``fno-agents pr-watch install --ensure`` command.
     """
     import subprocess
 

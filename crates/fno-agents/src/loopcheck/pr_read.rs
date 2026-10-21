@@ -150,7 +150,7 @@ pub(super) struct PrInfo {
     /// the no-PR early return and on callers without settings context.
     pub(super) posture: Option<PostureVerdict>,
     /// The attestation-chain range tiling computed for this read, carried so
-    /// the standalone verb's stdout payload equals the row read_pr_info
+    /// the standalone command's stdout payload equals the row read_pr_info
     /// emitted, field for field (payload parity). Default on every early
     /// return and test fixture: no chain, no rescue.
     pub(super) range_tiling: RangeTiling,

@@ -6,7 +6,7 @@ use fno_agents::restart_run::rm_after_drift_repair;
 use fno_agents::{emit_schema_json, state::AgentState, AgentStatus, KNOWN_EVENT_KINDS};
 
 // -----------------------------------------------------------------------
-// ab-351427cb: --help parity (top-level verb list + per-verb usage)
+// ab-351427cb: --help parity (top-level command list + per-command usage)
 // -----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------
@@ -162,7 +162,7 @@ fn schema_rows() {
 /// AC2-HP: KNOWN_EVENT_KINDS must be non-empty and contain the canonical kinds.
 
 // -----------------------------------------------------------------------
-// Task 2.1: format_success per-verb output (stop/rm stdout parity)
+// Task 2.1: format_success per-command output (stop/rm stdout parity)
 // -----------------------------------------------------------------------
 
 /// A codex thread stop names the interrupt outcome; `no-turn` stays silent.
@@ -348,14 +348,14 @@ async fn rm_flow_rows() {
     );
     assert!(out.contains("resume handle"), "{out}");
 
-    let resume = verb_usage("resume").expect("resume usage");
+    let resume = command_usage("resume").expect("resume usage");
     assert!(resume.contains("--cross-project"), "{resume}");
     assert!(resume.contains("--cwd <existing-checkout>"), "{resume}");
     // The seam appends --account on a wake; the usage line naming it is
     // the parse contract that keeps the wake ladder honest.
     assert!(resume.contains("--account <id>"), "{resume}");
 
-    let adopt = verb_usage("adopt").expect("adopt usage");
+    let adopt = command_usage("adopt").expect("adopt usage");
     assert!(adopt.contains("--cross-project"), "{adopt}");
 
     let result = json!({
@@ -388,7 +388,7 @@ async fn rm_flow_rows() {
 /// verdict the caller passed, never from the past-tense pre-exec banner. An
 /// unread store (`None`) says so instead of wearing an absent verdict.
 
-/// A reap that really removed a harness row names the verb that puts it
+/// A reap that really removed a harness row names the command that puts it
 /// back. Asserted on the literal `fno agents adopt` string, not merely on
 /// the receipt being longer: an absence has two explanations.
 /// A codex row carries no short_id, so `harness_row_id` degrades to the
@@ -402,9 +402,9 @@ async fn rm_flow_rows() {
 // x-9485: a confirmed pane stop prints its measurement - the pid that died -
 // not a bare surface name.
 
-/// AC2-HP: unknown verb returns None (falls back to pretty-print).
+/// AC2-HP: unknown command returns None (falls back to pretty-print).
 /// `spawn` is NOT unknown post-x-3ab8 (it renders a receipt, covered by
-/// `format_success_spawn_emits_compact_receipt`); use a truly unhandled verb.
+/// `format_success_spawn_emits_compact_receipt`); use a truly unhandled command.
 
 // ab-1891cdff: `restart` outcome rendering (AC2-HP / AC2-EDGE / AC2-FR)
 // -----------------------------------------------------------------------
@@ -458,7 +458,7 @@ fn ask_rows() {
     assert_eq!(params["name"], "myagent");
     assert_eq!(params["from_name"], "fno");
     assert_eq!(params["timeout"], 30u64);
-    // --yolo retired with the spawn axes, on every verb and in both spellings.
+    // --yolo retired with the spawn axes, on every command and in both spellings.
     for flag in ["--yolo", "-Y"] {
         let err = build_request("ask", &["a".to_string(), "m".to_string(), flag.to_string()])
             .unwrap_err();
@@ -710,7 +710,7 @@ fn spawn_flag_rows() {
 
 /// ab-3ff64151 AC2 (Rust-path parity): the global-register boolean shorts
 /// the client recognizes (`-A` --all, `-F` --force) parse identically to the
-/// long forms on the verbs that use them. `-J` --json is client-side (not a
+/// long forms on the commands that use them. `-J` --json is client-side (not a
 /// build_request param) and is covered by the json-detection path.
 #[test]
 fn parse_rows() {
@@ -758,14 +758,14 @@ fn parse_rows() {
     assert!(!defaults.no_wait);
 }
 
-/// The lifecycle verbs' store heal resolves through the project-confinement
+/// The lifecycle commands' store heal resolves through the project-confinement
 /// refusal that prescribes `--cross-project`, so `fno agents rm|stop <id>
 /// --cross-project` must PARSE (the old surface died with "unknown flag:
 /// --cross-project" before any resolution ran). The flag rides to the daemon
 /// as `cross_project`, where entry_for_lifecycle hands it to the scoped
-/// resolver; verbs that take no such flag keep refusing it.
+/// resolver; commands that take no such flag keep refusing it.
 
-/// x-c5cc: the spawn-gate flags parse on the spawn verb (--force already
+/// x-c5cc: the spawn-gate flags parse on the spawn command (--force already
 /// shared with stop/rm; --no-wait is gate-only).
 
 /// Both gate constructions (the daemon-bound codex-thread gate and the
@@ -1493,7 +1493,7 @@ fn render_list_rows() {
 /// keys, schema 2); render_list_table appends a distinct DISCOVERED section.
 
 /// A codex-filtered list folds the loaded-thread block into the JSON
-/// envelope; the key carries the retired verb's exact payload shape.
+/// envelope; the key carries the retired command's exact payload shape.
 
 /// AC1/AC7: the operator's ten columns in order, ROW is the served ordinal,
 /// and SESSION is the full id, never truncated. Positive strings, never a
@@ -1577,7 +1577,7 @@ fn seam_rows() {
     assert!(!spawn_needs_python_seam(&params));
 
     // AC24 (bridge case): the exact argv shape rust_spawn.py builds - marker
-    // straight after the verb, seed behind the fence. One parse, gate false,
+    // straight after the command, seed behind the fence. One parse, gate false,
     // message intact: no re-entry recursion and no prompt contamination.
     let (_m, params) = build_request(
         "spawn",
@@ -1698,12 +1698,12 @@ fn status_rows() {
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("stuck work: unreadable"), "{err}");
     } else {
-        assert!(stuck["hung_verbs"].is_array(), "{stuck}");
+        assert!(stuck["hung_commands"].is_array(), "{stuck}");
         assert!(stuck["dead_holders"].is_array(), "{stuck}");
     }
 
     let value = serde_json::json!({
-        "hung_verbs": ["hung verb pid 7 1h fno backlog advance (over 1800s)"],
+        "hung_commands": ["hung command pid 7 1h fno backlog advance (over 1800s)"],
         "dead_holders": ["dead holder flight:x holder h pid 9 absent held 10m"],
     });
     let lines = fno_agents::stuck_work::render_lines(&value);
@@ -1711,9 +1711,9 @@ fn status_rows() {
     assert_eq!(lines.len(), 3);
     assert_eq!(
         lines[1],
-        "  hung verb pid 7 1h fno backlog advance (over 1800s)"
+        "  hung command pid 7 1h fno backlog advance (over 1800s)"
     );
-    let clean = serde_json::json!({"hung_verbs": [], "dead_holders": []});
+    let clean = serde_json::json!({"hung_commands": [], "dead_holders": []});
     assert!(fno_agents::stuck_work::render_lines(&clean).is_empty());
     let err = serde_json::json!({"error": "ps exited 1"});
     let lines = fno_agents::stuck_work::render_lines(&err);
@@ -1766,7 +1766,7 @@ fn resume_env_lock() -> &'static std::sync::Mutex<()> {
 }
 
 /// main block_ons `run`, and a codex thread row's wake builds its own
-/// runtime and block_ons again (`resume_wake.rs`). Drive the verb through
+/// runtime and block_ons again (`resume_wake.rs`). Drive the command through
 /// the same entry main uses, inside a tokio runtime: it must refuse 16
 /// (`no-daemon`), never panic with "Cannot start a runtime from within a
 /// runtime".

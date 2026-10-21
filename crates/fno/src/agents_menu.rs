@@ -1,6 +1,6 @@
-//! The `fno agents` menu: twelve entries, each holding at most twelve verbs,
+//! The `fno agents` menu: twelve entries, each holding at most twelve commands,
 //! and nothing hidden. A nested spelling is rewritten lexically to the argv
-//! that answers today, so no verb's behavior, flags or output change. An old
+//! that answers today, so no command's behavior, flags or output change. An old
 //! flat spelling still answers for one release: it prints one stderr line
 //! naming the nested form, then runs as before (stderr, because callers
 //! parse stdout). `fno doctor lint menu-caps` counts this table as the
@@ -9,7 +9,7 @@
 
 use std::ffi::OsString;
 
-/// One entry, group or verb, of the agents menu.
+/// One entry, group or command, of the agents menu.
 #[derive(Debug)]
 pub struct Node {
     pub name: &'static str,
@@ -30,7 +30,7 @@ pub struct Node {
     pub pages_out: bool,
 }
 
-const fn verb(name: &'static str, legacy: &'static [&'static str], about: &'static str) -> Node {
+const fn command(name: &'static str, legacy: &'static [&'static str], about: &'static str) -> Node {
     Node {
         name,
         about,
@@ -51,7 +51,7 @@ const fn moved(
 ) -> Node {
     Node {
         old,
-        ..verb(name, legacy, about)
+        ..command(name, legacy, about)
     }
 }
 
@@ -59,7 +59,7 @@ const fn moved(
 const fn group(name: &'static str, about: &'static str, children: &'static [Node]) -> Node {
     Node {
         children,
-        ..verb(name, &[], about)
+        ..command(name, &[], about)
     }
 }
 
@@ -74,55 +74,55 @@ const fn kept(
     Node {
         children,
         strict: false,
-        ..verb(name, legacy, about)
+        ..command(name, legacy, about)
     }
 }
 
 #[rustfmt::skip]
 const ADMIT: &[Node] = &[
-    verb("gate", &["spawn-gate"], "The one spawn gate: stdin JSON payload in, admitted or refused out."),
-    verb("guard", &["spawn-guard"], "The shared bg-dispatch guard and its mutex."),
-    verb("overlay", &["spawn-overlay"], "Harness-keyed spawn-defaults resolver over a stdin payload."),
-    verb("axes", &["spawn-axes"], "Spawn billing axes (route, account, model) over a stdin payload."),
-    verb("status", &["gate-status"], "The spawn gate's read-only capacity verdict as JSON."),
-    verb("revival", &["revival-check"], "Whether a spawn --resume revives an existing row."),
-    verb("fallback", &["fallback-chain"], "Failover chain walk over a stdin payload."),
-    verb("slot", &["route-slot"], "Delivery-slot resolver over a stdin payload."),
-    verb("provider-cap", &["provider-cap"], "The provider-cap actor."),
-    verb("capabilities", &["capabilities"], "One harness's config-independent capability contract."),
-    verb("autonomy", &["autonomy"], "Every path that can start a session without an operator."),
+    command("gate", &["spawn-gate"], "The one spawn gate: stdin JSON payload in, admitted or refused out."),
+    command("guard", &["spawn-guard"], "The shared bg-dispatch guard and its mutex."),
+    command("overlay", &["spawn-overlay"], "Harness-keyed spawn-defaults resolver over a stdin payload."),
+    command("axes", &["spawn-axes"], "Spawn billing axes (route, account, model) over a stdin payload."),
+    command("status", &["gate-status"], "The spawn gate's read-only capacity verdict as JSON."),
+    command("revival", &["revival-check"], "Whether a spawn --resume revives an existing row."),
+    command("fallback", &["fallback-chain"], "Failover chain walk over a stdin payload."),
+    command("slot", &["route-slot"], "Delivery-slot resolver over a stdin payload."),
+    command("provider-cap", &["provider-cap"], "The provider-cap actor."),
+    command("capabilities", &["capabilities"], "One harness's config-independent capability contract."),
+    command("autonomy", &["autonomy"], "Every path that can start a session without an operator."),
 ];
 
 #[rustfmt::skip]
 const MAIL_ADMIN: &[Node] = &[
-    verb("drain-self", &["mail", "drain-self"], "Drain this session's own cross-harness inbox."),
-    verb("hold", &["mail", "hold"], "Busy mode: hold incoming mail and drain it on a timer."),
-    verb("hold-release", &["mail", "hold-release"], "Sleep until a hold expires, then release it."),
-    verb("lint", &["mail", "lint"], "Check thread files for malformed shape."),
-    verb("migrate-bus", &["mail", "migrate-bus"], "Backfill pre-bus markdown threads into the bus log."),
-    verb("pane-prepare", &["mail", "pane-prepare"], "The pane-send renderer in the fno-agents binary."),
-    verb("rebuild-render", &["mail", "rebuild-render"], "Regenerate a recipient's markdown render from the bus log."),
-    verb("seed-provenance", &["mail", "seed-provenance"], "The seed-provenance verb in the fno-agents binary."),
-    verb("sent", &["mail", "sent"], "List mail this session sent, with claim state."),
-    verb("team", &["mail", "team"], "Announce one body to a fleet scope as one bus line."),
-    verb("withdraw", &["mail", "withdraw"], "Retract a message the recipient has not picked up."),
-    verb("teach", &["mail-teach"], "The fmail read-verb lesson state."),
-    verb("mcp", &["mcp"], "MCP sidecar client verbs."),
+    command("drain-self", &["mail", "drain-self"], "Drain this session's own cross-harness inbox."),
+    command("hold", &["mail", "hold"], "Busy mode: hold incoming mail and drain it on a timer."),
+    command("hold-release", &["mail", "hold-release"], "Sleep until a hold expires, then release it."),
+    command("lint", &["mail", "lint"], "Check thread files for malformed shape."),
+    command("migrate-bus", &["mail", "migrate-bus"], "Backfill pre-bus markdown threads into the bus log."),
+    command("pane-prepare", &["mail", "pane-prepare"], "The pane-send renderer in the fno-agents binary."),
+    command("rebuild-render", &["mail", "rebuild-render"], "Regenerate a recipient's markdown render from the bus log."),
+    command("seed-provenance", &["mail", "seed-provenance"], "The seed-provenance command in the fno-agents binary."),
+    command("sent", &["mail", "sent"], "List mail this session sent, with claim state."),
+    command("team", &["mail", "team"], "Announce one body to a fleet scope as one bus line."),
+    command("withdraw", &["mail", "withdraw"], "Retract a message the recipient has not picked up."),
+    command("teach", &["mail-teach"], "The fmail read-command lesson state."),
+    command("mcp", &["mcp"], "MCP sidecar client commands."),
 ];
 
 #[rustfmt::skip]
 const MAIL: &[Node] = &[
-    verb("send", &["mail", "send"], "Send a message to a registered agent or a project."),
-    verb("reply", &["mail", "reply"], "Reply to a message, routed by the answered message's lane."),
-    verb("unread", &["mail", "unread"], "Show unread bus messages addressed to a name."),
-    verb("list", &["mail", "list"], "List threads in this inbox (default: unread only)."),
-    verb("show", &["mail", "show"], "Print one message."),
-    verb("ack", &["mail", "ack"], "Advance a read cursor to a message id."),
-    verb("drain", &["mail", "drain"], "Drain unread threads."),
-    verb("status", &["mail", "status"], "One-screen health snapshot for this project's inbox."),
-    verb("triage", &["mail", "triage"], "LLM triage of a heads-up thread into a JSON action plan."),
-    verb("ask", &["ask"], "Send a follow-up message to a registered agent."),
-    verb("announce", &["announce"], "Fleet announcements on one scope."),
+    command("send", &["mail", "send"], "Send a message to a registered agent or a project."),
+    command("reply", &["mail", "reply"], "Reply to a message, routed by the answered message's lane."),
+    command("unread", &["mail", "unread"], "Show unread bus messages addressed to a name."),
+    command("list", &["mail", "list"], "List threads in this inbox (default: unread only)."),
+    command("show", &["mail", "show"], "Print one message."),
+    command("ack", &["mail", "ack"], "Advance a read cursor to a message id."),
+    command("drain", &["mail", "drain"], "Drain unread threads."),
+    command("status", &["mail", "status"], "One-screen health snapshot for this project's inbox."),
+    command("triage", &["mail", "triage"], "LLM triage of a heads-up thread into a JSON action plan."),
+    command("ask", &["ask"], "Send a follow-up message to a registered agent."),
+    command("announce", &["announce"], "Fleet announcements on one scope."),
     group("admin", "Mailbox upkeep: holds, renders, migrations, lessons.", MAIL_ADMIN),
 ];
 
@@ -144,150 +144,150 @@ const ORG_CHART: &[Node] = &[
     moved("manifest-path", &["lead", "manifest-path"], &[&["org", "manifest-path"]], "This promoted session's scope manifest path."),
     moved("drain", &["lead", "drain"], &[&["org", "drain"]], "How many scope nodes are not done."),
     moved("term", &["lead", "term"], &[&["org", "term"]], "Declare or extend this term."),
-    verb("checkin-raw", &["lead-checkin"], "The check-in body over explicit scope and event paths."),
-    verb("history-raw", &["lead-history"], "The check-in readback over explicit scope and event paths."),
-    verb("rundown-raw", &["lead-rundown"], "The rundown page renderer over explicit inputs."),
+    command("checkin-raw", &["lead-checkin"], "The check-in body over explicit scope and event paths."),
+    command("history-raw", &["lead-history"], "The check-in readback over explicit scope and event paths."),
+    command("rundown-raw", &["lead-rundown"], "The rundown page renderer over explicit inputs."),
 ];
 
 #[rustfmt::skip]
 const ORG: &[Node] = &[
-    verb("init", &["lead", "init"], "Write the role manifest (step 1 of the lead skill)."),
-    verb("checkin", &["lead", "checkin"], "One lead beat: gather, print, diff, journal."),
-    verb("done", &["lead", "done"], "Expire this role: vacate the row and clear the manifest."),
-    verb("cancel", &["lead", "cancel"], "Set or clear the cancel signal beside a role manifest."),
-    verb("escalate", &["lead", "escalate"], "Escalate to the presiding role with work pending."),
-    verb("verdict", &["lead", "verdict"], "Read the term tenure verdict."),
-    verb("history", &["lead", "history"], "This role's recorded term, newest first."),
-    verb("promote", &["role"], "Grant a role to a live session: <session> --scope <scope>."),
-    verb("faq", &["lead", "faq"], "Durable answers a promoted session leaves behind."),
-    verb("roles", &["roles"], "Bounded business-role definitions and resolutions."),
+    command("init", &["lead", "init"], "Write the role manifest (step 1 of the lead skill)."),
+    command("checkin", &["lead", "checkin"], "One lead beat: gather, print, diff, journal."),
+    command("done", &["lead", "done"], "Expire this role: vacate the row and clear the manifest."),
+    command("cancel", &["lead", "cancel"], "Set or clear the cancel signal beside a role manifest."),
+    command("escalate", &["lead", "escalate"], "Escalate to the presiding role with work pending."),
+    command("verdict", &["lead", "verdict"], "Read the term tenure verdict."),
+    command("history", &["lead", "history"], "This role's recorded term, newest first."),
+    command("promote", &["role"], "Grant a role to a live session: <session> --scope <scope>."),
+    command("faq", &["lead", "faq"], "Durable answers a promoted session leaves behind."),
+    command("roles", &["roles"], "Bounded business-role definitions and resolutions."),
     group("chart", "The org chart's folds, pages and term records.", ORG_CHART),
 ];
 
 #[rustfmt::skip]
 const DISTRESS: &[Node] = &[
-    verb("scan", &["distress-scan"], "Read a transcript for a <help> tag; record a hit."),
-    verb("verdicts", &["distress-verdicts"], "Print each session's distress verdict."),
+    command("scan", &["distress-scan"], "Read a transcript for a <help> tag; record a hit."),
+    command("verdicts", &["distress-verdicts"], "Print each session's distress verdict."),
 ];
 
 #[rustfmt::skip]
 const LOOP: &[Node] = &[
-    verb("run", &["loop", "run"], "The unified driver loop: run --driver target."),
-    verb("check", &["loop-check"], "The stop-hook decision over external truth (read-only)."),
-    verb("control", &["loops"], "Every scheduled loop: the arms table, pause-all, resume-all."),
-    verb("finalize", &["finalize"], "The terminal-only side-effect writer."),
-    verb("probe", &["probe-run"], "Evaluate a plan's named probe list."),
-    verb("kill-check", &["kill-check"], "Evaluate a plan's kill_criteria."),
-    verb("verify-evidence", &["verify-evidence"], "Verify child-promise event evidence."),
-    verb("prove-it", &["prove-it-verdicts"], "Read terminal prove-it records."),
-    verb("review-coverage", &["review-coverage"], "Emit the review_coverage event for a PR."),
-    verb("judge", &["judge"], "Grade a plan against the five product questions."),
+    command("run", &["loop", "run"], "The unified driver loop: run --driver target."),
+    command("check", &["loop-check"], "The stop-hook decision over external truth (read-only)."),
+    command("control", &["loops"], "Every scheduled loop: the arms table, pause-all, resume-all."),
+    command("finalize", &["finalize"], "The terminal-only side-effect writer."),
+    command("probe", &["probe-run"], "Evaluate a plan's named probe list."),
+    command("kill-check", &["kill-check"], "Evaluate a plan's kill_criteria."),
+    command("verify-evidence", &["verify-evidence"], "Verify child-promise event evidence."),
+    command("prove-it", &["prove-it-verdicts"], "Read terminal prove-it records."),
+    command("review-coverage", &["review-coverage"], "Emit the review_coverage event for a PR."),
+    command("judge", &["judge"], "Grade a plan against the five product questions."),
     group("distress", "The <help> tag scan and its verdicts.", DISTRESS),
-    verb("attest", &["attest"], "The review-attestation carrier over the shared primary."),
+    command("attest", &["attest"], "The review-attestation carrier over the shared primary."),
 ];
 
 #[rustfmt::skip]
 const FLEET: &[Node] = &[
-    verb("census", &["census"], "One JSON row per long-lived process, with its build drift."),
-    verb("top", &["top"], "Every live worker process, fno-spawned and foreign."),
-    verb("orphans", &["orphans"], "Processes that outlived whatever started them."),
-    verb("sweep", &["sweep"], "Workers whose transcripts went quiet past their deadline."),
-    verb("watchdog", &["watchdog"], "Unfinished work: started nodes nobody holds."),
-    verb("truth", &["truth"], "A worker's supervision state from its transcript tail."),
-    verb("trace", &["trace"], "An agent's dispatch lifecycle from events.jsonl."),
-    verb("history", &["history"], "Each matching session's whole story."),
-    verb("digest", &["digest"], "The catch-up fold over events and ledger for a session."),
-    verb("feed", &["feed"], "The activity feed over questions and the graph."),
-    verb("needs", &["needs"], "The needs-me queue across all sessions."),
-    verb("pane-identity", &["pane-identity"], "Cross-check mux panes against registry rows."),
+    command("census", &["census"], "One JSON row per long-lived process, with its build drift."),
+    command("top", &["top"], "Every live worker process, fno-spawned and foreign."),
+    command("orphans", &["orphans"], "Processes that outlived whatever started them."),
+    command("sweep", &["sweep"], "Workers whose transcripts went quiet past their deadline."),
+    command("watchdog", &["watchdog"], "Unfinished work: started nodes nobody holds."),
+    command("truth", &["truth"], "A worker's supervision state from its transcript tail."),
+    command("trace", &["trace"], "An agent's dispatch lifecycle from events.jsonl."),
+    command("history", &["history"], "Each matching session's whole story."),
+    command("digest", &["digest"], "The catch-up fold over events and ledger for a session."),
+    command("feed", &["feed"], "The activity feed over questions and the graph."),
+    command("needs", &["needs"], "The needs-me queue across all sessions."),
+    command("pane-identity", &["pane-identity"], "Cross-check mux panes against registry rows."),
 ];
 
 #[rustfmt::skip]
 const AUDIT: &[Node] = &[
-    verb("bash-census", &["bash-census"], "Bash-call shares and top command tables over transcripts."),
-    verb("honesty-sweep", &["honesty-sweep"], "Declared-vs-measured sweep over declared populations."),
-    verb("evals-macro", &["evals-macro"], "The macro-eval failure-pattern leaderboard."),
-    verb("yard", &["yard"], "The yard identity fold per registry citizen."),
-    verb("drive-authority", &["drive-authority"], "Whether an operator holds a gate-hardening drive window."),
-    verb("stale-escalate", &["stale-escalate"], "Reconcile the stale-row question to the measured fleet."),
-    verb("friction-escalate", &["friction-escalate"], "Reconcile one watchdog-friction question to the fleet."),
+    command("bash-census", &["bash-census"], "Bash-call shares and top command tables over transcripts."),
+    command("honesty-sweep", &["honesty-sweep"], "Declared-vs-measured sweep over declared populations."),
+    command("evals-macro", &["evals-macro"], "The macro-eval failure-pattern leaderboard."),
+    command("yard", &["yard"], "The yard identity fold per registry citizen."),
+    command("drive-authority", &["drive-authority"], "Whether an operator holds a gate-hardening drive window."),
+    command("stale-escalate", &["stale-escalate"], "Reconcile the stale-row question to the measured fleet."),
+    command("friction-escalate", &["friction-escalate"], "Reconcile one watchdog-friction question to the fleet."),
     moved("incident", &["incident"], &[&["fleet-incident"]], "The durable fleet incident breaker."),
-    verb("test-run", &["test-run"], "The native test-suite process-group owner."),
-    verb("harness", &["harness"], "Instruments over the harness capability table."),
+    command("test-run", &["test-run"], "The native test-suite process-group owner."),
+    command("harness", &["harness"], "Instruments over the harness capability table."),
 ];
 
 #[rustfmt::skip]
 const SESSION: &[Node] = &[
-    verb("list", &["list"], "List registered agents."),
-    verb("logs", &["logs"], "Tail or follow an agent's log output."),
-    verb("attach", &["attach"], "Attach to a running agent session."),
-    verb("peek", &["peek"], "Observe a peer read-only."),
-    verb("watch", &["watch"], "Observe a held stream-json thread's turns live."),
-    verb("wait", &["wait"], "Block until an agent's row reaches a state."),
-    verb("stop", &["stop"], "Stop an agent's underlying session."),
-    verb("rm", &["rm"], "Remove an agent: its session first, its registry row after."),
-    verb("resume", &["resume"], "Resume a registered agent."),
-    verb("recover", &["recover"], "Restore a recorded claude session under its account."),
-    verb("restart", &["restart"], "Restart running fno processes onto fresh binaries."),
-    verb("status", &["status"], "Daemon liveness and the control-plane arms table."),
+    command("list", &["list"], "List registered agents."),
+    command("logs", &["logs"], "Tail or follow an agent's log output."),
+    command("attach", &["attach"], "Attach to a running agent session."),
+    command("peek", &["peek"], "Observe a peer read-only."),
+    command("watch", &["watch"], "Observe a held stream-json thread's turns live."),
+    command("wait", &["wait"], "Block until an agent's row reaches a state."),
+    command("stop", &["stop"], "Stop an agent's underlying session."),
+    command("rm", &["rm"], "Remove an agent: its session first, its registry row after."),
+    command("resume", &["resume"], "Resume a registered agent."),
+    command("recover", &["recover"], "Restore a recorded claude session under its account."),
+    command("restart", &["restart"], "Restart running fno processes onto fresh binaries."),
+    command("status", &["status"], "Daemon liveness and the control-plane arms table."),
 ];
 
 #[rustfmt::skip]
 const REGISTRY: &[Node] = &[
-    verb("adopt", &["adopt"], "Register an orphaned session by its session id."),
-    verb("register", &["register"], "Join this session to the mesh roster."),
-    verb("rename", &["rename"], "Rename a registry row's label."),
-    verb("name", &["name"], "The bridge to the canonical agent-name owner."),
-    verb("retask", &["retask"], "Retask one finished worker onto the node's next verb."),
-    verb("reap", &["reap"], "Retire finished agent rows."),
-    verb("reconcile", &["reconcile"], "Sync registry status with provider reality."),
-    verb("report", &["report"], "The inside-leg state push the per-turn hook calls."),
-    verb("whoami", &["whoami"], "This mesh worker's own registered name."),
-    verb("compaction", &["compaction"], "Compaction stamps."),
-    verb("transcript", &["transcript"], "Move a session bundle to another computer."),
-    verb("subscribe", &["subscribe"], "Stream registry transitions and pane exits as NDJSON."),
+    command("adopt", &["adopt"], "Register an orphaned session by its session id."),
+    command("register", &["register"], "Join this session to the mesh roster."),
+    command("rename", &["rename"], "Rename a registry row's label."),
+    command("name", &["name"], "The bridge to the canonical agent-name owner."),
+    command("retask", &["retask"], "Retask one finished worker onto the node's next command."),
+    command("reap", &["reap"], "Retire finished agent rows."),
+    command("reconcile", &["reconcile"], "Sync registry status with provider reality."),
+    command("report", &["report"], "The inside-leg state push the per-turn hook calls."),
+    command("whoami", &["whoami"], "This mesh worker's own registered name."),
+    command("compaction", &["compaction"], "Compaction stamps."),
+    command("transcript", &["transcript"], "Move a session bundle to another computer."),
+    command("subscribe", &["subscribe"], "Stream registry transitions and pane exits as NDJSON."),
 ];
 
 #[rustfmt::skip]
 const CLAIM: &[Node] = &[
-    verb("acquire", &["claim", "acquire"], "Acquire a claim on KEY for HOLDER."),
-    verb("list", &["claim", "list"], "Enumerate claims under the claims directory."),
-    verb("reap", &["claim", "reap"], "Archive every provably-dead claim."),
-    verb("refresh", &["claim", "refresh"], "Extend a TTL claim's expires_at."),
-    verb("release", &["claim", "release"], "Release a claim this holder owns."),
-    verb("session-pid", &["claim", "session-pid"], "Resolve the durable session pid."),
-    verb("status", &["claim", "status"], "Inspect a single claim."),
-    verb("backlog", &["claim", "backlog"], "The shared-store backlog claims."),
-    verb("export", &["claim", "export"], "Export the shared claim store."),
+    command("acquire", &["claim", "acquire"], "Acquire a claim on KEY for HOLDER."),
+    command("list", &["claim", "list"], "Enumerate claims under the claims directory."),
+    command("reap", &["claim", "reap"], "Archive every provably-dead claim."),
+    command("refresh", &["claim", "refresh"], "Extend a TTL claim's expires_at."),
+    command("release", &["claim", "release"], "Release a claim this holder owns."),
+    command("session-pid", &["claim", "session-pid"], "Resolve the durable session pid."),
+    command("status", &["claim", "status"], "Inspect a single claim."),
+    command("backlog", &["claim", "backlog"], "The shared-store backlog claims."),
+    command("export", &["claim", "export"], "Export the shared claim store."),
 ];
 
 #[rustfmt::skip]
 const WORKSPACE: &[Node] = &[
-    verb("register-worker", &["workspace", "register-worker"], "Register a worker in the workers registry."),
-    verb("reap", &["workspace", "reap"], "Age-reap expendable state files."),
-    verb("worktree", &["workspace", "worktree"], "Worktree lifecycle: ensure, status, cleanup, archive."),
-    verb("worker", &["worker"], "Delivery worker phases."),
+    command("register-worker", &["workspace", "register-worker"], "Register a worker in the workers registry."),
+    command("reap", &["workspace", "reap"], "Age-reap expendable state files."),
+    command("worktree", &["workspace", "worktree"], "Worktree lifecycle: ensure, status, cleanup, archive."),
+    command("worker", &["worker"], "Delivery worker phases."),
 ];
 
 #[rustfmt::skip]
 const INTERNAL: &[Node] = &[
-    verb("registry-json", &["registry-json"], "Registry rows as JSON, daemon-free."),
-    verb("discovered-json", &["discovered-json"], "The discovered-live-sessions lane as JSON."),
-    verb("codex-session-for-pid", &["codex-session-for-pid"], "A codex pane's session id from its rollout."),
-    verb("heal-token", &["heal-token"], "Adopt the session a token names, as JSON."),
-    verb("registry-repair", &["registry-repair"], "Roll a poisoned registry's schema_version back."),
-    verb("select-read", &["select-read"], "One bounded backlog read under the select timeout."),
-    verb("worked-nodes", &["worked-nodes"], "The worked-overlay join over a stdin rows payload."),
-    verb("target-family", &["target-family"], "The merge-posture family test for a message."),
-    verb("session-start-bytes", &["session-start-bytes"], "The session-start preamble byte total."),
-    verb("permission-tokens", &["permission-tokens"], "The permission-posture owner over a stdin payload."),
-    verb("sandbox-probe", &["sandbox-probe"], "The codex sandbox verdict over a stdin payload."),
-    verb("authorized-merge", &["authorized-merge"], "The one authorized merge operation over stdin JSON."),
+    command("registry-json", &["registry-json"], "Registry rows as JSON, daemon-free."),
+    command("discovered-json", &["discovered-json"], "The discovered-live-sessions lane as JSON."),
+    command("codex-session-for-pid", &["codex-session-for-pid"], "A codex pane's session id from its rollout."),
+    command("heal-token", &["heal-token"], "Adopt the session a token names, as JSON."),
+    command("registry-repair", &["registry-repair"], "Roll a poisoned registry's schema_version back."),
+    command("select-read", &["select-read"], "One bounded backlog read under the select timeout."),
+    command("worked-nodes", &["worked-nodes"], "The worked-overlay join over a stdin rows payload."),
+    command("target-family", &["target-family"], "The merge-posture family test for a message."),
+    command("session-start-bytes", &["session-start-bytes"], "The session-start preamble byte total."),
+    command("permission-tokens", &["permission-tokens"], "The permission-posture owner over a stdin payload."),
+    command("sandbox-probe", &["sandbox-probe"], "The codex sandbox verdict over a stdin payload."),
+    command("authorized-merge", &["authorized-merge"], "The one authorized merge operation over stdin JSON."),
 ];
 
 #[rustfmt::skip]
 const ENTRIES: &[Node] = &[
-    verb("spawn", &["spawn"], "Spawn a new agent; `mail ask` is the follow-up lane."),
+    command("spawn", &["spawn"], "Spawn a new agent; `mail ask` is the follow-up lane."),
     group("admit", "Spawn admission: gate, guard, overlays, axes, slot.", ADMIT),
     kept("mail", &["mail"], "Durable polled mailbox: send, reply, unread, ack, drain.", MAIL),
     Node {
@@ -307,7 +307,7 @@ const ENTRIES: &[Node] = &[
     group("registry", "Registry rows: register, name, reap, reconcile, report.", REGISTRY),
     kept("claim", &["claim"], "Work-claim coordination primitive.", CLAIM),
     kept("workspace", &["workspace"], "Worktree lifecycle and worker registration.", WORKSPACE),
-    group("internal", "Stdin-JSON verbs a hook or the daemon calls.", INTERNAL),
+    group("internal", "Stdin-JSON commands a hook or the daemon calls.", INTERNAL),
 ];
 
 /// The whole `agents` group as one node.
@@ -450,7 +450,7 @@ pub fn menu(path: &[&str], node: &Node) -> String {
         text.push_str(&format!("  {:width$}  {}{mark}\n", child.name, child.about));
     }
     text.push_str(&format!(
-        "\n{} <verb> --help shows one verb. Nothing is hidden: this list is the whole group.\n",
+        "\n{} <command> --help shows one command. Nothing is hidden: this list is the whole group.\n",
         spelled(path)
     ));
     text
@@ -459,7 +459,7 @@ pub fn menu(path: &[&str], node: &Node) -> String {
 fn unknown(path: &[&str], node: &Node, word: &str) -> String {
     let names: Vec<&str> = node.children.iter().map(|c| c.name).collect();
     format!(
-        "{} {word}: unknown verb. Verbs: {}. `{} --help` shows them.",
+        "{} {word}: unknown command. Commands: {}. `{} --help` shows them.",
         spelled(path),
         names.join(", "),
         spelled(path)
@@ -515,7 +515,7 @@ fn resolve(args: &[OsString]) -> Option<(Agents, Option<String>)> {
 }
 
 /// `fno help agents [<entry>...] [--all]`: the same menus, claimed here
-/// before the Python help verb sees them. A verb's own help forwards.
+/// before the Python help command sees them. A command's own help forwards.
 fn help(args: &[OsString]) -> Option<Agents> {
     let words: Vec<&str> = args
         .iter()
@@ -551,13 +551,13 @@ pub fn classify(args: &[OsString]) -> Option<Agents> {
         (Some("agents"), _) => {}
         _ => return None,
     }
-    if let Some(verb) = args.get(1).and_then(|a| a.to_str()) {
-        if let Some(instead) = crate::role_migration::retired_verb(verb) {
+    if let Some(command) = args.get(1).and_then(|a| a.to_str()) {
+        if let Some(instead) = crate::role_migration::retired_verb(command) {
             return Some(Agents::Refuse(format!(
-                "this role verb is retired; use {instead}"
+                "this role command is retired; use {instead}"
             )));
         }
-        if verb == "promote" {
+        if command == "promote" {
             return Some(Agents::Refuse(
                 "fno agents promote is now fno agents org promote <session> --scope <scope>".into(),
             ));
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn agents_menu_nested_spellings_rewrite_and_old_ones_notice() {
-        // A nested verb forwards the argv that answers today, tail intact.
+        // A nested command forwards the argv that answers today, tail intact.
         assert_eq!(
             run(&["fleet", "census", "--json"]),
             Some((Agents::Run(osv(&["agents", "census", "--json"])), None))
@@ -671,7 +671,7 @@ mod tests {
             forward(rundown, &osv(&["--out=/x.html"]), out),
             osv(&["agents", "lead", "ledger", "--out=/x.html"])
         );
-        // An unknown verb under a group this table defines refuses with one
+        // An unknown command under a group this table defines refuses with one
         // line listing the group; under a kept group it goes on unchanged.
         match run(&["fleet", "nope"]) {
             Some((Agents::Refuse(line), None)) => {
@@ -684,7 +684,7 @@ mod tests {
             other => panic!("expected Refuse, got {other:?}"),
         }
         assert_eq!(run(&["mail", "read", "fmail-x"]), None);
-        assert_eq!(run(&["no-such-verb"]), None);
+        assert_eq!(run(&["no-such-command"]), None);
         // Menus are native and list every child.
         match run(&["--help"]) {
             Some((Agents::Help(text), None)) => {
@@ -724,9 +724,9 @@ mod tests {
         }
         // Every `agents` row of the collapse map resolves to exactly one
         // destination: the node whose path, forward, or old spelling is the
-        // longest prefix of the row, or a deleted verb's tombstone.
+        // longest prefix of the row, or a deleted command's tombstone.
         let deleted = ["gate", "ping", "team-fold", "team-orphans", "term-ledger"];
-        let map = include_str!("../../../scripts/ci/verb-collapse-map.tsv");
+        let map = include_str!("../../../scripts/ci/command-collapse-map.tsv");
         let mut unplaced: Vec<String> = Vec::new();
         for line in map.lines().skip(1) {
             let leaf = line.split('\t').next().unwrap_or("");

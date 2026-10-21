@@ -1,9 +1,9 @@
-"""Integration: the merge verb and its owner, across the process seam.
+"""Integration: the merge command and its owner, across the process seam.
 
 The decision itself is under test in ``crates/fno-agents/src/authorized_merge.rs``
 against injected probes. What this file proves is the seam those unit tests
 cannot see: that ``fno do pr merge`` reaches the REAL compiled owner, that the
-receipt it reads back is rendered onto this verb's surface intact, and that a
+receipt it reads back is rendered onto this command's surface intact, and that a
 queue-armed merge GitHub lands later still gets its remote ref cleaned up.
 
 Only ``gh`` is faked. The payload, the subprocess, the JSON parse and the
@@ -50,12 +50,12 @@ def test_an_unreachable_owner_never_reads_as_a_merge(tmp_path, monkeypatch):
     A merge whose authorization could not be read has not been authorized, and
     `unknown` maps onto `held` - retry - never onto a silent success.
     """
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
-    def _gone(verb, payload, unavailable=VerbUnavailable, **_kw):
+    def _gone(command, payload, unavailable=CommandUnavailable, **_kw):
         raise unavailable("the fno-agents binary was not found")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _gone)
+    monkeypatch.setattr("fno.rust_binary.command_call", _gone)
     monkeypatch.setattr(_merge, "_authorized_merge", _REAL)
     receipt = _merge._authorized_merge(
         7, str(tmp_path), effect="arm", approved=True, source="config"
@@ -103,7 +103,7 @@ def test_a_queue_merged_pr_gets_its_remote_ref_deleted_once(tmp_path, monkeypatc
     """When finalize arms GitHub's queue and the queue
     lands the merge later, no fno process runs the post-merge step, so the
     remote ref stayed behind forever. The watcher tick is the detector that
-    sees the confirmed merge, so it pays that step through the merge verb's own
+    sees the confirmed merge, so it pays that step through the merge command's own
     cleanup owner - one implementation, not a second one for this path.
     """
     from fno.pr_watch._dispatch import _finish_queue_merge

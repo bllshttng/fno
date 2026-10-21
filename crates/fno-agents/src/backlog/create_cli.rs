@@ -369,7 +369,7 @@ fn refuse_tracker_owned(label: &str) -> Result<(), Refusal> {
     if backend != "graph" {
         return Err(refused(
             format!(
-                "fno backlog {label}: this verb owns graph state; under the {backend} \
+                "fno backlog {label}: this command owns graph state; under the {backend} \
                  tracker backend it is refused. Track the item in the tracker by its id."
             ),
             1,
@@ -1926,7 +1926,7 @@ pub fn parse_idea(tail: &[String]) -> ParsedIdea {
 
 /// Read --details from a file ("-" = stdin) when --details-file names one.
 /// The refusal texts are the shared seam's (fno/text_or_file.py), which the
-/// intake and capture verbs still serve: the twin must stay byte-equal.
+/// intake and capture commands still serve: the twin must stay byte-equal.
 fn read_text_arg(
     details: &Option<String>,
     details_file: &Option<String>,
@@ -2597,7 +2597,7 @@ fn confirm(prompt: &str) -> bool {
     })
 }
 
-/// `fno backlog idea` — the plan-less capture verb with the pre-mint fold
+/// `fno backlog idea` — the plan-less capture command with the pre-mint fold
 /// gate and wave filing. Share add's create path once the gate passes.
 pub fn run_idea(tail: &[String]) -> i32 {
     let idea = match parse_idea(tail) {

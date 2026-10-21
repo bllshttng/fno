@@ -36,7 +36,7 @@ Repository = "https://github.com/bllshttng/fno"
 Issues = "https://github.com/bllshttng/fno/issues"
 
 # The Python control-plane CLI ships as `fno-py`, NOT `fno`: the Rust mux binary
-# (crates/fno) owns `fno` on PATH and forwards every non-mux verb here by
+# (crates/fno) owns `fno` on PATH and forwards every non-mux command here by
 # absolute path (`<uv tool dir>/fno/bin/fno-py`). Naming this `fno` too would
 # make the two fight for the name on PATH (whichever `~/.local/bin` vs
 # `~/.cargo/bin` wins), silently breaking `fno mux`. `fno-py` slots into the

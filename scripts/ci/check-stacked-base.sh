@@ -33,7 +33,7 @@ printf '%s\n' "$out"
 case "$rc" in
   0) state=success; desc="base still leads to the default branch" ;;
   3) state=failure; desc="base branch no longer leads to the default branch" ;;
-  127) state=failure; desc="fno-agents binary missing (the lineage verb is native): run fno doctor update --rust" ;;
+  127) state=failure; desc="fno-agents binary missing (the lineage command is native): run fno doctor update --rust" ;;
   *) state=failure; desc="lineage check could not evaluate (exit $rc)" ;;
 esac
 

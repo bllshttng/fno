@@ -103,9 +103,9 @@ def test_cleanup_does_not_delete_a_successors_refreshed_manifest(tmp_path):
 
 
 def test_a_crashed_lead_s_leftover_manifest_captures_nobody(tmp_path):
-    """Expiry must not depend on the verb being called, and it does not.
+    """Expiry must not depend on the command being called, and it does not.
 
-    A lead that crashes never runs the expire verb, so its scope manifest
+    A lead that crashes never runs the expire command, so its scope manifest
     stays on disk. The registry row is authority: the dead lead's own read
     resolves nothing (terminal row), and a successor session resolving over
     the same file also gets nothing (its row holds no role over that
@@ -245,9 +245,9 @@ def _init(
 
     from fno.lead.cli import lead_app
 
-    def readiness(verb, args):
+    def readiness(command, args):
         if readiness_calls is not None:
-            readiness_calls.append((verb, args))
+            readiness_calls.append((command, args))
         if readiness_error:
             return readiness_error, None
         return None, {"ready": True}

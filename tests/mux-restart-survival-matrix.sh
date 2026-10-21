@@ -442,7 +442,7 @@ echo "[restart 1] mux server $KILLED_SERVER SIGKILLed"
 start_server
 # The stored workspace restore runs after every fresh server: the slot join
 # (a re-adopted pane returns to its own leaf by birth pane id) is exactly
-# what this verb drives.
+# what this command drives.
 retry_ctl 10 "$MUX_BIN" mux workspace restore --session "$SESSION" --json >/dev/null 2>&1 || true
 
 for row in a b c d; do

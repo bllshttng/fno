@@ -30,7 +30,7 @@ set -uo pipefail
 
 # Every ratchet below compares a `sort`ed inventory against a literal frozen in
 # this file, so the collation order IS the contract. Left to the ambient locale
-# it is not: a UTF-8 locale folds punctuation and orders `client_verbs.rs` before
+# it is not: a UTF-8 locale folds punctuation and orders `client_commands.rs` before
 # `client.rs`, while CI's C locale does the reverse, so the same tree failed on a
 # developer machine and passed on CI with a diff no one could read (the two lists
 # hold identical entries in swapped positions). Pin it once, here.
@@ -522,7 +522,7 @@ while IFS= read -r reader; do
     fi
     if [ "$reader" = "crates/fno-agents/src/backlog/session_cli.rs" ]; then
         # session_cli's "status" literals are GRAPH-row reads (the reap-open
-        # open-phase check) and the verbs' own JSON receipt vocabulary
+        # open-phase check) and the commands' own JSON receipt vocabulary
         # (joined/opened/closed/skipped/ended), never plan frontmatter; its
         # only plan read is the frontmatter `claims:`/`node:` name walk. The
         # "ready" spelling is a #[cfg(test)] graph-row fixture, the merge_hold

@@ -7,7 +7,7 @@
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
 # leads, mail, feed questions and harness panes, then shoots it with
 # `fno mux serve --snapshot --server`, kills the server and deletes the root.
-# Every view a paint PR changes renders populated: the verb itself refuses an
+# Every view a paint PR changes renders populated: the command itself refuses an
 # empty view render, and the refusal dies here.
 set -euo pipefail
 
@@ -145,7 +145,7 @@ done
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
-# The first backlog verb migrates the store and publishes its tombstone AS
+# The first backlog command migrates the store and publishes its tombstone AS
 # the claims path: a marker file where the lock needs a directory. The
 # marker's backup imported at publish, so retiring the marker and
 # recreating the directory hands the path back to the legacy lock writer.
@@ -310,7 +310,7 @@ agents = [
 ]
 import sqlite3
 conn = sqlite3.connect(db)
-# The registry rides the graph store the verbs migrated to .fno/db. Its
+# The registry rides the graph store the commands migrated to .fno/db. Its
 # tables are created lazily by the first Rust registry writer, so the seed
 # matches that DDL instead of assuming they exist.
 if not conn.execute(

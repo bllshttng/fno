@@ -25,7 +25,7 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// Protected branches the verb refuses to rebase (exit 3).
+/// Protected branches the command refuses to rebase (exit 3).
 const PROTECTED: [&str; 4] = ["main", "master", "develop", "dev"];
 
 /// Environment for git calls with a NON-INTERACTIVE editor: `git rebase

@@ -28,7 +28,7 @@ STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
 echo "CALL: $*" >> "$STUB_LOG"
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -282,13 +282,13 @@ ok 'corrupted -> failed' "$(field "$out")" 'failed'
 has 'corrupted reason' "$out" 'claim is corrupted; force-release or repair'
 no  'corrupted did NOT spawn' "$(calllog)" 'agents spawn '
 
-# --- stale fno WITHOUT the verb -> fail CLOSED, NO spawn ----------------------
+# --- stale fno WITHOUT the command -> fail CLOSED, NO spawn ----------------------
 # empty stdout + non-zero rc (Typer "No such command" goes to stderr, suppressed).
 out="$(STUB_VERDICT='' STUB_VERDICT_RC=2 \
   run --name w5 --provider claude --message '/target x' --node "$NODE")"
-ok 'verb-absent -> failed (fail-closed)' "$(field "$out")" 'failed'
-has 'verb-absent reason' "$out" 'spawn-guard unavailable'
-no  'verb-absent did NOT spawn' "$(calllog)" 'agents spawn '
+ok 'command-absent -> failed (fail-closed)' "$(field "$out")" 'failed'
+has 'command-absent reason' "$out" 'spawn-guard unavailable'
+no  'command-absent did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- spawn-guard returns dispatchable but the launch FAILS -> failed -----------
 out="$(STUB_VERDICT='{"verdict":"dispatchable","reservation_key":"dispatch:'"$NODE"'","reservation_holder":"dispatch-skill:1"}' \

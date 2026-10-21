@@ -3,7 +3,7 @@
 A registry row written by the retained Python create helper is read by the
 Rust `ask` follow-up against a fake codex on PATH: both runtimes share one
 registry. Skips (not fails) when the compiled ``fno-agents`` binary is
-absent (sdist test env), mirroring ``test_rust_verb_parity.py``.
+absent (sdist test env), mirroring ``test_rust_command_parity.py``.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from fno.rust_binary import find_dev_binary
 
 
 # --------------------------------------------------------------------------- #
-# Rust binary discovery (mirrors test_rust_verb_parity).
+# Rust binary discovery (mirrors test_rust_command_parity).
 # --------------------------------------------------------------------------- #
 
 RUST_BIN = find_dev_binary()

@@ -469,7 +469,7 @@ fn stage_stopped_row(
         e.created_at = "2026-09-01T00:00:00Z".into();
         if with_stop {
             e.stop = Some(state::StopRecord {
-                by: "stop-verb".into(),
+                by: "stop-command".into(),
                 at: "2026-09-15T00:00:00Z".into(),
                 reason: None,
             });

@@ -1,7 +1,7 @@
 """CLI-layer tests for `fno do pr merge`.
 
 The merge logic itself is characterized in test_pr_merge.py and, on the
-Rust side, by the operand parity suite; here we only assert the Typer verb
+Rust side, by the operand parity suite; here we only assert the Typer command
 forwards its args through the authorized-merge operand door and propagates
 the child's exit code.
 """
@@ -170,15 +170,15 @@ _HOOK_SOURCE = (
 _ROUTE_RE = re.compile(r"fno do pr ([a-z][a-z0-9-]*)")
 
 
-def _refusal_named_pr_verbs() -> set[str]:
-    """Every `fno do pr <verb>` a refusal surface names, read from source.
+def _refusal_named_pr_commands() -> set[str]:
+    """Every `fno do pr <command>` a refusal surface names, read from source.
 
     Scans the PreToolUse hook text, the quota broker's floor refusal, and the
     broker's malformed-argv refusal, so a future refusal naming a missing or
-    shape-broken verb fails the guard test instead of advertising a remedy
+    shape-broken command fails the guard test instead of advertising a remedy
     nobody executed. One hop through each surface's rendered help covers help
     text that names further routes (the graphql-exec epilog teaches its own
-    argv); deeper text like an unrelated verb's skill reference stays out.
+    argv); deeper text like an unrelated command's skill reference stays out.
     """
     texts = [
         _HOOK_SOURCE.read_text(),
@@ -188,25 +188,25 @@ def _refusal_named_pr_verbs() -> set[str]:
     frontier: set[str] = set()
     for text in texts:
         frontier.update(_ROUTE_RE.findall(text))
-    verbs: set[str] = set()
+    commands: set[str] = set()
     while frontier:
-        verb = frontier.pop()
-        if verb in verbs:
+        command = frontier.pop()
+        if command in commands:
             continue
-        result = runner.invoke(app, ["do", "pr", verb, "--help"])
+        result = runner.invoke(app, ["do", "pr", command, "--help"])
         assert result.exit_code == 0, (
-            f"refusal names `fno do pr {verb}` but --help fails"
+            f"refusal names `fno do pr {command}` but --help fails"
         )
-        verbs.add(verb)
+        commands.add(command)
         frontier.update(_ROUTE_RE.findall(result.stdout))
-    assert verbs, "route scan found nothing; the guard went blind"
-    return verbs
+    assert commands, "route scan found nothing; the guard went blind"
+    return commands
 
 
 def test_every_refusal_named_route_is_a_registered_command():
-    for verb in sorted(_refusal_named_pr_verbs()):
-        result = runner.invoke(app, ["do", "pr", verb, "--help"])
-        assert result.exit_code == 0, f"refusal names `fno do pr {verb}` but --help fails"
+    for command in sorted(_refusal_named_pr_commands()):
+        result = runner.invoke(app, ["do", "pr", command, "--help"])
+        assert result.exit_code == 0, f"refusal names `fno do pr {command}` but --help fails"
 
 
 def _graphql_route_argv() -> list[str]:
@@ -267,7 +267,7 @@ def test_the_exact_refusal_printed_command_returns_a_query_result(tmp_path, monk
 
 
 def test_pr_merge_forwards_args_to_the_operand_door(monkeypatch):
-    """The verb forwards its args through the merge operand door and exits its rc."""
+    """The command forwards its args through the merge operand door and exits its rc."""
     import subprocess
 
     import fno.rust_binary
@@ -307,7 +307,7 @@ def test_bind_created_forwards_flags_to_the_binary(monkeypatch):
             "--node", "x-1111",
         ],
     )
-    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # One JSON argv element (the logs-command door): the leg reads its payload
     # from argv, never stdin - the passthrough inherits the caller's stdin,
     # and a TTY there would hang a stdin read.
     assert seen["argv"][0:2] == ["/fake/fno-agents", "pr-closure-bind-created"]

@@ -26,7 +26,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Stub the event sink and CAPTURE ITS ARGV: the assertion must read what was
 # actually handed to `doctor event emit`, not what the receipt claims.
-# Discriminates on the verb, like tests/hooks/test_code_review_attest.sh's stub:
+# Discriminates on the command, like tests/hooks/test_code_review_attest.sh's stub:
 # the emitter shells `fno` for more than the event sink now (it clears the
 # review hold once a verdict exists for the head), and a stub that captured
 # EVERY call overwrote the payload under assertion with the last unrelated one.
@@ -404,8 +404,8 @@ stored '.reason' | grep -qx "empty_diff" && pass "terminal row names reason=empt
   || fail "terminal reason: want empty_diff, got '$(stored '.reason')'"
 [[ "$(stored '.reviewed_file_count')" == "0" ]] && pass "terminal row records files=0" \
   || fail "terminal files: want 0, got '$(stored '.reviewed_file_count')'"
-[[ "$(stored '.verb')" == "/code-review" ]] && pass "terminal row names the verb" \
-  || fail "terminal verb: got '$(stored '.verb')'"
+[[ "$(stored '.command')" == "/code-review" ]] && pass "terminal row names the command" \
+  || fail "terminal command: got '$(stored '.command')'"
 [[ -n "$(stored '.invocation_id')" && "$(stored '.invocation_id')" != "<missing>" ]] \
   && pass "terminal row carries an invocation_id" \
   || fail "terminal row lost invocation_id"

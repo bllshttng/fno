@@ -1,4 +1,4 @@
-# Groups over the menu cap today (cap 12 at levels 1-3, hidden verbs count).
+# Groups over the menu cap today (cap 12 at levels 1-3, hidden commands count).
 # Shrink-only: `fno doctor lint menu-caps` refuses a row above, below, or
 # inside the cap. Seed or lower a row from the guard's own output, never by hand.
 # Columns: path, ceiling, note (where the fold goes).
@@ -8,7 +8,7 @@ agents mail (python compat)	20	the flat mail registrations behind mail and mail 
 agents org (python compat)	13	the Python org group the front door shadows; goes with the compat leg
 backlog	54	retire the legacy flat spellings once their window ends; split the admin junk drawer
 config	19	nest under typed groups
-do pr	32	nest the pr verbs under typed groups
+do pr	32	nest the pr commands under typed groups
 doctor	20	nest under typed groups
-fno-agents	136	nest the binary verbs under typed groups
+fno-agents	136	nest the binary commands under typed groups
 mux	21	nest under typed groups

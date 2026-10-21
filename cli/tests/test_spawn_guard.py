@@ -1,6 +1,6 @@
-"""Unit tests for the `fno agents spawn-guard` verb (x-73cc).
+"""Unit tests for the `fno agents spawn-guard` command (x-73cc).
 
-The verb is the single source of truth for the bg-dispatch mutex shared by
+The command is the single source of truth for the bg-dispatch mutex shared by
 `/target bg` (dispatch-node.sh) and `/agent spawn` (spawn.sh): Guard 1 (the
 node:<id> claim probe, fail-closed) + Guard 2 (the create-only dispatch:<id>
 reservation). These tests root all claims under a tmp dir so they never touch
@@ -254,7 +254,7 @@ def test_probe_crash_fails_closed(claims_tmp, monkeypatch):
 
 
 def test_malformed_ttl_fails_closed(claims_tmp):
-    # _parse_ttl raises ValueError on a bad TTL; the verb must fail CLOSED
+    # _parse_ttl raises ValueError on a bad TTL; the command must fail CLOSED
     # (verdict=error, non-zero) rather than trace out, so the caller refuses.
     res = _invoke("x-4444", "--holder", "h", "--ttl", "not-a-ttl", "--json")
     assert res.exit_code != 0
@@ -293,18 +293,18 @@ def test_a_worked_authority_outage_names_itself_not_a_running_worker(
 def _native_worker_observation(monkeypatch, worker, *, worked_error=None, warning=None):
     from fno import rust_binary
 
-    call = rust_binary.verb_call
+    call = rust_binary.command_call
 
-    def observe(verb, payload, *args, **kwargs):
-        if verb == ["backlog", "advance", "--stdin"] and payload.get("op") == "claim":
+    def observe(command, payload, *args, **kwargs):
+        if command == ["backlog", "advance", "--stdin"] and payload.get("op") == "claim":
             return {"holder": "unknown", "truth_status": "unknown", "worker": worker,
                     "action": "blocked", "blocks_dispatch": True,
                     "block_reason": "worked-authority-unavailable" if worked_error else f"held: worked overlay: {worker}",
                     "verdict": "dead_predecessor", "worked_error": worked_error,
                     "warning": warning}
-        return call(verb, payload, *args, **kwargs)
+        return call(command, payload, *args, **kwargs)
 
-    monkeypatch.setattr(rust_binary, "verb_call", observe)
+    monkeypatch.setattr(rust_binary, "command_call", observe)
 
 
 def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(

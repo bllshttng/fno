@@ -85,7 +85,7 @@ def operator_turn(tmp_path: Path, monkeypatch, native_backlog_door):
 
 
 def _pin(monkeypatch, tmp_path: Path, rows: list[dict], session: str = "s-test") -> None:
-    """Point the verb at a fixture transcript through the env pins."""
+    """Point the command at a fixture transcript through the env pins."""
     tp = _transcript(tmp_path, rows)
     monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", session)
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(tp))
@@ -168,8 +168,8 @@ def test_operator_request_refuses_unreadable_queue(
     assert _entries(tmp_graph)[0]["request_origin"] == "unknown"
 
 
-def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypatch):
-    """AC: both queue verbs hand the resolved ids and paths to the Rust reader door,
+def test_queue_commands_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypatch):
+    """AC: both queue commands hand the resolved ids and paths to the Rust reader door,
     status prints the payload without `turns`, list prints the turns, a set
     `cursor_error` warns on stderr, and a door error exits 1 naming the reader
     instead of ever reading as depth 0."""
@@ -177,8 +177,8 @@ def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypat
 
     captured: dict = {}
 
-    def stub(verb, args=()):
-        captured["verb"] = verb
+    def stub(command, args=()):
+        captured["verb"] = command
         captured["args"] = args
         return (
             None,
@@ -218,7 +218,7 @@ def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypat
     assert rows[0]["excerpt"] == "hello"
     assert "scan cursor not saved" in listed.output
 
-    monkeypatch.setattr(rb, "call_binary_json", lambda verb, args=(): ("reader gone", None))
+    monkeypatch.setattr(rb, "call_binary_json", lambda command, args=(): ("reader gone", None))
     failed = runner.invoke(app, ["inbox", "user", "status", "--json"])
     assert failed.exit_code == 1
     assert "operator turn reader" in failed.output

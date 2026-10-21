@@ -155,7 +155,7 @@ fi
 # Runnable form, three shapes:
 #   1. an argument placeholder - `claude rm <id>`, `{row}`, `$job`
 #      An opening double quote counts too, so `fno inbox ask "<question>"`
-#      is a hit: the quoted form is how a question verb gets taught.
+#      is a hit: the quoted form is how a question command gets taught.
 #   2. a concrete short id - `claude rm 7c5dcf5d`, which is strictly MORE
 #      copyable than a placeholder and was missed by an earlier draft
 #   3. the command at end of line, which is how a wrapped format string
@@ -163,7 +163,7 @@ fi
 #      `f"{short_id} to clean later."` on the next shipped a live
 #      instruction straight past a line-scoped scan
 #
-# SUBVERB is why an earlier draft passed vacuously on `fno law set <subject>`.
+# SUBCOMMAND is why an earlier draft passed vacuously on `fno law set <subject>`.
 # The registry retires two-token ROOTS, but the string a reader copies names a
 # LEAF under one, so the argument sits a word further along than shapes 1-3
 # look. One optional lowercase word closes that, and it applies to all three
@@ -173,7 +173,7 @@ fi
 #
 # This DOES catch descriptive strings of the same shape. The measured specimen
 # is `format!("claude rm exited {code}")` in daemon.rs, where `exited` reads as
-# a sub-verb to any regex. That is not a reason to narrow: it is the first kind
+# a sub-command to any regex. That is not a reason to narrow: it is the first kind
 # of string the `retired-ok:` marker exists to excuse, and the tree holds one
 # of them. Declaring one marker is cheaper than a blind spot that hides every
 # f-string instruction under a retired root. An earlier draft of THIS line
@@ -181,7 +181,7 @@ fi
 # description; the daemon.rs specimen refutes it, since the brace there sits
 # after a word, not against the root.
 #
-# SUBVERB pairs with the ARGUMENT shapes (1 and 2) only, never with shape 3.
+# SUBCOMMAND pairs with the ARGUMENT shapes (1 and 2) only, never with shape 3.
 # Shape 3 is "command dangling at end of line", and one optional word there
 # turns any trailing prose into a hit: `"... came from fno test earlier"` would
 # match where only `"... fno test"` did before. That is a flood, and unlike the
@@ -190,8 +190,8 @@ fi
 # is a retired root and `fno workspace worktree ensure <name>` is the runnable
 # string under it, so a one-word bound passed it vacuously. Two is the depth
 # the real registry needs; raise it only against a specimen.
-SUBVERB='([[:space:]]+[a-z][a-z-]*){0,2}'
-ARG="(${SUBVERB}"'([[:space:]]+[<{$"]|[[:space:]]+[0-9a-f]{8})|[[:space:]]*"[[:space:]]*$)'
+SUBCOMMAND='([[:space:]]+[a-z][a-z-]*){0,2}'
+ARG="(${SUBCOMMAND}"'([[:space:]]+[<{$"]|[[:space:]]+[0-9a-f]{8})|[[:space:]]*"[[:space:]]*$)'
 PATTERN=""
 for cmd in "${CMDS[@]}"; do
     PATTERN="${PATTERN}${PATTERN:+|}${cmd}${ARG}"
@@ -203,18 +203,18 @@ CANARY="run ${CMDS[0]} <short_id> to clean up"
 printf '%s\n' "$CANARY" | grep -qE "$PATTERN" ||
     fail "pattern does not match the canary; every future sweep would pass vacuously"
 
-# The sub-verb form needs its own canaries, or SUBVERB could rot to a no-op
+# The sub-command form needs its own canaries, or SUBCOMMAND could rot to a no-op
 # and the bare canary above would still pass. All three argument shapes are
 # asserted, because an earlier draft covered only the angle-bracket one and
 # let every f-string instruction under a retired root through.
 for shape in "set <subject> <decision>" "set {subject}" "set 7c5dcf5d" \
              "worktree ensure <name>" 'set "subject"'; do
     printf '%s\n' "use \`${CMDS[0]} ${shape}\` instead" | grep -qE "$PATTERN" ||
-        fail "pattern misses sub-verb shape '${shape}'; a leaf under a retired root would pass"
+        fail "pattern misses sub-command shape '${shape}'; a leaf under a retired root would pass"
 done
 
-# Negative controls, one per way the sub-verb widening could flood. The first
-# is a mid-sentence mention. The second is the shape SUBVERB deliberately does
+# Negative controls, one per way the sub-command widening could flood. The first
+# is a mid-sentence mention. The second is the shape SUBCOMMAND deliberately does
 # NOT reach: a wrapped string whose trailing prose ends the line, which would
 # turn every sentence mentioning a retired command into a hit.
 NEGATIVE_CANARY="${CMDS[0]} is now ${INSTEAD[0]}"
@@ -223,7 +223,7 @@ printf '%s\n' "$NEGATIVE_CANARY" | grep -qE "$PATTERN" &&
 
 TRAILING_PROSE_CANARY="\"the value came from ${CMDS[0]} earlier\""
 printf '%s\n' "$TRAILING_PROSE_CANARY" | grep -qE "$PATTERN" &&
-    fail "sub-verb reached the end-of-line shape; trailing prose would flood the report"
+    fail "sub-command reached the end-of-line shape; trailing prose would flood the report"
 
 # --- 3. Scan the caller-facing surfaces ------------------------------------
 # A surface is a directory plus an extension, never a `**` pathspec (see the

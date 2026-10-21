@@ -26,14 +26,14 @@ def test_bundle_check_emits_terminal_verdict_line(monkeypatch):
     import fno.bundle.cli as bc
 
     # FAIL path: underlying freshness script reports drift (rc=1).
-    monkeypatch.setattr(bc, "_forward", lambda verb, args: 1)
+    monkeypatch.setattr(bc, "_forward", lambda command, args: 1)
     result = runner.invoke(app, ["doctor", "bundle", "check"])
     assert result.exit_code == 1
     lines = result.stdout.strip().splitlines()
     assert lines[-1] == "fno doctor bundle check: FAIL (rc=1)", result.stdout
 
     # PASS path: rc=0.
-    monkeypatch.setattr(bc, "_forward", lambda verb, args: 0)
+    monkeypatch.setattr(bc, "_forward", lambda command, args: 0)
     result = runner.invoke(app, ["doctor", "bundle", "check"])
     assert result.exit_code == 0
     assert result.stdout.strip().splitlines()[-1] == "fno doctor bundle check: PASS"

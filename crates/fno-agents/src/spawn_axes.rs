@@ -174,7 +174,7 @@ pub fn decide(payload: &Value) -> Value {
     }
 
     // --- pane group ----------------------------------------------------- //
-    // The placement judgment itself is the spawn-overlay verb's; this only
+    // The placement judgment itself is the spawn-overlay command's; this only
     // decides what the seam does with its answer. An unavailable overlay
     // degrades open with a named line, never failing the spawn.
     let pane_group = axis(payload, "pane_group");
@@ -335,7 +335,7 @@ pub fn reentry_mechanism_decide(ask: &Value) -> Value {
 }
 
 /// The `wake_name` field's answer: the identity a wake fork carries, read
-/// from the registry beside the reentry plan (same field-on-a-verb shape).
+/// from the registry beside the reentry plan (same field-on-a-command shape).
 /// An unreadable registry degrades to an empty one, so the full rung chain
 /// (row, tombstone, transcript, alias) still answers: a wake must never
 /// block mail on registry state.
@@ -363,7 +363,7 @@ pub fn wake_name_decide(ask: &Value) -> Value {
     answer
 }
 
-/// The verb entry: JSON payload on stdin, decision JSON on stdout (the
+/// The command entry: JSON payload on stdin, decision JSON on stdout (the
 /// spawn-overlay shape). Exit 0 even for a "no axes" answer; exit 2 only for
 /// transport-level faults (unreadable payload), which the caller reports as
 /// the owner being unavailable.
@@ -394,7 +394,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     };
     // A `dispatch_credit` field answers who answers for a node dispatch:
     // the covering role owner plus, when the role row carries a live
-    // session, the lead to mail at launch (same field-on-a-verb shape as
+    // session, the lead to mail at launch (same field-on-a-command shape as
     // node_seed).
     if let Some(ask) = parsed.get("dispatch_credit") {
         println!("{}", crate::dispatch_credit::covering_role(ask));
@@ -412,13 +412,13 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `spawn_node` field answers which node the spawn works, with the
-    // source that named it (same field-on-a-verb shape as node_seed).
+    // source that named it (same field-on-a-command shape as node_seed).
     if let Some(ask) = parsed.get("spawn_node") {
         println!("{}", crate::node_seed::resolve_node(ask));
         return 0;
     }
     // A `keeper_posture` field asks the agy_launch owner which permission
-    // tokens a launch carries (same field-on-a-verb shape as node_seed).
+    // tokens a launch carries (same field-on-a-command shape as node_seed).
     if let Some(ask) = parsed.get("keeper_posture") {
         let answer = match crate::agy_launch::keeper_posture(
             ask.get("harness").and_then(Value::as_str).unwrap_or(""),
@@ -442,7 +442,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `reentry_mechanism` field asks the reentry resolver which relaunch a
-    // wake may take (the same field-on-a-verb shape). It calls the
+    // wake may take (the same field-on-a-command shape). It calls the
     // registry-writing wrapper, so a route the resolver recovered from a
     // bare row's transcript is also persisted here, the same as any door.
     if let Some(ask) = parsed.get("reentry_mechanism") {
@@ -451,20 +451,20 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     }
     // A `wake_name` field asks which identity a wake fork carries: the
     // session's last recorded registry name, else the wake- alias (same
-    // field-on-a-verb shape).
+    // field-on-a-command shape).
     if let Some(ask) = parsed.get("wake_name") {
         println!("{}", wake_name_decide(ask));
         return 0;
     }
     // A `reap_receipt` field asks the receipt builder for the Python
-    // registry choke point's removal receipt (same field-on-a-verb shape).
+    // registry choke point's removal receipt (same field-on-a-command shape).
     if let Some(ask) = parsed.get("reap_receipt") {
         println!("{}", crate::receipt::decide_reap_receipt(ask));
         return 0;
     }
     // A `removal_accounting` field runs the registry write choke point's
     // removal accounting for the Python write primitive (same
-    // field-on-a-verb shape): the before-rows ride the payload, the
+    // field-on-a-command shape): the before-rows ride the payload, the
     // after-rows read from the registry on disk, and the existing
     // accounting stages the receipts and emits the events.
     if let Some(ask) = parsed.get("removal_accounting") {
@@ -472,7 +472,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `pi_session_lookup` field asks the pi store owner what a
-    // (cwd, session id) pair resolves to right now (same field-on-a-verb
+    // (cwd, session id) pair resolves to right now (same field-on-a-command
     // shape as node_seed).
     if let Some(ask) = parsed.get("pi_session_lookup") {
         use std::path::PathBuf;
@@ -529,7 +529,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `pi_route` field asks the pi route owner which provider, model and
-    // effort tokens a launch carries (same field-on-a-verb shape).
+    // effort tokens a launch carries (same field-on-a-command shape).
     if let Some(ask) = parsed.get("pi_route") {
         let s = |k: &str| ask.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let route = crate::pi::pi_route(&s("model"), &s("effort"), &s("tools"), &s("deny_tools"));
@@ -562,7 +562,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     // The fallthrough WAS the axis composition (config --model/--effort/
     // --substrate/--permission-mode injection); it is retired with the flags.
     // A stale caller reads the refusal and stops; the field asks above are
-    // the verb's live surface.
+    // the command's live surface.
     println!(
         "{}",
         serde_json::json!({

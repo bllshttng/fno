@@ -12,7 +12,7 @@
 #     the raw hook payload passed through on stdin. The daemon stamps the row
 #     additively (an empty primary session id fills, a resumed id fills the
 #     related slot, a third distinct id refuses) so mail and liveness stop
-#     guessing ids from transcripts. The verb never lazy-starts a daemon and
+#     guessing ids from transcripts. The command never lazy-starts a daemon and
 #     spools the payload to a capped file when the daemon is down, so a
 #     session start never blocks on it. Fail-open, exit 0 always.
 #   every other session: the same thin call, no --agent-self. The daemon
@@ -91,7 +91,7 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
     # already binds the row's mux ref to this pane (the `--wait-row` flag is
     # the same pane-worker marker both paths key on), and the Python leg's
     # remaining job here is opening a parked pending graph row. Panes are the
-    # rare substrate; every other lane stays on the thin verb alone.
+    # rare substrate; every other lane stays on the thin command alone.
     if [[ "${FNO_AGENT_ROW_PENDING:-}" == "${FNO_AGENT_SELF:-}" ]]; then
         PY_ARGS=(--harness "$HARNESS" --agent-self "$FNO_AGENT_SELF" --cwd "$REPO_ROOT")
         [[ -n "$SESSION_ID" ]] && PY_ARGS+=(--session-id "$SESSION_ID")
@@ -107,7 +107,7 @@ fi
 # Every session reports (decision D3 revised): the daemon mints a row for a
 # session no row holds yet. A session with no launch record is the user's
 # own: origin operator, an occupant toward the live cap, never refused,
-# managed, mailed or reaped. The same thin verb carries the raw payload on
+# managed, mailed or reaped. The same thin command carries the raw payload on
 # stdin; fail-open, exit 0 always; stdout stays empty.
 if [[ -z "$BIN" ]] || [[ -z "$SESSION_ID" ]]; then
     exit 0

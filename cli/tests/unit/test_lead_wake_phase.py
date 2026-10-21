@@ -834,7 +834,7 @@ def test_an_absent_respawn_ceiling_defaults_to_four_like_the_walk(tmp_path):
 #
 # The seams above prove the phase logic; this proves the loop on the real
 # bus, cursor, and ledger: a message lands for an absent lead, the phase
-# wakes, the respawned session's drain verb advances the cursor, and the
+# wakes, the respawned session's drain command advances the cursor, and the
 # next phase pass finds no mail and wakes nothing. No fake readers.
 
 
@@ -883,7 +883,7 @@ def test_the_wake_fires_on_a_real_bus_row_and_drains_by_cursor(tmp_path, monkeyp
 
     assert rec.dispatches == [("epic-x", "mail", "aa11bb22", None)], f"woke: {rec.dispatches}"
 
-    # The respawned session drains: the ack verb advances the cursor.
+    # The respawned session drains: the ack command advances the cursor.
     assert advance_cursor("aa11bb22", waking.id) is True
     assert read_cursor("aa11bb22") == waking.id, "the cursor names the waking id"
 

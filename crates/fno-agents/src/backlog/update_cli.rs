@@ -26,7 +26,7 @@ use crate::graph_store::{
 /// The lock deadline every update write rides.
 const LOCK_TIMEOUT: Duration = DEFAULT_LOCK_TIMEOUT;
 
-/// The parse outcome: usable args, or a usage refusal this verb owns.
+/// The parse outcome: usable args, or a usage refusal this command owns.
 enum ParsedUpdate {
     Args(UpdateArgs),
     Refusal { message: String, exit: i32 },
@@ -61,7 +61,7 @@ struct UpdateArgs {
     difficulty: Option<String>,
     tag: Vec<String>,
     untag: Vec<String>,
-    dispatch_verb: Option<String>,
+    dispatch_command: Option<String>,
     dispatch_brief: Option<String>,
     locked_by: Option<String>,
     plan_path: Option<String>,
@@ -134,7 +134,7 @@ impl UpdateArgs {
             difficulty: None,
             tag: Vec::new(),
             untag: Vec::new(),
-            dispatch_verb: None,
+            dispatch_command: None,
             dispatch_brief: None,
             locked_by: None,
             plan_path: None,
@@ -396,7 +396,7 @@ fn lower_op(
         ("project", update_ops::Op::Set) => a.project = Some(value),
         ("cwd", update_ops::Op::Set) => a.cwd = Some(value),
         ("difficulty", update_ops::Op::Set) => a.difficulty = Some(value),
-        ("dispatch_verb", update_ops::Op::Set) => a.dispatch_verb = Some(value),
+        ("dispatch_command", update_ops::Op::Set) => a.dispatch_command = Some(value),
         ("locked_by", update_ops::Op::Set) => a.locked_by = Some(value),
         ("plan_path", update_ops::Op::Set) => a.plan_path = Some(value),
         ("parent", update_ops::Op::Set) => a.parent = Some(value),
@@ -483,7 +483,7 @@ pub fn run(tail: &[String]) -> i32 {
     let backend = crate::tracker::backend_name(None);
     if backend != "graph" {
         eprintln!(
-            "fno backlog update: this verb owns graph state; under the \
+            "fno backlog update: this command owns graph state; under the \
              {backend} tracker backend it is refused. Track the item in the \
              tracker by its id."
         );
@@ -1240,7 +1240,7 @@ fn hold_text_names_id(haystack: &str, id: &str) -> bool {
 /// Removing a blocker a held hold still names strands the hold: the worker
 /// it parks keeps parking after the blocker row is gone, and the hold's
 /// release condition names a blocker no longer on the row. Refuse and name
-/// the release verb; lift the hold, then rerun the removal. An INVALID hold
+/// the release command; lift the hold, then rerun the removal. An INVALID hold
 /// (unreadable, not active) never refuses: there is nothing to strand.
 fn hold_names_blockers(
     node: &Value,
@@ -1438,7 +1438,7 @@ fn apply_mutators(
                 // The claim store is the lock's single writer: `locked_by=`
                 // acquires `node:<id>` for the holder and the projection
                 // reads it back; the row carries no mirror copy. A foreign
-                // live claim refuses naming the claim verb.
+                // live claim refuses naming the claim command.
                 let key = format!("node:{node_id}");
                 let pid = crate::claims::durable_session_pid().map(|p| p as u32);
                 let (pid_unavailable, ttl_ms) = match pid {
@@ -1483,7 +1483,7 @@ fn apply_mutators(
             None => {
                 // Clearing drops the row mirror and releases the invoking
                 // holder's own claim. A foreign live holder stays put and the
-                // refusal names the claim verb (the unclaim/requeue
+                // refusal names the claim command (the unclaim/requeue
                 // contract); an override there is `claim release --force`.
                 let key = format!("node:{node_id}");
                 let (state, record) = crate::claims::status(&key, None);
@@ -1636,7 +1636,7 @@ fn apply_mutators(
         }
         let dispatch_warnings: Vec<String> = super::fields::apply_dispatch_overrides(
             obj,
-            args.dispatch_verb.as_deref(),
+            args.dispatch_command.as_deref(),
             brief.as_deref(),
         )
         .map_err(|refusal| refused(refusal, 2))?;
@@ -2046,7 +2046,7 @@ fn apply_mutators(
         }
     }
     // A reparent leaves the OLD parent's stale rollup on its doc: the
-    // python verb repainted it alongside the node, so name it for the
+    // python command repainted it alongside the node, so name it for the
     // projector's target list.
     let old_parent = node
         .get("parent")
@@ -2252,7 +2252,7 @@ fn verify_lock_stamp(graph: &Path, node_id: &str, locked_by: &str) -> Result<(),
 /// The plan repaint: graph-authoritative fields flow onto the linked plan
 /// when a mirrored or status-affecting field changed - ownership, blockers,
 /// plan binding, parentage and tags included, the trigger set the python
-/// verb ran. Best-effort.
+/// command ran. Best-effort.
 fn repaint(graph: &Path, args: &UpdateArgs, node_id: &str, old_parent: Option<&str>) {
     let difficulty_clear = args
         .difficulty
@@ -2474,7 +2474,7 @@ mod tests {
     #[test]
     fn removing_a_blocker_a_held_hold_names_refuses() {
         // The held plan names the blocker in its reason; the removal refuses and
-        // names the release verb. An INVALID hold never
+        // names the release command. An INVALID hold never
         // refuses, and a removal the hold does not name passes.
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("plan.md");

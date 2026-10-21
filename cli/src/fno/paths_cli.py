@@ -1,6 +1,6 @@
 """CLI surface for path introspection: fno config paths (forwarder leaf).
 
-All four verbs - emit-shell, shell-stub, verify and handoff - answer natively
+All four commands - emit-shell, shell-stub, verify and handoff - answer natively
 (crates/fno-agents/src/paths_cli.rs); this front keeps a forwarding leaf for
 handoff so `fno-py` and the test harnesses that wrap it reach the native lane
 through the one Rust classify.
@@ -16,15 +16,15 @@ app = typer.Typer(
 )
 
 
-def _forward_native(verb: str, ctx: typer.Context) -> None:
+def _forward_native(command: str, ctx: typer.Context) -> None:
     """Exec the Rust front with the same argv, propagating its exit code.
 
     The Rust front owns the classify (crates/fno/src/paths_route.rs) and the
-    worker_binary resolution; this front never re-states the native verb list.
+    worker_binary resolution; this front never re-states the native command list.
     """
     from fno.cli import _run_rust_front
 
-    _run_rust_front(["config", "paths", verb, *ctx.args])
+    _run_rust_front(["config", "paths", command, *ctx.args])
 
 
 @app.command(
@@ -33,5 +33,5 @@ def _forward_native(verb: str, ctx: typer.Context) -> None:
     hidden=True,
 )
 def handoff(ctx: typer.Context) -> None:
-    """Forward to the native handoff verb (crates/fno-agents paths_cli.rs)."""
+    """Forward to the native handoff command (crates/fno-agents paths_cli.rs)."""
     _forward_native("handoff", ctx)

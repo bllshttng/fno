@@ -451,7 +451,7 @@ def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
 def test_a_sweep_that_cannot_run_is_an_absence_never_zero_orphans(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A stale binary without the org-vacancies verb exits non-zero; reading
+    """A stale binary without the org-vacancies command exits non-zero; reading
     that as [] would print a clean team. The ran marker must say it never ran."""
     from fno.agents.team import gather_team, render_team
 

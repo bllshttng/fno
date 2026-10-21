@@ -1669,7 +1669,7 @@ def test_sandbox_reap_requires_current_distress_before_removal(monkeypatch):
 # The unfinished-work report: the operator surface, distinct from the verdict
 # classifier above. The classifier stays the internal recovery engine; the
 # report answers the outcome question (was work started and never finished?)
-# over four dimensions, each row naming the one verb that clears it.
+# over four dimensions, each row naming the one command that clears it.
 # ---------------------------------------------------------------------------
 
 from pathlib import Path  # noqa: E402
@@ -1827,10 +1827,10 @@ def test_xdead_mtime_basis_is_never_positive_evidence():
     assert uw.owner_verdict(_probe(transcript_age_s=30.0, last_activity_basis="mtime")) == "unknown"
 
 
-def test_xdead_true_positive_keeps_its_clearing_verb():
+def test_xdead_true_positive_keeps_its_clearing_command():
     # x-77db, measured: the one genuinely ownerless dirty tree of the five
     # the watchdog reported that hour. The fix must not suppress it; the
-    # finding carries the target verb because the GONE was positive.
+    # finding carries the target command because the GONE was positive.
     snap = uw.classify(
         _uw_obs(worktrees=[_wt_obs("/w/x-77db", dirty=4, node_id="x-77db")])
     )
@@ -1864,7 +1864,7 @@ def test_ac2_no_candidates_is_gone_only_when_the_store_read():
 # --- AC3: started nodes with free claims ---------------------------------
 
 
-def test_ac3_started_free_claim_nodes_carry_target_verbs_and_idle_order():
+def test_ac3_started_free_claim_nodes_carry_target_commands_and_idle_order():
     older = _node_obs(
         "x-7d02", touched_epoch=NOW_1840 - 116 * 3600, worktree="/w/x-7d02", ahead=8
     )
@@ -2009,7 +2009,7 @@ def test_ac5_failed_git_status_marks_dimension_unknown():
 # --- AC6: ownerless open PRs (an unknown owner read waits 24h) -------------
 
 
-def test_ac6_pr_age_boundary_and_verb():
+def test_ac6_pr_age_boundary_and_command():
     # The owner question comes first: a PR whose owner set reads gone emits
     # at any age, so the young gone-owner PR lands beside the old one and the
     # 24h boundary now governs only the unknown-owner wait.
@@ -2066,14 +2066,14 @@ def test_ac6_merged_live_owned_and_unreadable_prs_do_not_emit():
     assert snap4.dimensions[uw.KIND_PR].state == uw.UNKNOWN_DIM
 
 
-# --- AC7: every finding names its clearing verb ---------------------------
+# --- AC7: every finding names its clearing command ---------------------------
 
 
-def test_ac7_a_finding_without_a_verb_is_not_emitted(monkeypatch):
+def test_ac7_a_finding_without_a_command_is_not_emitted(monkeypatch):
     monkeypatch.setattr(uw, "_dirty_clear_command", lambda w: "")
     snap = uw.classify(_uw_obs(worktrees=[_wt_obs("/w/x", dirty=7)]))
     assert snap.findings == ()
-    assert any("clearing verb" in w for w in snap.warnings)
+    assert any("clearing command" in w for w in snap.warnings)
 
 
 # --- AC8: a clean dimension is positive evidence --------------------------
@@ -2105,7 +2105,7 @@ def test_ac8_ordering_is_deterministic_severity_then_age_then_subject():
 # --- the digest and the signature -----------------------------------------
 
 
-def test_digest_is_house_style_blocks_and_names_verbs():
+def test_digest_is_house_style_blocks_and_names_commands():
     snap = uw.classify(
         _uw_obs(nodes=[_node_obs("x-7d02", touched_epoch=NOW_1840 - 116 * 3600)])
     )
@@ -2226,9 +2226,9 @@ def test_pid_probe_answers_with_a_live_process():
     assert uw._default_pid_alive(None) is None
 
 
-def test_clearing_verbs_name_the_main_worktree_not_the_reporting_one(tmp_path):
+def test_clearing_commands_name_the_main_worktree_not_the_reporting_one(tmp_path):
     """A report run from inside a linked worktree must still scope its
-    clearing verbs to the repository's MAIN worktree: `git worktree list`
+    clearing commands to the repository's MAIN worktree: `git worktree list`
     from any linked tree lists the main tree first, and that is the root a
     human or agent should stand in."""
     import subprocess as _sp
@@ -2305,7 +2305,7 @@ def test_publish_escalates_what_an_incomplete_scan_reached(tmp_path, monkeypatch
 
 
 def test_manual_report_and_tick_share_one_fleet_scope(monkeypatch):
-    """The manual verb and the tick resolve their roots through one shared
+    """The manual command and the tick resolve their roots through one shared
     resolver, so a hand-run names the same fleet the tick's digest named."""
     from fno.agents import cli as agents_cli
     from fno.pr_watch import cli as prcli

@@ -158,7 +158,7 @@ class NodeClaim(BaseModel):
 class Dispatch(BaseModel):
     """Typed view over a node's flat dispatch fields (Linear-aligned)."""
 
-    verb: Optional[str] = None
+    command: Optional[str] = None
     brief: Optional[str] = None
     model: Optional[str] = None
 
@@ -280,11 +280,11 @@ class Node(BaseModel):
     # protected pydantic namespace).
     model: Optional[str] = None
     batch: Optional[str] = None
-    # Per-node dispatch overrides (US3). dispatch_verb picks the worker command
-    # (`<verb> {id}`, allowlist-validated at resolve, not write); dispatch_brief
+    # Per-node dispatch overrides (US3). dispatch_command picks the worker command
+    # (`<command> {id}`, allowlist-validated at resolve, not write); dispatch_brief
     # rides TARGET_BRIEF env into cold-start. Both null = the built-in
     # `/target --no-merge {id}` default. Old graph.json entries parse without them.
-    dispatch_verb: Optional[str] = None
+    dispatch_command: Optional[str] = None
     dispatch_brief: Optional[str] = None
     plan_path: Optional[str] = None
     company_work: Optional[CompanyWorkRefs] = None
@@ -350,7 +350,7 @@ class Node(BaseModel):
 
     # The status the STORE holds, planted by _check_status_drift from the
     # wire's `status` key. `status` above stays the single-entry derived
-    # view; wedge verbs (requeue, hold, dispatch) read this one.
+    # view; wedge commands (requeue, hold, dispatch) read this one.
     persisted_status: Optional[str] = None
 
     # Archive residency stamp. Non-null means the node answers only
@@ -364,7 +364,7 @@ class Node(BaseModel):
     def _validate_rank(cls, v: object) -> Optional[float]:
         """Reject bool / inf / NaN ranks at the model boundary.
 
-        Live render/verb paths already guard these (``_rank_band`` finite-check
+        Live render/command paths already guard these (``_rank_band`` finite-check
         + bool exclusion, ``_is_ranked`` bool exclusion) and the raw-dict path
         dominates, so this is defensive hardening for the cases that *do*
         construct a ``Node``: a non-finite or bool rank fails loudly here
@@ -404,7 +404,7 @@ class Node(BaseModel):
         if persisted is None:
             persisted = legacy
         # The store's own status is kept beside the derived one: the Rust
-        # typed model carries the stored status, and verbs that settle wedges
+        # typed model carries the stored status, and commands that settle wedges
         # (requeue, hold) must read what the store holds, never the
         # single-entry approximation this model computes on `status`.
         if persisted is not None:
@@ -481,7 +481,7 @@ class Node(BaseModel):
 
     @property
     def dispatch(self) -> Dispatch:
-        return Dispatch(verb=self.dispatch_verb, brief=self.dispatch_brief, model=self.model)
+        return Dispatch(command=self.dispatch_command, brief=self.dispatch_brief, model=self.model)
 
     @property
     def pull_requests(self) -> list[PullRequest]:

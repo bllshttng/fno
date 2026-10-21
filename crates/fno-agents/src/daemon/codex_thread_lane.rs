@@ -398,14 +398,14 @@ async fn resolve_target_cwd(cwd: &Path, node: Option<&str>, seed: &str) -> Resul
     let Some(node) = node.filter(|node| !node.is_empty()) else {
         return Ok(cwd.to_path_buf());
     };
-    let Some((verb, _)) = seed
+    let Some((command, _)) = seed
         .split_whitespace()
         .next()
-        .and_then(crate::provider::parse_verb_token)
+        .and_then(crate::provider::parse_command_token)
     else {
         return Ok(cwd.to_path_buf());
     };
-    if verb != "target" {
+    if command != "target" {
         return Ok(cwd.to_path_buf());
     }
     let requested = cwd.to_path_buf();

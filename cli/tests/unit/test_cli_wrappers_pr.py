@@ -2,7 +2,7 @@
 in-package port (ab-d4c98550).
 
 The verify body is native now, so the CLI-layer contract is the forward: the
-same verb spelling hands `pr-verify` to the binary and propagates its exit
+same command spelling hands `pr-verify` to the binary and propagates its exit
 code. The audits themselves are characterized by the Rust golden replay over
 the fixture the deleted Python leg froze.
 """
@@ -26,8 +26,8 @@ def _capture_forward(monkeypatch):
     """Capture the forward instead of spawning a binary."""
     calls = {}
 
-    def _forward(verb, args):
-        calls["forward"] = (verb, args)
+    def _forward(command, args):
+        calls["forward"] = (command, args)
 
     monkeypatch.setattr("fno.pr.cli._forward_to_binary", _forward)
     return calls

@@ -80,7 +80,7 @@ class Kind(str, Enum):
     HEADS_UP = "heads-up"
     QUESTION = "question"
     FYI = "fyi"
-    # G2 cross-agent bus: async fire-and-forget message (send verb)
+    # G2 cross-agent bus: async fire-and-forget message (send command)
     SEND = "send"
 
 
@@ -1223,7 +1223,7 @@ def resolve_project(
     """Resolve the local project name from ``.fno/config.toml``.
 
     ``flag_hint`` names the flag the caller actually exposes, so the failure
-    message points at a real flag (inbox verbs have ``--from``; ``mail send``
+    message points at a real flag (inbox commands have ``--from``; ``mail send``
     has ``--from-name``/``--from-self``)."""
     if override is not None:
         return override
@@ -1332,7 +1332,7 @@ def migrate_md_threads_to_bus(
     Every message in every recipient's md threads that is not already in the log
     is appended as an envelope (root messages thread under their own id; appended
     messages correlate via ``in_reply_to`` to the thread root). Returns counts so
-    a caller (the ``fno agents mail migrate-bus`` verb) can report what moved.
+    a caller (the ``fno agents mail migrate-bus`` command) can report what moved.
     """
     from fno.bus.log import Envelope, append as _bus_append, iter_messages
 

@@ -394,7 +394,7 @@ pub fn dispatch_zcode_once(
     AskOutcome::reply(reply)
 }
 
-/// Client interceptor for the `ask` verb on a zcode row: resume by name. The
+/// Client interceptor for the `ask` command on a zcode row: resume by name. The
 /// turn runs fresh (`--prompt=<seed> --resume <sess>`), tees into the same
 /// log, and the reply prints. Returns `None` for non-zcode targets (fall
 /// through).

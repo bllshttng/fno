@@ -12,7 +12,7 @@
 //! only while the process lives, so a `stopped` row that still names a pid is
 //! a survivor of the ask. It takes ONE signal, a re-read, and an honest
 //! refusal while anything live is still reported (the same shape the stop
-//! verb applies).
+//! command applies).
 
 use crate::claude_roster::ClaudeAgentRow;
 use crate::state;

@@ -1,6 +1,6 @@
 //! The `evals` reading: the latest bank verdict as one check-in line, read
 //! from the same native fold triage health prints. The verdict used to live
-//! only in `fno doctor evals trend`, so a user who never ran that verb
+//! only in `fno doctor evals trend`, so a user who never ran that command
 //! never learned the bank existed; the lead beat now names it.
 
 use serde_json::{json, Value};

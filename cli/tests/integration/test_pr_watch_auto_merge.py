@@ -108,12 +108,12 @@ def _arm_world(
     # core: route the door's merge op back into the in-process run_merge,
     # which runs through the stubbed owner above, and flatten the flow
     # receipt the way the native door answers.
-    def _operand_door(verb, payload, timeout=None):
-        if verb == ["review-coverage", "op"] and payload.get("op") == "verdict":
+    def _operand_door(command, payload, timeout=None):
+        if command == ["review-coverage", "op"] and payload.get("op") == "verdict":
             # The journey is about grant/CI sequencing, not the coverage gate
             # (owned by the coverage suites): answer covered, no pinned head.
             return {"state": 0, "refusal": "", "covered_head": "", "note": "", "line": ""}
-        if verb == "authorized-merge" and payload.get("op") == "merge":
+        if command == "authorized-merge" and payload.get("op") == "merge":
             rc = merge_mod.run_merge(
                 list(payload.get("argv") or []),
                 cwd=payload.get("cwd"),
@@ -121,9 +121,9 @@ def _arm_world(
                 timeout_s=float(timeout or 300.0),
             )
             return {"exit": rc, **dict(merge_mod.LAST_RECEIPT)}
-        raise AssertionError(f"journey stub: unexpected verb_call {verb} {payload!r}")
+        raise AssertionError(f"journey stub: unexpected command_call {command} {payload!r}")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _operand_door)
+    monkeypatch.setattr("fno.rust_binary.command_call", _operand_door)
     return fake
 
 

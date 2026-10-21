@@ -8,11 +8,11 @@ bootstrap lives at ``hooks/helpers/init-target-state.sh`` - outside the
 skill dir and named without a path in SKILL.md. Agents looking in the skill
 dir fail to find it and substitute the discoverable-but-wrong ``fno do state
 init``, which writes a stub the stop hook then archives (often in a loop).
-A discoverable verb that REFUSES to write a stub closes that substitution at
+A discoverable command that REFUSES to write a stub closes that substitution at
 the source for every CLI (Claude / Codex / Gemini), since ``fno`` is the
 shared dependency.
 
-The verb is a thin wrapper: it sets ``TARGET_START=1`` plus the input env the
+The command is a thin wrapper: it sets ``TARGET_START=1`` plus the input env the
 init script reads (``TARGET_INPUT`` / ``TARGET_PLAN_PATH``) and execs the
 canonical script, propagating its exit code. It records nothing itself - the
 init script owns the owner_cwd worktree binding and all state.
@@ -49,7 +49,7 @@ def _resolve_init_script() -> Path:
     projects. Resolving it via ``resolve_repo_root()`` (the active project)
     means ``fno do target init`` would fail in normal plugin usage - running
     ``fno`` inside a target project where ``hooks/helpers/`` does not exist
-    (Codex P1 on #337). Since this verb is the mandatory bootstrap path, it
+    (Codex P1 on #337). Since this command is the mandatory bootstrap path, it
     resolves from the plugin install first.
 
     Order:
@@ -110,9 +110,9 @@ def _refuse_unsatisfiable_reviewers() -> None:
     from dataclasses import asdict
 
     from fno.config import resolvable_reviewers
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(
+    answer = command_call(
         ["review-level", "capability", "reviewers"],
         {
             "reviewers": reviewers,
@@ -166,9 +166,9 @@ def _refuse_unreachable_github_apps() -> None:
     if not apps:
         return
 
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(
+    answer = command_call(
         ["review-level", "capability", "github-apps"],
         {"apps": apps, "nudge_logins": list(nudge_logins)},
         timeout=70,
@@ -884,7 +884,7 @@ def blast_check(
 
 # Exit code meaning "this gate refused", distinct from every code Click itself
 # can produce. Click uses 2 for UsageError, so a STALE installed `fno` without
-# this verb exits 2 with "No such command" - indistinguishable from a refusal if
+# this command exits 2 with "No such command" - indistinguishable from a refusal if
 # the gate also spoke 2, which would turn every outdated CLI into a hard refusal
 # of the mandatory bootstrap. Anything Click can emit on its own must never mean
 # "refused".
@@ -912,7 +912,7 @@ def check_review_gate() -> None:
         _refuse_unreachable_github_apps()
     except typer.Exit as exc:
         # The helpers speak `init`'s vocabulary: 2 and only 2 means refused.
-        # Re-stamp that one code as this verb's, so the shell caller can tell a
+        # Re-stamp that one code as this command's, so the shell caller can tell a
         # refusal from a usage error. Anything else propagates untouched - the
         # caller reads a code it does not recognize as a BROKEN gate and
         # proceeds, so widening this to "any non-zero refuses" would turn a
@@ -939,20 +939,20 @@ def review_invocation_cmd(
     reason, the merge guard, the CI status) embed this output; prose cannot
     carry it because ``check-review-invocation-single-source.sh`` bans any
     concrete level outside the builder. A worker or lead can also run this
-    verb directly.
+    command directly.
 
     Read-only; writes no state. A named door refusal (the fno-agents binary
     missing or failed) prints the refusal on stderr and exits 1: machinery
     reading this output embeds it verbatim, so a fabricated placeholder would
     lie about a gate that cannot answer."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     argv = ["review-level", "capability", "invocation", "--root", str(Path.cwd())]
     if harness:
         argv += ["--harness", harness]
     try:
-        answer = verb_call(argv, {})
-    except VerbUnavailable as exc:
+        answer = command_call(argv, {})
+    except CommandUnavailable as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
     typer.echo(answer["invocation"])
@@ -1083,14 +1083,14 @@ def _hold_branch_under_review(
     if str(receipt.get("outcome") or "") in {"refused", "unconfirmed"}:
         return
     try:
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
         if not branch or branch == "HEAD":
             return
         holder = f"review-session:{session_id or 'unknown'}"
         # The native acquire runs the cap refusal first (exit 3 raises), so
         # the separate refusal read the Python leg made goes away here.
-        verb_call(
+        command_call(
             ["claim", "review-hold"],
             {
                 "action": "acquire",
@@ -1116,7 +1116,7 @@ def request_self_review_cmd(
     ),
 ) -> None:
     """Request one explicit final-head review through the raw self lane."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     cwd = Path.cwd()
     head_sha = _git_out(cwd, "rev-parse", "HEAD") or ""
@@ -1177,8 +1177,8 @@ def request_self_review_cmd(
             argv += ["--branch", branch]
         argv += ["--head-sha", head_sha, "--base-branch", base_branch]
         try:
-            payload = verb_call(argv, {})["invocation"]
-        except VerbUnavailable as exc:
+            payload = command_call(argv, {})["invocation"]
+        except CommandUnavailable as exc:
             # A named refusal, never a fabricated string: the receipt keeps
             # the door's full detail under a prefix that names the surface.
             raise RuntimeError(f"review invocation door refused: {exc}") from None
@@ -1216,9 +1216,9 @@ def resolve_owned_identity_cmd() -> None:
 
     The init hook has no Python and must stamp ``harness``/``harness_session_id``
     on the manifest; precedence alone launders an inherited marker into
-    ownership, so it calls this verb instead. Returns the proven (or
+    ownership, so it calls this command instead. Returns the proven (or
     collision-surviving) identity plus any collision detected, as ``KEY=value``
-    lines on stdout; the caller treats a stale ``fno`` without this verb as
+    lines on stdout; the caller treats a stale ``fno`` without this command as
     'unavailable' rather than bricking init.
 
     Resolution routes through :func:`fno.claims.self_identity.resolve_self_identity`,
@@ -1289,7 +1289,7 @@ def check_contained() -> None:
     Read-only; writes no state. Exit 0 = not contained, not resolvable, or
     nothing to check; exit ``REVIEW_GATE_REFUSED`` = redirected, message already
     on stderr. Every other non-zero means a BROKEN gate, and the caller
-    proceeds - a stale `fno` without this verb exits 2 as a Click usage error
+    proceeds - a stale `fno` without this command exits 2 as a Click usage error
     and must not hard-refuse every direct bootstrap.
     """
     # Read THROUGH THE STORE KEEPER (formerly: under the graph flock, codex
@@ -1466,7 +1466,7 @@ def _resolve_node_id(node: str, entries: Optional[list] = None) -> str:
     unchanged - init accepts text - so this only ever upgrades a resolvable id,
     never blocks one. Best-effort: any load/resolve error falls through to raw.
     ``entries`` lets a caller hand in the graph rows it already read, so a
-    verb that resolves AND gates off the graph pays one read, not two
+    command that resolves AND gates off the graph pays one read, not two
     (round-12 finding 10); ``None`` reads it here as before.
     """
     try:

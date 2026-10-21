@@ -5,7 +5,7 @@
 // TypeScript against node builtins only, so pi loads it with no install step.
 //
 // This extension is a TRANSPORT and nothing else. Every decision belongs to
-// Rust: the gate (`fno-agents loop-check`) decides, the store verbs answer,
+// Rust: the gate (`fno-agents loop-check`) decides, the store commands answer,
 // and this file moves bytes. Concretely it carries four abilities:
 //
 //   1. DISCOVERY: it tells pi where the Footnote skills live, so a native
@@ -64,7 +64,7 @@ function statePathTimeoutMs(): number {
 // One bounded child run. Resolves "" when the child failed for any reason
 // (spawn error, nonzero exit, timeout) - the caller records why it could not
 // read an answer rather than guessing one. An optional stdin payload rides
-// to the child (the hook verbs read a claude-shaped payload on stdin).
+// to the child (the hook commands read a claude-shaped payload on stdin).
 function runBounded(
   bin: string,
   args: string[],
@@ -96,7 +96,7 @@ function runBounded(
   })
 }
 
-// The space-resolved manifest for `dir`, when one exists. The verb is the
+// The space-resolved manifest for `dir`, when one exists. The command is the
 // only path authority: a directory with no `.fno` of its own still gates,
 // because the manifest lives under the session's space root.
 async function resolveManifestPath(bin: string, dir: string): Promise<string | null> {
@@ -224,7 +224,7 @@ export default function (pi: {
     if (sid) busy.delete(sid)
   })
 
-  // DISCOVERY: put the Footnote verbs in pi's own catalog as skills.
+  // DISCOVERY: put the Footnote commands in pi's own catalog as skills.
   pi.on("resources_discover", () => {
     const skills = skillsRoot()
     return skills ? { skillPaths: [skills] } : {}
@@ -370,7 +370,7 @@ export default function (pi: {
     const sid = sm?.getSessionId?.() || ""
     const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
 
-    // MANIFEST: the verb is the presence guard and the gate's --state.
+    // MANIFEST: the command is the presence guard and the gate's --state.
     const manifestPath = await resolveManifestPath(bin, dir)
     if (!manifestPath) {
       // No footnote session here. A worker that dies before `target init`

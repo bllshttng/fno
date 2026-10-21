@@ -38,7 +38,7 @@ def test_a_step_name_containing_a_comma_still_selects_exactly() -> None:
     into two globs matching nothing, so the documented way to reproduce one CI
     step locally exited 1 for those three. The whole value is tried first.
     """
-    commad = "Verb-surface ratchet (real count, both binaries)"
+    commad = "Command-surface ratchet (real count, both binaries)"
     assert _name_matches(commad, commad)
     assert not _name_matches("Sync + build", commad)
     # The list form still works beside it.

@@ -67,9 +67,9 @@ fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     };
     let args = xml_block(text, "<command-args>", "</command-args>").unwrap_or("");
     let mut seed_parts = seed.splitn(2, char::is_whitespace);
-    let verb = seed_parts.next().unwrap_or("");
+    let command = seed_parts.next().unwrap_or("");
     let rest = seed_parts.next().unwrap_or("").trim();
-    name == verb && args == rest
+    name == command && args == rest
 }
 
 /// The bus index both arms classify with, read off the state root the way
@@ -262,7 +262,7 @@ pub(crate) fn typed_turn_age_ever_for_row(
     newest_typed_turn_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
 }
 
-/// The stop-verb refusal: `Some(why)` when the row's store-resolved
+/// The stop-command refusal: `Some(why)` when the row's store-resolved
 /// transcript carries a typed turn inside the window. The bus join keys on
 /// the row's harness session id, the same key `fno-agents intel` joins on.
 /// The caller names its own error shape.

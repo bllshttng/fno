@@ -58,10 +58,10 @@ def delegate(real: str, args: Sequence[str]) -> None:
     if refusal:
         print(refusal, file=sys.stderr)
         raise SystemExit(_quota.REFUSED)
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
     try:
-        reply = verb_call("graph-get", {"pr_draft_ready": {"check": list(args), "cwd": os.getcwd()}})
+        reply = command_call("graph-get", {"pr_draft_ready": {"check": list(args), "cwd": os.getcwd()}})
     except Exception:  # noqa: BLE001 - an unreachable door admits; the sweep is the second gate
         print("gh proxy: draft guard unavailable; admitting", file=sys.stderr)
         reply = {"admitted": True}

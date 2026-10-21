@@ -33,7 +33,7 @@ agents_app = typer.Typer(
     ),
     no_args_is_help=True,
     # Default Rust runtime (Phase 6 W6 / cv-d28b266a): by default this group
-    # execs the installed `fno-agents` binary for the verbs it implements, and
+    # execs the installed `fno-agents` binary for the commands it implements, and
     # falls back to the Python dispatch below otherwise. FNO_AGENTS_RUNTIME=rust
     # forces the binary; =python forces this Python path. See rust_runtime.py.
     cls=make_agents_group_cls(),
@@ -100,7 +100,7 @@ def _remedy_for(key: str) -> str:
     )
 
 
-#: Holder prefix of a reservation THIS verb writes. The targeted clear below is
+#: Holder prefix of a reservation THIS command writes. The targeted clear below is
 #: scoped to it: every other producer of a `dispatch:` key has its own launch
 #: contract, and `fno backlog advance` in particular relies on that reservation
 #: outliving its own exit because it takes no node claim to replace it.
@@ -327,10 +327,10 @@ def _spawn_guard_decision(
             ),
         }, 0
 
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
     from types import SimpleNamespace
 
-    observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+    observation = SimpleNamespace(**command_call(["backlog", "advance", "--stdin"], {
         "op": "claim", "node_id": node_id, "cwd": cwd,
         "enforce_failure_limit": not no_reserve, "emit_events": not no_reserve,
     }))
@@ -397,7 +397,7 @@ def _spawn_guard_decision(
             )
             if prior is not None:
                 _emit_reaped_abandoned(node_id, prior, observation.truth_status)
-                observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+                observation = SimpleNamespace(**command_call(["backlog", "advance", "--stdin"], {
                     "op": "claim", "node_id": node_id, "cwd": cwd,
                     "enforce_failure_limit": not no_reserve, "emit_events": False,
                 }))
@@ -781,7 +781,7 @@ def _resolve_dispatch_workdir(cwd: str | None, fresh: bool, here: bool) -> Path:
     ``--fresh`` survives as an accepted no-op alias (the default already resolves
     canonical). A canonical that lands on the caller's own dir is a no-op (no
     redirect note). Only the Python fallback runtime reaches this -- when an
-    installed binary auto-routes the verb, the Rust client owns the identical
+    installed binary auto-routes the command, the Rust client owns the identical
     precedence.
     """
     del fresh  # accepted no-op alias: the default already resolves canonical.
@@ -1859,7 +1859,7 @@ def cmd_spawn(
             file=sys.stderr,
         )
 
-    # --print: the verb refuses, composes and renders; this leg is the ask and display.
+    # --print: the command refuses, composes and renders; this leg is the ask and display.
     if print_mode:
         import shlex
         from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
@@ -1896,7 +1896,7 @@ def cmd_spawn(
     # through resolve_dispatch, so the SAME vocabulary the resolver judges is
     # applied here. The legacy bare token in a /target-family message is
     # migrated to the flag (receipts show the effective message), and the env
-    # arm stays scoped to the family: prose and other verbs arm nothing.
+    # arm stays scoped to the family: prose and other commands arm nothing.
     from fno.agents.harness_map import (
         DispatchResolveError,
         apply_merge_posture_env,
@@ -1949,7 +1949,7 @@ def cmd_spawn(
         raise typer.Exit(code=2)
 
     #: the sessions row a node-bearing spawn opens. Explicit
-    # --session-phase wins; empty infers from the verb table
+    # --session-phase wins; empty infers from the command table
     # (spawn_phase.toml). A --node spawn the table cannot label is refused
     # fail-closed, like the guards above, before anything spawns: silently
     # launching a worker nothing can bind to the node does not survive
@@ -1972,7 +1972,7 @@ def cmd_spawn(
         stamp_phase = infer_phase(message)
         if node is not None and not stamp_phase:
             print(
-                f"refusing --node {node}: the message verb names no session "
+                f"refusing --node {node}: the message command names no session "
                 f"phase, so no worker would be bound to the node. Pass "
                 f"--session-phase <one of {sorted(SESSION_PHASES)}>. "
                 "No worker launched.",
@@ -2261,7 +2261,7 @@ def cmd_spawn(
             if pane_result.seed_source is not None:
                 receipt_obj["seed_source"] = pane_result.seed_source
             # Where the seed came from when the node supplied it:
-            # the `_spawn_worker` verb_source vocabulary beside the brief
+            # the `_spawn_worker` command_source vocabulary beside the brief
             # chain's source tag. A typed message receipts neither.
             if node_seed_receipt:
                 receipt_obj.update(node_seed_receipt)
@@ -2479,7 +2479,7 @@ def cmd_spawn(
 
                 launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
                 from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
-                from fno.config._dispatch_verbs import is_verb_seed
+                from fno.config._dispatch_commands import is_command_seed
 
                 if not launcher_session:
                     print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
@@ -2498,7 +2498,7 @@ def cmd_spawn(
                         # a compose-injected flag would die at the retired-flag
                         # stubs, and the lane template owns the posture.
                         "permission_mode": (
-                            SPAWN_PERMISSION_BUILTIN if is_verb_seed(message or "") else ""
+                            SPAWN_PERMISSION_BUILTIN if is_command_seed(message or "") else ""
                         ),
                         "cwd": str(workdir), "provider": route_provider or "",
                         "node": (prov_env or {}).get("FNO_NODE") or "",
@@ -2694,18 +2694,18 @@ NAME_REFUSED_EXIT = 3
 
 @agents_app.command("name", hidden=True)
 def cmd_name(
-    prefix: Optional[str] = typer.Argument(None, help="Legacy operation prefix (target|think|...); omit with --verb."),
+    prefix: Optional[str] = typer.Argument(None, help="Legacy operation prefix (target|think|...); omit with --command."),
     node_id: Optional[str] = typer.Argument(None, help="Full backlog node id; never abbreviated."),
     slug: str = typer.Option("", "--slug", help="Human-readable tail; the only expendable part."),
     qualifier: str = typer.Option("", "--qualifier", help="Lifecycle reason, e.g. retro."),
     discriminator: str = typer.Option("", "--discriminator", help="Uniqueness token; never shaved."),
     source: str = typer.Option("", "--source", help="Dispatch source code; omit when attended."),
-    verb: str = typer.Option("", "--verb", help="Verb code (t|bp|r|th|f) or a work verb the bridge maps."),
+    command: str = typer.Option("", "--command", help="Command code (t|bp|r|th|f) or a work command the bridge maps."),
 ) -> None:
     """Mechanical bridge to the canonical agent-name owner, for shell dispatchers.
 
     Prints one name on stdout. Exit 3 (NOT 2) is the naming refusal; 2 is Click's usage
-    error, which an `fno` too old to know this verb also returns - reading 2 as a refusal
+    error, which an `fno` too old to know this command also returns - reading 2 as a refusal
     refuses the fleet on a stale install.
 
     The model rides $FNO_AGENTS_NAME_MODEL, not a flag: the flag-registry gate
@@ -2729,7 +2729,7 @@ def cmd_name(
             qualifier=qualifier or None,
             discriminator=discriminator or None,
             source=source or None,
-            verb=verb or None,
+            command=command or None,
             model=model,
         )
     except (BridgeUsageError, AgentNameError) as exc:
@@ -2751,7 +2751,7 @@ def cmd_retask(
     effort: Optional[str] = typer.Option(None, "--effort"),
     json_out: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
-    """Retask one finished worker (pane or thread) onto the node's next verb."""
+    """Retask one finished worker (pane or thread) onto the node's next command."""
     from fno.agents.retask import run_retask
 
     try:
@@ -2784,7 +2784,7 @@ def cmd_spawn_guard(
         ...,
         "--holder",
         help=(
-            "Reservation holder string. On a `dispatchable` verdict the verb "
+            "Reservation holder string. On a `dispatchable` verdict the command "
             "acquires dispatch:<id> for this holder; the caller releases it on a "
             "spawn failure and lets it TTL-expire on success."
         ),
@@ -2852,7 +2852,7 @@ def cmd_spawn_guard(
 
     Exit 0 for every answered verdict (incl. already-running, unknown and
     corrupted). Exit non-zero ONLY for a usage error or a fail-closed guard
-    error (verdict=error), so a stale ``fno`` without this verb (Typer "No such
+    error (verdict=error), so a stale ``fno`` without this command (Typer "No such
     command") also fails closed in the caller.
     """
     obj, exit_code = _spawn_guard_decision(
@@ -2920,7 +2920,7 @@ def cmd_list(
     """List registered agents: ROW NAME SESSION HARNESS MODEL EFFORT PR AGE
     LAST MESSAGE STATUS, JSON when stdout is not a TTY or ``--json`` is passed.
 
-    The ``fno-agents`` client owns this verb; the options above document its
+    The ``fno-agents`` client owns this command; the options above document its
     surface. There is no Python list lane left: a missing binary is refused.
     """
     from fno.agents.rust_runtime import refuse_without_binary
@@ -3011,7 +3011,7 @@ def cmd_discovered_json(
     """Internal: emit the discovered-live-sessions lane as JSON.
 
     The real ``fno agents list`` auto-routes to the Rust client, which owns
-    the rendered surface; that path shells out to THIS verb to merge the P1
+    the rendered surface; that path shells out to THIS command to merge the P1
     host-local live-session lane. Output is
     ``{"discovered_sessions": [...]}``. Fail-open: any error prints an empty
     lane and exits 0 so ``agents list`` is never broken by discovery.
@@ -3118,9 +3118,9 @@ def cmd_registry_repair(
         sys.stderr.write(f"{exc}\n")
         raise typer.Exit(1) from exc
 
-    verb = "repaired" if apply else "would repair"
+    command = "repaired" if apply else "would repair"
     sys.stdout.write(
-        f"{verb} {plan.path}: schema_version {plan.on_disk} -> {plan.to_version}\n"
+        f"{command} {plan.path}: schema_version {plan.on_disk} -> {plan.to_version}\n"
     )
     for name in sorted(plan.dropped):
         keys = ", ".join(plan.dropped[name])
@@ -3133,7 +3133,7 @@ def cmd_registry_repair(
         sys.stdout.write("  dry run; pass --apply to perform it\n")
 
 
-#: `heal-token` exit codes. 13 mirrors the lifecycle verbs' not-found code; the
+#: `heal-token` exit codes. 13 mirrors the lifecycle commands' not-found code; the
 #: ambiguity code is distinct from BOTH that and typer's internal-error 1 so the
 #: Rust caller can tell "refuse loudly with these candidates" from "degrade to
 #: the original not-found error".
@@ -3166,7 +3166,7 @@ def cmd_heal_token(
     """Internal: adopt the session TOKEN names from its harness store, as JSON.
 
     The one healer behind ``registry.resolve_agent``, exposed so the Rust
-    lifecycle verbs (logs/attach/resume) use the SAME probes rather than growing
+    lifecycle commands (logs/attach/resume) use the SAME probes rather than growing
     a second implementation. ``--all-sources`` also includes registry rows in
     the uniqueness decision. Exit 0 with the resolved row on stdout; 13 on a
     miss or a non-session-shaped token; 3 with the candidate list on stderr when
@@ -3178,7 +3178,7 @@ def cmd_heal_token(
     every later call. The caller names the file it read from; agreement is then
     by construction rather than by two resolvers happening to match.
 
-    Python-only by construction: keeping it out of ``RUST_CLIENT_VERBS`` is what
+    Python-only by construction: keeping it out of ``RUST_CLIENT_COMMANDS`` is what
     stops the Rust shellout from re-entering the Rust client.
     """
     import json as _json
@@ -3270,7 +3270,7 @@ def cmd_logs(
 ) -> None:
     """Tail or follow an agent's log output.
 
-    The fno-agents client owns the verb; with an installed binary the runtime
+    The fno-agents client owns the command; with an installed binary the runtime
     router execs it before this function runs. A tail N slices the last N
     lines, `--follow` streams over the daemon's WebSocket `agent.logs`
     transport, and `--json` is JSON-Lines for codex/gemini rows while claude
@@ -4407,7 +4407,7 @@ def cmd_stop(
 ) -> None:
     """Stop an agent's underlying session.
 
-    The ``fno-agents`` client owns this verb; the argument above documents
+    The ``fno-agents`` client owns this command; the argument above documents
     its surface. There is no Python stop lane left: a missing binary is
     refused.
     """
@@ -4484,7 +4484,7 @@ def cmd_rm(
     binary = rust_binary.resolve_installed_binary()
     if runtime_mode() == "python" or binary is None:
         # There is no Python rm to fall back to: the twin was deleted
-        # (d-e11b2b3e: one verb, one implementation). Refuse by name.
+        # (d-e11b2b3e: one command, one implementation). Refuse by name.
         refuse_without_binary("rm")
 
 
@@ -4589,7 +4589,7 @@ def cmd_attach(
 ) -> None:
     """Attach to a running agent session interactively.
 
-    The Rust client verb owns attach; with an installed binary the runtime
+    The Rust client command owns attach; with an installed binary the runtime
     router execs it before this function runs. With a live mux server it
     drives the one dedicated thread pane, which routes every harness by
     capability. With no mux server: claude execs ``claude attach
@@ -4607,10 +4607,10 @@ def cmd_attach(
     refuse_without_binary("attach")
 
 
-# Observability verbs: trace + resume (Tasks 3.3 / 3.4 / 3.5)
+# Observability commands: trace + resume (Tasks 3.3 / 3.4 / 3.5)
 # Both commands live in their own modules so this CLI file stays focused
-# on shape + wiring. The cmd_<verb> functions are re-bound here as
-# Typer subcommands; tests can still monkeypatch cli.cmd_<verb> for
+# on shape + wiring. The cmd_<command> functions are re-bound here as
+# Typer subcommands; tests can still monkeypatch cli.cmd_<command> for
 # spy injection.
 
 from fno.agents.trace_cli import cmd_trace as _cmd_trace  # noqa: E402
@@ -4620,7 +4620,7 @@ from fno.agents.transcript import transcript_command  # noqa: E402
 
 agents_app.command("trace", hidden=True)(_cmd_trace)
 agents_app.command("resume")(_cmd_resume)
-# Advertised: the one verb over live rows, reap receipts and the
+# Advertised: the one command over live rows, reap receipts and the
 # ledger. `fno whoami ledger` stays as its hidden alias.
 agents_app.command("history")(history_command)
 agents_app.command("transcript", hidden=True)(transcript_command)
@@ -4651,7 +4651,7 @@ def yard(
 
     rows = load_registry()
     archive_path = paths.graph_archive_json()
-    # Strict on purpose: this is a truth-bound fold, not a browse verb. The
+    # Strict on purpose: this is a truth-bound fold, not a browse command. The
     # lenient reader turns a corrupt archive into [], which would mark every
     # citizen a first-sighting - fabricated outcome on the machine surface the
     # mux renders. Unreadable history fails the fold so the overlay degrades.

@@ -30,7 +30,7 @@ def active_backend_name(name: str | None = None) -> str:
     """The selected backend tag (``graph`` by default). Pure; no side effects.
 
     An explicit ``name`` wins (tests); otherwise ``FNO_TRACKER_BACKEND`` selects,
-    defaulting to ``"graph"``. Shared with :func:`get_tracker` so the verb-refusal
+    defaulting to ``"graph"``. Shared with :func:`get_tracker` so the command-refusal
     guard and backend construction cannot disagree on which backend is live.
     """
     return name or os.environ.get("FNO_TRACKER_BACKEND") or "graph"
@@ -50,7 +50,7 @@ class _RustTracker:
         self.name = name
 
     def _call(self, op: str, id: str | None = None) -> dict:
-        out = rust_binary.verb_call(["backlog", "get"], {"tracker": op, "backend": self.name, "id": id}, TrackerError, timeout=120)
+        out = rust_binary.command_call(["backlog", "get"], {"tracker": op, "backend": self.name, "id": id}, TrackerError, timeout=120)
         if out.get("not_found"):
             raise NodeNotFound(id)
         if out.get("error"):

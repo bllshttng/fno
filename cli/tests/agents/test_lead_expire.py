@@ -46,7 +46,7 @@ def team(tmp_path, monkeypatch, native_backlog_door):
     install_fake_claude(bin_dir)
     monkeypatch.setenv("PATH", str(bin_dir))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER_SESSION)
-    # The verb resolves the manifest state root from the caller's cwd; seat
+    # The command resolves the manifest state root from the caller's cwd; seat
     # the team so that resolution lands on the tmp state root too.
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -80,7 +80,7 @@ def _seat(
 
 
 def _manifest(team, scope: str = SCOPE, session: str = CALLER_SESSION):
-    # The verb keys the manifest root on the caller row's cwd, so the fixture
+    # The command keys the manifest root on the caller row's cwd, so the fixture
     # writes through the same call the resolver makes.
     path = lead_manifest_path(scope, state_root=lead_state_root(Path(team)))
     write_manifest(path, scope=scope, harness_session_id=session)

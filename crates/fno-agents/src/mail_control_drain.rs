@@ -4,7 +4,7 @@
 //! The recipient-side half of the control lane. A control body that demoted
 //! durable waits on `notify-self`, which fires only at a prompt boundary; a
 //! worker holding one long turn never reaches one. The PreToolUse hook runs
-//! this verb at every tool call instead, gated on the sender-stamped pending
+//! this command at every tool call instead, gated on the sender-stamped pending
 //! flags so a clean tool call pays three stat calls.
 //!
 //! The scan ports the Python bus read semantics it replaces

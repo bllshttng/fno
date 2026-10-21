@@ -373,7 +373,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         if self_send {
             release_budget(&reservation);
             eprintln!(
-                "error: --force cannot type into this session's own prompt. Use --to-self --raw to self-inject a verb, or send without --force to leave yourself a durable note."
+                "error: --force cannot type into this session's own prompt. Use --to-self --raw to self-inject a command, or send without --force to leave yourself a durable note."
             );
             return Err(2);
         }
@@ -753,7 +753,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
 /// simplification in this port.
 pub(super) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)> {
     let registry = AgentsHome::shared_registry_json();
-    let rows = crate::client_verbs::load_registry_entries(&registry).map_err(|exc| {
+    let rows = crate::client_commands::load_registry_entries(&registry).map_err(|exc| {
         (
             format!("error: --to-lead {scope:?}: registry unreadable: {exc}"),
             12,
@@ -879,7 +879,7 @@ pub(super) fn dispatch_send_to_project(
     let mut from_harness: Option<String> = None;
     let mut from_session: Option<String> = None;
     let registry = AgentsHome::shared_registry_json();
-    if let Ok(rows) = crate::client_verbs::load_registry_entries(&registry) {
+    if let Ok(rows) = crate::client_commands::load_registry_entries(&registry) {
         for row in rows.iter() {
             if str_field(row, "name") == from_name {
                 from_harness = opt_str_field(row, "harness");
@@ -1070,7 +1070,7 @@ mod project_demotion_tests {
 // The kind lane (cli.py cmd_send's --kind branch twin)
 // ---------------------------------------------------------------------------
 
-/// Python `inbox.store.resolve_project` at the send verb's working dir, or
+/// Python `inbox.store.resolve_project` at the send command's working dir, or
 /// the caller's --from-name. The error text names the real flags.
 /// `pub(crate)`: the reply leaf resolves its thread-store sender here.
 pub(crate) fn resolve_kind_sender(
@@ -1286,7 +1286,7 @@ pub(super) fn kind_lane_send(
         );
     } else {
         let window_tail = crate::mail_receipt::window_clause(24.0);
-        let verb = if appended {
+        let command = if appended {
             "appended (durable)"
         } else {
             "queued (durable)"
@@ -1297,7 +1297,7 @@ pub(super) fn kind_lane_send(
                 &thread_id,
                 subject,
                 &recipient,
-                &format!("{verb} [param-forced: --kind {kind}]{window_tail}"),
+                &format!("{command} [param-forced: --kind {kind}]{window_tail}"),
             )
         );
     }

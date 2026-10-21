@@ -1,4 +1,4 @@
-//! The structural registry gate (x-861c, AC5-RATCHET): the migrated verbs'
+//! The structural registry gate (x-861c, AC5-RATCHET): the migrated commands'
 //! flags stay declared once with nonblank help, and the hand-rolled scanners
 //! they replaced stay gone. A regression that reintroduces a `flag_value`
 //! helper, drops a help string, or breaks the Python adapter's exact argv

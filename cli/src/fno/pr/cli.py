@@ -1,6 +1,6 @@
 """fno do pr CLI - in-package gh/git PR operations.
 
-Verbs:
+Commands:
     merge  - merge a PR with the fno-canonical guards (-> _merge.py)
     verify - audit an external PR gate, merged|reviews (-> _verify.py)
     rebase - two-phase rebase with conflict delegation (-> fno-agents pr-rebase)
@@ -9,7 +9,7 @@ Verbs:
     wait   - poll status through the coalescing cache until settled/green (-> _wait.py)
 
 The four ``scripts/lib/pr-*.sh`` were ported to in-package Python shelling to
-gh/git, so these verbs run from a bare ``pip install fno`` with no repo-root
+gh/git, so these commands run from a bare ``pip install fno`` with no repo-root
 dependency. Each module preserves the bash exit-code / output contract.
 """
 
@@ -38,12 +38,12 @@ def _select_pr_worktree(ctx: typer.Context) -> None:
     if not (command := ctx.invoked_subcommand) or command not in {"verify", "status", "base-lineage-check", "merge-result-check", "coverage-check"}:
         return
     if pr := next((arg.partition("=")[2] if arg.startswith("--pr-number=") else arg for arg in sys.argv[sys.argv.index(command) + 1:] if arg.isdigit() or arg.startswith("--pr-number=")), None):
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            answer = verb_call("pr-worktree", {"pr": int(pr), "cwd": os.getcwd()})
+            answer = command_call("pr-worktree", {"pr": int(pr), "cwd": os.getcwd()})
             worktree = str(answer.get("worktree") or "")
-        except VerbUnavailable as exc:
+        except CommandUnavailable as exc:
             # "" = no local worktree on the PR branch: nothing to select, and
             # the command's own checkout lists every worktree of the repo.
             if exc.returncode == 3 and "no local worktree" in str(exc):
@@ -169,7 +169,7 @@ def status(
     help=(
         "The sanctioned watcher: poll `fno do pr status` through the "
         "coalescing cache until the PR settles (or turns green with "
-        "--until green), then exit the status verb's own code. --until review "
+        "--until green), then exit the status command's own code. --until review "
         "wakes when a new review posts on the PR. N waiters on "
         "one PR cost one network read per cache TTL, a rate-limit backoff is "
         "ridden out rather than hammered, and the gh-call count prints at "
@@ -238,7 +238,7 @@ def info(
         None, "--repo", help="GitHub owner/repo; defaults to origin"
     ),
 ) -> None:
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     ask: dict = {"op": "status-pr-info", "cwd": os.getcwd()}
     if pr_number is not None:
@@ -246,8 +246,8 @@ def info(
     if repo:
         ask["repo"] = repo
     try:
-        answer = verb_call("authorized-merge", ask, timeout=120)
-    except VerbUnavailable as exc:
+        answer = command_call("authorized-merge", ask, timeout=120)
+    except CommandUnavailable as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=127)
     typer.echo(json.dumps(answer, separators=(",", ":")))
@@ -341,9 +341,9 @@ def logs(
     )
 
 
-def _forward_to_binary(verb: str, args: list[str]) -> None:
+def _forward_to_binary(command: str, args: list[str]) -> None:
     """Forward to the bundled fno-agents binary, binary-direct. The shared
-    body of the do-pr binary verbs (heal, push, rebase)."""
+    body of the do-pr binary commands (heal, push, rebase)."""
     import subprocess
 
     from fno._subprocess_util import propagate_returncode
@@ -352,14 +352,14 @@ def _forward_to_binary(verb: str, args: list[str]) -> None:
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            f"fno do pr {verb.replace('pr-', '')}: the fno-agents binary was not found. "
+            f"fno do pr {command.replace('pr-', '')}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",
             err=True,
         )
         raise typer.Exit(code=127)
-    result = subprocess.run([str(binary), verb, *args], check=False)
+    result = subprocess.run([str(binary), command, *args], check=False)
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
@@ -444,7 +444,7 @@ def merge_result_check(pr_number: int = typer.Argument(..., help="GitHub PR numb
     hidden=True,
     help=(
         "The merge guard's coverage predicate, for callers that cannot import "
-        "it (the stdlib-only git-protection hook shells this verb on a bare "
+        "it (the stdlib-only git-protection hook shells this command on a bare "
         "gh pr merge). Exit 0 covered, 3 uncovered (the guard's refusal on "
         "stderr), 4 unanswered (a named instrument failure)."
     ),
@@ -583,18 +583,18 @@ def global_receipt_events_path() -> None:
 def sync_canonical(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number of the merged PR"),
 ) -> None:
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        answer = verb_call(
+        answer = command_call(
             "sync-canonical",
             {"action": "sync", "cwd": os.getcwd(), "pr": pr_number},
             timeout=900.0,
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         # The marker stays withheld, so the next reconcile retries.
         typer.echo(
-            f"post-merge sync: native verb unavailable ({exc}); skipping", err=True
+            f"post-merge sync: native command unavailable ({exc}); skipping", err=True
         )
         raise typer.Exit(code=1)
     for line in answer.get("stdout") or []:
@@ -737,7 +737,7 @@ def bind_created(
     ),
 ) -> None:
     """Bind a raw ``gh pr create`` result to its one real node."""
-    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # One JSON argv element (the logs-command door): the leg reads its payload
     # from argv, never stdin - the passthrough below inherits the caller's
     # stdin, and a TTY there would hang a stdin read.
     payload = json.dumps({"url": url, "repo": repo, "node": node})

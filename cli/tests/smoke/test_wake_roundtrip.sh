@@ -3,7 +3,7 @@
 # Exercises the wake-signal file paths + Python module exports end-to-end.
 # No side effects outside TMPDIR.
 #
-# This used to drive the write half through `fno wake drop`. Those ADMIN verbs
+# This used to drive the write half through `fno wake drop`. Those ADMIN commands
 # were removed for having no caller; the signals themselves are live, written
 # and read by `fno.wake.signal` on the inbox-drain and mail paths. So the
 # roundtrip is still worth proving, through the surface that actually runs it.
@@ -65,7 +65,7 @@ assert data[0]['msg_id'] == 'msg-deadbeef', f'wrong msg_id: {data[0][\"msg_id\"]
 COUNT_AFTER=$(find "$SIGNALS_DIR" -name 'wake-*.json' 2>/dev/null | wc -l | tr -d ' ')
 [[ "$COUNT_AFTER" == "0" ]] || { echo "FAIL: drain did not delete: $COUNT_AFTER files left"; exit 1; }
 
-# The removed verb must still refuse BY NAME rather than as a typo.
+# The removed command must still refuse BY NAME rather than as a typo.
 OUT=$(uv run --project "$CLI_DIR" fno-py wake drop 2>&1 || true)
 case "$OUT" in
   *"was removed"*) ;;

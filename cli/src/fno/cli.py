@@ -52,7 +52,7 @@ from fno._lazy_group import make_lazy_group_cls
 # eager inline command above; the `review` root claim moved to the rust
 # front door and carries no python registration;
 # `cost` moved under `whoami` and is a hidden lazy entry like its siblings.
-# Everything hidden here is one `fno help --all` away. New verbs default to
+# Everything hidden here is one `fno help --all` away. New commands default to
 # hidden; promotion to the menu is a deliberate, lint-gated act (see fno doctor lint).
 LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     # Sub-apps (Typer instances) -----------------------------------------
@@ -85,7 +85,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
         {"hidden": True},
     ),
-    # Moved to `inbox` (VERB_MOVES). The old top-level registration stays for
+    # Moved to `inbox` (COMMAND_MOVES). The old top-level registration stays for
     # one release - unreachable via resolve_command (the move intercepts
     # first) so it stays a hidden one-release shim, not a phantom root; the
     # moved-spellings block no longer renders, so the row teaches
@@ -111,11 +111,11 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in VERB_MOVES are one-release shims kept reachable for muscle
+    # sit in COMMAND_MOVES are one-release shims kept reachable for muscle
     # memory; their canonical homes are the move destinations.
     "mcp": (
         "fno.mcp.cli:mcp_app",
-        "MCP sidecar client verbs (send an envelope to a channel).",
+        "MCP sidecar client commands (send an envelope to a channel).",
         {"hidden": True},
     ),
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
@@ -287,7 +287,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 # T1 actions are parsed by the group dispatcher and keep their existing typing.
 # These selected actions remain registered leaves as deliberate readability
 # slack; the checked-in allocation and its reference costs live in
-# scripts/ci/verb-collapse-map.tsv.
+# scripts/ci/command-collapse-map.tsv.
 COLLAPSE_KEEP: dict[str, set[str]] = {
     "agents": {"ask", "list", "logs", "loop", "loop-check", "needs", "resume", "rm", "spawn"},
     "annotate": {"list"},
@@ -413,21 +413,21 @@ def _check_migration() -> None:
 
 
 class _HonestMenuGroup(make_lazy_group_cls(LAZY_SUBCOMMANDS)):  # type: ignore[misc]
-    """Root group; appends the honest verb-count line to `fno --help`.
+    """Root group; appends the honest command-count line to `fno --help`.
 
     The curated menu is small on purpose (menu-caps). Without a count it reads
-    as the whole surface, so a reader (human or agent) concludes a missing verb
+    as the whole surface, so a reader (human or agent) concludes a missing command
     does not exist and works around its absence. This line states how many
-    top-level verbs really exist and where the rest are. The count is read from
+    top-level commands really exist and where the rest are. The count is read from
     the registry at render time - lazy entries resolve to a hidden-aware stub
     with no module import, so `fno --help` stays fast and works from a bare
-    install. The leaf count lives in scripts/ci/verb-baseline.txt (and the
-    `fno doctor lint verb-ratchet` output) for anyone who wants the full surface.
+    install. The leaf count lives in scripts/ci/command-baseline.txt (and the
+    `fno doctor lint command-ratchet` output) for anyone who wants the full surface.
     """
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         super().format_help(ctx, formatter)
-        from fno.verb_moves import destination_is_registered, move_for
+        from fno.command_moves import destination_is_registered, move_for
 
         names = self.list_commands(ctx)
         moved_names = {
@@ -456,9 +456,9 @@ class _HonestMenuGroup(make_lazy_group_cls(LAZY_SUBCOMMANDS)):  # type: ignore[m
         )
         formatter.write_paragraph()
         formatter.write_text(
-            f"Showing {visible} of {len(names) - moved} top-level verbs{moved_note}. "
+            f"Showing {visible} of {len(names) - moved} top-level commands{moved_note}. "
             f"`mux` and `version` forward to the Rust front binary. Hidden "
-            f"verbs are invocable: run `fno help --all` for every command."
+            f"commands are invocable: run `fno help --all` for every command."
         )
 
 
@@ -613,17 +613,17 @@ def _render_full_menu() -> str:
 
     Reads short-help strings straight from LAZY_SUBCOMMANDS + the eager map -
     it never imports a command module, so a broken sub-app still lists here
-    (AC3-UI). Scope is the TOP LEVEL only: a sub-app's own (hidden) verbs are
+    (AC3-UI). Scope is the TOP LEVEL only: a sub-app's own (hidden) commands are
     one import away and would break the no-import guarantee, so they live behind
     the scoped door `fno help <group> --all` instead.
 
-    A spelling registered in VERB_MOVES is a signpost, not a root: it forwards
+    A spelling registered in COMMAND_MOVES is a signpost, not a root: it forwards
     to its new home and prints the new spelling on use. Moved spellings render
     nowhere here (operator ruling via d-26002be8: "they can be discovered in
     their own subcommands") - each alias prints its new home when used, which
     is the teaching moment that matters.
     """
-    from fno.verb_moves import destination_is_registered, move_for
+    from fno.command_moves import destination_is_registered, move_for
 
     # Eager inline commands classify too, not only lazy entries: a later
     # wave moves `cost`, which is an eager @app.command, and a move on an
@@ -641,7 +641,7 @@ def _render_full_menu() -> str:
     lines = [
         "fno-py full top-level surface - every fno-py command, including hidden.",
         "The curated menu is `fno --help`; hidden commands are invocable, just not advertised.",
-        "For a group's own verbs (hidden included) run `fno help <group> --all` "
+        "For a group's own commands (hidden included) run `fno help <group> --all` "
         "(e.g. `fno help agents --all`), or `fno <group> --help` for its menu.",
         "",
         "Commands:",
@@ -655,7 +655,7 @@ def _render_group_full_menu(path: list[str]) -> Optional[str]:
     `fno help <group> [<subgroup> ...] --all`.
 
     Unlike the top-level door this DOES import the named group (one module), so
-    it can enumerate the group's own hidden verbs - the discovery path that the
+    it can enumerate the group's own hidden commands - the discovery path that the
     import-free top-level `help --all` cannot provide. Returns None when the path
     does not resolve to a command group (the caller then forwards to `--help`).
     """
@@ -697,7 +697,7 @@ def _render_group_full_menu(path: list[str]) -> Optional[str]:
     width = max(len(n) for n in rows)
     lines = [
         f"{title} full command surface - every subcommand, including hidden.",
-        f"The curated menu is `{title} --help`; hidden verbs are invocable, just not advertised.",
+        f"The curated menu is `{title} --help`; hidden commands are invocable, just not advertised.",
         "",
         "Commands:",
     ]
@@ -728,7 +728,7 @@ def help_command(ctx: typer.Context) -> None:
         rest = [a for a in args if a not in ("--all", "-A")]
         if rest:
             # Scoped door: `fno help <group> [<subgroup>] --all` lists that
-            # group's own verbs, hidden included (imports the one named group).
+            # group's own commands, hidden included (imports the one named group).
             group_menu = _render_group_full_menu(rest)
             if group_menu is not None:
                 typer.echo(group_menu)
@@ -778,7 +778,7 @@ def help_command(ctx: typer.Context) -> None:
 def _run_rust_front(args: list[str]) -> None:
     """Exec the Rust front (`fno`) with `args`, propagating its exit code.
 
-    `mux` and `version` are Rust-front verbs promoted into the Python listings
+    `mux` and `version` are Rust-front commands promoted into the Python listings
     (d-cf2d6fe1): a user typing `fno mux ...` never reaches Python (the Rust
     binary intercepts), but `fno-py mux ...` must still work and the two
     listings must show real rows rather than footnotes about an absence.
@@ -818,7 +818,7 @@ def _run_rust_front(args: list[str]) -> None:
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
-        "Mux pane control and the web console (the Rust front's verb).\n\n"
+        "Mux pane control and the web console (the Rust front's command).\n\n"
         "List panes, send keystrokes, manage layouts and the web view. Run "
         "`fno mux` for the full surface."
     ),
@@ -833,7 +833,7 @@ def mux(
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
-        "Show the installed fno version(s) (the Rust front's verb).\n\n"
+        "Show the installed fno version(s) (the Rust front's command).\n\n"
         "Prints the Rust front's own version report; `fno --version` remains "
         "the Python package's flag form."
     ),

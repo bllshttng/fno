@@ -30,7 +30,7 @@ PS_TIMEOUT_SECONDS = 5.0
 #: The sccache fields the latest process-table fetch carried: server pid and
 #: trailing-hour restarts, counted by the daemon's watch tick. One slot,
 #: refreshed by _read_ps - the census door answers table and fields in one
-#: call. The verb reads it at emit time; the cause-only lane never does.
+#: call. The command reads it at emit time; the cause-only lane never does.
 _LAST_SCCACHE: tuple[int | None, int | None] = (None, None)
 _NO_LOAD_SNAPSHOT = object()
 #: Exit codes. A capacity breach keeps 3 (existing readers depend on it); the
@@ -648,7 +648,7 @@ def _unparsed_sample_evidence(reading: Footprint) -> str:
 def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None]:
     """One CPU-only fleet reading shared by `--cause-only` and the spawn gate.
 
-    The single producer for the cause pipeline: both the verb and the gate's
+    The single producer for the cause pipeline: both the command and the gate's
     load-refusal evidence read through here, so a hardening fix lands once and
     the two explanations cannot drift. Returns ``(reading, None)`` on success
     or ``(None, reason)``; the caller decides whether a reason is an exit-4 or
@@ -1212,7 +1212,7 @@ def footprint_command(
 
 def cause_main() -> None:
     """Console-script entry (``fno-footprint-cause``): the Rust spawn gate's
-    probe. Calls ``footprint_command`` so the verb and the probe share one
+    probe. Calls ``footprint_command`` so the command and the probe share one
     payload producer; outside a typer app its ``typer.Exit`` does not become a
     process exit on its own, so translate it here."""
     try:

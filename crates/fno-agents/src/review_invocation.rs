@@ -313,7 +313,7 @@ fn settle_lost(
             }));
             continue;
         }
-        let reviewer = verb_reviewer(data);
+        let reviewer = command_reviewer(data);
         let mut fields = serde_json::Map::new();
         fields.insert("reviewer".into(), reviewer.into());
         fields.insert("head_sha".into(), head_sha.clone().into());
@@ -344,15 +344,15 @@ fn settle_lost(
     out
 }
 
-/// The settle row's reviewer: the verb's tail after the last colon and any
+/// The settle row's reviewer: the command's tail after the last colon and any
 /// leading slash, `code-review` when nothing survives.
-fn verb_reviewer(data: &serde_json::Value) -> String {
-    let verb = data
+fn command_reviewer(data: &serde_json::Value) -> String {
+    let command = data
         .get("verb")
         .and_then(|v| v.as_str())
         .unwrap_or("/code-review")
         .to_string();
-    let reviewer = verb
+    let reviewer = command
         .trim_start_matches('/')
         .rsplit(':')
         .next()

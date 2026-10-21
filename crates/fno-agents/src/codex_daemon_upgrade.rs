@@ -2,7 +2,7 @@
 //!
 //! A stale daemon (live version older than the installed CLI) upgrades ONLY
 //! here: under the provider-daemon lock, after every loaded thread proves
-//! readable and safe, through the vendor restart verb, with the old
+//! readable and safe, through the vendor restart command, with the old
 //! incarnation's end, the new version, the initialize handshake, the config
 //! bytes, and every snapshot id verified after. On any post-restart failure
 //! the receipt reads `failed` with the ids it cannot read back. Never a
@@ -240,7 +240,7 @@ pub async fn codex_daemon_upgrade_transaction() -> UpgradeOutcome {
     snapshot_and_swap(&adapter, before).await
 }
 
-/// Snapshot, classify, restart through the vendor verb, verify.
+/// Snapshot, classify, restart through the vendor command, verify.
 async fn snapshot_and_swap(
     adapter: &CodexDaemonAdapter,
     before: CodexDaemonReadiness,
@@ -439,12 +439,12 @@ mod tests {
     }
 }
 
-/// Run the vendor restart verb with the resolved CODEX_HOME. NEVER a hand
+/// Run the vendor restart command with the resolved CODEX_HOME. NEVER a hand
 /// signal to the pid: `codex app-server daemon restart` is the vendor's own
 /// swap and the only mutation this transaction performs. Blocking call; the
-/// vendor verb is expected to be prompt.
+/// vendor command is expected to be prompt.
 fn vendor_restart(codex: &Path) -> Result<(), String> {
-    // The vendor verb is a blocking subprocess and the transaction holds the
+    // The vendor command is a blocking subprocess and the transaction holds the
     // provider flock across it inside the async runtime, so the wait runs on
     // its own thread: a slow restart parks that thread, never a runtime
     // worker.

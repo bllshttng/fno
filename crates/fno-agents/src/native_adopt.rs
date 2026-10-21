@@ -66,7 +66,7 @@ pub(crate) fn prepare_mint(
         return None;
     }
     let native = mint_flavor(record.is_some(), agent_self.is_some());
-    let short = crate::client_verbs::derived_short_id(session_id);
+    let short = crate::client_commands::derived_short_id(session_id);
     let origin = if native { "spawn" } else { "operator" };
     // Name precedence: the record's name, then the row the worker lost, then
     // the child's own name, then the draw (transcript title, else t-short).

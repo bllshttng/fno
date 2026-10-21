@@ -1,9 +1,9 @@
-//! `fno do target start`: the native port of the Python verb. One-verb
+//! `fno do target start`: the native port of the Python command. One-command
 //! cold-start: resolve the node, run the pre-allocation gates (hold,
 //! containment, foreign holder), `fno worktree ensure` the isolated tree,
 //! bind an existing manifest (idempotent re-run / successor takeover), then
 //! call the native init by its door with the flags forwarded - `--steps`
-//! included, which the Python verb never carried (the driver set
+//! included, which the Python command never carried (the driver set
 //! `TARGET_TURN_MODE` inline; ruling d-b7ef7d2d puts the flag here).
 //!
 //! The parity contract is `tests/golden/target_start/`, captured from the
@@ -69,7 +69,7 @@ fn fail_code(message: impl Into<String>, code: i32) -> Fail {
     }
 }
 
-/// The parsed verb surface. The node is the one positional.
+/// The parsed command surface. The node is the one positional.
 struct Args {
     node: String,
     plan_path: Option<String>,
@@ -98,7 +98,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             "--help" | "-h" => {
                 print!("{USAGE}");
                 print!(
-                    "\nCold-start a worktree-isolated target session in ONE verb.\n\n\
+                    "\nCold-start a worktree-isolated target session in ONE command.\n\n\
                      --steps  run this target one instructed step at a time; the\n\
                      \x20        flag forwards to init, which stamps turn_mode.\n"
                 );
@@ -146,7 +146,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
                 }
                 if node.is_some() {
                     return Err(usage_fail(&format!(
-                        "unexpected extra argument {other:?}; the verb takes one node"
+                        "unexpected extra argument {other:?}; the command takes one node"
                     )));
                 }
                 node = Some(other.to_string());
@@ -155,7 +155,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
     }
     let node = match node {
         Some(n) if !n.trim().is_empty() => n,
-        _ => return Err(usage_fail("the verb takes a node id or feature text")),
+        _ => return Err(usage_fail("the command takes a node id or feature text")),
     };
     Ok(Args {
         node,
@@ -366,7 +366,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         request_codex_native_handoff(&repo_root, &node, &base, deadline);
     }
 
-    // 1. Create/reuse the worktree off origin/main via the ensure verb (the
+    // 1. Create/reuse the worktree off origin/main via the ensure command (the
     //    one create/reuse path). Forward the current session's harness so a
     //    claude cold-start lands harness-native; no ambient marker omits it
     //    and ensure degrades to the external base. Plain `fno` off PATH,
@@ -1326,7 +1326,7 @@ fn refuse_dispatch_hold(node: Option<&Value>, entries: Option<&[Value]>) -> Resu
 /// REDIRECT, not a refusal: naming a node is consent; the answer is which
 /// node owns it. Exits before any allocation, so nothing is claimed and no
 /// manifest is written. The message text names init: the Python twin shares
-/// it across both verbs verbatim.
+/// it across both commands verbatim.
 fn redirect_if_contained(node: Option<&Value>, entries: Option<&[Value]>) -> Result<(), Fail> {
     let Some(node) = node else {
         return Ok(());

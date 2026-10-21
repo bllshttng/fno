@@ -247,7 +247,7 @@ fn a_zero_line_attestation_is_not_review_evidence() {
 
 #[test]
 fn a_retraction_revokes_the_named_pair_not_the_retractor() {
-    // The retraction verb addresses the EVENT, not the identity: an
+    // The retraction command addresses the EVENT, not the identity: an
     // operator session emits a fail carrying retracts_attester naming the
     // pair that passed. The pair-keyed scan must revoke THAT pair while
     // the retracting session's own entry stays untouched - undoing an

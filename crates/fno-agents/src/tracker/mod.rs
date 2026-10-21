@@ -6,10 +6,10 @@
 //! Python became a thin exec client. A backend is one file implementing
 //! [`Tracker`] plus one arm in [`backend`]; refusals ride in the door's JSON
 //! payload with exit 0, the same contract `gh_budget` uses on
-//! `fleet-incident`, so the Python `verb_call` never mistakes a refusal for a
+//! `fleet-incident`, so the Python `command_call` never mistakes a refusal for a
 //! crash.
 //!
-//! A new top-level verb is not allowed (law d-fe66560a), so the door rides the
+//! A new top-level command is not allowed (law d-fe66560a), so the door rides the
 //! existing `graph-get` action: no positional ids plus a non-terminal stdin
 //! carrying `{"tracker": <op>, ...}`.
 

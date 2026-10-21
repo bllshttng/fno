@@ -1523,10 +1523,10 @@ pub fn bg_create(
     use std::process::{Command, Stdio};
 
     // the sigil says WHO WROTE the seed, never which harness runs it,
-    // so a codex-authored `$fno:verb` reaches claude as `/fno:verb`. Bound
+    // so a codex-authored `$fno:command` reaches claude as `/fno:command`. Bound
     // here (not in `build_argv`) so the stdin path on argv overflow carries
     // the same normalized text as the argv value.
-    let message = crate::provider::render_verb_seed(message, "claude");
+    let message = crate::provider::render_command_seed(message, "claude");
     let message = message.as_str();
     let use_stdin = use_stdin_for(message);
     let mut argv = build_argv(
@@ -2122,7 +2122,7 @@ pub(crate) fn now_iso() -> String {
 /// ts is millisecond-precision so two distinct same-second events never build
 /// byte-identical lines (the store commits those as one logical write).
 /// Free function (not `.emit(`) so the crate's daemon-emit-kind scanner ignores
-/// these Python-side audit kinds, matching `client_verbs::append_agents_event`.
+/// these Python-side audit kinds, matching `client_commands::append_agents_event`.
 ///
 /// SCOPE NOTE (cv-022d74f9): success events here carry their explicit fields
 /// only. Python's `emit_with_context` also flattens a 13-field `EventContext`

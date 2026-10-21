@@ -60,7 +60,7 @@ pub(super) struct RowArm {
 /// Whether a notice names `row_name` tightly enough to be its
 /// verdict: the name must sit at a token boundary, and the notice must not
 /// be an in-flight progress line (those end in `…` and never resolve the
-/// arm - the external verbs emit "stopping X…" long before the verdict).
+/// arm - the external commands emit "stopping X…" long before the verdict).
 fn notice_names_row(text: &str, row_name: &str) -> bool {
     if text.ends_with('…') {
         return false;
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn row_stamp_skips_progress_lines_and_resolves_on_the_verdict() {
-        // (review) The external verbs emit "stopping X…" long before
+        // (review) The external commands emit "stopping X…" long before
         // the verdict; the arm must survive it and resolve on the outcome.
         let mut view = two_pane_view();
         view.arm_row_stamp(&ConfirmKind::StopExternal {

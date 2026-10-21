@@ -63,7 +63,7 @@
     "id": "x-5",
     "priority": "p1"
   },
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

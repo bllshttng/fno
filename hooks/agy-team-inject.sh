@@ -65,7 +65,7 @@ if [[ "$(printf '%s' "$HOOK_INPUT" | jq -r '.invocationNum // empty' 2>/dev/null
     # lead-postcompact-reinject.sh): `fno agents internal registry-json` is a daemon-free
     # file read; this session's row matches session_id OR harness_session_id.
     command -v fno >/dev/null 2>&1 || { emit; exit 0; }
-    # A hook is never a delegated one-verb child, so a FNO_AGENTS_RUNTIME pin here
+    # A hook is never a delegated one-command child, so a FNO_AGENTS_RUNTIME pin here
     # has leaked off a spawned worker: strip it for this read and keep the exit
     # code, so a broken read never reads silently as "no row".
     AGENTS_JSON="$(env -u FNO_AGENTS_RUNTIME fno agents internal registry-json 2>/dev/null)"
@@ -78,7 +78,7 @@ if [[ "$(printf '%s' "$HOOK_INPUT" | jq -r '.invocationNum // empty' 2>/dev/null
     ROLE_LEVEL="$(printf '%s' "$MY_ROW" | jq -r '.role_level // empty' 2>/dev/null)"
     ROLE_SCOPE="$(printf '%s' "$MY_ROW" | jq -r '.role_scope // empty' 2>/dev/null)"
     [[ -n "$ROLE_LEVEL" || -n "$ROLE_SCOPE" ]] \
-      && STEPS+=("You are the lead: team level ${ROLE_LEVEL:-?} over ${ROLE_SCOPE:-?}. Confirm with \`fno whoami\`. Before any CLI verb, load the lead reference at skills/lead/references/cli-commands.md.")
+      && STEPS+=("You are the lead: team level ${ROLE_LEVEL:-?} over ${ROLE_SCOPE:-?}. Confirm with \`fno whoami\`. Before any CLI command, load the lead reference at skills/lead/references/cli-commands.md.")
 fi
 
 emit

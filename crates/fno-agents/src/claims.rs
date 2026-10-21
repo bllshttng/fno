@@ -160,7 +160,7 @@ pub struct AcquireOpts {
     pub events_dir: Option<PathBuf>,
     /// `(session_id, harness)` the CALLER vouches for, overriding the ambient
     /// identity walk. The blueprint-session open passes the operator-supplied
-    /// `--harness`/`--session-id` so the record names the session the verb
+    /// `--harness`/`--session-id` so the record names the session the command
     /// promised, exactly as the Python writer did.
     pub identity: Option<(String, String)>,
     pub host: Option<String>,
@@ -1135,7 +1135,7 @@ pub(crate) fn common_event_data(rec: &ClaimRecord) -> Map<String, Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Verbs: acquire / release / status
+// Commands: acquire / release / status
 // ---------------------------------------------------------------------------
 
 pub(crate) fn validate_inputs(
@@ -1626,7 +1626,7 @@ pub fn acquire(key: &str, holder: &str, opts: AcquireOpts) -> AcquireOutcome {
     acquire_with_session_witness(key, holder, opts, None)
 }
 
-/// The claim verb supplies a lazy session witness for task leases. It is
+/// The claim command supplies a lazy session witness for task leases. It is
 /// consulted when a pid-less thread claim is assessed, so absent sessions can
 /// release claims and live sessions can survive an expired lease.
 pub(crate) fn acquire_with_session_witness(
@@ -1681,7 +1681,10 @@ pub(crate) fn release_with_receipt(
 /// Inspect one row. Store failures retain the Corrupted refusal state.
 pub fn status(key: &str, root: Option<&Path>) -> (ClaimState, Option<ClaimRecord>) {
     match crate::claim_store::read(key, root) {
-        Ok(Some(record)) => (crate::claim_verbs::status_verdict(&record).0, Some(record)),
+        Ok(Some(record)) => (
+            crate::claim_commands::status_verdict(&record).0,
+            Some(record),
+        ),
         Ok(None) => (ClaimState::Free, None),
         Err(error) => {
             eprintln!("claim status {key}: {error}");
@@ -1822,7 +1825,7 @@ pub(crate) fn renewed_record(observed: &ClaimRecord, ttl_ms: i64) -> ClaimRecord
         // so anchoring to it would re-file the corpse under a fresh number and
         // fix nothing. `resolve_session_pid` walks up to the nearest harness
         // ancestor and is the single resolver `fno do target init` already uses to
-        // acquire (`hooks/helpers/init-target-state.sh` shells the same verb);
+        // acquire (`hooks/helpers/init-target-state.sh` shells the same command);
         // a second walk implemented here would be two producers of one answer.
         // ONLY when the move actually repairs the claim. acquired_at is held
         // below, and is_live refuses a pid whose create_time is AFTER it, so a
@@ -1855,7 +1858,7 @@ pub(crate) fn renewed_record(observed: &ClaimRecord, ttl_ms: i64) -> ClaimRecord
             // instead of closing the one this claim opened.
             // `_rebound_claim(keep_acquired_at=True)` is the python twin.
         }
-        // No resolvable durable pid (plain-shell ancestry, or the verb is
+        // No resolvable durable pid (plain-shell ancestry, or the command is
         // missing) means no better anchor exists, so the deadline moves alone -
         // byte-for-byte the pre-change behavior rather than a worse guess.
     }

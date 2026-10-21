@@ -44,7 +44,7 @@ fn inputs_from(case: &Value, config: &toml::Table) -> fno_agents::spawn_compose:
         .get("profiles")
         .cloned()
         .unwrap_or_else(|| empty.clone());
-    let dispatch_verbs = subtree(config, &["dispatch", "verbs"]);
+    let dispatch_commands = subtree(config, &["dispatch", "verbs"]);
     fno_agents::spawn_compose::Inputs {
         argv: case["argv"]
             .as_array()
@@ -56,11 +56,11 @@ fn inputs_from(case: &Value, config: &toml::Table) -> fno_agents::spawn_compose:
             .unwrap_or_default(),
         defaults,
         profiles,
-        dispatch_verbs,
+        dispatch_commands,
         // The goldens were captured with harness markers scrubbed, so the
         // ambient inference answered the builtin default.
-        roster: fno_agents::provider::footnote_verbs_public(),
-        node_verb: case["node_verb"].as_str().map(str::to_string),
+        roster: fno_agents::provider::footnote_commands_public(),
+        node_command: case["node_command"].as_str().map(str::to_string),
         env_node: case["env_node"].as_str().map(str::to_string),
         ambient_harness: "claude".to_string(),
         apply_permission_builtin: case["apply_permission_builtin"].as_bool().unwrap_or(true),

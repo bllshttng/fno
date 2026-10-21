@@ -426,7 +426,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
     # here so this exact-dict assertion stays about the role fields. The
     # team-name carry line is the same shape of advisory receipt data.
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: "msg-t delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: "msg-t delivered (hosted)"
     )
     monkeypatch.setattr(role_mod, "_carry_team_name", lambda *args: "carried")
     result = _invoke_role("worker", "--scope", "alpha")
@@ -1110,7 +1110,7 @@ def test_succession_by_an_agent_caller_is_refused_with_a_reachable_remedy(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-EDGE: grant_error's succession branch accepts an equal scope because
-    SPAWN succession is legal there. This verb only stamps the target, so it
+    SPAWN succession is legal there. This command only stamps the target, so it
     must refuse - and the refusal has to name a remedy the caller can act on.
     Falling through to the live-holder scan named the caller's OWN row as the
     blocker and offered three remedies that all contradict the refusal: re-scope
@@ -1285,10 +1285,10 @@ def test_spawn_role_refuses_before_launch_when_scope_already_occupied(
     assert not _space_manifest(tmp_path, "epic-x").exists()
 
 
-# --- the role types the verb (x-7b36 change 11): raw mail names the delivery
+# --- the role types the command (x-7b36 change 11): raw mail names the delivery
 
 
-def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
+def test_in_place_role_mails_the_term_command_and_names_the_delivery(
     tmp_path: Path, monkeypatch
 ) -> None:
     import fno.agents.role as role_mod
@@ -1301,13 +1301,13 @@ def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
     )
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: sent.append((address, verb)) or "msg-1 delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: sent.append((address, command)) or "msg-1 delivered (hosted)"
     )
 
     receipt = promote_existing_session("worker", ["alpha"])
 
     assert receipt["term_delivery"] == "msg-1 delivered (hosted)"
-    # AC28: the holder receives the plugin-qualified verb by raw mail,
+    # AC28: the holder receives the plugin-qualified command by raw mail,
     # addressed by the full session id (the ADDRESS, never the spawn label).
     assert sent == [("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "/fno:lead alpha")]
 

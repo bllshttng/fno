@@ -63,5 +63,5 @@ for id in "${IDS[@]}"; do
   fi
 done
 
-VERB="retired"; [[ "$APPLY" -eq 0 ]] && VERB="would retire"
-echo "retire-round-cap-findings: $VERB ${#IDS[@]} node(s)"
+COMMAND="retired"; [[ "$APPLY" -eq 0 ]] && COMMAND="would retire"
+echo "retire-round-cap-findings: $COMMAND ${#IDS[@]} node(s)"

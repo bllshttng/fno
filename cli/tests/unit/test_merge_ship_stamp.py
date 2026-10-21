@@ -229,7 +229,7 @@ def test_on_confirmed_merge_defer_close_syncs_status_and_skips_reconcile(
 def test_reconcile_merged_pr_node_closes_via_seam_under_external(
     tmp_path, monkeypatch
 ):
-    """Under external selection the reconcile verb refuses, so the merge close
+    """Under external selection the reconcile command refuses, so the merge close
     must terminate through the shared seam: the primary-link backfill lands in
     the SIDECAR (the local graph is never written), exactly one tracker.close,
     and no reconcile subprocess fires."""
@@ -359,8 +359,8 @@ def _requested_rows(log: Path) -> list[dict]:
     ]
 
 
-def _stub_mint_verb(monkeypatch):
-    """Stub the verb_call seam both mint sites ride: record payloads, answer
+def _stub_mint_command(monkeypatch):
+    """Stub the command_call seam both mint sites ride: record payloads, answer
     the receipt with the fold-key formula the native mint implements. The
     envelope itself is pinned by the Rust goldens."""
     import hashlib
@@ -369,8 +369,8 @@ def _stub_mint_verb(monkeypatch):
 
     seen = []
 
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        seen.append((tuple(verb), payload))
+    def fake_command_call(command, payload, *args, **kwargs):
+        seen.append((tuple(command), payload))
         identity = "|".join(
             [str(payload.get("project")), str(payload.get("pr")), payload.get("branch") or ""]
         )
@@ -379,7 +379,7 @@ def _stub_mint_verb(monkeypatch):
             + hashlib.sha256(identity.encode()).hexdigest()[:20]
         }
 
-    monkeypatch.setattr(rust_binary, "verb_call", fake_verb_call)
+    monkeypatch.setattr(rust_binary, "command_call", fake_command_call)
     return seen
 
 
@@ -398,13 +398,13 @@ def test_post_merge_followups_mints_cleanup_request(tmp_path, monkeypatch):
     # A linked worktree's `.git` is a FILE; this fixture needs the merge
     # cleanup to see cwd as one (x-7b9c inlined the predicate in _merge.py).
     (tmp_path / ".git").write_text("gitdir: /elsewhere/worktrees/t/.git\n")
-    seen = _stub_mint_verb(monkeypatch)
+    seen = _stub_mint_command(monkeypatch)
 
     M._run_post_merge_followups(9, "squash", str(tmp_path), bound_node_ids=["x-07dc"])
 
     assert len(seen) == 1
-    verb, payload = seen[0]
-    assert verb == ("pr-watch", "merge-cleanup-mint")
+    command, payload = seen[0]
+    assert command == ("pr-watch", "merge-cleanup-mint")
     assert payload["pr"] == 9
     assert payload["branch"] == "feature/x-07dc"
     assert payload["node_ids"] == ["x-07dc"]

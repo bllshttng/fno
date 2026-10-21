@@ -139,7 +139,7 @@ pub enum ConnIntent {
     /// Set the client's session-local active account to the carried
     /// value (the post-toggle state: `Some(id)`, or `None` when toggled off).
     /// Shells NOTHING - the client mirrors this into its own `active_account`
-    /// so later spawns append `--account`. Distinct from the `use` verb (the
+    /// so later spawns append `--account`. Distinct from the `use` command (the
     /// global credential slot-swap); this only routes NEW spawns (Locked
     /// Decision 1).
     SetActiveAccount(Option<String>),
@@ -238,7 +238,7 @@ fn glm_base_url() -> String {
 }
 
 /// Validate a new-account id BEFORE any subprocess: lowercase alphanumeric +
-/// hyphens, leading letter (the register verb's `_ID_PATTERN` contract).
+/// hyphens, leading letter (the register command's `_ID_PATTERN` contract).
 pub fn valid_account_id(id: &str) -> bool {
     let mut chars = id.chars();
     match chars.next() {
@@ -303,7 +303,7 @@ pub struct ConnectionsView {
     pub member_sel: usize,
     /// Buffered member order for the selected combo while reordering (Order tab).
     /// `None` = viewing committed order; `Some` = dirty, committed on Enter,
-    /// reverted on Esc / combo switch (AC2-FR: never a verb per keystroke).
+    /// reverted on Esc / combo switch (AC2-FR: never a command per keystroke).
     pub dirty_order: Option<Vec<String>>,
     /// The `n` new-combo input form (name -> providers csv), Order tab.
     pub combo_input: Option<ComboInput>,
@@ -1021,7 +1021,7 @@ impl ConnectionsView {
         ConnIntent::SpawnLogin(argv)
     }
 
-    /// Close the wizard and add the GLM api-key provider in one verb.
+    /// Close the wizard and add the GLM api-key provider in one command.
     fn finish_api_key(&mut self) -> ConnIntent {
         let w = self.wizard.take().expect("wizard present");
         self.acting = true;
@@ -1466,7 +1466,7 @@ async fn read_json(args: &[&str], budget: Duration) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
-/// The result of a single-flight mutation verb: a human message and whether it
+/// The result of a single-flight mutation command: a human message and whether it
 /// succeeded. A failure carries the stderr tail so the modal can surface WHY
 /// (AC1-ERR) rather than a bare "failed".
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1479,14 +1479,14 @@ pub struct ActionResult {
 /// is the write path. On non-zero exit the message is the trimmed stderr tail so
 /// the modal surfaces the real reason. Longer timeout than a read: a `register`
 /// can hit an interactive Keychain access prompt (Domain Pitfalls), so a slow
-/// verb yields a named timeout error, never a hung modal.
-pub async fn run_verb(argv: Vec<String>) -> ActionResult {
-    run_verb_env(argv, Vec::new()).await
+/// command yields a named timeout error, never a hung modal.
+pub async fn run_command(argv: Vec<String>) -> ActionResult {
+    run_command_env(argv, Vec::new()).await
 }
 
-/// Like [`run_verb`] but sets extra child env vars (register needs
+/// Like [`run_command`] but sets extra child env vars (register needs
 /// `CLAUDE_CONFIG_DIR` to pick the account's config dir / Keychain item).
-pub async fn run_verb_env(argv: Vec<String>, env: Vec<(String, String)>) -> ActionResult {
+pub async fn run_command_env(argv: Vec<String>, env: Vec<(String, String)>) -> ActionResult {
     let mut cmd = crate::process_admission::tokio_command(fno_bin());
     cmd.args(&argv);
     for (k, v) in &env {
@@ -1505,7 +1505,10 @@ pub async fn run_verb_env(argv: Vec<String>, env: Vec<(String, String)>) -> Acti
         Err(_) => {
             return ActionResult {
                 ok: false,
-                msg: format!("{}: timed out (try the verb in a terminal)", argv.join(" ")),
+                msg: format!(
+                    "{}: timed out (try the command in a terminal)",
+                    argv.join(" ")
+                ),
             }
         }
     };
@@ -1976,7 +1979,7 @@ mod tests {
     }
 
     #[test]
-    fn api_key_wizard_builds_add_verb_with_glm_preset() {
+    fn api_key_wizard_builds_add_command_with_glm_preset() {
         let mut v = ready_view();
         v.on_key(b'a');
         type_str(&mut v, "glm2");
@@ -2054,7 +2057,7 @@ mod tests {
         assert_eq!(v.on_key(b'\r'), ConnIntent::Bell);
     }
 
-    // AC2-FR: Esc on a dirty reorder reverts, no verb runs.
+    // AC2-FR: Esc on a dirty reorder reverts, no command runs.
 
     // space activates the selected combo (combos use).
     #[test]

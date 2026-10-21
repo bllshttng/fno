@@ -60,8 +60,8 @@ pub struct RetaskTarget {
     pub permission_mode: Option<String>,
     pub route: Option<String>,
     pub account: Option<String>,
-    /// The node's next lifecycle verb; profiles.<verb> supplies the tier.
-    pub verb: String,
+    /// The node's next lifecycle command; profiles.<command> supplies the tier.
+    pub command: String,
 }
 
 impl RetaskTarget {
@@ -89,7 +89,7 @@ impl RetaskTarget {
             permission_mode: get("permission_mode"),
             route: get("route"),
             account: get("account"),
-            verb: get("verb").unwrap_or_else(|| "target".to_string()),
+            command: get("verb").unwrap_or_else(|| "target".to_string()),
         })
     }
 }
@@ -375,7 +375,7 @@ pub fn detect_retask(
         }
     }
 
-    // The model axis resolves from the new verb's routed lane alone; a row
+    // The model axis resolves from the new command's routed lane alone; a row
     // never carries its old tier across a retask, so an unrouted lane spawns.
     let desired_model = target.model.clone().filter(|m| !m.is_empty());
     if desired_model.is_none() && row.model.is_some() {
@@ -522,9 +522,9 @@ pub fn execute_retask<S: RetaskSeams>(
         ));
     }
 
-    let rename_name = match crate::naming::verb_code_for(Some(&target.verb)) {
-        Ok(verb_code) => {
-            crate::naming::dispatch_agent_name(None, &verb_code, node, None, None, None, None)
+    let rename_name = match crate::naming::command_code_for(Some(&target.command_name)) {
+        Ok(command_code) => {
+            crate::naming::dispatch_agent_name(None, &command_code, node, None, None, None, None)
         }
         Err(error) => {
             return Ok(override_receipt(

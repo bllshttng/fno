@@ -14,7 +14,7 @@ for task delegation, identity, and agent registration.
 | `skills/` | Symlink farm: `<name> -> ../../skills/<name>` for every shipped skill. opencode scans `.opencode/skills/`, never the repo-root `skills/`, so these tracked links are what makes footnote's skills discoverable on a fresh clone (and in any worktree - the links are relative). |
 | `tests/fno.test.ts` | `bun test` unit coverage for the pure helpers + task tool. |
 
-The repository used to carry its own `.opencode/commands/` directory: five bare-named stubs (`target`, `think`, `review`, `fix`, `pr`). They existed in no other project and disagreed with every renderer. `/fno:target` was asked for, and `target` was what existed. The global install now generates the correct `fno:<verb>.md` names everywhere, this repository included.
+The repository used to carry its own `.opencode/commands/` directory: five bare-named stubs (`target`, `think`, `review`, `fix`, `pr`). They existed in no other project and disagreed with every renderer. `/fno:target` was asked for, and `target` was what existed. The global install now generates the correct `fno:<command>.md` names everywhere, this repository included.
 
 ## What it does (and what opencode does natively)
 
@@ -51,7 +51,7 @@ FNO_OPENCODE=0 opencode
 
 ## Global install (every project)
 
-The command, agent and skill catalogs come from one supported install, not from this repository: `fno config plugin install opencode` writes generated `fno:<verb>` commands, `fno:<name>` agents, the skill trees, and the stop bridge into `~/.config/opencode/` (or `$OPENCODE_CONFIG_DIR`), records every path in a manifest, and refuses to overwrite a file footnote did not write.
+The command, agent and skill catalogs come from one supported install, not from this repository: `fno config plugin install opencode` writes generated `fno:<command>` commands, `fno:<name>` agents, the skill trees, and the stop bridge into `~/.config/opencode/` (or `$OPENCODE_CONFIG_DIR`), records every path in a manifest, and refuses to overwrite a file footnote did not write.
 
 Uninstall is `fno-agents plugin-install opencode --uninstall`. Only manifest paths whose bytes still match are removed. Anything you edited is kept and named. A partial uninstall exits 3.
 

@@ -259,7 +259,7 @@ An empty value means **clear this variable**.
 Pinning `CLAUDE_CONFIG_DIR` alone is only half an overlay: an inherited `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or routed `ANTHROPIC_BASE_URL` outranks it, so the worker would authenticate or bill through a different route while the receipt named the picked account.
 Every Python spawn substrate already scrubs that list before applying an overlay; emitting it here is what lets a non-Python caller apply the whole thing from one source of truth.
 
-`--if-armed` makes the verb itself honor `pick_on_launch`, declining with exit 5 when it is false.
+`--if-armed` makes the command itself honor `pick_on_launch`, declining with exit 5 when it is false.
 It exists for callers that must respect the opt-in but cannot read config themselves (the Rust loop dispatcher), so the knob keeps exactly one implementation.
 A bare `fno config accounts pick` you type by hand always answers: you asked.
 
@@ -283,7 +283,7 @@ Two spawns are never picked for, whatever the knob says:
 
 ### `fno config accounts doctor`
 
-One read-only verb reporting the store's real condition, exiting non-zero when anything is wrong:
+One read-only command reporting the store's real condition, exiting non-zero when anything is wrong:
 
 - a record whose stored credential duplicates another's (two ids, one account)
 - a `config_dir` that is missing or holds no login
@@ -293,7 +293,7 @@ One read-only verb reporting the store's real condition, exiting non-zero when a
 - `account_identity_unknown`: the live slot's account is unproven, so the slot is neither healthy nor a successful switch
 
 `register` refuses a duplicate credential up front, but that guard is register-time only.
-`doctor` is the surface that reports stores predating it, and the verb that confirms a `--config-dir` conversion took.
+`doctor` is the surface that reports stores predating it, and the command that confirms a `--config-dir` conversion took.
 It stays read-only: for the one finding it cannot merely report, it names `fno config accounts reconcile-slot <harness>` as the repair.
 
 ### `fno config accounts reconcile-slot <harness>`
@@ -310,7 +310,7 @@ On exactly one match it refreshes that account's snapshot from the live blob, st
 fno config accounts reconcile-slot claude
 ```
 
-It is deliberately **not** a `clear-taint` verb, and it will not act on anything short of proof.
+It is deliberately **not** a `clear-taint` command, and it will not act on anything short of proof.
 An unreachable profile endpoint, a malformed response, a slot `security` could not read, a principal matching no registered account, or one matching two of them each leave the stamp, the snapshots, and the taint byte-identical, and exit non-zero naming which of those happened.
 Clearing a taint without proof would file one account's usage under another's name, which is worse than staying `unknown`.
 
@@ -488,7 +488,7 @@ refuses non-zero naming the file it could not restore.
 
 Which commands are relaunch doors is wider than this page once claimed, and the distinction is load-bearing. An earlier version held that `claude attach` opens a session that is still running. So attach cannot lose a route and had "nothing to do". The operator falsified that on 2026-08-23. Every re-entry door shells a fresh claude process. A fresh process re-resolves its account namespace from ambient env, so a re-entry launched from the wrong shell lands in the wrong config namespace. The transcript store is per-config-dir, so it either misses the session (loud) or bills the wrong account (silent). That claim is superseded. The table below is the replacement.
 
-Every door that re-enters or re-launches a Claude session, and what fno does at each. fno controls the first seven. The last two are Claude-native transitions fno cannot block, only observe and record. A fork is additive: the row keeps its primary id and gains at most one optional `related_session_id`. Both ids address the row. When both ids are recorded, `recover` is the selection verb.
+Every door that re-enters or re-launches a Claude session, and what fno does at each. fno controls the first seven. The last two are Claude-native transitions fno cannot block, only observe and record. A fork is additive: the row keeps its primary id and gains at most one optional `related_session_id`. Both ids address the row. When both ids are recorded, `recover` is the selection command.
 
 | Door | Starts a claude process? | Account + route handling |
 |---|---|---|
@@ -498,7 +498,7 @@ Every door that re-enters or re-launches a Claude session, and what fno does at 
 | mux attach gestures (`AttachAgent`, open-here, split/drop, restore, picker) | yes | resolve through the same re-entry plan. A resolver refusal starts no pane. |
 | mux `ResumeAgent` gesture | yes | run the same re-entry plan in the selected pane, never bare provider argv |
 | `fno agents session resume <name>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. The spawn `--resume` fork door is retired. |
-| `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the verb refuses until `--session` names one. |
+| `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the command refuses until `--session` names one. |
 | native background / left-arrow fork (Claude-owned) | yes, Claude's own | not blockable pre-transition. SessionStart observes and records the second id. |
 | explicit `--fork-session` / SessionStart `source=fork` | yes, Claude's own | same: apply the row's binding on any fno re-entry, and record the id |
 
@@ -512,7 +512,7 @@ The paragraph below is the superseded theory, kept as the historical record of t
 
 A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
-**The Rust arm owns live Claude resume directly.** The `resume` verb routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_VERBS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
+**The Rust arm owns live Claude resume directly.** The `resume` command routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_COMMANDS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
 
 Both doors apply the same usability rule, not just an existence check: a recorded
 file that is missing, unparseable, or carries only the auth-scrub floor all
@@ -1009,8 +1009,8 @@ or backfill required.
 
 ### verify_provenance evidence path
 
-The bundled binary's `fno-agents verify-evidence` verb exposes three sub-commands
-(`child-promise`, `has-nonclaude`, `receipt`); the per-agent `event` sub-verb and
+The bundled binary's `fno-agents verify-evidence` command exposes three sub-commands
+(`child-promise`, `has-nonclaude`, `receipt`); the per-agent `event` sub-command and
 its `subagent_spawn` / `subagent_complete` pair verifier were removed for cause
 (production sigma dispatch goes through the raw Task tool and never reached the
 wrapper). See `crates/fno-agents/tests/verify_evidence_parity.rs` for the
@@ -1193,7 +1193,7 @@ Unknown combo (in env or settings) logs a WARNING and falls through to the next 
 
 ### What chooses the account a spawn bills
 
-`accounts.active` is rung four of `agents.dispatch_target.resolve_dispatch_target`. Failover and outage-handoff routes read it. It is a rotation pointer, not a spawn default. For a spawn, the spawn compose (`spawn_compose.rs` via `compose_spawn_argv`) checks the lane, then `agents.profiles.<verb>.account`, then `agents.defaults.account`. An explicit `--account` is the CLI pin.
+`accounts.active` is rung four of `agents.dispatch_target.resolve_dispatch_target`. Failover and outage-handoff routes read it. It is a rotation pointer, not a spawn default. For a spawn, the spawn compose (`spawn_compose.rs` via `compose_spawn_argv`) checks the lane, then `agents.profiles.<command>.account`, then `agents.defaults.account`. An explicit `--account` is the CLI pin.
 
 | Reading | Where it shows | What it means |
 |---|---|---|
@@ -1251,7 +1251,7 @@ Single-provider combos short-circuit (cursor never advances past `idx=0`).
 | Surface | How combo is supplied |
 |---------|-----------------------|
 | `/target` skill | `/fno:target combo my-stack "feature"` (positional 2-token modifier) |
-| `run-target-loop.sh` | `TARGET_COMBO=my-stack bash scripts/run-target-loop.sh <plan>` (env; the `fno loop` verb is removed) |
+| `run-target-loop.sh` | `TARGET_COMBO=my-stack bash scripts/run-target-loop.sh <plan>` (env; the `fno loop` command is removed) |
 
 (The `/megawalk` skill and `fno megawalk` combo rows are gone with the retired megawalk surface.)
 
@@ -1505,7 +1505,7 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
   `EXHAUSTED` (or `LOW` with a reset inside `defer_horizon_minutes`) is **not**
   dispatched here - it either cuts over to another record (below) or leaves a
   `quota-deferred` receipt + one decision event, node left in `ready`, the first
-  tick after the reset dispatching it. `p0` and explicit human dispatch verbs
+  tick after the reset dispatching it. `p0` and explicit human dispatch commands
   always fire. This is the one probe site (refresh-on-stale).
 - **Lane routing** (review panel `alternate` selection): a kind whose records
   are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit

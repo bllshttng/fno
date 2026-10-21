@@ -25,7 +25,7 @@ def _wire(monkeypatch, out):
     return obs_cli, calls
 
 
-def test_judge_verb_skips_at_report_level(monkeypatch, tmp_path):  # AC4-HP
+def test_judge_command_skips_at_report_level(monkeypatch, tmp_path):  # AC4-HP
     p = tmp_path / "p.md"
     p.write_text("---\ntitle: t\n---\n\n## Five questions\n\n1. persona: the operator\n")
     obs_cli, calls = _wire(monkeypatch, {"rows": []})
@@ -35,7 +35,7 @@ def test_judge_verb_skips_at_report_level(monkeypatch, tmp_path):  # AC4-HP
     assert not calls  # no fno-agents call at report level
 
 
-def test_judge_verb_forwards_rows_and_emits_findings(monkeypatch, tmp_path):  # AC4-HP
+def test_judge_command_forwards_rows_and_emits_findings(monkeypatch, tmp_path):  # AC4-HP
     p = tmp_path / "p.md"
     p.write_text("---\ntitle: t\n---\n\n## Five questions\n\n1. persona: the operator\n")
     out = {

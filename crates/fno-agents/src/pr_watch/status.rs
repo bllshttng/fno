@@ -1,4 +1,4 @@
-//! The `pr-watch status` verb: the one liveness leg.
+//! The `pr-watch status` command: the one liveness leg.
 //!
 //! Port of the Python `liveness_report` / `liveness_report_live` pair in
 //! `cli/src/fno/pr_watch/_install.py`, retired in the same change that
@@ -391,7 +391,7 @@ pub(crate) fn broken_streak(ends: &[EndRec]) -> usize {
     ends.iter().rev().take_while(|end| end.broken()).count()
 }
 
-/// `fno do pr watch status` (and later the other five verbs) dispatches here
+/// `fno do pr watch status` (and later the other five commands) dispatches here
 /// from `bin/client.rs` beside `pr-park`.
 pub fn run(args: &[String]) -> i32 {
     let mut json_out = false;
@@ -469,7 +469,7 @@ pub(crate) fn gather(cwd: &Path, launch_agents_dir: &Path) -> Inputs {
     }
 }
 
-/// The LaunchAgents dir every pr-watch verb writes and reads: the test pin
+/// The LaunchAgents dir every pr-watch command writes and reads: the test pin
 /// moves it, production keeps it under HOME.
 pub(crate) fn launch_agents_dir() -> PathBuf {
     std::env::var_os("FNO_TEST_PR_WATCH_LAUNCH_AGENTS_DIR")

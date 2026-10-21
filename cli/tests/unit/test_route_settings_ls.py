@@ -1,7 +1,7 @@
 """`fno config route settings ls`: the route-settings overlays, legibly.
 
 The overlay files under state_dir()/route-settings are sha16-named and carry
-live auth tokens, so before this verb the only way to answer "which file is
+live auth tokens, so before this command the only way to answer "which file is
 my session on, and is any of them stale" was a hand-written loop that opened
 every file (x-5cc5). These tests pin the two properties the node asks for:
 the WRONG case is disclosed by name (a stale tier renders old -> new), and
@@ -82,7 +82,7 @@ def test_prune_removes_only_unreferenced_old_files_by_name(tmp_path, monkeypatch
 
 def test_prune_refuses_to_act_when_the_registry_cannot_be_read(tmp_path, monkeypatch):
     """Fail closed: with the registry unreadable, 'no row references it' is a
-    guess, and deleting on a guess is the exact defect class this verb exists
+    guess, and deleting on a guess is the exact defect class this command exists
     to refuse."""
     overlays = _pin(tmp_path, monkeypatch, referenced=[])
     old = _overlay(overlays, "cc44", haiku="glm-4.7", mtime_days_ago=20)

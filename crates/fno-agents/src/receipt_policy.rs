@@ -285,7 +285,7 @@ fn highest_generation(
 /// HEAD, discover the journals, run `verify_evidence::receipt_decision`,
 /// and on an allowed miss borrow a patch-identical ancestor's green. Ports
 /// `_preflight.check_verification_evidence` (+ `run_evidence_check`'s
-/// stderr line lives in the verb door).
+/// stderr line lives in the command door).
 pub(crate) fn check_verification_evidence(
     cwd: &Path,
     candidate_sha: Option<&str>,

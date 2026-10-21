@@ -1,6 +1,6 @@
-//! Typed argv for the migrated `fno-agents` verbs.
+//! Typed argv for the migrated `fno-agents` commands.
 //!
-//! One derive declaration per flag: for the verbs it owns, this module IS the
+//! One derive declaration per flag: for the commands it owns, this module IS the
 //! flag registry, and its help strings are the only copy. Parsers run through
 //! `try_parse_from`, so the caller keeps process ownership (clap never exits
 //! inside library code) and maps failures through [`refusal_line`] into the
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 /// The shared machine-output group (contracts build on this): one
-/// declaration of `--json`/`-J`, flattened into every verb that emits it.
+/// declaration of `--json`/`-J`, flattened into every command that emits it.
 #[derive(Args, Debug)]
 pub struct JsonOnly {
     /// Emit machine-readable JSON on stdout instead of human text
@@ -90,7 +90,7 @@ pub struct ReportArgs {
 
 /// `fno-agents review-summary`: the reviewed-at display line's inputs.
 /// Branch and head are required for the display line; the caller turns a
-/// parse failure into the verb's deliberate silence (print nothing, exit 0),
+/// parse failure into the command's deliberate silence (print nothing, exit 0),
 /// never into a claim. `--evidence` replaces them: observer items on stdin,
 /// their review evidence as JSON on stdout.
 #[derive(Parser, Debug)]
@@ -119,7 +119,7 @@ pub struct ReviewSummaryArgs {
 }
 
 /// The spawn head's axis flags, parsed once and consumed by both the client's
-/// spawn dispatch and the spawn-overlay inspection verb: route,
+/// spawn dispatch and the spawn-overlay inspection command: route,
 /// provider, harness, model, effort, account, substrate. Tokens before the
 /// provider argv fence that are not axis flags belong to the rest of the
 /// spawn grammar and are ignored here; tokens after the fence are opaque
@@ -141,7 +141,7 @@ pub struct SpawnAxes {
     /// CLI binary axis: which harness launches
     #[arg(short = 'H', long)]
     pub harness: Option<String>,
-    /// The retired axis fields stay declared because the spawn-overlay verb's
+    /// The retired axis fields stay declared because the spawn-overlay command's
     /// inspection shape names them; `scan` refuses the spellings and never
     /// fills them, so every live read answers None.
     #[arg(short = 'P', long)]
@@ -374,8 +374,8 @@ mod tests {
 
     #[test]
     fn restart_parses_the_python_adapter_invocation() {
-        // this exact argv (post-verb) is what cli/src/fno/restart.py
-        // spawns; the dispatch strips the verb before the parser runs.
+        // this exact argv (post-command) is what cli/src/fno/restart.py
+        // spawns; the dispatch strips the command before the parser runs.
         let a = RestartArgs::try_parse_from(["--json"]).expect("--json parses");
         assert!(a.json.json);
         assert!(!a.force);

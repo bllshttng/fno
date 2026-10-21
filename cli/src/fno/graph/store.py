@@ -104,7 +104,7 @@ STATE_SPAWN_FAILED = "spawn_failed"
 STATE_UNREACHABLE = "unreachable"
 STATE_SILENT = "silent"
 STATE_UNCONFIRMED = "unconfirmed"
-# The keeper answered but does not know the verb: it predates the client
+# The keeper answered but does not know the command: it predates the client
 # (an installed worker behind the source). Remedied by restarting that
 # keeper on a current binary.
 STATE_STALE_KEEPER = "stale_keeper"
@@ -503,7 +503,7 @@ class _Keeper:
         carries the matched rows (readiness overlay applied server-side, the
         blockers' list is server-side knowledge) plus the unmatched tokens.
         The single-graph keeper, so no path; a stale keeper that predates
-        the verb raises through ``request`` and every caller falls back."""
+        the command raises through ``request`` and every caller falls back."""
         return self.request("read_ids", {"ids": list(ids)})
 
     def _control(self, tag: int, expected: int) -> bytes:
@@ -943,7 +943,7 @@ class ReadyParentMissingError(ValueError):
 def ready(
     *,
     project: str | None = None,
-    all: bool = False,  # noqa: A002 - the verb flag's own name
+    all: bool = False,  # noqa: A002 - the command flag's own name
     roadmap_id: str | None = None,
     parent: str | None = None,
     mission: str | None = None,
@@ -957,9 +957,9 @@ def ready(
     """The dispatch admission decision, answered by the native leg.
 
     One call into ``backlog_ready::select`` through the keeper's ``ready``
-    verb: survivors (dispatch summaries in selection order) plus per-node
-    drops. `next` takes ``rows[0]`` of the same call its sibling verb makes,
-    so the two surfaces cannot drift. When `entries` is given the verb
+    command: survivors (dispatch summaries in selection order) plus per-node
+    drops. `next` takes ``rows[0]`` of the same call its sibling command makes,
+    so the two surfaces cannot drift. When `entries` is given the command
     filters that list instead of reading the graph (the external-tracker
     backend's joined candidates); otherwise the keeper reads the graph it
     owns. An unreachable keeper raises ``StoreUnavailable`` - selection
@@ -1012,13 +1012,13 @@ def ready(
         if "ready filter: " in text:
             raise ValueError(text[text.index("ready filter: ") :]) from None
         if "no such node" in text:
-            # The verb's own refusal wording, without the store-error prefix
+            # The command's own refusal wording, without the store-error prefix
             # the transport wraps it in.
             raise ReadyParentMissingError(text[text.index("no such node") :]) from None
         if "unknown store method" in text:
             raise StoreUnavailable(
                 STATE_STALE_KEEPER,
-                "the running store keeper predates this verb; restart it on a "
+                "the running store keeper predates this command; restart it on a "
                 "current fno-agents-worker (`fno doctor` names binary lag)",
             ) from None
         raise
@@ -1406,7 +1406,7 @@ def append_progress_note(
     note`` and the status-fanout backlog-progress adapter.
 
     ``entries_out`` is filled with the begin snapshot this call already read, so
-    a caller that needs the graph next (the note verb, to resolve who to tell)
+    a caller that needs the graph next (the note command, to resolve who to tell)
     reuses it instead of paying a second full read.
     """
     resolved = _resolve_node_id(Path(path), node_id, entries_out=entries_out)
@@ -1441,7 +1441,7 @@ def _confirm_note_landed(
     """Read the target back and confirm the appended note is in the row.
 
     The op's word is not the world's: a layer that reports found=true and
-    loses the publish would let the verb print a fold receipt over a no-op
+    loses the publish would let the command print a fold receipt over a no-op
 . A read-back that cannot answer (store read failed) refuses
     with the uncertainty named rather than asserting the note is absent.
     """

@@ -26,7 +26,7 @@ CARGO_HOME_TEST="$TMP_DIR/cargo"
 AGENTS_HOME="$TMP_DIR/agents-home"
 mkdir -p "$MUX_DIR" "$CARGO_HOME_TEST/bin" "$AGENTS_HOME"
 ln -s "$MUX_BIN" "$CARGO_HOME_TEST/bin/fno"
-# The restart verb itself is the Rust binary now, so the journey needs the
+# The restart command itself is the Rust binary now, so the journey needs the
 # REAL one; the daemon leg stays isolated by the private agents home below.
 ln -s "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" "$CARGO_HOME_TEST/bin/fno-agents"
 

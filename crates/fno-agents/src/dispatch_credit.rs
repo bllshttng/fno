@@ -1,6 +1,6 @@
 //! Dispatch credit: who answers for an autonomously dispatched node worker.
 //!
-//! Two asks on the `spawn-axes` verb (the shrink law allows no new client
+//! Two asks on the `spawn-axes` command (the shrink law allows no new client
 //! action), each failing open:
 //!
 //! - `dispatch_credit`: the live role whose scope covers the node. The
@@ -203,7 +203,7 @@ pub fn launch_mail_text(node: &str, worker: &Value) -> String {
 }
 
 /// The `launch_credit_mail` ask: resolve the covering role's lead and
-/// deliver the notice through the mail verb the scheduler itself uses.
+/// deliver the notice through the mail command the scheduler itself uses.
 pub fn launch_credit_mail(payload: &Value) -> Value {
     let node = payload
         .get("node")

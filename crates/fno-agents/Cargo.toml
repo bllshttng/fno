@@ -23,7 +23,7 @@ include = ["build.rs", "codegen/**", "src/**", "Cargo.toml", "README.md", "LICEN
 name = "fno_agents"
 path = "src/lib.rs"
 
-# Wave 3 binaries: daemon (supervisor), client (thin verb forwarder), and the
+# Wave 3 binaries: daemon (supervisor), client (thin command forwarder), and the
 # per-agent worker shim that owns the PTY master and outlives the daemon
 # (Outcome B). All three compile from this crate.
 [[bin]]
@@ -56,7 +56,7 @@ libc = "0.2"
 # the keeper protocol speak one pty implementation.
 portable-pty = "0.9"
 # Cross-platform OS CSPRNG for minting interactive-claude session UUIDs
-# (client_verbs/bin). Already present transitively, so declaring it adds no new
+# (client_commands/bin). Already present transitively, so declaring it adds no new
 # compile cost; replaces a hardcoded `/dev/urandom` read that was unix-only
 # (gemini review, PR #88).
 getrandom = "0.3"
@@ -89,7 +89,7 @@ tokio-tungstenite = "0.29"
 # Drive (Wave 4): split the WS stream into independent read/write halves and
 # drive the Sink/Stream traits.
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-# trace verb (Python-only port): ISO8601 `--since` parsing with datetime-aware
+# trace command (Python-only port): ISO8601 `--since` parsing with datetime-aware
 # comparison matching Python's `datetime.fromisoformat`. Parsing only -- no
 # system clock needed, so the `clock` default feature is dropped.
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
@@ -115,8 +115,8 @@ md-5 = "0.10"
 # serde_yaml_ng is the maintained serde_yaml fork; transitive tree is
 # unsafe-libyaml (pure Rust), no C toolchain.
 serde_yaml_ng = "0.10"
-# Typed argv for the migrated client verbs: one derive declaration
-# per flag replaces the per-verb hand-rolled scans.
+# Typed argv for the migrated client commands: one derive declaration
+# per flag replaces the per-command hand-rolled scans.
 clap = { version = "4", features = ["derive"] }
 # The vendored review-invocation core shell-splits the raw args the way the
 # deleted Python leg did; same crate the fno copy declares.

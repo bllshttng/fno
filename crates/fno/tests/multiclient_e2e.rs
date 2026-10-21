@@ -1,7 +1,7 @@
 //! Multi-client e2e (task 3.6): the Phase 3 brief's clamp, per-client-view,
-//! session, and mux-verb ACs scripted through the socket seam (fake wire
+//! session, and mux-command ACs scripted through the socket seam (fake wire
 //! clients with distinct viewports against the real headless server binary)
-//! plus plain subprocess runs of the real binary for the mux verbs.
+//! plus plain subprocess runs of the real binary for the mux commands.
 
 mod common;
 
@@ -42,8 +42,8 @@ fn sh_server(scratch: &Scratch) -> common::ServerProc {
 }
 
 /// Run the real `fno` binary with `FNO_MUX_DIR` pointed at this scratch (no
-/// TTY - the mux verbs are plain subprocess surfaces). FNO_AGENTS_HOME rides
-/// along so a store-touching verb (workspace prune) writes the SAME isolated
+/// TTY - the mux commands are plain subprocess surfaces). FNO_AGENTS_HOME rides
+/// along so a store-touching command (workspace prune) writes the SAME isolated
 /// store the server uses instead of tripping the build-tree guard against
 /// the developer's real ~/.fno.
 fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
@@ -640,7 +640,7 @@ fn concurrent_strict_spawn_only_one_commits() {
     // tab). A 5-row viewport admits one MIN_ROWS split but not a second.
     use common::connect_with_retry;
     use fno::proto::{
-        read_msg_sync, write_msg_sync, ClientMsg, ControlVerb, PanePlacement, PaneTarget,
+        read_msg_sync, write_msg_sync, ClientMsg, ControlCommand, PanePlacement, PaneTarget,
         PlacementFallback, ServerMsg, BUILD_VERSION, PROTO_VERSION,
     };
     use fno::tree::Dir;
@@ -663,7 +663,7 @@ fn concurrent_strict_spawn_only_one_commits() {
     let req = ClientMsg::Control {
         proto: PROTO_VERSION,
         build: BUILD_VERSION.into(),
-        verb: ControlVerb::PaneRun {
+        command: ControlCommand::PaneRun {
             cwd: cwd.to_string_lossy().into_owned(),
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
             cols: None,
@@ -730,7 +730,7 @@ fn concurrent_graft_one_commits_one_refuses() {
     // on min-size (no partial tree, no orphan shell).
     use common::connect_with_retry;
     use fno::proto::{
-        read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, ControlVerb, GraftOutcome,
+        read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, ControlCommand, GraftOutcome,
         LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec, PaneTarget, ServerMsg,
         BUILD_VERSION, PROTO_VERSION,
     };
@@ -782,7 +782,7 @@ fn concurrent_graft_one_commits_one_refuses() {
     let req = ClientMsg::Control {
         proto: PROTO_VERSION,
         build: BUILD_VERSION.into(),
-        verb: ControlVerb::LayoutGraft {
+        command: ControlCommand::LayoutGraft {
             squad: PaneTarget::CurrentRoute,
             anchor: pane1,
             spec: spec(),

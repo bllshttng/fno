@@ -1,6 +1,6 @@
 """`fno backlog album`: the memento book over graph-archive.json (x-b2bf).
 
-The album is a read verb over the file the sweep already maintains. Cards are
+The album is a read command over the file the sweep already maintains. Cards are
 done nodes sorted newest-first; a card with no gift says so rather than hiding.
 """
 from __future__ import annotations

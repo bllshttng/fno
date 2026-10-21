@@ -1,9 +1,9 @@
 """`fno agents lead manifest-path` resolves a live role to its manifest.
 
 The stop hook calls the deprecated `fno lead manifest-path` spelling, which
-verb_moves forwards onto the agents app. The verb missed the agents fold, so
+command_moves forwards onto the agents app. The command missed the agents fold, so
 the resolver exited 2 and every stop on an active leads dir burned its
-unavailable-retries before allowing exit. These tests pin the verb onto the
+unavailable-retries before allowing exit. These tests pin the command onto the
 agents app and pin the deprecated spelling onto the same command.
 """
 from __future__ import annotations
@@ -113,7 +113,7 @@ def test_manifest_path_keys_on_the_role_row_cwd(team, monkeypatch) -> None:
 
 def test_manifest_path_frees_a_stranger(team) -> None:
     """No registry row names this session: exit 1, the hook's "stranger goes
-    free" contract, never the exit-2 parse failure the missing verb produced."""
+    free" contract, never the exit-2 parse failure the missing command produced."""
     result = _manifest_path(
         "--harness-session-id", CALLER_SESSION,
         "--state-root", str(team / ".fno"),

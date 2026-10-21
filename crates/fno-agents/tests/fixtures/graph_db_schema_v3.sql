@@ -31,7 +31,7 @@ CREATE TABLE node_claims (
 );
 CREATE TABLE node_dispatch (
   node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
-  verb TEXT, brief TEXT, model TEXT
+  command TEXT, brief TEXT, model TEXT
 );
 CREATE TABLE node_provenance (
   node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,

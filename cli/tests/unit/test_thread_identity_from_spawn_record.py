@@ -221,8 +221,8 @@ def test_foreign_legacy_marker_blocks_adoption(tmp_path, monkeypatch):
     assert ident.disposition != "spawn_record"
 
 
-def test_resolve_owned_identity_verb_stamps_the_spawn_record(tmp_path, monkeypatch):
-    """The production path end to end: init's manifest stamper verb answers
+def test_resolve_owned_identity_command_stamps_the_spawn_record(tmp_path, monkeypatch):
+    """The production path end to end: init's manifest stamper command answers
     HARNESS=codex SESSION_ID=<row id> for a thread worker standing in its own
     worktree - the answer whose absence stamped harness=unknown and refused
     the worker's node claim."""

@@ -54,7 +54,7 @@ impl AttachPlace {
 pub(crate) enum PortalPickDecision {
     /// The attach key the picker opens on - the old gate's exact outcome.
     Open(String),
-    /// The refusal the notice strip shows: the row, its state, and the verb
+    /// The refusal the notice strip shows: the row, its state, and the command
     /// that moves it where one applies.
     Refuse(String),
 }
@@ -156,7 +156,7 @@ impl View {
             None => String::new(),
         };
         // Meaning-first: the notice strip ellipsizes from the right, so the
-        // row and its state lead and the recovery verb trails.
+        // row and its state lead and the recovery command trails.
         if let Some(idx) = a.portal {
             PortalPickDecision::Refuse(format!(
                 "{} is already portal {idx}{tab}; move it: \

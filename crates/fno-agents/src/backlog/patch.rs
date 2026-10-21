@@ -2,7 +2,7 @@
 //! fields, status included. Status is never a stored input - the derivation
 //! ladder rewrites it from facts on every write - so `--status X` changes the
 //! facts that derive X, recomputes, and refuses unless the readback agrees.
-//! Every carried lifecycle verb (CLI defer/retract/undefer/unsupersede, the
+//! Every carried lifecycle command (CLI defer/retract/undefer/unsupersede, the
 //! typed `node_update` status arm) is a transport over this planner.
 //!
 //! The cycle: resolve -> read rows + version -> patch a working copy -> build
@@ -130,7 +130,7 @@ enum Policy {
     StatusFact(Kind),
     /// Read-only; the string is the reason a caller sees in the refusal.
     Derived(&'static str),
-    /// Another verb or flag owns the write; the refusal names it.
+    /// Another command or flag owns the write; the refusal names it.
     Owned(&'static str),
 }
 
@@ -156,7 +156,7 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("roadmap_id", Policy::Settable(Kind::Text)),
     ("vision_path", Policy::Settable(Kind::Text)),
     ("artifact_url", Policy::Settable(Kind::Text)),
-    ("dispatch_verb", Policy::Settable(Kind::Text)),
+    ("dispatch_command", Policy::Settable(Kind::Text)),
     ("dispatch_brief", Policy::Settable(Kind::Text)),
     ("model", Policy::Settable(Kind::Text)),
     ("deferred_reason", Policy::StatusFact(Kind::Text)),
@@ -307,7 +307,7 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
 /// itself is runtime code, so the list stays test-only.
 #[cfg(test)]
 const MODEL_EXTRA_KEYS: &[&str] = &[
-    "dispatch_verb",
+    "dispatch_command",
     "dispatch_brief",
     "model",
     "think_session_id",
@@ -444,7 +444,7 @@ fn target_owner(word: &str, id: &str) -> Option<String> {
 }
 
 /// The first fact that would still hold a node out of a rung target, with the
-/// flag or verb that clears it.
+/// flag or command that clears it.
 fn holding_fact(entry: &Value, id: &str) -> Option<String> {
     let truthy = |key: &str| entry.get(key).map(|v| !v.is_null()).unwrap_or(false);
     if truthy("completed_at") {
@@ -859,7 +859,7 @@ fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
 }
 
 /// Why the derived status is not the requested word: name the holding fact
-/// and the flag or verb that supplies it (AC1-ERR, AC2-HP).
+/// and the flag or command that supplies it (AC1-ERR, AC2-HP).
 fn status_mismatch(
     rows: &[Value],
     idx: usize,

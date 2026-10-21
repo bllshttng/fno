@@ -1,4 +1,4 @@
-//! `lead-checkin`: one verb runs the lead check-in body.
+//! `lead-checkin`: one command runs the lead check-in body.
 //!
 //! Gathers the readings the lead skill names, prints them in a fixed order,
 //! diffs against the previous canonical `lead_checkin` row, and emits that
@@ -47,7 +47,7 @@ mod peer_blocked;
 #[path = "lead_checkin_prompt_parked.rs"]
 mod prompt_parked;
 
-/// The numeric keys this verb owns and diffs versus the previous beat.
+/// The numeric keys this command owns and diffs versus the previous beat.
 const NUMERIC_DIFF_KEYS: [&str; 11] = [
     "open_prs",
     "free_claim_no_driver",
@@ -181,7 +181,7 @@ pub(crate) fn gh_error_cause(error: &str) -> String {
     )
 }
 
-pub(crate) fn fno_verb(args: &[&str]) -> Result<(i32, String, String), String> {
+pub(crate) fn fno_command(args: &[&str]) -> Result<(i32, String, String), String> {
     let mut argv = vec![fno_bin()];
     argv.extend(args.iter().map(std::ffi::OsString::from));
     run_capture(&argv)
@@ -194,7 +194,7 @@ pub(crate) fn fno_verb(args: &[&str]) -> Result<(i32, String, String), String> {
 /// stop gate's stale-doc resolver calls the same one.
 pub(crate) fn team_handoff_doc(handoffs_dir: &Path, scope: &str) -> Result<PathBuf, String> {
     // The FILENAME key keeps the role- spelling: the docs on disk and both
-    // writers (the retired Python verb, the native handoff verb) mint
+    // writers (the retired Python command, the native handoff command) mint
     // role-, so a reader keying team- would find nothing, ever.
     let key = format!("role-{}", sanitize_scope_key(scope));
     if key == "role-" {
@@ -234,7 +234,7 @@ pub(crate) fn sanitize_scope_key(scope: &str) -> String {
         } else if !in_run {
             // One dash per unsafe RUN, the Python writer's
             // re.sub(r"[^A-Za-z0-9._-]+", "-") shape, so reader keys match
-            // the docs the verb wrote.
+            // the docs the command wrote.
             out.push('-');
             in_run = true;
         }
@@ -607,13 +607,13 @@ fn epic_line(org: &Value) -> String {
 }
 
 fn r_capacity() -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["doctor", "footprint", "--json"])?;
+    let (_, out, err) = fno_command(&["doctor", "footprint", "--json"])?;
     if out.trim().is_empty() {
         return Err(format!("footprint unavailable: {}", stderr_cause(&err)));
     }
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("footprint payload did not parse: {e}"))?;
-    let (_, gate_out, gate_err) = fno_verb(&["agents", "gate-status"])?;
+    let (_, gate_out, gate_err) = fno_command(&["agents", "gate-status"])?;
     let gate: Value = serde_json::from_str(gate_out.trim())
         .map_err(|e| format!("gate payload did not parse: {e}: {}", gate_err.trim()))?;
     r_capacity_pair(&payload, &gate)
@@ -700,7 +700,7 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
 }
 
 fn r_team() -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["agents", "org", "--json"])?;
+    let (_, out, err) = fno_command(&["agents", "org", "--json"])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("org payload did not parse: {e}: {}", err.trim()))?;
     let summary = payload.get("summary").cloned().unwrap_or(json!({}));
@@ -984,13 +984,13 @@ fn r_wake_meter(since: Option<&str>) -> Result<Value, String> {
 }
 
 fn r_drain(ctx: &Ctx) -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["agents", "org", "drain", &ctx.scope])?;
+    let (_, out, err) = fno_command(&["agents", "org", "drain", &ctx.scope])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("drain payload did not parse: {e}: {}", err.trim()))?;
     Ok(payload.get("undelivered").cloned().unwrap_or(Value::Null))
 }
 
-/// The parked-PR board fact: open parks with the remedy verb, read
+/// The parked-PR board fact: open parks with the remedy command, read
 /// in-process from the one owner so a second reader of the store shape can
 /// never drift. An unreadable store reads empty, the same corrupt-reads-
 /// empty posture the Python watcher store has always had.
@@ -1067,7 +1067,7 @@ fn control_plane_attention(
         })
         .collect();
     if let (false, Some(p)) = (paused.is_empty(), trace.pause.as_ref()) {
-        let verb = match p {
+        let command = match p {
             crate::loops_pause::DispatchPause::Manual { .. } => "fno do loops status",
             _ => "fno agents incident status",
         };
@@ -1099,7 +1099,7 @@ fn control_plane_attention(
             _ => String::new(),
         };
         attention.push(format!(
-            "{} arms paused on purpose: {}{} ({verb})",
+            "{} arms paused on purpose: {}{} ({command})",
             paused.len(),
             p.detail(),
             tail
@@ -2404,7 +2404,7 @@ const FAQ_PROMPT: &str = "fno agents org faq add --question \"...\" --answer \".
 --specimen \"<node or PR>, <date>\" --exit \"<the change that retires this>\"";
 
 /// The one `lead_checkin` writer. `source` is the emitting half (`loop` for
-/// the verb's own beat, `hook` for the stop hook's missed-beat row); the
+/// the command's own beat, `hook` for the stop hook's missed-beat row); the
 /// append runs through the capped, rotation-safe `EventEmitter`, so the row
 /// never bypasses the payload cap or the ingest-before-rotate guard.
 pub(crate) fn emit_row(path: &Path, source: &str, data: &Map<String, Value>) -> bool {
@@ -2967,7 +2967,7 @@ pub(crate) fn title_rename_command(
     capabilities
         .native_verbs
         .iter()
-        .any(|verb| verb == "/rename")
+        .any(|command| command == "/rename")
         .then(|| format!("/rename {label}"))
 }
 

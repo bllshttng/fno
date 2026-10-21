@@ -378,12 +378,12 @@ def test_lane_successful_headless_spawn_with_no_observable_identity_is_unverifie
     assert row["observed_model"] is None
 
     # Second phase: the door itself unreachable degrades the row the same way.
-    def fake_verb_call(verb, payload, **kwargs):
-        from fno.rust_binary import VerbUnavailable
+    def fake_command_call(command, payload, **kwargs):
+        from fno.rust_binary import CommandUnavailable
 
-        raise VerbUnavailable("binary missing")
+        raise CommandUnavailable("binary missing")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", fake_verb_call)
+    monkeypatch.setattr("fno.rust_binary.command_call", fake_command_call)
     hp2 = tmp_path / "hist2.jsonl"
     results = run_task(task, repeat=1, repo_root=root, history_path=hp2, spawn=spawn, lane=_LANE)
     assert results[0].passed

@@ -311,7 +311,7 @@ pub(super) struct Budget {
     pub(super) used: BTreeMap<String, i64>,
 }
 pub(super) fn budget() -> Budget {
-    let probe = crate::spawn_gate_verb::probe_answer(
+    let probe = crate::spawn_gate_command::probe_answer(
         &json!({"mode":"probe","caller_session":crate::claims::resolve_identity().1}),
     );
     let fleet = if matches!(s(&probe, "verdict"), "unknown" | "refused") {

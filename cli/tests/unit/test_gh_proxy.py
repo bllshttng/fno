@@ -51,7 +51,7 @@ def test_proxy_classifies_every_graphql_gh_surface():
     assert classify(["api", "-X", "POST", "graphql", "-f", "query=x"]) is Action.BROKER
     assert classify(["api", "--hostname", "github.com", "graphql"]) is Action.BROKER
     assert classify(["api", "repos/o/r/pulls/930"]) is Action.DELEGATE
-    # A repo global option ahead of the verb must not hide it from the broker.
+    # A repo global option ahead of the command must not hide it from the broker.
     assert classify(["-R", "o/r", "pr", "view", "930"]) is Action.BROKER
 
 

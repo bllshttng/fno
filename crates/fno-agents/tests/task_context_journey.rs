@@ -1,6 +1,6 @@
 //! Task-context continuity journey (x-59b0).
 //!
-//! Deterministic fixtures around the REAL binary verbs: prepare, submit,
+//! Deterministic fixtures around the REAL binary commands: prepare, submit,
 //! observed/unavailable honesty, compaction-stage revalidation, explicit
 //! handoff (two-proof shape), and refusal recovery - every failure stage
 //! named. Closes by emitting TASK_CONTEXT_CONTINUITY_PASS with the attempt
@@ -12,14 +12,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const VERB_BIN: &str = env!("CARGO_BIN_EXE_fno-agents");
+const COMMAND_BIN: &str = env!("CARGO_BIN_EXE_fno-agents");
 const ATTEMPT: &str = "20260912T070000Z-journey-abc123";
 const CONSTRAINT: &str = "Do not widen scope beyond the plan";
 
-/// Drive one real binary verb: JSON request on stdin, JSON answer parsed.
-fn run_verb(verb: &str, payload: &Value) -> (i32, Value) {
-    let mut child = Command::new(VERB_BIN)
-        .arg(verb)
+/// Drive one real binary command: JSON request on stdin, JSON answer parsed.
+fn run_command(command: &str, payload: &Value) -> (i32, Value) {
+    let mut child = Command::new(COMMAND_BIN)
+        .arg(command)
         // The client lazy-starts a daemon that inherits this env, so the
         // daemon dies with this test run instead of idling an hour (x-5533).
         .envs(fno_agents::test_run::self_owner_env())
@@ -35,7 +35,7 @@ fn run_verb(verb: &str, payload: &Value) -> (i32, Value) {
         .expect("write request");
     let out = child.wait_with_output().expect("wait");
     let answer: Value =
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{verb}: {e}"));
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{command}: {e}"));
     (out.status.code().unwrap_or(-1), answer)
 }
 
@@ -86,7 +86,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     // 1. PREPARE: the binding names the exact plan revision, identity, and
     //    separate byte measures, and its digest is stable.
     let request = binding_request(&root);
-    let (code, prepared) = run_verb("task-context-prepare", &json!({"binding": request}));
+    let (code, prepared) = run_command("task-context-prepare", &json!({"binding": request}));
     assert_eq!(code, 0, "prepare refused: {prepared}");
     assert_eq!(prepared["ok"], json!(true));
     let digest = prepared["binding_digest"]
@@ -104,7 +104,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     //    advances forward only, re-stamping the digest. Prepared is not
     //    Submitted: the submitted binding is a different digest, and the
     //    carry never claims a read.
-    let (code, submitted) = run_verb(
+    let (code, submitted) = run_command(
         "task-context-stage",
         &json!({"binding": bound, "to": "submitted"}),
     );
@@ -115,9 +115,9 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     let mut bound_submitted = submitted["binding"].clone();
     bound_submitted["binding_digest"] = json!(submitted_digest);
 
-    // Backward is refused at the same stage door (the verb never re-mints a
+    // Backward is refused at the same stage door (the command never re-mints a
     // prepared binding; the unit tests pin advance_stage's regression table).
-    let (_, backward) = run_verb(
+    let (_, backward) = run_command(
         "task-context-stage",
         &json!({"binding": bound_submitted, "to": "prepared"}),
     );
@@ -126,12 +126,12 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     // 3. ACCEPTED-TURN OBSERVATION (x-175a's evidence is consumed, not
     //    re-detected): the observed stage is reachable only from submitted,
     //    and unavailable is the honesty ceiling that can never claim observed.
-    let (_, observed) = run_verb(
+    let (_, observed) = run_command(
         "task-context-stage",
         &json!({"binding": bound_submitted, "to": "observed"}),
     );
     assert_eq!(observed["stage"], json!("observed"), "{observed}");
-    let (_, unavailable) = run_verb(
+    let (_, unavailable) = run_command(
         "task-context-stage",
         &json!({"binding": bound_submitted, "to": "unavailable"}),
     );
@@ -139,7 +139,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     let unavailable_bound = unavailable["binding"].clone();
     let mut unavailable_bound = unavailable_bound;
     unavailable_bound["binding_digest"] = json!(unavailable["binding_digest"]);
-    let (_, upgrade) = run_verb(
+    let (_, upgrade) = run_command(
         "task-context-stage",
         &json!({"binding": unavailable_bound, "to": "observed"}),
     );
@@ -154,7 +154,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     // 4. COMPACTION: the stage advance for compaction revalidates against the
     //    worktree - the binding SURVIVES the boundary unchanged (the pointer
     //    is re-emitted; the session is not replaced).
-    let (_, compact_ok) = run_verb(
+    let (_, compact_ok) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,
@@ -167,7 +167,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     // 5. EXPLICIT HANDOFF, two-proof shape: the parent prepared under its own
     //    authority; a FOREIGN successor refuses by name before any delegation;
     //    the AUTHORIZED successor (the named session) revalidates clean.
-    let (_, foreign) = run_verb(
+    let (_, foreign) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,
@@ -183,7 +183,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
             .starts_with("foreign_session"),
         "wrong-session refused by name: {foreign}"
     );
-    let (_, wrong_attempt) = run_verb(
+    let (_, wrong_attempt) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,
@@ -198,7 +198,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
             .starts_with("wrong_attempt"),
         "wrong-attempt refused by name: {wrong_attempt}"
     );
-    let (_, authorized) = run_verb(
+    let (_, authorized) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,
@@ -210,7 +210,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
 
     // 6. FAILED CHILD / missing worktree: a dead or missing root refuses by
     //    name instead of passing vacuously.
-    let (_, dead_child) = run_verb(
+    let (_, dead_child) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,
@@ -231,7 +231,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
     //    refuses; an authorized task revision (re-prepare) produces a NEW
     //    immutable binding, and restoring the source recovers the original.
     std::fs::write(root.join("PLAN.md"), "REVISED bytes\n").expect("revise");
-    let (_, stale) = run_verb(
+    let (_, stale) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,
@@ -246,7 +246,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
             .starts_with("stale_source"),
         "changed required source refused by name: {stale}"
     );
-    let (_, revised) = run_verb(
+    let (_, revised) = run_command(
         "task-context-prepare",
         &json!({"binding": {
             "version": 1,
@@ -280,7 +280,7 @@ fn task_context_survives_the_execution_compaction_handoff_journey() {
         "an authorized revision is a NEW immutable binding"
     );
     std::fs::write(root.join("PLAN.md"), "plan bytes\n").expect("restore");
-    let (_, recovered) = run_verb(
+    let (_, recovered) = run_command(
         "task-context-revalidate",
         &json!({
             "binding": bound_submitted,

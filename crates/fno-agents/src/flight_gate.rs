@@ -1,6 +1,6 @@
 //! The backlog one-in-flight gate: binary-direct `flight-acquire`/`flight-release`.
 //!
-//! The Python backlog verbs carry the gate; this module is the lock itself,
+//! The Python backlog commands carry the gate; this module is the lock itself,
 //! natively, so the compatibility shell does not grow it. Three properties
 //! the shim depends on:
 //!
@@ -88,8 +88,8 @@ fn reset_held_requests(key: &str, root: Option<&Path>) {
 }
 
 /// The outcome of one trip through the gate, in-process. `Unavailable`
-/// carries the gate-side error text the CLI verb prints; a caller with no
-/// face for it (the heal verb) folds it into the held answer, the way the
+/// carries the gate-side error text the CLI command prints; a caller with no
+/// face for it (the heal command) folds it into the held answer, the way the
 /// Python shim's fail-open `None` reached its callers.
 pub(crate) enum FlightGate {
     Acquired(String),
@@ -98,7 +98,7 @@ pub(crate) enum FlightGate {
 }
 
 /// The in-process core of `flight-acquire`: take the gate, reclaiming a dead
-/// holder on the pid probe. The CLI verb wraps this with the receipt
+/// holder on the pid probe. The CLI command wraps this with the receipt
 /// printing; `pr-watch heal` calls it directly, so the reclaim protocol has
 /// one owner instead of a second copy in the heal leaf.
 pub(crate) fn acquire_flight(
@@ -180,7 +180,7 @@ pub fn run_flight_acquire(args: &[String]) -> i32 {
     let events_dir = arg_value(args, "--events-dir").map(PathBuf::from);
     let scope = arg_value(args, "--scope").unwrap_or_else(|| "backlog single-flight".into());
     let receipt_root = root.clone();
-    // The claim is held in the name of the CALLING process (the Python verb
+    // The claim is held in the name of the CALLING process (the Python command
     // that will do the work), never this short-lived binary: the lock must
     // die with the work, not with the messenger.
     let pid = arg_value(args, "--pid").and_then(|v| v.parse::<u32>().ok());
@@ -275,7 +275,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn verb_args(key: &str, holder: &str, td: &TempDir) -> Vec<String> {
+    fn command_args(key: &str, holder: &str, td: &TempDir) -> Vec<String> {
         vec![
             key.to_string(),
             "--holder".into(),
@@ -307,7 +307,7 @@ mod tests {
         claims::release(key, "A", Some(td.path()), None).unwrap();
 
         // B's acquire resets the sidecar: the count belongs to the new holder.
-        let rc = run_flight_acquire(&verb_args(key, "B", &td));
+        let rc = run_flight_acquire(&command_args(key, "B", &td));
         assert_eq!(rc, 0, "B must acquire");
         let path = requests_path(key, Some(td.path())).unwrap();
         assert!(!path.exists(), "a fresh acquire starts the count at zero");
@@ -320,7 +320,7 @@ mod tests {
     fn the_held_receipt_names_the_expiry() {
         let td = TempDir::new().unwrap();
         let key = "flight:test-expires";
-        assert_eq!(run_flight_acquire(&verb_args(key, "A", &td)), 0);
+        assert_eq!(run_flight_acquire(&command_args(key, "A", &td)), 0);
         let receipt = held_receipt_value(key, Some(td.path()));
         assert_eq!(receipt["acquired"], false);
         assert_eq!(receipt["key"], key);

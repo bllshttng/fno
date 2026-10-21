@@ -20,7 +20,7 @@ Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and
 
 The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status. Cross-host mail is the exception: the send writes one row on the primary, and the next section carries it.
 
-Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier verbs are `fno-agents attest push` and `fno-agents attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
+Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier commands are `fno-agents attest push` and `fno-agents attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
 
 The primary is the coverage authority, so write access to it is review authority. Any writer on the primary can add a `review_attestation` row the gate reads as a review, so the set of machines with `store.remote_url` is the set of machines that can vouch a pass. The push stamps the writing machine id into the row (`data.attest_machine`), and the coverage listing shows it. That makes the row auditable, not true. Treat a primary row like the journal it mirrors: trust is the operator's machine list, and a foreign writer is a trust decision, not a bug. A gate read never writes schema: a pull that finds no table reads no rows instead of creating one.
 
@@ -49,7 +49,7 @@ If the primary cannot be reached, backlog writes still land in the replica and w
 3. On one machine, set both keys and run `fno agents claim backlog seed`. It copies this backlog to the primary. It refuses a primary that already holds one.
 4. On every other machine, set both keys and run `fno agents claim backlog sync`.
 
-If the primary holds no seeded backlog, a flush refuses and names the seed verb. The writes wait in the outbox.
+If the primary holds no seeded backlog, a flush refuses and names the seed command. The writes wait in the outbox.
 
 A later fno version that adds a backlog column does not change the primary. Writes then refuse with the primary's "no such column" error. Export, unset the keys, and seed again from a current machine.
 
@@ -91,7 +91,7 @@ A row waits up to 7 days for its host (`MAIL_TTL_SECS`). The expire leg flips pa
 
 A final refusal does not wait. A pull that sees exit 1 asks the receiver's own style door about the body. The door naming violations is the style refusal, and a retry replays it. The pull marks such a row `refused`, and the sender's `mail status` shows it. Every other refusal keeps waiting for the TTL. The list: an unknown name (exit 16, once 13), a failed durable write (exit 12), a cap or forged-envelope refusal, a signal kill. The durable demotion (exit 14) is not on the refusal list. That exit means the receiver's local send already wrote its durable copy, so the pull marks the row `delivered` and runs no second send. A failed pull attempt leaves one daemon log line naming the msg_id and the exit, so a row that retries forever is never silent. A pending row that just failed backs its next attempt down a ladder. The rung schedule doubles from 15 s and caps at 15 min. The memory is one persisted entry per msg_id beside the seen ledger (`mail_retry.jsonl`). A pending row pays the send's cold start on the ladder, never once a beat.
 
-The primary can be unreachable. The send then queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`. When the store answers again, the flush leg drains it. No `store.remote_url` at all means the ssh fallback. The remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane. The reason: that flag stamps whichever machine runs the verb, so pass `--from-name`.
+The primary can be unreachable. The send then queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`. When the store answers again, the flush leg drains it. No `store.remote_url` at all means the ssh fallback. The remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane. The reason: that flag stamps whichever machine runs the command, so pass `--from-name`.
 
 Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
 
@@ -115,7 +115,7 @@ The lease assumes one GitHub account behind a primary, as `gh-budget:fleet` does
 
 ## Failure: the primary is unreachable
 
-A claim verb refuses. The error names the URL and the key, and says nothing was written locally. A request that timed out can still have reached the primary, so a retry by the same holder is the safe next step. A 4xx reply, such as a bad token, is named as a refusal and never read as an outage. `fno backlog next` refuses selection. `fno do target init` writes a cancel signal with `store_unreachable` and owns no node. A running worker finishes its turn: at its stop, loop-check reads the unreachable renewal and allows the stop, so the worker holds. The machine claims no new work until the network returns. To work alone, unset the key.
+A claim command refuses. The error names the URL and the key, and says nothing was written locally. A request that timed out can still have reached the primary, so a retry by the same holder is the safe next step. A 4xx reply, such as a bad token, is named as a refusal and never read as an outage. `fno backlog next` refuses selection. `fno do target init` writes a cancel signal with `store_unreachable` and owns no node. A running worker finishes its turn: at its stop, loop-check reads the unreachable renewal and allows the stop, so the worker holds. The machine claims no new work until the network returns. To work alone, unset the key.
 
 ## Failure: a peer took the claim
 

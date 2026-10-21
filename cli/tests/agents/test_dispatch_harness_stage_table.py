@@ -1,6 +1,6 @@
 """One home for the autonomous-dispatch harness axis.
 
-``agents.profiles.<verb>.provider`` (the stage table) is the home; the
+``agents.profiles.<command>.provider`` (the stage table) is the home; the
 deprecated ``dispatch.harness`` reads as the fallback rung beneath it for one
 release. Both dispatch doors - ``resolve_dispatch`` (dispatch-node.sh /
 ``resolve_node_spawn``) and ``fno agents spawn``
@@ -48,14 +48,14 @@ class _Settings:
 def _settings(
     profile_provider: Optional[str] = None,
     legacy_harness: Optional[str] = None,
-    verb: str = "target",
+    command: str = "target",
     profile_route: Optional[str] = None,
 ) -> _Settings:
     from types import SimpleNamespace
 
     profiles = None
     if profile_provider or profile_route:
-        profiles = {verb: {"provider": profile_provider, "route": profile_route}}
+        profiles = {command: {"provider": profile_provider, "route": profile_route}}
     # Attribute access, like the typed DispatchBlock the real model carries.
     dispatch = (
         SimpleNamespace(harness=legacy_harness, substrate="", command="")
@@ -86,7 +86,7 @@ def test_spawn_door_answers_the_same_harness(tmp_path, monkeypatch) -> None:
     not land on two vendors. The spawn-axis retirement moved the launch line
     to the lane template, so the composed argv no longer carries the harness
     axis; both doors read the one stage-table rung, and the two readers this
-    file exercises must keep answering one harness for one verb row."""
+    file exercises must keep answering one harness for one command row."""
     from fno.dispatch_flags import configured_dispatch_harness
 
     config_path = tmp_path / "config.toml"

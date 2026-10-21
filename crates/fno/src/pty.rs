@@ -1007,7 +1007,7 @@ fn pane_key_of(stem: &str, session: &str) -> Option<u64> {
 }
 
 /// Every keeper socket for `session` with the pane key its stem carries,
-/// sorted by key, newest-last. The sweep and the `pane keeper list` verb both
+/// sorted by key, newest-last. The sweep and the `pane keeper list` command both
 /// read this. A stem whose key does not parse is skipped here, so the sweep
 /// never sees a socket it could not adopt at its own key.
 pub fn keeper_sockets(session: &str) -> Vec<(u64, PathBuf)> {

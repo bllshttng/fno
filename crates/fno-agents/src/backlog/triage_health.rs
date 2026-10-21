@@ -1067,7 +1067,7 @@ fn post_webhook(breaches: &[Value], report: &Value, url: &str, discord: bool) ->
 
 // ---------------------------------------------------------------------------
 // History log + trend (health_monitor.py append_history / read_history /
-// summarize_trend, consumed by the trend verb).
+// summarize_trend, consumed by the trend command).
 // ---------------------------------------------------------------------------
 
 /// The history file: FNO_HEALTH_HISTORY, else config.health_monitor.history.

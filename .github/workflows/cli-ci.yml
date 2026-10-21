@@ -714,7 +714,7 @@ jobs:
           enable-cache: true
       - name: Build native fno (Python guard rows)
         # The Python guards commit their guard_decision rows through the
-        # native `fno doctor event emit-envelope` verb. Without this binary
+        # native `fno doctor event emit-envelope` command. Without this binary
         # the rows are dropped (best-effort by contract) and the dispatch
         # fixture sees only the Rust guards' rows. The compiled deps come
         # from the cached build base, so this pays mostly the final link.
@@ -722,7 +722,7 @@ jobs:
       - name: Generated copies match their sources
         run: |
           (cd cli && uv run fno-py doctor harness-matrix --write)
-          awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/verb-matrix.md" { print $1 }' \
+          awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/command-matrix.md" { print $1 }' \
             generated-artifacts.tsv > "$RUNNER_TEMP/generated-paths.txt"
           cat "$RUNNER_TEMP/generated-paths.txt"
           xargs git diff --exit-code -- < "$RUNNER_TEMP/generated-paths.txt"
@@ -900,7 +900,7 @@ jobs:
         # regenerates the capability copies, the merge-posture copy,
         # events_limits.toml, and the registry-schema copy on every build;
         # `fno doctor harness-matrix --write` renders the capability doc (and
-        # the verb doc, whose own cheap freshness step lives in guards.yml
+        # the command doc, whose own cheap freshness step lives in guards.yml
         # because it also reads skills/*/SKILL.md). A committed copy that
         # drifted from its source (a hand edit, a forgotten rebuild) shows up
         # here as a dirty tree - which is the wrong-merge class the retired

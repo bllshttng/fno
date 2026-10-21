@@ -1,5 +1,5 @@
 //! `team-widen`: may this session edit its own epic-set team? One
-//! payload kind on the existing `spawn-overlay` verb, the shape
+//! payload kind on the existing `spawn-overlay` command, the shape
 //! `team-settle` set: graph rows in as JSON, one answer out. The
 //! decision lives here, not in Python, so `cli/src/fno` stays call glue.
 //!

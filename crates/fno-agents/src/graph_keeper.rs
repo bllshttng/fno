@@ -128,7 +128,7 @@ pub fn parse_store_keeper_args(args: &[String]) -> Result<KeeperConfig, String> 
             .map(Duration::from_secs),
         // No override: the default bound. A keeper the spawner abandoned
         // still dies, on a clock long enough that an operator's back-to-back
-        // verbs keep one keeper alive across the session.
+        // commands keep one keeper alive across the session.
         Err(_) => DEFAULT_IDLE_LIMIT,
     };
     Ok(KeeperConfig {
@@ -1186,7 +1186,7 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
         }),
         // The dispatch admission decision (backlog_ready::select), served so
         // the Python callers are clients and no second selection leg exists.
-        // With `entries` in the params the verb filters that list (the
+        // With `entries` in the params the command filters that list (the
         // external-tracker backend's joined candidates); without, it reads
         // the graph this keeper owns.
         "ready" => handle_ready(state, &params),
@@ -1227,10 +1227,10 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
         "scoreboard_escalation" => {
             crate::scoreboard_escalation::view(&params).map_err(StoreError::Invalid)
         }
-        // The lifecycle verb decision (backlog_ready::serve_effective_verb):
+        // The lifecycle command decision (backlog_ready::serve_effective_command):
         // one answer per shipped row; a refusal rides its own row.
-        "effective_verb" => {
-            crate::backlog_ready::serve_effective_verb(&params).map_err(StoreError::Invalid)
+        "effective_command" => {
+            crate::backlog_ready::serve_effective_command(&params).map_err(StoreError::Invalid)
         }
         // One named op applied over client-shipped rows, no file I/O and no
         // publish: `set_related`, `plan_path_owner_conflict`, and friends
@@ -1383,7 +1383,7 @@ fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError>
                 .map(str::to_string)
                 .collect::<BTreeSet<String>>(),
             // Unknown claim state must refuse, not read as "nothing is
-            // claimed": the Python leg this verb replaced failed closed
+            // claimed": the Python leg this command replaced failed closed
             // (`live_claimed_node_ids(strict=True)`).
             _ => crate::claims::list_strict(Some("node:"), None, false)
                 .map_err(|e| {
@@ -2675,7 +2675,7 @@ fn stamp_utc(v: &str) -> Result<String, StoreError> {
 /// node exists" on the exact form and "at least one node matched" on the
 /// identity form; `node_ids` names every node the write touched.
 /// The settlement facts one node's row answers, shared by the in-write roll
-/// and the verb's read-back so the two can never drift: higher-precedence
+/// and the command's read-back so the two can never drift: higher-precedence
 /// fields (a done, superseded, deferred or PR-bearing row keeps its own
 /// status), then a live execute row or a lock keeps `in_progress`, and
 /// everything else falls back to `idea`.
@@ -2791,7 +2791,7 @@ pub(crate) fn session_reap_open(
                 obj.insert("sessions".to_string(), Value::Array(rows));
                 // The settle rolls the node off in_progress when nothing
                 // holds it open any more, so every caller of the op (the
-                // verb and the store's python senders alike) settles the
+                // command and the store's python senders alike) settles the
                 // same way.
                 roll_settled_status(entries, idx);
             }

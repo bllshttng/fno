@@ -1,6 +1,6 @@
-"""fno do plan CLI - plan management verbs.
+"""fno do plan CLI - plan management commands.
 
-Verbs:
+Commands:
     stamp             - mark a plan's frontmatter with ship metadata (status:in_review)
     graduate          - flip a stamped plan from status:in_review to status:done
     brief             - generate a scoped task brief from a single-doc plan
@@ -32,11 +32,11 @@ plan_app = typer.Typer(
 )
 
 
-def _forward(verb: str, extra_args: List[str]) -> int:
-    """Send verb + extra_args to the keeper-served plan-doc writer; return its exit code."""
+def _forward(command: str, extra_args: List[str]) -> int:
+    """Send command + extra_args to the keeper-served plan-doc writer; return its exit code."""
     from fno.plan._project import plan_docs
 
-    return (plan_docs("argv", verb=verb, args=extra_args) or {"exit": 1})["exit"]
+    return (plan_docs("argv", command=command, args=extra_args) or {"exit": 1})["exit"]
 
 
 @plan_app.command(
@@ -79,7 +79,7 @@ def set_expected(ctx: typer.Context) -> None:
         "Print the save path for a NEW plan/design doc: the resolved plans dir "
         "(plansDirectory -> config.plans_dir) joined with the config.plans_filename "
         "template (strftime + {slug}/{node}). Resolution is the Rust chain; this "
-        "verb forwards to it through the pydoor. /think and /blueprint shell "
+        "command forwards to it through the pydoor. /think and /blueprint shell "
         "this instead of hardcoding a filename convention."
     ),
 )
@@ -108,7 +108,7 @@ def path(
         raise typer.Exit(code=proc.returncode or 1)
 
 
-# Update the module docstring's verb list when adding verbs above.
+# Update the module docstring's command list when adding commands above.
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +509,7 @@ def rung(
     """The shell-facing face of ``fno.graph.ladder``.
 
     Hidden from the menu, though it still counts: `fno do plan` sits at the
-    12-verb menu-caps ceiling. Its audience is three shell scripts, not the
+    12-command menu-caps ceiling. Its audience is three shell scripts, not the
     `--help` reader.
 
     Takes a PATH, not a node id. Every caller already holds a path, and node-id

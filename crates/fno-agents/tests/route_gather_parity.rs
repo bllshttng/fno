@@ -1,6 +1,6 @@
 //! Characterization over the route_gather goldens
 //! (`tests/fixtures/route_gather/`): the filled payload must equal the
-//! payload Python's gather sent the verb, as a JSON value, and the
+//! payload Python's gather sent the command, as a JSON value, and the
 //! fingerprint the walk stamps must be equal for both.
 
 //! parity-stage: characterization
@@ -123,9 +123,9 @@ fn gather_goldens_reproduce_the_python_payload() {
     // asserts stay hermetic even though the env is unpinned by now.
     let pin_pick = fno_agents::route_slot::resolve_slot_payload(&serde_json::json!({
         "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-        "work_verb": "target",
+        "work_command": "target",
         "node": {"difficulty": "medium", "model": "claude-opus-5", "effort": "high"},
-        "slot_by_verb": {
+        "slot_by_command": {
             "target": {
                 "rung_base": "agents.profiles.target",
                 "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -154,9 +154,9 @@ fn gather_goldens_reproduce_the_python_payload() {
 
     let fallback = fno_agents::route_slot::resolve_slot_payload(&serde_json::json!({
         "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-        "work_verb": "target",
+        "work_command": "target",
         "node": {"difficulty": "medium", "model": "mystery-model"},
-        "slot_by_verb": {
+        "slot_by_command": {
             "target": {
                 "rung_base": "agents.profiles.target",
                 "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -184,9 +184,9 @@ fn gather_goldens_reproduce_the_python_payload() {
 
     let typed_wins = fno_agents::route_slot::resolve_slot_payload(&serde_json::json!({
         "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-        "work_verb": "target",
+        "work_command": "target",
         "node": {"difficulty": "medium", "model": "claude-opus-5"},
-        "slot_by_verb": {
+        "slot_by_command": {
             "target": {
                 "rung_base": "agents.profiles.target",
                 "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -215,9 +215,9 @@ fn gather_goldens_reproduce_the_python_payload() {
 
     let effort_rides = fno_agents::route_slot::resolve_slot_payload(&serde_json::json!({
         "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-        "work_verb": "target",
+        "work_command": "target",
         "node": {"difficulty": "medium", "effort": "high"},
-        "slot_by_verb": {
+        "slot_by_command": {
             "target": {
                 "rung_base": "agents.profiles.target",
                 "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -236,9 +236,9 @@ fn gather_goldens_reproduce_the_python_payload() {
 
     let no_surface = fno_agents::route_slot::resolve_slot_payload(&serde_json::json!({
         "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-        "work_verb": "target",
+        "work_command": "target",
         "node": {"difficulty": "medium", "effort": "high"},
-        "slot_by_verb": {
+        "slot_by_command": {
             "target": {
                 "rung_base": "agents.profiles.target",
                 "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},

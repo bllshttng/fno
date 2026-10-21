@@ -59,7 +59,7 @@ const OP_FIELDS: &[(&str, FieldKind)] = &[
     ("project", FieldKind::Scalar),
     ("cwd", FieldKind::Scalar),
     ("difficulty", FieldKind::Scalar),
-    ("dispatch_verb", FieldKind::Scalar),
+    ("dispatch_command", FieldKind::Scalar),
     ("locked_by", FieldKind::Scalar),
     ("plan_path", FieldKind::Scalar),
     ("parent", FieldKind::Scalar),
@@ -125,7 +125,7 @@ pub const RETIRED_FLAGS: &[(&str, &str)] = &[
     ("--difficulty", "difficulty=<band>"),
     ("--tag", "tags+=<tag>"),
     ("--untag", "tags-=<tag>"),
-    ("--dispatch-verb", "dispatch_verb=<verb>"),
+    ("--dispatch-command", "dispatch_command=<command>"),
     ("--dispatch-brief", "dispatch_brief=<text>"),
     ("--locked-by", "locked_by=<holder>"),
     (

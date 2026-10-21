@@ -996,7 +996,7 @@ fn utc_stamp() -> String {
 /// The daemon bin calls this once at startup, BEFORE `daemon::run` opens a
 /// store: one apply pass over the state root. Best effort - a refusal only
 /// prints, and the daemon's reclaim lane retries it (law: the mover runs
-/// from the daemon, never an operator verb).
+/// from the daemon, never an operator command).
 pub fn run_at_daemon_start(home: &crate::paths::AgentsHome) {
     let root = crate::reclaim::reclaim_state_root(home);
     let receipt = migrate(&root, true);

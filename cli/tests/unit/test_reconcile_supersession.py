@@ -1,7 +1,7 @@
 """Supersession verdicts and PR merge-state queries over the surviving reconcile defs.
 
 Split out of the retired test_pr_closure_producer.py: the closure producer
-module is gone (superseded by the fno-agents binary verbs), but the
+module is gone (superseded by the fno-agents binary commands), but the
 reconcile-side defs these tests cover live on in fno.graph._reconcile.
 """
 from __future__ import annotations

@@ -3,9 +3,9 @@ use super::super::self_review_floor::{classify_payload, payload_is_code};
 use super::*;
 
 #[test]
-fn reviewer_invocation_resolves_the_author_harness_verb() {
+fn reviewer_invocation_resolves_the_author_harness_command() {
     // The owned lane is the invocation on EVERY harness: an inline lane
-    // runs wherever the plugin runs, so a transport-dependent verb here
+    // runs wherever the plugin runs, so a transport-dependent command here
     // would be the fragile part. sigma is retired and also names the lane
     // (the refusal tells a wedged session what to run instead).
     for harness in ["codex", "claude", "opencode", "agy"] {
@@ -67,8 +67,8 @@ fn self_review_gate_fails_closed_when_main_resolves_but_diffs_fail() {
 }
 
 #[test]
-fn floor_payload_classifies_the_named_pr_for_the_coverage_verb() {
-    // The review-coverage verb evaluates a PR it names (--pr), from a
+fn floor_payload_classifies_the_named_pr_for_the_coverage_command() {
+    // The review-coverage command evaluates a PR it names (--pr), from a
     // checkout that need not sit on its branch: the floor must classify
     // THAT PR, and a named PR that resolves to nothing fails closed
     // rather than falling back to the foreign checkout's empty diff.
@@ -133,16 +133,16 @@ fn self_review_gate_floor_respects_opt_out_lanes_docs_and_existing() {
 }
 
 #[test]
-fn self_review_gate_held_reason_names_code_review_and_its_verb() {
+fn self_review_gate_held_reason_names_code_review_and_its_command() {
     // AC1-HP: a code payload that reaches the stop gate with no head-pinned
     // code-review attestation is held, and the reason names the reviewer
-    // and the verb served by the ambient harness. Both render branches are
+    // and the command served by the ambient harness. Both render branches are
     // pinned through the sizing seam (`unattested_reviewers_reason` takes
     // the sized line explicitly): a working render substitutes its
     // invocation for the map value's `<level>` placeholder, and a failed
     // render keeps the placeholder (fail-open). The production caller feeds
     // the seam from the native render; the stub-script era ended with the
-    // shell-out it stubbed, and the harness rides in pinned so the verb
+    // shell-out it stubbed, and the harness rides in pinned so the command
     // form never depends on the host's ambient markers.
     let mut pr = reviewers_gate_pr();
     pr.unattested_reviewers[0].name = "code-review".to_string();
@@ -181,7 +181,7 @@ fn self_review_gate_held_reason_names_code_review_and_its_verb() {
 
 #[test]
 fn unresolved_harness_floors_the_self_review_gate() {
-    // `None` means UNATTRIBUTABLE, not verbless. A claude session
+    // `None` means UNATTRIBUTABLE, not commandless. A claude session
     // started from a codex shell resolves no single family, and reading
     // that ambiguity as "no floor" silently disengaged the only review a
     // stock install demands. Ambiguity is not permission; the explicit
@@ -191,11 +191,11 @@ fn unresolved_harness_floors_the_self_review_gate() {
     assert!(self_review_floor_applies(Some("claude"), false));
     assert!(self_review_floor_applies(Some("codex"), true));
     // The owned fno review lane runs wherever the plugin runs, so no
-    // KNOWN harness is verbless any more: gemini/agy/opencode floor too.
+    // KNOWN harness is commandless any more: gemini/agy/opencode floor too.
     assert!(self_review_floor_applies(Some("opencode"), false));
     assert!(self_review_floor_applies(Some("gemini"), false));
     assert!(self_review_floor_applies(Some("agy"), false));
     // An unrecognized spelling is an unattributed run: it floors rather
-    // than passing an unknown name through the verb table.
+    // than passing an unknown name through the command table.
     assert!(self_review_floor_applies(Some("hermes"), false));
 }

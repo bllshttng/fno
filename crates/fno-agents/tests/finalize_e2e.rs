@@ -2089,7 +2089,7 @@ fn finalize_arms_with_merge_on_an_invalid_strategy() {
 /// gh exits right after queueing and GitHub's server-side merge deletes
 /// nothing, so the flag bought nothing at arm time - while its LOCAL delete
 /// attempt was the x-7267 false-failure shape. Remote cleanup after a
-/// `fno do pr merge` merge is this verb's post-merge step, not an arm flag.
+/// `fno do pr merge` merge is this command's post-merge step, not an arm flag.
 #[test]
 fn finalize_arm_never_carries_delete_branch() {
     for body in [

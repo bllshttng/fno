@@ -429,13 +429,13 @@ def test_record_refusal_lets_the_measured_bucket_overrule_core_wording(monkeypat
     assert [s["kind"] for s in sent] == ["secondary", "core"]
 
 
-def test_record_refusal_survives_an_unavailable_verb(monkeypatch, capsys):
-    from fno.rust_binary import VerbUnavailable
+def test_record_refusal_survives_an_unavailable_command(monkeypatch, capsys):
+    from fno.rust_binary import CommandUnavailable
 
     monkeypatch.setattr(_quota, "record_refusal", _REAL_RECORD_REFUSAL)
 
     def unavailable(payload):
-        raise VerbUnavailable("fno-agents binary not found")
+        raise CommandUnavailable("fno-agents binary not found")
 
     monkeypatch.setattr(_quota, "_gh_budget", unavailable)
     _quota.record_refusal("API rate limit exceeded (HTTP 403)")
@@ -456,14 +456,14 @@ def test_admit_returns_the_refusal_line_and_admits_on_none(monkeypatch):
     assert _quota.admit(["pr", "view", "1"]) is None
 
 
-def test_admit_fails_open_when_the_verb_is_unavailable(monkeypatch, capsys):
+def test_admit_fails_open_when_the_command_is_unavailable(monkeypatch, capsys):
     monkeypatch.setenv("FNO_AGENT_SELF", "quota-test-worker")
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     monkeypatch.setattr(_quota, "admit", _REAL_ADMIT)
 
     def unavailable(payload):
-        raise VerbUnavailable("no binary")
+        raise CommandUnavailable("no binary")
 
     monkeypatch.setattr(_quota, "_gh_budget", unavailable)
     assert _quota.admit(["pr", "view", "1"]) is None
@@ -471,12 +471,12 @@ def test_admit_fails_open_when_the_verb_is_unavailable(monkeypatch, capsys):
 
 
 def _budget_raising(monkeypatch, exc):
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     monkeypatch.setattr(_quota, "admit", _REAL_ADMIT)
 
     def unavailable(payload):
-        raised = VerbUnavailable(exc.pop("message"))
+        raised = CommandUnavailable(exc.pop("message"))
         returncode = exc.get("returncode")
         if returncode is not None:
             raised.returncode = returncode

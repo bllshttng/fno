@@ -1,10 +1,10 @@
 """Plan verification 7, second half: one stalled board is ONE fleet task.
 
-The first half - that both lead terminals reach the verb, over the same stalled
+The first half - that both lead terminals reach the command, over the same stalled
 set - is `both_lead_terminals_escalate_over_the_same_stalled_set` in
 `crates/fno-agents/tests/loop_check.rs`. It drives the two real paths against a
 mock `fno` and asserts the `--stalled` argument they produce. This file takes
-that argument and asserts what the verb does with it.
+that argument and asserts what the command does with it.
 
 After the fleet-task port, the fold behind `escalate` lives in
 `crates/fno-agents/src/fleet_task.rs`; the Python channel is ONE transport
@@ -80,8 +80,8 @@ def _capture_transport(monkeypatch: pytest.MonkeyPatch, *, answer: dict) -> list
     captured: list = []
     seen: set = set()
 
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        assert verb == "fleet-task", verb
+    def fake_command_call(command, payload, *args, **kwargs):
+        assert command == "fleet-task", command
         captured.append(payload)
         identity = (payload["lane"], payload["key"], payload["cwd"])
         if payload["empty"]:
@@ -94,7 +94,7 @@ def _capture_transport(monkeypatch: pytest.MonkeyPatch, *, answer: dict) -> list
         reply = {"outcome": outcome, "id": id_out}
         return reply
 
-    monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
+    monkeypatch.setattr(fno.rust_binary, "command_call", fake_command_call)
     return captured
 
 

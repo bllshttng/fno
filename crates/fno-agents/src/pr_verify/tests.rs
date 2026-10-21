@@ -41,7 +41,7 @@ fn failed(stderr: &str) -> Option<Run> {
 }
 
 /// The canned gh world one case answers with, mirroring the Python
-/// capture's FakeGH dispatch on the argv shapes the verb emits.
+/// capture's FakeGH dispatch on the argv shapes the command emits.
 struct World {
     toplevel: PathBuf,
     repo: String,

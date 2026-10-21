@@ -766,7 +766,7 @@ pub fn run_distress_scan(args: &[String]) -> i32 {
 /// (here and in loopcheck.rs) can hand each other's stub answer to the
 /// wrong call. Every test that sets this var holds this lock across the
 /// set/run/restore section.
-/// F6: does the newest user entry of the transcript carry the cancel verb?
+/// F6: does the newest user entry of the transcript carry the cancel command?
 /// The user-typed `/fno:cancel-target` (claude) or `$fno:cancel-target`
 /// (codex) is the authoritative cancel; the session's own assistant write
 /// is not. The newest user entry ends the walk; anything newer is assistant
@@ -942,7 +942,7 @@ mod tests {
 
     #[test]
     fn run_distress_scan_reads_the_checked_in_codex_fixture() {
-        // AC10-HP / AC11-EDGE through the actual verb entry point
+        // AC10-HP / AC11-EDGE through the actual command entry point
         // (run_distress_scan), against the real rollout line checked in at
         // tests/fixtures/rollout-codex-help.jsonl, parsed natively (no
         // reader stub). The tag-free rerun is the positive control for the

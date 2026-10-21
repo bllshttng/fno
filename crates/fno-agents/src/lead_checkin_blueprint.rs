@@ -1,7 +1,7 @@
 //! The check-in's blueprint reading: which unplanned nodes to blueprint and
 //! which to route straight to target. Extracted from lead_checkin.rs under
 //! the file budget's shrink rule; the beat's print block reads the JSON this
-//! module returns. Each unplanned row routes through the lifecycle verb
+//! module returns. Each unplanned row routes through the lifecycle command
 //! table (`dispatch.blueprint_floor`), so the beat's starts list can never
 //! disagree with the routing the dispatch doors answer.
 use serde_json::{json, Value};
@@ -47,8 +47,8 @@ const DEFAULT_BLUEPRINT_CEILING: usize = 1;
 
 /// The check-in's blueprint reading: this session's live blueprint
 /// subagents against the ceiling, then which unplanned nodes to start and
-/// which to skip. Each unplanned row is routed through the lifecycle verb
-/// table first: a row whose verb resolves to /blueprint is a candidate, one
+/// which to skip. Each unplanned row is routed through the lifecycle command
+/// table first: a row whose command resolves to /blueprint is a candidate, one
 /// that resolves to /target prints as target-ready (no blueprint ceiling
 /// applies), and an undecidable row skips with the refusal. `floor` is the
 /// operator's `dispatch.blueprint_floor`; the claim list and the session id
@@ -87,7 +87,7 @@ pub(crate) fn r_blueprint(
     let mut target_ready: Vec<String> = Vec::new();
     let mut skips: Vec<Value> = Vec::new();
     for row in &rows {
-        // A row with no string id answers no verb: skip it, never dispatch
+        // A row with no string id answers no command: skip it, never dispatch
         // an "unknown" node the way a silent default would invite.
         let id = match row.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
@@ -100,9 +100,9 @@ pub(crate) fn r_blueprint(
             skips.push(json!({"id": id, "reason": format!("owned by team {owner}")}));
             continue;
         }
-        match crate::backlog_ready::effective_verb_with_floor(row, floor) {
-            Ok((verb, _)) if verb.as_deref() == Some("/blueprint") => candidates.push(id),
-            Ok((verb, _)) if verb.as_deref() == Some("/target") => target_ready.push(id),
+        match crate::backlog_ready::effective_command_with_floor(row, floor) {
+            Ok((command, _)) if command.as_deref() == Some("/blueprint") => candidates.push(id),
+            Ok((command, _)) if command.as_deref() == Some("/target") => target_ready.push(id),
             Ok((_, note)) => skips.push(json!({"id": id, "reason": note})),
             Err(refusal) => skips.push(json!({"id": id, "reason": refusal})),
         }
@@ -376,18 +376,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A declared verb outranks the derived answer: an out-of-family
+    /// A declared command outranks the derived answer: an out-of-family
     /// declaration abstains into a skip, a declared /target wins over the
     /// derived /blueprint, and a declared /blueprint stays a candidate.
     #[test]
-    fn r_blueprint_honors_a_declared_verb_over_the_derived_answer() {
+    fn r_blueprint_honors_a_declared_command_over_the_derived_answer() {
         let dir = std::env::temp_dir().join(format!("fno-bp-decl-{}", std::process::id()));
         let board = json!({"queues": [
             {"name": "unplanned", "status": "ok", "count": 3,
              "rows": [
-                {"id": "x-think", "difficulty": "high", "dispatch_verb": "/fno:think"},
-                {"id": "x-tgt", "difficulty": "low", "dispatch_verb": "/target"},
-                {"id": "x-bp", "difficulty": "low", "dispatch_verb": "/fno:blueprint"}
+                {"id": "x-think", "difficulty": "high", "dispatch_command": "/fno:think"},
+                {"id": "x-tgt", "difficulty": "low", "dispatch_command": "/target"},
+                {"id": "x-bp", "difficulty": "low", "dispatch_command": "/fno:blueprint"}
             ]},
             {"name": "undispatched", "status": "ok", "count": 0, "rows": []}
         ]});

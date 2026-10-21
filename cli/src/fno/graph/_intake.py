@@ -402,7 +402,7 @@ def recent_encounter(entry: dict, now, within_days: int) -> bool:
 def encounter_voters(entry: dict) -> set:
     """Distinct voter keys that recorded an encounter with this node.
 
-    Distinct VOTERS, never rows. The write verb already refuses a second vote per
+    Distinct VOTERS, never rows. The write command already refuses a second vote per
     voter, so a duplicate row means the record was written some other way;
     counting rows would let that path inflate the signal. The fallback to
     ``session_id`` keeps encounters written before ``voter_key`` was introduced.
@@ -1095,7 +1095,7 @@ def _warn_similar_nodes(
     name its id; idea/add cannot, so they get the supersede/update remedy only.
 
     Receipt is stderr-only - stdout stays the machine-readable payload each
-    birth verb already returns. Scoring/state filtering lives in similar_nodes;
+    birth command already returns. Scoring/state filtering lives in similar_nodes;
     this helper only formats what it returns.
     """
     from fno.graph.relatedness import similar_nodes

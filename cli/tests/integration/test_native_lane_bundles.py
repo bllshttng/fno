@@ -34,9 +34,9 @@ def _pin_profile(cfg, lanes):
 
 
 def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None):
-    """Pin the capacity readings the verb judges lanes with.
+    """Pin the capacity readings the command judges lanes with.
 
-    The Python capacity read was deleted: the verb computes it from
+    The Python capacity read was deleted: the command computes it from
     the runtime-state file, so a hermetic one rides in through env instead of
     a monkeypatched Python function. claude/codex pin one account record each
     (`cl-a` for claude, `cx-a` for codex); None leaves the harness with no

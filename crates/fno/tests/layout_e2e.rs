@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use common::{connect_with_retry, spawn_server, FakeClient};
 use fno::proto::{
-    read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, Command, ControlVerb,
+    read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, Command, ControlCommand,
     LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec, PanePlacement, PaneTarget,
     PlacementFallback, ResolvedPlacement, ServerMsg, BUILD_VERSION, PROTO_VERSION,
 };
@@ -62,7 +62,7 @@ fn run_pane(scratch: &Scratch, cwd: &Path, placement: PanePlacement) -> Result<u
         &ClientMsg::Control {
             proto: PROTO_VERSION,
             build: BUILD_VERSION.into(),
-            verb: ControlVerb::PaneRun {
+            command: ControlCommand::PaneRun {
                 cwd: cwd.to_string_lossy().into_owned(),
                 argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
                 cols: None,
@@ -679,7 +679,7 @@ fn run_pane_receipt(
         &ClientMsg::Control {
             proto: PROTO_VERSION,
             build: BUILD_VERSION.into(),
-            verb: ControlVerb::PaneRun {
+            command: ControlCommand::PaneRun {
                 cwd: cwd.to_string_lossy().into_owned(),
                 argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
                 cols: None,
@@ -952,7 +952,7 @@ fn graft_at(
         &ClientMsg::Control {
             proto: PROTO_VERSION,
             build: BUILD_VERSION.into(),
-            verb: ControlVerb::LayoutGraft {
+            command: ControlCommand::LayoutGraft {
                 squad: PaneTarget::CurrentRoute,
                 anchor,
                 spec,

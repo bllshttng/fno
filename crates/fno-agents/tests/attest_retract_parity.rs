@@ -4,7 +4,7 @@
 //! Characterization tests for the `attest retract` port (x-1d1e). The
 //! Python leg was captured into tests/golden/attest_retract/ before
 //! deletion; each case rebuilds the same fixture and asserts the Rust
-//! verb's (exit, stdout, stderr) against the frozen golden, plus a
+//! command's (exit, stdout, stderr) against the frozen golden, plus a
 //! structural read of the retraction row it appended. The identity-conflict
 //! golden rides a src unit test: real ancestry cannot be faked from an
 //! integration process (attest.rs::retraction_conflict_message).
@@ -161,9 +161,9 @@ fn retract_args(events: &Path) -> Vec<String> {
     ]
 }
 
-/// The retraction row the verb appended: found by retraction_reason, then
+/// The retraction row the command appended: found by retraction_reason, then
 /// asserted field by field (the golden's .events file is the reference).
-/// Read through the event store the verb writes through: the raw .jsonl is
+/// Read through the event store the command writes through: the raw .jsonl is
 /// a stray the store owns, so a read never serves the raw bytes.
 fn retraction_row(journal: &Path) -> serde_json::Value {
     let text = fno_agents::event_store::journal_text_checked(

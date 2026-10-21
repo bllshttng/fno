@@ -1,7 +1,7 @@
-# Verbs the tutorial curriculum teaches.
-# One CLI leaf per line, exactly as it appears in scripts/ci/verb-baseline.txt.
-# Consumed by scripts/diagnostics/verb-callers.py --curriculum to compute the complement
-# (the deletion-candidate set the verb-cut decision consumes).
+# Commands the tutorial curriculum teaches.
+# One CLI leaf per line, exactly as it appears in scripts/ci/command-baseline.txt.
+# Consumed by scripts/diagnostics/command-callers.py --curriculum to compute the complement
+# (the deletion-candidate set the command-cut decision consumes).
 #
 # Slash commands (/fno:think, /fno:blueprint, ...) are deliberately absent:
 # they are skill invocations, not CLI leaves, and are not in the baseline.
@@ -22,21 +22,21 @@ target status
 pr status
 agents loop-check
 state show
-# L4 design before code (skill-led; one CLI verb)
+# L4 design before code (skill-led; one CLI command)
 think dispatch
-# L5 turn a design into a plan (skill-led; three CLI verbs)
+# L5 turn a design into a plan (skill-led; three CLI commands)
 plan path
 plan brief
 plan stamp
-# L6 execute a plan (skill-led; two CLI verbs)
+# L6 execute a plan (skill-led; two CLI commands)
 state set
 state init
-# L8 the PR lifecycle (skill-led; four CLI verbs)
+# L8 the PR lifecycle (skill-led; four CLI commands)
 pr merge
 pr rebase
 pr verify
 pr ritual
-# L9 when it breaks (skill-led; five CLI verbs)
+# L9 when it breaks (skill-led; five CLI commands)
 test
 config get
 config set
@@ -61,7 +61,7 @@ backlog roadmap
 backlog triage
 backlog advance
 # backlog intake went native with its port (the wheel caller the sweep
-# counts is gone; the native verb is reached through the dispatcher door)
+# counts is gone; the native command is reached through the dispatcher door)
 # Track C, the mesh (L12-L14)
 # L12 worktrees
 worktree ensure

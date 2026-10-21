@@ -45,19 +45,19 @@ def _verdict(monkeypatch, state, reason="r", claim_state="stale"):
 
 def test_resolver_reads_a_stateless_receipt_as_unknown(monkeypatch):
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call", lambda verb, payload, **kw: {"reason": "x"}
+        "fno.rust_binary.command_call", lambda command, payload, **kw: {"reason": "x"}
     )
 
     assert resolve_durable_grant(PR, "/tmp").state == UNKNOWN
 
 
 def test_unreachable_resolver_reads_unknown(monkeypatch, tmp_path):
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
-    def boom(verb, payload, **kw):
-        raise VerbUnavailable("fno-agents exited 1")
+    def boom(command, payload, **kw):
+        raise CommandUnavailable("fno-agents exited 1")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", boom)
+    monkeypatch.setattr("fno.rust_binary.command_call", boom)
     _stub_merge_world(monkeypatch, tmp_path)
 
     assert resolve_durable_grant(PR, str(tmp_path)).state == UNKNOWN
@@ -81,16 +81,16 @@ def _stub_merge_world(monkeypatch, tmp_path):
     monkeypatch.setattr(_merge, "_load_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
     monkeypatch.setattr(_merge.shutil, "which", lambda _x: "/usr/bin/gh")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
-    def _fake(verb, payload, **kw):
-        if verb == ["review-coverage", "op"] and payload.get("op") == "verdict":
+    def _fake(command, payload, **kw):
+        if command == ["review-coverage", "op"] and payload.get("op") == "verdict":
             return {"state": 0, "refusal": "", "covered_head": "", "note": "", "line": ""}
         if payload.get("op") == "status-rerun":
             return {"recovered": False, "failed": []}
-        raise VerbUnavailable("door op unavailable in tests")
+        raise CommandUnavailable("door op unavailable in tests")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _fake)
+    monkeypatch.setattr("fno.rust_binary.command_call", _fake)
 
 
 def test_merge_durable_refusal_skips(tmp_path, monkeypatch, capsys):

@@ -41,9 +41,9 @@ from fno.config.split_block import SplitBlock as SplitBlock
 from fno.config import _watchdog
 from fno.config._active_backlog import ActiveBacklogConfig as ActiveBacklogConfig
 from fno.config._auto_heal import AutoHealBlock
-from fno.config._dispatch_verbs import DEFAULT_DISPATCH_VERBS as _DEFAULT_DISPATCH_VERBS
-from fno.config._dispatch_verbs import DispatchVerbDescriptor as DispatchVerbDescriptor
-from fno.config._dispatch_verbs import resolvable_verbs as resolvable_verbs
+from fno.config._dispatch_commands import DEFAULT_DISPATCH_COMMANDS as _DEFAULT_DISPATCH_COMMANDS
+from fno.config._dispatch_commands import DispatchCommandDescriptor as DispatchCommandDescriptor
+from fno.config._dispatch_commands import resolvable_commands as resolvable_commands
 from fno.config._lead import LEAD_CHECKIN_TEXT as LEAD_CHECKIN_TEXT
 from fno.config._lead import LeadBlock
 from fno.config._evals import EvalsBlock
@@ -724,12 +724,12 @@ class ReviewerDescriptor:
     # means "is self-cert") and leaves check-reviewer-descriptor-parity.sh
     # reading a two-valued axis.
     asserts: Literal["review-evidence", "self-cert", "invocation"]
-    # Per-harness verb overrides. A reviewer whose verb differs by harness
-    # (the self-review verb: `/code-review` on claude, `/review` on codex)
+    # Per-harness command overrides. A reviewer whose command differs by harness
+    # (the self-review command: `/code-review` on claude, `/review` on codex)
     # carries them here; `invocation` stays the unknown-harness default. None
     # means the scalar invocation is the only rendering. Mirrored into the Rust
     # REVIEWER_INVOCATIONS per-harness column by the parity script, so the two
-    # tables cannot disagree about which verb a harness serves.
+    # tables cannot disagree about which command a harness serves.
     invocations: Optional[Mapping[str, str]] = None
 
 
@@ -758,7 +758,7 @@ _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
     # review lane and its emit step records the classified attestation.
     # `requires="none"` is load-bearing ("operator" made `blocks_autonomy` true
     # and refused every unattended run at init). No per-harness map: the lane is
-    # the invocation on every harness. The native verbs (/code-review on claude,
+    # the invocation on every harness. The native commands (/code-review on claude,
     # /review on codex) stay the operator's explicit choice; the machinery never
     # recommends them (docs/architecture/review-lanes.md).
     "code-review": ReviewerDescriptor(
@@ -2065,25 +2065,25 @@ class DispatchBlock(BaseModel):
     capabilities at resolve time, fail-loud.
 
     `command` is a template with a single `{id}` placeholder. A node's
-    `dispatch_verb`/`dispatch_brief` (US3) layer on top: the resolver validates
-    the verb against `allowed_verbs` and carries the brief via env only, so a
+    `dispatch_command`/`dispatch_brief` (US3) layer on top: the resolver validates
+    the command against `allowed_commands` and carries the brief via env only, so a
     graph field crossing into a worker prompt is a guarded trust boundary.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     # DEPRECATED: the harness axis lives in the stage table
-    # (`agents.profiles.<verb>.provider`); this key reads as the fallback rung
+    # (`agents.profiles.<command>.provider`); this key reads as the fallback rung
     # beneath it for one release. The fold runs at resolution time
     # (fno.agents.harness_map); the operator-facing surface is `fno config doctor`.
     harness: str = ""
     substrate: str = ""
     command: str = ""
-    # Registered verbs from outside fno (unioned with allowed_verbs at resolve;
+    # Registered commands from outside fno (unioned with allowed_commands at resolve;
     # a shipped or allowlisted spelling cannot be redefined here).
-    verb_registry: dict[str, DispatchVerbDescriptor] = Field(default_factory=dict)
-    # US3 verb allowlist: a node dispatch_verb must match or the resolver refuses.
-    allowed_verbs: list[str] = Field(default_factory=lambda: list(_DEFAULT_DISPATCH_VERBS))
+    command_registry: dict[str, DispatchCommandDescriptor] = Field(default_factory=dict)
+    # US3 command allowlist: a node dispatch_command must match or the resolver refuses.
+    allowed_commands: list[str] = Field(default_factory=lambda: list(_DEFAULT_DISPATCH_COMMANDS))
     # DEPRECATED (/): reads as `auto_merge.grant` for one release;
     # every dispatch path reads the grant key now, no consumer reads this field.
     # An explicit --allow-merge/--no-merge flag always wins.
@@ -2100,8 +2100,8 @@ class DispatchBlock(BaseModel):
     # `premise-question` tag). Every other plan-less node goes straight to
     # /target, which states its own scope. "medium" restores the pre-lean
     # table (blueprint for medium and up). "low" blueprints every plan-less
-    # node; "never" targets everything. Read by the lifecycle verb table
-    # (fno-agents effective_verb) through the dispatch doors, and by the
+    # node; "never" targets everything. Read by the lifecycle command table
+    # (fno-agents effective_command) through the dispatch doors, and by the
     # lead check-in's blueprint reading.
     blueprint_floor: str = "high"
 
@@ -2268,10 +2268,10 @@ class AgentsBlock(SweepKeys):
 
     a2a: A2aBlock = Field(default_factory=A2aBlock)
     defaults: SpawnDefaultsBlock = Field(default_factory=SpawnDefaultsBlock)
-    # Per-verb overlays of defaults, one precedence rung above them.
+    # Per-command overlays of defaults, one precedence rung above them.
     profiles: dict[str, SpawnProfileBlock] = Field(default_factory=dict)
     # Ordered per-size fallback chains, consulted only after provider and account refusal.
-    # Values stay raw so the consuming verb can name malformed links without making every
+    # Values stay raw so the consuming command can name malformed links without making every
     # settings load fail.
     fallback: dict[str, Any] = Field(default_factory=dict)
     # Silence only reports; it never stops, spawns, or unclaims.
@@ -2334,7 +2334,7 @@ class AgentsBlock(SweepKeys):
         pre-existing no-failover behavior stands. Everything else passes
         through untouched, INCLUDING a malformed link, because the failover
         path has to be able to see the mistake and name it. The strict check
-        lives in the ``fallback-chain`` verb (crates/fno-agents).
+        lives in the ``fallback-chain`` command (crates/fno-agents).
         """
         return v if isinstance(v, dict) else {}
 
@@ -2689,7 +2689,7 @@ class ThinkSpawnBlock(BaseModel):
     node (a birth trigger never auto-spawns -), handing it the *resolved*
     origin transcript pointer (not a paraphrase) so a later pickup starts from
     ground truth. A real spawn still happens for the explicit conversational
-    verb, an armed lifecycle trigger (``on_work_start``), or a
+    command, an armed lifecycle trigger (``on_work_start``), or a
     consented decompose fan-out.
 
     Default ``False`` (Locked Decision 2): shipping this changes nothing until
@@ -2917,7 +2917,7 @@ class AutoMergeBlock(BaseModel):
     # same affirmative set this coercer does. It was stricter while it read
     # only for the native arm. `fno do pr merge` now resolves its standing
     # switch through that reader too, and a split would have refused
-    # `enabled = "true"` at the very verb that honored it a release ago. Any
+    # `enabled = "true"` at the very command that honored it a release ago. Any
     # change to either spelling set must move both readers and the
     # git-protection hook, or the gates split on exactly that spelling.
     enabled: bool = False
@@ -3843,7 +3843,7 @@ class QuotaBlock(BaseModel):
     pick_on_launch: bool = False
 
 
-class FailoverBlock(BaseModel):
+class Failocommandlock(BaseModel):
     """Provider rotation failover configuration (nested under 'config.accounts.failover')."""
 
     model_config = ConfigDict(extra="ignore")
@@ -3872,7 +3872,7 @@ class AccountsBlock(BaseModel):
     records: list[dict[str, Any]] = Field(default_factory=list)
     combos: dict[str, ComboBlock] = Field(default_factory=dict)
     quota: QuotaBlock = Field(default_factory=QuotaBlock)
-    failover: Optional[FailoverBlock] = None
+    failover: Optional[Failocommandlock] = None
 
     @field_validator("quota", mode="before")
     @classmethod
@@ -3884,7 +3884,7 @@ class AccountsBlock(BaseModel):
     @field_validator("failover", mode="before")
     @classmethod
     def _coerce_failover(cls, v: object) -> object:
-        if isinstance(v, (dict, FailoverBlock)):
+        if isinstance(v, (dict, Failocommandlock)):
             return v
         return None
 
@@ -4476,7 +4476,7 @@ def run_config_migration(
     """Convert every legacy settings.yaml (+ its settings.local.yaml) in the
     candidate chain to a flat config.toml, returning ``(toml_path, action)`` per
     file for the CLI to report. ``action`` is ``migrated`` | ``already-migrated``
-    | ``absent``. The explicit ``fno config setup migrate-config`` verb over the same
+    | ``absent``. The explicit ``fno config setup migrate-config`` command over the same
     one-shot conversion the loader runs, so a deployed install converts on demand
     (comments are NOT carried across the round-trip). Idempotent + atomic.
     """

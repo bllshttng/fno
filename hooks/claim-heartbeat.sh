@@ -374,8 +374,8 @@ if [[ "$_HANDOVER_NODE" =~ ^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$ \
 fi
 
 # The manifest lives in the repo space's worktree slice; resolve it through the
-# owning verb so this hook never spells the path. Degraded fallback for an fno
-# predating the verb: the legacy checkout-relative path (same contract as
+# owning command so this hook never spells the path. Degraded fallback for an fno
+# predating the command: the legacy checkout-relative path (same contract as
 # target-stop-hook.sh).
 MANIFEST="$("$AGENTS_BIN" state path target-state 2>/dev/null || true)"
 [[ -z "$MANIFEST" ]] && MANIFEST="$CWD/.fno/target-state.md"
@@ -518,7 +518,7 @@ if [[ -z "$_STATUS_ONCE" || "$_STATUS_SHAPE_OK" != 1 ]]; then
 fi
 if [[ "$HOLDER_STATE" == "corrupted" ]]; then
   # Corrupted is UNKNOWN ownership, not positively-free: the file exists, a
-  # holder may still be working the node, and every recovery verb refuses on
+  # holder may still be working the node, and every recovery command refuses on
   # it. Telling this session to "take a claim" dead-ends; say what is true.
   echo "claim-heartbeat: node:$NODE_ID claim file corrupted; ownership unverifiable, renewal impossible this window" >&2
   write_stamp corrupted

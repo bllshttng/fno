@@ -11,7 +11,7 @@
 # act. Only the second is the moment that matters.
 claude rm|fno agents rm, then fno agents adopt <session-id> to reverse it|d-1900e419
 worktree cargo-offload|nothing: cargo writes outside the checkout now (build.build-dir); reclaim stale intermediates with fno agents workspace worktree cleanup --cargo-targets|the cargo build-dir move
-config setup codex-plugin|fno config plugin install codex [--force], the one install verb for every harness|the one-install-verb ruling
+config setup codex-plugin|fno config plugin install codex [--force], the one install command for every harness|the one-install-command ruling
 claude stop|fno agents stop|d-1900e419
 # root folds: the old root spellings forward for one release, but no
 # caller-facing string may TEACH them. Full two-token paths so the canonical
@@ -23,12 +23,12 @@ fno mail|fno agents mail (the form every skill already teaches)|d-b93d7754
 fno test|fno doctor test|d-df6c29a6
 fno workspace|fno agents workspace|d-cf2d6fe1
 fno project|fno config project|d-344fe242
-fno yard|fno agents yard|the root-verb fold
+fno yard|fno agents yard|the root-command fold
 fno runtime|fno agents workspace (retired outright, tombstoned)|d-cf2d6fe1
 --model-tier|difficulty=<band> on fno backlog update - the work-difficulty axis (low, medium, high)|the difficulty-axis rename
 # The operator-form retirement (user 2026-10-02): fno backlog update writes
 # fields through field=value / field+=value / field-=value tokens. One
-# verb-scoped line per retired spelling; the pattern is a grep -E fragment
+# command-scoped line per retired spelling; the pattern is a grep -E fragment
 # joined into the gate's alternation, so it can read anything a line-scoped
 # grep can, but it must not hold a `|`.
 backlog update[^`]* --title|title=<value> on fno backlog update|the operator-form retirement (user 2026-10-02)
@@ -54,7 +54,7 @@ backlog update[^`]* --no-reverted|reverted=false on fno backlog update|the opera
 backlog update[^`]* --difficulty|difficulty=<band> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --tag|tags+=<tag> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --untag|tags-=<tag> on fno backlog update|the operator-form retirement (user 2026-10-02)
-backlog update[^`]* --dispatch-verb|dispatch_verb=<verb> on fno backlog update|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --dispatch-command|dispatch_command=<command> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --dispatch-brief|dispatch_brief=<text> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --locked-by|locked_by=<holder> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --locked-by-harness|fno agents claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
@@ -79,13 +79,13 @@ inbox law prepare|fno inbox law set (one call, no staged proposal)|d-e1eec854
 inbox law enact|fno inbox law set (one call, no hash and no receipt)|d-e1eec854
 inbox law resume|fno inbox law set (nothing is staged, so nothing resumes)|d-e1eec854
 inbox law inspect|fno inbox decisions <subject> --lane law|d-e1eec854
-# d-496680aa retires the second launch verb: one launch verb, and it
-# is spawn. The door renders the verb, brief and lane for a node-seeded spawn.
+# d-496680aa retires the second launch command: one launch command, and it
+# is spawn. The door renders the command, brief and lane for a node-seeded spawn.
 fno agents dispatch|fno agents spawn --node <id>|d-496680aa
 fno dispatch|fno agents spawn --node <id>|d-496680aa
-# d-fe66560a: hidden verb roots are not allowed at all. The loaded-thread
+# d-fe66560a: hidden command roots are not allowed at all. The loaded-thread
 # answer rides fno-agents list --json --harness codex as the codex_loaded
-# block; a caller-facing string may never teach the bare verb.
+# block; a caller-facing string may never teach the bare command.
 codex-loaded-threads|fno-agents list --json --no-discovered --harness codex (the codex_loaded block)|d-fe66560a
 
 # The one lead skill: the one-wave pass is lead --once.
@@ -94,7 +94,7 @@ lead-for-a-day|/fno:lead --once <scope>|the one-lead-skill fold
 # Never shipped: step 2a-bis of the blueprint skill named it for the question door.
 fno inbox ask|fno inbox outstanding ask "<question>" --node <id>|never shipped: the question door is fno inbox outstanding ask
 
-# d-4b39ad4c: the annotate verb retired; note --blocking / notes findings / note
+# d-4b39ad4c: the annotate command retired; note --blocking / notes findings / note
 # --resolve are the only spellings that touch the findings gate.
 backlog annotate add|fno backlog note <node> "<text>" --blocking|d-4b39ad4c one finding store
 backlog annotate list|fno backlog notes findings [<node>]|d-4b39ad4c one finding store
@@ -105,7 +105,7 @@ fno backlog annotate resolve|fno backlog note --resolve <finding-id>|d-4b39ad4c 
 fno mux block annotate|fno mux block annotate still shells note --blocking (internal)|d-4b39ad4c one finding store
 
 # 2026-09-30: the PR lifecycle folded under the ship umbrella; ship is the one
-# delivery verb and pr is its subcommand. skills/pr is deleted, no alias.
+# delivery command and pr is its subcommand. skills/pr is deleted, no alias.
 /fno:pr|/fno:ship pr (same modes: create, check, merged)|the ship-umbrella fold
 # 2026-10-02: the bg substrate spelling is retired outright (user ruling, no
 # alias release). thread is the only spelling of the persistent lane.
@@ -116,11 +116,11 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 # teach them.
 --succeed|--hand-off, the succession transfer|the people-word rename
 
-# The bus-era inbox verbs moved under fno agents mail; fno inbox view has no
+# The bus-era inbox commands moved under fno agents mail; fno inbox view has no
 # one-for-one successor. The python plan stamper was ported to plan_doc.
-fno inbox view|fno agents mail list --all [--from P] [--json], or fno agents mail unread [-n NAME]|the mail-verb fold
-fno inbox drain|fno agents mail drain|the mail-verb fold
-fno inbox migrate-bus|fno agents mail migrate-bus|the mail-verb fold
+fno inbox view|fno agents mail list --all [--from P] [--json], or fno agents mail unread [-n NAME]|the mail-command fold
+fno inbox drain|fno agents mail drain|the mail-command fold
+fno inbox migrate-bus|fno agents mail migrate-bus|the mail-command fold
 stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
 
 # The role-role group is org on both fronts; the pre-rename spelling is what

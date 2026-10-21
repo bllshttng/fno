@@ -4,7 +4,7 @@ The build-base half of the sweep is the Rust lane now
 (`fno-agents reclaim cargo-build-dirs`, crates/fno-agents/src/cargo_build_dirs.rs);
 its classification cases live in that module's Rust tests. These cover the
 bash side of the contract: the delegate prints the binary's lines, and the in-checkout lanes keep their
-legacy offload-symlink refusal (the retired verb's suite used to own it).
+legacy offload-symlink refusal (the retired command's suite used to own it).
 
 Drives the real scripts/lib/worktree-lifecycle.sh against a throwaway git
 repo with a bare origin, same fixture family as the merged-cleanup tests.

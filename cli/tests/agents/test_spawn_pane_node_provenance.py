@@ -36,7 +36,7 @@ def test_cmd_spawn_node_flag_resolves_and_passes_provenance(
             {
                 "id": node_id,
                 "slug": "s",
-                "dispatch_verb": "/target",
+                "dispatch_command": "/target",
                 "difficulty": "low",
             }
         ], "missing": []},

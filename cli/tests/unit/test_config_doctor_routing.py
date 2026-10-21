@@ -48,9 +48,9 @@ def _pin_roles(monkeypatch: pytest.MonkeyPatch, roles: dict):
 
 
 @requires_rust
-def test_doctor_names_verbs_with_empty_slots(monkeypatch):
+def test_doctor_names_commands_with_empty_slots(monkeypatch):
     """AC4-EDGE: the line names BOTH halves - the declared inventory count and
-    every dispatched verb whose slot has no lane."""
+    every dispatched command whose slot has no lane."""
     _pin_inventory(monkeypatch, declared=False)
     _pin_roles(monkeypatch, {})
     out = _capture(monkeypatch)
@@ -60,8 +60,8 @@ def test_doctor_names_verbs_with_empty_slots(monkeypatch):
     text = "\n".join(out)
     assert "band routing inactive:" in text
     assert "declares 0 row(s)" in text
-    for verb in ("think", "blueprint", "target", "review", "role"):
-        assert verb in text
+    for command in ("think", "blueprint", "target", "review", "role"):
+        assert command in text
 
 
 def test_roles_set_alongside_an_empty_inventory_says_they_are_a_different_axis(
@@ -101,12 +101,12 @@ def _pin_overlay_settings(
             harness=defaults.get("harness", {}) if defaults else {},
         ),
         profiles={
-            verb: SimpleNamespace(
+            command: SimpleNamespace(
                 permission_mode=cfg.get("permission_mode", ""),
                 effort=cfg.get("effort", ""),
                 harness=cfg.get("harness", {}),
             )
-            for verb, cfg in (profiles or {}).items()
+            for command, cfg in (profiles or {}).items()
         },
     )
     monkeypatch.setattr(

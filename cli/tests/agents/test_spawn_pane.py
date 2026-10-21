@@ -48,7 +48,7 @@ CODEX_HARNESS = "codex"
 
 
 class FakeRunner:
-    """Record `fno mux ...` invocations; script the replies per verb."""
+    """Record `fno mux ...` invocations; script the replies per command."""
 
     def __init__(
         self,
@@ -803,7 +803,7 @@ def test_cmd_spawn_pane_uses_global_bounded_dispatch(monkeypatch) -> None:
 
 
 class SquadAwareRunner(FakeRunner):
-    """A fake whose two verbs DISAGREE about which squad they answer for.
+    """A fake whose two commands DISAGREE about which squad they answer for.
 
     This is the whole point of the fixture. The old fake's ``pane ls`` payload
     carried ``pane_id``, ``squad_id`` and ``tab_id`` in one object and its
@@ -812,7 +812,7 @@ class SquadAwareRunner(FakeRunner):
 
     Here the spawned pane lands in squad 1 and an UNSCOPED ``tab ls`` answers
     with squad 5's tabs - the live shape, where the pane run resolves its squad
-    from the spawn's cwd and the tab verbs resolve theirs from the operator's
+    from the spawn's cwd and the tab commands resolve theirs from the operator's
     gaze. A resolver that reads unscoped gets squad 5's tabs for a squad-1 pane
     and places nothing where it meant to.
     """
@@ -849,7 +849,7 @@ class SquadAwareRunner(FakeRunner):
                     argv, self.tabs_returncode, "", self.tabs_stderr
                 )
             if scope == "UNSCOPED":
-                # CurrentRoute on the tab verbs = the squad being LOOKED at.
+                # CurrentRoute on the tab commands = the squad being LOOKED at.
                 rows = self.squads.get(self.gazed_at, [])
             elif scope.startswith("id:"):
                 sid = int(scope[3:])
@@ -1810,7 +1810,7 @@ def test_ac7_claude_off_pane_forwards_fenced_tokens(
 
 # -- an unanswered control read is reconciled, never asserted absent --
 #
-# `mux pane run` exiting `_MUX_CONTROL_UNANSWERED` means the verb reached the
+# `mux pane run` exiting `_MUX_CONTROL_UNANSWERED` means the command reached the
 # server and the reply never came back - not that no pane was created. These
 # pin the Python side of that reconciliation: adopt the one pane that proves
 # it is this spawn, refuse (writing no row) on zero/many/unknown, and never

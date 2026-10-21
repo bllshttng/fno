@@ -74,7 +74,7 @@ pub(super) fn live_tabs() -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String
             unreachable.push(name);
             continue;
         };
-        match control_roundtrip(&sock, &name, ControlVerb::PaneLs) {
+        match control_roundtrip(&sock, &name, ControlCommand::PaneLs) {
             Ok(ServerMsg::PaneList { panes }) => {
                 answered.push(name.clone());
                 for pane in panes {
@@ -339,7 +339,7 @@ pub(super) fn close_live_tab(tab: &LiveTab) -> bool {
         control_roundtrip(
             &sock,
             &tab.session,
-            ControlVerb::TabClose {
+            ControlCommand::TabClose {
                 squad: PaneTarget::SquadId(tab.squad_id),
                 tab: TabSel::Id(tab.tab_id),
                 force: false,

@@ -1,13 +1,13 @@
 //! `fno-agents terminals`: the daemon-free JSON read of the delivered-terminal
 //! vocabulary. The one owner is [`TerminationReason::is_delivered`]; Python's
 //! ledger promotion gate, scoreboard fold, and delivery reference read this
-//! verb instead of carrying a set copy that could drift from the enum.
+//! command instead of carrying a set copy that could drift from the enum.
 //!
 //! Transport-only and unregistered in `ALL_CLIENT_ACTIONS` (the shrink law,
 //! d-fe66560a, allows no new client action): every caller reaches it through
 //! `resolve_binary`, like `harness-roster`.
 
-use crate::client_verbs::to_python_json;
+use crate::client_commands::to_python_json;
 use crate::scoreboard::ALL_TERMINALS;
 use serde_json::json;
 

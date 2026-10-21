@@ -100,7 +100,7 @@ pub struct RosterReapSummary {
 impl RosterReapSummary {
     /// AC1-ERR (change 1): rows reached the quiet gate and the batch
     /// answered none of them. That is not a clean pass with nothing to do -
-    /// the probe resolved nothing at all - so the verb refuses instead of
+    /// the probe resolved nothing at all - so the command refuses instead of
     /// reporting success while removing nothing.
     pub fn nothing_resolved(&self) -> bool {
         self.probed > 0 && self.answered == 0
@@ -170,9 +170,9 @@ pub fn render(summary: &RosterReapSummary, json_out: bool, dry_run: bool) -> Str
             })
         );
     }
-    let verb = if dry_run { "would retire" } else { "retired" };
+    let command = if dry_run { "would retire" } else { "retired" };
     let mut out = format!(
-        "{verb} {} of {} roster row(s)\n",
+        "{command} {} of {} roster row(s)\n",
         summary.retired.len(),
         summary.visited
     );
@@ -208,7 +208,7 @@ pub fn render(summary: &RosterReapSummary, json_out: bool, dry_run: bool) -> Str
     for j in &summary.retired {
         let node = j.node.as_deref().unwrap_or("-");
         out.push_str(&format!(
-            "  {verb} {} [{}] ({}: {node})\n",
+            "  {command} {} [{}] ({}: {node})\n",
             j.short_id, j.class, j.reason
         ));
     }
@@ -708,7 +708,7 @@ pub(crate) fn run_with_scope_workers(
     // default pages 24 handles per truth probe instead of paying one
     // subprocess per row. Judgements push in roster order. `answered`
     // beside `probed` is what turns "nothing resolved" into a refusal the
-    // verb can act on (change 1, AC1-ERR).
+    // command can act on (change 1, AC1-ERR).
     let refs: Vec<&RegistryEntry> = candidates.iter().map(|c| &c.entry).collect();
     let ages = age_many(&refs);
     summary.probed = candidates.len();

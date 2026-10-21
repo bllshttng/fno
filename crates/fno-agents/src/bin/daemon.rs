@@ -219,7 +219,7 @@ fn parse_home_arg(args: &[String]) -> Option<String> {
 
 /// `FNO_AGENTS_RUNTIME=python` is a per-child anti-recursion pin. A daemon
 /// lazy-started by a pinned child would keep it for life, and every arm child
-/// would then refuse the verbs that have no Python leg (`rm` exits 127).
+/// would then refuse the commands that have no Python leg (`rm` exits 127).
 fn leaked_dispatch_pin(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|v| v.to_string_lossy().trim().eq_ignore_ascii_case("python"))
 }

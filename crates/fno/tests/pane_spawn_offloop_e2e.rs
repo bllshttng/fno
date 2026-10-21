@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use common::{connect_with_retry, spawn_server, worker_bin, FakeClient, Scratch};
 use fno::proto::{
-    read_msg_sync, write_msg_sync, ClientMsg, ControlVerb, PanePlacement, ServerMsg, BUILD_VERSION,
-    PROTO_VERSION,
+    read_msg_sync, write_msg_sync, ClientMsg, ControlCommand, PanePlacement, ServerMsg,
+    BUILD_VERSION, PROTO_VERSION,
 };
 
 /// A keeper binary that execs the real worker, until `stall` exists: then it
@@ -44,7 +44,7 @@ fn run_pane(sock: &Path, cwd: &Path) -> Result<u64, String> {
         &ClientMsg::Control {
             proto: PROTO_VERSION,
             build: BUILD_VERSION.into(),
-            verb: ControlVerb::PaneRun {
+            command: ControlCommand::PaneRun {
                 cwd: cwd.to_string_lossy().into_owned(),
                 argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
                 cols: None,

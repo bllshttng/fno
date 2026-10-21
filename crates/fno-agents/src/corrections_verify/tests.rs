@@ -206,7 +206,7 @@ fn skill_commit_rows_score_and_carry_their_link() {
     let text = markdown(std::slice::from_ref(&worse));
     assert!(
         text.contains("git revert abc123def456"),
-        "the parsed sha drives the roll-back verb: {text}"
+        "the parsed sha drives the roll-back command: {text}"
     );
     assert!(text.contains("ref=r1#1"), "{text}");
 }

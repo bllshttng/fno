@@ -6,8 +6,8 @@ prompt.
 
 Two callers share it. The Python mail lane
 (:func:`fno.agents.dispatch._mux_pane_send`) imports :func:`prepare` directly.
-The Rust ``fno mux pane send`` verb renders through the paired fno-agents
-binary's ``mail pane-prepare`` verb (the former Python leaf, ported) and FAILS
+The Rust ``fno mux pane send`` command renders through the paired fno-agents
+binary's ``mail pane-prepare`` command (the former Python leaf, ported) and FAILS
 CLOSED when that call cannot run -- there is no
 bare-paste fallback, because a silent fallback rebuilds the unattributed send
 this module exists to close, and does so exactly when something is already wrong.

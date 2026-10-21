@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.rust_binary import VerbUnavailable
+from fno.rust_binary import CommandUnavailable
 from fno.worktree_stranded import (
     ABANDONED,
     CLEAN,
@@ -227,9 +227,9 @@ def test_act_on_stranded_skips_push_when_scan_reports_a_leak(monkeypatch):
     published: the push act records the refusal and the sweep stops."""
     calls = []
 
-    def fake_verb_call(verb, payload, **kwargs):
-        calls.append(verb)
-        assert verb[:2] == ["pr-push", "--scan-only"]
+    def fake_command_call(command, payload, **kwargs):
+        calls.append(command)
+        assert command[:2] == ["pr-push", "--scan-only"]
         return {
             "leaks": [
                 {
@@ -239,7 +239,7 @@ def test_act_on_stranded_skips_push_when_scan_reports_a_leak(monkeypatch):
             ]
         }
 
-    monkeypatch.setattr("fno.worktree_stranded.verb_call", fake_verb_call)
+    monkeypatch.setattr("fno.worktree_stranded.command_call", fake_command_call)
 
     row = Row(STRANDED, "x-abcd", 3, "1 hour ago", {"path": "/wt/x-abcd", "branch": "feature/x-abcd"})
     outcome = act_on_stranded(row)
@@ -254,10 +254,10 @@ def test_act_on_stranded_skips_push_when_scan_reports_a_leak(monkeypatch):
 def test_act_on_stranded_fails_closed_when_scanner_unavailable(monkeypatch):
     """No scanner means no push: recovery never publishes unscanned work."""
 
-    def fake_verb_call(verb, payload, **kwargs):
-        raise VerbUnavailable("the fno-agents binary was not found")
+    def fake_command_call(command, payload, **kwargs):
+        raise CommandUnavailable("the fno-agents binary was not found")
 
-    monkeypatch.setattr("fno.worktree_stranded.verb_call", fake_verb_call)
+    monkeypatch.setattr("fno.worktree_stranded.command_call", fake_command_call)
 
     row = Row(STRANDED, "x-abcd", 3, "1 hour ago", {"path": "/wt/x-abcd", "branch": "feature/x-abcd"})
     outcome = act_on_stranded(row)

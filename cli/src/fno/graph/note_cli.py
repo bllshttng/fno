@@ -48,13 +48,13 @@ def note_evidence(text, reads):
     """Note-lane gate: (rows, claims), each None when not applicable.
 
     A contradicted citation RAISES (a note is a fact on the node even when
-    --quiet); a claim with no read only reports - the note verb advises,
+    --quiet); a claim with no read only reports - the note command advises,
     never refuses a body.
     """
     from fno.paths import resolve_repo_root
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(
+    answer = command_call(
         "evidence-gate",
         {
             "lane": "note",
@@ -82,7 +82,7 @@ def warn_if_note_is_long(text, *, stream=None):
     """Advise on a long note, never refuse one.
 
     Why uncapped, and why the blunt multiplier:
-    docs/architecture/backlog-graph-verb-contracts.md.
+    docs/architecture/backlog-graph-command-contracts.md.
     """
     import sys
 
@@ -116,7 +116,7 @@ def cmd_note(
     ),
     quiet: bool = typer.Option(
         False, "--quiet", "-q",
-        help="Write it, mail nobody: the acknowledgment when the verb would refuse.",
+        help="Write it, mail nobody: the acknowledgment when the command would refuse.",
     ),
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit the state receipt as JSON."),
     read: list[str] = typer.Option([], "--read", help=READ_HELP),
@@ -210,7 +210,7 @@ def cmd_note(
         raise typer.Exit(code=2)
 
     # A contradicted citation refuses BEFORE the write; an unmeasured claim
-    # only warns (this verb advises, never refuses a body).
+    # only warns (this command advises, never refuses a body).
     try:
         read_rows, claims = note_evidence(text, list(read))
     except (UnresolvableCitationError, UnmeasuredClaimError) as exc:

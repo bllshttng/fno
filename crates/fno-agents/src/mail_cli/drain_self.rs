@@ -1,7 +1,7 @@
 //! `mail drain-self`: drain every unread message addressed to any form of the
 //! caller's identity, then ack per address form.
 //!
-//! Port of the Python drain-self verb. Forward-only + inject-before-ack: the
+//! Port of the Python drain-self command. Forward-only + inject-before-ack: the
 //! bodies render and flush BEFORE any cursor advances, so a crash re-surfaces
 //! the message next SessionStart (a harmless repeat), never a loss. No harness
 //! identity in env is a silent no-op (`[]` under `--json`), never an error, so
@@ -10,7 +10,7 @@
 //!
 //! Two documented divergences from the Python leg, both output-only:
 //! - The ambiguous-identity case prints one fixed sentence instead of the
-//!   dynamic multi-line ambiguity report (hold-verb wording, hook-safe exit 0).
+//!   dynamic multi-line ambiguity report (hold-command wording, hook-safe exit 0).
 //! - The held-job manifest reader rejects the literal `"null"` placeholder at
 //!   the call site, because the shared `scan_manifest_field` only rejects
 //!   empty values where the Python field reader rejects both.

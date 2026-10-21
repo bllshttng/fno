@@ -1,4 +1,4 @@
-//! The two read leaves the dispatch-verb retirement left behind (
+//! The two read leaves the dispatch-command retirement left behind (
 //! change 2): `capabilities` reads the packaged harness capability table and
 //! `target-family` classifies a message against the merge-posture family
 //! table. With `--harness`, `target-family` also answers the loop gate: the

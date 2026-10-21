@@ -27,7 +27,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Redefined here: the engine's copy in `claim_verbs` is private.
+/// Redefined here: the engine's copy in `claim_commands` is private.
 const HANDOVER_HOLDER_PREFIX: &str = "spawn-handover:";
 /// Mirrors `truth_status._HOLDER_PREFIX`.
 const SESSION_HOLDER_PREFIX: &str = "target-session:";
@@ -317,7 +317,7 @@ fn claim_meta_repo(rec: &ClaimRecord) -> Option<PathBuf> {
 }
 
 /// Port of `cli._handover_pane_probe_blocked`: consult the worktree policy
-/// through the Python verb (single-resolver doctrine); blocked for `never`
+/// through the Python command (single-resolver doctrine); blocked for `never`
 /// and every failure path, matching Python's `except: return True` (a dead
 /// handover holder is kept, not probed).
 fn handover_pane_probe_blocked(rec: &ClaimRecord) -> bool {
@@ -476,7 +476,7 @@ fn keyed_fresh_row(directory: &Path, key: &str) -> Result<Value, String> {
             "provably_dead": false,
         }));
     }
-    let payload = crate::claim_verbs::claim_sweep_payload_from_records(
+    let payload = crate::claim_commands::claim_sweep_payload_from_records(
         &records,
         None,
         &[key.to_string()],
@@ -707,7 +707,7 @@ pub fn run(args: &[String]) -> i32 {
             }
         };
         let payload =
-            crate::claim_verbs::claim_sweep_payload_from_records(&records, None, &[], true);
+            crate::claim_commands::claim_sweep_payload_from_records(&records, None, &[], true);
         let rows = payload
             .get("claims")
             .and_then(Value::as_array)

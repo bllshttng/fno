@@ -171,7 +171,7 @@ pub(super) fn select_provider(
 
 /// Python `_resolve_sender_entry`: the sender's registry row by handle.
 pub(super) fn resolve_sender_entry(rows: &[Value], from_name: &str) -> Option<Value> {
-    crate::client_verbs::find_agent_entry(rows, from_name)
+    crate::client_commands::find_agent_entry(rows, from_name)
         .ok()
         .cloned()
 }
@@ -509,7 +509,7 @@ pub(super) fn wake_rung(
 pub(super) fn daemon_rpc(method: &str, params: Value) -> Option<Value> {
     let owned = method.to_string();
     // block_on panics under an ambient runtime - the client main block_ons
-    // every verb - so the one-shot current-thread runtime runs on a fresh
+    // every command - so the one-shot current-thread runtime runs on a fresh
     // thread there (same guard as `codex_inject`).
     if tokio::runtime::Handle::try_current().is_ok() {
         return std::thread::spawn(move || daemon_rpc_inner(&owned, params))
@@ -594,7 +594,7 @@ pub(super) fn resolve_pane_entry(
     token: Option<&str>,
 ) -> Option<Value> {
     let registry = AgentsHome::shared_registry_json();
-    let rows = crate::client_verbs::load_registry_entries(&registry).ok()?;
+    let rows = crate::client_commands::load_registry_entries(&registry).ok()?;
     let mut candidates: Vec<&str> = Vec::new();
     if let Some(r) = resolved {
         candidates.push(r.session_id.as_str());
@@ -629,7 +629,7 @@ pub(super) fn resolve_pane_entry(
 
 pub(super) fn row_hosts_keeper_thread(session_id: &str) -> bool {
     let registry = AgentsHome::shared_registry_json();
-    let Ok(rows) = crate::client_verbs::load_registry_entries(&registry) else {
+    let Ok(rows) = crate::client_commands::load_registry_entries(&registry) else {
         return false;
     };
     for row in rows.iter() {
@@ -832,7 +832,7 @@ pub(super) fn deliver_live(
                 let (verdict, _reason, _pane) = lane_heal(&sid);
                 if verdict == "rebound-thread" {
                     let registry = AgentsHome::shared_registry_json();
-                    if let Ok(rows) = crate::client_verbs::load_registry_entries(&registry) {
+                    if let Ok(rows) = crate::client_commands::load_registry_entries(&registry) {
                         let rebound = rows.iter().find(|r| {
                             opt_str_field(r, "harness_session_id").as_deref() == Some(sid.as_str())
                         });
@@ -1144,7 +1144,7 @@ pub(super) fn load_and_resolve_target(
     requested_name: &str,
 ) -> Result<(Vec<Value>, Value), (String, i32)> {
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(exc) => {
             emit_event(
@@ -1154,7 +1154,7 @@ pub(super) fn load_and_resolve_target(
             return Err((format!("registry read failed: {exc}"), 12));
         }
     };
-    let existing = match crate::client_verbs::find_agent_entry(&rows, requested_name) {
+    let existing = match crate::client_commands::find_agent_entry(&rows, requested_name) {
         Ok(entry) => entry.clone(),
         Err(_) => {
             emit_event(
@@ -1759,7 +1759,7 @@ pub(super) fn resolve_to_project(
 ) -> Result<(Option<String>, Vec<String>, bool), (String, i32)> {
     // (recipient, live_candidates, durable)
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(exc) => return Err((format!("registry read failed: {exc}"), 12)),
     };

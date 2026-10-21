@@ -186,7 +186,7 @@ claim. To claim it without the loop: fno do target start {node} --steps"
 /// field is written out on purpose: the mint guard's text scan reads any
 /// default-spread literal in production code, comments included.
 fn mint_for_session(sid: &str, cwd: &str) -> crate::state::RegistryEntry {
-    crate::client_verbs::mint_synthesized_entry(
+    crate::client_commands::mint_synthesized_entry(
         &crate::manifest_lookup::ManifestIdentity {
             harness: "claude".to_string(),
             harness_session_id: sid.to_string(),
@@ -211,7 +211,7 @@ fn mint_and_upsert(
     let mut minted = mint_for_session(sid, cwd);
     minted.node = Some(node.to_string());
     minted.node_basis = Some("first-turn".to_string());
-    crate::client_verbs::upsert_synthesized_row(registry_path, minted)
+    crate::client_commands::upsert_synthesized_row(registry_path, minted)
 }
 
 #[cfg(test)]
@@ -278,7 +278,7 @@ mod tests {
 
         // AC14: a row that already holds a spawn node is never rebound.
         let sid = "99998888-7777-4666-8555-444433332222";
-        let held = crate::client_verbs::mint_synthesized_entry(
+        let held = crate::client_commands::mint_synthesized_entry(
             &crate::manifest_lookup::ManifestIdentity {
                 harness: "claude".into(),
                 harness_session_id: sid.into(),
@@ -290,7 +290,7 @@ mod tests {
         );
         let mut held = held;
         held.node = Some("x-bbbb".into());
-        crate::client_verbs::upsert_synthesized_row(
+        crate::client_commands::upsert_synthesized_row(
             &crate::paths::AgentsHome::from_env().registry_json(),
             held,
         )

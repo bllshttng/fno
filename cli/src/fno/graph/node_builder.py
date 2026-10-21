@@ -1,9 +1,9 @@
 """How a backlog node dict is built.
 
-``_build_backlog_node`` is the single builder every wheel creation verb
+``_build_backlog_node`` is the single builder every wheel creation command
 routes through (decompose, capture promote, retro land), and
 ``_session_provenance`` is the ambient origin it stamps. The plan-less
-``new`` verb that lived beside them rides the native create door now, which
+``new`` command that lived beside them rides the native create door now, which
 retired the last writer that built its dict inline. cli.py re-exports the
 private names so the lazy ``from fno.graph.cli import _build_backlog_node``
 imports in capture.py and retro/land.py keep resolving.
@@ -207,7 +207,7 @@ def _build_backlog_node(
     completion_note: Optional[str] = None,
     source_session_id: Optional[str] = None,
 ) -> dict:
-    """Build a backlog node dict shared by the Python creation verbs``.
+    """Build a backlog node dict shared by the Python creation commands``.
 
     ``out``, when given, receives metadata ABOUT the capture that is not itself
     a node field (currently ``source_node_dropped``). A separate channel rather
@@ -215,7 +215,7 @@ def _build_backlog_node(
     strip it cannot persist it into the graph.
 
     Centralizes the field set so a schema addition (e.g. a new graph
-    field) shows up in every entry-creating verb at once. ``difficulty`` is
+    field) shows up in every entry-creating command at once. ``difficulty`` is
     required so every caller makes the routing decision explicitly instead of
     silently minting an unroutable node. ``difficulty_source`` names the writer
     in the history entry. The returned dict has no ``id`` - the caller assigns
@@ -234,7 +234,7 @@ def _build_backlog_node(
 
     # Parent-edge provenance: stamped from the running session's env +
     # manifest, or from an explicit --source-node. Centralized here so
-    # every creator verb (add/idea/decompose) self-describes its origin.
+    # every creator command (add/idea/decompose) self-describes its origin.
     prov = _session_provenance(source_node=source_node, known_ids=known_ids)
     if out is not None:
         out["source_node_dropped"] = prov["source_node_dropped"]

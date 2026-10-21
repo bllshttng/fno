@@ -1,4 +1,4 @@
-"""A merge mints a cleanup request when, and only when, `fno do pr merge` completes `_run_post_merge_followups` and its own `gh pr view` read confirms `state == MERGED` with a non-empty `headRefName`. Every other outcome now emits `merge_cleanup_skipped` with the reason. A merge that never ran the verb emits neither, and is out of scope here.
+"""A merge mints a cleanup request when, and only when, `fno do pr merge` completes `_run_post_merge_followups` and its own `gh pr view` read confirms `state == MERGED` with a non-empty `headRefName`. Every other outcome now emits `merge_cleanup_skipped` with the reason. A merge that never ran the command emits neither, and is out of scope here.
 
 The invariant these cases pin: `_emit_merge_cleanup_request` writes exactly
 one journal row on every call, a request or a skip. Silence is not legal.
@@ -109,18 +109,18 @@ def test_every_unmet_precondition_speaks_its_reason(
     assert data["harness"] == "claude"
 
 
-def _stub_mint_verb(monkeypatch):
-    """Stub the verb_call seam the mint rides: record payloads, answer the
+def _stub_mint_command(monkeypatch):
+    """Stub the command_call seam the mint rides: record payloads, answer the
     receipt shape. The envelope itself is pinned by the Rust goldens."""
     import fno.rust_binary as rust_binary
 
     seen = []
 
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        seen.append((tuple(verb), payload))
+    def fake_command_call(command, payload, *args, **kwargs):
+        seen.append((tuple(command), payload))
         return {"request_id": "merge-cleanup-stubbed"}
 
-    monkeypatch.setattr(rust_binary, "verb_call", fake_verb_call)
+    monkeypatch.setattr(rust_binary, "command_call", fake_command_call)
     return seen
 
 
@@ -134,13 +134,13 @@ def test_a_confirmed_merge_still_mints_its_request(tmp_path, monkeypatch):
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     manifest = _write_manifest(tmp_path)
-    seen = _stub_mint_verb(monkeypatch)
+    seen = _stub_mint_command(monkeypatch)
 
     M._emit_merge_cleanup_request(11, str(tmp_path), str(manifest), [])
 
     assert len(seen) == 1
-    verb, payload = seen[0]
-    assert verb == ("pr-watch", "merge-cleanup-mint")
+    command, payload = seen[0]
+    assert command == ("pr-watch", "merge-cleanup-mint")
     assert payload["branch"] == "feature/x"
     assert payload["pr"] == 11
     assert _rows(log, "merge_cleanup_skipped") == []

@@ -2,7 +2,7 @@
 guard_mark(), the positive liveness signal that a guard actually ran and
 what it decided. One guard_decision event row per invocation, committed to
 the journal's store through the native ``fno doctor event emit-envelope``
-verb: the same write boundary the bash transport (guard-mark.sh via
+command: the same write boundary the bash transport (guard-mark.sh via
 events.sh) and the Rust dispatcher use, so every guard's row lands in the
 one store regardless of language. Best-effort by contract: any failure is
 swallowed and can never change a guard's decision."""
@@ -49,7 +49,7 @@ def _resolve_events_path():
     degrade. A cwd guess is how guard rows landed in the checkout journal
     the store ignores. The fact comes from `fno-agents state path events`,
     whose resolver mirrors the retired fno.paths import; a missing binary or
-    a failing verb degrades rather than blocks."""
+    a failing command degrades rather than blocks."""
     pin = os.environ.get("FNO_EVENTS_PATH")
     if pin:
         return pin

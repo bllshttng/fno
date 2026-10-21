@@ -1,6 +1,6 @@
-//! `fno do target init`: the native port of the Python verb, with a real
+//! `fno do target init`: the native port of the Python command, with a real
 //! `--steps` flag. The bash helper stays; this module is the decision layer
-//! the Python verb was: validate the call, run the gates, build the exact
+//! the Python command was: validate the call, run the gates, build the exact
 //! helper environment, run the helper, propagate its exit, and print the
 //! orientation report.
 //!
@@ -37,7 +37,7 @@ fn refuse(message: impl Into<String>) -> Fail {
     }
 }
 
-/// The parsed verb surface. Every option the Python verb accepted, plus
+/// The parsed command surface. Every option the Python command accepted, plus
 /// `--steps`.
 struct Args {
     input: Option<String>,
@@ -105,11 +105,11 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             other => {
                 if other.starts_with("--") {
                     return Err(usage_fail(&format!(
-                        "unknown flag {other}; --steps is the one flag the Python verb did not carry"
+                        "unknown flag {other}; --steps is the one flag the Python command did not carry"
                     )));
                 }
                 return Err(usage_fail(&format!(
-                    "unexpected argument {other:?}; the verb takes flags only"
+                    "unexpected argument {other:?}; the command takes flags only"
                 )));
             }
         }
@@ -545,7 +545,7 @@ fn run_helper(
         cmd.env("TARGET_TURN_MODE", "steps");
     }
     // Stamp the launcher's process-bound harness proof for the script and the
-    // owned-identity verb it spawns. The pair is validated natively (a live
+    // owned-identity command it spawns. The pair is validated natively (a live
     // pid plus a known harness name); an inherited pair forwards as-is.
     let status = cmd.status();
     match status {
@@ -973,7 +973,7 @@ fn repo_root_of(cwd: &Path) -> Option<PathBuf> {
 /// First-bind the graph node's plan_path at init. Never overwrites a
 /// non-empty stored value (a group child shares one plan); non-fatal on
 /// failure, like the shell hook's lock-stamp posture. Rides the sibling
-/// binary's own update verb with stdio captured, the way the Python verb
+/// binary's own update command with stdio captured, the way the Python command
 /// shelled `fno backlog update`.
 fn bind_node_plan_path(node: &serde_json::Value, plan_path: &str) {
     let node_id = node_str(Some(node), "id");

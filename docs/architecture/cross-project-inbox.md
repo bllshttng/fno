@@ -113,7 +113,7 @@ entries; only triaged heads-up threads do (via `fno agents mail triage` ->
                 |     (interrupts mid-feature)       |
 ```
 
-Sender resolution: `resolve_project()` walks up from cwd looking for `.fno/config.toml` with a `project:` field. Without that field, every `fno agents mail` verb errors with the exact fix string `"set 'project:' in .fno/config.toml or pass --from"` (the reply/drain verbs keep `--from`; the cursor `unread`/`ack` take `--name`; the send verb `fno agents mail send` uses `--from-name`).
+Sender resolution: `resolve_project()` walks up from cwd looking for `.fno/config.toml` with a `project:` field. Without that field, every `fno agents mail` command errors with the exact fix string `"set 'project:' in .fno/config.toml or pass --from"` (the reply/drain commands keep `--from`; the cursor `unread`/`ack` take `--name`; the send command `fno agents mail send` uses `--from-name`).
 
 ## Three message kinds (post-2026-05)
 
@@ -142,7 +142,7 @@ complete -> fyi-with-replies-to).
 
 Concurrent writers to the same thread file serialize via a
 `mkdir <path>.lock.d` mutex (POSIX-atomic, macOS portable). Read-only
-verbs (`unread`, `list`, `find_thread_by_msg_id`) skip the lock. Writes
+commands (`unread`, `list`, `find_thread_by_msg_id`) skip the lock. Writes
 go through `_atomic_write_text(path, content)`: write to a sibling
 tempfile (mkstemp), then `os.replace(tmp, target)` so a partial write
 under SIGKILL or disk-full cannot leave the live thread file
@@ -243,7 +243,7 @@ The substrate ships as a single feature. Four follow-up backlog entries land in 
 ## Files
 
 - `cli/src/fno/inbox/store.py` - Markdown parser, `Message`/`Kind`/`Status`, filelock, monotonic transitions, `resolve_project()`
-- `cli/src/fno/mail/cli.py` - `fno agents mail` Typer verbs (send/unread/ack/reply/list/lint/drain/status) over the store data model
+- `cli/src/fno/mail/cli.py` - `fno agents mail` Typer commands (send/unread/ack/reply/list/lint/drain/status) over the store data model
 - `cli/src/fno/inbox/triage.py` - `claude -p` subprocess wrapper with retry-once and env-stub override
 - `cli/src/fno/graph/store.py` - Provenance setdefaults in `_apply_graph_defaults`
 - `cli/src/fno/graph/load.py` - `query_by_source_inbox_msg` helper

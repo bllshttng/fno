@@ -2,7 +2,7 @@
 
 The alias is gone but its EVENTS are not. Sessions recorded `inbox_add` rows
 before the rename and those rows still have to count, so the reader vocabulary
-outlives the verb. Dropping it would silently break the capture-pass gate for
+outlives the command. Dropping it would silently break the capture-pass gate for
 any session that predates the rename.
 """
 from __future__ import annotations

@@ -17,7 +17,7 @@ pub const LOAD_PER_CORE_BAND: f64 = 10.0;
 pub const MACHINE_BRAKE_NAME: &str = "machine-brake.json";
 pub const MACHINE_BRAKE_HOLD_SECS: u64 = 1800;
 /// The sccache server's last seen pid and restart timestamps, one row per
-/// tick: a pid change is one restart. The footprint verb reads it.
+/// tick: a pid change is one restart. The footprint command reads it.
 pub const SCCACHE_WATCH_NAME: &str = "sccache-watch.json";
 const SCCACHE_RESTART_CAP: usize = 64;
 pub const RUNAWAY_LOAD_PER_CORE: f64 = 4.0;
@@ -610,7 +610,7 @@ pub fn observe_sccache_pid(pid: Option<u32>) {
     );
 }
 
-/// Restarts within the trailing hour: the footprint verb's sccache line.
+/// Restarts within the trailing hour: the footprint command's sccache line.
 pub fn sccache_restarts_1h() -> usize {
     #[cfg(test)]
     if std::env::var_os("FNO_SCCACHE_WATCH").is_none() {
@@ -859,7 +859,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         }
         // One long-lived sccache server per machine: a server that died under
         // load is revived within a tick, and the pid change feeds the restart
-        // counter the footprint verb reads. The sample's own table answers the
+        // counter the footprint command reads. The sample's own table answers the
         // probe, so the tick spends no extra process walk.
         let sccache_pid = crate::cargo_build_dirs::sccache_row_pid(&sample.procs);
         crate::cargo_build_dirs::ensure_sccache_server_unless(sccache_pid.is_some());

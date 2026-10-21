@@ -162,7 +162,7 @@ def test_bg_create_uses_rust_birth_exec_fence(tmp_path: Path, monkeypatch) -> No
 def test_bg_create_stale_rust_binary_suggests_update(tmp_path: Path, monkeypatch) -> None:
     from fno.agents.harnesses import claude as claude_mod
 
-    result = MagicMock(returncode=2, stdout="", stderr="unknown verb: claude-birth-exec")
+    result = MagicMock(returncode=2, stdout="", stderr="unknown command: claude-birth-exec")
     monkeypatch.setattr(claude_mod, "_subprocess_run", lambda *args, **kwargs: result)
 
     with pytest.raises(claude_mod.ProviderSubprocessError) as exc:

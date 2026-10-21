@@ -2,7 +2,7 @@
 //!
 //! Four event rows (started, built, installed, failed) append to the global
 //! journal through `event_store::append_envelope`, and the installed and
-//! failed rows mail the roles through the front binary's own mail verb. The
+//! failed rows mail the roles through the front binary's own mail command. The
 //! Python side composes nothing: one argv per step, one exit code back, and
 //! the fail trap passes `--rc` instead of a JSON template.
 
@@ -64,7 +64,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-/// One bounded mail subprocess: the front binary's mail verb is local, but a
+/// One bounded mail subprocess: the front binary's mail command is local, but a
 /// wedged front door must not hang a failed install's exit past the minute
 /// the old Python wrapper allowed.
 fn mail_roles(fno_bin: &str, body: &str) {
@@ -122,7 +122,7 @@ pub fn run_update_journal(args: &[String]) -> i32 {
         return 2;
     }
     // The failed row's reason is schema-required; the trap passes only --rc,
-    // so the verb derives the sentence the journal reader expects.
+    // so the command derives the sentence the journal reader expects.
     if args.type_name == "failed" {
         args.fields
             .entry("stage".to_string())

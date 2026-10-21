@@ -2,7 +2,7 @@
 
 The send receipt is one JSON line {msg_id, subject, to, status} on every
 lane. The subject flag lives on the Rust front, which peels it off the
-argv and hands it over as FNO_MAIL_SUBJECT; this verb reads that env, and
+argv and hands it over as FNO_MAIL_SUBJECT; this command reads that env, and
 the subject rides the wire envelope (the delivered header's third field),
 the durable bus row, and the receipt.
 """

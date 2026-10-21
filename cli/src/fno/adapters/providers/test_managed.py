@@ -1964,7 +1964,7 @@ class TestTaintWriterIdentity:
         ).outcome == "slot-pinned"
 
 
-class TestSwitchNeverBindsAnIdentity:
+class TestSwitchNecommandindsAnIdentity:
     def test_a_switch_does_not_bind_an_unbound_record(self, fake_slot, tmp_path):
         """A switch materializes the record's STORED snapshot, whose provenance
         is the store, not the operator. An earlier out-of-band login plus
@@ -2383,7 +2383,7 @@ class TestRegisterCommitSafety:
 
 class TestUnreadableSlotIsARefusal:
     def test_a_keychain_timeout_is_typed_not_raised(self, tmp_path, monkeypatch):
-        """`security` can time out or be denied; an operator verb must report
+        """`security` can time out or be denied; an operator command must report
         that, not surface a traceback."""
         def _boom(cli):
             raise managed.KeychainError("`security find-generic-password` timed out")

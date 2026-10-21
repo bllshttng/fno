@@ -1,12 +1,12 @@
 # `fno agents mail ask`: auto-routing to the Rust client
 
-> **Superseded by the unconditional flip.** This document describes the *provider-conditional* state shipped earlier (claude/codex routed to Rust, gemini stayed on Python via the `RUST_CLIENT_ASK_PROVIDERS` / `_resolve_ask_provider` special case). That special case is now **removed**: gemini is ported and `ask` auto-routes for every provider. `PYTHON_AGENT_VERBS` is empty and `AUTO_ROUTE_VERBS == RUST_CLIENT_VERBS` is the whole contract. See [`fno-agents-gemini-ask-rust.md`](./fno-agents-gemini-ask-rust.md) for the current state. The sections below are retained as the design history of the intermediate provider-conditional step.
+> **Superseded by the unconditional flip.** This document describes the *provider-conditional* state shipped earlier (claude/codex routed to Rust, gemini stayed on Python via the `RUST_CLIENT_ASK_PROVIDERS` / `_resolve_ask_provider` special case). That special case is now **removed**: gemini is ported and `ask` auto-routes for every provider. `PYTHON_AGENT_COMMANDS` is empty and `AUTO_ROUTE_COMMANDS == RUST_CLIENT_COMMANDS` is the whole contract. See [`fno-agents-gemini-ask-rust.md`](./fno-agents-gemini-ask-rust.md) for the current state. The sections below are retained as the design history of the intermediate provider-conditional step.
 
 Builds on the claude port ([`fno-agents-claude-ask-rust.md`](./fno-agents-claude-ask-rust.md)) which shipped the **capability** for claude.
 
 ## What this is
 
-`ask` was the last `fno agents` verb still owned by Python by default. Every other verb (`list`, `stop`, `rm`, `reconcile`, ...) auto-routes to the compiled `fno-agents` client. This node makes `ask` auto-route as well, for the providers whose client-side port is live: **claude** (parent) and **codex** (Wave B of this node). **gemini** continues to use the Python dispatch until its port lands (deferred follow-up).
+`ask` was the last `fno agents` command still owned by Python by default. Every other command (`list`, `stop`, `rm`, `reconcile`, ...) auto-routes to the compiled `fno-agents` client. This node makes `ask` auto-route as well, for the providers whose client-side port is live: **claude** (parent) and **codex** (Wave B of this node). **gemini** continues to use the Python dispatch until its port lands (deferred follow-up).
 
 ## Why ask is provider-split
 
@@ -16,17 +16,17 @@ Builds on the claude port ([`fno-agents-claude-ask-rust.md`](./fno-agents-claude
 - **codex** is a one-shot `codex exec --json ...` subprocess: not a daemon-PTY agent. The Rust client replicates this path directly in `codex_ask.rs` (new in this node), bypassing the fno daemon. Byte-parity proven by `codex_ask_parity.rs`.
 - **gemini** has no Rust client port yet; the Python dispatch handles it.
 
-The fno daemon's `handle_ask` returns the whole rendered `TerminalGrid` screen of a resident PTY worker — a different execution model and output channel. Screen-diffing it CANNOT reach byte-parity with the Python providers' parsed reply text. The daemon `handle_ask` exists for resident-agent interaction (`drive`/`attach`), not the `ask` verb. So both claude and codex (and gemini, when its port lands) handle `ask` CLIENT-SIDE.
+The fno daemon's `handle_ask` returns the whole rendered `TerminalGrid` screen of a resident PTY worker — a different execution model and output channel. Screen-diffing it CANNOT reach byte-parity with the Python providers' parsed reply text. The daemon `handle_ask` exists for resident-agent interaction (`drive`/`attach`), not the `ask` command. So both claude and codex (and gemini, when its port lands) handle `ask` CLIENT-SIDE.
 
 ## The provider-conditional flip
 
-`ask` deliberately **stays** in `PYTHON_AGENT_VERBS` (`cli/src/fno/agents/rust_runtime.py`). Removing it would route gemini `ask` to the wrong backend. Instead, a new branch in `make_context` handles `ask` as a special case:
+`ask` deliberately **stays** in `PYTHON_AGENT_COMMANDS` (`cli/src/fno/agents/rust_runtime.py`). Removing it would route gemini `ask` to the wrong backend. Instead, a new branch in `make_context` handles `ask` as a special case:
 
 ```python
 RUST_CLIENT_ASK_PROVIDERS = frozenset({"claude", "codex"})
 
-# Inside make_context, after the AUTO_ROUTE_VERBS short-circuit:
-elif mode == "auto" and verb == "ask":
+# Inside make_context, after the AUTO_ROUTE_COMMANDS short-circuit:
+elif mode == "auto" and command == "ask":
     provider = _resolve_ask_provider(args)
     if provider in RUST_CLIENT_ASK_PROVIDERS:
         binary = resolve_installed_binary()
@@ -38,15 +38,15 @@ elif mode == "auto" and verb == "ask":
 `_resolve_ask_provider(args)` resolves the target provider in two passes:
 
 1. An explicit `--provider <p>` or `--provider=<p>` wins (the create path always carries this).
-2. Otherwise, the first non-flag positional after the verb is the agent name; look it up in `agents_registry_path()` (top-level `agents` list, per the cross-language schema in [`cross-language-schema-parity.md`](./cross-language-schema-parity.md)) and return its `provider`.
+2. Otherwise, the first non-flag positional after the command is the agent name; look it up in `agents_registry_path()` (top-level `agents` list, per the cross-language schema in [`cross-language-schema-parity.md`](./cross-language-schema-parity.md)) and return its `provider`.
 
 The scanner skips past the value tokens of every value-carrying flag on `cmd_ask` (`--cwd`, `--timeout`, `--from-name`, plus `--provider` special-cased) so flag values do not get misread as the agent name. Trap: `ask --from-name sender registered-agent hi` — without value-flag skip, "sender" would look like the name; the scanner now correctly captures "registered-agent".
 
 Returns `None` on any failure (missing registry, perm denied, corrupt JSON, agent absent, no positional name). The caller treats `None` as "let Python handle it" — Python emits the canonical actionable error. Deliberately tolerant; the Rust binary does its own registry read once routed.
 
-### Why ask stays in `PYTHON_AGENT_VERBS`
+### Why ask stays in `PYTHON_AGENT_COMMANDS`
 
-The contract test `AUTO_ROUTE_VERBS == RUST_CLIENT_VERBS - PYTHON_AGENT_VERBS` is the routing-drift tripwire. If a future change removes `ask` from `PYTHON_AGENT_VERBS` before gemini is ported, gemini `ask` routes silently to the binary, which has no gemini-ask path. Keeping `ask` in `PYTHON_AGENT_VERBS` and routing via the explicit provider-conditional branch keeps the tripwire honest. A second contract test pins the membership of `RUST_CLIENT_ASK_PROVIDERS`. If gemini is added without porting `harnesses/gemini.py`, that test flags the drift.
+The contract test `AUTO_ROUTE_COMMANDS == RUST_CLIENT_COMMANDS - PYTHON_AGENT_COMMANDS` is the routing-drift tripwire. If a future change removes `ask` from `PYTHON_AGENT_COMMANDS` before gemini is ported, gemini `ask` routes silently to the binary, which has no gemini-ask path. Keeping `ask` in `PYTHON_AGENT_COMMANDS` and routing via the explicit provider-conditional branch keeps the tripwire honest. A second contract test pins the membership of `RUST_CLIENT_ASK_PROVIDERS`. If gemini is added without porting `harnesses/gemini.py`, that test flags the drift.
 
 ## Codex `ask` client-side port
 

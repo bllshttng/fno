@@ -11,8 +11,8 @@ The queue is derived from the whole transcript by the Rust reader
 prose user turns minus the ids already acked. A per-session scan cursor
 (``<session>.scan.json``, a deletable cache) is that reader's cache, so
 later reads parse only newly appended bytes and no turn is lost to
-distance from EOF. Recording still runs through the existing capture verbs
-first; ``ack`` names what the turn produced - one ack verb where a
+distance from EOF. Recording still runs through the existing capture commands
+first; ``ack`` names what the turn produced - one ack command where a
 ``--from-turn`` flag would have been threaded through three surfaces.
 
 Session/transcript/ledger resolution (in order: explicit env pins, then

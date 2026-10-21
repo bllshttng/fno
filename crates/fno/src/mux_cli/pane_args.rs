@@ -1,5 +1,5 @@
-//! The pane argv grammar (`fno mux pane <verb> ...`): one parser, [`parse_pane_args`],
-//! for every pane verb including `run`'s embedded command argv. A child
+//! The pane argv grammar (`fno mux pane <command> ...`): one parser, [`parse_pane_args`],
+//! for every pane command including `run`'s embedded command argv. A child
 //! module of `mux_cli` on purpose: the file-budget gate keeps the parent
 //! shrink-only, and `use super::*` keeps the proto types, the selector
 //! parsers, and the shared `MuxCommon` group in one place.
@@ -121,7 +121,7 @@ pub fn parse_pane_args(
     op: &crate::cli_args::PaneOp,
     args: &[OsString],
 ) -> Result<ParsedPane, String> {
-    // Hidden verb subtree: `pane keeper list` reads the keeper sockets
+    // Hidden command subtree: `pane keeper list` reads the keeper sockets
     // directly (no server), so it parses here and dispatches before any
     // session resolution.
     if matches!(op, crate::cli_args::PaneOp::Keeper { .. }) {
@@ -373,9 +373,9 @@ pub fn parse_pane_args(
         });
     }
 
-    // Every other verb: a single flag/positional pass (no embedded argv).
+    // Every other command: a single flag/positional pass (no embedded argv).
     // The common flags stay loop arms (not MuxCommon::take) for the same
-    // reason run has them inline: the verbs' flag VALUES are arbitrary text,
+    // reason run has them inline: the commands' flag VALUES are arbitrary text,
     // and a fence-less pre-pass would strip a value that spells
     // --json/--server/--session instead of reading it.
     let mut session = None;
@@ -469,9 +469,9 @@ pub fn parse_pane_args(
             "--pattern" => pattern = Some(value_of!()),
             // `pane kill --hand-off-to <socket>` is the opposite of a kill:
             // the keeper socket moves to that path and the child keeps
-            // running. It rides `kill` because it is the same verb from the
+            // running. It rides `kill` because it is the same command from the
             // server's side - this pane stops being ours - and a second
-            // verb would duplicate the pane-resolution and refusal ladder.
+            // command would duplicate the pane-resolution and refusal ladder.
             "--hand-off-to" => hand_off_to = Some(value_of!()),
             "--timeout" => {
                 let v = value_of!();

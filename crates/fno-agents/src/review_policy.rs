@@ -7,7 +7,7 @@
 //! `runtime_state.headroom`), the lock is `spawn_gate_lanes::account_locked_until`
 //! over `route_capacity::runtime_state_payload`, the ambient harness is
 //! `claims::resolve_harness`, the ledger path is `paths_cli::ledger_json`, and
-//! the record line renders through `client_verbs::to_python_json`.
+//! the record line renders through `client_commands::to_python_json`.
 //!
 //! Two mirrors are local because no Rust reader shared their shape:
 //!
@@ -35,7 +35,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::client_verbs::{expand_eq, to_python_json};
+use crate::client_commands::{expand_eq, to_python_json};
 use crate::fallback_chain::{
     headroom, health_from_map, parse_provider_health, parse_usage, snapshot_from_map, Verdict,
 };

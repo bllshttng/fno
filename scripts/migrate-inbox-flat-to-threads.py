@@ -276,9 +276,9 @@ def main(argv: list[str]) -> int:
             overall_rc = 1
             print(f"[ERROR] {project}: {'; '.join(result['errors'])}")
             continue
-        verb = "would write" if args.dry_run else "wrote"
+        command = "would write" if args.dry_run else "wrote"
         print(
-            f"[ok] {project}: {verb} {result['threads_written']} thread file(s) "
+            f"[ok] {project}: {command} {result['threads_written']} thread file(s) "
             f"covering {result['messages_migrated']} message(s)"
         )
 

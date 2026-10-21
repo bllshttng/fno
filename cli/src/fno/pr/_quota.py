@@ -13,7 +13,7 @@ from typing import Callable, Optional, Sequence
 
 from fno.paths import github_cli_proxy_dir, graphql_quota_lock
 from fno.pr._proc import Result, run
-from fno.rust_binary import VerbUnavailable
+from fno.rust_binary import CommandUnavailable
 from fno.setup.github_cli import PROXY_DEPTH_ENV, PROXY_EXEC_LINE, PROXY_IMPORT_LINE
 
 GRAPHQL_RESERVE = 200
@@ -346,16 +346,16 @@ def _gh_budget(payload: dict) -> dict:
     # The budget ops ride the existing fleet-incident action as an argument
     # (law d-fe66560a allows no new client action); the door is unchanged.
     # Call-time import: a module-top capture can permanently hold a test's
-    # monkeypatched verb_call stub, leaking it into every later reader.
-    from fno.rust_binary import verb_call
+    # monkeypatched command_call stub, leaking it into every later reader.
+    from fno.rust_binary import command_call
 
-    return verb_call("fleet-incident", payload, timeout=5)
+    return command_call("fleet-incident", payload, timeout=5)
 
 
-def _reader_signalled(exc: VerbUnavailable) -> bool:
+def _reader_signalled(exc: CommandUnavailable) -> bool:
     """Whether the budget reader died from a signal (OOM killer, kernel).
 
-    verb_call attaches the child's exit code on a clean non-zero failure; a
+    command_call attaches the child's exit code on a clean non-zero failure; a
     signalled reader comes back negative from subprocess, or 137 through a
     shell. A signalled reader means the machine is killing processes - exactly
     when a flood of gh calls hurts. A clean exit (missing ledger, bad install)
@@ -395,7 +395,7 @@ def admit(argv: Sequence[str]) -> Optional[str]:
     """
     try:
         answer = _gh_budget({"op": "admit", "argv": [str(a) for a in argv]})
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         if _reader_signalled(exc):
             if not _agent_origin_env():
                 print(
@@ -453,7 +453,7 @@ def record_refusal(stderr: str) -> None:
             kind = "secondary"
     try:
         _gh_budget({"op": "refused", "kind": kind})
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         print(f"gh budget: refusal not recorded: {exc}", file=sys.stderr)
 
 
@@ -480,7 +480,7 @@ def backoff_live() -> bool:
     global LAST_BUDGET
     try:
         answer = _gh_budget({"op": "status"})
-    except VerbUnavailable:
+    except CommandUnavailable:
         LAST_BUDGET = None
         return False
     LAST_BUDGET = answer if isinstance(answer, dict) else None

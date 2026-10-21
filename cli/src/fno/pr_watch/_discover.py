@@ -12,7 +12,7 @@ Both are designed for easy testing: discovery accepts an ``entries`` list
 rather than reading the graph directly, and ``read_pr_state`` accepts an
 injectable ``runner`` so tests can stub the merge-state leg without a live
 network call; the reviews leg answers through the ``status-pr-activity``
-op on the authorized-merge door (tests stub ``fno.rust_binary.verb_call``).
+op on the authorized-merge door (tests stub ``fno.rust_binary.command_call``).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from fno.graph._reconcile import (
 )
 from fno.pr._proc import ToolMissing
 from fno.pr._proc import run as _rest_run
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 log = logging.getLogger(__name__)
 
@@ -315,7 +315,7 @@ def read_pr_state(
         "pr": candidate.pr_number,
         "reviewers": list(reviewers),
     }
-    answer = verb_call("authorized-merge", payload, ReconcileError, timeout=remaining)
+    answer = command_call("authorized-merge", payload, ReconcileError, timeout=remaining)
     if answer.get("error"):
         raise ReconcileError(
             f"read_pr_state #{candidate.pr_number} (reviews) failed: {answer['error']}"

@@ -1,6 +1,6 @@
 //! The decisions listing, native (`fno backlog decisions`, `fno inbox
 //! decisions`): one entry, two fronts. This is the port of the deleted
-//! Python verb (`cli/src/fno/decide/cli.py::_list_decisions` and the
+//! Python command (`cli/src/fno/decide/cli.py::_list_decisions` and the
 //! `review_list` half of `fno/decide/__init__.py` that only it read); the
 //! library halves other readers still import stay Python. Lifecycle, lane,
 //! scope and near-miss rules mirror the deleted reader line for line - the
@@ -16,9 +16,9 @@ const LABEL: &str = "backlog decisions";
 
 const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--output PATH] [--format markdown|json] [--json|-J]";
 
-/// The state filter's closed set, the deleted Python verb's own ValueError
+/// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
-/// the Python verb validated inside the read, and the exit ladder is part
+/// the Python command validated inside the read, and the exit ladder is part
 /// of the contract.
 const STATE_ERROR: &str =
     "state must be live, retired, expired, superseded, retracted, unscoped, or all";
@@ -49,7 +49,7 @@ const REGISTERED_GRADUATION_PROBES: &[(&str, &str)] = &[(
 /// `^d-[0-9a-f]{4,32}$`, the Python `looks_like_decision_id` shape. The
 /// doors' own `is_decision_id` is the stricter 8-hex write shape; the
 /// listing's empty-answer branch must classify exactly what the deleted
-/// verb classified.
+/// command classified.
 fn looks_like_decision_id(token: &str) -> bool {
     let token = token.trim();
     let Some(rest) = token.strip_prefix("d-") else {
@@ -183,11 +183,11 @@ fn decision_lane(row: &Value) -> &'static str {
 
 #[derive(Debug)]
 enum CoreError {
-    /// The store could not be read at all: the Python verb's
+    /// The store could not be read at all: the Python command's
     /// `cannot read the decision index` exit (1).
     Read(String),
     /// The ValueError family: the message rides the same exit-1 text,
-    /// because the Python verb caught ValueError and OSError into one arm.
+    /// because the Python command caught ValueError and OSError into one arm.
     ValueError(String),
 }
 
@@ -202,7 +202,7 @@ fn decisions_jsonl() -> PathBuf {
 }
 
 /// The machine-wide graph, archive included: the same read `_graph_entries`
-/// served the Python verb. An unreadable graph is the caller's degrade, not
+/// served the Python command. An unreadable graph is the caller's degrade, not
 /// an error.
 pub(crate) fn read_graph_entries() -> Result<Vec<Value>, String> {
     crate::backlog::api::rows(&crate::backlog::api::Store::new(
@@ -420,7 +420,7 @@ impl<'a> Matcher<'a> {
 /// The listing read, `list_decisions` verbatim: store rows flattened and
 /// deduplicated, lane and lifecycle derived (the graph read once, only when
 /// a coord row needs it), filtered, newest first, then the law-only scope
-/// split the Python verb applied through the front door. `entries` carries
+/// split the Python command applied through the front door. `entries` carries
 /// a caller's already-read graph in and the required read out; `scope_all`
 /// is the review read's unfiltered view.
 fn list_core(
@@ -443,9 +443,9 @@ fn list_core(
         &decisions_jsonl(),
     ) {
         Ok(pair) => pair,
-        // No store on this machine is the honest empty the deleted verb
+        // No store on this machine is the honest empty the deleted command
         // answered, not a failed read: its empty-answer branch exists
-        // for exactly this machine and names the backfill verb.
+        // for exactly this machine and names the backfill command.
         Err(reason) if reason.starts_with("no decision store") => (Vec::new(), 0),
         Err(reason) => return Err(CoreError::Read(reason)),
     };
@@ -626,7 +626,7 @@ fn list_core_over(
 
     // The law-only scope split: out-of-scope law rows hide, everything else
     // stays visible (losing a law is worse than seeing one), and the note
-    // rides the label the way the deleted verb's front-door call appended it.
+    // rides the label the way the deleted command's front-door call appended it.
     let (rows, note) = if scope_all {
         (out, String::new())
     } else {
@@ -823,7 +823,7 @@ fn near_miss_subjects(
     ranked
 }
 /// The run entry for both spellings. The label stays `backlog decisions`
-/// on every stream: the deleted Python verb printed it from the inbox mount
+/// on every stream: the deleted Python command printed it from the inbox mount
 /// too, and scripts read the prefix.
 pub fn run(argv: &[String]) -> i32 {
     let opts = match parse_options(argv) {
@@ -940,7 +940,7 @@ pub fn run(argv: &[String]) -> i32 {
 
     // The near-miss scan reads the whole machine index, never the subject's
     // filtered answer: its own store read, the same second read the deleted
-    // Python verb paid, taken only when a subject query can use it.
+    // Python command paid, taken only when a subject query can use it.
     let near = match &subject {
         Some(s) => {
             let raw = crate::decision_index::read_store_rows(
@@ -1151,7 +1151,7 @@ fn subject_node_id(entries: &[Value], subject: &str) -> Option<String> {
     resolved_twice(entries, subject.trim())
 }
 
-/// The plans dir the deleted verb scanned, resolved by the one owner of the
+/// The plans dir the deleted command scanned, resolved by the one owner of the
 /// chain (`fno do plan path`, cwd-anchored). A probe failure is the
 /// unavailable status, never a silent empty scan.
 pub(crate) fn plans_dir_for_listing() -> Result<PathBuf, String> {
@@ -1366,7 +1366,7 @@ fn resolve_output_format(path: &str, requested: Option<&str>) -> Result<String, 
     }
 }
 
-/// The one file export: full JSON (sorted keys, the deleted verb's own
+/// The one file export: full JSON (sorted keys, the deleted command's own
 /// `json.dumps(sort_keys=True)` shape) or the markdown render, then the
 /// receipt alone on stdout.
 fn write_report(report: &Value, output: &str, format: Option<&str>) -> Result<(), (String, i32)> {
@@ -1564,7 +1564,7 @@ fn render_human(
                 return;
             }
             // The filter emptied nothing the store holds: the honest-empty
-            // branches still run, the way the deleted verb fell through.
+            // branches still run, the way the deleted command fell through.
         }
         let index_path = decisions_jsonl();
         let hint = if index_path.exists() || crate::event_store::store_path(&index_path).exists() {
@@ -1779,7 +1779,7 @@ fn render_filtered_empty(
     } else {
         "decisions"
     };
-    let verb = if unfiltered.len() == 1 { "sits" } else { "sit" };
+    let command = if unfiltered.len() == 1 { "sits" } else { "sit" };
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     for d in &unfiltered {
         let key = match d.get("lane").and_then(Value::as_str) {
@@ -1812,7 +1812,7 @@ fn render_filtered_empty(
     }
     recovery_command.push_str(" --state all");
     eprintln!(
-        "{LABEL}: 0 {filter_label} decisions for '{}', but {} {noun} {verb} under \
+        "{LABEL}: 0 {filter_label} decisions for '{}', but {} {noun} {command} under \
          it: {lanes}.{hint} Read all lifecycle states with: {recovery_command}.",
         payload.get("subject").and_then(Value::as_str).unwrap_or(""),
         unfiltered.len(),

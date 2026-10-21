@@ -995,7 +995,7 @@ fn install_crate_bins(
     true
 }
 
-/// Chain the crate's drift-gated daemon swap; the verb is quiet on fresh or
+/// Chain the crate's drift-gated daemon swap; the command is quiet on fresh or
 /// down. A failed swap keeps its last stderr line for the closing verdict.
 fn chained_restart_if_drifted(binary: &Path, dry_run: bool) {
     let args: Vec<String> = ["restart".into(), "--if-drifted".into()].to_vec();
@@ -1093,7 +1093,7 @@ pub(crate) fn sync_source_checkout(source: &Path, dry_run: bool) -> Result<(), S
 }
 
 /// The closing verdict: does the running daemon run the build on disk? Ok
-/// when it does or when none runs (the next verb runs the build on disk).
+/// when it does or when none runs (the next command runs the build on disk).
 fn daemon_verdict() -> Result<String, String> {
     let bin = fno_agents_bin();
     let rev = run_bounded(
@@ -1137,7 +1137,7 @@ fn daemon_verdict() -> Result<String, String> {
             }
         }
         Ok((13, _, _)) => Ok(format!(
-            "no daemon running; the next fno-agents verb runs the build on disk ({rev})"
+            "no daemon running; the next fno-agents command runs the build on disk ({rev})"
         )),
         Ok((code, _, err)) => Err(format!(
             "the daemon status read exited {code} ({}){restart_failure}",
@@ -1617,7 +1617,7 @@ fn await_fno_py(fno_py: &Path, dry_run: bool) -> bool {
     false
 }
 
-/// Best-effort commands chained after a successful install, each verb
+/// Best-effort commands chained after a successful install, each command
 /// self-gating. The plugin-stage restage rides last: live sessions exec
 /// hooks straight from the stage, so a restage IS the deploy; the codex
 /// refresh follows the restage when its channel marker says dev.
@@ -1910,7 +1910,7 @@ fn release_update_claim() {
     }
 }
 
-/// Run the verb for one argv tail (`doctor update ...` minus the leading
+/// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let started = Instant::now();
@@ -2353,7 +2353,7 @@ fn source_prs_ahead(installed_rev: &str, source: &Path) -> Option<u64> {
 }
 
 /// Release notes for the update modal, built by the native leg through the
-/// verb seam: one line per merged PR between `installed_rev` and source
+/// command seam: one line per merged PR between `installed_rev` and source
 /// HEAD. None on any failure; the payload never blocks on it.
 fn release_notes_payload(installed_rev: &str, source: &Path) -> Option<Value> {
     let body = serde_json::json!({

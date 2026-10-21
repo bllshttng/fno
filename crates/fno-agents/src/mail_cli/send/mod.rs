@@ -1,4 +1,4 @@
-//! The `mail send` wrapped verb: agent, project, kind, job, lead and ruling
+//! The `mail send` wrapped command: agent, project, kind, job, lead and ruling
 //! lanes plus the durable floor.
 //!
 //! Port of the Python `cmd_send` body (`cli/src/fno/mail/cli.py`) with the
@@ -783,7 +783,7 @@ fn refuse_unsafe_short_address(token: Option<&str>, self_addressed: bool) -> Res
         return Ok(());
     }
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(_) => return Ok(()),
     };
@@ -1541,17 +1541,17 @@ fn append_render_block(
 }
 
 /// Python `_ruling_graph_path` + `_append_ruling_to_node`: append a dated
-/// ruling block to a governed node's details. The native backlog note verb
+/// ruling block to a governed node's details. The native backlog note command
 /// owns that write today; the lane refuses the same shapes the Python lane
 /// refused before the append.
 fn append_ruling(ruling: &str, message: &str, graph_path: Option<&Path>) -> Result<(), i32> {
-    // The graph write rides the native note verb, the post-port home of the
+    // The graph write rides the native note command, the post-port home of the
     // same transaction, so the gate the graph store enforces stays the one
     // gate. The Python leg resolved the graph from --cwd or the ambient
-    // project; the native verb resolves identically.
+    // project; the native command resolves identically.
     // Refuse an unknown node by name before any mail moves, through the same
-    // id/slug read and store the note verb uses. An unreadable store falls
-    // through so the note verb reports its own cause.
+    // id/slug read and store the note command uses. An unreadable store falls
+    // through so the note command reports its own cause.
     let graph = graph_path
         .map(Path::to_path_buf)
         .unwrap_or_else(crate::graph_get::default_graph_path);
@@ -1679,7 +1679,7 @@ pub(crate) fn vet_body(body: &str, allow_reason: Option<&str>) -> Result<(), i32
 // ---------------------------------------------------------------------------
 
 /// Python `cmd_send`. The front routes every `send` here; `--raw` delegates
-/// to the raw leaf, every other lane is the wrapped verb.
+/// to the raw leaf, every other lane is the wrapped command.
 #[allow(clippy::too_many_lines)]
 pub fn run(args: &[String]) -> i32 {
     let args = match parse_args(args) {
@@ -1688,7 +1688,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     if let Some(cwd) = args.cwd.as_deref() {
         // Python resolved `workdir = Path(cwd).resolve()` and passed it to
-        // every repo-scoped consumer; the native verb reaches the same place
+        // every repo-scoped consumer; the native command reaches the same place
         // by making it the process cwd before any consumer reads.
         let resolved = std::fs::canonicalize(cwd);
         match resolved {

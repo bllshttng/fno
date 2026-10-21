@@ -50,7 +50,7 @@ pub const EXIT_LOCK_TIMEOUT: i32 = 11;
 /// `_run_mux`'s FileNotFoundError/OSError exits: the front door could not be
 /// The shell's command-not-found code, shared with heal's missing-`gh` exit: one allocation name for the one convention (`spawn_gate.rs:45`).
 pub const EXIT_CMD_NOT_FOUND: i32 = 127;
-/// `fno mux pane run`'s exit when the verb reached the server but the control
+/// `fno mux pane run`'s exit when the command reached the server but the control
 /// read was never answered (crates/fno `EXIT_CONTROL_UNANSWERED`). Unlike any
 /// other non-zero code this does NOT prove the pane is absent, so the spine
 /// reconciles instead of refusing.
@@ -723,7 +723,7 @@ pub fn parse_pane_run(
 /// panes and adopt exactly one candidate matching this spawn - same cwd, a
 /// live child pid started at/after the spawn clock, and not already claimed
 /// by a registry row. Zero, one, many -> three different, honest answers.
-/// Never retries the run: the verb reached the server, and re-sending risks
+/// Never retries the run: the command reached the server, and re-sending risks
 /// a second pane.
 pub fn reconcile_unanswered_run(
     session: &str,

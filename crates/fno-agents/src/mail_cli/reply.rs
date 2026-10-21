@@ -9,12 +9,12 @@
 //! row addressed to a project falls to the thread-store append / orphan
 //! self-note. The cross-host branch runs before any of that:
 //! `reply_cross_host` owns foreign-host senders, exactly as it did when the
-//! front claimed the verb for the remote lane.
+//! front claimed the command for the remote lane.
 //!
 //! The delivery rungs are the send leaf's shared choke points
 //! (`name_lane_send`, `write_durable_thread`, `append_to_kind_thread`); this
 //! module owns reply's routing, refusals and transcript reads only. Goldens
-//! captured from the Python verb through tests/capture/mail_reply_capture.py
+//! captured from the Python command through tests/capture/mail_reply_capture.py
 //! freeze the bytes.
 
 use serde_json::{json, Value};
@@ -51,7 +51,7 @@ fn is_legacy_handle(token: &str) -> bool {
         && rest.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// typer's usage block for this verb; every parameter refusal rides it.
+/// typer's usage block for this command; every parameter refusal rides it.
 fn usage_error(detail: &str) -> i32 {
     eprintln!("Usage: fno agents mail reply [OPTIONS] [BODY_ARG]");
     eprintln!("Try 'fno agents mail reply --help' for help.");
@@ -211,7 +211,7 @@ pub fn run(args: &[String]) -> i32 {
 
     // The cross-host branch first: a foreign-host sender is a cross-host
     // send, and the flags the store lane cannot carry are refused there
-    // naming each. Everything else falls through to the local verb.
+    // naming each. Everything else falls through to the local command.
     let mut extra: Vec<String> = Vec::new();
     if parsed.json_out {
         extra.push("--json".to_string());

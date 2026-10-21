@@ -81,7 +81,7 @@ fi
 # Extract key state fields. The manifest is inputs-only post-wedge:
 # no current_phase / iteration / *_passed gate booleans live here anymore
 # (removed those dead reads). Progress is external now - git HEAD,
-# PR/CI, the loop-check verb - surfaced via `fno whoami` / `fno whoami status`.
+# PR/CI, the loop-check command - surfaced via `fno whoami` / `fno whoami status`.
 GOAL=$(grep '^input:' "$STATE_FILE" 2>/dev/null | head -1 | sed 's/^input: *//' | sed 's/^"//' | sed 's/"$//')
 PLAN_PATH=$(grep '^plan_path:' "$STATE_FILE" 2>/dev/null | head -1 | sed 's/^plan_path: *//' | tr -d '"')
 NODE=$(grep '^graph_node_id:' "$STATE_FILE" 2>/dev/null | head -1 | sed 's/^graph_node_id: *//' | tr -d '"' | tr -d "'")
@@ -166,7 +166,7 @@ CONTEXT="${CONTEXT}
 Progress is not in the manifest. Run \`fno whoami\` then \`fno whoami status\`
 for live phase + completion state (git HEAD, PR/CI, review)."
 
-# The read-verb lesson rides the post-compact brief: a compaction boundary
+# The read-command lesson rides the post-compact brief: a compaction boundary
 # newer than the taught one re-teaches it once, and the door prints nothing
 # when the session is current. Best-effort - a stale or absent binary
 # teaches nothing and never blocks the brief.

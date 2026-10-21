@@ -1,7 +1,7 @@
 """fno doctor: detect skew between the installed fno and its source checkout.
 
 The ``fno`` on a developer's PATH is a snapshot, not a live view of the repo
-. When a new gate-bearing verb ships (e.g. ``backlog inbox`` in
+. When a new gate-bearing command ships (e.g. ``backlog inbox`` in
 PR #329), an install that predates it silently fails the documented path. This
 command makes that skew detectable and self-explaining, **network-free**.
 
@@ -12,7 +12,7 @@ Python-side signals, each degrading to ``unknown`` rather than crying wolf:
    HEAD`` of the resolved source.
 2. **Capability probe** (always-available fallback): run ``fno backlog capture
    --help`` against the *installed* CLI; a "No such command" failure proves a
-   missing verb regardless of any marker.
+   missing command regardless of any marker.
 3. **Content compare** (ground truth, cannot be fooled by a lying marker):
    fingerprint the *installed* ``fno`` package's ``.py`` bytes against the
    source working tree ``uv tool install`` would ship. Signal 1 trusts a marker
@@ -58,12 +58,12 @@ import typer
 if TYPE_CHECKING:
     from datetime import datetime
 
-# The verb the narrow capability probe checks for: the newest gate-bearing
-# verb. A missing `backlog inbox` (PR #329 gate) was the failure that
+# The command the narrow capability probe checks for: the newest gate-bearing
+# command. A missing `backlog inbox` (PR #329 gate) was the failure that
 # motivated this command; the probe now targets the renamed `backlog capture`
 # spelling, which also catches installs that predate the rename.
-_PROBE_VERB = ("backlog", "capture")
-_PROBE_VERB_LABEL = "backlog capture"
+_PROBE_COMMAND = ("backlog", "capture")
+_PROBE_COMMAND_LABEL = "backlog capture"
 
 # Three-valued probe outcome made explicit (not Optional[bool]) so call sites
 # must distinguish "proven missing" from "could not probe" - an `if not x:`
@@ -243,7 +243,7 @@ def _source_rev(source: Path) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Native-verb transports (the update leg lives in the front door binary)
+# Native-command transports (the update leg lives in the front door binary)
 # ---------------------------------------------------------------------------
 
 # One memoized `fno doctor update --check` per process: the readiness payload
@@ -262,7 +262,7 @@ def _front_door() -> Optional[str]:
     return str(candidate) if candidate.is_file() else None
 
 
-def _run_update_verb(door: str, source: Optional[Path]) -> int:
+def _run_update_command(door: str, source: Optional[Path]) -> int:
     """One `fno doctor update` run; its exit code is the --fix exit code."""
     argv = [door, "doctor", "update"]
     if source is not None:
@@ -542,15 +542,15 @@ def _python_content_drift(source: Optional[Path]) -> Optional[int]:
     )
 
 
-def _probe_installed_verb() -> ProbeResult:
-    """Probe whether the *installed* fno exposes the known gate verb.
+def _probe_installed_command() -> ProbeResult:
+    """Probe whether the *installed* fno exposes the known gate command.
 
     Returns "present", "missing" (proven via "No such command"), or "unknown"
     (could not probe - no ``fno-py`` on PATH, or a non-zero exit for some other
     reason). "unknown" never asserts staleness.
 
     Probes ``fno-py`` (the Python CLI console script), NOT ``fno`` (the Rust mux
-    front door): the gate verb is a property of the Python CLI, and probing it
+    front door): the gate command is a property of the Python CLI, and probing it
     directly keeps this check working even when the front door binary is not
     installed - the front door only forwards here anyway.
     """
@@ -559,7 +559,7 @@ def _probe_installed_verb() -> ProbeResult:
         return "unknown"
     try:
         result = subprocess.run(
-            [fno_bin, *_PROBE_VERB, "--help"],
+            [fno_bin, *_PROBE_COMMAND, "--help"],
             capture_output=True,
             text=True,
             check=False,
@@ -609,7 +609,7 @@ def _binary_version_json(binary: Optional[str]) -> dict:
     One subprocess spawn shared by ``_binary_self_rev`` and ``_binary_crates_rev``
     so the ``doctor`` command does not pay for ``version --json`` twice on the
     same binary (gemini PR #491). Any failure (no binary, old binary without the
-    verb, non-zero exit, malformed/non-dict JSON) degrades to ``{}`` rather than
+    command, non-zero exit, malformed/non-dict JSON) degrades to ``{}`` rather than
     crying wolf. Module-level so tests monkeypatch it like the other collectors.
     """
     if not binary:
@@ -826,7 +826,7 @@ def _run_stage_check(argv: list[str]) -> tuple[int, str, str]:
 
 
 def _plugin_cache_report() -> dict[str, Any]:
-    """Root freshness, folded natively by the Rust verb; transport only."""
+    """Root freshness, folded natively by the Rust command; transport only."""
     def unknown(detail: str) -> dict[str, Any]:
         return {"status": "unknown", "sha": None, "installed_at": None, "detail": detail, "kind": "stage", "stage": None, "roots": []}
 
@@ -1027,13 +1027,13 @@ def _cargo_installed_mux() -> Optional[Path]:
     Thin wrapper over the native readiness payload (single source of truth,
     shared with `fno doctor update`'s probes) so this collector stays patchable.
     Probes the default ``$CARGO_HOME/bin``; a custom-``--root`` install is caught
-    instead by the ``which("fno")`` + mux-verb probe in ``_mux_front_door_report``.
+    instead by the ``which("fno")`` + mux-command probe in ``_mux_front_door_report``.
     """
     return _probes(None).get("cargo_mux_path")
 
 
 def _probe_is_mux(fno_path: str) -> bool:
-    """True if the `fno` at ``fno_path`` responds to a mux-only verb - i.e. it is
+    """True if the `fno` at ``fno_path`` responds to a mux-only command - i.e. it is
     the Rust mux front door, not some other binary named `fno`. Runs
     ``fno mux ls --json`` (read-only, no TTY; the Python CLI has no `mux`
     subcommand and fails "No such command"). Bounded + best-effort: any error or
@@ -1057,7 +1057,7 @@ def _mux_front_door_report() -> dict[str, Any]:
     ``mux_front_door`` is one of:
     - ``active``: `fno` on PATH IS the mux - it either resolves to the
       cargo-installed mux binary, or (custom ``--root`` / non-default
-      ``CARGO_HOME``) answers a mux-only verb.
+      ``CARGO_HOME``) answers a mux-only command.
     - ``shadowed``: the mux is cargo-installed but `fno` on PATH is not it (a
       Python binary, another `fno`) or is off PATH - so bare `fno` will not
       launch the mux.
@@ -1127,7 +1127,7 @@ def _pr_watch_liveness() -> dict[str, Any]:
     """Ground-truth liveness verdict for the global PR-watch agent.
 
     Advisory: never changes doctor's status/exit. The verdict is the Rust
-    verb's (`fno-agents pr-watch status --json`); a check that can't run
+    command's (`fno-agents pr-watch status --json`); a check that can't run
     degrades to ``unknown`` (silent) rather than crying wolf.
     """
     import subprocess
@@ -1229,7 +1229,7 @@ def _groom_health() -> dict[str, Any]:
     try:
         # The native probe exits 0 exactly when a pass is due (never ran, or
         # past its stale threshold), so the exit code IS the stale verdict.
-        proc, probe = _groom_verb("--check")
+        proc, probe = _groom_command("--check")
         plist = Path.home() / "Library" / "LaunchAgents" / "sh.fno.groom.plist"
         return {
             "state": probe["state"],
@@ -1241,7 +1241,7 @@ def _groom_health() -> dict[str, Any]:
         return {"state": "unknown", "hours": None, "stale": False, "agent_installed": False}
 
 
-def _groom_verb(flag: str) -> tuple[subprocess.CompletedProcess, dict[str, Any]]:
+def _groom_command(flag: str) -> tuple[subprocess.CompletedProcess, dict[str, Any]]:
     """One native `backlog groom <flag>` call and its parsed JSON receipt."""
     from fno.rust_binary import resolve_binary
 
@@ -1256,9 +1256,9 @@ def _groom_verb(flag: str) -> tuple[subprocess.CompletedProcess, dict[str, Any]]
 
 
 def _groom_install_agent() -> dict[str, Any]:
-    """Install the daily groom LaunchAgent through the native verb."""
+    """Install the daily groom LaunchAgent through the native command."""
     try:
-        return _groom_verb("--install-agent")[1]
+        return _groom_command("--install-agent")[1]
     except Exception as exc:  # noqa: BLE001 - --fix is advisory
         return {"status": "failed", "detail": str(exc)[:200]}
 
@@ -1322,14 +1322,14 @@ def _post_merge_sync_health() -> dict[str, Any]:
     ``post_merge.auto_run``: reporting is not acting.
     """
     try:
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         # fetch=True: doctor is the human-facing report and runs interactively,
         # so it can afford the fetch that makes the behind-count trustworthy.
         # Without it a merge aged out of the gh window leaves no markerless row
         # and a stale remote-tracking ref reads as zero behind - the outage goes
         # invisible exactly when it has lasted longest.
-        st = verb_call(
+        st = command_call(
             "sync-canonical",
             {"action": "staleness", "cwd": os.getcwd(), "fetch": True},
             timeout=120.0,
@@ -1340,7 +1340,7 @@ def _post_merge_sync_health() -> dict[str, Any]:
             "behind": st["behind"],
             "detail": st["detail"],
         }
-    except VerbUnavailable:
+    except CommandUnavailable:
         return {"state": "unknown", "stale": False, "behind": None, "detail": ""}
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         return {"state": "unknown", "stale": False, "behind": None, "detail": ""}
@@ -1516,10 +1516,10 @@ def _auto_merge_armed_manifests() -> dict[str, int]:
 
 
 def _read_posture_stamp() -> Optional[dict[str, Any]]:
-    """Advisory provenance written by the removed ``fno posture`` verb; None if
+    """Advisory provenance written by the removed ``fno posture`` command; None if
     absent. Doctor may DISPLAY this; config resolution must never read it, or
     an applied posture becomes a resolve-time layer. The same keys are now
-    written by ``fno config set``, which is what the verb's tombstone names."""
+    written by ``fno config set``, which is what the command's tombstone names."""
     try:
         from fno import paths as _paths
 
@@ -1697,9 +1697,9 @@ def _auto_merge_review_gap(
         from fno.pr._merge import _repo_state_dir
 
         root = Path(_repo_state_dir(os.getcwd())).parent
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
-        lane = verb_call(
+        lane = command_call(
             ["review-coverage", "op"],
             {"op": "lane", "cwd": str(root), "code_payload": True},
             timeout=30,
@@ -1936,14 +1936,14 @@ def _verdict(
     keysets are known and the source defines keys the deployed CLI lacks is the
     Python schema proven stale. A deployed CLI AHEAD of source is never stale.
     """
-    missing_verbs: list[str] = []
+    missing_commands: list[str] = []
     python_stale = False
     status: DoctorStatus
 
     if capture_present == "missing":
-        # Capability probe proved a missing verb - stale regardless of marker.
+        # Capability probe proved a missing command - stale regardless of marker.
         python_stale = True
-        missing_verbs = [_PROBE_VERB_LABEL]
+        missing_commands = [_PROBE_COMMAND_LABEL]
         status = "stale"
     elif source_resolved and source_rev is not None and marker is not None:
         if marker == source_rev:
@@ -1958,7 +1958,7 @@ def _verdict(
 
     # Config-schema drift: the deployed FIELD_META keyset is a schema fingerprint.
     # Source keys the deployed CLI lacks mean the install predates a config block
-    # and silently mis-mints IDs - a stale the rev/verb signals miss (they read
+    # and silently mis-mints IDs - a stale the rev/command signals miss (they read
     # "unknown" when the install predates the rev marker). Full evidence only;
     # proven drift upgrades even an "unknown" status to stale.
     missing_config_keys: list[str] = []
@@ -2019,7 +2019,7 @@ def _verdict(
         "content_stale": content_stale,
         "content_drift_count": content_drift_count,
         "content_indeterminate": content_indeterminate,
-        "missing_verbs": missing_verbs,
+        "missing_commands": missing_commands,
         "missing_config_keys": missing_config_keys,
         "source_rev": source_rev,
         "installed_rev": marker,
@@ -2313,7 +2313,7 @@ def _emit_human(
         # change I just wrote". Anyone editing fno itself reads the first as the
         # second and then verifies their branch against a binary without it.
         # The command named here must actually load the other checkout. `fno` is
-        # the Rust front door and forwards every non-mux verb to the ABSOLUTE
+        # the Rust front door and forwards every non-mux command to the ABSOLUTE
         # installed fno-py (cli/pyproject.toml), so cd-ing into a worktree and
         # typing `fno` runs the installed build again and the branch stays
         # untested. Measured: one scoped call reported 196 inspected lines via
@@ -2325,16 +2325,16 @@ def _emit_human(
             f"(rev {result.get('source_rev') or 'unknown'}). "
             "Unmerged work in another branch or worktree is not included, and "
             "`fno` forwards to this installed build from anywhere. To exercise "
-            "another checkout run: cd <checkout>/cli && uv run fno-py <verb>"
+            "another checkout run: cd <checkout>/cli && uv run fno-py <command>"
         )
     elif status == "stale":
-        # A missing-verb verdict can be stale with no resolved source (src is
+        # A missing-command verdict can be stale with no resolved source (src is
         # None), so fall back to a readable label rather than printing "behind None".
         src_label = src or "source"
-        if result["missing_verbs"]:
+        if result["missing_commands"]:
             out(
                 f"fno doctor: installed fno is behind {src_label} "
-                f"(missing: {', '.join(result['missing_verbs'])}). "
+                f"(missing: {', '.join(result['missing_commands'])}). "
                 "Run `fno doctor update` (or `fno doctor --fix`)."
             )
         elif result.get("content_stale"):
@@ -2406,7 +2406,7 @@ def _emit_human(
     else:
         out(
             "fno doctor: status unknown "
-            "(installed rev undeterminable; capability probe found no missing verbs)."
+            "(installed rev undeterminable; capability probe found no missing commands)."
         )
 
     rust_bin_path = rust["binary"]
@@ -2859,7 +2859,7 @@ def _emit_human(
         )
 
     # Advisory legacy pre-push hook (destination-ref gate): names the remedy
-    # verb. Only the legacy install prints; absent/foreign/unchecked are
+    # command. Only the legacy install prints; absent/foreign/unchecked are
     # silent. Never changes status/exit.
     if (result.get("pre_push_hook") or {}).get("status") == "legacy":
         out(
@@ -3764,7 +3764,7 @@ def _managed_block_report() -> dict:
 # --------------------------------------------------------------------------
 # Per-harness surface freshness (Change 5): `fno doctor update` refreshes only
 # the shared CLI/wheel; the codex marketplace plugin and the opencode local
-# plugin are separate surfaces with their own refresh verbs. Report-and-point
+# plugin are separate surfaces with their own refresh commands. Report-and-point
 # only (no auto-fix): the refresh action differs per harness and stays manual.
 # --------------------------------------------------------------------------
 
@@ -4273,7 +4273,7 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     src = _resolve_source(source)
     source_rev = _source_rev(src) if src is not None else None
     marker = _read_marker()
-    capture_present = _probe_installed_verb()
+    capture_present = _probe_installed_command()
     rust = _rust_report()
 
     rust_src_rev = _rust_source_rev(src)
@@ -4642,23 +4642,23 @@ def doctor_command(
         # current binary first.
         pw = result.get("pr_watch") or {}
         if pw.get("verdict") in ("dead", "wedged") and not json_out:
-            # Both cures are the native verbs: heal bounces a dead watcher,
+            # Both cures are the native commands: heal bounces a dead watcher,
             # refresh re-renders a wedged one. Each self-gates (the enabled
             # flag, the bounce-pending grace, the single-flight), so doctor
-            # only relays what the verb said.
+            # only relays what the command said.
             import subprocess
             from fno.rust_binary import resolve_binary
 
             binary = resolve_binary()
             if pw.get("verdict") == "wedged":
-                cure, verb_argv = "refresh", ["refresh", "--force-bounce", "--caller", "doctor-fix"]
+                cure, command_argv = "refresh", ["refresh", "--force-bounce", "--caller", "doctor-fix"]
             else:
-                cure, verb_argv = "heal", ["heal", "--caller", "doctor-fix"]
+                cure, command_argv = "heal", ["heal", "--caller", "doctor-fix"]
             if binary is None:
                 said = "skipped; fno-agents binary not found"
             else:
                 proc = subprocess.run(
-                    [str(binary), "pr-watch", *verb_argv],
+                    [str(binary), "pr-watch", *command_argv],
                     capture_output=True, text=True, check=False, timeout=120,
                 )
                 said = (proc.stdout or "").strip() or f"rc={proc.returncode}"
@@ -4710,7 +4710,7 @@ def doctor_command(
         elif result["python_stale"] or result["rust_stale"]:
             # One native update answers both stale kinds: its rust leg
             # refreshes the cargo bins and its uv leg reinstalls the Python
-            # package. The verb's own IN_PROGRESS guard and source-pin gate
+            # package. The command's own IN_PROGRESS guard and source-pin gate
             # apply; its exit code is the fix's exit code (ruling d-f2bd8d86:
             # a failed step no longer exits 0).
             door = _front_door()
@@ -4721,7 +4721,7 @@ def doctor_command(
                 )
                 raise typer.Exit(1)
             typer.echo("fno doctor: --fix running `fno doctor update`...", err=True)
-            raise typer.Exit(_run_update_verb(door, source))
+            raise typer.Exit(_run_update_command(door, source))
         else:
             typer.echo("fno doctor: nothing to fix.", err=True)
 

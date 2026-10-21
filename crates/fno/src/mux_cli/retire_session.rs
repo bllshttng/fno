@@ -1,4 +1,4 @@
-//! The `fno mux retire-session` verb (v75): the thin transport for
+//! The `fno mux retire-session` command (v75): the thin transport for
 //! the exact-session retirement. A child module of `mux_cli`: the file
 //! budget gate keeps the parent shrink-only, and `use super::*` keeps every
 //! helper in one place.
@@ -16,7 +16,7 @@ pub fn retire_session(args: &[OsString], env_session: Option<&str>) -> i32 {
     };
     let (session_flag, json) = (common.server.or(common.session), common.json);
     // The host session is the first positional; --server stays the override
-    // spelling every verb shares.
+    // spelling every command shares.
     let mut parsed = rest.iter();
     let host_session = match parsed
         .next()
@@ -82,7 +82,7 @@ pub fn retire_session(args: &[OsString], env_session: Option<&str>) -> i32 {
     let reply = control_roundtrip(
         &sock,
         &host_session,
-        ControlVerb::RetireSession {
+        ControlCommand::RetireSession {
             harness,
             session_id,
         },

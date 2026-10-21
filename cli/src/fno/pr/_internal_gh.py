@@ -68,12 +68,12 @@ def _door_get(argv: Sequence[str], cwd: str | None) -> Result | None:
     """
     if len(argv) != 3 or argv[1] != "api":
         return None
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     payload = {"op": "status-rest-get", "cwd": cwd or os.getcwd(), "path": argv[2]}
     try:
-        answer = verb_call("authorized-merge", payload, timeout=120)
-    except VerbUnavailable:
+        answer = command_call("authorized-merge", payload, timeout=120)
+    except CommandUnavailable:
         return None
     if not answer.get("eligible"):
         return None
@@ -136,11 +136,11 @@ def _checks(
     if number is None:
         return Result(1, "", reason)
     # The bucketed rows are the Rust reader's status-ci op; classify lives there.
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        rows = verb_call("authorized-merge", {"op": "status-ci", "cwd": cwd or os.getcwd(), "pr": int(number)}, timeout=120)
-    except VerbUnavailable as exc:
+        rows = command_call("authorized-merge", {"op": "status-ci", "cwd": cwd or os.getcwd(), "pr": int(number)}, timeout=120)
+    except CommandUnavailable as exc:
         return Result(1, "", str(exc))
     return Result(0, json.dumps(rows) + "\n", "")
 

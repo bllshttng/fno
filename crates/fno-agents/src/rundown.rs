@@ -1189,7 +1189,7 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
         eprintln!("fno-agents lead-rundown: --org-json and --graph are required");
         return 2;
     };
-    // No --out: the verb resolves the lead page itself, through the
+    // No --out: the command resolves the lead page itself, through the
     // `term.html` row (cache/pages/lead.html once written, a straggler at
     // the legacy spelling until the fold). The state root is the configured
     // ladder, not --graph's parent: the anchor lives at

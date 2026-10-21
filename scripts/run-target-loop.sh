@@ -2,8 +2,8 @@
 # Exec shim over `fno-agents loop run --driver target` (step 5, x-aaaa).
 # The legacy 466-line bash loop moved into the Rust loop runtime
 # (crates/fno-agents/src/loop_target.rs). This shim maps the documented
-# legacy flags onto the new verb and execs the binary - no loop logic here.
-# Resume after a crash is world-state driven: the Rust verb re-reads the
+# legacy flags onto the new command and execs the binary - no loop logic here.
+# Resume after a crash is world-state driven: the Rust command re-reads the
 # events journal and refuses to double-dispatch a terminated session.
 #
 # THE DOCUMENTED SUPERVISED-LOOP EXCEPTION. Since the active_backlog
@@ -29,7 +29,7 @@ Usage: run-target-loop.sh [OPTIONS]
 
 Exec shim over: fno-agents loop run --driver target [options]
 
-Options (mapped onto the Rust verb):
+Options (mapped onto the Rust command):
   --driver <name>          Dispatcher: claude-code (default) | hermes | openclaw | opencode
                            (maps to --dispatcher; --driver target is pinned)
   --cli <claude|opencode>  Legacy CLI alias (passed through)

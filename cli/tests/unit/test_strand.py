@@ -242,7 +242,7 @@ def test_next_winner_stdout_stays_clean_stderr_names_the_stranded(
     # stdout is EXACTLY the winner JSON - the contract `_next_node` parses.
     picked = json.loads(out)
     assert picked["id"] == "x-winner"
-    # stderr carries the capped strand receipt and the heal verb.
+    # stderr carries the capped strand receipt and the heal command.
     assert "stranded x-kid: dead-ancestor" in err
     assert "1 node(s) stranded under terminal parents" in err
     assert "fno backlog reconcile" in err

@@ -488,7 +488,7 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     launchd is a second seam of the same shape: on 2026-09-08 two unstubbed
     pr-watch install tests re-registered the operator's real
     ``sh.fno.pr-watcher`` from a pytest tempdir (x-63aa), so a mutating
-    launchctl verb resolved outside the tmp tree is blocked in EVERY test,
+    launchctl command resolved outside the tmp tree is blocked in EVERY test,
     smoke included - only the provider half stands down for smoke.
     """
     # Real-provider smoke tests (@pytest.mark.smoke, run nightly by
@@ -537,7 +537,7 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
             return True
         return not str(Path(resolved).resolve()).startswith(tmp_root)
 
-    mutating_launchctl_verbs = {
+    mutating_launchctl_commands = {
         "bootstrap", "bootout", "load", "unload", "kickstart",
         "enable", "disable", "remove", "submit", "start", "stop",
     }
@@ -548,10 +548,10 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
         argv0 = str(cmd[0])
         if Path(argv0).name != "launchctl":
             return False
-        if str(cmd[1]) not in mutating_launchctl_verbs:
+        if str(cmd[1]) not in mutating_launchctl_commands:
             return False
         # Same discriminator as _is_real_provider_exec: a fake launchctl on a
-        # tmp-isolated PATH may run any verb; an unresolved bare name would
+        # tmp-isolated PATH may run any command; an unresolved bare name would
         # reach the ambient real binary (or fail) -> block.
         resolved = argv0 if Path(argv0).is_absolute() else (shutil.which(argv0) or "")
         if not resolved:
@@ -595,7 +595,7 @@ def _stable_fno_py_cmd(monkeypatch):
     Source modules resolve the Python CLI via
     ``_subprocess_util.fno_py_cmd()``, which returns an ABSOLUTE path in most
     runner envs (the console script on PATH / beside the interpreter). Command
-    assertions across the suite assert the bare ``["fno-py", <verb>, ...]``, so
+    assertions across the suite assert the bare ``["fno-py", <command>, ...]``, so
     stub the resolver here to keep them stable regardless of how it resolves
     locally. The resolver's own unit tests bind the real function at import time
     and are unaffected by this module-attribute patch.
@@ -652,12 +652,12 @@ def _neutral_host_harness(monkeypatch):
 def _hermetic_promise_carveout_gate(monkeypatch):
     """Default condition D of the promise gate to an empty carve-out ledger.
 
-    ``resolve_promise_evidence`` (consulted by every close verb) reads
+    ``resolve_promise_evidence`` (consulted by every close command) reads
     ``.fno/carveouts.jsonl`` off the canonical repo root; in the test process
     that resolves to the real checkout, so it would read the real ledger and
     refuse every close. Default the reader to empty so unrelated close tests
     stay hermetic; tests that exercise condition D override it (``carveout_reader``
-    on the unit gate, or re-patch this attribute for the close verbs).
+    on the unit gate, or re-patch this attribute for the close commands).
     """
     import fno.graph._reconcile as rec
 
@@ -807,10 +807,10 @@ def _in_memory_hold_verdict(tmp_path, monkeypatch):
             rows = rows + [entry]
         rows = [e for e in rows if isinstance(e, dict) and e.get("id")]
 
-        def seeded_call(verb, args, *, timeout=None):
+        def seeded_call(command, args, *, timeout=None):
             payload = _json.loads(args[0])
             payload["entries"] = rows
-            return _real_call(verb, [_json.dumps(payload)], timeout=15)
+            return _real_call(command, [_json.dumps(payload)], timeout=15)
 
         monkeypatch.setattr("fno.rust_binary.call_binary_json", seeded_call)
         if not isinstance(entry, dict) or not entry.get("id"):
@@ -1016,15 +1016,15 @@ def clean_lock_dir(tmp_path: Path) -> Path:
 
 def run_native_create(
     graph: Path,
-    verb: str,
+    command: str,
     *args: str,
     input: str | None = None,
     auto_difficulty: bool = True,
     extra_env: dict[str, str] | None = None,
 ):
-    """Run the native backlog create verb over a fixture store.
+    """Run the native backlog create command over a fixture store.
 
-    The create verbs (`add`/`idea`) are binary-owned since the create port,
+    The create commands (`add`/`idea`) are binary-owned since the create port,
     so tests that used to drive the Python typer app exec the dev binary
     with the state dir pinned to the graph path's parent and the caller's
     cwd inherited (work-map and repo-root reads key on it). The difficulty
@@ -1053,8 +1053,8 @@ def run_native_create(
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
         pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    argv = ["backlog", verb, *args]
-    if verb == "add" and auto_difficulty and "--difficulty" not in argv:
+    argv = ["backlog", command, *args]
+    if command == "add" and auto_difficulty and "--difficulty" not in argv:
         argv.extend(["--difficulty", "medium"])
     env = dict(_os.environ)
     env.pop("FNO_CONFIG", None)
@@ -1101,7 +1101,7 @@ def _mint_fno_id_stubbed(monkeypatch):
 
     `fno.rust_binary.mint_fno_id` shells `fno-agents state mint-id`, and the
     pytest shards run with no binary, so every Python row birth would raise
-    VerbUnavailable. A random UUIDv4 stands in; tests that pin the forwarder
+    CommandUnavailable. A random UUIDv4 stands in; tests that pin the forwarder
     WIRING re-stub it themselves.
     """
     monkeypatch.setattr("fno.rust_binary.mint_fno_id", lambda: str(uuid.uuid4()))
@@ -1109,20 +1109,20 @@ def _mint_fno_id_stubbed(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _closure_leg_hermetic(monkeypatch):
-    """Hermetic default for the closure-line binary verbs.
+    """Hermetic default for the closure-line binary commands.
 
     The closure producer lives in the fno-agents binary now; the Python side
-    reaches it only through `fno.rust_binary.verb_call`. In the test
+    reaches it only through `fno.rust_binary.command_call`. In the test
     environment that resolver can find an installed binary without the new
-    verb, or none at all, so the default answers `pr-closure-parse` from a
+    command, or none at all, so the default answers `pr-closure-parse` from a
     test-local copy of the shared-corpus grammar and refuses the writer
-    verbs loudly; tests that pin the forwarder WIRING re-stub
-    `fno.rust_binary.verb_call` themselves.
+    commands loudly; tests that pin the forwarder WIRING re-stub
+    `fno.rust_binary.command_call` themselves.
     """
     import fno.rust_binary as rb
     from fno.graph._constants import is_wellformed_node_id
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
 
     def _line_ids(line):
         stripped = line.strip()
@@ -1139,27 +1139,27 @@ def _closure_leg_hermetic(monkeypatch):
                 return list(dict.fromkeys(toks))
         return None
 
-    def _fake_verb_call(verb, payload, unavailable=None, **kwargs):
-        if verb == "pr-closure-parse":
+    def _fake_command_call(command, payload, unavailable=None, **kwargs):
+        if command == "pr-closure-parse":
             best = None
             for line in (payload.get("body") or "").splitlines():
                 ids = _line_ids(line)
                 if ids is not None:
                     best = ids
             return {"ids": best or []}
-        if verb in (
+        if command in (
             "pr-closure-context",
             "pr-closure-ensure",
             "pr-closure-trailer",
             "pr-closure-bind-created",
             "pr-closure-branch-ids",
         ):
-            raise (unavailable or rb.VerbUnavailable)(
-                "closure leg hermetic in tests: stub verb_call for " + verb
+            raise (unavailable or rb.CommandUnavailable)(
+                "closure leg hermetic in tests: stub command_call for " + command
             )
-        return real_verb_call(verb, payload, unavailable or rb.VerbUnavailable, **kwargs)
+        return real_command_call(command, payload, unavailable or rb.CommandUnavailable, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _fake_verb_call)
+    monkeypatch.setattr(rb, "command_call", _fake_command_call)
 
 
 @pytest.fixture(autouse=True)
@@ -1167,23 +1167,23 @@ def _no_live_evidence_gate(monkeypatch):
     """Hermetic default for the evidence gate.
 
     The note gate (`fno.graph.note_cli.note_evidence`) transports to the
-    `fno-agents evidence-gate` verb through `fno.rust_binary.verb_call`. In
+    `fno-agents evidence-gate` command through `fno.rust_binary.command_call`. In
     the test environment that resolver can find a real installed binary, so
     an unstubbed gate would run a foreign implementation of the claim
-    checker. The default answers pass-through (no claim) for that verb and
-    delegates every other verb to the real transport; tests that need a
-    specific verdict stub `fno.rust_binary.verb_call` themselves.
+    checker. The default answers pass-through (no claim) for that command and
+    delegates every other command to the real transport; tests that need a
+    specific verdict stub `fno.rust_binary.command_call` themselves.
     """
     import fno.rust_binary as rust_binary
 
-    real_verb_call = rust_binary.verb_call
+    real_command_call = rust_binary.command_call
 
-    def _passthrough(verb, payload, **kwargs):
-        if verb == "evidence-gate":
+    def _passthrough(command, payload, **kwargs):
+        if command == "evidence-gate":
             return {"ok": True, "rows": None, "claims": None}
-        return real_verb_call(verb, payload, **kwargs)
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rust_binary, "verb_call", _passthrough)
+    monkeypatch.setattr(rust_binary, "command_call", _passthrough)
 
 
 @pytest.fixture(autouse=True)
@@ -1304,10 +1304,10 @@ def loop_admission_ready(monkeypatch):
 
     real_call = rust_binary.call_binary_json
 
-    def ready(verb, args, *call_args, **call_kwargs):
-        if verb == "loop" and args and args[0] == "readiness":
+    def ready(command, args, *call_args, **call_kwargs):
+        if command == "loop" and args and args[0] == "readiness":
             return None, {"ready": True}
-        return real_call(verb, args, *call_args, **call_kwargs)
+        return real_call(command, args, *call_args, **call_kwargs)
 
     monkeypatch.setattr(rust_binary, "call_binary_json", ready)
 
@@ -1332,9 +1332,9 @@ def checkout_fno_agents_binary():
 
 @pytest.fixture(autouse=True)
 def _door_binary_from_this_checkout(monkeypatch):
-    """Door-routed verbs shell out to a resolved ``fno-agents`` binary, and
+    """Door-routed commands shell out to a resolved ``fno-agents`` binary, and
     on a dev checkout the installed one lags the worktree source: a store
-    verb then refuses against rows only the worktree build can see. Pin the
+    command then refuses against rows only the worktree build can see. Pin the
     door to this checkout's build when one exists; an operator override
     through $FNO_AGENTS_BIN always wins. The store WORKER pins the same way:
     the projection reads live through whichever worker binary serves the
@@ -1419,34 +1419,34 @@ def _no_status_ci_door(monkeypatch):
     """Hermetic default for the status door transports.
 
     `_verify._failing_required`, `_internal_gh._checks` and the merge flake
-    probe read their facts through `fno.rust_binary.verb_call` status ops.
+    probe read their facts through `fno.rust_binary.command_call` status ops.
     In the test environment the resolver finds no dev binary or a stale
     installed one, so an unstubbbed call is a real network read or a
     wrong-shape answer. The default answers an empty row set for status-ci
     (no required check failing) and the fail-open no-recovery fact for
-    status-rerun. ONLY the status door's verbs are faked: `verb_call` is the
+    status-rerun. ONLY the status door's commands are faked: `command_call` is the
     universal transport (spawn-gate, spawn-axes, permission-tokens, ...), and
     faking it whole refused every spawn in the suite with
     "unavailable in tests" while CI's preserved FNO_AGENTS_BIN sat unread.
-    Tests pinning real door answers re-stub `fno.rust_binary.verb_call`.
+    Tests pinning real door answers re-stub `fno.rust_binary.command_call`.
     """
     import fno.rust_binary as rust_binary
 
-    real_verb_call = rust_binary.verb_call
+    real_command_call = rust_binary.command_call
 
-    def _fake_verb_call(
-        verb, payload, unavailable=rust_binary.VerbUnavailable, **kwargs
+    def _fake_command_call(
+        command, payload, unavailable=rust_binary.CommandUnavailable, **kwargs
     ):
         op = payload.get("op") if isinstance(payload, dict) else None
-        if verb == "authorized-merge" and op == "status-ci":
+        if command == "authorized-merge" and op == "status-ci":
             return []
-        if verb == "authorized-merge" and op == "status-rerun":
-            raise unavailable(f"fno-agents {verb} {op} unavailable in tests")
-        if verb == ["review-coverage", "op"] and isinstance(payload, dict):
+        if command == "authorized-merge" and op == "status-rerun":
+            raise unavailable(f"fno-agents {command} {op} unavailable in tests")
+        if command == ["review-coverage", "op"] and isinstance(payload, dict):
             # The native gate's op door, hermetic defaults: covered (the
             # fresh-install no-lane answer the retired Python gate gave),
             # an empty chain, no lane. Tests pinning a refusal re-stub
-            # `fno.rust_binary.verb_call`.
+            # `fno.rust_binary.command_call`.
             if op == "verdict":
                 return {
                     "state": 0,
@@ -1459,14 +1459,14 @@ def _no_status_ci_door(monkeypatch):
                 return {"rounds_used": 0, "max_rounds": 2, "last": None}
             if op == "lane":
                 return {"lane": False}
-        if verb == "authorized-merge" and op == "pr-head":
+        if command == "authorized-merge" and op == "pr-head":
             from fno.pr import _merge
             from fno.pr._rest import fetch_pr_info_rest
 
             info, _ = fetch_pr_info_rest(str(payload["pr"]), cwd=payload["cwd"], runner=_merge.run)
             return {"head": info.get("head_sha") if info else None}
-        return real_verb_call(verb, payload, unavailable=unavailable, **kwargs)
+        return real_command_call(command, payload, unavailable=unavailable, **kwargs)
 
-    monkeypatch.setattr(rust_binary, "verb_call", _fake_verb_call)
+    monkeypatch.setattr(rust_binary, "command_call", _fake_command_call)
 
 
