@@ -139,13 +139,13 @@ esac
 
 # The refusal mode journals one refused review_invocation row (so a silent
 # fresh reviewer reads as attempted-and-refused, never as never-attempted),
-# emits no attestation, and exits 1.
+# emits no attestation, and exits 1. No set +e/-e pair here: the script runs
+# without errexit on purpose, and flipping it on kills the refusing captures
+# in the cases below before their assertions run.
 rm -f "$TMP/last-emit.txt"
-set +e
 REFUSE_OUT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
   FNO="$TMP/fno-stub" bash "$EMITTER" --refuse fresh_reviewer_silent 2>&1 >/dev/null)"
 REFUSE_RC=$?
-set -e
 [[ $REFUSE_RC -ne 0 ]] && pass "refusal mode exits nonzero" \
   || fail "refusal mode exited 0"
 [[ "$(stored '.stage')" == "refused" ]] && pass "refusal row carries stage=refused" \
