@@ -105,10 +105,7 @@ fn run_verb_with_stdin(cwd: &Path, extra: &[&str], stdin: Option<&str>) -> (i32,
 fn every_guard_passes_exit_0() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
-    for name in [
-        "check-pr-node-closure.sh",
-        "check-oos-tracked.sh",
-    ] {
+    for name in ["check-pr-node-closure.sh", "check-oos-tracked.sh"] {
         write_guard(&work, name, PASS_STUB);
     }
     let body = body_file(&work, "clean body\n\nBacklog-Closure: x-3830\n");
