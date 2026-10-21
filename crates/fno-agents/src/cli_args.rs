@@ -572,7 +572,7 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
     }
 
     #[test]
-    fn spawn_axes_as_admits_cloud_alone() {
+    fn spawn_axes_as_admits_the_public_vocabulary() {
         for form in [
             vec!["--as", "cloud"],
             vec!["--as=cloud"],
@@ -583,12 +583,25 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
             assert_eq!(axes.substrate.as_deref(), Some("cloud"));
             assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
         }
-        for other in ["thread", "pane", "headless", "bg"] {
+        // The pane seam routes `-H <member> --as pane` argvs here, so the
+        // public substrate vocabulary rides --as beside cloud; a narrower
+        // refusal would strand an argv the seam already routed.
+        for word in ["pane", "thread", "headless"] {
+            let toks: Vec<String> = vec!["--as".to_string(), word.to_string()];
+            let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
+            assert_eq!(axes.substrate.as_deref(), Some(word));
+        }
+        for form in [["--as", "pane"], ["--as=pane"]] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let (axes, _) = SpawnAxes::scan(&toks).expect("the joined spelling is admitted");
+            assert_eq!(axes.substrate.as_deref(), Some("pane"));
+        }
+        for other in ["bg"] {
             let toks: Vec<String> = ["--substrate", other]
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            let err = SpawnAxes::scan(&toks).expect_err("only cloud passes");
+            let err = SpawnAxes::scan(&toks).expect_err("bg is the retired thread spelling");
             assert!(err.contains("is retired"), "{err}");
         }
     }
