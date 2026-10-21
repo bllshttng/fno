@@ -1583,12 +1583,14 @@ mod tests {
     /// to join an `--argv` payload with a named line instead of dropping.
     #[test]
     fn a_pick_model_rides_the_harness_argv() {
-        let argv = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let pin = |a: &[String], mut bundle: Vec<String>| {
+        fn argv(t: &[&str]) -> Vec<String> {
+            t.iter().map(|s| s.to_string()).collect()
+        }
+        fn pin(a: &[String], mut bundle: Vec<String>) -> (Vec<String>, Vec<String>) {
             let mut stderr = Vec::new();
             fence_model(a, &mut bundle, "claude-haiku-5-5".into(), &mut stderr);
             (bundle, stderr)
-        };
+        }
         let seed = argv(&["spawn", "--name", "w", "/fno:target x-1"]);
         assert_eq!(
             pin(&seed, vec![]).0,

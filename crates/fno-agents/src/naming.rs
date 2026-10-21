@@ -566,7 +566,7 @@ pub fn worker_name(slug: &str) -> Option<String> {
     if head.len() > WORKER_SLUG_CAP && words.len() > 2 {
         head = words[..2].join("-");
     }
-    let head = cut_slug(Some(&head), WORKER_SLUG_CAP);
+    let head = cut_slug(Some(head.as_str()), WORKER_SLUG_CAP);
     (!head.is_empty()).then(|| format!("t-{head}"))
 }
 
