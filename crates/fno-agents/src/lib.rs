@@ -517,6 +517,7 @@ pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
+pub mod spawn_route;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;

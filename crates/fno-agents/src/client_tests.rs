@@ -912,7 +912,7 @@ fn harness_flag_rows() {
         for flag in ["--provider", "-P"] {
             let args = vec!["wk".to_string(), flag.to_string(), v.to_string()];
             let err = build_request("spawn", &args).unwrap_err();
-            assert!(err.contains(&format!("{flag} is retired")), "got: {err}");
+            assert!(err.contains("--provider is retired"), "{flag}: {err}");
         }
     }
 
@@ -938,7 +938,7 @@ fn harness_flag_rows() {
             "opus".to_string(),
         ];
         let err = build_request("spawn", &args).unwrap_err();
-        assert!(err.contains(&format!("{flag} is retired")), "got: {err}");
+        assert!(err.contains("--model is retired"), "{flag}: {err}");
     }
 
     // x-c5db: the role halves the Python seam passes for a promoted codex

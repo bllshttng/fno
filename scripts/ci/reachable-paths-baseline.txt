@@ -201,6 +201,7 @@ A	plan_path_owner_conflict	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/sr
 A	plist unchanged; not re-registered ({caller})	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	ledger unreadable: {exc}	py=cli/src/fno/carveout/cli.py|cli/src/fno/retro/cli.py;rs=crates/fno-agents/src/ledger_axes.rs	# CLASSIFY protocol|msg-twin|data the one infra-reason text both sides print for an unreadable ledger
 A	post_merge_noninteractive	py=cli/src/fno/hermetic.py|cli/src/fno/pr/cli.py;rs=crates/fno-agents/src/post_merge/ritual.rs	# CLASSIFY protocol|msg-twin|data one env-var name read by both the forwarder and the native arm
+A	provider unknown, non-anthropic, or keyless	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/spawn_route.rs	# CLASSIFY protocol|msg-twin|data the --route refusal reason: the Python leg serves pane and account-composed routes until row 2b ports them
 A	we looked and found nothing	py=cli/src/fno/cost/_register.py|cli/src/fno/observer/fold.py;rs=crates/fno-agents/src/ledger_axes.rs	# CLASSIFY protocol|msg-twin|data the shared unresolved-sentinel sentence
 A	postmortem_corrections_log	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/finalize.rs|crates/fno-agents/src/finalize_pointer_tests.rs	# CLASSIFY protocol|msg-twin|data
 A	pr #{first_pr_number}: no merged evidence	py=cli/src/fno/graph/_reconcile.py|cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
