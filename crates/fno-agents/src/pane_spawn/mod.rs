@@ -7,8 +7,9 @@
 //! Split shape: this module is PR 1 of the pane-port split - the spine plus
 //! its goldens, wired into the client door behind a no-op arm table. PR 2
 //! seats the codex arm (argv, daemon bind wait, seed, late bind) in a
-//! `codex` submodule and narrows the Python carve-out; the following row
-//! seats the claude arm here and deletes the bounce.
+//! `codex` submodule; the following row seats the claude arm (`claude`):
+//! argv, session pin, billing guard, monitor/route/happy legs. Deleting the
+//! Python bounce for the shapes the arms own is the row's remaining work.
 //!
 //! Ordering is the Python leg's ordering, because the contract it enforces is
 //! the contract reviewers will hold this module to: refusals before the
@@ -23,6 +24,7 @@
 //! ambient values through and synthesizes the Python defaults when absent;
 //! a custom config value rides only if the caller exported it. That bridge
 //! lands with the Rust settings reader, not here.
+pub mod claude;
 pub mod codex;
 mod env_wrap;
 pub mod placement;
@@ -114,6 +116,12 @@ pub struct PaneContext {
     /// the client door folds into one list. The arms append it where the
     /// Python leg appends `passthrough` (`mux_spawn.py:970`).
     pub passthrough: Vec<String>,
+    /// The `--monitor` value (PR 3661): the one supported monitor, resolved
+    /// by the owning arm. Absent means "no monitor requested".
+    pub monitor: Option<String>,
+    /// The `--route` target (`provider,model` or a declared lane name): the
+    /// owning arm resolves it to the routed env the wrapper carries.
+    pub route: Option<String>,
 }
 
 impl PaneContext {
@@ -136,6 +144,8 @@ impl PaneContext {
             worker_name: String::new(),
             node: None,
             passthrough: Vec::new(),
+            monitor: None,
+            route: None,
         }
     }
 
@@ -199,6 +209,14 @@ impl PaneContext {
                         .collect()
                 })
                 .unwrap_or_default(),
+            monitor: params
+                .get("monitor")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            route: params
+                .get("route")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
     }
 
@@ -299,6 +317,7 @@ pub fn pane_arm_for(ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
         return Some(&codex::CODEX_ARM);
     }
     let arm: &dyn PaneArm = match ctx.provider.as_str() {
+        "claude" => &claude::CLAUDE_ARM,
         "opencode" => &simple::OPENCODE_ARM,
         "pi" => &simple::PI_ARM,
         "cursor-agent" => &simple::CURSOR_ARM,

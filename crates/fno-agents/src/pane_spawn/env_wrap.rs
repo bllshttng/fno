@@ -4,11 +4,13 @@
 //! substrate and seed attribution ride the wrapper as assignments and the
 //! parent's own identity rides out as `-u` unsets.
 //!
-//! Scope, recorded: the role/provenance/account/route legs of the Python
-//! pairs are NOT ported here. Every shape that carries them is seam-carved
-//! to Python (`_is_role_bearing_spawn`, `_is_provenance_bearing_spawn`, the
-//! route+account pair) and never reaches an arm; the claude arm composes
-//! its own account/route overlay beside this wrapper (row 8, PR B).
+//! Scope, recorded: the role/provenance/account legs of the Python pairs are
+//! NOT ported here. Every shape that carries them is seam-carved to Python
+//! (`_is_role_bearing_spawn`, `_is_provenance_bearing_spawn`) and never
+//! reaches an arm. The route overlay IS: the claude arm (row 8, PR B) hands
+//! its resolved route env to this wrapper through the `overlay` param, which
+//! the pairs append after the claude extras and the unsets answer with the
+//! account_env.py scrub floor when the harness is claude.
 
 use base64::Engine as _;
 
@@ -60,15 +62,35 @@ pub const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_HARNESS",
 ];
 
+/// account_env.py's `SCRUB_AUTH_VARS` (account_env.py:72-87): the inherited
+/// auth vars a routed claude worker must never keep. The tier-alias remaps
+/// (`MODEL_ENV_KEYS`' tail) ride along because endpoint, auth and model are
+/// ONE provider route; the tuple order is the Python tuple's order - the
+/// goldens pin it byte-equal.
+pub const SCRUB_AUTH_VARS: [&str; 10] = [
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "FNO_ROUTE_PROVIDER",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+];
+
 /// `_mesh_env_pairs` for the shapes an arm answers: no role, no provenance,
-/// no account or route overlay (all seam-carved), so the pairs reduce to
-/// identity, substrate, the pinned session and the seed sidecar. Returns
-/// `(unset, pairs)` in the Python construction order.
+/// no account overlay (seam-carved), so the pairs reduce to identity,
+/// substrate, the pinned session, the claude extras, the caller's route
+/// overlay and the seed sidecar. Returns `(unset, pairs)` in the Python
+/// construction order.
 pub fn mesh_env_pairs(
     name: &str,
     harness: &str,
     session_id: Option<&str>,
     seed_prov: &[(String, String)],
+    overlay: &[(String, String)],
 ) -> (Vec<String>, Vec<String>) {
     let mut pairs = vec![
         format!("FNO_AGENT_SELF={name}"),
@@ -105,6 +127,11 @@ pub fn mesh_env_pairs(
             .unwrap_or_else(|| "50".to_string());
         pairs.push(format!("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP={cap}"));
     }
+    // The caller's route/account overlay, appended after the claude extras
+    // the way Python's composed block appends after them (mux_spawn.py:1242):
+    // env(1) is left-to-right last-wins, so the overlay wins over anything an
+    // inherited assignment would say.
+    pairs.extend(overlay.iter().cloned());
     let mut unset: Vec<String> = AMBIENT_IDENTITY_ENV
         .iter()
         .flat_map(|name| ["-u".to_string(), name.to_string()])
@@ -113,6 +140,16 @@ pub fn mesh_env_pairs(
         "-u".to_string(),
         crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
     ]);
+    // The account_env.py scrub floor, riding with an overlay the way the
+    // account/route block rides in Python (mux_spawn.py:1228-1242): claude
+    // only, and only when the caller carries an overlay to apply, so a plain
+    // pane's unset list stays the golden's. `env -u` on an unset var is a
+    // harmless no-op; the tuple order is the Python tuple's order.
+    if harness == "claude" && !overlay.is_empty() {
+        for key in SCRUB_AUTH_VARS {
+            unset.extend(["-u".to_string(), key.to_string()]);
+        }
+    }
     // Node provenance, set-or-clear (never reached with a value through an
     // arm, so it is always the clear half here).
     for key in [
@@ -142,9 +179,10 @@ pub fn mesh_env_wrapper(
     harness: &str,
     session_id: Option<&str>,
     seed_prov: &[(String, String)],
+    overlay: &[(String, String)],
     qos_wrapped: Vec<String>,
 ) -> Vec<String> {
-    let (unset, pairs) = mesh_env_pairs(name, harness, session_id, seed_prov);
+    let (unset, pairs) = mesh_env_pairs(name, harness, session_id, seed_prov, overlay);
     let mut out = Vec::with_capacity(1 + unset.len() + pairs.len() + qos_wrapped.len());
     out.push("env".to_string());
     out.extend(unset);

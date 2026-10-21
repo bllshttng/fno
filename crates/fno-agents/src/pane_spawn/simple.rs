@@ -72,7 +72,8 @@ const ADD_DIR_PROVIDERS: [&str; 4] = ["claude", "codex", "agy", "cursor-agent"];
 /// cell. Non-member harnesses carry no grant and print no note: the seam
 /// already publishes the set, and the note is Python's per-process stderr
 /// once-per-provider line, which a one-shot binary arm does not re-print.
-fn grant_tokens(harness: &str) -> Vec<String> {
+/// `pub(crate)` for the claude arm (row 8 PR B), which grants identically.
+pub(crate) fn grant_tokens(harness: &str) -> Vec<String> {
     if !ADD_DIR_PROVIDERS.contains(&harness) || harness == "codex" {
         return Vec::new();
     }
@@ -84,7 +85,8 @@ fn grant_tokens(harness: &str) -> Vec<String> {
 
 /// The per-spawn seed text: normalize a verb seed, then the one payload
 /// entry (brevity block once) - the Python leg's render_seed/prepare ordering.
-fn seed_text(ctx: &PaneContext) -> String {
+/// `pub(crate)` for the claude arm, which composes the same seed.
+pub(crate) fn seed_text(ctx: &PaneContext) -> String {
     let message = ctx.message.as_str();
     if is_verb_seed(message) {
         let normalized = normalize_command(message, ctx.provider.as_str());
@@ -294,6 +296,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
             arm.harness,
             uuid.as_deref(),
             &seed_prov,
+            &[],
             qos_argv,
         )
     };
@@ -338,8 +341,13 @@ fn build_cursor(ctx: &PaneContext, uuid: &str) -> Vec<String> {
 }
 
 /// The post-pane failure carrier: the spine's refuse() reaps this pane and
-/// appends the may-still-exist wording when its own reap misses.
-fn spawn_failed_refusal(ctx: &PaneContext, pane: &PaneFacts, head: String) -> PaneRefusal {
+/// appends the may-still-exist wording when its own reap misses. `pub(crate)`
+/// for the claude arm, which fails the spawn on the same Python line.
+pub(crate) fn spawn_failed_refusal(
+    ctx: &PaneContext,
+    pane: &PaneFacts,
+    head: String,
+) -> PaneRefusal {
     PaneRefusal {
         line: format!(
             "{head}; pane {id} reaped, no registry row written",

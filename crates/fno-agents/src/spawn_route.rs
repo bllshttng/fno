@@ -61,7 +61,7 @@ pub fn parse_target(raw: &str) -> Option<(String, String)> {
     Some((provider.to_lowercase(), model.to_string()))
 }
 
-fn refused(route: &str, reason: &str) -> String {
+pub(crate) fn refused(route: &str, reason: &str) -> String {
     format!(
         "--route {} refused ({reason}); no worker launched, node stays dispatchable.",
         py_repr(route)

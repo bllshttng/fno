@@ -8,6 +8,7 @@
 //! footnote plan writes its spec into the sessions root. The cursor-agent
 //! mint and the footnote endpoint resolve need their ambient tools or env;
 //! where they are absent the test names the skip instead of failing.
+use super::claude::{claude_core_argv, ClaudeArm, CLAUDE_ARM};
 use super::env_wrap::enrich_spawn_payload;
 use super::simple::{
     make_plan, SimpleArm, AGY_ARM, CURSOR_ARM, FOOTNOTE_ARM, GROK_ARM, OPENCODE_ARM, PI_ARM,
@@ -16,6 +17,7 @@ use super::tests::FakeMux;
 use super::*;
 
 const SPINE: &str = include_str!("../../tests/golden/pane_spawn/spine_python_leg.json");
+const CLAUDE: &str = include_str!("../../tests/golden/pane_spawn/claude_python_leg.json");
 const OPENCODE: &str = include_str!("../../tests/golden/pane_spawn/opencode_python_leg.json");
 const PI: &str = include_str!("../../tests/golden/pane_spawn/pi_python_leg.json");
 const CURSOR: &str = include_str!("../../tests/golden/pane_spawn/cursor-agent_python_leg.json");
@@ -352,4 +354,117 @@ fn normalize_command_and_verb_seed() {
     );
     assert!(is_verb_seed("/target x"));
     assert!(!is_verb_seed("hello"));
+}
+
+#[test]
+fn claude_arm_owns_claude_only() {
+    assert!(ClaudeArm::owns(&PaneContext::simple("claude", "/repo")));
+    assert!(!ClaudeArm::owns(&PaneContext::simple("codex", "/repo")));
+    assert!(!ClaudeArm::owns(&PaneContext::simple("agy", "/repo")));
+    match pane_arm_for(&PaneContext::simple("claude", "/repo")) {
+        Some(arm) => assert_eq!(arm.name(), "claude"),
+        None => panic!("pane_arm_for must seat the claude arm"),
+    }
+}
+
+#[test]
+fn claude_argv_parity_row8_golden() {
+    let claude = golden(CLAUDE);
+
+    // The plain capture: exact tail equality from the "claude" token, with
+    // the --add-dir VALUE stripped (the grant names the capture sandbox's
+    // state dirs). The capture drove the argv builder with no pinned id, so
+    // this leg replays the core builder directly with uuid = None.
+    let mut ctx = PaneContext::simple("claude", "/repo");
+    ctx.worker_name = "w".to_string();
+    let plain = claude_core_argv(&ctx, "do x", None).expect("the plain claude argv builds");
+    assert_eq!(
+        strip_flag_values(&plain, "--add-dir"),
+        strip_flag_values(&str_list(&claude["cases"]["argv"]["plain"]), "--add-dir")
+    );
+
+    // The pinned capture, through the arm: --session-id present with any
+    // uuid, sitting BEFORE --name, and the remaining tail equal to the
+    // golden's with the pair removed.
+    let mut pinned = PaneContext::simple("claude", "/repo");
+    pinned.message = "do x".to_string();
+    pinned.worker_name = "w".to_string();
+    let plan = CLAUDE_ARM
+        .prepare(&pinned)
+        .expect("the pinned claude plan builds");
+    let uuid = plan
+        .preassigned_id
+        .clone()
+        .expect("claude pins its session id");
+    assert!(plan.held_seed.is_none(), "claude commits its seed in argv");
+    assert!(plan
+        .wrapped
+        .contains(&format!("FNO_HARNESS_SESSION_ID={uuid}")));
+    let tail = tail_from(&plan.wrapped, "claude");
+    assert_eq!(
+        value_of(&tail, "--session-id").map(String::as_str),
+        Some(uuid.as_str())
+    );
+    let sid = tail
+        .iter()
+        .position(|t| t == "--session-id")
+        .expect("the pin rides the argv");
+    assert_eq!(tail[sid + 2], "--name", "the pin precedes --name");
+    // The rest of the tail is the plain capture's shape (the golden captured
+    // a raw "do x"; through the arm the seed is enriched, so only the
+    // token STRUCTURE compares, not the seed text).
+    let want = str_list(&claude["cases"]["argv"]["pinned_session"]);
+    let want_no_pin: Vec<String> = want
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !(1..=2).contains(i))
+        .map(|(_, t)| t.clone())
+        .collect();
+    let got_no_pin = strip_flag_values(&tail_no_pin(&tail, sid), "--add-dir");
+    assert_eq!(got_no_pin.len(), want_no_pin.len());
+    assert_eq!(got_no_pin[0], "claude");
+    assert_eq!(got_no_pin[1], "--name");
+    assert_eq!(got_no_pin[2], "w");
+}
+
+/// Drop the `--session-id` pair at position `sid` from an argv tail.
+fn tail_no_pin(tail: &[String], sid: usize) -> Vec<String> {
+    tail.iter()
+        .enumerate()
+        .filter(|(i, _)| !(sid..=sid + 1).contains(i))
+        .map(|(_, t)| t.clone())
+        .collect()
+}
+
+#[test]
+fn claude_refusals_row8_golden() {
+    // The billing guard: a -p passthrough refuses before any pane exists,
+    // byte-equal to the Python leg (mux_spawn.py:3536-3539).
+    let mut ctx = PaneContext::simple("claude", "/repo");
+    ctx.worker_name = "w".to_string();
+    ctx.passthrough = vec!["-p".to_string()];
+    let r = match CLAUDE_ARM.prepare(&ctx) {
+        Ok(_) => panic!("a -p passthrough must refuse"),
+        Err(r) => r,
+    };
+    assert_eq!(
+        r.line,
+        "refusing to pane-host claude with -p/--print (that bills the Agent SDK pool); \
+         the mux spawns interactive subscription-billed claude"
+    );
+    assert_eq!(r.exit_code, EXIT_REFUSAL);
+
+    // The monitor value gate: any explicit value but "happy" refuses with the
+    // pinned golden plus the Python suffix.
+    let mut ctx = PaneContext::simple("claude", "/repo");
+    ctx.monitor = Some("grumpy".to_string());
+    let r = match CLAUDE_ARM.prepare(&ctx) {
+        Ok(_) => panic!("a non-happy monitor must refuse"),
+        Err(r) => r,
+    };
+    assert_eq!(
+        r.line,
+        format!("{} (got 'grumpy')", crate::spawn_axes::MONITOR_VALUE_GOLDEN)
+    );
+    assert_eq!(r.exit_code, EXIT_REFUSAL);
 }
