@@ -15,6 +15,10 @@ export PATH
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 noop() { echo '{}'; exit 0; }
+# The delegate bounds its fno-agents call; sourcing here keeps this hook
+# under the same wall-clock helper every daemon-shelling hook carries.
+# shellcheck source=scripts/lib/with-timeout.sh
+source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || noop
 
 PAYLOAD=""
 [[ ! -t 0 ]] && PAYLOAD="$(cat 2>/dev/null || true)"
