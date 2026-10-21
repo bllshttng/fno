@@ -142,6 +142,28 @@ pub fn run(tail: &[String]) -> i32 {
             .to_string();
         return serve_loaded(&graph_path, &id, true, &args.render, &args.id);
     }
+    // Rows the store ARCHIVED live in the SQLite archive, not in
+    // the live store - the archived tier above only sees rows the store
+    // still carries. Resolve there before answering no. The same shared
+    // reader the reaper's graph read uses; a failed archive read answers
+    // no rows, never an error.
+    let state_dir = super::settings::state_dir();
+    if let Some(state_dir) = state_dir.as_deref() {
+        let archive_rows = crate::graph_store::archive_rows(state_dir);
+        if !archive_rows.is_empty() {
+            if let Some(hit) = resolve_tiers(&archive_rows, args.id) {
+                let id = hit
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let archive_db = crate::state_layout::find("graph-archive.db")
+                    .map(|row| state_dir.join(row.new))
+                    .unwrap_or_else(|| state_dir.join("graph-archive.db"));
+                return serve_loaded(&archive_db, &id, true, &args.render, &args.id);
+            }
+        }
+    }
     let served = served_store_path(&graph_path);
     eprintln!(
         "No node matching '{}' (id/slug/bare-hex) in {}",

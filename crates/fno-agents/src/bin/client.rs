@@ -3310,24 +3310,57 @@ fn run_reap(rest: &[String]) -> i32 {
 
     let dry_run = rest.iter().any(|a| a == "--dry-run");
     let no_mux = rest.iter().any(|a| a == "--no-mux");
+    let only_done = rest.iter().any(|a| a == "--done");
+    let apply = rest.iter().any(|a| a == "--apply");
     let extras: Vec<&str> = rest
         .iter()
         .map(String::as_str)
-        .filter(|a| *a != "--json" && *a != "-J" && *a != "--dry-run" && *a != "--no-mux")
+        .filter(|a| {
+            *a != "--json"
+                && *a != "-J"
+                && *a != "--dry-run"
+                && *a != "--no-mux"
+                && *a != "--done"
+                && *a != "--apply"
+        })
         .collect();
     if !extras.is_empty() {
         eprintln!(
-            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux (got: {})",
+            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux/--done/--apply (got: {})",
             extras.join(" ")
+        );
+        return 2;
+    }
+    if apply && !only_done {
+        eprintln!(
+            "fno-agents: reap --apply only rides --done (the bulk all-clear): `reap --done --apply`"
         );
         return 2;
     }
     let home = AgentsHome::from_env();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let grace_secs = fno_agents::agents_config::retire_grace_secs(&cwd) as i64;
+    // The bulk all-clear: --apply executes the scoped pass; without it the
+    // pass rehearses, whatever --dry-run says.
+    if only_done && apply && dry_run {
+        eprintln!("fno-agents: reap --done takes --apply or --dry-run, not both");
+        return 2;
+    }
+    let effective_dry = if only_done { !apply } else { dry_run };
     // Dead teams first, matching the arm's in-arm order.
-    let teams = fno_agents::team_reap::production_sweep(&home, &cwd, !dry_run);
-    let mut summary = if dry_run {
+    let teams = fno_agents::team_reap::production_sweep(&home, &cwd, !effective_dry);
+    let mut summary = if only_done {
+        if apply {
+            fno_agents::gc::gc_sweep_done_only(
+                &home,
+                &fno_agents::events::EventEmitter::new(home.events_jsonl(), "daemon"),
+                grace_secs,
+                fno_agents::agents_config::reap_receipt_retain_days(&cwd),
+            )
+        } else {
+            fno_agents::gc::gc_sweep_done_only_dry_run(&home, grace_secs)
+        }
+    } else if dry_run {
         fno_agents::daemon::gc_sweep_dry_run(&home, grace_secs)
     } else {
         // Source "daemon": the manual verb is the same operation as the tick.
@@ -3346,7 +3379,7 @@ fn run_reap(rest: &[String]) -> i32 {
     // retire and what was seen, one read. Text dry-runs carry it too now:
     // the text receipt prints the counts beside the judged rows instead of
     // the census living only in the JSON read.
-    let inventory = if dry_run {
+    let inventory = if effective_dry {
         Some(fno_agents::gc_inventory::census(&home))
     } else {
         None
@@ -3359,7 +3392,7 @@ fn run_reap(rest: &[String]) -> i32 {
     let mux = if no_mux {
         fno_agents::reap_render::MuxSweep::Skipped
     } else {
-        fno_agents::gc::mux_tab_sweep(None, &cwd, dry_run, true)
+        fno_agents::gc::mux_tab_sweep(None, &cwd, effective_dry, true)
     };
     print!(
         "{}",
@@ -3368,7 +3401,7 @@ fn run_reap(rest: &[String]) -> i32 {
             inventory.as_ref(),
             Some(&mux),
             json_out,
-            dry_run
+            effective_dry
         )
     );
     0

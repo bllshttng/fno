@@ -295,6 +295,7 @@ fn ac3_hp_the_release_retires_the_ruled_row_and_keeps_the_rest() {
         &no_agents,
         &|_| (None, None),
         &|_| None,
+        false,
         Some(&release),
     );
 
@@ -355,6 +356,7 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
         &no_agents,
         &|_| (None, None),
         &|_| None,
+        false,
         Some(&release),
     );
 

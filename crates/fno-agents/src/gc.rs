@@ -163,12 +163,20 @@ pub struct GcRow {
     /// another session owns the node, so this row must not resume it.
     /// `None` when no such claim was read.
     pub node_held_elsewhere: Option<String>,
-    /// Age of the newest TYPED user turn in the row's transcript, with NO
-    /// window: a person took this session on as a conversation partner.
-    /// `None` reads absence as nothing - the untyped row is the common case
-    /// the sweep must not pay a full-transcript scan for, so the sweep
-    /// resolves this only for a row the policy would otherwise retire.
+    /// Age of the session's LAST readable turn, when that turn is typed
+    /// (no window): a person spoke last, so the row is a conversation the
+    /// user may still be in. `None` reads "machine spoke last" OR "no
+    /// readable turn" - the untyped row is the common case the sweep must
+    /// not pay a full-transcript scan for, so the sweep resolves this only
+    /// for a row the policy would otherwise retire and whose work is not
+    /// done. A done row never resolves the fact at all.
     pub typed_turn_age_s: Option<i64>,
+    /// The row is an eval worker (`ev-th-evals-*`) whose attempt the evals
+    /// history reads graded: the attempt ran once, was classified, and the
+    /// roster row is the leftover. Retires ahead of every keep below the
+    /// operator and teamed shields, so the bulk all-clear can remove the
+    /// whole family without naming rows.
+    pub eval_graded: bool,
 }
 
 impl GcRow {
@@ -283,9 +291,10 @@ pub enum KeepReason {
     /// liveness fact the machine holds. The row is never reaped as
     /// unattended while it holds one.
     LiveClaim { detail: String },
-    /// A person typed into this session, whenever that was: the words are
-    /// the one witness a done ledger and a quiet clock never override, the
-    /// same fact the stop door refuses on. Permanent, like an operator row.
+    /// The person typed the session's LAST readable turn and the work is
+    /// not done: the row is a conversation the user may still be in. A
+    /// done row never carries this keep (the 2026-10-21 ruling): a typed
+    /// turn never keeps a done row, whatever its age.
     UserTyped { age_s: i64 },
 }
 
@@ -315,7 +324,7 @@ impl KeepReason {
             KeepReason::OpenPr { .. } => "open pr",
             KeepReason::DeadOpenWork { .. } => "dead open work",
             KeepReason::LiveClaim { .. } => "live claim held",
-            KeepReason::UserTyped { .. } => "user typed into this session",
+            KeepReason::UserTyped { .. } => "user typed the last turn, work not done",
         }
     }
 }
@@ -347,13 +356,12 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     if row.teamed {
         return (GcAction::Keep, Some(KeepReason::Teamed));
     }
-    // A person typed into this session, whenever that was. The words
-    // outrank every gate below - done work, quiet past the grace, a
-    // settled PR - the person is talking to THIS row, and a retirement
-    // here reaps the session (and its worktree) out from under them.
-    // Permanent, like the operator keep above.
-    if let Some(age_s) = row.typed_turn_age_s {
-        return (GcAction::Keep, Some(KeepReason::UserTyped { age_s }));
+    // A graded eval attempt is finished work by definition: the attempt was
+    // run once (`--once`), classified, and recorded in the evals history.
+    // No node resolves to the row and no transcript gate should hold it -
+    // the roster row is the leftover, and the bulk all-clear removes it.
+    if row.eval_graded {
+        return (GcAction::Retire, None);
     }
     // Only a row fno itself spawned retires. An `adopted` row (a session the
     // operator took over) or a row with no origin recorded is someone else's
@@ -378,7 +386,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             let origin = row.origin.clone().unwrap_or_default();
             return (GcAction::Keep, Some(KeepReason::NotSpawn { origin }));
         }
-        return grace_gate(row, grace_secs);
+        return grace_gate_typed(row, grace_secs);
     }
     // The cascade's holds relay through here so every keep is named by the
     // policy: a conflict between witnesses, or PR evidence contradicting a
@@ -394,8 +402,14 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // fno never stopped the row. The grace gate supplies the quiet
             // conjunct, so a done-and-quiet row with no node releases, and
             // a row that never reported done keeps exactly as before.
-            if row.turn_ended || row.session_released() {
-                grace_gate(row, grace_secs)
+            // The registry's own terminal stamp is the same kind of
+            // positive marker - a row the sweep watched exit has finished
+            // its story whatever its transcript reported, and an exited
+            // no-node row that never wrote a done report used to keep
+            // forever. It takes the same grace gate a reported-done row
+            // takes.
+            if row.turn_ended || row.session_released() || row.registry_terminal {
+                grace_gate_typed(row, grace_secs)
             } else {
                 (GcAction::Keep, Some(KeepReason::NoProvenance))
             }
@@ -421,7 +435,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // holds even when the node's status would free a non-planner.
             if let Some(assignments) = &row.planning {
                 if row.planning_released {
-                    return grace_gate(row, PLANNING_IDLE_RETIRE_SECS);
+                    return grace_gate_typed(row, PLANNING_IDLE_RETIRE_SECS);
                 }
                 // An EMPTY status set fails closed: a lane that fires on a
                 // vacuous all() would retire a row the graph could not
@@ -495,7 +509,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // - the node's recorded merge_status already reads merged.
             // Dead pid is change 8 and rides the grace gate itself.
             if row.session_released() {
-                return grace_gate(row, grace_secs);
+                return grace_gate_typed(row, grace_secs);
             }
             // change 2: open NODE state alone is not evidence a
             // SESSION is alive, and inside this window neither is an open
@@ -506,7 +520,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // transcript has no clock to age past anything, so it keeps
             // under the unchanged open-work reason.
             match row.transcript_age_s {
-                Some(age) if age > row.open_work_retire_s => grace_gate(row, grace_secs),
+                Some(age) if age > row.open_work_retire_s => grace_gate_typed(row, grace_secs),
                 Some(_) => (
                     GcAction::Keep,
                     Some(KeepReason::OpenWorkStale {
@@ -529,9 +543,12 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
 
 /// The sweep's lazy resolution of the typed-turn fact: the
 /// full-transcript scan is the pass's one unbounded read, so it runs only
-/// when the policy would already retire the row. A typed turn flips the
-/// verdict to the permanent keep before the retirement can land; a row
-/// any cheaper gate keeps never pays the scan.
+/// when the policy would already retire the row AND the work is not done -
+/// a done row never keeps for a typed turn (the 2026-10-21 ruling), so
+/// scanning its transcript would pay the pass's most expensive read to
+/// learn nothing. A typed last turn flips the verdict to the keep before
+/// the retirement can land; a row any cheaper gate keeps never pays the
+/// scan.
 pub fn resolve_typed_turn(
     row: &mut GcRow,
     verdict: (GcAction, Option<KeepReason>),
@@ -539,6 +556,9 @@ pub fn resolve_typed_turn(
     scan: impl FnOnce() -> Option<i64>,
 ) -> (GcAction, Option<KeepReason>) {
     if verdict.0 != GcAction::Retire {
+        return verdict;
+    }
+    if matches!(row.work, WorkState::AllDone { .. }) {
         return verdict;
     }
     if let Some(age_s) = scan() {
@@ -576,6 +596,23 @@ fn grace_gate(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>) {
         Some(age) if age <= grace_secs => (GcAction::Keep, Some(KeepReason::Active { age_s: age })),
         Some(_) => (GcAction::Retire, None),
     }
+}
+
+/// The typed-turn keep, scoped to a row whose work is NOT done: the person
+/// typed the session's last readable turn and the work is open or
+/// unprovenanced, so the row is a conversation the user may still be in.
+/// A done row never keeps for a typed turn (the 2026-10-21 ruling): the
+/// wrapper passes a done-row retire through untouched, and passes every
+/// keep through untouched. This is the ONLY site the typed fact keeps
+/// from - the top-of-policy permanent keep is gone.
+fn grace_gate_typed(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>) {
+    let v = grace_gate(row, grace_secs);
+    if v.0 == GcAction::Retire && !matches!(row.work, WorkState::AllDone { .. }) {
+        if let Some(age_s) = row.typed_turn_age_s {
+            return (GcAction::Keep, Some(KeepReason::UserTyped { age_s }));
+        }
+    }
+    v
 }
 
 /// The tree verdict for a row the policy just retired. Runs ONLY on Retire:
@@ -766,6 +803,7 @@ pub fn gc_sweep_release(
         &crate::claude_roster::read_all_agents,
         &gc_sweep::production_tree_probe,
         &crate::daemon::rm_take_worktree,
+        false,
         Some(release),
     );
     summary.settled_do_rows = settled
@@ -820,6 +858,69 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
     ladder_rows.extend(summary.dead_work_rows.iter().cloned());
     summary.open_pr_nudge = crate::pr_nudge::plan(home, &ladder_rows, grace_secs);
     summary
+}
+
+/// `fno agents registry reap --done`: the bulk all-clear pass. The same
+/// seams and gates as [`gc_sweep`], scoped to rows whose work is done or
+/// whose graded eval attempt marks the row finished: the merge the user
+/// already did is the all-clear, so the merge's rows leave the roster in
+/// one pass, and every other row is out of scope for that pass -
+/// untouched, unjudged, rendered nowhere.
+pub fn gc_sweep_done_only(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    grace_secs: i64,
+    retain_days: u64,
+) -> gc_sweep::GcSummary {
+    let (settled, mut refused) = gc_sweep::settle_stale_do_rows(home);
+    refused.extend(crate::phase_close::settle_ship_rows(home));
+    let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
+    let mut summary = gc_sweep::run_done_only(
+        home,
+        emitter,
+        grace_secs,
+        false,
+        retain_days,
+        &gc_sweep::read_graph_entries,
+        &|e| store.borrow_mut().matches(e),
+        &probe_entry_ages,
+        &|e| gc_sweep::stop_row_process(home, e),
+        &crate::gc_native::apply_active_surface_removal,
+        &crate::gc_native::apply_mux_member_retirement,
+        &crate::claude_roster::read_all_agents,
+        &gc_sweep::production_tree_probe,
+        &crate::daemon::rm_take_worktree,
+    );
+    summary.settled_do_rows = settled
+        .into_iter()
+        .map(|row| (row.node, row.harness, row.session_id))
+        .collect();
+    summary.settle_refused = refused;
+    summary
+}
+
+/// `fno agents registry reap --done` without `--apply`: the same scoped
+/// pass as [`gc_sweep_done_only`], rehearsed - classify, name every row
+/// under exactly one bucket, mutate nothing.
+pub fn gc_sweep_done_only_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSummary {
+    let emitter = EventEmitter::new(std::path::PathBuf::new(), "daemon");
+    let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
+    gc_sweep::run_done_only(
+        home,
+        &emitter,
+        grace_secs,
+        true,
+        0,
+        &gc_sweep::read_graph_entries,
+        &|e| store.borrow_mut().matches(e),
+        &probe_entry_ages,
+        &|e| gc_sweep::stop_row_process(home, e),
+        &crate::gc_native::apply_active_surface_removal,
+        &crate::gc_native::apply_mux_member_retirement,
+        &crate::claude_roster::read_all_agents,
+        &gc_sweep::production_tree_probe,
+        &crate::daemon::rm_take_worktree,
+    )
 }
 
 // --- the orphan process sweep -----------------------------------------------
@@ -2275,6 +2376,7 @@ mod tests {
             worked_node: true,
             node_held_elsewhere: None,
             typed_turn_age_s: None,
+            eval_graded: false,
         }
     }
 
@@ -2327,32 +2429,48 @@ mod tests {
         );
     }
 
-    /// A person typed into the session, so the row keeps under its
-    /// own permanent reason - past the grace, past done work, past the
-    /// origin classes - exactly where the operator and teamed keeps sit.
+    /// The 2026-10-21 ruling: a typed turn never keeps a DONE row, and at
+    /// most keeps a row whose LAST readable turn is typed and whose work is
+    /// not done. The old permanent keep (any typed turn at any age, ahead
+    /// of every gate) is gone.
     #[test]
-    fn a_row_the_user_typed_into_keeps_under_a_permanent_reason() {
-        // The incident row: quiet 17 minutes, past the 900 s grace, every
-        // node done - and the person's turn sits in the transcript.
+    fn a_typed_turn_never_keeps_a_done_row() {
+        // The incident row's twin: quiet past the grace, every node done,
+        // the person's turn in the transcript. The done gate retires it.
         let typed = GcRow {
             typed_turn_age_s: Some(17 * 60),
             ..retiring()
         };
         assert_eq!(
             gc_decide(&typed, GRACE),
+            (GcAction::Retire, None),
+            "a typed turn never keeps a done row"
+        );
+        // The same keep on OPEN work holds: the user may still be in the
+        // conversation, whatever its age. The row reported done (the
+        // inside-leg read), so it reaches the grace path; the typed fact
+        // flips it.
+        let typed_open = GcRow {
+            typed_turn_age_s: Some(17 * 60 * 26), // 26h old typed last turn
+            work: WorkState::NoProvenance,
+            turn_ended: true,
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&typed_open, GRACE),
             (
                 GcAction::Keep,
-                Some(KeepReason::UserTyped { age_s: 17 * 60 })
+                Some(KeepReason::UserTyped {
+                    age_s: 17 * 60 * 26
+                })
             ),
-            "a typed turn outranks every retire-eligible fact"
+            "typed last turn on not-done work keeps at any age"
         );
-        // The gate reads only the real fact: the same row without one
-        // retires as before.
-        assert_eq!(gc_decide(&retiring(), GRACE), (GcAction::Retire, None));
-        // The keep precedes the origin classes: a finished adopted row the
-        // person engaged keeps as its own keep, not as a corpse carve-out.
+        // The keep precedes the origin classes' grace: a finished adopted
+        // row whose last turn is typed and whose work is not done keeps.
         let adopted_typed = GcRow {
             typed_turn_age_s: Some(17 * 60),
+            work: WorkState::NoProvenance,
             ..adopted_finished()
         };
         assert_eq!(
@@ -2362,10 +2480,14 @@ mod tests {
                 Some(KeepReason::UserTyped { age_s: 17 * 60 })
             ),
         );
-        // The sweep resolves the fact lazily: only a verdict that would
-        // retire pays for the read, and a typed answer flips the verdict
-        // before the retirement lands.
-        let mut row = retiring();
+        // The sweep resolves the fact lazily: only a would-retire verdict
+        // on NOT-done work pays for the read, and a typed answer flips the
+        // verdict before the retirement lands.
+        let mut row = GcRow {
+            work: WorkState::NoProvenance,
+            turn_ended: true,
+            ..retiring()
+        };
         assert_eq!(
             resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || Some(17 * 60)),
             (
@@ -2377,6 +2499,14 @@ mod tests {
         row.typed_turn_age_s = None;
         assert_eq!(
             resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || None),
+            (GcAction::Retire, None),
+        );
+        // A done row never pays the scan either: the resolver refuses.
+        let mut done = retiring();
+        assert_eq!(
+            resolve_typed_turn(&mut done, (GcAction::Retire, None), GRACE, || panic!(
+                "a done row must never pay the typed-turn scan"
+            ),),
             (GcAction::Retire, None),
         );
         // A keep never pays the scan: the resolver would panic if called.
@@ -2392,6 +2522,56 @@ mod tests {
                 || panic!("a kept row must never pay the typed-turn scan"),
             ),
             (GcAction::Keep, Some(KeepReason::Active { age_s: 4 })),
+        );
+    }
+
+    /// A graded eval worker retires ahead of every gate below the operator
+    /// and teamed shields: the attempt was run once and classified, so the
+    /// roster row is the leftover the bulk all-clear removes.
+    #[test]
+    fn a_graded_eval_row_retires_ahead_of_the_gates() {
+        let eval = GcRow {
+            eval_graded: true,
+            work: WorkState::NoProvenance,
+            transcript_age_s: None, // transcript unresolved would otherwise keep
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&eval, GRACE),
+            (GcAction::Retire, None),
+            "graded eval facts outrank the transcript gates"
+        );
+    }
+
+    /// An exited row with no node and no done report used to keep
+    /// forever under NoProvenance; the registry's own terminal stamp now
+    /// takes the same grace gate a reported-done row takes.
+    #[test]
+    fn an_exited_no_node_row_releases_after_grace() {
+        let exited = GcRow {
+            registry_terminal: true,
+            work: WorkState::NoProvenance,
+            transcript_age_s: Some(GRACE + 1),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&exited, GRACE),
+            (GcAction::Retire, None),
+            "an exited no-node row quiet past the grace retires"
+        );
+        // Inside the window it keeps as Active, like every other row.
+        let young = GcRow {
+            registry_terminal: true,
+            work: WorkState::NoProvenance,
+            transcript_age_s: Some(GRACE - 1),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&young, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::Active { age_s: GRACE - 1 })
+            ),
         );
     }
 
@@ -2800,6 +2980,7 @@ mod tests {
             worked_node: true,
             node_held_elsewhere: None,
             typed_turn_age_s: None,
+            eval_graded: false,
         }
     }
 

@@ -82,7 +82,9 @@ fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
 
 /// The newest typed turn in ONE transcript, as an age in seconds; `None`
 /// when the file holds none. A row without a parseable timestamp cannot
-/// testify; a future stamp reads as now.
+/// testify; a future stamp reads as now. This is the RECENCY read the
+/// 15-minute window hold and the stop refusal use: a person spoke a
+/// moment ago, whatever machine turn followed.
 fn typed_age_in_file(
     path: &PathBuf,
     bus: &BusIndex,
@@ -120,6 +122,64 @@ fn typed_age_in_file(
     newest
 }
 
+/// The LAST readable turn in ONE transcript decides: the newest user-shaped
+/// row whose reminder-stripped text is non-empty, classified once. Empty
+/// rows are the harness delivering tool results - machinery, never a turn
+/// a person made, and never the turn that answers "did the person speak
+/// last". `Some(age)` when that turn is typed; `None` when the file holds
+/// no readable turn or the last one is machine-shaped. A row without a
+/// parseable timestamp cannot testify; a future stamp reads as now.
+fn last_typed_age_in_file(
+    path: &PathBuf,
+    bus: &BusIndex,
+    session: &str,
+    now: i64,
+    spawn_payload: Option<&str>,
+) -> Option<i64> {
+    let Ok(file) = std::fs::File::open(path) else {
+        return None;
+    };
+    // The newest readable turn so far: `(ts, Some(age))` when it typed,
+    // `(ts, None)` when it did not. `>=` so the row written later wins a
+    // shared stamp - append order is event order.
+    let mut last: Option<(f64, Option<i64>)> = None;
+    for line in std::io::BufReader::new(file).split(b'\n') {
+        let Ok(line) = line else { continue };
+        let Ok(obj) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if !is_user_turn(&obj) {
+            continue;
+        }
+        // The readable-turn cut mirrors the classifier's own no_user_text
+        // shape: a turn whose reminder-stripped text is empty is the
+        // harness delivering tool results, not a turn that decides.
+        let cleaned_empty = crate::provenance::system_reminder_re()
+            .replace_all(turn_text(&obj).trim(), "")
+            .trim()
+            .is_empty();
+        if cleaned_empty {
+            continue;
+        }
+        let Some(ts) = turn_ts_epoch(&obj) else {
+            continue;
+        };
+        if last.is_some_and(|(prev, _)| ts < prev) {
+            continue;
+        }
+        let prov = classify_turn(&obj, bus, session);
+        let seed_command = matches!(prov, Provenance::Harness(HarnessKind::CommandInvocation))
+            && spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed));
+        let verdict = if !seed_command && typed(prov) {
+            Some((now - ts as i64).max(0))
+        } else {
+            None
+        };
+        last = Some((ts, verdict));
+    }
+    last.and_then(|(_, verdict)| verdict)
+}
+
 /// Age in seconds of the newest typed user turn across `paths`, `None`
 /// when no transcript holds one. A row without a parseable timestamp
 /// cannot testify; a future stamp reads as now. `spawn_payload` is the
@@ -152,31 +212,36 @@ pub(crate) fn newest_typed_turn_age_s(
     newest
 }
 
-/// The same read with NO window and NO mtime skip: the newest typed turn
-/// whenever it was written. This is the fact the retirement policy reads,
-/// and the mtime short-circuit cannot answer it - the incident row sat
-/// quiet 17 minutes when the sweep retired it, past every window here.
-/// The all-time read's one process-lifetime memo, keyed by the file's stat
-/// trio (path, len, mtime secs) PLUS the recorded seed the read exempts by:
-/// two rows can resolve to one transcript with different payloads, and a
-/// memo keyed without it would answer one row with another row's
-/// exemption. An appended transcript misses (new len or mtime) and
-/// rescans; an unchanged one never pays the full read twice in this
-/// process - without it, a kept-forever row's transcript is read
-/// end-to-end on every sweep pass.
+/// The LAST-turn read with NO window and NO mtime skip: whether the
+/// session's newest readable turn was typed, whenever it was written. This
+/// is the fact the retirement policy reads, and the mtime short-circuit
+/// cannot answer it - the incident row sat quiet 17 minutes when the sweep
+/// retired it, past every window here. Across files, the newest readable
+/// turn decides, wherever it lives. The read's one process-lifetime memo,
+/// keyed by the file's stat trio (path, len, mtime secs) PLUS the recorded
+/// seed the read exempts by: two rows can resolve to one transcript with
+/// different payloads, and a memo keyed without it would answer one row
+/// with another row's exemption. An appended transcript misses (new len or
+/// mtime) and rescans; an unchanged one never pays the full read twice in
+/// this process - without it, a held row's transcript is read end-to-end
+/// on every sweep pass.
 fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>> {
     static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>>> =
         OnceLock::new();
     MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn newest_typed_turn_age_ever(
+pub(crate) fn last_turn_typed_age_ever(
     paths: &[PathBuf],
     bus: &BusIndex,
     session: &str,
     now: i64,
     spawn_payload: Option<&str>,
 ) -> Option<i64> {
+    // Across files: a typed last turn in ANY file testifies, and the age
+    // is the youngest such answer. A None from one file cannot outweigh a
+    // typed answer from another - over-keep is the safe direction, and the
+    // done gate rules the row the scan would over-keep.
     let mut newest: Option<i64> = None;
     for path in paths {
         // A file that cannot stat cannot form a key: it reads fresh and
@@ -195,23 +260,22 @@ pub(crate) fn newest_typed_turn_age_ever(
             continue;
         };
         let key = (path.clone(), len, mtime, spawn_payload.map(str::to_string));
-        if let Some(hit) = scan_memo()
+        let file_fact = if let Some(hit) = scan_memo()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&key)
         {
-            if let Some(h) = *hit {
-                newest = Some(newest.map_or(h, |n| n.min(h)));
+            *hit
+        } else {
+            let age = last_typed_age_in_file(path, bus, session, now, spawn_payload);
+            let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
+            if memo.len() >= 1024 {
+                memo.clear();
             }
-            continue;
-        }
-        let age = typed_age_in_file(path, bus, session, now, spawn_payload);
-        let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
-        if memo.len() >= 1024 {
-            memo.clear();
-        }
-        memo.insert(key, age);
-        if let Some(age) = age {
+            memo.insert(key, age);
+            age
+        };
+        if let Some(age) = file_fact {
             newest = Some(newest.map_or(age, |n| n.min(age)));
         }
     }
@@ -248,10 +312,11 @@ pub(crate) fn sweep_hold(
 }
 
 /// The all-time read a retirement sweep pays for: the row's store-resolved
-/// transcripts, keyed on the row's harness session id. `None` answers
-/// "no typed turn" AND "store unresolved" alike - the sweep treats both as
-/// no witness, and an unresolved store never invented quiet either.
-pub(crate) fn typed_turn_age_ever_for_row(
+/// transcripts, keyed on the row's harness session id. The fact is the
+/// LAST readable turn: `None` answers "last turn was machine" AND "store
+/// unresolved" alike - the sweep treats both as no witness, and an
+/// unresolved store never invented quiet either.
+pub(crate) fn last_turn_typed_age_for_row(
     hits: Option<Vec<PathBuf>>,
     home: &crate::paths::AgentsHome,
     sid: &str,
@@ -259,7 +324,7 @@ pub(crate) fn typed_turn_age_ever_for_row(
     spawn_payload: Option<&str>,
 ) -> Option<i64> {
     let hits = hits?;
-    newest_typed_turn_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
+    last_turn_typed_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
 }
 
 /// The stop-verb refusal: `Some(why)` when the row's store-resolved
@@ -280,6 +345,76 @@ pub(crate) fn stop_refusal(home: &crate::paths::AgentsHome, e: &RegistryEntry) -
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The 2026-10-21 ruling's classifier half: the LAST readable turn
+    /// decides, not the newest typed turn at any age. Empty rows are
+    /// machinery, never a turn that decides; a machine shape after the
+    /// person's turn answers None; a person's turn after machinery
+    /// answers its age.
+    #[test]
+    fn the_last_readable_turn_decides_the_all_time_fact() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = crate::daemon::now_epoch_secs();
+        let ts = |age: i64| {
+            chrono::DateTime::from_timestamp(now - age, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let bus = BusIndex::empty();
+        // A person typed at 120s; lead mail arrived at 30s. The old fact
+        // answered Some(120) forever; the last readable turn is the mail,
+        // so the all-time fact answers None.
+        let path = dir.path().join("mail_last.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                json!({"type":"user","timestamp":ts(120),"message":{"role":"user","content":"keep the notes coming"}}),
+                json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"`@lead · fmail-a1b2c3d4e5f6`\nLead here, on x-1"}}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            last_turn_typed_age_ever(&[path], &bus, "s", now, None),
+            None,
+            "the mail is the last readable turn; a machine turn never testifies"
+        );
+        // A person typed at 30s; empty rows (tool-result deliveries)
+        // followed at 20s and 10s. The empty rows never decide, so the
+        // person's turn is the last readable one.
+        let path = dir.path().join("empty_tail.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"go on"}}),
+                json!({"type":"user","timestamp":ts(20),"message":{"role":"user","content":""}}),
+                json!({"type":"user","timestamp":ts(10),"message":{"role":"user","content":""}}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            last_turn_typed_age_ever(&[path], &bus, "s2", now, None),
+            Some(30),
+            "empty tail rows are machinery; the person's turn still decides"
+        );
+        // A machine shape after the person's turn flips the answer.
+        let path = dir.path().join("task_after.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":"run it"}}),
+                json!({"type":"user","timestamp":ts(20),"message":{"role":"user","content":"<task-notification><task-id>x</task-id></task-notification>"}}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            last_turn_typed_age_ever(&[path], &bus, "s3", now, None),
+            None,
+            "a machine turn after the person's turn is the last turn"
+        );
+    }
 
     #[test]
     fn typed_turn_age_reads_the_person_and_skips_the_machines() {

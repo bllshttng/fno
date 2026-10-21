@@ -118,10 +118,16 @@ pub struct GcSummary {
     /// `(id, detail)`: a typed user turn inside the attended window - the
     /// user is talking to this session; a done ledger never overrides it.
     pub kept_attended: Vec<(String, String)>,
-    /// `(id, detail)`: a typed turn whenever it was written - the
-    /// permanent keep behind the windowed attended hold. The row never
-    /// retires on a sweep, like an operator row.
+    /// `(id, detail)`: the person typed the session's LAST readable turn
+    /// and the work is not done - the row is a conversation the user may
+    /// still be in. A done row never lands here (the 2026-10-21 ruling):
+    /// a typed turn never keeps a done row.
     pub kept_user_typed: Vec<(String, String)>,
+    /// `(id, reason)`: the catch-all keep line. No judged row may render
+    /// nowhere: a row whose reason reaches the bucket match's fallback
+    /// lands here under its reason string, so the report's rows always
+    /// account for the total.
+    pub kept_other: Vec<(String, String)>,
     /// `(id, detail)`: the user set a keep mark on this session (`fno
     /// agents reap --keep`); one command lifts it.
     pub kept_marked: Vec<(String, String)>,
@@ -323,6 +329,7 @@ impl GcSummary {
             + self.kept_active.len()
             + self.kept_attended.len()
             + self.kept_user_typed.len()
+            + self.kept_other.len()
             + self.kept_marked.len()
             + self.kept_probe_unread.len()
             + self.kept_transcript_unresolved.len()
@@ -616,19 +623,15 @@ pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
 /// than the store (reading it is not opening graph.json) and stays advisory:
 /// a read failure contributes nothing. The working store failing to read is
 /// `None` and every consumer keeps its rows. A missing store is an empty
-/// graph, matching the Python read seam.
+/// graph, matching the Python read seam. The archive read is the shared
+/// reader (`graph_store::archive_rows`), so an archived node's status reads
+/// from the SQLite archive the import actually maintains, not from a legacy
+/// JSON file that no longer exists.
 pub(crate) fn read_graph_rows(home: &AgentsHome) -> Option<Vec<Value>> {
     let store = crate::backlog::api::Store::new(&graph_path(home));
     let state_root = home.root().parent().unwrap_or(home.root());
     let mut entries = crate::backlog::api::rows(&store).ok()?;
-    // The archive: same shape, advisory. An unparseable archive must not
-    // blind the sweep to the working graph.
-    let archive = std::fs::read(state_root.join("graph-archive.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-        .and_then(|v| v.get("entries").and_then(|e| e.as_array().cloned()))
-        .unwrap_or_default();
-    entries.extend(archive);
+    entries.extend(crate::graph_store::archive_rows(state_root));
     Some(entries)
 }
 
@@ -1503,6 +1506,47 @@ pub(crate) fn run(
         agents_read,
         tree_probe,
         prune_tree,
+        false,
+        None,
+    )
+}
+
+/// [`run`] scoped to done-node rows and graded eval rows: the bulk
+/// all-clear pass (`fno agents registry reap --done`). The seams are
+/// identical; the scope rides [`run_with_release`]'s `only_done`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_done_only(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    grace_secs: i64,
+    dry_run: bool,
+    retain_days: u64,
+    read_graph: &dyn Fn(&AgentsHome) -> Option<GraphRead>,
+    store_matches: &dyn Fn(&state::RegistryEntry) -> Option<Vec<PathBuf>>,
+    age_many: &dyn Fn(&[&state::RegistryEntry]) -> HashMap<String, Option<i64>>,
+    stop_confirmed: &dyn Fn(&state::RegistryEntry) -> bool,
+    surface_removal: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
+    mux_member: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
+    agents_read: &dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot,
+    tree_probe: &dyn Fn(&state::RegistryEntry) -> (Option<bool>, Option<bool>),
+    prune_tree: &dyn Fn(&state::RegistryEntry) -> Option<crate::daemon::PruneOutcome>,
+) -> GcSummary {
+    run_with_release(
+        home,
+        emitter,
+        grace_secs,
+        dry_run,
+        retain_days,
+        read_graph,
+        store_matches,
+        age_many,
+        stop_confirmed,
+        surface_removal,
+        mux_member,
+        agents_read,
+        tree_probe,
+        prune_tree,
+        true,
         None,
     )
 }
@@ -1533,6 +1577,7 @@ pub(crate) fn run_with_release(
     agents_read: &dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot,
     tree_probe: &dyn Fn(&state::RegistryEntry) -> (Option<bool>, Option<bool>),
     prune_tree: &dyn Fn(&state::RegistryEntry) -> Option<crate::daemon::PruneOutcome>,
+    only_done: bool,
     release: Option<&Release>,
 ) -> GcSummary {
     let mut summary = GcSummary::default();
@@ -1678,6 +1723,9 @@ pub(crate) fn run_with_release(
     };
     let mut staged: Vec<Option<(ProvenanceVerdict, Option<i64>)>> =
         Vec::with_capacity(registry.entries.len());
+    // One evals-history read per pass: the graded set joins the roster once,
+    // so N eval rows cost one file read, not N.
+    let graded_evals = crate::eval_reap::graded_eval_workers();
     for e in &registry.entries {
         let eligible = e.role_level.is_none()
             && (e.origin.as_deref() == Some("spawn")
@@ -2125,11 +2173,12 @@ pub(crate) fn run_with_release(
             node_held_elsewhere,
             open_work_retire_s,
             typed_turn_age_s: None,
+            eval_graded: crate::eval_reap::is_graded_eval_row(&e.name, graded_evals.as_ref()),
         };
         let (mut action, mut reason) = {
             let verdict = gc_decide(&row, grace_secs);
             crate::gc::resolve_typed_turn(&mut row, verdict, grace_secs, || {
-                crate::attended::typed_turn_age_ever_for_row(
+                crate::attended::last_turn_typed_age_for_row(
                     store_matches(e),
                     home,
                     sid,
@@ -2138,6 +2187,13 @@ pub(crate) fn run_with_release(
                 )
             })
         };
+        // The --done scope (the bulk all-clear): the pass judges only rows
+        // whose work is done or whose graded eval attempt marks the row
+        // finished. Every other row is out of scope for this pass -
+        // untouched, unjudged, and rendered nowhere.
+        if only_done && !matches!(row.work, WorkState::AllDone { .. }) && !row.eval_graded {
+            continue;
+        }
         // d-81c6da7e: a release matched to the planning hold answers the
         // marker question by ruling. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,
@@ -2185,9 +2241,10 @@ pub(crate) fn run_with_release(
                 Some(KeepReason::Teamed) => summary.kept_teamed.push(id),
                 Some(KeepReason::NotSpawn { origin }) => summary.kept_not_spawn.push((id, origin)),
                 Some(KeepReason::UserTyped { age_s }) => {
-                    summary
-                        .kept_user_typed
-                        .push((id.clone(), format!("typed user turn {age_s}s ago")));
+                    summary.kept_user_typed.push((
+                        id.clone(),
+                        format!("typed last turn {age_s}s ago, work open"),
+                    ));
                 }
                 Some(KeepReason::NoProvenance) => {
                     summary.kept_no_provenance.push(id.clone());
@@ -2353,8 +2410,15 @@ pub(crate) fn run_with_release(
                     });
                 }
                 // GraphUnreadable / OpenDoRow are decided above, before the
-                // policy ran; they cannot arrive here.
-                _ => {}
+                // policy ran; they cannot arrive here. Anything else that
+                // still arrives renders under its reason string - a judged
+                // row never vanishes from the report.
+                other => {
+                    summary.kept_other.push((
+                        id.clone(),
+                        other.map(|r| r.as_str().to_string()).unwrap_or_default(),
+                    ));
+                }
             }
             continue;
         }
