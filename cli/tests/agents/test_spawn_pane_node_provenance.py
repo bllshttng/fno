@@ -30,6 +30,10 @@ def test_cmd_spawn_node_flag_resolves_and_passes_provenance(
     monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
+    # The binary owns the name form (naming.rs worker_name); stub its binding.
+    monkeypatch.setattr(
+        "fno.agents.naming.worker_name", lambda node=None, *, seed=None, slug=None: f"t-{slug}"
+    )
     monkeypatch.setattr(
         "fno.graph.store.read_nodes_by_ids",
         lambda path, tokens: {"entries": [
@@ -66,5 +70,5 @@ def test_cmd_spawn_node_flag_resolves_and_passes_provenance(
         "FNO_NODE": node_id,
         "FNO_SLUG": "s",
         "FNO_PLAN": "p.md",
-        "FNO_NODE_CLAIM_HOLDER": "spawn-handover:t-a-s",
+        "FNO_NODE_CLAIM_HOLDER": "spawn-handover:t-s",
     }
