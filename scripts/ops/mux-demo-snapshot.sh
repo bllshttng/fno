@@ -60,6 +60,12 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.fno/claims"
+# FNO_DEMO_SIDELINE_WIDTH shoots the sideline at that many columns: the view
+# prefs the client reads hold the width.
+if [ -n "${FNO_DEMO_SIDELINE_WIDTH:-}" ]; then
+  mkdir -p "$ROOT/.fno/agents"
+  printf '{"version":1,"sections":{},"width":%s}\n' "$FNO_DEMO_SIDELINE_WIDTH" >"$ROOT/.fno/agents/mux-view.json"
+fi
 # State under $ROOT/.fno: the mux board reads the graph from $HOME/.fno.
 # FNO_DEMO_PY_SOURCE pins the CLI the rust bootstrap provisions, so the
 # python leg matches the binary: a PyPI wheel older than the graph.db
