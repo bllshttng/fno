@@ -264,3 +264,40 @@ fn team_front_matches_python_goldens() {
         assert_golden("mail_team", case.label, &leg.normalized_golden(root), None);
     }
 }
+
+/// Writer flags relay as flag-value pairs in either form: the space form no
+/// longer leaks its value into the message slot, and the `=` form reaches a
+/// writer that parses only the space form.
+#[test]
+fn team_relays_writer_flags_with_their_values() {
+    for args in [
+        &[
+            "team",
+            "--scope",
+            "all",
+            "--subject",
+            "S",
+            "--expires",
+            "12h",
+            "--urgent",
+            BODY,
+        ][..],
+        &[
+            "team",
+            "--scope",
+            "all",
+            "--subject=S",
+            "--expires=12h",
+            "--urgent",
+            BODY,
+        ][..],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        apply_setup(root, &Setup::Registry);
+        let leg = run_client(root, args);
+        // The writer refuses an unknown flag non-zero, so exit 0 is the proof
+        // that every flag reached it paired with its value.
+        assert_eq!(leg.exit, 0, "{args:?}: {}", leg.stderr);
+    }
+}
