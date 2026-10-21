@@ -279,8 +279,9 @@ pub(super) fn store_checks() -> [Check; 2] {
 }
 
 /// A registry whose newest row stamp is older than this while sessions are
-/// live has stopped landing writes: a live worker stamps its row far sooner.
-const WRITES_STALL_SECS: u64 = 3600;
+/// live has stopped landing writes. A day, not an hour: a lead can idle on a
+/// long watcher with no stamp, and the cutover stall ran for days.
+const WRITES_STALL_SECS: u64 = 86_400;
 
 /// Are registry writes landing? A table at revision 0 that holds rows was
 /// written by a path that skips the revision bump. Live sessions with no row
@@ -370,9 +371,9 @@ mod tests {
         assert_eq!(landing(None, 5, 3, Some(9_999)), Verdict::Na);
         assert_eq!(landing(Some(0), 227, 0, Some(10)), Verdict::Warn);
         assert_eq!(landing(Some(0), 0, 0, None), Verdict::Ok);
-        assert_eq!(landing(Some(40), 227, 3, Some(7_200)), Verdict::Warn);
-        assert_eq!(landing(Some(40), 227, 0, Some(7_200)), Verdict::Ok);
-        assert_eq!(landing(Some(40), 227, 3, Some(60)), Verdict::Ok);
+        assert_eq!(landing(Some(40), 227, 3, Some(90_000)), Verdict::Warn);
+        assert_eq!(landing(Some(40), 227, 0, Some(90_000)), Verdict::Ok);
+        assert_eq!(landing(Some(40), 227, 3, Some(7_200)), Verdict::Ok);
 
         // The canonical-venv scan: a shebang inside the root passes,
         // any absolute shebang outside is named (even a system shim, which
