@@ -1280,28 +1280,30 @@ mod tests {
         // notice and retake on the fresh answer, and the returned path must
         // be the one the lock holds.
         let tmp = tempfile::tempdir().unwrap();
-        let legacy = tmp.path().join("locks");
-        let moved = tmp.path().join("state").join("locks");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::create_dir_all(&moved).unwrap();
-        let stray = legacy.join("github-request-budget.json.lock");
+        let legacy_dir = tmp.path().join("locks");
+        let moved_dir = tmp.path().join("state").join("locks");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::create_dir_all(&moved_dir).unwrap();
+        // The resolver answers the LEDGER file, the way ledger_path() does;
+        // the lock is its .lock sidecar.
+        let stray = legacy_dir.join("github-request-budget.json.lock");
         std::fs::write(&stray, b"").unwrap();
-        let real = moved.join("github-request-budget.json.lock");
+        let real = moved_dir.join("github-request-budget.json.lock");
         std::fs::write(&real, b"").unwrap();
         // First resolve answers the legacy spelling; every later resolve
         // answers the moved one, the way place() does once the fold ran.
         let first = std::sync::atomic::AtomicBool::new(true);
         let resolve = || {
             if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                legacy.clone()
+                legacy_dir.join("github-request-budget.json")
             } else {
-                moved.clone()
+                moved_dir.join("github-request-budget.json")
             }
         };
         let (_lock, path) = ledger_lock_resolving(resolve);
         assert_eq!(
             path.parent(),
-            Some(moved.as_path()),
+            Some(moved_dir.as_path()),
             "the retake landed on the moved folder, not the stray: {path:?}"
         );
         use std::os::unix::fs::MetadataExt;
