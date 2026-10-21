@@ -398,10 +398,10 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         .filter(|e| super::promise::rollup_holds_plan(e))
         .cloned()
         .collect();
-    let rollup_held_ids = super::promise::rollup_hold_set(&warm_candidates, &mut |node| {
-        resolve_promise_evidence(node, gate_cwd_for(node).as_deref(), &[])
+    let rollup_verdicts = super::promise::rollup_hold_set(&warm_candidates, &mut |node| {
+        resolve_promise_evidence(node, super::promise::gate_cwd_for(node).as_deref(), &[])
     });
-    for (pid, verdict) in &rollup_held_ids {
+    for (pid, verdict) in rollup_verdicts.iter().filter(|(_, v)| !v.satisfied()) {
         let outcome = match verdict.outcome {
             PromiseOutcome::Unmet => "promise_unmet",
             _ => "promise_unknown",
@@ -425,7 +425,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
             &sweep,
             &reopen_expired,
             full_sweep,
-            &rollup_held_ids,
+            &rollup_verdicts,
             &mut stderr_log,
         )
     };
@@ -447,7 +447,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // The dry-run preview simulates the exact close on a throwaway copy.
     let preview = args
         .dry_run
-        .then(|| preview_leg(&entries, &sweep, &supersession_files, &rollup_held_ids));
+        .then(|| preview_leg(&entries, &sweep, &supersession_files, &rollup_verdicts));
 
     // Full sweep only: stamp `reverted` on nodes a merged revert PR names.
     let reverted = revert_leg(
@@ -1126,21 +1126,6 @@ fn reopen_held_reason(node: &Value, pr_number: i64) -> String {
 /// --json rows carry all of it.
 type HeldRow = (String, String, String);
 
-/// The gate cwd for one node row: the project-resolved cwd when it is a
-/// live directory, else None (the plan resolves repo-relative from the
-/// caller's cwd). Shared by the closeable gate and the rollup gate.
-fn gate_cwd_for(node: &Value) -> Option<String> {
-    let resolved = effective_reconcile_cwd(
-        node.get("cwd").and_then(Value::as_str).unwrap_or(""),
-        node.get("project").and_then(Value::as_str),
-    );
-    if Path::new(&resolved).is_dir() {
-        Some(resolved)
-    } else {
-        None
-    }
-}
-
 /// The promise gate over the closeable set: reopen guard first, then the
 /// promise verdict. Returns the gated records, the held roll, the gate
 /// warnings, and the reopen-expired ids (a reopen a LATER merged ref
@@ -1168,7 +1153,7 @@ fn promise_gate_leg(
                     "pr_url": record.pr_url,
                 })
             });
-        let gate_cwd = gate_cwd_for(&node);
+        let gate_cwd = super::promise::gate_cwd_for(&node);
         // Reopen guard BEFORE the promise gate: a deliberate reopen
         // postdating the merge holds, unless a later ref merged after it.
         if reopen_outranks_merge(&node, record.merged_at.as_deref().unwrap_or("")) {

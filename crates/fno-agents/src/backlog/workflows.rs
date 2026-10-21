@@ -786,8 +786,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
             .into_iter()
             .collect();
         let verdicts = super::promise::rollup_hold_set(&candidates, &mut |parent| {
-            let parent_cwd = text_at(parent, "cwd").map(String::from);
-            resolve_promise_evidence(parent, parent_cwd.as_deref(), &[])
+            resolve_promise_evidence(parent, super::promise::gate_cwd_for(parent).as_deref(), &[])
         });
         for (pid, verdict) in verdicts {
             if let Some(reason) = verdict.reason {

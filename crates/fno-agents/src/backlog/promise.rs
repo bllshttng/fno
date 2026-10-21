@@ -440,6 +440,22 @@ pub(crate) fn rollup_holds(parent: &Value, warm: &RollupVerdicts) -> bool {
     warm.get(id).is_none_or(|v| !v.satisfied())
 }
 
+/// The gate cwd for one node row: the project-resolved cwd when it is a
+/// live directory, else None (the plan resolves repo-relative from the
+/// caller's cwd). Shared by the closeable gate, the rollup warm, and the
+/// done verb's parent warm, so one node reads one verdict everywhere.
+pub(crate) fn gate_cwd_for(node: &Value) -> Option<String> {
+    let resolved = crate::backlog::drift_scan::effective_reconcile_cwd(
+        node.get("cwd").and_then(Value::as_str).unwrap_or(""),
+        node.get("project").and_then(Value::as_str),
+    );
+    if Path::new(&resolved).is_dir() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
 /// Count MERGED refs; return (merged, first typed failure). Stops early at
 /// the ceiling: once enough ships are confirmed, the remaining refs cannot
 /// change the verdict. An unreachable ref is reported separately from a
@@ -704,6 +720,9 @@ mod tests {
             "pr_number": 3606,
         })];
         let held = rollup_hold_set(&candidates, &mut |_node| verdict(PromiseOutcome::Ok));
-        assert!(held.is_empty());
+        // The map holds every warm verdict, Ok included: the hold reads
+        // verdict.satisfied(), not key presence (rollup_holds).
+        assert!(held["ab-multi"].satisfied());
+        assert!(!rollup_holds(&candidates[0], &held));
     }
 }
