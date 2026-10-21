@@ -1165,7 +1165,9 @@ mod marker_tests {
             Some(34890)
         ));
         assert!(marker_present("### #3489 landed\n", "x-none", Some(3489)));
-        assert!(marker_present("### #3489\n", "x-none", Some(3489)));
+        // The heading must read as a landed marker: one without the word
+        // never matches, however it names the PR.
+        assert!(!marker_present("### #3489\n", "x-none", Some(3489)));
     }
 
     #[test]
