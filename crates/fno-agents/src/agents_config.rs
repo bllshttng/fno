@@ -1818,7 +1818,7 @@ mod tests {
         );
         assert_eq!(
             machine_locks_dir(),
-            Some(PathBuf::from("/pinned-state/locks"))
+            Some(PathBuf::from("/pinned-state/state/locks"))
         );
 
         match prior {

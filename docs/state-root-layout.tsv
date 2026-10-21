@@ -136,7 +136,7 @@ handoffs	handoffs	dir	daemon
 history	history	dir	daemon
 inbox	inbox	dir	daemon
 latches	latches	dir	daemon
-locks	locks	dir	daemon
+locks	state/locks	dir	daemon
 mail-escalations	mail-escalations	dir	daemon
 mail-hold	mail-hold	dir	daemon
 migrations	migrations	dir	daemon

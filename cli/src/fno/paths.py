@@ -759,7 +759,8 @@ def github_cli_proxy_dir() -> Path:
 
 
 def locks_dir() -> Path:
-    """Advisory-lock sidecar directory (``~/.fno/locks``).
+    """Advisory-lock sidecar directory: the layout table's ``locks`` row
+    (``state/locks`` once the fold ran).
 
     Deliberately config-free (``$HOME``/``FNO_STATE_DIR`` only, no settings load). The plan-doc lock is keyed by the plan's resolved path,
     so the two fno writers only need to agree on this directory; a config
