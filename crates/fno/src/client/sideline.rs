@@ -1205,7 +1205,7 @@ impl View {
 
     /// The `+ new` footer row, painted over the blitted cells in its legacy
     /// full-width composition: the menu button rides the footer's right edge
-    /// at the exact column [`View::footer_menu_range`] names, because that
+    /// at the exact column [`View::footer_buttons`] names, because that
     /// range routes a click there - paint and hit range cannot diverge.
     fn paint_new_squad_footer(
         &self,

@@ -39,12 +39,16 @@ impl View {
                     _ => bare.to_string(),
                 };
                 let (session, workspace, menu) = (label(SESSION), label(WORKSPACE), label(MENU));
+                // Columns as the row painter counts them, so a rebound key
+                // with a wide glyph cannot move a range off its label.
+                let cols = |s: &str| s.chars().map(super::glyph_cols).sum::<usize>();
                 let left = format!("{session}  {workspace}");
-                if left.len() + 1 + menu.len() <= tw {
-                    let menu_at = tw - menu.len();
+                if cols(&left) + 1 + cols(&menu) <= tw {
+                    let menu_at = tw - cols(&menu);
+                    let pad = " ".repeat(menu_at - cols(&left));
                     return FooterButtons {
-                        text: format!("{left:<menu_at$}{menu}"),
-                        session: Some(0..session.len()),
+                        text: format!("{left}{pad}{menu}"),
+                        session: Some(0..cols(&session)),
                         menu: Some(menu_at..tw),
                     };
                 }
@@ -59,11 +63,5 @@ impl View {
             text: format!("{}   {} marked \u{b7}R", WORKSPACE.1, self.marks.len()),
             ..Default::default()
         }
-    }
-
-    /// The column range of the footer's `menu` button, shared by the
-    /// renderer and the hit-test so a click lands where it draws.
-    pub(super) fn footer_menu_range(&self, panel_w: usize) -> Option<Range<usize>> {
-        self.footer_buttons(panel_w).menu
     }
 }

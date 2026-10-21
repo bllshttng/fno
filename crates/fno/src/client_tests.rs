@@ -646,7 +646,7 @@ fn xf331_rows() {
         matches!(hit, Some(ChromeHit::OpenCreate)),
         "a click on the pinned footer opens create, got {hit:?}"
     );
-    if let Some(range) = view.footer_menu_range(view.panel_w() as usize) {
+    if let Some(range) = view.footer_buttons(view.panel_w() as usize).menu {
         let hit = view.chrome_hit(pinned_row, range.start as u16);
         assert!(
             matches!(hit, Some(ChromeHit::OpenSidelineMenu { .. })),
