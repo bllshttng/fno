@@ -34,6 +34,7 @@ const DEFAULT_READY_MARKER: &str = "Plan, search, build anything";
 
 /// A refusal on the spawn path: the operator line plus the exit code the
 /// Python lane exits with.
+#[derive(Debug)]
 pub(crate) struct SpawnRefusal {
     message: String,
     exit: i32,
