@@ -112,13 +112,19 @@ fn plan_file(plan_path: &str, home: &Path) -> Option<PathBuf> {
     (path.is_absolute() && !bare.is_empty()).then_some(path)
 }
 
-/// Writable here: absolute, under this home, no `..` hop.
+/// Writable here: a `.md` file under this home, with no `..` hop and no
+/// dot-dir below home. A primary row names the path, so without this a row
+/// could write `~/.ssh/authorized_keys` or a shell profile.
 fn placeable(path: &Path, home: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(home) else {
+        return false;
+    };
     !home.as_os_str().is_empty()
-        && path.starts_with(home)
-        && !path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+        && path.extension().and_then(|e| e.to_str()) == Some("md")
+        && rel.components().all(|c| match c {
+            std::path::Component::Normal(part) => !part.to_string_lossy().starts_with('.'),
+            _ => false,
+        })
 }
 
 fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
@@ -433,6 +439,13 @@ mod tests {
         assert_eq!(out.unplaced, vec!["x-1"]);
         let err = fetch_with("x-1", &primary.remote, "b", home.path()).unwrap_err();
         assert!(err.contains("outside this host's home"), "{err}");
+        // A row naming a dot-dir or a non-plan file under home never lands.
+        for evil in [".ssh/authorized_keys.md", "plans/p.sh"] {
+            let path = home.path().join(evil);
+            push(&primary.remote, "x-1", path.to_str().unwrap(), "pwn", "a").unwrap();
+            assert!(fetch_with("x-1", &primary.remote, "b", home.path()).is_err());
+            assert!(!path.exists());
+        }
         // An unreachable primary is an error the tick logs, never a panic.
         assert!(sync_with(&b, &test_primary::dead(), "b", home.path()).is_err());
     }
