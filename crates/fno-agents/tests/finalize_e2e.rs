@@ -1574,12 +1574,14 @@ fn finalize_skips_stamp_when_no_node() {
 
 /// Like GH_PR_358 but records every argv, so a `pr merge` call is observable.
 /// The headRefOid case answers the merge gate's review-activity probe, which
-/// reads the PR head in process (d-e11b2b3e).
+/// reads the PR head in process (d-e11b2b3e). That arm exits: falling through
+/// into the `view` case would hand the probe two concatenated JSON bodies,
+/// which parse as nothing and fail the probe closed.
 const GH_PR_358_LOGGING: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
-     case \"$*\" in *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}' ;; esac\n\
+     case \"$*\" in *headRefOid*) echo '{\"headRefName\":\"pr-358\",\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"state\":\"OPEN\"}'; exit 0 ;; esac\n\
      case \"$2\" in view) echo '{\"number\": 358, \"url\": \"https://github.com/o/r/pull/358\"}' ;; esac\n";
 
 const GH_OPTIONAL_REVIEWED: &str = "#!/bin/sh\n\

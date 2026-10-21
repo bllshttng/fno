@@ -124,17 +124,17 @@ fn repo_head(repo: &Path) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// The fake gh the Python capture used, behaviorally byte-for-byte: the REST
-/// pulls payload keyed by FGH_MODE.
+/// The fake gh the Python capture used, behaviorally byte-for-byte except the
+/// one seam the port moved: the reader now asks `gh pr view` for the
+/// headRefName/headRefOid/state field set (the REST pulls shape the Python
+/// leg parsed), so the payload carries that field set, keyed by FGH_MODE.
 fn write_fake_gh(root: &Path, oid: String) -> PathBuf {
     let dir = root.join("fakegh");
     fs::create_dir_all(&dir).unwrap();
-    let open = format!(
-        r#"{{"head":{{"ref":"feat/a","sha":"{oid}"}},"base":{{"ref":"main"}},"state":"open","number":41}}"#
-    );
-    let closed = format!(
-        r#"{{"head":{{"ref":"feat/a","sha":"{oid}"}},"base":{{"ref":"main"}},"state":"closed","number":41}}"#
-    );
+    let open =
+        format!(r#"{{"headRefName":"feat/a","headRefOid":"{oid}","state":"open","number":41}}"#);
+    let closed =
+        format!(r#"{{"headRefName":"feat/a","headRefOid":"{oid}","state":"closed","number":41}}"#);
     let script = format!(
         "#!/bin/sh\ncase \"$FGH_MODE\" in\n  fail) echo 'gh: api error' >&2; exit 1 ;;\n  closed) echo '{closed}' ;;\n  *) echo '{open}' ;;\nesac\n"
     );
@@ -158,6 +158,12 @@ fn run(fx: &Fixture, args: &[&str], extra_env: &[(&str, String)]) -> (i32, Strin
     cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.env("HOME", &fx.home);
     cmd.env("FNO_STATE_DIR", fx.root.join("state"));
+    // The repo-space claims store resolves through the spaces root, so the
+    // seed and the verb must both land in this tree; without the pin the
+    // binary writes under its own home default and the test's db path (and
+    // the raw sqlite stale-corruption edits below) read a store that was
+    // never created.
+    cmd.env("FNO_SPACES_DIR", fx.root.join("state/spaces"));
     cmd.env("FNO_EVENTS_PATH", fx.root.join("events.jsonl"));
     cmd.env("FGH_MODE", "open");
     let path = format!(
@@ -192,6 +198,7 @@ fn seed_hold(fx: &Fixture, ttl_ms: u64) {
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)
         .env("FNO_STATE_DIR", fx.root.join("state"))
+        .env("FNO_SPACES_DIR", fx.root.join("state/spaces"))
         .output()
         .expect("seed claim");
     assert!(
