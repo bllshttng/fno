@@ -87,12 +87,12 @@ assert_rejected "node id in a shell comment" \
     "scripts/_selftest_probe.sh" '# planned by node x-1b88.'
 assert_rejected "ab- id in a code comment" \
     "hooks/_selftest_probe.sh" '# legacy plan ab-1b88c2d4 shaped this.'
-assert_rejected "session URL in code" \
-    "crates/fno-agents/src/_selftest_probe.rs" '// transcript: https://claude.ai/code/1a2b3c'
 assert_rejected "node id still fails in the prose scope" \
     "docs/_selftest_probe.md" "a breadcrumb (x-1b88)."
 
 # --- sanctioned forms must still pass ---
+assert_accepted "session URL in code is allowed" \
+    "crates/fno-agents/src/_selftest_probe.rs" '// transcript: https://claude.ai/code/1a2b3c'
 assert_accepted "allowlisted synthetic in code comment" \
     "crates/fno/src/_selftest_probe.rs" '// format example: tgt-x-aaaa-liveness.'
 assert_accepted "internal/ path literal in code" \
