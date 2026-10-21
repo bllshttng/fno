@@ -363,6 +363,56 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         promise_gate_leg(&sweep.closeable, &entries, args.json_out, &mut stderr_log);
     sweep.closeable = gated;
 
+    // The rollup close paths (epic self-heal + parent cascade) hold on the
+    // same plan promise, judged pre-lock (gh I/O stays outside the store
+    // mutation): a parent whose plan promises more than has merged never
+    // closes on its children's closes (x-0b13). The verdicts ride the
+    // promise_held roll so the report names them. Absent = held, so the
+    // warm covers every plan-having rollup candidate this pass can close:
+    // strandable epics, plus the direct parent of each closeable trigger.
+    // A grandparent closing in the same pass holds (fail closed) and closes
+    // gated on the next pass, when it is the direct parent.
+    let warm_candidates: Vec<Value> = sweep
+        .strandable_epics
+        .iter()
+        .filter_map(|pid| {
+            entries
+                .iter()
+                .find(|e| e.get("id").and_then(Value::as_str) == Some(pid.as_str()))
+        })
+        .chain(sweep.closeable.iter().filter_map(|r| {
+            entries
+                .iter()
+                .find(|e| e.get("id").and_then(Value::as_str) == Some(r.node_id.as_str()))
+                .and_then(|trigger| {
+                    trigger
+                        .get("parent")
+                        .and_then(Value::as_str)
+                        .and_then(|pid| {
+                            entries
+                                .iter()
+                                .find(|e| e.get("id").and_then(Value::as_str) == Some(pid))
+                        })
+                })
+        }))
+        .filter(|e| super::promise::rollup_holds_plan(e))
+        .cloned()
+        .collect();
+    let rollup_held_ids = super::promise::rollup_hold_set(&warm_candidates, &mut |node| {
+        resolve_promise_evidence(node, gate_cwd_for(node).as_deref(), &[])
+    });
+    for (pid, verdict) in &rollup_held_ids {
+        let outcome = match verdict.outcome {
+            PromiseOutcome::Unmet => "promise_unmet",
+            _ => "promise_unknown",
+        };
+        promise_held.push((
+            pid.clone(),
+            verdict.reason.clone().unwrap_or_default(),
+            outcome.into(),
+        ));
+    }
+
     // The close: ONE locked mutation, then the post-lock legs.
     let close = if args.dry_run {
         None
@@ -375,6 +425,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
             &sweep,
             &reopen_expired,
             full_sweep,
+            &rollup_held_ids,
             &mut stderr_log,
         )
     };
@@ -396,7 +447,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // The dry-run preview simulates the exact close on a throwaway copy.
     let preview = args
         .dry_run
-        .then(|| preview_leg(&entries, &sweep, &supersession_files));
+        .then(|| preview_leg(&entries, &sweep, &supersession_files, &rollup_held_ids));
 
     // Full sweep only: stamp `reverted` on nodes a merged revert PR names.
     let reverted = revert_leg(
@@ -1075,6 +1126,21 @@ fn reopen_held_reason(node: &Value, pr_number: i64) -> String {
 /// --json rows carry all of it.
 type HeldRow = (String, String, String);
 
+/// The gate cwd for one node row: the project-resolved cwd when it is a
+/// live directory, else None (the plan resolves repo-relative from the
+/// caller's cwd). Shared by the closeable gate and the rollup gate.
+fn gate_cwd_for(node: &Value) -> Option<String> {
+    let resolved = effective_reconcile_cwd(
+        node.get("cwd").and_then(Value::as_str).unwrap_or(""),
+        node.get("project").and_then(Value::as_str),
+    );
+    if Path::new(&resolved).is_dir() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
 /// The promise gate over the closeable set: reopen guard first, then the
 /// promise verdict. Returns the gated records, the held roll, the gate
 /// warnings, and the reopen-expired ids (a reopen a LATER merged ref
@@ -1102,15 +1168,7 @@ fn promise_gate_leg(
                     "pr_url": record.pr_url,
                 })
             });
-        let resolved = effective_reconcile_cwd(
-            node.get("cwd").and_then(Value::as_str).unwrap_or(""),
-            node.get("project").and_then(Value::as_str),
-        );
-        let gate_cwd = if Path::new(&resolved).is_dir() {
-            Some(resolved)
-        } else {
-            None
-        };
+        let gate_cwd = gate_cwd_for(&node);
         // Reopen guard BEFORE the promise gate: a deliberate reopen
         // postdating the merge holds, unless a later ref merged after it.
         if reopen_outranks_merge(&node, record.merged_at.as_deref().unwrap_or("")) {
@@ -1218,6 +1276,7 @@ fn close_leg(
     sweep: &Sweep,
     reopen_expired: &[String],
     full_sweep: bool,
+    rollup_held: &super::promise::RollupVerdicts,
     stderr_log: &mut Vec<String>,
 ) -> Option<CloseResult> {
     let settlement_pending = sweep.settlement["receipts"]
@@ -1285,6 +1344,7 @@ fn close_leg(
                 sweep,
                 reopen_expired,
                 full_sweep,
+                rollup_held,
                 &rollups,
                 &result,
                 stderr_log,
@@ -1359,6 +1419,7 @@ fn close_mutator(
     sweep: &Sweep,
     reopen_expired: &[String],
     full_sweep: bool,
+    rollup_held: &super::promise::RollupVerdicts,
     rollups: &HashMap<String, crate::backlog::workflows::Rollup>,
     result: &std::cell::RefCell<CloseResult>,
     stderr_log: &mut Vec<String>,
@@ -1452,7 +1513,7 @@ fn close_mutator(
             .borrow_mut()
             .contained_released
             .append(&mut contained.released);
-        let mut cascaded = cascade_close_parents(entries, &record.node_id);
+        let mut cascaded = cascade_close_parents(entries, &record.node_id, rollup_held);
         result.borrow_mut().cascade_closed.append(&mut cascaded);
         result.borrow_mut().actually_closed.push(record.clone());
     }
@@ -1468,7 +1529,7 @@ fn close_mutator(
         .borrow_mut()
         .contained_released
         .append(&mut contained.released);
-    let mut epics = sweep_close_done_epics(entries);
+    let mut epics = sweep_close_done_epics(entries, rollup_held);
     result.borrow_mut().cascade_closed.append(&mut epics);
     let mut reparented = sweep_reparent_stranded_orphans(entries);
     result.borrow_mut().reparented.append(&mut reparented);
@@ -2048,6 +2109,7 @@ fn preview_leg(
     entries: &[Value],
     sweep: &Sweep,
     supersession_files: &HashMap<i64, Vec<String>>,
+    rollup_held: &super::promise::RollupVerdicts,
 ) -> Preview {
     let nothing_pending = sweep.closeable.is_empty()
         && sweep.strandable_epics.is_empty()
@@ -2101,7 +2163,11 @@ fn preview_leg(
         );
         contained.extend(contained_pass.closed);
         released_preview.extend(contained_pass.released);
-        acc.extend(cascade_close_parents(&mut sim, &record.node_id));
+        acc.extend(cascade_close_parents(
+            &mut sim,
+            &record.node_id,
+            rollup_held,
+        ));
     }
     if sweep.strandable_epics.is_empty()
         && sweep.strandable_contained.is_empty()
@@ -2117,7 +2183,7 @@ fn preview_leg(
     let stranded = sweep_close_stranded_contained(&mut sim);
     contained.extend(stranded.closed);
     released_preview.extend(stranded.released);
-    acc.extend(sweep_close_done_epics(&mut sim));
+    acc.extend(sweep_close_done_epics(&mut sim, rollup_held));
     reparented.extend(sweep_reparent_stranded_orphans(&mut sim));
     let carried = sweep_stamp_carried_sessions(&mut sim);
     Preview {
@@ -2898,6 +2964,7 @@ mod tests {
             &sweep,
             &[],
             false,
+            &Default::default(),
             &HashMap::new(),
             &result,
             &mut stderr_log,

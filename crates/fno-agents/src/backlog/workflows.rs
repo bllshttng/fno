@@ -393,7 +393,15 @@ fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
 
 /// Close ancestor epics whose children are now all complete (the
 /// _cascade_close_parents twin). Returns the closed ancestor ids.
-pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec<String> {
+/// `promise_held` carries the pre-lock rollup verdicts: a plan plus one
+/// merged PR of its own clears `has_own_plan_work`, and without the hold
+/// the cascade would close a multi-slice parent on its first child's
+/// close (x-0b13). Absent = held (fail closed).
+pub(crate) fn cascade_close_parents(
+    entries: &mut [Value],
+    node_id: &str,
+    promise_held: &super::promise::RollupVerdicts,
+) -> Vec<String> {
     let id_of = |e: &Value| text_at(e, "id").map(String::from);
     let mut closed: Vec<String> = Vec::new();
     let mut cur: Option<String> = entries
@@ -422,8 +430,9 @@ pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec
         let all_closed = children_all_closed(&entries[idx], &kid_refs);
         // Own plan work holds the close: the parent's own deliverables are
         // unverified, and the UNVERIFIED note that used to flag this close
-        // is retired with it.
-        let holds_plan = has_own_plan_work(&entries[idx]);
+        // is retired with it. So does an unmet (or unwarmed) plan promise.
+        let holds_plan = has_own_plan_work(&entries[idx])
+            || super::promise::rollup_holds(&entries[idx], promise_held);
         if parent_is_done || outranks || holds_plan || !all_closed {
             clear_reopen_warning_if_child_matches(&mut entries[idx], Some(node_id));
             break;
@@ -758,6 +767,37 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
         }
     }
 
+    // The parent cascade runs inside the mutation, where gh I/O must not:
+    // judge the direct parent pre-lock. Its parent (if any) closes one pass
+    // later, when it is the direct parent of a just-closed child; a parent
+    // the warm never judged holds (fail closed). An ancestor whose plan
+    // promises more than has merged stays open (x-0b13).
+    let mut promise_held_parents = super::promise::RollupVerdicts::new();
+    if !args.force {
+        let candidates: Vec<Value> = rows
+            .iter()
+            .find(|e| text_at(e, "id") == Some(task_id.as_str()))
+            .and_then(|trigger| text_at(trigger, "parent"))
+            .and_then(|pid| {
+                rows.iter()
+                    .find(|e| text_at(e, "id") == Some(pid) && super::promise::rollup_holds_plan(e))
+            })
+            .cloned()
+            .into_iter()
+            .collect();
+        let verdicts = super::promise::rollup_hold_set(&candidates, &mut |parent| {
+            let parent_cwd = text_at(parent, "cwd").map(String::from);
+            resolve_promise_evidence(parent, parent_cwd.as_deref(), &[])
+        });
+        for (pid, verdict) in verdicts {
+            if let Some(reason) = verdict.reason {
+                let first = reason.lines().next().unwrap_or("");
+                eprintln!("warning: parent {pid} stays open: {first}");
+            }
+            promise_held_parents.insert(pid, verdict);
+        }
+    }
+
     // Cost stamp: the ledger's per-plan cost the node never captured.
     let rollup = rollup_from_ledger(&node);
     let env_session = std::env::var("CLAUDECODE_SESSION_ID")
@@ -853,7 +893,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
                     .map(String::from),
             );
         }
-        let closed = cascade_close_parents(rows, &task);
+        let closed = cascade_close_parents(rows, &task, &promise_held_parents);
         cascade.replace(closed);
         Ok(true)
     });
@@ -2728,7 +2768,7 @@ mod tests {
         let closer = &rows[idx]["closed_by"];
         assert!(closer["session"].is_null() || closer["session"].is_string());
         assert!(closer["actor_kind"].is_string());
-        let closed = cascade_close_parents(&mut rows, "ab-bbbbbbbb");
+        let closed = cascade_close_parents(&mut rows, "ab-bbbbbbbb", &Default::default());
         assert!(closed.contains(&"ab-ffffffff".to_string()), "{closed:?}");
         let epic = rows
             .iter()
@@ -2755,6 +2795,42 @@ mod tests {
         let older_kid = json!({"id": "ab-aaaaaaaa", "completed_at": "2026-08-01T00:00:00+00:00"});
         let refs: Vec<&Value> = vec![&older_kid];
         assert!(reopen_outranks_child_closes(&parent, &refs));
+    }
+
+    #[test]
+    fn a_held_parent_stops_the_cascade_without_closing_it() {
+        // x-0b13: the plan+PR parent. A warm Unmet verdict holds it, and the
+        // walk does not close THROUGH it either; the satisfied verdict lets
+        // the cascade close it exactly as before the gate existed.
+        let verdict = |outcome| super::promise::PromiseVerdict {
+            outcome,
+            reason: None,
+            warning: None,
+        };
+        let mut rows = vec![
+            json!({
+                "id": "ab-ffffffff", "plan_path": "plans/multi.md",
+                "pr_number": 3606, "status": "in_progress",
+            }),
+            json!({"id": "ab-aaaaaaaa", "parent": "ab-ffffffff", "status": "done",
+                   "completed_at": "2026-09-01T00:00:00+00:00"}),
+        ];
+        let unmet: super::promise::RollupVerdicts = [(
+            "ab-ffffffff".to_string(),
+            verdict(super::promise::PromiseOutcome::Unmet),
+        )]
+        .into();
+        let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &unmet);
+        assert!(closed.is_empty(), "{closed:?}");
+        assert!(rows[0].get("completed_at").is_none());
+        // Warmed satisfied, the same shape closes.
+        let ok: super::promise::RollupVerdicts = [(
+            "ab-ffffffff".to_string(),
+            verdict(super::promise::PromiseOutcome::Ok),
+        )]
+        .into();
+        let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &ok);
+        assert!(closed.contains(&"ab-ffffffff".to_string()), "{closed:?}");
     }
 }
 
