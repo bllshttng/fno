@@ -2285,7 +2285,11 @@ mod tests {
         spawn_fanout_loops(first, bin, &mut tasks, Arc::clone(&shutdown));
         let second = parse(br#"[{"project":"fno","cwd":"/","interval_seconds":30}]"#);
         spawn_fanout_loops(second, bin, &mut tasks, Arc::clone(&shutdown));
-        assert_eq!(tasks["fno"].1.load(Ordering::SeqCst), 30, "one loop, new interval");
+        assert_eq!(
+            tasks["fno"].1.load(Ordering::SeqCst),
+            30,
+            "one loop, new interval"
+        );
         let handle = tasks["fno"].0.abort_handle();
         spawn_fanout_loops(Vec::new(), bin, &mut tasks, Arc::clone(&shutdown));
         assert!(tasks.is_empty(), "a removed project leaves the set");
