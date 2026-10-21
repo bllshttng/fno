@@ -1043,3 +1043,37 @@ def test_resolve_url_missing_everywhere_short_circuits_secret_safe(tmp_path, mon
     assert url is None
     assert "FNO_STATUS_DISCORD" in err
     assert "discord.example" not in err  # never leaks a value
+
+
+def test_tick_short_circuit_parks_sink_until_backoff_expires(tmp_path, monkeypatch):
+    # A dead sink parks instead of re-reading its held window every tick; a
+    # live peer keeps delivering, and the parked backlog replays on expiry.
+    import json as _json
+
+    from fno import status_fanout as sf
+
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    _seed_cursor(ss, "a", "2026-07-12T00:00:00Z")
+    _seed_cursor(ss, "b", "2026-07-12T00:00:00Z")
+    _write_events(tmp_path, [_ev("2026-07-12T00:00:01Z", "blocked")])
+    sinks = [_text_sink("a"), _text_sink("b")]
+    dead = _Recorder(script={"a": (sf.SHORT_CIRCUIT, "refused")})
+    sf.run_tick(tmp_path, sinks, dispatch_fn=dead)
+    parks = _json.loads((ss / "short-circuit-backoff.json").read_text())
+    assert set(parks) == {"a"}
+
+    _write_events(tmp_path, [_ev("2026-07-12T00:00:01Z", "blocked"),
+                             _ev("2026-07-12T00:00:02Z", "blocked")])
+    rec = _Recorder()
+    res = sf.run_tick(tmp_path, sinks, dispatch_fn=rec)
+    assert [s.name for s in res.sinks] == ["b"] and rec.calls == [("b", "2026-07-12T00:00:02Z")]
+    assert _cursor(ss, "a")["ts"] == "2026-07-12T00:00:00Z"
+    alone = sf.run_tick(tmp_path, [_text_sink("a")], dispatch_fn=rec)
+    assert alone.parked_sinks == ("a",) and len(rec.calls) == 1
+
+    monkeypatch.setattr(sf.time, "time", lambda: parks["a"] + 1)
+    sf.run_tick(tmp_path, sinks, dispatch_fn=rec)
+    assert ("a", "2026-07-12T00:00:02Z") in rec.calls
+    assert _cursor(ss, "a")["ts"] == "2026-07-12T00:00:02Z"
+    assert _json.loads((ss / "short-circuit-backoff.json").read_text()) == {}

@@ -29,6 +29,8 @@ import json
 import os
 import string
 import threading
+import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,6 +76,7 @@ class TickResult:
     locked_out: bool = False  # another tick held the per-project lock; skipped
     lease_lost: bool = False  # lock was stolen; cursor persistence was aborted
     undeliverable_sinks: "tuple[str, ...]" = ()  # enabled sinks' url unresolved; no read attempted
+    parked_sinks: "tuple[str, ...]" = ()  # every enabled sink parked after a short-circuit; no read
 
 
 # ── event stream (rotation-aware, skip-and-count) ───────────────────────────
@@ -227,6 +230,14 @@ def _read_cursor(name: str, project_root: Optional[Path]) -> "Optional[tuple[str
         return None  # a torn/legacy cursor reads as fresh (harmless re-init at EOF)
 
 
+def _read_parks(project_root: Optional[Path]) -> "dict[str, float]":
+    try:  # per-sink park deadlines, epoch secs
+        parks = json.loads((_state_dir(project_root) / "short-circuit-backoff.json").read_text())
+        return {str(k): float(v) for k, v in parks.items()}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
 def _write_cursor(name: str, cursor: "tuple[str, int]", project_root: Optional[Path]) -> None:
     path = _cursor_path(name, project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,11 +296,16 @@ def run_tick(
         # cursor resumes the backlog once the url resolves.
         return TickResult(undeliverable_sinks=tuple(s.name for s in enabled))
 
+    # A short-circuited sink parks until its deadline, never re-reading its window each tick.
+    parks = {} if dry_run else _read_parks(project_root)
+    live = [s for s in enabled if parks.get(s.name, 0) <= time.time()]
+    if not live:
+        return TickResult(parked_sinks=tuple(s.name for s in enabled))
     lock = _TickLock(project_root)
     if not lock.acquire():
         return TickResult(locked_out=True)
     try:
-        return _run_locked(project_root, enabled, dry_run, dispatch, lock.verify)
+        return _run_locked(project_root, live, dry_run, dispatch, lock.verify, parks, fanout.short_circuit_backoff_secs)
     finally:
         lock.release()
 
@@ -300,6 +316,8 @@ def _run_locked(
     dry_run: bool,
     dispatch: Dispatcher,
     verify_lease: Callable[[], bool],
+    parks: "Optional[dict[str, float]]" = None,
+    backoff: float = 0,
 ) -> TickResult:
     active = paths.project_log("events.jsonl", project_root=project_root)
     scan = (_read_cursor(_SCAN, project_root) or (None, None))[1]
@@ -394,7 +412,9 @@ def _run_locked(
         # Past an advance no same-ts peer remains, so counts restart at 0.
         # Cursors land first: a crash between the writes re-delivers.
         advance = high is not None and high != scan
-        advance = advance and not any(state[s.name].short_circuited for s in sinks)
+        # A parked sink's backlog replays against this frozen seq floor on resume.
+        held = {k: v for k, v in (parks or {}).items() if v > time.time()}
+        advance = advance and not held and not any(state[s.name].short_circuited for s in sinks)
         for s in sinks:
             st = state[s.name]
             cursor = st.new_cursor
@@ -419,6 +439,12 @@ def _run_locked(
                 _write_cursor(_SCAN, ("", high), project_root)
             except OSError:
                 pass  # the next tick re-reads this window; ts cursors dedupe
+        held.update({s.name: time.time() + backoff for s in sinks if backoff and state[s.name].short_circuited})
+        if held != (parks or {}) and verify_lease():
+            with suppress(OSError):  # unparked: the sink retries next tick, as before
+                path = _state_dir(project_root) / "short-circuit-backoff.json"
+                path.with_suffix(".tmp").write_text(json.dumps(held), encoding="utf-8")
+                os.replace(path.with_suffix(".tmp"), path)
 
     return TickResult(
         sinks=[state[s.name] for s in sinks], skipped_lines=skipped, rows_read=len(events))
@@ -494,8 +520,6 @@ _USER_AGENT = "fno-status-fanout/1.0"
 
 
 def _sleep(seconds: float) -> None:
-    import time
-
     time.sleep(seconds)
 
 

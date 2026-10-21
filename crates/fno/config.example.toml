@@ -767,6 +767,8 @@ interval_secs = 5
 http_timeout_secs = 5
 # Retry budget per webhook dispatch before drop/short-circuit.
 retries = 2
+# Seconds a short-circuited status sink stays parked before the next retry; 0 retries every tick.
+short_circuit_backoff_secs = 300
 
 [lead]
 # Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false.
