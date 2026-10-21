@@ -14,6 +14,7 @@
 //! not parse is counted, not dropped silently.
 
 use crate::context_window::normalize_model;
+use crate::evals_trend::{round4, wilson_rate};
 use crate::scoreboard_provider::{node_outcome, num_opt, parse_local, pct, percentile, round2};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -21,6 +22,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub(crate) const UNATTRIBUTED: &str = "unattributed";
 pub(crate) const UNRECORDED: &str = "unrecorded";
 pub(crate) const UNKNOWN: &str = "unknown";
+
+/// The per-PR outcome feeds the fold joins through the node's PR number.
+/// `None` means the feed could not be read this run, so the column it feeds
+/// stays null on every record instead of a measured zero.
+#[derive(Default)]
+pub struct OutcomeFeeds<'a> {
+    /// Fail review verdicts per PR number (the latest verdict per reviewer
+    /// and head, from the review_coverage + review_attestation rows).
+    pub review_fails_by_pr: Option<&'a HashMap<i64, u64>>,
+}
 
 /// The verb part of `kind`: every execute/target session ran the delivery
 /// pipeline, so `target/<difficulty>` is the only slice-1 kind.
@@ -120,10 +131,17 @@ pub struct RecordSet {
 /// (no `reverted` flag and no `caused_by` fix node anywhere), and the
 /// friction counts are null when the friction store could not be read, so
 /// an unread source never prints as a measured zero.
+///
+/// The PR-keyed outcome columns ride the same rule one store narrower: a
+/// node without a PR number has no CI, review or fix-of-fix surface at all
+/// (null, not a measured zero), a node with one is measured whenever its
+/// feed was readable, and `fix_of_fix` is stamped afterwards by
+/// [`stamp_fix_of_fix`] once the blame read knows which PRs it answers.
 pub fn build_records(
     nodes: &[Value],
     ledger: &LedgerIndex,
     friction_by_node: Option<&BTreeMap<String, BTreeMap<String, u32>>>,
+    feeds: &OutcomeFeeds<'_>,
     since_days: i64,
     now: chrono::NaiveDateTime,
     domain: Option<&str>,
@@ -313,12 +331,24 @@ pub fn build_records(
                 .copied()
                 .unwrap_or(0)
         });
-        let review_round = friction_by_node.map(|m| {
-            m.get(id)
-                .and_then(|f| f.get("review_round"))
-                .copied()
-                .unwrap_or(0)
-        });
+        // The PR-keyed outcomes: no PR number, no surface. A PR-bearing node
+        // is measured whenever its feed was readable; a red is at least one
+        // recorded ci_failure row (one row per red head).
+        let pr = node.get("pr_number").and_then(Value::as_i64);
+        let ci_red = match (pr, friction_by_node) {
+            (Some(_), Some(m)) => Some(
+                m.get(id)
+                    .and_then(|f| f.get("ci_failure"))
+                    .copied()
+                    .unwrap_or(0)
+                    > 0,
+            ),
+            _ => None,
+        };
+        let review_findings = match (pr, feeds.review_fails_by_pr) {
+            (Some(pr), Some(m)) => Some(m.get(&pr).copied().unwrap_or(0)),
+            _ => None,
+        };
 
         if let Some(d) = domain {
             if node.get("domain").and_then(Value::as_str) != Some(d) {
@@ -335,17 +365,85 @@ pub fn build_records(
             "model": model,
             "effort": effort,
             "merged": merged,
+            "pr": pr,
             "cost_usd": cost_usd,
             "work_hours": if work_hours > 0.0 { Some(round2(work_hours)) } else { None },
             "bounce": bounce,
             "ci_failure": ci_failure,
-            "review_round": review_round,
+            "ci_red": ci_red,
+            "review_findings": review_findings,
             "shared": lanes.len() > 1,
         }));
     }
     RecordSet {
         records,
         dropped_unparsed,
+    }
+}
+
+/// Stamps the fix-of-fix verdict onto each record after the blame read: the
+/// verdict set is keyed by PR number and only computed for the PRs this fold
+/// carries, so the read blames nothing else. A PR with no row (not a fix
+/// delivery, unmeasured, or outside the walk) stays unrecorded - null, never
+/// a measured clean.
+pub fn stamp_fix_of_fix(records: &mut [Value], fix_by_pr: &HashMap<u64, Option<bool>>) {
+    for r in records.iter_mut() {
+        let Some(pr) = r.get("pr").and_then(Value::as_u64) else {
+            continue;
+        };
+        if let Some(verdict) = fix_by_pr.get(&pr) {
+            r["fix_of_fix"] = json!(verdict);
+        }
+    }
+}
+
+/// The fix-of-fix verdicts for this fold: the PR set the records carry,
+/// walked on the merged line of the repo at `cwd`. `None` on a non-repo cwd
+/// or a failed walk - the column then reads null with its coverage saying
+/// so, never a measured clean.
+pub fn fix_by_pr(
+    records: &[Value],
+    cwd: &std::path::Path,
+    since_days: i64,
+) -> Option<HashMap<u64, Option<bool>>> {
+    let wanted: HashSet<u64> = records
+        .iter()
+        .filter_map(|r| r.get("pr").and_then(Value::as_u64))
+        .collect();
+    if wanted.is_empty() {
+        return Some(HashMap::new());
+    }
+    // The repo root: the nearest ancestor holding .git (a worktree's is a
+    // file). Outside a repo the feed is unreadable, not clean.
+    let repo = std::fs::canonicalize(cwd)
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .ancestors()
+        .find(|p| p.join(".git").exists())
+        .map(|p| p.to_path_buf());
+    let Some(repo) = repo else {
+        eprintln!(
+            "fno backlog calibration: no git repo above {}; the fix-of-fix column reads as unknown",
+            cwd.display()
+        );
+        return None;
+    };
+    let rev = crate::stability_report::scorecard_rev(&repo);
+    match crate::stability_report::fix_of_fix_by_pr(
+        &repo,
+        &rev,
+        since_days + 7,
+        7,
+        chrono::Utc::now(),
+        &wanted,
+    ) {
+        Ok(map) => Some(map),
+        Err(err) => {
+            eprintln!(
+                "fno backlog calibration: could not walk the merged line ({err}); \
+the fix-of-fix column reads as unknown rather than a measured zero."
+            );
+            None
+        }
     }
 }
 
@@ -361,8 +459,13 @@ struct CellAcc {
     measured_cost: bool,
     work_hours: Vec<f64>,
     ci_failure: u64,
-    review_round: u64,
     friction_readable: u64,
+    ci_red: u64,
+    ci_red_measured: u64,
+    review_findings: u64,
+    review_measured: u64,
+    fix_of_fix: u64,
+    fix_measured: u64,
     shared: u64,
 }
 
@@ -397,12 +500,32 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
         if let Some(h) = num_opt(r.get("work_hours")) {
             c.work_hours.push(h);
         }
-        // Both friction counts ride one store read: readable or null
+        // Both friction columns ride one store read: readable or null
         // together.
         if let Some(ci) = r["ci_failure"].as_u64() {
             c.friction_readable += 1;
             c.ci_failure += ci;
-            c.review_round += r["review_round"].as_u64().unwrap_or(0);
+        }
+        // The PR-keyed outcome columns each count their own denominator: a
+        // merged node with a PR is measured whenever its feed was readable,
+        // so a cell's rate never dilutes across nodes the feed cannot see.
+        if merged {
+            if r["ci_red"].as_bool().is_some() {
+                c.ci_red_measured += 1;
+                if r["ci_red"].as_bool() == Some(true) {
+                    c.ci_red += 1;
+                }
+            }
+            if let Some(f) = r["review_findings"].as_u64() {
+                c.review_measured += 1;
+                c.review_findings += f;
+            }
+            if let Some(v) = r["fix_of_fix"].as_bool() {
+                c.fix_measured += 1;
+                if v {
+                    c.fix_of_fix += 1;
+                }
+            }
         }
         if r["shared"].as_bool() == Some(true) {
             c.shared += 1;
@@ -442,6 +565,19 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
                     None
                 }
             };
+            // The Wilson score interval over the merged share, the same
+            // closed form the eval trend emits: the interval is computed
+            // from the cell's own counts, so it always reads when the cell
+            // has nodes.
+            let (_, ci_lo, ci_hi) = wilson_rate(c.nodes as usize, c.merged as usize);
+            // An outcome rate measures only the merged nodes its feed can
+            // see; with none measured the rate is null and its coverage
+            // says so - never a clean 0%.
+            let rate = |hits: u64, measured: u64| -> Option<i64> {
+                (measured > 0).then(|| pct(hits, measured))
+            };
+            let cover =
+                |measured: u64| -> Option<i64> { (c.merged > 0).then(|| pct(measured, c.merged)) };
             json!({
                 "kind": kind,
                 "harness": harness,
@@ -450,12 +586,22 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
                 "nodes": c.nodes,
                 "merged": c.merged,
                 "merged_pct": merged_pct,
+                "merged_ci95": [round4(ci_lo), round4(ci_hi)],
                 "spend_usd": spend_usd,
                 "cost_per_merged_usd": cost_per_merged,
                 "median_work_hours": percentile(&c.work_hours, 50),
                 "bounce_pct": bounce_pct,
                 "ci_failure_per_node": per_node(c.ci_failure),
-                "review_round_per_node": per_node(c.review_round),
+                "ci_red_pct": rate(c.ci_red, c.ci_red_measured),
+                "ci_red_coverage_pct": cover(c.ci_red_measured),
+                "review_findings_per_node": if c.review_measured > 0 {
+                    Some(round2(c.review_findings as f64 / c.review_measured as f64))
+                } else {
+                    None
+                },
+                "review_findings_coverage_pct": cover(c.review_measured),
+                "fix_of_fix_pct": rate(c.fix_of_fix, c.fix_measured),
+                "fix_of_fix_coverage_pct": cover(c.fix_measured),
                 "shared": c.shared,
             })
         })
@@ -504,6 +650,78 @@ pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
     })
 }
 
+/// Per-PR fail-review counts from the journal, the feed behind
+/// `review_findings_per_node`: one batched read over the same journal the
+/// friction read walks. `review_coverage` rows map each PR to the heads its
+/// rounds read; `review_attestation` rows give each (reviewer, head) pair's
+/// verdict, and the pair's LATEST verdict decides - a reviewer who failed a
+/// head and passed the same head after the answers landed counts one
+/// resolved round, not findings. An unreadable store reports false so the
+/// column reads null, never a measured zero.
+pub fn review_fails_by_pr(journal: &std::path::Path) -> (HashMap<i64, u64>, bool) {
+    let query = crate::event_store::EventQuery {
+        types: vec![
+            "review_coverage".to_string(),
+            "review_attestation".to_string(),
+        ],
+        ..Default::default()
+    };
+    let rows = match crate::event_store::query_events(journal, &query) {
+        Ok(rows) => rows,
+        Err(err) => {
+            eprintln!(
+                "fno backlog calibration: could not read the review event store ({err}); \
+the review findings column reads as unknown rather than a measured zero."
+            );
+            return (HashMap::new(), false);
+        }
+    };
+    let mut keyed: Vec<(i64, &str)> = rows.iter().map(|r| (r.ts_ms, r.line.as_str())).collect();
+    keyed.sort_by_key(|(ts, _)| *ts);
+    let mut heads_by_pr: HashMap<i64, HashSet<String>> = HashMap::new();
+    let mut latest_by_reviewer_head: HashMap<(String, String), bool> = HashMap::new();
+    for (_, line) in &keyed {
+        let Ok(env) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let data = &env["data"];
+        match env["type"].as_str() {
+            Some("review_coverage") => {
+                if let (Some(pr), Some(head)) = (
+                    data.get("pr").and_then(Value::as_i64),
+                    data.get("head_sha").and_then(Value::as_str),
+                ) {
+                    heads_by_pr.entry(pr).or_default().insert(head.to_string());
+                }
+            }
+            Some("review_attestation") => {
+                if let (Some(reviewer), Some(head), Some(verdict)) = (
+                    data.get("reviewer").and_then(Value::as_str),
+                    data.get("head_sha").and_then(Value::as_str),
+                    data.get("verdict").and_then(Value::as_str),
+                ) {
+                    // The same reviewer arrives with and without the leading
+                    // slash the gate strips on both sides; key on one form or
+                    // a pass and a fail split into two identities.
+                    let name = reviewer.trim_start_matches('/');
+                    latest_by_reviewer_head
+                        .insert((name.to_string(), head.to_string()), verdict == "fail");
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut fails_by_pr: HashMap<i64, u64> = HashMap::new();
+    for (pr, heads) in heads_by_pr {
+        let fails: u64 = latest_by_reviewer_head
+            .iter()
+            .filter(|((_, head), is_fail)| heads.contains(head) && **is_fail)
+            .count() as u64;
+        fails_by_pr.insert(pr, fails);
+    }
+    (fails_by_pr, true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +741,13 @@ mod tests {
         if let Some(c) = cost {
             n["cost_sessions"] = json!([{"session_id": "s1", "cost_usd": c}]);
         }
+        n
+    }
+
+    /// Attaches a PR number to a fixture node, giving it the CI, review and
+    /// fix-of-fix surfaces.
+    fn with_pr(mut n: Value, pr: i64) -> Value {
+        n["pr_number"] = json!(pr);
         n
     }
 
@@ -573,11 +798,16 @@ mod tests {
 
     const NOW: &str = "2026-10-20T12:00:00Z";
 
+    fn no_feeds() -> OutcomeFeeds<'static> {
+        OutcomeFeeds::default()
+    }
+
     fn records(nodes: &[Value], ledger_rows: &[Value]) -> Vec<Value> {
         build_records(
             nodes,
             &LedgerIndex::build(ledger_rows),
             Some(&BTreeMap::new()),
+            &no_feeds(),
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -698,6 +928,7 @@ mod tests {
             &nodes,
             &LedgerIndex::build(&[]),
             None,
+            &no_feeds(),
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -724,7 +955,20 @@ mod tests {
             Value::Null,
             "unread friction store stays null: {unattr}"
         );
-        assert_eq!(unattr["review_round_per_node"], Value::Null);
+        assert_eq!(
+            unattr["review_findings_per_node"],
+            Value::Null,
+            "unread review feed stays null: {unattr}"
+        );
+        assert_eq!(
+            unattr["ci_red_pct"],
+            Value::Null,
+            "no PR-bearing node, no CI surface: {unattr}"
+        );
+        assert_eq!(
+            unattr["ci_red_coverage_pct"], 0,
+            "merged present, none measured: coverage reads 0"
+        );
         // The priced cell keeps its columns even beside the unmeasured one.
         let priced = cells
             .iter()
@@ -770,6 +1014,7 @@ mod tests {
             &[old, recent],
             &LedgerIndex::build(&[]),
             Some(&BTreeMap::new()),
+            &no_feeds(),
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -798,11 +1043,143 @@ mod tests {
             &[junk],
             &LedgerIndex::build(&[]),
             Some(&BTreeMap::new()),
+            &no_feeds(),
             28,
             parse_local(NOW).unwrap(),
             None,
         );
         assert_eq!(built.records.len(), 0);
         assert_eq!(built.dropped_unparsed, 1, "{:?}", built.records);
+    }
+
+    #[test]
+    fn merged_ci95_is_the_wilson_interval_of_the_cell_counts() {
+        // AC3-HP: 20 merged of 40 nodes lands near [0.35, 0.65], the closed
+        // form the eval trend emits.
+        let mut nodes = Vec::new();
+        for i in 0..40 {
+            let id = format!("x-w{i:04}");
+            let mut n = node(
+                &id,
+                json!([session(
+                    Some("claude"),
+                    None,
+                    &format!("sess-w{i}"),
+                    Some("2026-10-15T10:00:00Z")
+                )]),
+                "medium",
+                None,
+            );
+            // Every other node stays unmerged so the cell folds 20 of 40.
+            if i % 2 == 1 {
+                n["merge_status"] = json!("in_review");
+            }
+            nodes.push(n);
+        }
+        let recs = records(&nodes, &[]);
+        assert_eq!(recs.len(), 40, "{recs:?}");
+        let cells = fold_cells(&recs);
+        assert_eq!(cells.len(), 1, "{cells:?}");
+        let ci = cells[0]["merged_ci95"].as_array().expect("ci95 array");
+        let lo = ci[0].as_f64().unwrap();
+        let hi = ci[1].as_f64().unwrap();
+        assert!(
+            (0.34..=0.36).contains(&lo) && (0.64..=0.66).contains(&hi),
+            "wilson(40, 20) about [0.35, 0.65]: {ci:?}"
+        );
+    }
+
+    #[test]
+    fn unread_outcome_feeds_stay_null_never_zero() {
+        // AC3-EDGE shape: no node carries a PR, so no CI, review or
+        // fix-of-fix surface exists; the rates read null with coverage 0
+        // while merged_ci95 still reads from the cell's own counts.
+        let nodes = vec![node(
+            "x-nopr",
+            json!([session(
+                Some("claude"),
+                None,
+                "sess-nopr",
+                Some("2026-10-15T10:00:00Z")
+            )]),
+            "low",
+            None,
+        )];
+        let recs = records(&nodes, &[]);
+        let cells = fold_cells(&recs);
+        let c = &cells[0];
+        assert_eq!(c["merged"], 1);
+        assert_eq!(
+            c["merged_ci95"].as_array().map(Vec::as_slice),
+            Some(&[json!(0.2065), json!(1.0)][..]),
+            "wilson(1, 1) is [0.2065, 1.0]: {c}"
+        );
+        assert_eq!(c["ci_red_pct"], Value::Null);
+        assert_eq!(c["ci_red_coverage_pct"], 0);
+        assert_eq!(c["review_findings_per_node"], Value::Null);
+        assert_eq!(c["review_findings_coverage_pct"], 0);
+        assert_eq!(c["fix_of_fix_pct"], Value::Null);
+        assert_eq!(c["fix_of_fix_coverage_pct"], 0);
+    }
+
+    #[test]
+    fn pr_keyed_feeds_fold_to_cell_rates() {
+        // Two merged PR-bearing nodes on one lane: one recorded a red head
+        // and a fail verdict, one carried a measured-clean fix-of-fix; the
+        // rates read 50 with full coverage, and a PR the stability walk
+        // never answers stays null (not a measured clean).
+        let red_node = with_pr(
+            node(
+                "x-red",
+                json!([session(
+                    Some("claude"),
+                    None,
+                    "sess-red",
+                    Some("2026-10-15T10:00:00Z")
+                )]),
+                "low",
+                None,
+            ),
+            4201,
+        );
+        let clean_node = with_pr(
+            node(
+                "x-clean",
+                json!([session(
+                    Some("claude"),
+                    None,
+                    "sess-clean",
+                    Some("2026-10-16T10:00:00Z")
+                )]),
+                "low",
+                None,
+            ),
+            4202,
+        );
+        let mut built = build_records(
+            &[red_node, clean_node],
+            &LedgerIndex::build(&[]),
+            Some(&BTreeMap::new()),
+            &OutcomeFeeds {
+                review_fails_by_pr: Some(&HashMap::from([(4201_i64, 3_u64)])),
+            },
+            28,
+            parse_local(NOW).unwrap(),
+            None,
+        );
+        assert_eq!(built.records.len(), 2);
+        stamp_fix_of_fix(
+            &mut built.records,
+            &HashMap::from([(4202_u64, Some(false))]),
+        );
+        let cells = fold_cells(&built.records);
+        assert_eq!(cells.len(), 1, "{cells:?}");
+        let c = &cells[0];
+        assert_eq!(c["ci_red_pct"], 50);
+        assert_eq!(c["ci_red_coverage_pct"], 100);
+        assert_eq!(c["review_findings_per_node"], 1.5, "3 fails / 2 nodes: {c}");
+        assert_eq!(c["review_findings_coverage_pct"], 100);
+        assert_eq!(c["fix_of_fix_pct"], 0, "measured clean, a real 0%: {c}");
+        assert_eq!(c["fix_of_fix_coverage_pct"], 50, "one PR answered: {c}");
     }
 }

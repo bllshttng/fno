@@ -399,58 +399,7 @@ fn compute(
     // young introducer is always inside the delivery map.
     let map_since = since - Duration::days(parsed.fix_window_days.max(1));
     let since_iso = map_since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let log = git_out(
-        &parsed.repo,
-        &[
-            "log",
-            "--first-parent",
-            &format!("--since={since_iso}"),
-            "--format=%H%x1f%cI%x1f%P%x1f%s%x1f%b%x1e",
-        ],
-    )?;
-
-    let mut deliveries: Vec<Delivery> = Vec::new();
-    let mut by_sha: BTreeMap<String, (u64, DateTime<Utc>)> = BTreeMap::new();
-    for record in log.split('\u{1e}') {
-        let record = record.trim_start();
-        if record.is_empty() {
-            continue;
-        }
-        let fields: Vec<&str> = record.split('\u{1f}').collect();
-        let (sha, iso, subject, body) = match fields.as_slice() {
-            [sha, iso, _parents, subject, body] => (*sha, *iso, *subject, *body),
-            _ => continue,
-        };
-        let time = match DateTime::parse_from_rfc3339(iso) {
-            Ok(time) => time.with_timezone(&Utc),
-            Err(_) => continue,
-        };
-        let Some((pr, branch)) = delivery_pr(subject) else {
-            continue;
-        };
-        if deliveries.iter().any(|d| d.pr == pr) {
-            // git log walks newest-first, so the delivery already held is
-            // the newest one; keep it.
-            continue;
-        }
-        // The PR title rung is merge-delivery only: a squash's own body
-        // lines are commit prose, not a PR title.
-        let title = if branch.is_some() {
-            merge_title(body, subject)
-        } else {
-            None
-        };
-        let (kind, classified_by) = classify(subject, title, branch.as_deref(), node_kinds);
-        by_sha.insert(sha.to_string(), (pr, time));
-        deliveries.push(Delivery {
-            pr,
-            sha: sha.to_string(),
-            time,
-            kind,
-            classified_by,
-            subject: subject.to_string(),
-        });
-    }
+    let (mut deliveries, by_sha) = walk_deliveries(&parsed.repo, "HEAD", &since_iso, node_kinds)?;
     deliveries.sort_by_key(|d| d.time);
 
     let mut report = Report {
@@ -500,6 +449,125 @@ fn compute(
         });
     }
     Ok(report)
+}
+
+/// One first-parent walk over PR deliveries, newest-first, deduped to the
+/// newest landing per PR: the report's delivery map, shared by the stability
+/// verb (on HEAD) and the scorecard's fix-of-fix join (on a named ref).
+fn walk_deliveries(
+    repo: &std::path::Path,
+    rev: &str,
+    since_iso: &str,
+    node_kinds: &BTreeMap<String, String>,
+) -> Result<(Vec<Delivery>, BTreeMap<String, (u64, DateTime<Utc>)>), String> {
+    let log = git_out(
+        repo,
+        &[
+            "log",
+            rev,
+            "--first-parent",
+            &format!("--since={since_iso}"),
+            "--format=%H%x1f%cI%x1f%P%x1f%s%x1f%b%x1e",
+        ],
+    )?;
+    let mut deliveries: Vec<Delivery> = Vec::new();
+    let mut by_sha: BTreeMap<String, (u64, DateTime<Utc>)> = BTreeMap::new();
+    for record in log.split('\u{1e}') {
+        let record = record.trim_start();
+        if record.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = record.split('\u{1f}').collect();
+        let (sha, iso, subject, body) = match fields.as_slice() {
+            [sha, iso, _parents, subject, body] => (*sha, *iso, *subject, *body),
+            _ => continue,
+        };
+        let time = match DateTime::parse_from_rfc3339(iso) {
+            Ok(time) => time.with_timezone(&Utc),
+            Err(_) => continue,
+        };
+        let Some((pr, branch)) = delivery_pr(subject) else {
+            continue;
+        };
+        if deliveries.iter().any(|d| d.pr == pr) {
+            // git log walks newest-first, so the delivery already held is
+            // the newest one; keep it.
+            continue;
+        }
+        // The PR title rung is merge-delivery only: a squash's own body
+        // lines are commit prose, not a PR title.
+        let title = if branch.is_some() {
+            merge_title(body, subject)
+        } else {
+            None
+        };
+        let (kind, classified_by) = classify(subject, title, branch.as_deref(), node_kinds);
+        by_sha.insert(sha.to_string(), (pr, time));
+        deliveries.push(Delivery {
+            pr,
+            sha: sha.to_string(),
+            time,
+            kind,
+            classified_by,
+            subject: subject.to_string(),
+        });
+    }
+    Ok((deliveries, by_sha))
+}
+
+/// Per-PR fix-of-fix verdicts for the scorecard join: the same delivery walk
+/// and blame read the stability report runs, narrowed to the wanted PR
+/// numbers so one scorecard fold blames only its own fix deliveries. `rev`
+/// is the first-parent line to walk (origin/main for a scorecard read: a
+/// worktree cwd must see merged history, not its branch tip). The git-only
+/// classification ladder applies (an empty node-kind map): the subject and
+/// merge-title rungs carry this repo's conventional subjects, so a fix
+/// without one reads `other` and is skipped, never miscounted.
+pub(crate) fn fix_of_fix_by_pr(
+    repo: &std::path::Path,
+    rev: &str,
+    days: i64,
+    fix_window_days: i64,
+    now: DateTime<Utc>,
+    wanted: &std::collections::HashSet<u64>,
+) -> Result<BTreeMap<u64, Option<bool>>, String> {
+    let since = now - Duration::days(days);
+    let map_since = since - Duration::days(fix_window_days.max(1));
+    let since_iso = map_since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let (deliveries, by_sha) = walk_deliveries(repo, rev, &since_iso, &BTreeMap::new())?;
+    let mut out: BTreeMap<u64, Option<bool>> = BTreeMap::new();
+    for delivery in &deliveries {
+        if delivery.time < since || !wanted.contains(&delivery.pr) || delivery.kind != "fix" {
+            continue;
+        }
+        let parent = format!("{}^1", delivery.sha);
+        let mut blame_failures = 0;
+        let verdict = match fix_of_fix(
+            repo,
+            &parent,
+            delivery,
+            &by_sha,
+            fix_window_days,
+            &mut blame_failures,
+        ) {
+            Ok((verdict, _, _)) => verdict,
+            Err(_) => None,
+        };
+        out.insert(delivery.pr, verdict);
+    }
+    Ok(out)
+}
+
+/// The ref a scorecard read walks: the remote main when it exists, the local
+/// main as the fallback, HEAD last. A worktree session has no main checked
+/// out but shares the remote refs.
+pub(crate) fn scorecard_rev(repo: &std::path::Path) -> String {
+    for rev in ["origin/main", "main"] {
+        if git_out(repo, &["rev-parse", "--verify", "--quiet", rev]).is_ok() {
+            return rev.to_string();
+        }
+    }
+    "HEAD".to_string()
 }
 
 /// (side, changed lines) for one PR: per-file first-match globs, the PR sits
