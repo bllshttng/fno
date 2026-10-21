@@ -5,10 +5,28 @@
 #
 # Roles: held-out (qualification) tasks never enter a tuning view; a climb
 # verdict claims held-out quality only from these three tasks. validation
-# sits empty until slice 3 lands stage tasks.
+# sits empty until the qualification draw moves tasks in.
 #
-# bank_rev pins origin/main at the slice-1 branch point.
-bank_rev: ae16de58655c3583d7af6d198c9ff8fb97795edd
+# Slice 3 adds eight stage tasks mined from real failures (four target,
+# four review). They all land in train. The future qualification draw is
+# seeded: python3 random.Random(20261020) shuffled each stage's new ids,
+# and the first three of each shuffle are the designated qualification
+# candidates. They move only after the user validates their graders (the
+# plan's open question, resolved 2026-10-20 by lead ruling: graders are
+# validated by the user; an opus reviewer may pre-screen first). Draw
+# orders, to be consumed in order:
+#
+#   target candidates:
+#     capability-stage-target-commit-guard
+#     capability-stage-target-fold-order
+#     capability-stage-target-mail-sender
+#   review candidates:
+#     capability-stage-review-decorative-test
+#     capability-stage-review-absence-control
+#     capability-stage-review-swallowed-error
+#
+# bank_rev pins the slice-3 task-authoring commit b700aff599cfb490f62cd728b77d5051b6d1eb1a.
+bank_rev: b700aff599cfb490f62cd728b77d5051b6d1eb1a
 
 train:
   - capability-lane-blueprint
@@ -16,10 +34,18 @@ train:
   - capability-lane-review
   - capability-lane-implementation
   - capability-judgment-root-cause
+  - capability-stage-target-commit-guard
+  - capability-stage-target-fold-order
+  - capability-stage-target-mail-sender
+  - capability-stage-review-decorative-test
+  - capability-stage-review-absence-control
+  - capability-stage-review-swallowed-error
+  - capability-stage-review-commit-url-leak
+  - capability-stage-target-rebuild-scope
 
 validation: []
 
 qualification:
   - capability-judgment-design
-  - capability-judgment-blast-radius
   - capability-judgment-investigate
+  - capability-judgment-blast-radius
