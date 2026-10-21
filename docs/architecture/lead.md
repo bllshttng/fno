@@ -1,6 +1,6 @@
 # Lead: the tenured lead
 
-A pass encodes a wave and steps_down (`/fno:lead <scope> --once`). A lead without `--once` stays. The operator asked for a lead that keeps working over a territory for days. It checks in on a schedule, drives with levers, and parks rather than dies. `/fno:lead <scope>` is that skill.
+A pass encodes a wave and steps down (`/fno:lead <scope> --once`). A lead without `--once` stays. The operator asked for a lead that keeps working over a territory for days. It checks in on a schedule, drives with levers, and parks rather than dies. `/fno:lead <scope>` is that skill.
 
 ## What keeps a lead active
 
