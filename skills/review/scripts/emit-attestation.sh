@@ -68,7 +68,11 @@ usage() {
 # gate. Any typo'd or stray flag did the same. There is no reviewer name in any
 # registry that begins with `-`, so refusing the whole shape costs nothing and
 # closes the class rather than the one spelling.
+# reviewer starts empty so the lstrip loop below is a no-op in refusal mode:
+# under set -u the loop runs before the refusal exit and $reviewer is
+# otherwise never assigned there.
 refuse_reason=""
+reviewer=""
 case "${1:-}" in
   -h | --help)
     usage
