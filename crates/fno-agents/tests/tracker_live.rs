@@ -698,16 +698,27 @@ impl Gate {
                         "--limit",
                         "100",
                         "--json",
-                        "number,title,createdAt",
+                        "number,title,createdAt,labels",
                     ],
                 )?;
+                // An issue without the gate label never counts as a gate
+                // item, whatever its title says.
+                let labeled = |i: &Value| {
+                    i["labels"]
+                        .as_array()
+                        .is_some_and(|ls| ls.iter().any(|l| l["name"] == json!(LABEL)))
+                };
                 Ok(v.as_array()
                     .into_iter()
                     .flatten()
                     .map(|i| {
                         (
                             format!("{repo}#{}", i["number"]),
-                            s(&i["title"]),
+                            if labeled(i) {
+                                s(&i["title"])
+                            } else {
+                                String::new()
+                            },
                             s(&i["createdAt"]),
                         )
                     })
