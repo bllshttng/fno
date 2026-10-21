@@ -3817,8 +3817,8 @@ mod tests {
         let by_id = index_by_id(&entries);
         let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
         assert_eq!(trail.len(), 2, "every pruned dependent rides the trail");
-        assert_eq!(trail[0]["node"].as_str(), Some("x-open"), "{trail}");
-        assert_eq!(trail[1]["node"].as_str(), Some("x-open2"), "{trail}");
+        assert_eq!(trail[0]["node"].as_str(), Some("x-open"), "{trail:?}");
+        assert_eq!(trail[1]["node"].as_str(), Some("x-open2"), "{trail:?}");
         // The reconcile path commits through apply_edge_settlement on LIVE
         // rows: the trail must land there too, or a reopen restores nothing.
         let settlement = json!({
