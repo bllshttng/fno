@@ -949,10 +949,7 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     """
     if verb != "spawn":
         return False
-    # An explicit -H naming the member set routes to the binary's arm; the absent -H keeps the Python leg.
-    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() in _RUST_PANE_HARNESSES:
-        return False
-    substrate = "pane"
+    substrate = None
     it = iter(args)
     for a in it:
         if a == "--argv" or a == "--":
@@ -968,7 +965,10 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
             substrate = next(it, "")
         elif a.startswith("--substrate=") or a.startswith("--as="):
             substrate = a.split("=", 1)[1]
-    return substrate == "pane"
+    if substrate is None or substrate != "pane":
+        return substrate is None
+    # An EXPLICIT -H naming the member set routes to the binary's arm; the absent -H keeps the Python leg.
+    return (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() not in _RUST_PANE_HARNESSES
 
 
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:

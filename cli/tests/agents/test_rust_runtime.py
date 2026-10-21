@@ -866,6 +866,10 @@ def test_is_pane_substrate_spawn_harness_carveout() -> None:
     assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--substrate", "thread"])
     assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--once"])
     assert not rr._is_pane_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
+    # The carve-out is EXPLICIT-pane only: an absent substrate keeps the
+    # Python pane back half even for a member harness, whose default the
+    # Python body resolves (thread where the harness seats one, else pane).
+    assert rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "-H", "codex"])
 
 
 def test_is_dispatch_account_bearing_spawn_predicate() -> None:
