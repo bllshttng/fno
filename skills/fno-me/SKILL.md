@@ -30,7 +30,7 @@ take, so delivery is coherent and a missed send is recoverable by the same id. I
 derived handle. Exit 3 means the session has no addressable harness identity
 (nothing to register) - report that rather than inventing a handle.
 
-This joins only THIS session. A session also joins on its own at its first fno skill or verb. A `/fno:` or `$fno:` prompt joins it, and so do an `fno:*` Skill call and an `fno` command it runs. A joined session gets a registry row, a spawn-gate slot and the using-fno preamble. An unjoined one gets none of them. The join writes the marker `~/.fno/agents/sessions/<harness>/<session-id>/joined`. A hook's own fno call never joins, because every hook runs with `FNO_HOOK_CONTEXT=1`. To auto-join every hand-started session in scope, set `agents.auto_register_sessions = true` in config.
+This joins only THIS session. A session also joins on its own at its first fno skill or command. A `/fno:` or `$fno:` prompt joins it, and so do an `fno:*` Skill call and an `fno` command it runs. A joined session gets a registry row, a spawn-gate slot and the using-fno preamble. An unjoined one gets none of them. The join writes the marker `~/.fno/agents/sessions/<harness>/<session-id>/joined`. A hook's own fno call never joins, because every hook runs with `FNO_HOOK_CONTEXT=1`. To auto-join every hand-started session in scope, set `agents.auto_register_sessions = true` in config.
 
 That knob joins sessions at SessionStart only, so a session already running, or one another skill tells to join (lead, on titling), still invokes this. This is a skill, not a command. The codex plugin manifest and the agy bundle ship `skills/` only, and a skill is the surface an agent can invoke itself.
 
