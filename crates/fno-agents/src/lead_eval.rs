@@ -1524,8 +1524,13 @@ fn session_has_eval(session: &str) -> Result<bool, String> {
         let entry = entry.map_err(|error| format!("eval directory entry unreadable: {error}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.contains(sid8) {
-            if name.ends_with(".md") && index_status(&entry.path()).as_deref() == Some(RETRY_STATUS)
-            {
+            // A retry index and the dir it sits beside both name the
+            // handle; neither is a written eval.
+            let index = match name.strip_suffix(".md") {
+                Some(_) => entry.path(),
+                None => entry.path().with_file_name(format!("{name}.md")),
+            };
+            if index_status(&index).as_deref() == Some(RETRY_STATUS) {
                 continue;
             }
             return Ok(true);
