@@ -7,9 +7,10 @@
 use serde_json::json;
 use std::path::PathBuf;
 
-/// The subverbs that stay Python mounts (x-ad0b's surface): decide_role
-/// leaves them unclaimed, and the dispatcher refuses them by name so a
-/// hand-typed `fno-agents do pr watch` cannot shadow the mount.
+/// The subverbs that stay Python mounts (the watcher's own surface, outside
+/// this port's scope): decide_role leaves them unclaimed, and the
+/// dispatcher refuses them by name so a hand-typed `fno-agents do pr watch`
+/// cannot shadow the mount.
 const PYTHON_MOUNTS: [&str; 2] = ["watch", "stub-manifest"];
 
 /// One spelling's row: (spelling, usage tail). The grouped help lists every
@@ -61,7 +62,7 @@ fn print_help() {
         println!();
     }
     println!(
-        "  watch, stub-manifest      Python mounts under the same namespace (x-ad0b's surface)"
+        "  watch, stub-manifest      Python mounts under the same namespace (the watcher's surface)"
     );
 }
 

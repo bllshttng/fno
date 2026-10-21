@@ -26,8 +26,17 @@ PR="${1:?usage: check-stacked-base.sh <pr-number> <head-sha>}"
 SHA="${2:?usage: check-stacked-base.sh <pr-number> <head-sha>}"
 CONTEXT="stacked-base-guard"
 
-out="$(uv run --project cli fno-py do pr base-lineage-check "$PR" 2>&1)"
-rc=$?
+bin="${FNO_AGENTS_BIN:-}"
+if [ -z "$bin" ]; then
+  bin="$(command -v fno-agents || true)"
+fi
+if [ -n "$bin" ] && [ -x "$bin" ]; then
+  out="$("$bin" do pr base-lineage-check "$PR" 2>&1)"
+  rc=$?
+else
+  out="fno-agents binary not found (set FNO_AGENTS_BIN or install fno)"
+  rc=127
+fi
 printf '%s\n' "$out"
 
 case "$rc" in

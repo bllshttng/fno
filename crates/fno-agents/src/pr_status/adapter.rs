@@ -3,8 +3,8 @@
 //! translated from REST helpers, remaining GraphQL shapes run through the
 //! serialized quota broker with a purpose fixed by the executable name, so
 //! an environment variable cannot promote a discretionary read into the
-//! coverage reserve. Ported from `cli/src/fno/pr/_internal_gh.py` (pr port
-//! 7, x-e024); the Rust stop gate and finalize spawn these names as
+//! coverage reserve. Ported from `cli/src/fno/pr/_internal_gh.py` (the pr
+//! port 7 retirement); the Rust stop gate and finalize spawn these names as
 //! executables, so the interface is "a gh-shaped argv in, gh-shaped streams
 //! and an exit code out".
 

@@ -306,7 +306,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "paths": set(),
     "plan": set(),
     "plugins": set(),
-    "pr": {"merge"},
     "pr-watch": set(),
     "resume": set(),
     "retro": set(),

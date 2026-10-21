@@ -818,9 +818,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // The pr namespace claims itself lexically, like backlog: the sibling
     // dispatcher owns the 29 spellings and the handover stays byte-verbatim
     // (pr port 7). The two carve-outs stay with the Python wheel: `watch`
-    // and `stub-manifest` are x-ad0b's surface, and do_cli.py keeps their
-    // mounts answering under `fno do pr`. Bare `fno do pr` claims too: the
-    // grouped help is native once the Python pr_app is gone.
+    // and `stub-manifest` are the watcher's own surface, and do_cli.py keeps
+    // their mounts answering under `fno do pr`. Bare `fno do pr` claims too:
+    // the grouped help is native once the Python pr_app is gone.
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("pr")
         && !matches!(

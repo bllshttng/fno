@@ -1,6 +1,6 @@
 //! One serialized quota policy for every Footnote GraphQL caller. Ported from
-//! `cli/src/fno/pr/_quota.py` (pr port 7, x-e024). The machine quota lock,
-//! the probe cache, and every refusal wording are the Python leg's,
+//! `cli/src/fno/pr/_quota.py` (the pr port 7 retirement). The machine quota
+//! lock, the probe cache, and every refusal wording are the Python leg's,
 //! byte-for-byte where an operator or a test read them.
 
 use serde_json::Value;

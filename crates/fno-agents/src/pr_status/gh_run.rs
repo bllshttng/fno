@@ -1,7 +1,8 @@
 //! The captured external-command runner the quota broker and the internal gh
-//! adapter share. Ported from `cli/src/fno/pr/_proc.py` (pr port 7, x-e024):
-//! run a tool, capture text output, and distinguish "tool not installed"
-//! from "tool ran and failed", so the missing-`gh` exit codes (127) survive
+//! adapter share. Ported from `cli/src/fno/pr/_proc.py` (the pr port 7
+//! retirement): run a tool, capture text output, and distinguish "tool not
+//! installed" from "tool ran and failed", so the missing-`gh` exit codes
+//! (127) survive
 //! the port instead of surfacing as spawn panics.
 
 use std::io::Read;

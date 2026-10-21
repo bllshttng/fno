@@ -224,7 +224,7 @@ fn same_repo_head_deletes_from_the_base_repo_once() {
         ok(String::new())
     };
     let mut err: Vec<u8> = Vec::new();
-    remote_delete_cleanup(7, Path::new("/nonexistent-x-e024"), &probe, &mut err);
+    remote_delete_cleanup(7, Path::new("/nonexistent-fno-tmp"), &probe, &mut err);
     let deletes = deletes.borrow();
     assert_eq!(deletes.len(), 1, "one ref delete: {deletes:?}");
     assert_eq!(
@@ -251,7 +251,7 @@ fn a_fork_head_is_never_deleted_from_the_base_repo() {
         ok(String::new())
     };
     let mut err: Vec<u8> = Vec::new();
-    remote_delete_cleanup(7, Path::new("/nonexistent-x-e024"), &probe, &mut err);
+    remote_delete_cleanup(7, Path::new("/nonexistent-fno-tmp"), &probe, &mut err);
     assert!(
         deletes.borrow().is_empty(),
         "a fork's branch is the fork's to delete"
@@ -277,7 +277,7 @@ fn a_failed_delete_names_the_failure_without_raising() {
         })
     };
     let mut err: Vec<u8> = Vec::new();
-    remote_delete_cleanup(7, Path::new("/nonexistent-x-e024"), &probe, &mut err);
+    remote_delete_cleanup(7, Path::new("/nonexistent-fno-tmp"), &probe, &mut err);
     assert!(
         String::from_utf8_lossy(&err).contains("cleanup failed"),
         "the failure is named, warn-only: {:?}",
