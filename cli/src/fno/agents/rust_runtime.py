@@ -1700,7 +1700,6 @@ def make_agents_group_cls() -> type:
                     or _is_keeper_thread_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
                     or _is_provenance_bearing_spawn(verb, args)
-                    or _is_resume_bearing_spawn(verb, args)
                     or _is_output_format_bearing_spawn(verb, args)
                     or _is_dispatch_account_bearing_spawn(verb, args)
                     or _is_anycast_ask(verb, args)

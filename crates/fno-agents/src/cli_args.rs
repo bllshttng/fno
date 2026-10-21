@@ -168,6 +168,8 @@ impl SpawnAxes {
         "--model",
         "-m",
         "--effort",
+        "--resume",
+        "-r",
         "--substrate",
         "--as",
     ];
@@ -198,6 +200,26 @@ impl SpawnAxes {
         let mut i = 0;
         while i < head.len() {
             let tok = head[i].as_str();
+            // An attached retired short (`-rabc`) is one token the exact
+            // AXIS_FLAGS match never sees. The Python door refused every head
+            // token a retired short starts, so the attached form refuses by
+            // its long here instead of reaching the prompt positionals.
+            let attached = if tok.starts_with("--") {
+                None
+            } else if tok.starts_with("-P") {
+                Some("--provider")
+            } else if tok.starts_with("-m") {
+                Some("--model")
+            } else if tok.starts_with("-r") {
+                Some("--resume")
+            } else {
+                None
+            };
+            if let Some(long) = attached {
+                if tok.len() > 2 {
+                    return Err(Self::refused_axis(long));
+                }
+            }
             // Equals-form is a live spelling of the value axes (`--account=x`);
             // split it here so the strict clap parse sees flag and value.
             let (long, inline) = match tok.split_once('=') {
@@ -239,6 +261,7 @@ impl SpawnAxes {
                     let named = match long {
                         "-P" => "--provider",
                         "-m" => "--model",
+                        "-r" => "--resume",
                         other => other,
                     };
                     return Err(Self::refused_axis(named));
@@ -494,6 +517,48 @@ mod tests {
             );
             assert!(err.contains("HARNESSES.md"), "{err}");
         }
+    }
+
+    #[test]
+    fn spawn_resume_refuses_with_the_python_golden_line() {
+        // The exact line _retired_axis("--resume") prints at the Python door;
+        // the golden pins it so both doors teach one native form.
+        const GOLDEN: &str = "refused: --resume is retired; the lane template owns it. \
+Native form: docs/HARNESSES.md (launch each harness its own way)";
+        assert_eq!(SpawnAxes::refused_axis("--resume"), GOLDEN);
+        for form in [
+            vec!["--resume", "6501096a"],
+            vec!["--resume=6501096a"],
+            vec!["-r", "6501096a"],
+        ] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("a resume-bearing spawn refuses");
+            assert_eq!(err, GOLDEN, "{err}");
+        }
+        // The attached short (`-rabc`, one token) is a spelling the exact
+        // AXIS_FLAGS match never sees; it refuses by its long. The fence
+        // still keeps a post-argv `-r` provider payload opaque.
+        for (tok, long) in [
+            ("-rabc", "--resume"),
+            ("-r=x", "--resume"),
+            ("-Pzai", "--provider"),
+            ("-msonnet", "--model"),
+        ] {
+            let toks: Vec<String> = [tok].iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("an attached retired short refuses");
+            assert!(
+                err.starts_with(&format!("refused: {long} is retired")),
+                "{err}"
+            );
+        }
+        let fenced: Vec<String> = ["--argv", "--", "claude", "-r", "x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            SpawnAxes::scan(&fenced).is_ok(),
+            "a post-fence -r stays provider argv"
+        );
     }
 
     #[test]
