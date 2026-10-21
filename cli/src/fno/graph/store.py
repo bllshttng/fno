@@ -66,7 +66,8 @@ _TX_ATTEMPTS = 5
 # Full-jitter backoff between retries. An immediate `continue` made N
 # concurrent writers re-ship the whole graph in lockstep and collide again
 # (the 2026-09-09 write livelock). Full jitter, not a shared floor: a common
-# floor is its own herd.
+# floor is its own herd. The daemon's settle loops in
+# crates/fno-agents/src/gc_sweep.rs share this policy; a Rust test pins it.
 _TX_BACKOFF_BASE_S = 0.05
 _TX_BACKOFF_CAP_S = 2.0
 
