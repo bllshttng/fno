@@ -1506,7 +1506,7 @@ pub(crate) fn run(
     )
 }
 
-/// [`run`] scoped to done-node rows and graded eval rows: the bulk
+/// [`run`] scoped to done-node rows and terminal eval rows: the bulk
 /// all-clear pass (`fno agents registry reap --done`). The seams are
 /// identical; the scope rides [`run_with_release`]'s `only_done`.
 #[allow(clippy::too_many_arguments)]
@@ -1718,9 +1718,9 @@ pub(crate) fn run_with_release(
     };
     let mut staged: Vec<Option<(ProvenanceVerdict, Option<i64>)>> =
         Vec::with_capacity(registry.entries.len());
-    // One evals-history read per pass: the graded set joins the roster once,
+    // One evals-history read per pass: the terminal set joins the roster once,
     // so N eval rows cost one file read, not N.
-    let graded_evals = crate::eval_reap::graded_eval_workers();
+    let finished_evals = crate::eval_reap::finished_eval_workers();
     for e in &registry.entries {
         let eligible = e.role_level.is_none()
             && (e.origin.as_deref() == Some("spawn")
@@ -1788,7 +1788,7 @@ pub(crate) fn run_with_release(
     let mut manifest_teams = crate::lead_state::ManifestRoleCache::new();
     for (e, staged_row) in registry.entries.iter().zip(staged.iter()) {
         let id = row_label(e);
-        // The --done scope: a row whose work is neither done nor a graded
+        // The --done scope: a row whose work is neither done nor a terminal
         // eval attempt is out of scope BEFORE any gate runs, so the scoped
         // receipt renders only rows the pass actually judged.
         if only_done {
@@ -1796,12 +1796,12 @@ pub(crate) fn run_with_release(
                 staged_row,
                 Some((verdict, _)) if matches!(verdict.work, WorkState::AllDone { .. })
             );
-            let graded_eval = crate::eval_reap::is_graded_eval_row(
+            let finished_eval = crate::eval_reap::is_finished_eval_row(
                 &e.name,
                 e.harness_session_id.as_deref(),
-                graded_evals.as_ref(),
+                finished_evals.as_ref(),
             );
-            if !done_work && !graded_eval {
+            if !done_work && !finished_eval {
                 continue;
             }
         }
@@ -2184,10 +2184,10 @@ pub(crate) fn run_with_release(
                 .is_some_and(node_route::NodeSource::is_transcript),
             node_held_elsewhere,
             open_work_retire_s,
-            eval_graded: crate::eval_reap::is_graded_eval_row(
+            eval_finished: crate::eval_reap::is_finished_eval_row(
                 &e.name,
                 Some(sid),
-                graded_evals.as_ref(),
+                finished_evals.as_ref(),
             ),
         };
         let (mut action, mut reason) = gc_decide(&row, grace_secs);

@@ -165,11 +165,12 @@ pub struct GcRow {
     /// `None` when no such claim was read.
     pub node_held_elsewhere: Option<String>,
     /// The row is an eval worker (`ev-th-evals-*`) whose attempt the evals
-    /// history reads graded: the attempt ran once, was classified, and the
+    /// history reads terminal (`graded` or `unavailable`): the attempt ran
+    /// once, was classified, and the
     /// roster row is the leftover. Retires ahead of every keep below the
     /// operator and teamed shields, so the bulk all-clear can remove the
     /// whole family without naming rows.
-    pub eval_graded: bool,
+    pub eval_finished: bool,
 }
 
 impl GcRow {
@@ -348,14 +349,14 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     if row.teamed {
         return (GcAction::Keep, Some(KeepReason::Teamed));
     }
-    // A graded eval attempt is finished work by definition: the attempt was
+    // A terminal eval attempt is finished work by definition: the attempt was
     // run once (`--once`), classified, and recorded in the evals history.
     // It still yields to the liveness gates a quiet retire takes - a live
     // claim or a moving transcript means the process is doing something -
     // but an UNREADABLE transcript is not a hold here: an eval worker's
-    // transcript may never resolve, and a graded row waiting on one keeps
+    // transcript may never resolve, and a finished row waiting on one keeps
     // forever.
-    if row.eval_graded {
+    if row.eval_finished {
         let v = spawn_idle_gate(row);
         return match v.1 {
             Some(KeepReason::TranscriptUnresolved) => (GcAction::Retire, None),
@@ -854,7 +855,7 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
 
 /// `fno agents registry reap --done`: the bulk all-clear pass. The same
 /// seams and gates as [`gc_sweep`], scoped to rows whose work is done or
-/// whose graded eval attempt marks the row finished: the merge the user
+/// whose terminal eval attempt marks the row finished: the merge the user
 /// already did is the all-clear, so the merge's rows leave the roster in
 /// one pass, and every other row is out of scope for that pass -
 /// untouched, unjudged, rendered nowhere.
@@ -2367,7 +2368,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
-            eval_graded: false,
+            eval_finished: false,
         }
     }
 
@@ -2550,16 +2551,16 @@ mod tests {
         );
     }
 
-    /// A graded eval row yields to the liveness gates a quiet retire
+    /// A terminal eval row yields to the liveness gates a quiet retire
     /// takes: a live claim holds, a moving transcript holds as Active,
     /// and only quiet OR unreadable retires. An unreadable transcript is
     /// not a hold for an eval row - the worker's transcript may never
-    /// resolve, and a graded row waiting on one keeps forever.
+    /// resolve, and a finished row waiting on one keeps forever.
     #[test]
-    fn a_graded_eval_row_yields_to_liveness_but_not_to_an_unreadable_transcript() {
+    fn a_finished_eval_row_yields_to_liveness_but_not_to_an_unreadable_transcript() {
         // Live claim: the holder process answered the pid probe.
         let claimed = GcRow {
-            eval_graded: true,
+            eval_finished: true,
             live_claim: Some("node:x-1 (holder s-1)".into()),
             ..retiring()
         };
@@ -2571,37 +2572,37 @@ mod tests {
                     detail: "node:x-1 (holder s-1)".into()
                 })
             ),
-            "a live claim outranks the graded fact"
+            "a live claim outranks the finished fact"
         );
         // Moving transcript: the worker is still writing.
         let moving = GcRow {
-            eval_graded: true,
+            eval_finished: true,
             transcript_age_s: Some(4),
             ..retiring()
         };
         assert_eq!(
             gc_decide(&moving, GRACE),
             (GcAction::Keep, Some(KeepReason::Active { age_s: 4 })),
-            "a moving transcript outranks the graded fact"
+            "a moving transcript outranks the finished fact"
         );
         // Quiet past the idle hour: retires.
         let quiet = GcRow {
-            eval_graded: true,
+            eval_finished: true,
             transcript_age_s: Some(SPAWN_IDLE_RETIRE_SECS + 1),
             ..retiring()
         };
         assert_eq!(gc_decide(&quiet, GRACE), (GcAction::Retire, None));
-        // An unreadable transcript is NOT a hold for a graded row: the
+        // An unreadable transcript is NOT a hold for a finished row: the
         // worker's transcript may never resolve.
         let unresolved = GcRow {
-            eval_graded: true,
+            eval_finished: true,
             transcript_age_s: None,
             ..retiring()
         };
         assert_eq!(
             gc_decide(&unresolved, GRACE),
             (GcAction::Retire, None),
-            "a graded row waiting on an unreadable transcript keeps forever otherwise"
+            "a finished row waiting on an unreadable transcript keeps forever otherwise"
         );
     }
 
@@ -3041,7 +3042,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
-            eval_graded: false,
+            eval_finished: false,
         }
     }
 
