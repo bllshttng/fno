@@ -1489,12 +1489,12 @@ async fn run(args: Vec<String>) -> i32 {
             );
             return 2;
         }
-        // 4a-G2: the `pane` substrate (the default) is mux-hosted, and the
-        // pane spine owns every harness arm (fno.agents.mux_spawn stays the
-        // python-mode twin). The Python front door no longer carves pane
-        // spawns out of the binary route: a pane spawn routes like a thread
-        // spawn, and the spine resolves the provider default itself.
-        // FNO_AGENTS_RUNTIME=python still selects the Python leg.
+        // 4a-G2: the `pane` substrate is mux-hosted, and the pane spine owns
+        // every harness arm (fno.agents.mux_spawn stays the python-mode
+        // twin). An explicit --as pane spawn routes here for every harness;
+        // a bare spawn keeps the Python door, where the default substrate
+        // (thread) and the keeper thread lanes live. FNO_AGENTS_RUNTIME=
+        // python still selects the Python leg.
         let mut substrate = params
             .get("substrate")
             .and_then(|v| v.as_str())

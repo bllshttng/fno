@@ -848,10 +848,11 @@ def test_is_resume_bearing_spawn_predicate() -> None:
 
 
 def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
-    """Every pane harness seats a Rust arm, so a pane spawn - explicit or
-    default substrate, any harness - routes to the binary like a thread
-    spawn. The old member-set carve-out is gone; the Python pane back half
-    answers only FNO_AGENTS_RUNTIME=python."""
+    """Every pane harness seats a Rust arm, so an explicit --as pane spawn
+    routes to the binary for any harness. The old member-set carve-out is
+    gone; the Python pane back half answers only FNO_AGENTS_RUNTIME=python.
+    A bare spawn is NOT this shape: its default substrate still resolves in
+    the Python door (see test_default_substrate_spawn_stays_python)."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -874,25 +875,23 @@ def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
     assert "--substrate" in captured[0]
 
 
-def test_default_substrate_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
-    """An absent --substrate routes to the binary too: the client resolves
-    the default substrate itself (thread where the harness seats one, else
-    pane), so the seam no longer holds the spawn back for it."""
-    from fno.cli import app
-
-    binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
-    captured: list = []
-
-    def fake_route(args, **kw):
-        captured.append(list(args))
-        raise SystemExit(99)
-
-    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
-    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
-    monkeypatch.setattr(rr, "route_to_rust", fake_route)
-    result = CliRunner().invoke(app, ["agents", "spawn", "--name", "w", "-H", "grok", "do x"])
-    assert result.exit_code == 99
-    assert captured, "a default-substrate spawn must route to the binary"
+def test_default_substrate_spawn_stays_python() -> None:
+    """A bare spawn's default substrate (thread, with the thread-seatable
+    refusal and the keeper thread lanes behind it) still resolves in the
+    Python door. Only an explicit --as pane names the shape the binary's
+    pane spine answers; the scan stops at --argv and the -- fence, and the
+    --once headless spelling opts out."""
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "seed"])
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "pane"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as=pane"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "thread"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "headless"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--once"])
+    # A fenced or payload token is the child's, never fno's routing flag.
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--", "--as", "pane"])
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--argv", "--as=pane"])
+    assert not rr._is_default_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
 
 
 def test_is_dispatch_account_bearing_spawn_predicate() -> None:

@@ -8,7 +8,9 @@
 //! `codex` submodule; the following row seated the claude arm (`claude`):
 //! argv, session pin, billing guard, monitor/route/happy legs. The client
 //! bounce is deleted with the claude arm, and the routing seam no longer
-//! carves any pane shape to Python.
+//! carves any explicit-pane shape to Python; a bare spawn's default
+//! substrate still resolves in the Python door (thread, with the seatable
+//! refusal and the keeper lanes).
 //!
 //! Ordering is the Python leg's ordering, because the contract it enforces is
 //! the contract reviewers will hold this module to: refusals before the
@@ -333,16 +335,19 @@ pub fn pane_arm_for(ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
 /// (AC4-ERR): the Gemini CLI was deprecated 2026-07-27 and no arm seats it.
 pub fn pane_refusal_for(provider: &str) -> Option<String> {
     (provider == "gemini").then(|| {
-        "gemini has no pane arm: the Gemini CLI was deprecated 2026-07-27 (Google's          successor is Antigravity); spawn agy instead"
+        "gemini has no pane arm: the Gemini CLI was deprecated 2026-07-27 (Google's successor is Antigravity); spawn agy instead"
             .to_string()
     })
 }
 
-/// The binary door's pane entry: the spine answers every shape (receipt or
-/// refusal printed). The provider default (dispatch_flags
+/// The binary door's pane entry: the spine answers every explicit-pane shape
+/// (receipt or refusal printed). The provider default (dispatch_flags
 /// `resolve_dispatch_harness`: explicit flag > invoking-harness inference >
 /// builtin claude) resolves here, where the deleted client bounce used to
-/// re-exec Python to get it.
+/// re-exec Python to get it. Narrowing, recorded: the front door scrubs the
+/// ambient identity markers before the exec, so the inference half can only
+/// fire on a DIRECT binary call; a routed explicit-pane spawn without -H
+/// resolves to claude. Pass -H when the invoking seat is not claude.
 pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[String]) -> i32 {
     let mut params = params.clone();
     let provider = params

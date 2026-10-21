@@ -716,9 +716,9 @@ def _refuse_codex_spawn_with_unreachable_tools(args: Sequence[str]) -> None:
 def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
     """Refuse a fresh claude thread spawn with no message before any worker launches.
 
-    Judges an explicit substrate only: an absent one resolves its default
-    substrate downstream (the binary's own ``default_substrate``), so this
-    seam must not pre-judge it.
+    Judges an explicit substrate only: an absent one routes to the Python
+    ``cmd_spawn`` (see :func:`_is_default_substrate_spawn`), which judges the
+    resolved substrate with the same helper.
     """
     from fno.agents.spawn_defaults import (
         _has_explicit_substrate,
@@ -927,7 +927,31 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn
 
-
+def _is_default_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
+    """True for a ``spawn`` with no explicit substrate: the Python door
+    resolves the built-in default (thread, with the thread-seatable refusal
+    and the headless spellings, cli.py's ``substrate or ...``), and the
+    keeper thread lanes live behind it. The scan stops at ``--argv`` and a
+    bare ``--`` so a payload or fenced token never reads as our flag. An
+    EXPLICIT ``--as pane`` routes to the binary's pane spine (row 8 seats
+    every harness); an explicit thread/headless spelling keeps its existing
+    lane.
+    """
+    if verb != "spawn":
+        return False
+    explicit = False
+    it = iter(args)
+    for a in it:
+        if a == "--argv" or a == "--":
+            break
+        if a in ("--once", "-o"):
+            return False
+        if a == "--substrate" or a == "--as":
+            next(it, "")
+            explicit = True
+        elif a.startswith("--substrate=") or a.startswith("--as="):
+            explicit = True
+    return not explicit
 
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     """The fno-arg head, stopping at the ``--argv`` provider-payload boundary
@@ -1598,6 +1622,7 @@ def make_agents_group_cls() -> type:
                     _is_role_bearing_spawn(verb, args)
                     or _is_promotion_bearing_spawn(verb, args)
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
+                    or _is_default_substrate_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
                     or _is_provenance_bearing_spawn(verb, args)
                     or _is_dispatch_account_bearing_spawn(verb, args)
