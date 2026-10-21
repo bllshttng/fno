@@ -88,8 +88,14 @@ fn golden_codex_tail(case: &str) -> Vec<String> {
 
 /// Set FNO_CODEX_VERSION for one test body and restore whatever was there,
 /// so hook_trust_flag's version gate answers deterministically under
-/// cfg(test) (which otherwise emits no flag).
+/// cfg(test) (which otherwise emits no flag). The lock serializes every
+/// pinner: the env var is process-global, and one test's restore must never
+/// delete another test's pin mid-read (the flaky parity failure the first
+/// parallel CI run hit).
+static CODEX_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn with_pinned_codex_version(body: impl FnOnce()) {
+    let _guard = CODEX_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let key = "FNO_CODEX_VERSION";
     let saved = std::env::var(key).ok();
     std::env::set_var(key, "0.156.0");
