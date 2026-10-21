@@ -24,6 +24,10 @@
 //! a custom config value rides only if the caller exported it. That bridge
 //! lands with the Rust settings reader, not here.
 pub mod codex;
+mod env_wrap;
+pub mod placement;
+pub mod readiness;
+pub mod simple;
 
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -65,6 +69,12 @@ const PLACEMENT_LEASE_TTL_MS: i64 = 60_000;
 const AGENT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 /// Python `_pane_group_max`'s fail-safe default.
 const DEFAULT_PANE_GROUP_MAX: &str = "4";
+
+/// The group cap as a number for the tab-fit arithmetic (the transport arg
+/// carries the same value as a string).
+fn pane_group_max() -> u64 {
+    DEFAULT_PANE_GROUP_MAX.parse().unwrap_or(4)
+}
 /// Python `_process_admission_max`'s fail-safe default.
 const DEFAULT_PROCESS_ADMISSION_MAX: &str = "400";
 
@@ -283,7 +293,25 @@ pub fn pane_arm_for(ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
     if codex::CodexArm::owns(ctx) {
         return Some(&codex::CODEX_ARM);
     }
-    None
+    let arm: &dyn PaneArm = match ctx.provider.as_str() {
+        "opencode" => &simple::OPENCODE_ARM,
+        "pi" => &simple::PI_ARM,
+        "cursor-agent" => &simple::CURSOR_ARM,
+        "grok" => &simple::GROK_ARM,
+        "agy" => &simple::AGY_ARM,
+        "footnote" => &simple::FOOTNOTE_ARM,
+        _ => return None,
+    };
+    Some(arm)
+}
+
+/// The retired pane harnesses refuse in the spine with a named line
+/// (AC4-ERR): the Gemini CLI was deprecated 2026-07-27 and no arm seats it.
+pub fn pane_refusal_for(provider: &str) -> Option<String> {
+    (provider == "gemini").then(|| {
+        "gemini has no pane arm: the Gemini CLI was deprecated 2026-07-27 (Google's          successor is Antigravity); spawn agy instead"
+            .to_string()
+    })
 }
 
 /// The binary door's pane entry. `Some(code)` means this process answered the
@@ -296,6 +324,10 @@ pub fn run_pane_spawn(
     _args: &[String],
 ) -> Option<i32> {
     let ctx = PaneContext::from_params(params)?;
+    if let Some(line) = pane_refusal_for(&ctx.provider) {
+        eprintln!("{line}");
+        return Some(EXIT_REFUSAL);
+    }
     let arm = pane_arm_for(&ctx)?;
     Some(spawn_pane(home, &ctx, name, arm))
 }
@@ -304,6 +336,18 @@ pub fn run_pane_spawn(
 /// (or reconcile), child pid, bind, row, late-bind, receipt. Every failure
 /// path prints its named line and returns the Python leg's exit code.
 fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneArm) -> i32 {
+    // The group-tab + split/at combination refuses before the lease, byte
+    // equal to the Python leg (AC3-ERR).
+    if let Some(tab) = ctx.tab.as_deref() {
+        let (_selector, group) = placement::resolve_group_tab(tab);
+        if group.is_some() && (ctx.split.is_some() || ctx.at.is_some()) {
+            return refuse(&PaneRefusal {
+                line: placement::group_tab_conflict_line(tab),
+                exit_code: EXIT_REFUSAL,
+                after_pane: None,
+            });
+        }
+    }
     let session = resolve_mux_session(ctx.session.as_deref());
     // The bounded wrapper holds the lease around everything below and drops
     // it after; a held lease refuses before any pane or row exists.
@@ -410,6 +454,23 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
             });
         }
     };
+    // The group-tab move lands between the parse and the bind: cosmetic by
+    // the Python leg's own account (the seed already rode in and the worker
+    // may be live), so a failure prints its named line and keeps the pane.
+    let group = ctx
+        .tab
+        .as_deref()
+        .map(placement::resolve_group_tab)
+        .and_then(|t| t.1);
+    if let Some(group) = group {
+        if let Err(detail) =
+            placement::place_pane_in_group_tab(&session, pane_id, &group, pane_group_max(), &FsMux)
+        {
+            eprintln!(
+                "fno agents spawn: pane {pane_id} left in its own tab; grouping into {group:?} failed: {detail}"
+            );
+        }
+    }
     let child_pid = lookup_child_pid(&session, pane_id, &FsMux);
     let pane = PaneFacts {
         session: session.clone(),
@@ -635,7 +696,13 @@ pub fn pane_run_args(ctx: &PaneContext, session: &str, name: &str, plan: &ArmPla
         args.extend(["split".to_string(), split.clone()]);
     }
     if let Some(tab) = &ctx.tab {
-        args.extend(["--tab".to_string(), tab.clone()]);
+        // A bare name is a pane GROUP: no tab rides the transport; the pane
+        // lands in its own tab and joins the group after the run (the
+        // act-then-place contract). A selector rides verbatim.
+        let (selector, _group) = placement::resolve_group_tab(tab);
+        if let Some(selector) = selector {
+            args.extend(["--tab".to_string(), selector]);
+        }
     }
     if let Some(at) = &ctx.at {
         // Forwarded verbatim; the mux CLI resolves `current` from FNO_PANE so

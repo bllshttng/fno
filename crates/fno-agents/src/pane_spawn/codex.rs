@@ -75,7 +75,7 @@ impl CodexArm {
     /// (`place_pane_in_group_tab`) is not ported, and a shape the arm cannot
     /// finish must never be half-taken.
     pub fn owns(ctx: &PaneContext) -> bool {
-        ctx.provider == "codex" && !ctx.has_geometry()
+        ctx.provider == "codex"
     }
 }
 
