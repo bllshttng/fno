@@ -2,10 +2,12 @@
 //!
 //! fnh checks every claim in its final reply against its records and writes
 //! one `footnotes` record per ended run. The done read reports the newest one
-//! beside CI and review. It is advisory: a line on the done reason and a
-//! `footnote_evidence` object on the terminal `loop_check` row, never a block.
-//! The row's `agrees_with_ci_and_review` gives the false-hold rate a
-//! denominator before anyone makes the read blocking.
+//! beside CI and review. It never blocks: a line on the done reason and a
+//! `footnote_evidence` object on the terminal `loop_check` row. A rejected or
+//! missing claim on a passing PR is a half-fail, and each one files a node
+//! once per session and claim, so a person owns it. The row's
+//! `agrees_with_ci_and_review` gives the false-hold rate a denominator before
+//! anyone makes the read blocking.
 
 use crate::footnote_harness::transcript::{find_session_dir, transcript_file};
 use crate::state::RegistryEntry;
@@ -188,6 +190,28 @@ pub(super) fn read_live(
     read_evidence(&records_for(&entries, node, own_session, &root), pr_head)
 }
 
+/// One file name per session and claim text, stable across runs.
+fn half_fail_key(session: &str, claim: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{session}\0{claim}").as_bytes());
+    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The node id from a `fno backlog idea -J` receipt.
+pub(super) fn idea_receipt_id(stdout: &str) -> Option<String> {
+    let id = |v: Value| v["id"].as_str().map(str::to_string);
+    serde_json::from_str::<Value>(stdout.trim())
+        .ok()
+        .and_then(id)
+        .or_else(|| {
+            stdout
+                .lines()
+                .rev()
+                .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+                .find_map(id)
+        })
+}
+
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
@@ -233,6 +257,78 @@ impl FootnoteEvidence {
             }
         };
         format!("{done_msg}; {line}")
+    }
+
+    /// A half-fail gets an owner: each flagged claim at the PR head files one
+    /// node, once per session and claim. A marker under `marker_dir`, written
+    /// only after the filing succeeds, is the dedup: every later stop files
+    /// nothing, and a failed or interrupted filing retries on the next stop.
+    /// Stops of one session run one at a time, so no lock is needed. Returns the ids
+    /// filed this stop.
+    pub(super) fn file_half_fails(
+        &self,
+        marker_dir: &Path,
+        node: Option<&str>,
+        mut file: impl FnMut(&[String]) -> Option<String>,
+    ) -> Vec<String> {
+        let FootnoteEvidence::Counted {
+            session,
+            head_sha,
+            flagged,
+            ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        if std::fs::create_dir_all(marker_dir).is_err() {
+            return Vec::new();
+        }
+        let mut filed = Vec::new();
+        for f in flagged {
+            let key = half_fail_key(session, &f.text);
+            let marker = marker_dir.join(&key);
+            if marker.exists() {
+                continue;
+            }
+            let text: String = f.text.chars().take(CLAIM_TEXT_CHARS).collect();
+            let details = format!(
+                "Footnote session {session} claimed {text:?} at {}. The check read it {}{}. CI and review passed the PR anyway{}. Confirm the claim with a command, or fix the work it describes.",
+                short(head_sha),
+                f.verdict,
+                if f.sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (source: {})", f.sources.join(", "))
+                },
+                node.map_or(String::new(), |n| format!(" on node {n}")),
+            );
+            let mut argv: Vec<String> = [
+                "backlog",
+                "idea",
+                &format!("Half-fail: {} claim {text:?}", f.verdict),
+                "--source-kind",
+                "from_observation",
+                "--origin-evidence",
+                &format!("footnote-half-fail:{key}"),
+                "--separate",
+                "--domain",
+                "code",
+                "-d",
+                &details,
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+            if let Some(n) = node {
+                argv.extend(["--caused-by".to_string(), n.to_string()]);
+            }
+            argv.push("-J".to_string());
+            if let Some(id) = file(&argv) {
+                let _ = std::fs::write(&marker, &id);
+                filed.push(id);
+            }
+        }
+        filed
     }
 
     /// `row` with a `footnote_evidence` key, unchanged when absent.
@@ -326,5 +422,34 @@ mod tests {
         let none = FootnoteEvidence::Absent;
         assert_eq!(none.on_reason("done".into()), "done");
         assert_eq!(none.on_row(json!({"a": 1})), json!({"a": 1}));
+        let marks = tmp.path().join("marks");
+        assert!(ev
+            .file_half_fails(&marks, None, |_| panic!("stale files nothing"))
+            .is_empty());
+    }
+
+    /// A half-fail at the PR head files one node per session and claim; the
+    /// next stop files nothing, and a failed filing retries.
+    #[test]
+    fn a_half_fail_files_one_node_once_and_retries_a_failed_filing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ev = read_evidence(&bound_at(tmp.path(), HEAD), HEAD);
+        let marks = tmp.path().join("marks");
+        assert!(ev
+            .file_half_fails(&marks, Some("x-aaaa"), |_| None)
+            .is_empty());
+        let mut calls = Vec::new();
+        let filed = ev.file_half_fails(&marks, Some("x-aaaa"), |argv| {
+            calls.push(argv.to_vec());
+            idea_receipt_id("{\n  \"id\": \"x-beef\"\n}")
+        });
+        assert_eq!(filed, vec!["x-beef".to_string()]);
+        assert_eq!(calls.len(), 1);
+        let argv = calls[0].join(" ");
+        assert!(argv.contains("--caused-by x-aaaa"), "{argv}");
+        assert!(argv.contains("source: diff:src/a.rs"), "{argv}");
+        assert!(ev
+            .file_half_fails(&marks, Some("x-aaaa"), |_| panic!("deduped"))
+            .is_empty());
     }
 }
