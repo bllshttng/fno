@@ -170,8 +170,12 @@ jobs:
         # store aggregate, each carrying its first contract test. 6: the
         # OTLP exporter is a new native module whose four tests are its
         # first contracts, plus two regressions in existing owners (the
-        # preview-flag refusal and the old-spelling vacate).
-        run: fno-agents test-delta --base "$TEST_BASE" --max-net 6
+        # preview-flag refusal and the old-spelling vacate). 22: the pane
+        # spawn spine is a brand-new native module whose tests are its
+        # first contracts, each pinning one golden-parity or reconcile
+        # behavior the dual-implementation protocol requires to stay
+        # byte-true until the Python leg deletes.
+        run: fno-agents test-delta --base "$TEST_BASE" --max-net 22
 
       - name: Verb matrix fresh
         if: ${{ !cancelled() }}
