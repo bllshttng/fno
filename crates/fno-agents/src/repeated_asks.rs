@@ -46,6 +46,11 @@ const NOT_ASK: &[&str] = &[
     "nothing needs your",
     "nothing needed",
     "no decision needed",
+    "nothing from you",
+    "you ruled",
+    "you already",
+    "you decided",
+    "was your call",
 ];
 
 pub(crate) fn reading() -> Result<Value, String> {
@@ -152,7 +157,8 @@ fn codex_assistant_text(row: &Value) -> Option<String> {
 pub(crate) fn asks_in(reply: &str) -> Vec<String> {
     let mut asks = Vec::new();
     for sentence in sentences(reply) {
-        if sentence.trim_start().starts_with('|') {
+        // A table cell is a reading, never an ask, even with a `?` value.
+        if sentence.contains('|') {
             continue;
         }
         let normalized = normalize(sentence);
