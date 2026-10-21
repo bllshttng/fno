@@ -19,17 +19,20 @@ use md5::Md5;
 /// inbox/triage) to a later session's LLM/human pass. Reconcile must NOT
 /// auto-create inbox lines or backlog nodes - that stays explicit.
 /// Overwrites an existing sentinel for the same node (idempotent).
+/// `root` is the state root: the folder resolves through the layout
+/// table's `place` ladder.
 pub(crate) fn write_retro_sentinel(
     record: &MergeDriftRecord,
-    sentinel_dir: &Path,
+    root: &Path,
 ) -> std::io::Result<PathBuf> {
     debug_assert!(
         record.closeable(),
         "refusing to write sentinel for non-closeable {}",
         record.node_id
     );
-    std::fs::create_dir_all(sentinel_dir)?;
-    let path = sentinel_dir.join(format!("{}.json", record.node_id));
+    let dir = crate::state_layout::place(root, "retro-pending");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.json", record.node_id));
     let payload = json!({
         "node_id": record.node_id,
         "pr_number": record.pr_number,
@@ -43,6 +46,22 @@ pub(crate) fn write_retro_sentinel(
         &path,
         serde_json::to_string_pretty(&payload).unwrap_or_default() + "\n",
     )?;
+    // The fold can flip `place` between the resolve above and this write
+    // landing: the sentinel would strand at the legacy spelling, where no
+    // reader looks until the next migrate pass. Re-resolve once; a flip
+    // renames the sentinel onto the fresh answer, and the fold winning the
+    // race has already moved the file for us.
+    let fresh = crate::state_layout::place(root, "retro-pending");
+    if fresh != dir {
+        let moved = fresh.join(format!("{}.json", record.node_id));
+        if !path.exists() && moved.exists() {
+            return Ok(moved);
+        }
+        let _ = std::fs::create_dir_all(&fresh);
+        if std::fs::rename(&path, &moved).is_ok() {
+            return Ok(moved);
+        }
+    }
     Ok(path)
 }
 

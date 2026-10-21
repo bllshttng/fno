@@ -86,6 +86,7 @@ latches
 .preflight-cancel
 .preflight-receipt-locks
 mail-hold
+route-settings
 locks
 bin
 .lock.d

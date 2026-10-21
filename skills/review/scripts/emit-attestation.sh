@@ -223,8 +223,9 @@ fi
 invocation_id="$(printf '%s' "$hold_json" \
   | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
 if [[ -z "$invocation_id" && -n "$harness_session_id" && "$harness_session_id" != "null" ]]; then
-  invocation_id="$(jq -r '.invocation_id // empty' \
-    "${FNO_HOME:-$HOME/.fno}/review-invocations/${harness_session_id}.json" \
+  invocation_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${harness_session_id}.json" 2>/dev/null || true)"
+  [[ -n "$invocation_sidecar" ]] || invocation_sidecar="${FNO_HOME:-$HOME/.fno}/review-invocations/${harness_session_id}.json" # state-root: legacy fallback
+  invocation_id="$(jq -r '.invocation_id // empty' "$invocation_sidecar" \
     2>/dev/null || true)"
 fi
 if [[ -z "$invocation_id" ]]; then

@@ -1516,6 +1516,21 @@ mod tests {
             "a self-mapped row is absent: {receipt:?}"
         );
         assert!(root.join("locks").is_dir());
+        // The shipped table pins the five non-lock rows at their folded
+        // destinations: reverting any row in any table copy fails here.
+        for name in [
+            "attest",
+            "push-stamps",
+            "retro-pending",
+            "review-invocations",
+            "route-settings",
+        ] {
+            assert_eq!(
+                place_dir(&root, name),
+                Some(root.join("state").join(name)),
+                "{name} must answer at its state/ destination"
+            );
+        }
         clean(&root);
     }
 

@@ -282,9 +282,10 @@ fn compare_sidecar(runtime_base: &Path, case: &Value, problems: &mut Vec<String>
         return;
     }
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let sidecar = root
-        .join("review-invocations")
-        .join(format!("{session}.json"));
+    // The read follows the table: place_in answers the seeded legacy file
+    // while it exists, else the folded destination the join minted into.
+    let sidecar =
+        fno_agents::state_layout::place_in(&root, "review-invocations", &format!("{session}.json"));
     match case["expect"]["id"].as_str() {
         Some(want) => {
             if id != want {
