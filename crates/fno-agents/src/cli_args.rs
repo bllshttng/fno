@@ -246,19 +246,23 @@ impl SpawnAxes {
                         }
                     }
                 } else if long == "--as" || long == "--substrate" {
-                    // The lanes this door selects: cloud has no template lane
-                    // (its original selector), and the pane arm answers an
-                    // explicit `-H <pane-arm harness> --as pane` itself. The
-                    // Python seam's harness scan (`_RUST_PANE_HARNESSES`) only
-                    // execs here for the harnesses a pane arm owns, so accepting
-                    // the public substrate vocabulary keeps the binary door as
-                    // wide as the Python door it replaced - a narrower refusal
-                    // here would strand an argv the seam already routed.
+                    // The lanes this door selects. `--as` is the public axis:
+                    // cloud has no template lane (its original selector), and
+                    // the pane arm answers an explicit `-H <pane-arm harness>
+                    // --as pane` itself. The Python seam's harness scan
+                    // (`_RUST_PANE_HARNESSES`) only execs here for the
+                    // harnesses a pane arm owns, so accepting the public
+                    // vocabulary keeps the binary door as wide as the Python
+                    // door it replaced - a narrower refusal would strand an
+                    // argv the seam already routed. `--substrate` stays the
+                    // RETIRED spelling: cloud only, everything else refuses by
+                    // name (the retirement rows in client_tests pin it).
                     let value = inline.or_else(|| head.get(i + 1).cloned());
-                    let accepted = matches!(
-                        value.as_deref(),
-                        Some("cloud") | Some("pane") | Some("thread") | Some("headless")
-                    );
+                    let accepted = match value.as_deref() {
+                        Some("cloud") => true,
+                        Some("pane") | Some("thread") | Some("headless") => long == "--as",
+                        _ => false,
+                    };
                     if !accepted {
                         return Err(Self::refused_axis(long));
                     }
