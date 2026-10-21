@@ -337,7 +337,12 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
 
     // 9. Plan pointer: explicit --plan-path must resolve; a node-bound plan
     // is back-filled when it resolves too.
-    let plan_path = resolve_plan_pointer_stage(args, dispatch_node.as_ref(), &cwd)?;
+    let plan_path = resolve_plan_pointer_stage(
+        args,
+        dispatch_node.as_ref(),
+        &cwd,
+        &crate::plan_carry::fetch_one,
+    )?;
 
     // 10. Scope denominator: a plan-less code node states its own scope.
     let mut deliverables = args.deliverables;
@@ -871,11 +876,14 @@ pub(crate) fn resolve_dispatch_node(
 /// readable plan (fail closed before the write-once manifest exists); a node
 /// input with no --plan-path back-fills the node's bound plan when THAT
 /// resolves, and refuses when a named-but-dangling pointer would otherwise
-/// close the only legal repair route.
+/// close the only legal repair route. Before either a dangling pointer
+/// refuses or a null one seats a planless worker, `fetch` asks the shared
+/// primary for the plan body another host pushed for this node.
 fn resolve_plan_pointer_stage(
     args: &Args,
     node: Option<&serde_json::Value>,
     cwd: &Path,
+    fetch: &dyn Fn(&str) -> Result<Option<String>, String>,
 ) -> Result<Option<String>, Fail> {
     if let Some(explicit) = &args.plan_path {
         if !explicit.is_empty() {
@@ -901,17 +909,37 @@ fn resolve_plan_pointer_stage(
         .unwrap_or("")
         .trim()
         .to_string();
+    let node_id = node_str(Some(node), "id");
+    let carried = || match fetch(&node_id) {
+        Ok(path) => (path.and_then(|p| resolve_plan_pointer(&p, cwd)), None),
+        Err(why) => (None, Some(why)),
+    };
     if bound_plan.is_empty() {
-        return Ok(None);
+        // A null pointer with a carrier row is a binding another host lost.
+        let (found, _) = carried();
+        if let Some(found) = &found {
+            eprintln!(
+                "fno do target init: fetched the plan another host wrote for {node_id}: {found}"
+            );
+        }
+        return Ok(found);
     }
-    match resolve_plan_pointer(&bound_plan, cwd) {
-        Some(bound) => Ok(Some(bound)),
-        None => Err(refuse(format!(
-            "fno do target init: REFUSING because the node's bound plan_path \
-             does not resolve to a readable plan ({bound_plan}). \
-             Repair the node with: fno backlog update <id> plan_path=<path>"
-        ))),
+    if let Some(bound) = resolve_plan_pointer(&bound_plan, cwd) {
+        return Ok(Some(bound));
     }
+    let (found, why) = carried();
+    if let Some(found) = found {
+        eprintln!("fno do target init: fetched {found} from the shared primary");
+        return Ok(Some(found));
+    }
+    let carrier = why.map_or(String::new(), |why| {
+        format!(" The shared primary has no copy: {why}.")
+    });
+    Err(refuse(format!(
+        "fno do target init: REFUSING because the node's bound plan_path \
+         does not resolve to a readable plan ({bound_plan}).{carrier} \
+         Repair the node with: fno backlog update <id> plan_path=<path>"
+    )))
 }
 
 /// The plan pointer to bind, NORMALIZED, or None when it does not resolve.
@@ -1030,5 +1058,43 @@ fn bind_node_plan_path(node: &serde_json::Value, plan_path: &str) {
         Err(exc) => {
             eprintln!("WARNING: could not bind {plan_path} to {node_id}: {exc}");
         }
+    }
+}
+
+#[cfg(test)]
+mod plan_carry_miss_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_or_lost_plan_comes_from_the_carrier_before_any_refusal() {
+        let args = parse_args(&[]).unwrap_or_else(|_| unreachable!());
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("p.md");
+        let plan_s = plan.to_str().unwrap().to_string();
+        let fetch_writes = |_: &str| {
+            std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
+            Ok(Some(plan_s.clone()))
+        };
+        // A dangling pointer: the carrier writes the file and init proceeds.
+        let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
+        let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
+        assert!(matches!(got, Ok(Some(_))));
+        // A null pointer with a carrier row binds the carrier's path (x-20a6).
+        std::fs::remove_file(&plan).unwrap();
+        let node = serde_json::json!({"id": "x-1", "plan_path": null});
+        let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
+        assert!(matches!(got, Ok(Some(_))));
+        // No copy anywhere: the refusal says so.
+        std::fs::remove_file(&plan).unwrap();
+        let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
+        let none = |_: &str| Err("no host pushed a plan for it".to_string());
+        let Err(fail) = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &none) else {
+            panic!("a plan absent everywhere must refuse");
+        };
+        assert!(
+            fail.message.contains("no host pushed a plan"),
+            "{}",
+            fail.message
+        );
     }
 }
