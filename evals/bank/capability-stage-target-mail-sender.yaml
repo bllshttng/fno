@@ -24,6 +24,12 @@ grade:
   - kind: exit
     command: 'cd evals/fixtures/stage-tasks/mail-sender && python3 verify.py'
   - kind: exit
+    # The verifier must survive the run untouched: a lane that edits the
+    # grader instead of the code grades fail here. A tamper committed
+    # alongside the fix still lands (status reads clean); the bank accepts
+    # that residual, the same as every fixture-verifier task.
+    command: 'test -z "$(git status --porcelain -- evals/fixtures/stage-tasks/mail-sender/verify.py)"'
+  - kind: exit
     command: 'grep -q REGISTRY evals/fixtures/stage-tasks/mail-sender/mailsend.py'
 timeout_minutes: 20
 tags: [stage-climb, target]
