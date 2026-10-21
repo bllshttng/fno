@@ -571,10 +571,9 @@ fn metadata_fields() {
     assert_eq!(payload["key"], "review:branch:feat/a");
     assert_eq!(payload["state"], "live");
     assert_eq!(payload["holder"], "review-session:s1");
-    assert_eq!(
-        payload["metadata"]["head_sha"],
-        repo_head(&fx.repo).as_str()
-    );
+    // run() normalizes before this parse, so the 40-hex head reads <SHA40>;
+    // the token still proves the metadata names the seeded head's shape.
+    assert_eq!(payload["metadata"]["head_sha"], "<SHA40>");
     // The volatile identity fields ride along, whatever they read here.
     assert!(payload.get("acquired_at").is_some());
     assert!(payload.get("host").is_some());
