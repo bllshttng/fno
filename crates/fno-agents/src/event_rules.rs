@@ -1066,7 +1066,7 @@ mod tests {
         );
         rig.seed(json!({
             "ts": crate::events::now_rfc3339(),
-            "type": "operator_question_closed",
+            "type": crate::needs::QUESTION_TYPES[1],
             "source": "test",
             "data": {"question_id": "q-1f456994"},
         }));
