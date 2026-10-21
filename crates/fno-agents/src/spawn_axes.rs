@@ -942,7 +942,7 @@ mod tests {
         // The typed parse beside insert_role_flag: value flags refuse a
         // missing value and store under the params keys the seam verdicts
         // read.
-        let mut it = ["json"].into_iter();
+        let mut it = ["json".to_string()].into_iter();
         let mut params = Map::new();
         insert_spawn_flag("--output-format", &mut it, &mut params).expect("parses");
         assert_eq!(params["output_format"], json!("json"));
@@ -953,7 +953,7 @@ mod tests {
         )
         .expect_err("a valueless flag refuses");
         assert!(err.contains("needs a value"), "{err}");
-        let mut it = ["happy"].into_iter();
+        let mut it = ["happy".to_string()].into_iter();
         insert_spawn_flag("--monitor", &mut it, &mut params).expect("parses");
         assert_eq!(params["monitor"], json!("happy"));
     }
