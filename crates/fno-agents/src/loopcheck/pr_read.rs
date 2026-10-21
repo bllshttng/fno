@@ -221,7 +221,8 @@ pub(super) fn live_fixes_pr(
     if repo_slug.is_empty() || node_id.is_empty() {
         return None;
     }
-    let query = format!("q={node_id} in:body type:pr repo:{repo_slug}");
+    // Quoted: search splits a bare hyphenated id into separate terms.
+    let query = format!("q=\"{node_id}\" in:body type:pr repo:{repo_slug}");
     let out = bounded_read(
         gh_bin.as_ref(),
         &["api", "-X", "GET", "search/issues", "-f", &query],

@@ -632,11 +632,13 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 Action::Stop(why) => {
                     let (code, out, error) = command(&["fno", "agents", "stop", sid], &entry.cwd);
                     episode.escalated = true;
+                    let receipt =
+                        crate::attention_arm::last_line(if code == 0 { &out } else { &error });
                     emitter
                         .emit(
-                            "quiet_worker_stop",
-                            &json!({"session_id": sid, "node": node, "reason": why,
-                        "exit": code, "receipt": out, "error": error}),
+                            "quiet_worker_recovery",
+                            &json!({"session_id": sid, "node": node,
+                        "reason": format!("node {why}: stopped the idle worker instead of resuming it (exit {code}: {receipt})")}),
                         )
                         .map_err(|e| e.to_string())?;
                 }
