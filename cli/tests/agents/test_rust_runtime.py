@@ -840,6 +840,27 @@ def test_is_resume_bearing_spawn_predicate() -> None:
     assert not rr._is_resume_bearing_spawn("ask", ["ask", "w", "--resume", uuid])
 
 
+def test_is_pane_substrate_spawn_harness_carveout() -> None:
+    # The member-set pane carve-out (the binary's codex arm): an explicit -H
+    # codex pane spawn routes to the binary; an absent -H keeps the Python
+    # pane leg; every other harness keeps Python; headless spellings still
+    # refuse for every harness (the carve-out check runs first, so the -H
+    # codex headless case reads False by the member check, same answer).
+    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "-H", "codex", "--as", "pane"])
+    assert not rr._is_pane_substrate_spawn(
+        "spawn", ["spawn", "w", "-H", "codex", "--substrate", "pane", "--bounded-placement"]
+    )
+    assert rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--as", "pane"])
+    assert rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "-H", "claude", "--as", "pane"])
+    # The --as fix: the scan reads --as beside --substrate, so a --as thread
+    # spelling no longer defaults to a pane and route to Python.
+    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--as", "thread"])
+    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--as=thread"])
+    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--substrate", "thread"])
+    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--once"])
+    assert not rr._is_pane_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
+
+
 def test_is_dispatch_account_bearing_spawn_predicate() -> None:
     # The cutover carrier is Python-only: the Rust spawn parser exits
     # "unknown flag: --dispatch-account" and the launch dies before it starts.
