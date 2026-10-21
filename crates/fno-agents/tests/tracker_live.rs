@@ -1,6 +1,6 @@
 //! The credentialed live gate for the GitHub Issues and Linear backends.
 //!
-//! Each test drives the public `fno` verbs as subprocesses through one
+//! Each test drives the public `fno` commands as subprocesses through one
 //! disposable issue: read, list, bind, target start, PR bind, a bad-credential
 //! refusal, merge and close, board refresh, and the no-mirror check. It runs
 //! only on purpose, against a scratch repo and team the user created

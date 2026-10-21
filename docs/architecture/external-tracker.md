@@ -150,13 +150,13 @@ The `artifact_url` reader and writer asymmetry is the standing proof this system
 
 The sidecar has one writer, `tracker::sidecar::save` in Rust. The Python `_save_to_file` calls it through the tracker door's `sidecar-set` op. The writer refuses any key outside the sidecar list, so a tracker-owned field never lands in the file.
 
-Under an external backend, `fno backlog update <id> cwd=<checkout> plan_path=<plan>` binds the checkout and the plan. It also takes `pr_number` and `pr_url`. Every other field refuses and names the four keys that bind. The verb reads the id through the tracker first, so a missing issue refuses with `not found`.
+Under an external backend, `fno backlog update <id> cwd=<checkout> plan_path=<plan>` binds the checkout and the plan. It also takes `pr_number` and `pr_url`. Every other field refuses and names the four keys that bind. The command reads the id through the tracker first, so a missing issue refuses with `not found`.
 
-`fno do pr bind-created --url <pr> --node <id>` records the PR on the sidecar. An external id is never inferred from a branch name, so the verb refuses without `--node`. The merge-time close finds the item by that `pr_number`.
+`fno do pr bind-created --url <pr> --node <id>` records the PR on the sidecar. An external id is never inferred from a branch name, so the command refuses without `--node`. The merge-time close finds the item by that `pr_number`.
 
 ## Live gate
 
-`crates/fno-agents/tests/tracker_live.rs` holds two ignored tests, `github_journey` and `linear_journey`. Each drives the public `fno` verbs through one disposable issue. The steps are read, list next, bind, target start and PR bind. Then come a bad-credential refusal, merge and close, board refresh, and a no-mirror check. Run them on purpose:
+`crates/fno-agents/tests/tracker_live.rs` holds two ignored tests, `github_journey` and `linear_journey`. Each drives the public `fno` commands through one disposable issue. The steps are read, list next, bind, target start and PR bind. Then come a bad-credential refusal, merge and close, board refresh, and a no-mirror check. Run them on purpose:
 
 ```bash
 cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture
