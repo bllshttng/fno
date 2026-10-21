@@ -467,6 +467,19 @@ fn undeterminable_marker(cause: &str) -> Value {
     serde_json::json!({ "_undeterminable": cause })
 }
 
+/// True when the plan's frontmatter reads `domain: code`, the same test
+/// validate-plan.sh applies before it refuses a probe-less plan.
+fn plan_is_code_domain(content: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return false;
+    }
+    lines
+        .take_while(|l| l.trim() != "---")
+        .filter_map(|l| l.trim().strip_prefix("domain:"))
+        .any(|v| v.trim().trim_matches(|c| c == '"' || c == '\'') == "code")
+}
+
 /// True when any prior loop_check fire for this session recorded probe results.
 /// Used to fail closed on an unreadable plan only when probes are known to have
 /// existed - a probe-less session with a stale plan_path keeps today's behavior.
@@ -539,6 +552,17 @@ fn plan_declared_probes(
         other => other,
     };
     let probes = match parse_done_probes(&plan) {
+        // A code plan with no probe would let DonePRGreen fire on activity
+        // alone; validate-plan refuses it too, this is the runtime backstop.
+        ProbeDecl::None if plan_is_code_domain(&plan) => {
+            return Err(ProbeGate::Fail {
+                reason: format!(
+                    "done_probes missing: code plan {} declares none, so nothing checks the goal; add a probe (a docs or research plan sets domain: docs|research)",
+                    plan_path.unwrap_or("(unset)")
+                ),
+                results: undeterminable_marker("code-plan-without-probes"),
+            })
+        }
         ProbeDecl::None => return Ok((Vec::new(), decl)),
         ProbeDecl::Unparseable => {
             return Err(ProbeGate::Fail {
@@ -1441,6 +1465,30 @@ mod done_probe_tests {
             _ => panic!("over-cap declaration must refuse"),
         }
         assert!(!sentinel.exists(), "an over-cap list must not execute");
+    }
+
+    #[test]
+    fn a_code_plan_without_probes_holds_done_and_a_docs_plan_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let events = tmp.path().join("events.jsonl");
+        let plan = tmp.path().join("plan.md");
+        let eval = |p: &Path| {
+            evaluate_done_probes(
+                p.to_str(),
+                None,
+                tmp.path(),
+                &events,
+                "s1",
+                Duration::from_secs(10),
+            )
+        };
+        std::fs::write(&plan, fm("domain: code\nstatus: ready")).unwrap();
+        match eval(&plan) {
+            ProbeGate::Fail { reason, .. } => assert!(reason.contains("done_probes missing")),
+            other => panic!("code plan without probes must hold done, got {other:?}"),
+        }
+        std::fs::write(&plan, fm("domain: docs\nstatus: ready")).unwrap();
+        assert!(matches!(eval(&plan), ProbeGate::Absent));
     }
 
     #[test]
