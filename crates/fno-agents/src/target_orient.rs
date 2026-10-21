@@ -1154,7 +1154,16 @@ mod marker_tests {
         // are the allowlisted synthetic pool (x-aaaa), not real nodes.
         let text = "### x-aaaa landed via #3489 - boundary reconcile\n";
         assert!(marker_present(text, "x-aaaa", Some(3489)));
-        assert!(!marker_present(text, "x-aaaa", Some(34890)));
+        // The keys are id OR pr (the python twin's contract): the id alone
+        // marks the blocker present, even when the query names another pr.
+        assert!(marker_present(text, "x-aaaa", Some(34890)));
+        // The pr token boundary, decided by the pr leg alone: #3489 does
+        // not satisfy a #34890 query when no id matches.
+        assert!(!marker_present(
+            "### x-bbbb landed via #3489 - boundary reconcile\n",
+            "x-aaaa",
+            Some(34890)
+        ));
         assert!(marker_present("### #3489 landed\n", "x-none", Some(3489)));
         assert!(marker_present("### #3489\n", "x-none", Some(3489)));
     }
