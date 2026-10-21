@@ -59,14 +59,14 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
 
     h.type_bytes(&[PREFIX, b'V']);
     eprintln!("STAGE leg1 agents-after-second-V");
-    h.wait_screen(15, |s| s.contains("+ new workspace"));
+    h.wait_screen(15, |s| s.contains("+ workspace"));
 
     h.type_bytes(&[PREFIX, b'?']);
     eprintln!("STAGE agents global-keybinds");
     h.wait_screen(15, |s| s.contains("keybindings"));
     h.type_bytes(&[27]);
     h.wait_screen(15, |s| {
-        s.contains("+ new workspace") && !s.contains("keybindings")
+        s.contains("+ workspace") && !s.contains("keybindings")
     });
 
     // The cycle now runs through Messages (the new view after Agents) ...

@@ -448,7 +448,7 @@ fn sticky_footer_and_the_in_list_new_squad_row_never_paint_twice() {
         agents,
         focus_node: None,
     });
-    let label = "+ new workspace";
+    let label = "+ workspace";
     let count = |view: &View| {
         let (rows, cols, panel_w) = (10usize, 72usize, 28usize);
         let mut cells = vec![Cell::default(); rows * cols];

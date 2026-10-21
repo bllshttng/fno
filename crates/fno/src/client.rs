@@ -158,13 +158,6 @@ const STATUS_ROWS: u16 = 1;
 /// Below this many terminal rows the bottom chrome (status row + which-key
 /// hint) auto-hides and the content area recovers the line (AC4-ERR).
 const MIN_ROWS_FOR_STATUS: u16 = TAB_BAR_ROWS + STATUS_ROWS + 5;
-/// The sideline footer's `+ new` and `menu` labels (US4). The menu
-/// button rides the existing new-workspace footer row's right edge when the
-/// panel is wide enough (see [`View::footer_menu_range`]). ASCII only: the
-/// former `☰` is an ambiguous-width glyph some terminals render wide, which
-/// displaced that row's whole line (the screenshot review's stray fragments).
-const FOOTER_NEW_LABEL: &str = "+ new workspace";
-const FOOTER_MENU: &str = "menu";
 /// How long a pending prefix chord waits before the hint bar paints.
 /// Zero: the bar paints at once; `prefix+?` shows the full table.
 const HINT_DELAY: Duration = Duration::ZERO;
@@ -3900,49 +3893,6 @@ impl View {
         })
     }
 
-    /// The footer's two labels with their live key hints, and the menu
-    /// button's column range - one fn so the paint and the hit-test cannot
-    /// diverge. The hinted forms (`+ new workspace (N)`, `menu (M)`) resolve
-    /// through the live chord table (`key_for`), so a rebind relabels the
-    /// row; when the row cannot fit the hints, the bare forms keep the
-    /// button's seat (the density-button rule: the hint drops, the affordance
-    /// stays). A `None` range means no button at all: the panel is too
-    /// narrow, or a recruit-mark tally is competing for the row.
-    fn footer_labels(&self, panel_w: usize) -> (String, String, Option<std::ops::Range<usize>>) {
-        // last column is the divider
-        let tw = panel_w.saturating_sub(1);
-        let hint = |action: &str, bare: &str| match crate::keys::key_for(action) {
-            Some(k) => format!("{bare} ({k})"),
-            None => bare.to_string(),
-        };
-        let new_hinted = hint("new-workspace", FOOTER_NEW_LABEL);
-        let menu_hinted = hint("sideline-menu", FOOTER_MENU);
-        for (new_label, menu) in [
-            (&new_hinted, &menu_hinted),
-            (&FOOTER_NEW_LABEL.to_string(), &FOOTER_MENU.to_string()),
-        ] {
-            // Display columns, not char count: the menu trigram (U+2630) is
-            // two display columns, so a char-count range under-reserves by
-            // one and the button crosses the divider into the pane.
-            let mw = menu.chars().map(glyph_cols).sum::<usize>();
-            if self.marks.is_empty() && tw >= new_label.len() + 2 + mw {
-                return (new_label.clone(), menu.clone(), Some((tw - mw)..tw));
-            }
-        }
-        let bare_new = if self.marks.is_empty() {
-            FOOTER_NEW_LABEL.to_string()
-        } else {
-            format!("{FOOTER_NEW_LABEL}   {} marked \u{b7}R", self.marks.len())
-        };
-        (bare_new, FOOTER_MENU.to_string(), None)
-    }
-
-    /// The column range of the footer's `menu` button, shared by the
-    /// renderer and the hit-test so a click lands where it draws.
-    fn footer_menu_range(&self, panel_w: usize) -> Option<std::ops::Range<usize>> {
-        self.footer_labels(panel_w).2
-    }
-
     /// The column range of the density button on the sideline's top
     /// row, shared by the renderer and the hit-test so a click lands where it
     /// draws. `None` when the panel is too narrow to reserve the button without
@@ -6381,6 +6331,8 @@ enum ChromeHit {
     Notice(String),
     /// Open the new-workspace name-input overlay; the `+` footer.
     OpenCreate,
+    /// The footer's `+ session` button: what prefix+i does.
+    ToggleComposer,
     /// Flip the active squad row's caret locally; no socket write.
     /// Advance one sideline section through the view cycle.
     CycleSection(SectionKey),
@@ -9180,6 +9132,7 @@ async fn apply_hit(
                 .await
                 .map_err(|e| format!("resize send failed: {e}"))?;
         }
+        ChromeHit::ToggleComposer => sideline::toggle_composer(view, sock_w).await?,
         // US4: open the sideline MENU popup anchored at the clicked cell.
         ChromeHit::OpenSidelineMenu { row, col } => {
             view.open_sideline_menu(Anchor::At { row, col })
@@ -10378,6 +10331,7 @@ mod glyph_legend;
 
 mod card_line;
 pub(crate) use card_line::CardGraph;
+mod sideline_footer;
 
 #[path = "client/confirm_anchor.rs"]
 mod confirm_anchor;

@@ -236,3 +236,28 @@ fn parent_edge_join_reads_an_ambiguous_parent_as_absent() {
     let row = rows.iter().find(|r| r.name == "think-thread").unwrap();
     assert_eq!(row.squad, None);
 }
+
+// A row spawned with no model flag shows the model its transcript reads;
+// a spawn-recorded model still wins over the observation.
+#[test]
+fn a_null_model_row_carries_the_observed_model() {
+    let mut core = empty_core();
+    core.session_name = "main".into();
+    let mut recorded = bg_row("glm-worker", "/w", None);
+    recorded.model = Some("glm-5.3-flash[1m]".into());
+    core.agents = vec![bg_row("t-x96bd-sonnet", "/w", None), recorded];
+    for name in ["t-x96bd-sonnet", "glm-worker"] {
+        let reading = crate::server::truth_probe::TruthReading {
+            observed_model: Some("claude-sonnet-5-5".into()),
+            ..Default::default()
+        };
+        core.truth_by_name.insert(name.into(), reading);
+    }
+    let rows = core.agent_rows();
+    let model = |n: &str| rows.iter().find(|r| r.name == n).unwrap().model.clone();
+    assert_eq!(
+        model("t-x96bd-sonnet").as_deref(),
+        Some("claude-sonnet-5-5")
+    );
+    assert_eq!(model("glm-worker").as_deref(), Some("glm-5.3-flash[1m]"));
+}

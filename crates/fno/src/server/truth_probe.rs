@@ -86,6 +86,15 @@ fn truth_map_from_list(result: &serde_json::Value) -> Option<HashMap<String, Tru
         let cost_cents = row.get("session_cost_cents").and_then(|v| v.as_u64());
         let tokens = row.get("session_tokens").and_then(|v| v.as_u64());
         let compaction_count = row.get("compaction_count").and_then(|v| v.as_u64());
+        // Only an `observed` reading names a model; `no-transcript` and the
+        // other kinds are absence, never a model string.
+        let observed_model = row
+            .get("observed_model")
+            .filter(|m| m.get("kind").and_then(|k| k.as_str()) == Some("observed"))
+            .and_then(|m| m.get("model"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         map.insert(
             key,
             TruthReading {
@@ -94,6 +103,7 @@ fn truth_map_from_list(result: &serde_json::Value) -> Option<HashMap<String, Tru
                 cost_cents,
                 tokens,
                 compaction_count,
+                observed_model,
             },
         );
     }
@@ -113,6 +123,8 @@ pub(crate) struct TruthReading {
     pub(crate) cost_cents: Option<u64>,
     pub(crate) tokens: Option<u64>,
     pub(crate) compaction_count: Option<u64>,
+    /// The model the session's transcript shows it running.
+    pub(crate) observed_model: Option<String>,
 }
 
 impl TruthReading {
@@ -137,6 +149,15 @@ impl Core {
         self.truth_reading(a)
             .map(|t| t.cost())
             .unwrap_or((None, None))
+    }
+
+    /// The row's model: the spawn-recorded one, else what the transcript
+    /// shows. A row spawned with no model flag records none, so the
+    /// observation is the only model it has.
+    pub(crate) fn row_model(&self, a: &RegistryAgent) -> Option<String> {
+        a.model
+            .clone()
+            .or_else(|| self.truth_reading(a).and_then(|t| t.observed_model.clone()))
     }
 }
 
@@ -168,14 +189,25 @@ mod truth_probe_cadence {
                  "basis": "transcript", "last_activity_age_s": 12.0,
                  "session_cost_cents": 7, "session_tokens": 9001,
                  "compaction_count": 2},
-                {"name": "row-b", "basis": "process-gone"},
+                {"name": "row-b", "basis": "process-gone",
+                 "observed_model": {"kind": "no-transcript"}},
+                {"name": "row-c",
+                 "observed_model": {"kind": "observed", "model": "claude-opus-5-5"}},
                 "junk",
                 {"basis": "silent"}
             ]}"#,
         )
         .unwrap();
         let map = super::truth_map_from_list(&result).expect("parses");
-        assert_eq!(map.len(), 2, "malformed rows are skipped, not fatal");
+        assert_eq!(map.len(), 3, "malformed rows are skipped, not fatal");
+        assert_eq!(
+            map.get("row-c").and_then(|c| c.observed_model.as_deref()),
+            Some("claude-opus-5-5")
+        );
+        assert_eq!(
+            map["row-b"].observed_model, None,
+            "only an observed kind names a model"
+        );
         let a = map.get("sess-1").expect("identity-first key");
         assert_eq!(a.basis.as_deref(), Some("transcript"));
         assert_eq!(a.age_s, Some(12));

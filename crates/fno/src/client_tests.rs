@@ -4,6 +4,8 @@ use crate::proto::{AnswerOption, AnswerablePrompt, PaneMeta, Reach, TabMeta};
 mod chrome_hit_helpers;
 #[path = "client/tests/density_button_tests.rs"]
 mod density_button_tests;
+#[path = "client/tests/sideline_footer_tests.rs"]
+mod sideline_footer_tests;
 use crate::client::{
     input_folds::MAX_ESC_CARRY,
     keys_modal::{build_keys_modal, keys_modal_keys, keys_modal_mouse},
@@ -639,12 +641,12 @@ fn xf331_rows() {
 
     // A click at the pinned row is the footer's row - the same resolver
     // hover answers - so the covered row beneath it never wins.
-    let hit = view.chrome_hit(pinned_row, 2);
+    let hit = view.chrome_hit(pinned_row, 14);
     assert!(
         matches!(hit, Some(ChromeHit::OpenCreate)),
         "a click on the pinned footer opens create, got {hit:?}"
     );
-    if let Some(range) = view.footer_menu_range(view.panel_w() as usize) {
+    if let Some(range) = view.footer_buttons(view.panel_w() as usize).menu {
         let hit = view.chrome_hit(pinned_row, range.start as u16);
         assert!(
             matches!(hit, Some(ChromeHit::OpenSidelineMenu { .. })),
@@ -1938,7 +1940,7 @@ fn chrome_hit_rows() {
                                  // Agents-first display order (x-0090; no tab rows) with x-cd67 US1
                                  // + the strip row (R15, display i paints at terminal i + 1) + Blank
                                  // spacers: squad 1 (terminal 1), "worker" (2), Blank (3), squad 2 (4),
-                                 // footer spacer (5), "+ new workspace" (6), Blank (7), "~ elsewhere"
+                                 // footer spacer (5), "+ workspace" (6), Blank (7), "~ elsewhere"
                                  // (8), orphan "bg-claude" (9), orphan "bg-other" (10).
     assert_eq!(cmds(view.chrome_hit(2, 4)), vec![Command::FocusPane(10)]);
     // (x-07c2) Both watch-only rows now REACH the dedicated thread pane:
@@ -1967,8 +1969,11 @@ fn chrome_hit_rows() {
         view.chrome_hit(8, 4),
         Some(ChromeHit::CycleSection(SectionKey::Elsewhere))
     ));
-    // The "+ new workspace" footer opens the create overlay.
-    assert!(matches!(view.chrome_hit(6, 4), Some(ChromeHit::OpenCreate)));
+    // The "+ workspace" footer opens the create overlay.
+    assert!(matches!(
+        view.chrome_hit(6, 14),
+        Some(ChromeHit::OpenCreate)
+    ));
 
     // Enough agents that display_rows() reaches the last terminal row.
     // (x-c5ee) Working, not idle: attention rows are never folded by the
@@ -6301,31 +6306,6 @@ async fn row_menu_move_is_the_same_operation_as_the_row_drag() {
     }
 }
 
-#[test]
-fn footer_menu_region_routes_a_click_to_the_sideline_menu() {
-    // US4: a click on the footer's `☰ menu` region opens the MENU popup; the
-    // rest of the `+ new workspace` row still opens create.
-    let mut v = two_pane_view();
-    v.term = (30, 100);
-    let footer = v
-        .display_rows()
-        .iter()
-        .position(|r| matches!(r, DisplayRow::NewSquad))
-        .unwrap();
-    let panel_w = v.panel_w() as usize;
-    let range = v
-        .footer_menu_range(panel_w)
-        .expect("a wide panel shows the menu button");
-    // (x-cd67 US1; the strip row since R15) outer row == display index -
-    // offset + 1.
-    let trow = (footer - v.sideline_offset()) as u16 + 1;
-    assert!(matches!(
-        v.chrome_hit(trow, range.start as u16),
-        Some(ChromeHit::OpenSidelineMenu { .. })
-    ));
-    assert!(matches!(v.chrome_hit(trow, 2), Some(ChromeHit::OpenCreate)));
-}
-
 #[tokio::test]
 async fn sideline_menu_settings_toggle_flips_session_state_and_stays_open() {
     // MENU -> settings chains, and a toggle flips session state and keeps
@@ -6967,7 +6947,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     let lines: Vec<&str> = text.lines().collect();
     // Agents-first row order (x-0090; no tab rows): footnote (auto-expanded,
     // x-2f99), its two agent rows, a Blank spacer, notes squad, the footer
-    // spacer, the "+ new workspace" footer, a spacer, the "~ elsewhere"
+    // spacer, the "+ workspace" footer, a spacer, the "~ elsewhere"
     // header, the orphan row. (x-cd67 US1) The strip row owns frame row 0
     // (R15), so every display row shifted down one. The state glyph is the
     // status WORD now: Blocked reads `Input`, exited reads `Stop` (x-177c).
@@ -6984,7 +6964,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
         lines[3]
     );
     assert!(lines[5].contains("\u{25b8} notes"), "{:?}", lines[5]);
-    assert!(lines[7].contains("+ new workspace"), "{:?}", lines[7]);
+    assert!(lines[7].contains("+ workspace"), "{:?}", lines[7]);
     assert!(lines[9].contains("~ elsewhere"), "{:?}", lines[9]);
     assert!(lines[10].contains("bg-watch"), "{:?}", lines[10]);
     // The exited row is DIM (fact beats badge, visually too). "dead" is
@@ -8052,7 +8032,7 @@ async fn attach_picker_ignores_a_modified_arrow_instead_of_attaching() {
 /// Display rows (x-0090 agents-first; sq1 active/expanded, no tab rows;
 /// x-cd67 US3 adds Blank spacers between groups and before the trailing
 /// headers since there are 2 squads):
-/// 0 sq1 · 1 hosted agent · 2 Blank · 3 sq2 · 4 "+ new workspace" ·
+/// 0 sq1 · 1 hosted agent · 2 Blank · 3 sq2 · 4 "+ workspace" ·
 /// 5 Blank · 6 "~ elsewhere" · 7 bg-attach · 8 bg-plain.
 fn unified_rows_view() -> View {
     let agent = |squad: Option<u64>, name: &str, pane_id, attach_id: Option<&str>| AgentRow {
@@ -9570,7 +9550,7 @@ async fn selector_enter_refusal_keeps_selector_open() {
 
 #[tokio::test]
 async fn selector_enter_footer_opens_create_overlay() {
-    // AC3-HP: Enter on "+ new workspace" opens the name-input overlay.
+    // AC3-HP: Enter on "+ workspace" opens the name-input overlay.
     let mut v = unified_rows_view();
     v.selector = Some(5); // footer
     let mut buf: Vec<u8> = Vec::new();
