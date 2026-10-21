@@ -877,7 +877,7 @@ fn review_invocation_event_fields(
     let parsed = crate::review_invocation::owner::parse_review_invocation(command);
     let command_name = parsed
         .as_ref()
-        .map(|p| p.command_name.clone())
+        .map(|p| p.command.clone())
         .unwrap_or_else(|| "/review".to_string());
     let args_raw = parsed
         .as_ref()

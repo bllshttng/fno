@@ -522,7 +522,7 @@ pub fn execute_retask<S: RetaskSeams>(
         ));
     }
 
-    let rename_name = match crate::naming::command_code_for(Some(&target.command_name)) {
+    let rename_name = match crate::naming::command_code_for(Some(&target.command)) {
         Ok(command_code) => {
             crate::naming::dispatch_agent_name(None, &command_code, node, None, None, None, None)
         }
