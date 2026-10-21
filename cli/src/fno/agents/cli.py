@@ -1455,6 +1455,15 @@ def cmd_spawn(
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
     uncarried = fence_uncarried(harness, passthrough)
+    if passthrough and message.startswith("-"):
+        # A seed written after the fence lands here: the fence's first token
+        # fills the prompt slot, so `-- -m X 'seed'` seeds the worker with `-m`.
+        print(
+            f"the seed reads as the flag {message!r}: put the prompt before "
+            "the `--` fence, `fno agents spawn ... '<seed>' -- <flags>`",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=2)
     if any(t == "--substrate" or t.startswith("--substrate=") for t in sys.argv[1:]):
         print("--substrate is now --as; the old spelling answers for one release.", file=sys.stderr)
     substrate = substrate or ("headless" if once else "thread")
