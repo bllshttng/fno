@@ -2023,35 +2023,33 @@ mod tests {
         );
     }
 
-    /// The chain that lost the lost nodes a second way: an insert the
-    /// primary orphans stays local and unsent, then the node's next write
-    /// refuses with the primary holding no row. The take-back must keep the
-    /// local row it cannot replace, or the mint dies one write later.
+    /// The chain that lost the lost nodes a second way: a child-row insert
+    /// the primary orphans (the peer deleted the node the row names) stays
+    /// local and unsent, then the node's next write refuses with the primary
+    /// holding no row. The take-back must keep the local row it cannot
+    /// replace, or the node dies one write later.
     #[test]
     fn an_update_the_primary_has_no_row_for_keeps_the_local_row() {
         let primary = test_primary::start();
         let a = machine();
         on(&primary, &a);
         seed(&a.graph).unwrap();
-        add_node(&a, "x-ghost", "ghost");
+        add_node(&a, "x-del", "doomed");
         flush(&a.graph).unwrap();
 
-        // The peer deletes the parent on the primary; this machine has not
-        // synced the delete. A local mint naming that parent refuses as
-        // orphaned.
+        // The peer deletes the node on the primary; this machine has not
+        // synced the delete. A child-row insert naming that node then
+        // refuses as orphaned: node_dispatch.node_id references nodes(id).
         primary
             .db
             .lock()
             .unwrap()
-            .execute(&format!("DELETE FROM {NODES} WHERE id = 'x-ghost'"), [])
+            .execute(&format!("DELETE FROM {NODES} WHERE id = 'x-del'"), [])
             .unwrap();
         crate::backlog::open(&a.graph)
             .unwrap()
             .execute(
-                &format!(
-                    "INSERT INTO {NODES} (id, ordinal, slug, title, status, priority, parent_id)
-                     VALUES ('x-orph', 3, 'x-orph', 'orphan', 'idea', 'p2', 'x-ghost')"
-                ),
+                "INSERT INTO node_dispatch (node_id, verb) VALUES ('x-del', 'do')",
                 [],
             )
             .unwrap();
@@ -2061,17 +2059,17 @@ mod tests {
             refusal.contains("parent row the primary does not hold"),
             "{refusal}"
         );
-        assert_eq!(title(&a, "x-orph").as_deref(), Some("orphan"));
+        assert_eq!(title(&a, "x-del").as_deref(), Some("doomed"));
         assert_eq!(outbox(&a), 0, "the orphaned insert does not re-queue");
 
         // The node's next write refuses with the primary holding no row.
         // The take-back fetches nothing and must keep the local row.
         on(&primary, &a);
-        retitle(&a, "x-orph", "still here");
+        retitle(&a, "x-del", "still here");
         let refusal = flush(&a.graph).unwrap_err();
         route_to_primary(None);
         assert!(refusal.starts_with(REFUSED), "{refusal}");
-        assert_eq!(title(&a, "x-orph").as_deref(), Some("still here"));
+        assert_eq!(title(&a, "x-del").as_deref(), Some("still here"));
         assert_eq!(outbox(&a), 0);
     }
 }
