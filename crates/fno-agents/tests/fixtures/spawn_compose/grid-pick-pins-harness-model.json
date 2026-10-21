@@ -24,18 +24,18 @@
         "applied": [
           [
             "grid",
-            "grid candidate claude/claude-haiku-5-5 capacity=unknown-permitted window=absent",
+            "grid candidate claude/claude-haiku capacity=unknown-permitted window=absent",
             "routing"
           ],
           [
             "model",
             "claude-haiku-5-5",
-            "routing.models.claude-haiku"
+            "difficulty-grid"
           ],
           [
             "grid",
             "claude/claude-haiku-5-5",
-            "routing.models.claude-haiku"
+            "difficulty-grid"
           ]
         ],
         "fingerprint": "8073e3d62108",
@@ -62,7 +62,7 @@
       "type": "spawn_defaults_applied"
     },
     "stderr": [
-      "fno agents spawn: applied grid=grid candidate claude/claude-haiku-5-5 capacity=unknown-permitted window=absent (routing), model=claude-haiku-5-5 (routing.models.claude-haiku), grid=claude/claude-haiku-5-5 (routing.models.claude-haiku)"
+      "fno agents spawn: applied grid=grid candidate claude/claude-haiku capacity=unknown-permitted window=absent (routing), model=claude-haiku-5-5 (difficulty-grid), grid=claude/claude-haiku-5-5 (difficulty-grid)"
     ],
     "stdout": null
   },
