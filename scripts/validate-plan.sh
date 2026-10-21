@@ -553,14 +553,14 @@ except yaml.YAMLError as exc:
         else
             warn "missing 'project:' field in frontmatter (intake will fall back to cwd-based inference)"
         fi
-        # Advisory, never a gate: an unpassable gate trains the waive. A code
-        # plan with no done_probes simply has no runtime evidence declared;
-        # name the absence and the reason so the omission is a choice on the
-        # record, not a default nobody noticed.
+        # A gate, not an advisory: a code plan with no done_probes ships on
+        # activity alone (PR open, CI green, reviewed) with nothing checking the
+        # goal itself. loop-check holds DonePRGreen on the same absence. A docs
+        # or research plan opts out by its domain.
         if _fm_has '^[[:space:]]*done_probes:'; then
             ok "declares done_probes (runtime evidence bound at ship)"
         elif _fm_has '^[[:space:]]*domain:[[:space:]]*code'; then
-            warn "code plan declares no done_probes; runtime evidence is undeclared (advisory: add a probe or record why not - /fno:review prove-it is the lane)"
+            error "code plan declares no done_probes; add a probe that proves the goal, not the activity (a docs or research plan sets domain: docs|research instead)"
         fi
         if _fm_has '^dispatch_hold:'; then
             _hold_out=""
