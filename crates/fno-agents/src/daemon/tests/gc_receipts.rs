@@ -429,7 +429,17 @@ fn a_shared_worktree_survives_while_the_other_row_is_live() {
         7,
         &move |_| graph.clone(),
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // The ruling's hour splits the pair: the done row is past it, the
+        // live row sits inside it, so only the done row retires.
+        &|entries| {
+            entries
+                .iter()
+                .map(|e| {
+                    let age = if e.short_id == "rowy" { 1800 } else { 2 * 3600 };
+                    (crate::gc::row_handle(e), Some(age))
+                })
+                .collect()
+        },
         &|_| true,
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
