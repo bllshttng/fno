@@ -375,6 +375,20 @@ fn write_pane_row_statuses_match_the_bind() {
     assert_eq!(row.origin.as_deref(), Some("spawn"));
     assert_eq!(row.substrate.as_deref(), Some("pane"));
     assert_eq!(row.spawn_trigger, None);
+    let registry = write_and_load(
+        &home,
+        "w4",
+        &ctx,
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".to_string(),
+        },
+        false,
+    )
+    .unwrap();
+    let row = registry.entries.iter().find(|e| e.name == "w4").unwrap();
+    assert_eq!(row.status, AgentStatus::Failed);
+    assert_eq!(row.harness_session_id, None);
 }
 
 #[test]
@@ -432,6 +446,45 @@ fn receipt_keys_follow_the_cli_order() {
     assert!(
         unbound_json.contains("\"unbound_reason\": \"binding-window-expired\""),
         "got: {unbound_json}"
+    );
+}
+
+#[test]
+fn died_receipt_names_the_death_and_the_row_reads_failed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(tmp.path().join("agents"));
+    write_pane_row(
+        &home,
+        "w",
+        &PaneContext::simple("codex", "/repo"),
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".into(),
+        },
+        false,
+        &None,
+    )
+    .unwrap();
+    let registry = state::load_registry(&home.registry_json())
+        .map_err(|e| e.to_string())
+        .unwrap();
+    let row = registry.entries.iter().find(|e| e.name == "w").unwrap();
+    assert_eq!(row.status, AgentStatus::Failed);
+    let receipt = PaneReceipt::new(
+        "w",
+        &PaneContext::simple("codex", "/repo"),
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".into(),
+        },
+    );
+    let json = receipt.to_json();
+    assert!(json.contains("\"status\": \"failed\""), "got: {json}");
+    assert!(json.contains("\"bound\": false"), "got: {json}");
+    assert!(json.contains("\"pane_alive\": false"), "got: {json}");
+    assert!(
+        json.contains("\"unbound_reason\": \"pane-died-before-binding\""),
+        "got: {json}"
     );
 }
 
