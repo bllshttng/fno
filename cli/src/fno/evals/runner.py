@@ -131,15 +131,11 @@ def _git_rev(repo_root: Path, ref: str) -> Optional[str]:
 
 
 def _resolvable_lane_account(lane: Optional[Any]) -> Optional[str]:
-    """The lane's account, only when the providers registry resolves it.
-
-    Seat spawns resolve a routed lane's vendor through the route itself; the
-    ``--account`` axis is the providers registry, and a route row's account
-    may name a config-side alias that registry does not carry (a zai-route
-    lane refused every eval spawn here while seat spawns on the same route
-    worked). Pass ``--account`` only when it would resolve; otherwise the
-    spawn rides the route exactly like a seat spawn, and the row's lane
-    identity still reads back from the transcript.
+    """The lane's account, only when the providers registry resolves it. A
+    route row's account may name a config-side alias that registry does not
+    carry (a zai-route lane refused every eval spawn while seat spawns on the
+    same route worked); pass ``--account`` only when it resolves, else the
+    spawn rides the route alone, exactly the seat form.
     """
     account = getattr(lane, "account", None)
     if not account:
