@@ -533,6 +533,24 @@ pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
     (block, probe.calls.load(Ordering::SeqCst))
 }
 
+/// The wait's zero-network tick: the newest (slug, pr) row answers only
+/// inside the TTL and only when minted for `require_head`, so the head
+/// guard that protects the status verb serves the wait too - fed a sha the
+/// caller read from local git at no cost instead of from GitHub. None sends
+/// the caller down the network path.
+pub(crate) fn fresh_tick(
+    cwd: &Path,
+    pr: u64,
+    require_head: Option<&str>,
+) -> Option<(i32, Value, Vec<String>)> {
+    let slug = git_slug(cwd)?;
+    let dir = cache_dir(cwd)?;
+    let slug_key = slug.replace('/', "--");
+    let answer = fresh_serve(&dir, &slug_key, &pr.to_string(), now_secs(), require_head)?;
+    let (code, payload, lines, _) = into_answer(answer, 0);
+    Some((code, payload, lines))
+}
+
 /// The light read that mints the key: the PR's head sha and state, one call.
 /// The full pulls payload rides along so the live read never re-fetches the
 /// same PR seconds later (one `pulls/{n}` read per status, not two).
@@ -750,5 +768,21 @@ mod tests {
         for d in [peer_dir, dir] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// The zero-network tick's serve: a young row minted FOR the required
+    /// head answers; the mismatch case is pinned by the head-guard test
+    /// above. No probe is involved, so 0 gh calls is inherent.
+    #[test]
+    fn a_young_row_minted_for_the_head_serves_fresh_tick() {
+        let dir = temp_cache_dir("freshtick");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        let (code, stdout, _) =
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
+                .expect("a young matching row serves");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"head\":\"aaaaaaaa1111\""), "{stdout}");
+        assert!(stdout.contains("\"cached\":true"), "{stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
