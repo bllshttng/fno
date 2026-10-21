@@ -823,27 +823,6 @@ pub(crate) fn admit_spawn_for_origin(argv: &[String]) -> Option<String> {
     }
 }
 
-/// The same question with the ledger path, clock and cap injected, so tests
-/// pass a temp ledger. The argv carries the subcommand and arguments, NOT
-/// the program name - the shape `admit` takes and `points_for` prices.
-pub(crate) fn admit_spawn_at(
-    path: &Path,
-    now: i64,
-    cap: u32,
-    program: &OsStr,
-    args: &[String],
-) -> Option<String> {
-    if !is_github_program(program) {
-        return None;
-    }
-    let verdict = admit(path, args, now, cap);
-    if verdict.admitted {
-        None
-    } else {
-        verdict.refusal
-    }
-}
-
 /// admit_spawn for an already-built Command: the program and args come off
 /// the command, so a transport admits without knowing what it was handed.
 /// The program check runs before any argv copy: the transports carry every
@@ -926,19 +905,6 @@ pub(crate) fn record_refusal_real(now: i64, kind: &str) -> Result<(), String> {
     record_refusal_body(None, now, kind, shared)
 }
 
-/// The record_refusal body with the fleet row injected: `shared` is
-/// (until, step, last_refusal) as the claims store would answer. Tests
-/// stage temp ledger paths, which never read the real fleet row, so the
-/// multi-host branches are reachable only through this seam.
-pub(crate) fn record_refusal_via(
-    path: &Path,
-    now: i64,
-    kind: &str,
-    shared: (i64, i64, i64),
-) -> Result<(), String> {
-    record_refusal_body(Some(path), now, kind, shared)
-}
-
 /// The refusal body over an optional ledger override: None means the real
 /// ledger, and the write below lands on the path the lock returned.
 fn record_refusal_body(
@@ -1007,25 +973,20 @@ pub(crate) fn core_reserve() -> u32 {
         .unwrap_or(500)
 }
 
-/// One core reading lands in the ledger under the same flock, read-modify
-/// write: it writes when the reading is newer than core_seen_ms, and
-/// lowers core_remaining only within the same core_reset_ms (a later reset
-/// replaces the bucket; an older one is a stale window, dropped). A fresh
-/// reading (under 60 s old, same reset, both values above twice the
-/// reserve) skips the write, so the write rate stays flat while the
-/// bucket is healthy.
-pub(crate) fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
-    let (_lock, locked) = ledger_lock(Some(path));
-    record_core_locked(&locked, remaining, reset_epoch_s, now);
-}
-
 /// The real-ledger core stamp: the lock, the read and the write share one
-/// late resolve. Tests inject through record_core_at instead.
+/// late resolve. Tests inject through their own record_core_at seam.
 pub(crate) fn record_core_real(remaining: i64, reset_epoch_s: i64, now: i64) {
     let (_lock, locked) = ledger_lock(None);
     record_core_locked(&locked, remaining, reset_epoch_s, now);
 }
 
+/// One core reading lands in the ledger under the flock the caller holds:
+/// it writes when the reading is newer than core_seen_ms, and lowers
+/// core_remaining only within the same core_reset_ms (a later reset
+/// replaces the bucket; an older one is a stale window, dropped). A fresh
+/// reading (under 60 s old, same reset, both values above twice the
+/// reserve) skips the write, so the write rate stays flat while the
+/// bucket is healthy.
 fn record_core_locked(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
     let (mut ledger, _) = read_ledger(path);
     let reset_ms = reset_epoch_s * 1000;
@@ -1270,6 +1231,42 @@ mod tests {
 
     fn argv(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
+    }
+
+    /// The injected spawn-admit seam: tests pin a temp ledger, a fixed
+    /// clock and a small cap through the shape the production entry takes.
+    fn admit_spawn_at(
+        path: &Path,
+        now: i64,
+        cap: u32,
+        program: &OsStr,
+        args: &[String],
+    ) -> Option<String> {
+        if !is_github_program(program) {
+            return None;
+        }
+        let verdict = admit(path, args, now, cap);
+        if verdict.admitted {
+            None
+        } else {
+            verdict.refusal
+        }
+    }
+
+    /// The injected refusal seam with the fleet row staged by the test.
+    fn record_refusal_via(
+        path: &Path,
+        now: i64,
+        kind: &str,
+        shared: (i64, i64, i64),
+    ) -> Result<(), String> {
+        record_refusal_body(Some(path), now, kind, shared)
+    }
+
+    /// The injected core-stamp seam.
+    fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
+        let (_lock, locked) = ledger_lock(Some(path));
+        record_core_locked(&locked, remaining, reset_epoch_s, now);
     }
 
     #[test]
