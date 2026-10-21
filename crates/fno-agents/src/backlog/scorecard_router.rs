@@ -12,6 +12,10 @@ use std::collections::BTreeMap;
 /// a verdict; below it the router answers explore, never propose.
 const EXPLORE_FLOOR: u64 = 5;
 
+/// The seat law governing blueprint seating: blueprinting runs only on the
+/// families below, never glm.
+const BLUEPRINT_LAW: &str = "d-7b9e5ce4";
+
 /// The d-7b9e5ce4 model families allowed to blueprint, matched by
 /// normalized-model prefix. glm never matches: the law names it barred.
 const BLUEPRINT_MODEL_PREFIXES: &[&str] = &["opus", "fable", "gpt-5.6-sol", "gpt-6-astra"];
@@ -109,10 +113,43 @@ pub(crate) fn declared_inventory() -> Option<(Vec<RowKey>, Value)> {
     Some((rows, inventory))
 }
 
-/// The lane the grid names for one band, from the declared pick only: an
-/// empty capacity map reads every row unknown-permitted, so no live
-/// capacity read shapes the incumbent.
+/// The lane the verb actually seats on one band: a declared lanes list
+/// routes the verb off the grid (the slot walk reads one lanes list for
+/// every band), so the seated list decides first, and the grid names the
+/// incumbent only for a verb that declares none. Either way the pick is
+/// declared-only: an empty capacity map reads every row
+/// unknown-permitted, so no live capacity read shapes the incumbent.
 fn incumbent_lane(stage: &str, difficulty: &str, inventory: &Value) -> Option<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Some(profile) = crate::agents_config::config_lookup(&cwd, &["agents", "profiles", stage])
+    {
+        let lanes_of = |t: &toml::Value| -> Option<String> {
+            let arr = t.as_array()?;
+            let first = arr.first()?;
+            first.as_str().map(str::to_string).or_else(|| {
+                first
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+        };
+        let overlay = profile
+            .get("by_difficulty")
+            .and_then(|b| b.get(difficulty))
+            .and_then(|b| b.get("lanes"))
+            .and_then(lanes_of)
+            .filter(|n| !n.is_empty());
+        if overlay.is_some() {
+            return overlay;
+        }
+        let top = profile
+            .get("lanes")
+            .and_then(lanes_of)
+            .filter(|n| !n.is_empty());
+        if top.is_some() {
+            return top;
+        }
+    }
     let payload = json!({
         "inventory": inventory,
         "capacity": {},
@@ -128,10 +165,23 @@ fn incumbent_lane(stage: &str, difficulty: &str, inventory: &Value) -> Option<St
         .map(str::to_string)
 }
 
-/// The declared row a cell rode: harness equal, normalized model equal, and
-/// a route vendor (when the row names one) matching the cell's provider. A
-/// row with no route is provider-agnostic.
-fn cell_row<'a>(rows: &'a [RowKey], cell: &Value) -> Option<&'a RowKey> {
+/// The declared rows one cell could have ridden: harness equal, normalized
+/// model equal, and a route vendor (when the row names one) matching the
+/// cell's provider. A row with no route is provider-agnostic, so a cell can
+/// legitimately match several rows - the caller refuses that ambiguity with
+/// a note instead of silently reading the first match.
+/// The kind's cells that rode one row, by name. A provider-agnostic row
+/// can match several cells; the caller refuses that ambiguity with a note
+/// instead of silently reading the first match.
+fn row_cells<'a>(kind_cells: &[&'a Value], rows: &[RowKey], row: &RowKey) -> Vec<&'a Value> {
+    kind_cells
+        .iter()
+        .filter(|c| cell_rows(rows, c).iter().any(|x| x.name == row.name))
+        .copied()
+        .collect()
+}
+
+fn cell_rows<'a>(rows: &'a [RowKey], cell: &Value) -> Vec<&'a RowKey> {
     let harness = cell.get("harness").and_then(Value::as_str).unwrap_or("");
     let provider = cell.get("provider").and_then(Value::as_str).unwrap_or("");
     let model = cell
@@ -139,11 +189,13 @@ fn cell_row<'a>(rows: &'a [RowKey], cell: &Value) -> Option<&'a RowKey> {
         .and_then(Value::as_str)
         .map(crate::context_window::normalize_model)
         .unwrap_or_default();
-    rows.iter().find(|r| {
-        r.harness == harness
-            && r.model_norm == model
-            && (r.vendor.is_empty() || r.vendor == provider)
-    })
+    rows.iter()
+        .filter(|r| {
+            r.harness == harness
+                && r.model_norm == model
+                && (r.vendor.is_empty() || r.vendor == provider)
+        })
+        .collect()
 }
 
 fn in_blueprint_law(row: &RowKey) -> bool {
@@ -156,7 +208,7 @@ fn in_blueprint_law(row: &RowKey) -> bool {
 /// one-line gist: the router names them, the user decides. A glm-flash
 /// target lane runs against the temporary opus/sonnet seating until it
 /// lapses; any other target lane runs against the standing glm preference.
-fn contradicted_laws(stage: &str, row: &RowKey) -> Vec<Value> {
+fn contradicted_laws(stage: &str, band: &str, row: &RowKey) -> Vec<Value> {
     let mut out = Vec::new();
     if stage == BLUEPRINT_STAGE {
         out.push(json!({
@@ -174,15 +226,28 @@ fn contradicted_laws(stage: &str, row: &RowKey) -> Vec<Value> {
         return out;
     }
     let today = chrono::Utc::now().date_naive();
-    if row.model_norm == "glm-5.3-flash" {
-        if today < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap() {
+    let flash = row.model_norm == "glm-5.3-flash";
+    if today < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap() {
+        // The temporary law seats by band: sonnet for low and medium, opus
+        // for high.
+        let low_band = matches!(band, "low" | "medium");
+        let aligned = (row.model_norm.starts_with("sonnet") && low_band)
+            || (row.model_norm.starts_with("opus") && !low_band);
+        if !aligned {
             out.push(json!({
                 "id": "d-e38d92cc",
-                "gist": "until 2026-10-23 target work seats on claude opus/sonnet as much as possible",
+                "gist": "until 2026-10-23 the law seats sonnet on low and medium bands and opus on high",
                 "contradicted": true,
             }));
         }
-    } else {
+    } else if !flash {
+        out.push(json!({
+            "id": "d-e38d92cc",
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true,
+        }));
+    }
+    if !flash {
         out.push(json!({
             "id": "d-ecaf06b8",
             "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
@@ -228,11 +293,19 @@ fn verdict_pair(cand: Option<(&Value, u64)>, inc: Option<(&Value, u64)>) -> (&'s
         let cost = c.get("cost_per_merged_usd")?.as_f64()?;
         Some((lo, hi, cost))
     };
-    let (Some((c, c_nodes)), Some((i, _))) = (cand, inc) else {
-        return ("hold", json!("unmeasured pair"));
-    };
+    // Explore reads the node count alone: a declared row with no cell (zero
+    // nodes) or a thin one gets the spawn line before any incumbent facts
+    // are asked for, and a thin candidate explores even against no
+    // measured incumbent.
+    let c_nodes = cand.as_ref().map(|(_, n)| *n).unwrap_or(0);
     if c_nodes < EXPLORE_FLOOR {
         return ("explore", json!("fewer than 5 nodes on this kind"));
+    }
+    let (Some((c, _)), Some((i, i_nodes))) = (cand, inc) else {
+        return ("hold", json!("unmeasured pair"));
+    };
+    if i_nodes < EXPLORE_FLOOR {
+        return ("hold", json!("incumbent underpowered"));
     }
     let (Some((clo, _chi, ccost)), Some((ilo, ihi, icost))) = (cell_facts(c), cell_facts(i)) else {
         return ("hold", json!("cost or interval unmeasured"));
@@ -305,16 +378,25 @@ pub(crate) fn propose_with(
             }));
             continue;
         };
-        let inc_row = rows.iter().find(|r| r.name == incumbent);
-        let inc_cell = inc_row.and_then(|r| {
-            kind_cells
-                .iter()
-                .find(|c| cell_row(rows, c) == Some(r))
-                .copied()
-        });
-        let inc_facts = inc_cell
-            .map(|c| (c, c.get("nodes").and_then(Value::as_u64).unwrap_or(0)))
-            .filter(|(_, nodes)| *nodes > 0);
+        // The row's cells: every kind cell that could have ridden the row,
+        // by name - a provider-agnostic row can match more than one cell,
+        // and the fold refuses that ambiguity with a note instead of
+        // silently reading the first match.
+        let inc_cells = rows
+            .iter()
+            .find(|r| r.name == incumbent)
+            .map(|r| row_cells(&kind_cells, rows, r))
+            .unwrap_or_default();
+        let inc_facts = match inc_cells.len() {
+            1 => Some((
+                inc_cells[0],
+                inc_cells[0]
+                    .get("nodes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            )),
+            _ => None,
+        };
         for row in rows {
             if stage == BLUEPRINT_STAGE && !in_blueprint_law(row) {
                 continue;
@@ -322,26 +404,32 @@ pub(crate) fn propose_with(
             if row.name == incumbent {
                 continue;
             }
-            let cell = kind_cells
-                .iter()
-                .find(|c| cell_row(rows, c) == Some(row))
-                .copied();
+            let matches = row_cells(&kind_cells, rows, row);
+            let (cell, ambiguity) = match matches.len() {
+                0 => (None, false),
+                1 => (Some(matches[0]), false),
+                _ => (None, true),
+            };
             let nodes = cell
                 .and_then(|c| c.get("nodes"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            let (verdict, note) = verdict_pair(cell.map(|c| (c, nodes)), inc_facts);
+            let (verdict, note) = if ambiguity {
+                ("hold", json!("several cells map to this lane"))
+            } else {
+                verdict_pair(cell.map(|c| (c, nodes)), inc_facts)
+            };
             let mut p = json!({
                 "kind": kind,
                 "lane": row.name,
                 "harness": row.harness,
                 "verdict": verdict,
                 "nodes": nodes,
-                "laws": contradicted_laws(stage, row),
+                "laws": contradicted_laws(stage, difficulty, row),
             });
             if let Some(c) = cell {
                 for k in ["merged", "merged_ci95", "cost_per_merged_usd"] {
-                    p[k.as_str()] = c.get(k).cloned().unwrap_or(Value::Null);
+                    p[k] = c.get(k).cloned().unwrap_or(Value::Null);
                 }
             }
             if verdict == "propose" {
