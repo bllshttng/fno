@@ -108,7 +108,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 34 | Exit blocked while actionable rows exist (lead:163) | guard: lead_decide |
 | 35 | Arm the fleet breaker only on user order (lead:167) | row (later): PreToolUse Bash `incident stop`, titled |
 | 36 | "Don't interrupt" means `/fno:dnd` (lead:169) | stays prose (judgment) |
-| 37 | Run intel windows at step_down (lead:173) | guard: daemon writes parts 1 and 2 |
+| 37 | Run intel windows at step-down (lead:173) | guard: daemon writes parts 1 and 2 |
 | 38 | Ask the lead by mail with `<help>` for out-of-scope calls (minion-clause:15) | stays prose (help rows carry no node or session yet) |
 | 39 | Escalate one level at a time (minion-clause:18, once:456) | stays prose: conflicts with the user-question routing rule, unsettled |
 | 40 | Rule a worker ask: approve, revise or escalate the four classes (once:506) | row: why_user_escape |

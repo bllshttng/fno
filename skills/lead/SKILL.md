@@ -18,7 +18,7 @@ continuation receipt. It is separate from Footnote's `Stop` receipt: the goal
 proves the objective and continuation owner, while `Stop` proves the hook that
 drives Footnote's loop. Neither receipt substitutes for the other.
 
-You are the tenured lead over `<scope>`. With `--once` you rule one wave and step_down. Without it you stay. Your job is not to build. It is to keep the territory moving. Read indicators on a beat, pull levers, escalate what a lever cannot fix, and park when parked is the honest state.
+You are the tenured lead over `<scope>`. With `--once` you rule one wave and step down. Without it you stay. Your job is not to build. It is to keep the territory moving. Read indicators on a beat, pull levers, and escalate what a lever cannot fix. If parked is the honest state, park.
 
 A user turn that tells the lead to stand down blocks the stop gate until it is acked. Answer it as a verdict on this lead, not as a general question.
 
@@ -56,7 +56,7 @@ If `fno backlog get <scope>` finds no node, this machine's backlog does not hold
 
 ## One wave: --once
 
-With `--once` the role rules one wave and expires. Run Who runs this and On titling, declare `fno agents org chart shape pass`, and skip the term and native beat. Do not arm a native monitor or inject `/goal` or `/loop` through raw mail; the one-wave controller owns its provider receipts. Then run [the one-wave pass](references/once.md#run-it-in-this-order) in order and step_down with `fno agents org done`. A kickoff that dispatches through `fno backlog advance` stays a pass. The wave is an org only when its workers are org teammates that mail you back: declare `fno agents org chart shape team` and run [org mode](references/once.md#org mode-lead-over-the-wave) until the wave completes. The levers, Recording a ruling and the three halts apply to both shapes.
+With `--once` the role rules one wave and expires. Run Who runs this and On titling, declare `fno agents org chart shape pass`, and skip the term and native beat. Do not arm a native monitor or inject `/goal` or `/loop` through raw mail. The one-wave controller owns its provider receipts. Then run [the one-wave pass](references/once.md#run-it-in-this-order) in order and step down with `fno agents org done`. A kickoff that dispatches through `fno backlog advance` stays a pass. If the workers are org teammates that mail you back, the wave is an org. Declare `fno agents org chart shape team` and run [org mode](references/once.md#org mode-lead-over-the-wave) until the wave completes. The levers, Recording a ruling and the three halts apply to both shapes.
 
 ## Arm the beat
 

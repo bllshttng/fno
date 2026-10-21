@@ -443,7 +443,7 @@ pub(crate) fn handle_session_report(
 
     // The successor's first report is the manifest arm point (Python's
     // `_arm_role_after_identification`): spawn-time succession has no successor
-    // id at settle, so the transfer leaves the manifest naming the stepping_down
+    // id at settle, so the transfer leaves the manifest naming the outgoing
     // session and the successor holds with no levers until this rewrite names it.
     if let Some((scope, cwd, row_harness)) = manifest_arm {
         arm_role_manifest(
@@ -1527,7 +1527,7 @@ mod tests {
     }
 
     /// A `spawn --promote --succeed` transfer leaves the manifest
-    /// naming the stepping_down session, and the successor's levers (shape, term)
+    /// naming the session stepping down, and the successor's levers (shape, term)
     /// read that manifest, so the successor holds with no levers. The successor's
     /// first session report is the arm point: the fill rebinds the manifest
     /// to the successor, including the harness when the row carries one (a claude

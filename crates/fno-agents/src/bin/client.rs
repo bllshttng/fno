@@ -921,7 +921,7 @@ async fn run(args: Vec<String>) -> i32 {
     // `--verdict` is the same journals read as a tenure verdict (law
     // d-fe66560a: the verdict rides this action as an argument, never a
     // new action).
-    if verb == "lead-history" || verb == "lead-history" {
+    if verb == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);
         }
@@ -933,7 +933,7 @@ async fn run(args: Vec<String>) -> i32 {
     // resolves the caller's team scope and Python-owned paths, the native
     // side gathers, prints, diffs and journals the row, reusing the org-fold
     // fold and the lead-history scan in process.
-    if verb == "lead-checkin" || verb == "lead-checkin" {
+    if verb == "lead-checkin" {
         return fno_agents::lead_checkin::run_lead_checkin(&args[1..]);
     }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
