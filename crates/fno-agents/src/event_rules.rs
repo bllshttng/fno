@@ -1003,6 +1003,16 @@ mod tests {
         assert!(decision_ask(ask));
     }
 
+    #[test]
+    fn status_reports_with_no_question_are_not_decision_asks() {
+        let table = "| node | state |\n|---|---|\n| x-1 | ? |\n1. PR open\n2. CI pending";
+        assert!(!decision_ask(table));
+        let next = "1. merged\n2. reconciled\nNext: nothing from you.";
+        assert!(!decision_ask(next));
+        let receipt = "You ruled hold, which was your call.\n1. held\n2. noted";
+        assert!(!decision_ask(receipt));
+    }
+
     fn r1_unpromoted_and_cap_legs() {
         // AC5: unpromoted, no manifest, default config - the same ask allows.
         let rig = Rig::new(false);
