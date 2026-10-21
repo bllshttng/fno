@@ -170,8 +170,8 @@ def _tier3_tokens(
     decision the pane funnel uses (:func:`fno.agents.writable_dirs.add_dir_tokens`)
     rather than a second copy of it here: a claude worker with no grant for the
     state root fails to write the claim store exactly as a codex one does. The
-    repository ships no ``.claude/settings.json``, so a fresh user's claude
-    worker has no ``permissions.additionalDirectories`` to mask it."""
+    repository's ``.claude/settings.json`` carries no permissions, so a fresh
+    user's claude worker has no ``permissions.additionalDirectories`` to mask it."""
     from fno.agents.writable_dirs import add_dir_tokens
 
     def _unreachable(flag: str) -> object:  # pragma: no cover - claude maps every cell

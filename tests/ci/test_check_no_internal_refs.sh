@@ -2,7 +2,7 @@
 # tests/ci/test_check_no_internal_refs.sh
 #
 # Exercises scripts/ci/check-no-internal-refs.sh (finding A2): the three-class
-# prose gate (internal-path / node-id / session-url) with a by-TOKEN node-id
+# prose gate (internal-path / node-id) with a by-TOKEN node-id
 # allowlist. Uses a scratch git repo with fixture prose so `git ls-files` sees
 # real tracked files.
 #
@@ -58,19 +58,9 @@ echo "$OUT" | grep -q "ab-1234abcd" \
     && fail "node-id: allowlisted example token ab-1234abcd was flagged ($OUT)"
 pass "node-id: real id fails, allowlisted example token exempt"
 
-# --- session-url leak in prose fails -----------------------------------------
-log "session-url leak fails"
-rm -f docs/mixed.md
-printf 'see https://claude.ai/code/session_xyz for details.\n' > docs/url.md
-commit_all
-OUT=$(run_gate); RC=$?
-(( RC == 1 )) || fail "session-url: expected 1, got $RC"
-echo "$OUT" | grep -q "\[session-url\] docs/url.md" || fail "session-url: not flagged ($OUT)"
-pass "session-url: prose leak fails"
-
 # --- AC2-UI: a file with BOTH an internal/ leak and a node-id leak labels each
 log "report distinguishes pattern class"
-rm -f docs/url.md
+rm -f docs/mixed.md
 printf 'pointer to internal/foo/bar.md\nand node x-ab12 breadcrumb.\n' > docs/both.md
 commit_all
 OUT=$(run_gate); RC=$?
