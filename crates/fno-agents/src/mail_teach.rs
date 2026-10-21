@@ -28,6 +28,7 @@ use crate::paths::AgentsHome;
 /// the registry the session resolves in. A render hands its own registry's
 /// parent, so its due check never reads the ambient env - one root per
 /// store, and a test's tmp registry is its own world.
+#[cfg(test)]
 fn teach_path_at(root: &Path, session: &str) -> PathBuf {
     lesson_path_at(root, Lesson::Mail, session)
 }
