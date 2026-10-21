@@ -1964,7 +1964,7 @@ class TestTaintWriterIdentity:
         ).outcome == "slot-pinned"
 
 
-class TestSwitchNecommandindsAnIdentity:
+class TestSwitchNeverBindsAnIdentity:
     def test_a_switch_does_not_bind_an_unbound_record(self, fake_slot, tmp_path):
         """A switch materializes the record's STORED snapshot, whose provenance
         is the store, not the operator. An earlier out-of-band login plus

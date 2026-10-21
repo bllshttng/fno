@@ -368,17 +368,10 @@ pub(crate) enum SearchOp {
 /// unknown badge (liveness-only, no fresh hook report / manifest verdict)
 /// refuses fail-closed, and false-ready is the forbidden direction.
 ///
-/// Refusing mid-turn is still the conservative call HERE, but not for the
-/// reason this comment used to give: node measured, from a live claude
-/// session's own transcript, that a busy recipient does not corrupt its
-/// composer on an injected turn - it enqueues the paste and processes it at
-/// the next turn boundary (`queue-operation`/`enqueue`, confirmed via
-/// `crates/fno-agents/src/mail_inject.rs`). That measurement is about a
-/// bracketed-paste MAIL turn landing through the harness's own input-queue
-/// feature; it says nothing about `BlockNavOp::Rerun`'s write below, which
-/// puts a raw re-typed command line directly onto the pane's live input state
-/// (`pty.write_input`), not a message the composer is designed to buffer. No
-/// measurement establishes that write is safe mid-turn, so the guard stays.
+/// A busy claude composer queues an injected MAIL paste safely
+/// (`crates/fno-agents/src/mail_inject.rs`), but this rerun writes a raw
+/// command line onto the live input (`pty.write_input`). Nothing shows that
+/// write is safe mid-turn, so the guard stays.
 ///
 /// `agents` is the WHOLE cross-session registry, so the row match is scoped to
 /// `session` on the FULL `(session, pane)` ref (the same filter `agent_rows`
@@ -9527,13 +9520,8 @@ impl Core {
                 // pre-v64 client's `thread_pane: true` lands in portal 0,
                 // exactly where it always did.
                 //
-                // The geometry refusal no longer lives here. This
-                // edge cannot see whether index N is occupied - only the slot
-                // lookup in `reach_portal` learns that - so one check here
-                // answered two cases that deserve opposite answers. The
-                // decision moved into the reach: a repoint keeps owning its
-                // geometry (ignored, visibly), a fresh open honors the
-                // caller's placement. This edge only resolves WHICH index.
+                // This edge only resolves WHICH index. Only `reach_portal`
+                // knows if index N is occupied, so it owns the geometry call.
                 if placement.view {
                     // The transient machine view: never a portal, never an
                     // entry in the map, never restored. A side effect's

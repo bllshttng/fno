@@ -331,5 +331,5 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `accounts.quota.probe_ttl_seconds` | int | `300` | never | Seconds a quota probe result stays fresh before re-probing. |
 | `accounts.quota.defer_horizon_minutes` | int | `60` | never | How far ahead a quota-window reset is still worth deferring for. |
 | `accounts.quota.pick_on_launch` | bool | `false` | never | Pick the least-loaded account at spawn time instead of pinning one. |
-| `accounts.failover` | Failocommandlock (optional) | _(none)_ | never | Provider-rotation failover: {max_swaps_per_phase}. |
+| `accounts.failover` | FailoverBlock (optional) | _(none)_ | never | Provider-rotation failover: {max_swaps_per_phase}. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |

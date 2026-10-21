@@ -124,12 +124,14 @@ pub(super) fn print_prune_summary(
     // read as "nothing matched", the same rule as every other part.
     let orphan_total = tabs.closed_orphaned + tabs.would_close_orphaned;
     if orphan_total > 0 {
-        let ocommand = if command == "pruned" {
+        let orphan_command = if command == "pruned" {
             "closed"
         } else {
             "would close"
         };
-        parts.push(format!("orphaned worker tabs {ocommand} {orphan_total}"));
+        parts.push(format!(
+            "orphaned worker tabs {orphan_command} {orphan_total}"
+        ));
     }
     if !unreachable.is_empty() {
         parts.push(format!(
@@ -149,13 +151,13 @@ pub(super) fn print_prune_summary(
         ));
     }
     if members_reaped > 0 {
-        let mcommand = if command == "pruned" {
+        let member_command = if command == "pruned" {
             "reaped"
         } else {
             "would reap"
         };
         parts.push(format!(
-            "{mcommand} {members_reaped} dead member(s) from surviving workspaces"
+            "{member_command} {members_reaped} dead member(s) from surviving workspaces"
         ));
     }
     if members_kept_live > 0 {

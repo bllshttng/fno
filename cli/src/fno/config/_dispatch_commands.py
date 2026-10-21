@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Mapping, Optional, Sequence, Tuple
 
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+
 
 @dataclass(frozen=True)
 class DispatchCommandDescriptor:
@@ -95,3 +97,102 @@ def resolvable_commands(
         for key, desc in (registry or {}).items()
         if (canon := canonical_command_key(str(key))) not in allowed_canon
     }
+
+
+class DispatchBlock(BaseModel):
+    """Autonomous-dispatch profile (nested under 'config.dispatch').
+
+    Per-environment overlay of the in-tree harness-capability map
+    (`fno.agents.harness_map`): the shared `resolve_node_spawn` resolver reads
+    these as the config rung between an explicit flag and the built-in default.
+    All three are empty ("") = unset, so a fresh install resolves exactly as the
+    built-ins (harness=claude, per-harness substrate, `/target --no-merge {id}`).
+
+    No value validation here (config stays a leaf module): the resolver
+    validates the harness against the map and the substrate against the harness's
+    capabilities at resolve time, fail-loud.
+
+    `command` is a template with a single `{id}` placeholder. A node's
+    `dispatch_command`/`dispatch_brief` (US3) layer on top: the resolver validates
+    the command against `allowed_commands` and carries the brief via env only, so a
+    graph field crossing into a worker prompt is a guarded trust boundary.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    # DEPRECATED: the harness axis lives in the stage table
+    # (`agents.profiles.<command>.provider`); this key reads as the fallback rung
+    # beneath it for one release. The fold runs at resolution time
+    # (fno.agents.harness_map); the operator-facing surface is `fno config doctor`.
+    harness: str = ""
+    substrate: str = ""
+    command: str = ""
+    # Registered commands from outside fno (unioned with allowed_commands at resolve;
+    # a shipped or allowlisted spelling cannot be redefined here).
+    # Both keys read their pre-rename spelling too, so an existing config.toml loads.
+    command_registry: dict[str, DispatchCommandDescriptor] = Field(
+        default_factory=dict, validation_alias=AliasChoices("command_registry", "verb_registry")  # verb-wording: allow
+    )
+    # US3 command allowlist: a node dispatch_command must match or the resolver refuses.
+    allowed_commands: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DISPATCH_COMMANDS),
+        validation_alias=AliasChoices("allowed_commands", "allowed_verbs"),  # verb-wording: allow
+    )
+    # DEPRECATED (/): reads as `auto_merge.grant` for one release;
+    # every dispatch path reads the grant key now, no consumer reads this field.
+    # An explicit --allow-merge/--no-merge flag always wins.
+    auto_merge: bool = False
+    # defer (default, byte-identical to today) or fail over to the next
+    # healthy provider in the active combo; an unknown value degrades to "defer".
+    on_exhaustion: str = "defer"
+    # Proactive LOW cutover, opt-in, default 0 = off. Deliberately inverted from
+    # defer_horizon_minutes: a distant reset means leave now, not wait.
+    cutover_low_after_minutes: int = 0
+    # The blueprint floor for a plan-less node (lean dispatch): "high" (the
+    # default) routes a plan-less node to /blueprint only when its difficulty
+    # is high, its size is L, or an open premise question blocks it (the
+    # `premise-question` tag). Every other plan-less node goes straight to
+    # /target, which states its own scope. "medium" restores the pre-lean
+    # table (blueprint for medium and up). "low" blueprints every plan-less
+    # node; "never" targets everything. Read by the lifecycle command table
+    # (fno-agents effective_command) through the dispatch doors, and by the
+    # lead check-in's blueprint reading.
+    blueprint_floor: str = "high"
+
+    @field_validator("auto_merge", mode="before")
+    @classmethod
+    def _coerce_auto_merge(cls, v: object) -> object:
+        """Only a real TOML boolean grants merge; anything else degrades to
+        no-merge. Locked Decision 6 + Errors invariant: a config error can never
+        grant merge rights, so a lax-coercible string like "yes" (which a plain
+        bool would read as True) resolves False. Mirrors the _coerce_* idiom on
+        AgentsBlock: never raise, always degrade toward safety."""
+        return v if isinstance(v, bool) else False
+
+    @field_validator("on_exhaustion", mode="before")
+    @classmethod
+    def _coerce_on_exhaustion(cls, v: object) -> object:
+        """Only the two literals are honored; anything else degrades to "defer".
+        Same degrade-toward-safety stance as _coerce_auto_merge: a typo can never
+        enable failover."""
+        return v if v in ("defer", "failover") else "defer"
+
+    @field_validator("cutover_low_after_minutes", mode="before")
+    @classmethod
+    def _coerce_cutover_low(cls, v: object) -> object:
+        """Only a nonnegative TOML integer arms proactive LOW cutover; a bool,
+        a string, or a negative degrades to 0 (off). Same stance as the two
+        above: a config typo can never arm automatic rerouting."""
+        return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+    @field_validator("blueprint_floor", mode="before")
+    @classmethod
+    def _coerce_blueprint_floor(cls, v: object) -> object:
+        """Only the four literals are honored; anything else degrades to "high",
+        the lean default. Case and surrounding space are normalized like the
+        Rust reader lowercases them, so both surfaces answer one value. Same
+        stance as the validators above: a typo can never widen blueprint
+        ceremony past the lean-dispatch ruling."""
+        if isinstance(v, str) and v.strip().lower() in ("high", "medium", "low", "never"):
+            return v.strip().lower()
+        return "high"

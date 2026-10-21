@@ -1692,8 +1692,8 @@ fn unreachable_notice(unreachable: &[String]) -> String {
 
 /// `fno mux workspace prune [--dry-run] [--include-named] [--tabs-only]
 /// [--dead-only] [--include-used-shells] [--json]`: remove squads
-/// whose every recorded origin is gone and which host no live member or pane
-///. Named squads require `--include-named`. The predicate is
+/// whose every recorded origin is gone and which host no live member or pane.
+/// Named squads require `--include-named`. The predicate is
 /// re-evaluated under the store lock against fresh fs state, and the receipt is
 /// built from the locked closure's actual removals - never the pre-lock
 /// candidate list (AC1-UI). `--dry-run` writes nothing. `--tabs-only` runs the
@@ -1703,28 +1703,20 @@ fn unreachable_notice(unreachable: &[String]) -> String {
 /// squad-row pass, so the sweep modal's "both" can never remove a squad row
 /// the modal never offered to remove.
 ///
-/// `--include-used-shells` is the one tab-fold widening, and it is
-/// OPT-IN: a tab of spent bare shells (every pane `cmd: None`, no `fno_id`,
-/// measured idle now) closes only when this flag names the category. Without
-/// the flag the receipt still counts that population (`tabs_used_shells`)
-/// and splits every kept tab by reason, so the operator can see the size of
-/// the choice before making it. The receipt names each tab it would close
-/// (dry-run) or closed (apply) in `tabs_close_named`.
+/// `--include-used-shells` is the one OPT-IN tab-fold widening: a tab of
+/// spent bare shells (every pane `cmd: None`, no `fno_id`, idle now) closes
+/// only under it. Without it the receipt still counts them
+/// (`tabs_used_shells`) and splits every kept tab by reason. `tabs_close_named`
+/// names each tab closed (or, on dry-run, to close).
 ///
-/// An orphaned worker tab (v71) - its stored member judged Dead by the
-/// server - closes under the DEFAULT flags, ahead of the pristine test. So
-/// does a spawned-name pane: the pane carries the worker name the
-/// spawn captured (`unresolved:spawned-name`), and once the shared evidence
-/// fold judges that name dead the pane routes by the orphan verdict under
-/// default flags too. `--include-used-shells` stays the opt-in for shells
-/// with no worker history at all.
+/// An orphaned worker tab (its stored member judged Dead) closes under the
+/// DEFAULT flags, ahead of the pristine test. So does a spawned-name pane
+/// (`unresolved:spawned-name`) once the evidence fold judges that name dead.
 ///
-/// Two arms run in ONE call and they must not contradict each other. The tab arm
-/// folds surplus pristine tabs; the squad arm decides store rows, and a live pane
-/// protects a squad's row inside the grace window. Since the server de-persists a
-/// squad whose last tab closes, the tab arm never touches a workspace's only tab -
-/// otherwise the fold would delete the very row the squad arm had just kept, and
-/// the receipt would report `pruned_count: 0` over a row that is gone.
+/// The tab arm folds surplus pristine tabs; the squad arm decides store rows,
+/// and a live pane protects a squad's row inside the grace window. The server
+/// de-persists a squad whose last tab closes, so the tab arm never touches a
+/// workspace's only tab: it would delete the row the squad arm just kept.
 fn squad_prune(args: &[OsString]) -> i32 {
     let mut dry_run = false;
     let mut include_named = false;
