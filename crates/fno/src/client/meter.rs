@@ -129,8 +129,8 @@ async fn stream_macmon(
     }
 }
 
-/// CPU and watts only: the memory figure reads from the capacity state, so
-/// the meter and the org overlay can never disagree about it.
+/// CPU, watts and GPU only: the memory figure reads from the capacity state,
+/// so the meter and the org overlay can never disagree about it.
 fn parse_macmon_sample(raw: &[u8], detailed: bool) -> Option<String> {
     let text = std::str::from_utf8(raw).ok()?;
     let line = text.lines().find(|l| l.trim_start().starts_with('{'))?;
@@ -150,6 +150,22 @@ fn parse_macmon_sample(raw: &[u8], detailed: bool) -> Option<String> {
             line.push_str(&format!(" {w:.0}W"));
         } else {
             line.push_str(&format!(" · {w:.0} W"));
+        }
+    }
+    // macmon's gpu_usage is `[freq_mhz, busy fraction]`; a missing or
+    // malformed pair renders no GPU number, never a zero.
+    let gpu = value
+        .get("gpu_usage")
+        .and_then(|g| g.get(1))
+        .and_then(|v| v.as_f64());
+    if let Some(gpu) = gpu {
+        let gpu_pct = gpu * 100.0;
+        let gpu_watts = value.get("gpu_power").and_then(|p| p.as_f64());
+        match (detailed, gpu_watts) {
+            (true, Some(w)) => line.push_str(&format!(" · gpu {gpu_pct:.0}% {w:.1}W")),
+            (true, None) => line.push_str(&format!(" · gpu {gpu_pct:.0}%")),
+            (false, Some(w)) => line.push_str(&format!(" · GPU {gpu_pct:.0}% busy, {w:.1} W")),
+            (false, None) => line.push_str(&format!(" · GPU {gpu_pct:.0}% busy")),
         }
     }
     Some(line)
@@ -197,11 +213,15 @@ fn memory_segment(state: Option<&serde_json::Value>, detailed: bool) -> String {
         return String::new();
     };
     if detailed {
-        let used = mem
-            .get("compressor_occupied_gb")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(fraction * total);
-        format!(" · mem {used:.0}G/{total:.0}G")
+        let gb = |key: &str| mem.get(key).and_then(|v| v.as_f64());
+        let used = gb("ram_used_gb").unwrap_or(fraction * total);
+        let mut text = format!(" · mem {used:.0}G/{total:.0}G");
+        if let (Some(swap), Some(swap_total)) = (gb("swap_used_gb"), gb("swap_total_gb")) {
+            if swap_total > 0.0 {
+                text.push_str(&format!(" swap {swap:.0}G/{swap_total:.0}G"));
+            }
+        }
+        text
     } else {
         format!(" · memory {:.0}% full", fraction * 100.0)
     }
@@ -311,10 +331,20 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn macmon_keeps_cpu_and_watts_and_drops_the_memory_math() {
+    fn macmon_keeps_cpu_watts_and_gpu_and_drops_the_memory_math() {
         let raw = br#"{"cpu_usage_pct":0.45,"sys_power":53.5,"memory":{"ram_total":103079215104,"ram_usage":30702266368}}"#;
         let simple = parse_macmon_sample(raw, false).unwrap();
         assert_eq!(simple, "CPU 45% busy · 54 W");
+        let gpu =
+            br#"{"cpu_usage_pct":0.68,"sys_power":42.0,"gpu_usage":[491,0.03],"gpu_power":0.28}"#;
+        assert_eq!(
+            parse_macmon_sample(gpu, false).unwrap(),
+            "CPU 68% busy · 42 W · GPU 3% busy, 0.3 W"
+        );
+        assert_eq!(
+            parse_macmon_sample(gpu, true).unwrap(),
+            "cpu 68% 42W · gpu 3% 0.3W"
+        );
         assert_eq!(
             parse_macmon_sample(br#"{"cpu_usage_pct":0.45}"#, false).unwrap(),
             "CPU 45% busy"
@@ -330,12 +360,17 @@ mod tests {
             "ceiling": 23,
             "effective": 14,
             "memory": {"used_fraction": 0.64, "total_gb": 96.0,
+                       "ram_used_gb": 81.0, "swap_used_gb": 4.0, "swap_total_gb": 8.0,
                        "compressor_occupied_gb": 61.4, "compressor_stored_gb": 41.0},
             "workers_live": 15,
             "accounts": [],
         });
         let memory = memory_segment(Some(&state), false);
         assert_eq!(memory, " · memory 64% full");
+        assert_eq!(
+            memory_segment(Some(&state), true),
+            " · mem 81G/96G swap 4G/8G"
+        );
         // The overlay reads the same field (org_overlay::memory_line), so
         // one sample renders one percent in both places (AC5).
         let overlay_pct = (state["memory"]["used_fraction"].as_f64().unwrap() * 100.0).round();
