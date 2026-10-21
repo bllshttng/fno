@@ -2240,4 +2240,20 @@ mod style_gate_tests {
             .collect::<Vec<_>>()
             .join(" ")
     }
+
+    // Ported from cli/tests/unit/test_mail_body_cap.py when the body cap
+    // moved: the warn-does-not-block contract is unguarded in Rust, so it
+    // ports rather than deletes (dead-seam rule). The paired refuse assert
+    // proves the knobs took; without it a dead env read would false-pass
+    // both legs as unlimited.
+    #[test]
+    fn over_the_warn_bytes_the_body_cap_notes_but_does_not_block() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _warn = EnvVarGuard::set("FNO_MAIL_BODY_WARN", "10");
+        let _refuse = EnvVarGuard::set("FNO_MAIL_BODY_REFUSE", "1000");
+        assert_eq!(enforce_body_cap(&"x".repeat(50), false), Ok(()));
+        assert_eq!(enforce_body_cap(&"x".repeat(1500), false), Err(1));
+    }
 }
