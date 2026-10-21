@@ -55,3 +55,30 @@ def test_an_unprovable_disagreement_stamps_nothing(monkeypatch):
         "CODEX_THREAD_ID",
         "CLAUDE_CODE_SESSION_ID",
     }
+
+
+def test_a_footnote_pane_proves_its_complete_stamp_from_the_footnote_process(monkeypatch):
+    # footnote mints no vendor marker, so its spawn stamp is the only
+    # identity in a pane's env. The footnote process carrying the same
+    # stamp is the witness; without it the stamp stays unproven.
+    import fno.harness_identity as hi
+
+    monkeypatch.setattr(
+        "fno.claims.session_pid.resolve_session_harness", lambda *a, **k: "footnote"
+    )
+    monkeypatch.setattr("fno.claims.session_pid.resolve_session_pid", lambda *a, **k: 4242)
+    env = {"FNO_HARNESS_NAME": "footnote", "FNO_HARNESS_SESSION_ID": "0540c5bb-b9e8"}
+    carried = {"FNO_HARNESS_SESSION_ID": "0540c5bb-b9e8"}
+    monkeypatch.setattr(
+        hi, "_read_ancestor_marker", lambda pid, m: carried.get(m) if pid == 4242 else None
+    )
+
+    ident = resolve_self_identity(env)
+    assert (ident.session_id, ident.harness, ident.disposition) == (
+        "0540c5bb-b9e8",
+        "footnote",
+        "canonical",
+    )
+
+    carried["FNO_HARNESS_SESSION_ID"] = "someone-else"
+    assert resolve_self_identity(env).disposition == "ambiguous"

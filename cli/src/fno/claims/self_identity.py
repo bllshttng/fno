@@ -116,6 +116,11 @@ def resolve_self_identity(
         == session_identity_key(attested_session_id)
     )
 
+    if not canonical_proven and canonical.disposition == "complete":
+        canonical_proven = _stamp_witnessed_by_markerless_harness(
+            true_harness, canonical.harness, canonical.session_id
+        )
+
     # a name_only codex stamp carries no id and codex never carries
     # CODEX_THREAD_ID in its own env, so the attester cannot complete the
     # pair. A marker value the rollout witness sees in a live fd IS this
@@ -185,6 +190,35 @@ def resolve_self_identity(
             collide=None if canonical_proven else collide_with(own_pair),
         )
     )
+
+
+def _stamp_witnessed_by_markerless_harness(
+    true_harness: Optional[str],
+    stamp_harness: Optional[str],
+    stamp_session: Optional[str],
+) -> bool:
+    """The proof for a COMPLETE stamp whose harness mints no vendor session
+    marker (footnote): the attester has no marker to corroborate, so it never
+    answers ``process``. The harness process itself is the witness instead.
+    The walk must name the stamp's harness, and that ancestor's own
+    environment must carry the same ``FNO_HARNESS_SESSION_ID``. The spawn
+    sets the stamp on the harness process, so a stamp exported in a shell
+    below it does not pass. Mirror of the Rust
+    ``stamp_witnessed_by_markerless_harness``.
+    """
+    from fno.claims.session_pid import resolve_session_pid
+    from fno.harness_identity import HARNESS_SESSION_MARKERS, _read_ancestor_marker
+
+    walked = (true_harness or "").strip().lower()
+    if not walked or not stamp_session or walked != (stamp_harness or "").strip().lower():
+        return False
+    if any(family == walked for _marker, family in HARNESS_SESSION_MARKERS):
+        return False
+    pid = resolve_session_pid()
+    if pid is None:
+        return False
+    carried = (_read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") or "").strip()
+    return bool(carried) and session_identity_key(carried) == session_identity_key(stamp_session)
 
 
 def _own_cwd() -> str:

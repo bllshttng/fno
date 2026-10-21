@@ -430,7 +430,14 @@ fn ladder_settle(
 /// Returns the harness name, so a caller can prove which session id this
 /// process owns.
 pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
-    const SEGMENT_TOKENS: [&str; 5] = ["codex", "gemini", "opencode", "agy", "cursor-agent"];
+    const SEGMENT_TOKENS: [&str; 6] = [
+        "codex",
+        "gemini",
+        "opencode",
+        "agy",
+        "cursor-agent",
+        "footnote",
+    ];
     let argv: Vec<&str> = command.split_whitespace().collect();
     if argv.is_empty() {
         return None;
@@ -472,6 +479,7 @@ fn basename_into_harness(token: &str) -> &'static str {
             "gemini" => "gemini",
             "opencode" => "opencode",
             "agy" => "agy",
+            "footnote" => "footnote",
             _ => "cursor-agent",
         }
     }
@@ -685,6 +693,7 @@ fn harness_static(stamp: &str) -> Option<&'static str> {
         "opencode" => Some("opencode"),
         "agy" => Some("agy"),
         "cursor-agent" => Some("cursor-agent"),
+        "footnote" => Some("footnote"),
         _ => None,
     }
 }
@@ -1078,6 +1087,14 @@ pub fn resolve_self_identity(
             attested_session_id.as_deref().unwrap_or_default(),
         );
 
+    if !canonical_proven && stamp_disposition == CanonicalDisposition::Complete {
+        canonical_proven = stamp_witnessed_by_markerless_harness(
+            true_harness,
+            stamp_harness.as_deref(),
+            stamp_session.as_deref(),
+        );
+    }
+
     // a name_only codex stamp carries no id; a rollout witness value
     // seen in a live fd IS this process's id (the thread id wins). The
     // witness keys on the STAMP family: a silent walk (a thread worker whose
@@ -1142,6 +1159,39 @@ pub fn resolve_self_identity(
     let owned = resolve_owned_identity_from(get, Some(prove), collide_wrapped);
     let cwd = ambient_cwd();
     fill_spawn_record(owned, &cwd, home)
+}
+
+/// The proof for a COMPLETE stamp whose harness mints no vendor session
+/// marker (footnote): the attester has no marker to corroborate, so it can
+/// never answer `Process`. The harness process itself is the witness
+/// instead. The walk must name the stamp's harness, and that ancestor's own
+/// environment must carry the same `FNO_HARNESS_SESSION_ID`. The spawn sets
+/// the stamp on the harness process, so a stamp exported in a shell below
+/// it does not pass.
+fn stamp_witnessed_by_markerless_harness(
+    true_harness: Option<&str>,
+    stamp_harness: Option<&str>,
+    stamp_session: Option<&str>,
+) -> bool {
+    let (Some(walked), Some(stamped), Some(session)) = (true_harness, stamp_harness, stamp_session)
+    else {
+        return false;
+    };
+    if !walked.eq_ignore_ascii_case(stamped)
+        || crate::claims::HARNESS_SESSION_MARKERS
+            .iter()
+            .chain(crate::claims::LEGACY_HARNESS_SESSION_MARKERS.iter())
+            .any(|(_, family)| family.eq_ignore_ascii_case(walked))
+    {
+        return false;
+    }
+    let ppid = unsafe { libc::getppid() } as u32;
+    let Some((pid, harness)) = session_identity_from_table(&ancestry_table(), ppid) else {
+        return false;
+    };
+    harness == walked
+        && ancestor_env_marker(pid, "FNO_HARNESS_SESSION_ID")
+            .is_some_and(|v| same_session_id(v.trim(), session))
 }
 
 fn ambient_cwd() -> String {
@@ -1575,5 +1625,45 @@ mod tests {
             resolve_session_harness_from_table(&table, 100),
             Some("claude")
         );
+    }
+
+    #[test]
+    fn a_footnote_pane_walks_to_footnote_and_only_a_markerless_stamp_takes_its_witness() {
+        // A footnote pane's tool shell sits under the footnote binary, and a
+        // claude ancestor further up (the mux's launcher) must not answer.
+        let table = table_of(&[
+            proc_row(100, 90, "bash -c fno whoami"),
+            proc_row(90, 80, "/Users/x/.cargo/bin/footnote /tmp/spec.json"),
+            proc_row(
+                80,
+                1,
+                "/Users/x/.local/share/claude/versions/2.1.0 --resume s",
+            ),
+        ]);
+        assert_eq!(
+            resolve_session_harness_from_table(&table, 100),
+            Some("footnote")
+        );
+        assert_eq!(
+            session_identity_from_table(&table, 100),
+            Some((90, "footnote"))
+        );
+        // The process witness is for a harness that mints no vendor marker,
+        // and only when the walk and the stamp name the same harness.
+        assert!(!stamp_witnessed_by_markerless_harness(
+            Some("claude"),
+            Some("claude"),
+            Some("s")
+        ));
+        assert!(!stamp_witnessed_by_markerless_harness(
+            Some("claude"),
+            Some("footnote"),
+            Some("s")
+        ));
+        assert!(!stamp_witnessed_by_markerless_harness(
+            None,
+            Some("footnote"),
+            Some("s")
+        ));
     }
 }
