@@ -804,6 +804,52 @@ fn keeper_rows_from(table: &[ProcRow]) -> Vec<Value> {
     rows
 }
 
+/// The running daemon's pid from agent.status, `None` with no daemon.
+async fn daemon_pid() -> Option<u32> {
+    let resp = crate::client::call_if_running(
+        &crate::paths::AgentsHome::from_env(),
+        &crate::protocol::Request::new(1, "agent.status", json!({})),
+    )
+    .await
+    .ok()?;
+    let pid = resp.result()?.pointer("/daemon/pid")?.as_u64()?;
+    Some(pid as u32)
+}
+
+/// The daemon's own and reaped-child CPU share over `window`, in cores: two
+/// reads `window` apart. No daemon or an unreadable pid answers `null` with
+/// a reason, never zeros.
+async fn daemon_cpu(pid: Option<u32>, window: Duration) -> (Value, Value) {
+    let Some(pid) = pid else {
+        return (Value::Null, json!("no daemon answered agent.status"));
+    };
+    let start = std::time::Instant::now();
+    let Some((own0, kids0)) = crate::reader_cost::cpu_split_ns(pid) else {
+        return (
+            Value::Null,
+            json!(format!("pid {pid}: cpu time unreadable")),
+        );
+    };
+    tokio::time::sleep(window).await;
+    let Some((own1, kids1)) = crate::reader_cost::cpu_split_ns(pid) else {
+        return (
+            Value::Null,
+            json!(format!("pid {pid}: exited during the window")),
+        );
+    };
+    let secs = start.elapsed().as_secs_f64();
+    let cores = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e9 / secs;
+    let capacity = std::thread::available_parallelism().map_or(0, |n| n.get());
+    let cpu = json!({
+        "pid": pid,
+        "own_cores": cores(own0, own1),
+        "children_cores": cores(kids0, kids1),
+        "window_s": secs,
+        "capacity_cores": capacity,
+    });
+    (cpu, Value::Null)
+}
+
 /// The daemon's row, read in-process: one agent.status call feeds both the
 /// pid and the drift verdict. A failed call reads unknown, never current.
 async fn daemon_row() -> Value {
@@ -1003,6 +1049,13 @@ pub async fn run_verb(args: &[String]) -> i32 {
         return crate::agents_top::run(&args[1..]);
     }
     if args.iter().any(|arg| arg == "--ps") {
+        // The 1 s window is opt-in: the spawn gate reads this table on
+        // every admission and must not wait on it.
+        let (cpu, cpu_reason) = if args.iter().any(|arg| arg == "--daemon-cpu") {
+            daemon_cpu(daemon_pid().await, Duration::from_secs(1)).await
+        } else {
+            (Value::Null, json!("not read: pass --daemon-cpu"))
+        };
         let (rows, unreadable) = process_table();
         println!(
             "{}",
@@ -1011,6 +1064,8 @@ pub async fn run_verb(args: &[String]) -> i32 {
                 "unreadable": unreadable,
                 "sccache_server_pid": crate::cargo_build_dirs::sccache_row_pid(&rows),
                 "sccache_restarts_1h": crate::machine_watch::sccache_restarts_1h(),
+                "daemon_cpu": cpu,
+                "daemon_cpu_reason": cpu_reason,
             })
         );
         return 0;
@@ -1109,6 +1164,21 @@ fn shutdown_reply(sock: &Path) -> Option<Value> {
 
 #[cfg(test)]
 mod process_table_tests {
+    /// AC1: a live pid reads a window of own and child cores; no daemon
+    /// reads null with a reason, never zeros.
+    #[tokio::test]
+    async fn daemon_cpu_reads_a_window_or_names_why_not() {
+        let window = std::time::Duration::from_millis(50);
+        let (cpu, reason) = super::daemon_cpu(Some(std::process::id()), window).await;
+        assert!(reason.is_null(), "{reason}");
+        assert!(cpu["window_s"].as_f64().unwrap() > 0.0);
+        assert!(cpu["own_cores"].as_f64().unwrap() >= 0.0);
+        assert!(cpu["children_cores"].as_f64().unwrap() >= 0.0);
+        let (cpu, reason) = super::daemon_cpu(None, window).await;
+        assert!(cpu.is_null());
+        assert!(reason.as_str().unwrap().contains("no daemon"));
+    }
+
     use super::{pid_is_zombie, process_table, ps_text};
 
     #[test]
