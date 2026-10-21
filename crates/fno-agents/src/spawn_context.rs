@@ -430,14 +430,7 @@ fn ladder_settle(
 /// Returns the harness name, so a caller can prove which session id this
 /// process owns.
 pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
-    const SEGMENT_TOKENS: [&str; 6] = [
-        "codex",
-        "gemini",
-        "opencode",
-        "agy",
-        "cursor-agent",
-        "footnote",
-    ];
+    const SEGMENT_TOKENS: [&str; 5] = ["codex", "gemini", "opencode", "agy", "cursor-agent"];
     let argv: Vec<&str> = command.split_whitespace().collect();
     if argv.is_empty() {
         return None;
@@ -447,6 +440,12 @@ pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
     let exe = argv[0].to_lowercase();
     if exe.contains("claude") {
         return Some("claude");
+    }
+    // footnote is a compiled binary, never run through an interpreter, so it
+    // matches on argv[0] alone: `nvim footnote` (the repo's own name) is not
+    // a footnote session.
+    if exe.rsplit('/').next() == Some("footnote") {
+        return Some("footnote");
     }
     for cand in argv.iter().take(2) {
         let low = cand.to_lowercase();
@@ -479,7 +478,6 @@ fn basename_into_harness(token: &str) -> &'static str {
             "gemini" => "gemini",
             "opencode" => "opencode",
             "agy" => "agy",
-            "footnote" => "footnote",
             _ => "cursor-agent",
         }
     }
@@ -1648,6 +1646,7 @@ mod tests {
             session_identity_from_table(&table, 100),
             Some((90, "footnote"))
         );
+        assert_eq!(harness_name_of_command("nvim footnote"), None);
         // The process witness is for a harness that mints no vendor marker,
         // and only when the walk and the stamp name the same harness.
         assert!(!stamp_witnessed_by_markerless_harness(
