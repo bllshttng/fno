@@ -438,17 +438,26 @@ pub fn build_records(
         if let Some(bp) = blueprint {
             let (bp_harness, bp_model, bp_provider, bp_effort) = session_lane(bp, ledger);
             let bp_hours = session_hours(bp);
+            // The credit carries the downstream outcome, not the node's
+            // whole bill: this lane's own cost is the ledger row joined by
+            // its session id, and null with no row.
+            let bp_cost = bp
+                .get("session_id")
+                .and_then(Value::as_str)
+                .and_then(|sid| ledger.first_by_session(sid))
+                .and_then(|r| num_opt(r.get("cost_usd")));
             records.push(json!({
                 "id": id,
                 "kind": format!("blueprint/{}",
                     node.get("difficulty").and_then(Value::as_str).unwrap_or("unknown")),
+                "credit": "blueprint",
                 "harness": bp_harness,
                 "provider": bp_provider,
                 "model": bp_model,
                 "effort": bp_effort,
                 "merged": merged,
                 "pr": pr,
-                "cost_usd": cost_usd,
+                "cost_usd": bp_cost,
                 "work_hours": bp_hours.map(round2),
                 "bounce": bounce,
                 "ci_failure": ci_failure,
@@ -812,11 +821,17 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
 /// The coverage block: what share of records carry each lane axis and a
 /// measured cost. The unattributed share is the harness number's gap, and
 /// `dropped_unparsed` counts the nodes excluded because their session time
-/// did not parse.
+/// did not parse. Blueprint credit records are the same node counted twice
+/// by design, so the denominator reads the population once: target records
+/// only.
 pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
-    let total = records.len() as u64;
+    let nodes: Vec<&Value> = records
+        .iter()
+        .filter(|r| r.get("credit").and_then(Value::as_str) != Some("blueprint"))
+        .collect();
+    let total = nodes.len() as u64;
     let axis = |k: &str| -> u64 {
-        records
+        nodes
             .iter()
             .filter(|r| {
                 let v = r[k].as_str().unwrap_or_default();
@@ -830,7 +845,7 @@ pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
         "provider_pct": pct(axis("provider"), total),
         "model_pct": pct(axis("model"), total),
         "cost_pct": pct(
-            records
+            nodes
                 .iter()
                 .filter(|r| num_opt(r.get("cost_usd")).is_some())
                 .count() as u64,
@@ -1514,6 +1529,11 @@ mod tests {
             "other"
         );
         assert_eq!(crate::stability_report::commit_type("docs: note"), "docs");
+        // A breaking-change marker keeps the type.
+        assert_eq!(
+            crate::stability_report::named_commit_type("feat!: x"),
+            Some("feat")
+        );
         assert_eq!(
             crate::stability_report::surface_class(&["crates/a.rs"]),
             Some("rust")
@@ -1533,6 +1553,20 @@ mod tests {
         assert_eq!(
             crate::stability_report::surface_class(&["cli/src/fno/agents/mux_server.py"]),
             Some("ui")
+        );
+        // A python PR never lands in mixed on its own tests, the lockfile
+        // rides with crates, and support paths carry no vote.
+        assert_eq!(
+            crate::stability_report::surface_class(&["cli/src/fno/a.py", "cli/tests/b.py"]),
+            Some("python")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs", "Cargo.lock"]),
+            Some("rust")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs", "scripts/x.sh"]),
+            Some("rust")
         );
     }
 
@@ -1586,8 +1620,18 @@ mod tests {
             by_kind.contains(&("target/medium", "claude", "glm-5.3-flash")),
             "{by_kind:?}"
         );
-        // The credit mirrors the downstream outcome, merged included.
+        // The credit mirrors the downstream outcome, merged included, and
+        // bills its own session: 5.0 from the bp1 ledger row, not the node
+        // total twice.
         assert!(recs.iter().all(|r| r["merged"] == json!(true)));
+        let bp_cell = recs
+            .iter()
+            .find(|r| r["kind"] == json!("blueprint/medium"))
+            .unwrap();
+        assert_eq!(bp_cell["cost_usd"], json!(5.0), "{bp_cell}");
+        // The credit record is the same node twice, so the coverage block
+        // reads the population once.
+        assert_eq!(coverage(&recs, 0)["nodes"], json!(1));
     }
 
     #[test]

@@ -308,7 +308,7 @@ pub(crate) fn commit_type(subject: &str) -> &'static str {
 pub(crate) fn named_commit_type(subject: &str) -> Option<&'static str> {
     let head = subject.split(':').next().unwrap_or(subject);
     let kind = head.split('(').next().unwrap_or(head);
-    match kind.trim() {
+    match kind.trim_end_matches('!').trim() {
         "fix" | "bugfix" | "hotfix" => Some("fix"),
         "feat" | "feature" => Some("feat"),
         "docs" => Some("docs"),
@@ -598,14 +598,21 @@ pub(crate) fn fix_of_fix_by_pr(
 
 /// Slice 3's second glob table: the user's surface classes, first match per
 /// path wins. Order matters: the python mux-server lane reads ui before the
-/// python glob below it would, and crates/ reads rust so a mux-flavored
-/// subject on plain crates paths still reads rust. The web html pages carry
-/// ui by suffix, not by directory - they live inside crates sources.
+/// python glob below it would, the root lockfile rides with crates/, and
+/// every cli/ path (source and tests) reads python so a python PR never
+/// lands in mixed on its own tests. The web html pages carry ui by suffix,
+/// not by directory - they live inside crates sources.
 const SURFACE_GLOBS: &[(&str, &str)] = &[
     ("cli/src/fno/agents/mux_", "ui"),
     ("crates/", "rust"),
-    ("cli/src/fno/", "python"),
+    ("Cargo.lock", "rust"),
+    ("cli/", "python"),
 ];
+
+/// Paths that carry no surface vote, the way doc paths do not: support and
+/// fleet tooling a product PR drags along. `tests/` is the root shell
+/// suite, not a product surface.
+const SURFACE_SKIP_PREFIXES: &[&str] = &["scripts/", "skills/", "hooks/", "tests/", ".github/"];
 
 fn surface_of_path(path: &str) -> &'static str {
     if path.ends_with(".html") {
@@ -621,19 +628,21 @@ fn surface_of_path(path: &str) -> &'static str {
 
 /// The user's surface class for one merge commit's changed paths: `docs`
 /// when every path is docs/ or markdown, else the one glob class when every
-/// non-doc path agrees, else `mixed`. `None` when the diff carries no
-/// paths - unmeasured, never a class by default.
+/// voting path agrees, else `mixed`. Doc paths and support paths carry no
+/// vote. `None` when the diff carries no paths - unmeasured, never a class
+/// by default.
 pub(crate) fn surface_class(paths: &[&str]) -> Option<&'static str> {
     if paths.is_empty() {
         return None;
     }
     let is_doc = |path: &str| path.starts_with("docs/") || path.ends_with(".md");
+    let is_support = |path: &str| SURFACE_SKIP_PREFIXES.iter().any(|p| path.starts_with(p));
     if paths.iter().all(|path| is_doc(path)) {
         return Some("docs");
     }
     let mut class: Option<&'static str> = None;
     for path in paths {
-        if is_doc(path) {
+        if is_doc(path) || is_support(path) {
             continue;
         }
         match class {
