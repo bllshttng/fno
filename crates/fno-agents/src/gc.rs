@@ -558,7 +558,10 @@ pub fn resolve_typed_turn(
     if verdict.0 != GcAction::Retire {
         return verdict;
     }
-    if matches!(row.work, WorkState::AllDone { .. }) {
+    if matches!(row.work, WorkState::AllDone { .. }) || row.eval_graded {
+        // A done row and a graded eval row never keep for a typed turn:
+        // the scan would pay the pass's most expensive read to learn
+        // nothing the policy can use.
         return verdict;
     }
     if let Some(age_s) = scan() {

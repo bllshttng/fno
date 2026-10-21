@@ -661,24 +661,12 @@ fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
 /// One best-effort SQLite archive read, over every row shape the store has
 /// used: entries blob rows, the typed nodes table, and nodes_raw, which the
 /// working import parks an unrepresentable row in (both tables count as
-/// live, so all three feed the exclusion set). The open is read-only: an
-/// ordinary open creates the file it opens. A WAL-mode twin whose -shm is
-/// gone (a daemon that exited clean) refuses a plain read-only open, so a
-/// second attempt reads it immutable: safe with no live writer, and only
-/// reached after the ordinary open failed.
+/// live, so all three feed the exclusion set). The open is the shared
+/// read-only archive open.
 fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
-    let conn = match rusqlite::Connection::open_with_flags(path, flags) {
-        Ok(conn) => conn,
-        Err(_) => {
-            let uri = format!("file:{}?immutable=1", uri_path(path));
-            let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-            match rusqlite::Connection::open_with_flags(uri, uri_flags) {
-                Ok(conn) => conn,
-                Err(_) => return out,
-            }
-        }
+    let Some(conn) = crate::graph_store::open_archive_conn(path) else {
+        return out;
     };
     for sql in [
         "SELECT id FROM entries",
@@ -695,21 +683,6 @@ fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
             if let Ok(id) = row.get::<_, String>(0) {
                 out.insert(id);
             }
-        }
-    }
-    out
-}
-
-/// Percent-encoded path for a `file:` URI: the query (`?immutable=1`) must
-/// survive, so reserved characters in the path itself are escaped.
-fn uri_path(path: &Path) -> String {
-    let mut out = String::new();
-    for byte in path.to_string_lossy().as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
-                out.push(*byte as char);
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
     out
