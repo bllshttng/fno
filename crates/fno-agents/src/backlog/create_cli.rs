@@ -1392,8 +1392,11 @@ pub(crate) fn create_node(
             }
         }
     }
-    // The read-back guard: a write the store cannot confirm is an error.
-    let readback = crate::graph_store::read_rows_where(
+    // The read-back guard: a write the store cannot confirm is an error. The
+    // arms split a failed read from a read that worked and found the row
+    // gone: the first is a store fault, the second means the write did not
+    // land, which under a shared backlog is a refused flush's take-back.
+    match crate::graph_store::read_rows_where(
         &graph,
         &crate::backlog::RowQuery {
             filter: crate::backlog::api::NodeFilter {
@@ -1403,31 +1406,53 @@ pub(crate) fn create_node(
             with_blockers: true,
             ..Default::default()
         },
-    )
-    .ok()
-    .and_then(|rows| {
-        rows.iter()
+    ) {
+        Err(error) => {
+            return Err(refused(
+                format!(
+                    "Error: filed {minted} but the read-back failed: {error}; verify before re-filing"
+                ),
+                1,
+            ));
+        }
+        Ok(rows) => match rows
+            .iter()
             .find(|r| r.get("id").and_then(Value::as_str) == Some(minted.as_str()))
-            .cloned()
-    });
-    match readback {
-        None => {
-            return Err(refused(
-                format!(
-                    "Error: filed {minted} but the read-back could not confirm it (store read failed); verify before re-filing"
-                ),
-                1,
-            ));
-        }
-        Some(row) if row.is_null() => {
-            return Err(refused(
-                format!(
-                    "Error: filed {minted} but it does not read back from the store; the write did not land"
-                ),
-                1,
-            ));
-        }
-        _ => {}
+        {
+            Some(row) if !row.is_null() => {}
+            _ => {
+                // The read worked and found no (live) row: the write did not
+                // land. Under a shared backlog, a refused flush takes rows
+                // back; point the operator at the audit table.
+                let at = crate::backlog::open(&graph).ok().and_then(|connection| {
+                    connection
+                        .query_row("SELECT MAX(at) FROM backlog_refused", [], |r| {
+                            r.get::<_, Option<i64>>(0)
+                        })
+                        .ok()
+                });
+                let share_hint = match crate::store_remote::share_backlog() {
+                    Ok(Some(_)) => format!(
+                        " A refused shared-backlog flush takes rows back; run `fno agents claim backlog sync` and inspect backlog_refused{}.",
+                        at.flatten()
+                            .map(|ms| format!(
+                                " (last refusal {})",
+                                chrono::DateTime::from_timestamp_millis(ms)
+                                    .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                                    .unwrap_or_else(|| format!("{ms} ms"))
+                            ))
+                            .unwrap_or_default()
+                    ),
+                    _ => String::new(),
+                };
+                return Err(refused(
+                    format!(
+                        "Error: filed {minted} but it does not read back from the store; the write did not land.{share_hint}"
+                    ),
+                    1,
+                ));
+            }
+        },
     }
     Ok(Born {
         id: minted,
