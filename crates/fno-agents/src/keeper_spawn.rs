@@ -62,7 +62,7 @@ pub(crate) struct Seams<'a> {
 
 /// True when the harness's capability contract carries a keeper row: the one
 /// routing fact the client arm reads, never a name list.
-pub(crate) fn carries_keeper_row(harness: &str) -> bool {
+pub fn carries_keeper_row(harness: &str) -> bool {
     crate::harness_capabilities::HarnessContract::packaged()
         .ok()
         .and_then(|contract| {
@@ -83,7 +83,7 @@ fn keeper_arm(harness: &str) -> Option<crate::harness_capabilities::KeeperArm> {
 
 /// The arm the client routes keeper-row thread spawns to. `harness_args` is
 /// the fenced passthrough tail; `params` carries the parsed spawn request.
-pub(crate) fn dispatch(
+pub fn dispatch(
     home: &crate::paths::AgentsHome,
     harness: &str,
     name: &str,
@@ -632,9 +632,9 @@ fn seed_submit(
     let mut raw_pending: Vec<u8> = Vec::new();
     let mut text: Vec<u8> = Vec::new();
 
-    let mut drain = |conn: &mut std::os::unix::net::UnixStream,
-                     raw_pending: &mut Vec<u8>,
-                     text: &mut Vec<u8>|
+    let drain = |conn: &mut std::os::unix::net::UnixStream,
+                 raw_pending: &mut Vec<u8>,
+                 text: &mut Vec<u8>|
      -> std::io::Result<bool> {
         let mut chunk = [0u8; 65536];
         match conn.read(&mut chunk) {

@@ -248,7 +248,7 @@ pub mod interrupt_classify;
 pub mod json_output;
 pub mod keep_mark;
 pub(crate) mod keeper_revival;
-pub(crate) mod keeper_spawn;
+pub mod keeper_spawn;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;

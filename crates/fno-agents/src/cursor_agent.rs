@@ -110,7 +110,7 @@ pub fn create_chat(cwd: &Path) -> Result<String, String> {
         buf
     });
     let err_reader = std::thread::spawn(move || {
-        let mut buf: Vec<u8> = Vec::new();
+        let buf: Vec<u8> = Vec::new();
         if let Some(stderr) = stderr.as_mut() {
             let mut sink = [0u8; 4096];
             while matches!(stderr.read(&mut sink), Ok(n) if n > 0) {
