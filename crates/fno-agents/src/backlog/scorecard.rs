@@ -40,17 +40,12 @@ const TARGET_VERB: &str = "target";
 /// `host/owner/repo` from a GitHub PR URL, the same lowercase identity shape
 /// `finalize::repo_identity_from_git_remote` produces for the origin remote:
 /// the one comparison that keeps a foreign repo's PR number out of this
-/// repo's joins. Unparseable URLs read as foreign (None).
+/// repo's joins. The `/pull/<n>` tail is cut first so the shared
+/// remote-url identity read sees owner/repo only; a URL without one reads
+/// as foreign (None), and so does anything the shared read refuses.
 fn pr_url_identity(url: &str) -> Option<String> {
-    let trimmed = url.trim();
-    let rest = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))?;
-    let mut segments = rest.split('/');
-    let host = segments.next().filter(|h| !h.is_empty())?;
-    let owner = segments.next().filter(|o| !o.is_empty())?;
-    let repo = segments.next().filter(|r| !r.is_empty())?;
-    Some(format!("{host}/{owner}/{}", repo.trim_end_matches(".git")).to_lowercase())
+    let repo_url = &url[..url.find("/pull/")?];
+    crate::finalize::repo_identity_from_remote_url(repo_url)
 }
 
 /// One batched ledger read, indexed by session id and by graph node id: the
@@ -365,7 +360,7 @@ pub fn build_records(
             None
         };
         // The PR-keyed outcomes: no in-repo PR number, no surface. A red is
-        // at least one recorded ci_failure row (one row per red head), and
+        // the same recorded ci_failure count the friction column reads, and
         // it is only measured when the review gate's coverage rows prove a
         // loop actually read that PR - without one, a missing row is an
         // unread, not a clean bill.
@@ -374,14 +369,8 @@ pub fn build_records(
         } else {
             None
         };
-        let ci_red = match (pr, friction_by_node, feeds.review_fails_by_pr) {
-            (Some(p), Some(f), Some(rv)) if rv.contains_key(&p) => Some(
-                f.get(id)
-                    .and_then(|fr| fr.get("ci_failure"))
-                    .copied()
-                    .unwrap_or(0)
-                    > 0,
-            ),
+        let ci_red = match (pr, ci_failure, feeds.review_fails_by_pr) {
+            (Some(p), Some(cf), Some(rv)) if rv.contains_key(&p) => Some(cf > 0),
             _ => None,
         };
         let review_findings = match (pr, feeds.review_fails_by_pr) {
