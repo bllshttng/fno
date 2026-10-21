@@ -6,8 +6,10 @@ its Python door: ``KNOWN_HARNESSES`` runs one ``fno-agents harness-roster``
 subprocess per process, cached in the module globals (never a subprocess per
 call) and fail-closed, while ``scripts/ci/check-harness-roster-parity.py``
 holds every evidence surface as a subset of that source. No ``fno.agents``
-import, so the platform layer drags no runtime. ``SPAWN_HARNESSES`` stays
-Python: it is the set of BUILT thread/headless seam arms, not roster.
+import, so the platform layer drags no runtime. ``SPAWN_HARNESSES`` is served
+the same way: the roster's ``spawn`` set, derived in Rust from the bundled
+contract (``features.spawn.state == "native"``), so a new seam harness edits
+no Python.
 """
 from __future__ import annotations
 
@@ -17,19 +19,7 @@ from fno.rust_binary import VerbUnavailable, call_binary_json, find_dev_binary, 
 
 if TYPE_CHECKING:  # served by __getattr__ below; type checkers only
     KNOWN_HARNESSES: tuple[str, ...]
-
-# Every harness with a BUILT spawn-seam arm, measured per
-# docs/architecture/thread-lanes.md; kimi is absent until its ACP lane admits a provider.
-SPAWN_HARNESSES: tuple[str, ...] = (
-    "claude",
-    "codex",
-    "opencode",
-    "cursor-agent",
-    "pi",
-    "grok",
-    "agy",
-    "zcode",
-)
+    SPAWN_HARNESSES: tuple[str, ...]
 
 
 def _read_roster() -> dict[str, tuple[str, ...]]:
@@ -52,6 +42,15 @@ def _read_roster() -> dict[str, tuple[str, ...]]:
                 f"fno-agents harness-roster answered no usable {key!r}: {payload!r}"[:200]
             )
         out[key] = tuple(names)
+    # `spawn` is contract-derived in Rust and takes NO old-binary alias: a
+    # binary that predates the key must not have `known` stand in for it, or
+    # every non-seam harness would pass the thread-seam gate.
+    spawn = payload.get("spawn") if isinstance(payload, dict) else None
+    if not spawn or not all(isinstance(n, str) and n for n in spawn):
+        raise VerbUnavailable(
+            f"fno-agents harness-roster answered no usable 'spawn': {payload!r}"[:200]
+        )
+    out["spawn"] = tuple(spawn)
     return out
 
 
@@ -72,16 +71,18 @@ def known_providers() -> tuple[str, ...]:
 
 
 def __getattr__(name: str) -> Any:
-    """PEP 562: serve ``KNOWN_HARNESSES`` from the Rust roster on first read."""
+    """PEP 562: serve the roster-backed names from the Rust read on first access."""
     if name == "KNOWN_HARNESSES":
         return known_harnesses()
+    if name == "SPAWN_HARNESSES":
+        return _roster("spawn")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def unknown_thread_harness_message(name: str) -> str:
     """The one refusal every thread-substrate seam raises: both halves derive
     from this module, and the pane lane execs whatever is on PATH."""
-    accepted = ", ".join(SPAWN_HARNESSES)
+    accepted = ", ".join(_roster("spawn"))
     lines = [
         f"unknown harness {name!r} on the thread substrate (--harness names "
         f"the CLI BINARY); accepted here: {accepted}.",

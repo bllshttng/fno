@@ -313,25 +313,32 @@ def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
     from fno import harness_names
 
     dispatch._check_spawn_harness("opencode")
-    # Patch the ONE tuple the message builder reads. dispatch's own import is a
-    # second binding of the same names, and patching it would prove nothing
-    # about where the rendered text comes from.
+    # Patch the ONE cache the message builder reads. The spawn set is
+    # roster-served now, so patching dispatch's imported binding would prove
+    # nothing about where the rendered text comes from; the module reads the
+    # _ROSTER cache through _roster() on every refusal.
     monkeypatch.setattr(
-        harness_names, "SPAWN_HARNESSES", (*harness_names.SPAWN_HARNESSES, "future")
+        harness_names,
+        "_ROSTER",
+        {
+            "known": harness_names.known_harnesses(),
+            "providers": harness_names.known_providers(),
+            "spawn": (*harness_names._roster("spawn"), "future"),
+        },
     )
 
     with pytest.raises(dispatch.DispatchAskError) as caught:
-        # A DECLARED harness outside SPAWN_HARNESSES renders the accept set;
-        # an undeclared name takes the undeclared arm instead, so the set is
-        # asserted through a declared pane-only harness (gemini; pi joined the
-        # set in x-43bd and agy in x-d145).
+        # A DECLARED harness outside the roster's spawn set renders the accept
+        # list; an undeclared name takes the undeclared arm instead, so the
+        # set is asserted through a declared pane-only harness (gemini; pi and
+        # agy sit in the set by their contract rows).
         dispatch._check_spawn_harness("gemini")
 
-    expected = ", ".join(harness_names.SPAWN_HARNESSES)
+    expected = ", ".join(harness_names._roster("spawn"))
     assert f"accepted here: {expected}" in str(caught.value)
-    assert expected.endswith("future"), "the monkeypatched name must be rendered"
+    assert expected.endswith("future"), "the patched roster must be rendered"
     # The pane sentence derives too: it names the refused harness, never a
-    # hardcoded roster that the tuple can outgrow.
+    # hardcoded roster that the set can outgrow.
     assert "gemini has no measured thread lane yet; use --substrate pane." in str(caught.value)
 
 

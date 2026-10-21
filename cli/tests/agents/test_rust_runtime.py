@@ -716,11 +716,13 @@ def test_rust_only_verb_no_binary_emits_install_hint(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Spawns carrying a Python-only flag (--role, --promote, --resume,
+# Spawns carrying a Python-only flag (--role, --promote,
 # --dispatch-account) never route to the binary: the Rust client cannot
-# parse them. `--help` exercises the make_context routing decision without
-# running a real spawn. --monitor and --output-format left this list in
-# row 9: the binary parses and refuses/launches them natively.
+# parse them. A --resume spawn DOES route: the binary's grammar knows the
+# flag and refuses it with the retired-axis line. --monitor and
+# --output-format left this list in row 9: the binary parses and
+# refuses/launches them natively. `--help` exercises the make_context
+# routing decision without running a real spawn.
 # --------------------------------------------------------------------------- #
 
 
@@ -832,9 +834,9 @@ def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) ->
 
 
 def test_is_resume_bearing_spawn_predicate() -> None:
-    # A resume-bearing spawn stays Python (Rust cannot parse --resume yet).
-    # x-9844 added --resume revival; x-f76e reassigned -r to --resume, so the
-    # predicate matches both spellings.
+    # The predicate matches both spellings (the front-door normalizer rewrites
+    # -r into --resume) and no longer routes: the binary's grammar knows the
+    # flag and refuses a resume-bearing spawn itself.
     uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
     assert rr._is_resume_bearing_spawn("spawn", ["spawn", "w", "--resume", uuid])
     assert rr._is_resume_bearing_spawn("spawn", ["spawn", "--name", "w", f"--resume={uuid}"])

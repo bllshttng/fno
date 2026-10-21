@@ -912,6 +912,7 @@ def test_every_resumable_harness_resolves_an_identity() -> None:
     from fno.agents.harnesses import READABLE_PROVIDERS
     from fno.agents.registry import HARNESS_SESSION_ID_FIELDS, AgentEntry
     from fno.agents.resume_cli import _session_id_for
+    from fno.harness_names import known_providers
 
     checked = []
     for harness in known_harnesses():
@@ -933,10 +934,20 @@ def test_every_resumable_harness_resolves_an_identity() -> None:
             f"identity read returns nothing for a harness_session_id-only row"
         )
         assert _session_id_for(entry) == "canonical-id-1", harness
-        assert harness in HARNESS_SESSION_ID_FIELDS, (
+        # The gate is the Rust roster now, not the field map: a resumable
+        # harness must be roster-known, or register_session raises on it and
+        # discovery skips its rows. The field itself is derived: claude is the
+        # one exception (its jobId transport key), everything else rides the
+        # harness_session_id fallback the two reads above just exercised.
+        assert harness in known_providers(), (
             f"harness {harness!r} declares interactive_resume support but is "
-            f"absent from HARNESS_SESSION_ID_FIELDS, so register_session "
-            f"raises on it and discovery skips its rows"
+            f"absent from the Rust roster, so register_session raises on it "
+            f"and discovery skips its rows"
+        )
+        expected_field = "short_id" if harness == "claude" else "harness_session_id"
+        actual_field = HARNESS_SESSION_ID_FIELDS.get(harness) or "harness_session_id"
+        assert actual_field == expected_field, (
+            f"harness {harness!r} resolves {actual_field!r}, expected {expected_field!r}"
         )
         checked.append(harness)
 

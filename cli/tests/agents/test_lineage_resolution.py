@@ -106,8 +106,8 @@ def test_token_matching_two_live_branch_rows_refuses_and_names_both() -> None:
 
 
 class _CodexSuccessorRow(_Row):
-    """A codex-shaped succession row (harness-specific id mapping reads
-    harness_session_id through HARNESS_SESSION_ID_FIELDS)."""
+    """A codex-shaped succession row (its id reads through the
+    harness_session_id fallback beside claude's short_id exception)."""
 
 
 def test_resume_by_predecessor_full_uuid_keeps_that_exact_id() -> None:

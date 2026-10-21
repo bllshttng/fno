@@ -70,7 +70,7 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
 
     def fake_read(verb, args=(), *, timeout=60, binary=None):
         calls.append(verb)
-        return (None, {"known": ("alpha", "beta"), "providers": ("alpha",)})
+        return (None, {"known": ("alpha", "beta"), "providers": ("alpha",), "spawn": ("alpha",)})
 
     monkeypatch.setattr(hn, "_ROSTER", None, raising=False)
     monkeypatch.setattr(hn, "call_binary_json", fake_read)
@@ -89,7 +89,7 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
             sys.executable,
             "-c",
             "import fno.harness_names as hn; "
-            "hn.call_binary_json = lambda *a, **k: (None, {'known': ['alpha']}); "
+            "hn.call_binary_json = lambda *a, **k: (None, {'known': ['alpha'], 'providers': ['alpha'], 'spawn': ['alpha']}); "
             "from fno.agents.harnesses import READABLE_PROVIDERS; "
             "print(READABLE_PROVIDERS)",
         ],

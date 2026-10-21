@@ -27,7 +27,7 @@
 # spellings of one vocabulary start drifting.
 # See docs/architecture/company-boundaries.md.
 cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.self_stamp import resolve_self_model
-cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.registry import HARNESS_SESSION_ID_FIELDS, load_registry
+cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.registry import load_registry
 # Retired in the claims list port: the single-line watchdog import merged into
 # the parenthesized import still listed below, so the edge now rides that entry.
 cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.watchdog import (

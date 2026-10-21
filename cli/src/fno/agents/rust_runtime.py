@@ -971,37 +971,6 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     return substrate == "pane"
 
 
-def _is_keeper_thread_spawn(verb: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` on the ``thread`` substrate naming a keeper-lane
-    harness.
-
-    The Rust client's thread match handles claude/codex/opencode and refuses
-    every other name, while the keeper arms (``_lane_b_thread_spawn``: pi,
-    cursor-agent, grok, agy) live only in the Python dispatch. Without this
-    carve-out an installed binary answers a working lane with "fno has not
-    built this harness's keeper lane spawn arm yet". The substrate scan
-    mirrors :func:`_is_pane_substrate_spawn` (absent routes to Python, whose
-    body resolves the built-in default; the headless spellings opt out; the
-    scans stop at ``--argv`` and a bare ``--``), and a headless spawn of these
-    harnesses is NOT carved out: its honest refusal is the stance check.
-    """
-    if verb != "spawn":
-        return False
-    harness = (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower()
-    if harness not in _KEEPER_THREAD_HARNESSES:
-        return False
-    it = iter(_args_before_argv(args))
-    substrate = "pane"
-    for a in it:
-        if a in ("--once", "-o"):
-            return False
-        if a == "--substrate":
-            substrate = next(it, "")
-        elif a.startswith("--substrate="):
-            substrate = a.split("=", 1)[1]
-    return substrate == "thread"
-
-
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     """The fno-arg head, stopping at the ``--argv`` provider-payload boundary
     and at a bare ``--`` seed fence.
@@ -1051,15 +1020,6 @@ def _is_role_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     if verb != "spawn":
         return False
     return _has_flag(args, longs=("--role",))
-
-
-#: The keeper-lane harnesses whose thread spawn arm lives in the Rust client
-#: (`keeper_spawn.rs`) in rust mode; the Python leg (`_lane_b_thread_spawn`)
-#: still serves python mode until the dispatch_spawn port deletes it. Kept in
-#: sync with the capability rows by a parity test, like the client.rs verb
-#: list. The py_spawn carve-out is gone (this list no longer routes), so the
-#: tuple remains only as the roster the parity test reads.
-_KEEPER_THREAD_HARNESSES = ("pi", "cursor-agent", "grok", "agy")
 
 
 def _has_flag(
@@ -1154,11 +1114,11 @@ def _is_dispatch_account_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
 def _is_resume_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--resume`` / ``-r``.
 
-    The front-door normalizer rewrites ``-r <id>`` into ``--resume <full-uuid>``,
-    and the Rust spawn parser does not (yet) know ``--resume``, so a resume-bearing
-    spawn that auto-routed to the binary would exit ``unknown flag: --resume``.
-    Keeping it Python routes it to ``cmd_spawn``, which owns the bg-thread revival
-    lane. (``-r`` is matched too for a pre-normalization raw argv.)
+    No longer a route: the Rust spawn grammar knows ``--resume`` and refuses
+    a resume-bearing spawn itself with the retired-axis line, so the flag
+    never reaches ``cmd_spawn``. The predicate now only reports the flag to
+    the ``spawn-axes`` node-seed derivation. (``-r`` is matched too for a
+    pre-normalization raw argv.)
     """
     if verb != "spawn":
         return False
