@@ -368,6 +368,7 @@ pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;
 pub mod pane_relaunch;
+pub mod pane_spawn;
 pub mod pane_stop;
 pub mod paths;
 pub mod paths_cli;

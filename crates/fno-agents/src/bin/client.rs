@@ -1522,6 +1522,15 @@ async fn run(args: Vec<String>) -> i32 {
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
         if substrate == "pane" {
+            // The pane spine answers from the binary when a harness arm is
+            // seated; None falls through to the bounce below, which stays the
+            // leg for every harness until its arm lands (the codex arm in PR
+            // 2, claude in the next row).
+            if let Some(code) =
+                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
+            {
+                return code;
+            }
             use fno_agents::claude_ask::py_repr;
             // Provider parity with the optional-provider Python resolver: a
             // MISSING --provider is legal on the pane substrate (the Python
