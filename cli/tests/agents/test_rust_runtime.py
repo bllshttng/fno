@@ -736,10 +736,10 @@ def test_role_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch, tmp_path
 
 
 def test_monitor_bearing_spawn_routes_in_rust_mode(monkeypatch) -> None:
-    """Row 9: a non-pane --monitor spawn routes to the binary, whose
-    monitor_seam prints the resolve_spawn_gates line and exits 2. The stub
-    records the crossing and lets the body run, so the SAME line answering
-    proves both doors teach one owner text."""
+    """Row 9: a non-pane --monitor spawn crosses to the binary (the stub
+    records the routing; the Python body still answers exit 2 with the same
+    line for this once-shaped argv). The Rust door's own golden lives in
+    spawn_axes' monitor_seam tests."""
     from fno.cli import app
 
     called: list = []
