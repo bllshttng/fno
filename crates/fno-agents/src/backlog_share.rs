@@ -1710,15 +1710,25 @@ mod tests {
     }
 
     /// A node-scoped child row, the shape `id_of` missed: provenance keys on
-    /// `node_id`, so a refused node's take-back set must reach it.
+    /// `node_id`, so a refused node's take-back set must reach it. Written
+    /// through the owning module's save, like any writer.
     fn add_provenance(m: &Machine, node_id: &str) {
-        crate::backlog::open(&m.graph)
+        let connection = crate::backlog::open(&m.graph).unwrap();
+        let mut node = crate::backlog::nodes::load(&connection, node_id)
             .unwrap()
-            .execute(
-                "INSERT INTO node_provenance (node_id) VALUES (?1)",
-                params![node_id],
-            )
-            .unwrap();
+            .expect("fixture node exists");
+        node.provenance.source = Some("fixture".into());
+        crate::backlog::nodes::save(&connection, &node).unwrap();
+    }
+
+    /// A node_dispatch row for the orphan test, through the owning module.
+    fn add_dispatch(m: &Machine, node_id: &str) {
+        let connection = crate::backlog::open(&m.graph).unwrap();
+        let mut node = crate::backlog::nodes::load(&connection, node_id)
+            .unwrap()
+            .expect("fixture node exists");
+        node.dispatch.brief = Some("fixture brief".into());
+        crate::backlog::nodes::save(&connection, &node).unwrap();
     }
 
     #[test]
@@ -2038,26 +2048,23 @@ mod tests {
         flush(&a.graph).unwrap();
 
         // The peer deletes the node on the primary; this machine has not
-        // synced the delete. A child-row insert naming that node then
-        // refuses as orphaned: node_dispatch.node_id references nodes(id).
+        // synced the delete. A child-row write naming that node then
+        // refuses: node_dispatch.node_id references nodes(id). Whether the
+        // refusal lands on the child insert or the base row's rewritten
+        // stamp, the batch rolls back whole and the take-back keeps every
+        // local row of the node.
         primary
             .db
             .lock()
             .unwrap()
             .execute(&format!("DELETE FROM {NODES} WHERE id = 'x-del'"), [])
             .unwrap();
-        crate::backlog::open(&a.graph)
-            .unwrap()
-            .execute("INSERT INTO node_dispatch (node_id) VALUES ('x-del')", [])
-            .unwrap();
+        add_dispatch(&a, "x-del");
         let refusal = flush(&a.graph).unwrap_err();
         route_to_primary(None);
-        assert!(
-            refusal.contains("parent row the primary does not hold"),
-            "{refusal}"
-        );
+        assert!(refusal.starts_with(REFUSED), "{refusal}");
         assert_eq!(title(&a, "x-del").as_deref(), Some("doomed"));
-        assert_eq!(outbox(&a), 0, "the orphaned insert does not re-queue");
+        assert_eq!(outbox(&a), 0, "the refused batch does not re-queue");
 
         // The node's next write refuses with the primary holding no row.
         // The take-back fetches nothing and must keep the local row.
