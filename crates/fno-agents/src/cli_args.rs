@@ -246,15 +246,25 @@ impl SpawnAxes {
                         }
                     }
                 } else if long == "--as" || long == "--substrate" {
-                    // The one lane this door selects: cloud has no template
-                    // lane, so `--as cloud` is its only selector. The Python
-                    // door routes thread, pane and headless itself.
+                    // The lanes this door selects: cloud has no template lane
+                    // (its original selector), and the pane arm answers an
+                    // explicit `-H <pane-arm harness> --as pane` itself. The
+                    // Python seam's harness scan (`_RUST_PANE_HARNESSES`) only
+                    // execs here for the harnesses a pane arm owns, so accepting
+                    // the public substrate vocabulary keeps the binary door as
+                    // wide as the Python door it replaced - a narrower refusal
+                    // here would strand an argv the seam already routed.
                     let value = inline.or_else(|| head.get(i + 1).cloned());
-                    if value.as_deref() != Some("cloud") {
+                    let accepted = matches!(
+                        value.as_deref(),
+                        Some("cloud") | Some("pane") | Some("thread") | Some("headless")
+                    );
+                    if !accepted {
                         return Err(Self::refused_axis(long));
                     }
+                    let value = value.unwrap_or_default();
                     pairs.push("--substrate".to_string());
-                    pairs.push("cloud".to_string());
+                    pairs.push(value);
                     i += if tok.contains('=') { 1 } else { 2 };
                 } else {
                     // A short names its long, as the Python stubs print it.

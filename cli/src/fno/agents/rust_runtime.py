@@ -927,6 +927,10 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn
 
+#: The pane harnesses the binary's own arm answers (codex now; row 8 widens): an explicit `-H <member>` pane spawn routes to Rust.
+_RUST_PANE_HARNESSES = frozenset({"codex"})
+
+
 def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` targeting the ``pane`` substrate (4a-G2).
 
@@ -945,6 +949,9 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     """
     if verb != "spawn":
         return False
+    # An explicit -H naming the member set routes to the binary's arm; the absent -H keeps the Python leg.
+    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() in _RUST_PANE_HARNESSES:
+        return False
     substrate = "pane"
     it = iter(args)
     for a in it:
@@ -957,9 +964,9 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
             # and `-P` (vendor) are NOT here: they are value flags that do not
             # pick the lane.
             return False
-        if a == "--substrate":
+        if a == "--substrate" or a == "--as":
             substrate = next(it, "")
-        elif a.startswith("--substrate="):
+        elif a.startswith("--substrate=") or a.startswith("--as="):
             substrate = a.split("=", 1)[1]
     return substrate == "pane"
 

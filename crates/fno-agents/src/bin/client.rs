@@ -4016,6 +4016,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // to the canonical repo root. Parsed for dispatcher compat.
                 params.insert("fresh".into(), Value::Bool(true));
             }
+            "--bounded-placement" => {
+                // The dispatchers' automated pane spell (fallback_chain /
+                // spawn_overlay emit it beside `--as pane`): the pane arm
+                // reads it as hold-the-placement-lease-and-`--fit`. Parsed
+                // on every verb like the other placement flags; only the
+                // pane arm consumes it.
+                params.insert("bounded_placement".into(), Value::Bool(true));
+            }
             "--here" | "--in-place" => {
                 // Explicit opt-in to the caller's cwd instead of the canonical
                 // default: extend WIP right here.
