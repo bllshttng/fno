@@ -105,7 +105,7 @@ pub(crate) fn revive_with<P, L, K>(
     message: Option<&str>,
     sock: &Path,
     probe: P,
-    mut launch: L,
+    launch: L,
     kill: K,
 ) -> i32
 where
@@ -183,7 +183,7 @@ where
         harness: harness.to_string(),
         session_id: session_id.to_string(),
     };
-    let (launched, outcome) = match launch_and_identify(&spec, probe, launch) {
+    let (launched, outcome) = match launch_and_identify(&spec, &probe, launch) {
         Err(reason) => {
             eprintln!(
                 "fno agents resume: {row_name}: failed to launch the keeper on {}: {reason}; \

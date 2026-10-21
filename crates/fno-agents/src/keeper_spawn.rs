@@ -75,10 +75,9 @@ pub(crate) fn carries_keeper_row(harness: &str) -> bool {
 }
 
 fn keeper_arm(harness: &str) -> Option<crate::harness_capabilities::KeeperArm> {
-    crate::harness_capabilities::HarnessContract::packaged()
-        .ok()
-        .and_then(|contract| contract.capabilities(harness).ok())
-        .and_then(|caps| caps.keeper.clone())
+    let contract = crate::harness_capabilities::HarnessContract::packaged().ok()?;
+    let caps = contract.capabilities(harness).ok()?;
+    caps.keeper.clone()
 }
 // == Section 2: production entry ==
 
@@ -157,8 +156,12 @@ fn production_mint_with(
         _ => {
             let callee_minted = crate::harness_capabilities::HarnessContract::packaged()
                 .ok()
-                .and_then(|contract| contract.capabilities(harness).ok())
-                .map(|caps| caps.session_binding.strategy == "callee-minted-read-back")
+                .and_then(|contract| {
+                    contract
+                        .capabilities(harness)
+                        .ok()
+                        .map(|caps| caps.session_binding.strategy == "callee-minted-read-back")
+                })
                 .unwrap_or(false);
             if callee_minted {
                 return Err(SpawnRefusal::err(
@@ -385,7 +388,7 @@ pub(crate) fn dispatch_with(
             },
         )) => (keeper_pid, child_pid),
         Ok((launched, IdentifyOutcome::Wrong { answered_sid, .. })) => {
-            seams.kill(launched);
+            (seams.kill)(launched);
             // Read liveness BEFORE judging: a collision means OUR keeper
             // already exited (it refuses to bind a socket a live keeper
             // serves), while an identity bug means the keeper answering is
@@ -411,7 +414,7 @@ pub(crate) fn dispatch_with(
             ));
         }
         Ok((launched, IdentifyOutcome::TimedOut)) => {
-            seams.kill(launched);
+            (seams.kill)(launched);
             return refused(SpawnRefusal::err(
                 format!(
                     "lane-B keeper never answered Identify on {}: timed out after 10s; \
@@ -447,7 +450,7 @@ pub(crate) fn dispatch_with(
     }) {
         Ok(true) => {}
         Ok(false) => {
-            seams.kill(keeper_pid);
+            (seams.kill)(keeper_pid);
             return refused(SpawnRefusal::err(
                 format!(
                     "agent {name:?} already exists (registered concurrently); the keeper for \
@@ -457,7 +460,7 @@ pub(crate) fn dispatch_with(
             ));
         }
         Err(e) => {
-            seams.kill(keeper_pid);
+            (seams.kill)(keeper_pid);
             return refused(SpawnRefusal::err(
                 format!("registry write failed: {e}; keeper for {name:?} stopped"),
                 12,
@@ -582,6 +585,12 @@ fn py_repr_opt(value: Option<&str>) -> String {
     }
 }
 
+/// Python `repr` of a str in the created receipt: a single-quoted string, the
+/// shape the Python lane prints for the same payload.
+fn py_string(value: &str) -> String {
+    format!("'{value}'")
+}
+
 fn thread_socket(state_root: &Path, name: &str) -> PathBuf {
     crate::convert::keeper_rebind::thread_socket_path(state_root, name)
 }
@@ -688,9 +697,9 @@ fn seed_submit(
                 1,
             ));
         }
-        if let Some((keys, _)) = clear_modal {
+        if let Some((_pattern, keys)) = clear_modal {
             if !modal_answered {
-                if let Some(Ok(re)) = modal_re.as_ref() {
+                if let Some(Some(re)) = modal_re.as_ref() {
                     if re.is_match(&String::from_utf8_lossy(&text)) {
                         let _ = conn.write_all(&encode(&Frame::Input(keys.to_vec())));
                         modal_answered = true;
