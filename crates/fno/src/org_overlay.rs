@@ -762,11 +762,17 @@ impl Panel {
                     mem.get("used_fraction").and_then(|v| v.as_f64()),
                     mem.get("total_gb").and_then(|v| v.as_f64()),
                 ) {
+                    // Free is RAM left, so a swapping machine reads near
+                    // zero; the percent folds swap in with RAM.
+                    let used = mem
+                        .get("ram_used_gb")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(fraction * total);
                     return format!(
                         "  memory    {} {:.0}% used, {:.1} GB free",
                         spark(&self.mem_history),
                         fraction * 100.0,
-                        ((1.0 - fraction) * total).max(0.0)
+                        (total - used).max(0.0)
                     );
                 }
             }
