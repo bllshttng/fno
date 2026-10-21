@@ -322,6 +322,10 @@ fn seed_torn_registry(root: &Path) {
 /// the append path's parent. The frontmatter's `from:` names web, so the
 /// reply's recipient re-finds the same file and appends.
 fn seed_project_thread(root: &Path) -> &'static str {
+    // The capture seeded through the real write_new_thread, which minted an
+    // fmail id; the scrubber folds that shape to fmail-HEX, so the seed mints
+    // the same shape and the receipts normalize identically.
+    const PARENT_ID: &str = "fmail-a1b2c3d4e5f6";
     let thread = root
         .join("inbox")
         .join("web")
@@ -330,10 +334,10 @@ fn seed_project_thread(root: &Path) -> &'static str {
     std::fs::create_dir_all(thread.parent().unwrap()).unwrap();
     std::fs::write(
         &thread,
-        "---\nthread_id: msg-parent1\nfrom: web\nto: web\nkind: send\n---\n\n## msg-parent1 · 2026-10-12T09:00:00Z · from:web\n\nparent ping\n",
+        "---\nthread_id: fmail-a1b2c3d4e5f6\nfrom: web\nto: web\nkind: send\n---\n\n## fmail-a1b2c3d4e5f6 · 2026-10-12T09:00:00Z · from:web\n\nparent ping\n",
     )
     .unwrap();
-    let row = bus_row("msg-parent1", "web", "web", "send", None, None);
+    let row = bus_row(PARENT_ID, "web", "web", "send", None, None);
     seed_bus(root, &[row.clone()]);
     // The real write path records the chats row before the bus write (the
     // record seam); the chats-recovery case wipes the bus afterward, leaving
@@ -350,7 +354,7 @@ fn seed_project_thread(root: &Path) -> &'static str {
     let mut line = rec.to_string();
     line.push('\n');
     std::fs::write(chat.join("messages.jsonl"), line).unwrap();
-    "msg-parent1"
+    PARENT_ID
 }
 
 /// One sentence, well over the 25-word cap: the length rule's cleanest
