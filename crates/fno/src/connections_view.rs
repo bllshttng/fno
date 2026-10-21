@@ -1811,34 +1811,16 @@ mod tests {
         assert_eq!(v.notice.as_deref(), Some("usage refresh failed: timed out"));
 
         v.acct_sel = 1; // ccr: its stored login serves another account
+        let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
         let login = v.on_key(b'r');
         assert_eq!(
             login,
-            ConnIntent::SpawnLogin(vec![
-                "mux".into(),
-                "pane".into(),
-                "run".into(),
-                "claude".into(),
-                "/login".into()
-            ])
+            ConnIntent::SpawnLogin(argv("mux pane run claude /login"))
         );
         assert!(v.render().join("\n").contains("login open, r saves it"));
         let save = v.on_key(b'r');
-        assert_eq!(
-            save,
-            ConnIntent::Run(
-                [
-                    "config",
-                    "accounts",
-                    "register",
-                    "ccr",
-                    "--harness",
-                    "claude"
-                ]
-                .map(String::from)
-                .to_vec()
-            )
-        );
+        let register = argv("config accounts register ccr --harness claude");
+        assert_eq!(save, ConnIntent::Run(register));
         assert!(v.relogin.is_empty());
     }
 
