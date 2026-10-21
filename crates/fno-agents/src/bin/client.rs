@@ -2768,6 +2768,37 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         // held app-server process and register its full thread identity.
         ("codex", "bg") => None,
 
+        // The keeper-lane thread spawns (pi, cursor-agent, grok, agy): the
+        // keeper_spawn arm reads the harness's capability row and launches
+        // the keeper from the binary, with no Python crossing. A keeper row
+        // names the harness and the row's refusals answer the unmeasured
+        // stances, so the guard is the row itself.
+        (other, "bg") if fno_agents::keeper_spawn::carries_keeper_row(other) => {
+            let outcome = fno_agents::keeper_spawn::dispatch(
+                home,
+                other,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                &harness_args,
+                &params,
+            );
+            if !outcome.stderr.is_empty() {
+                eprint!("{}", outcome.stderr);
+            }
+            if !outcome.stdout.is_empty() {
+                print!("{}", outcome.stdout);
+            }
+            // The row exists once dispatch returned: release the gate now,
+            // like the claude arm, so a waiter never queues behind this
+            // spawn's post-receipt work.
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            Some(outcome.exit_code)
+        }
+
         // The three arms above stay NAMED rather than lane-routed: claude's
         // thread is hosted by the detached client, codex's by its own
         // app-server, opencode's by a serve-hosted HTTP session. `thread_lane`
