@@ -96,7 +96,7 @@ FNO_PLATFORM=claude
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
 [[ $RC -eq 0 ]] && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-    | contains("level 1 over fno") and contains("Encode, then step_down")
+    | contains("level 1 over fno") and contains("Encode, then step down")
       and contains("--substrate thread") and contains("glm-5.3-flash[1m]")
       and contains("status=retasked") and contains("spawn_required")
       and (contains("retier: ") | not)' >/dev/null 2>&1 \
