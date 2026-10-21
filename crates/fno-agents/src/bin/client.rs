@@ -2276,6 +2276,41 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         None => infer_dispatch_provider(|k| std::env::var(k).ok()),
     };
 
+    // The row-9 flag seams: the refusals the binary owns print the Python
+    // door's line bare and exit 2 before the gate takes a slot (the account
+    // seam's ordering rationale, and the doors' shared Python order:
+    // monitor gates, then output-format, then account, then route). A valid
+    // pane monitor spawn never reaches here via the seam (the pane predicate
+    // keeps it Python), so Launch falls through to the normal flow.
+    let public_substrate = if substrate == "bg" {
+        "thread"
+    } else {
+        substrate
+    };
+    match fno_agents::spawn_axes::monitor_seam(
+        params.get("monitor").and_then(Value::as_str),
+        provider,
+        public_substrate,
+    ) {
+        fno_agents::spawn_axes::MonitorSeam::None | fno_agents::spawn_axes::MonitorSeam::Launch => {
+        }
+        fno_agents::spawn_axes::MonitorSeam::Refuse(line) => {
+            eprintln!("{line}");
+            return Some(2);
+        }
+    }
+    let output_format = match fno_agents::spawn_axes::output_format_seam(
+        params.get("output_format").and_then(Value::as_str),
+        provider,
+        public_substrate,
+    ) {
+        Ok(v) => v,
+        Err(line) => {
+            eprintln!("{line}");
+            return Some(2);
+        }
+    };
+
     // The account arm: native launch on a seam stamp naming the request;
     // Python re-exec otherwise.
     if let Some(code) = fno_agents::spawn_axes::account_seam_exit(
@@ -2288,11 +2323,6 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
     }
 
     // The route arm: resolved before the gate, so a refusal takes no slot.
-    let public_substrate = if substrate == "bg" {
-        "thread"
-    } else {
-        substrate
-    };
     let route = match fno_agents::spawn_route::route_seam(
         params.get("route").and_then(Value::as_str),
         params.get("account").and_then(Value::as_str),
@@ -2605,6 +2635,7 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
                 None,
                 None,
                 None,
+                output_format.as_deref(),
                 claude_flags,
             ))
         }
@@ -3636,6 +3667,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--harness-arg",
         "--role-level",
         "--role-scope",
+        "--output-format",
+        "--monitor",
     ];
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
@@ -3906,6 +3939,12 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             // thread spawn; the typed parse lives in spawn_axes.
             "--role-level" | "--role-scope" => {
                 fno_agents::spawn_axes::insert_role_flag(&a, &mut it, &mut params)?;
+            }
+            // The row-9 flags: typed parse in spawn_axes (the equals form
+            // split above); the value gates run after the loop where harness
+            // and substrate are both known.
+            "--output-format" | "--monitor" if verb == "spawn" => {
+                fno_agents::spawn_axes::insert_spawn_flag(&a, &mut it, &mut params)?;
             }
             "--account" => {
                 // per-spawn account selection. Parsed here so the spawn

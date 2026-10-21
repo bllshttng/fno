@@ -223,7 +223,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.64x | 23 | 14 | `cli/src/fno/graph/_intake.py:181` | `descendants_of` |
 | 1.62x | 13 | 8 | `cli/src/fno/agents/format.py:185` | `_collapse_home` |
 | 1.6x | 8 | 5 | `cli/src/fno/active_backlog.py:37` | `touch_nudge` |
-| 1.6x | 8 | 5 | `cli/src/fno/agents/rust_runtime.py:726` | `_is_output_format_bearing_spawn` |
 | 1.6x | 8 | 5 | `cli/src/fno/dispatch_flags.py:48` | `infer_invoking_harness` |
 | 1.6x | 8 | 5 | `cli/src/fno/events/gate_escape.py:71` | `canonical_events_path` |
 | 1.6x | 8 | 5 | `cli/src/fno/graph/cli.py:3358` | `_invoking_session_id` |
