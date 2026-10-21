@@ -656,6 +656,14 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     if host.contains(['/', '@', ':']) || user.contains(['/', '@']) {
         return ReplyRoute::Forward;
     }
+    // A colon is common in other ids, so the user part must read as an OS
+    // user name before `a:b/c` counts as the relay's label.
+    if !user
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return ReplyRoute::Forward;
+    }
     let host = mail_bus::normalize_host(host);
     let local = mail_bus::normalize_host(&crate::claims::hostname());
     if host == local {
@@ -1343,6 +1351,11 @@ mod tests {
                 host: "some-remote".to_string()
             },
             "the colon label sender_id writes routes the same"
+        );
+        assert_eq!(
+            reply_route("fmail session:h/x"),
+            ReplyRoute::Forward,
+            "a user part that is no OS user name is not the relay's label"
         );
         assert_eq!(
             reply_route(&format!("a@{test_host}/b")),
