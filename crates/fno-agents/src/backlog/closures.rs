@@ -47,13 +47,13 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
 }
 
 /// Close every open epic whose children are all done (self-heal/migration).
-/// `promise_held` names epics whose plan's `expected_url_count` is unmet
-/// (gated pre-lock): a plan plus a merged PR clears `has_own_plan_work`,
-/// and without the hold such an epic closed on its children's closes with
-/// the plan's ships unverified.
+/// `promise_held` carries the pre-lock rollup verdicts: a plan plus a
+/// merged PR clears `has_own_plan_work`, and without the hold such an epic
+/// closed on its children's closes with the plan's ships unverified.
+/// Absent = held (fail closed), like the cascade.
 pub(crate) fn sweep_close_done_epics(
     entries: &mut [Value],
-    promise_held: &std::collections::BTreeSet<String>,
+    promise_held: &super::promise::RollupVerdicts,
 ) -> Vec<String> {
     let mut closed: Vec<String> = Vec::new();
     for _ in 0..64 {
@@ -63,15 +63,15 @@ pub(crate) fn sweep_close_done_epics(
             break;
         }
         for pid in ready {
-            if promise_held.contains(pid.as_str()) {
-                continue;
-            }
             let Some(index) = entries
                 .iter()
                 .position(|e| text_at(e, "id") == Some(pid.as_str()))
             else {
                 continue;
             };
+            if super::promise::rollup_holds(&entries[index], promise_held) {
+                continue;
+            }
             let parent = &mut entries[index];
             if parent
                 .get("completed_at")

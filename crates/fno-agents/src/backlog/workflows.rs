@@ -1313,24 +1313,36 @@ fn restore_pruned_dependents(rows: &mut [Value], reopened_id: &str) -> Vec<Strin
                 }
             }
         }
-        if open_dependent && !already_named && !cyclic {
-            let obj = rows[idx].as_object_mut().expect("row is an object");
-            let edge = obj
-                .entry("blocked_by".into())
-                .or_insert_with(|| Value::Array(Vec::new()));
-            edge.as_array_mut()
-                .expect("blocked_by is an array")
-                .push(json!(reopened_id));
-            restored.push(dependent_id.to_string());
+        if !open_dependent {
+            // A terminal dependent owes no edge: the trail row is stale.
             continue;
         }
-        remaining.push(entry);
+        if already_named {
+            // The edge is back (a prior restore, or the operator): consumed.
+            continue;
+        }
+        if cyclic {
+            // Withheld for a real graph reason; keep the trail row so a
+            // later reopen after the cycle breaks can still restore.
+            remaining.push(entry);
+            continue;
+        }
+        let obj = rows[idx].as_object_mut().expect("row is an object");
+        let edge = obj
+            .entry("blocked_by".into())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        edge.as_array_mut()
+            .expect("blocked_by is an array")
+            .push(json!(reopened_id));
+        restored.push(dependent_id.to_string());
     }
-    let obj = rows
+    let Some(obj) = rows
         .iter_mut()
         .find(|e| text_at(e, "id") == Some(reopened_id))
         .and_then(|e| e.as_object_mut())
-        .expect("the reopened row is an object");
+    else {
+        return restored;
+    };
     obj.insert("pruned_dependents".into(), Value::Array(remaining));
     restored
 }
@@ -2928,6 +2940,34 @@ mod tests {
         .into();
         let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &ok);
         assert!(closed.contains(&"ab-ffffffff".to_string()), "{closed:?}");
+    }
+
+    #[test]
+    fn the_reopen_restores_a_pruned_edge_only_onto_a_live_dependent() {
+        // The reopen consumes the trail: the edge re-adds, the trail row
+        // leaves, a terminal dependent's row is dropped untouched.
+        let mut rows = vec![
+            json!({"id": "x-open2", "status": "ready"}),
+            json!({
+                "id": "x-gone", "completed_at": "2026-10-01T00:00:00Z",
+                "status": "done",
+            }),
+            json!({
+                "id": "x-back", "status": "ready",
+                "pruned_dependents": [
+                    {"node": "x-open2", "pruned_at": "2026-10-01T00:00:00Z"},
+                    {"node": "x-gone", "pruned_at": "2026-10-01T00:00:00Z"},
+                ],
+            }),
+        ];
+        let restored = restore_pruned_dependents(&mut rows, "x-back");
+        assert_eq!(restored, vec!["x-open2".to_string()]);
+        assert_eq!(rows[0]["blocked_by"], json!(["x-back"]));
+        // Consumed and stale rows both leave: the trail is empty.
+        assert_eq!(rows[2]["pruned_dependents"], json!([]));
+        // Idempotent: a second pass restores nothing.
+        let again = restore_pruned_dependents(&mut rows, "x-back");
+        assert!(again.is_empty(), "{again:?}");
     }
 }
 
