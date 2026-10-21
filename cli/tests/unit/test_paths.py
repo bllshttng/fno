@@ -183,7 +183,9 @@ def test_graphql_quota_lock_ignores_project_state_dir(
 
     from fno.paths import graphql_quota_lock
 
-    assert graphql_quota_lock() == machine_home / ".fno" / "locks" / "github-graphql-quota.lock"
+    assert graphql_quota_lock() == (
+        machine_home / ".fno" / "state" / "locks" / "github-graphql-quota.lock"
+    )
 
 
 # ---------------------------------------------------------------------------
