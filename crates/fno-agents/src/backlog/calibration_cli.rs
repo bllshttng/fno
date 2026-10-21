@@ -180,11 +180,16 @@ fn run_by_lane(since_days: i64, json_out: bool, domain: Option<&str>) -> i32 {
     let feeds = scorecard::OutcomeFeeds {
         review_fails_by_pr: review_readable.then_some(&review_fails_by_pr),
     };
+    // The fold joins PR numbers only within the cwd's own repo: the origin
+    // remote's host/owner/repo, or None when no remote reads (every node
+    // then keeps the slice-1 in-scope read).
+    let repo_scope = crate::finalize::repo_identity_from_git_remote(&cwd);
     let mut built = scorecard::build_records(
         &nodes,
         &ledger,
         friction_readable.then_some(&friction_by_node),
         &feeds,
+        repo_scope.as_deref(),
         since_days,
         chrono::Local::now().naive_local(),
         domain,

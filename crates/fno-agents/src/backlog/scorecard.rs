@@ -37,6 +37,22 @@ pub struct OutcomeFeeds<'a> {
 /// pipeline, so `target/<difficulty>` is the only slice-1 kind.
 const TARGET_VERB: &str = "target";
 
+/// `host/owner/repo` from a GitHub PR URL, the same lowercase identity shape
+/// `finalize::repo_identity_from_git_remote` produces for the origin remote:
+/// the one comparison that keeps a foreign repo's PR number out of this
+/// repo's joins. Unparseable URLs read as foreign (None).
+fn pr_url_identity(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))?;
+    let mut segments = rest.split('/');
+    let host = segments.next().filter(|h| !h.is_empty())?;
+    let owner = segments.next().filter(|o| !o.is_empty())?;
+    let repo = segments.next().filter(|r| !r.is_empty())?;
+    Some(format!("{host}/{owner}/{}", repo.trim_end_matches(".git")).to_lowercase())
+}
+
 /// One batched ledger read, indexed by session id and by graph node id: the
 /// two joins the lane resolution and the cost fallback need. Execution rows
 /// only, the same filter the by-provider view applies.
@@ -133,15 +149,18 @@ pub struct RecordSet {
 /// an unread source never prints as a measured zero.
 ///
 /// The PR-keyed outcome columns ride the same rule one store narrower: a
-/// node without a PR number has no CI, review or fix-of-fix surface at all
-/// (null, not a measured zero), a node with one is measured whenever its
-/// feed was readable, and `fix_of_fix` is stamped afterwards by
-/// [`stamp_fix_of_fix`] once the blame read knows which PRs it answers.
+/// node without an in-repo PR number has no CI, review or fix-of-fix surface
+/// at all (null, not a measured zero), `repo_scope` (the cwd's
+/// host/owner/repo) keeps a foreign repo's PR number out of the joins
+/// entirely, a PR-bearing node is measured only where its feed proves a
+/// read, and `fix_of_fix` is stamped afterwards by [`stamp_fix_of_fix`] once
+/// the blame read knows which PRs it answers.
 pub fn build_records(
     nodes: &[Value],
     ledger: &LedgerIndex,
     friction_by_node: Option<&BTreeMap<String, BTreeMap<String, u32>>>,
     feeds: &OutcomeFeeds<'_>,
+    repo_scope: Option<&str>,
     since_days: i64,
     now: chrono::NaiveDateTime,
     domain: Option<&str>,
@@ -322,23 +341,43 @@ pub fn build_records(
                     .and_then(parse_local)
             });
         let bounce = w4_available.then(|| node_outcome(id, shipped_at, &by_id, &fixes));
+        // Repo scope: a node whose PR belongs to another repository joins no
+        // local feed - its friction lives in another project's journal, its
+        // PR number collides with this repo's line, and a verdict for it
+        // would be somebody else's. No pr_url (or no origin remote to
+        // compare) keeps the slice-1 read: the node stays in scope.
+        let same_repo = match (node.get("pr_url").and_then(Value::as_str), repo_scope) {
+            (None, _) => true,
+            (Some(_), None) => true,
+            (Some(url), Some(id)) => pr_url_identity(url).as_deref() == Some(id),
+        };
         // The store maps, never the entry: a readable store with no events
         // for this node is a measured zero, and only an unreadable store
         // (None) stays null on the record.
-        let ci_failure = friction_by_node.map(|m| {
-            m.get(id)
-                .and_then(|f| f.get("ci_failure"))
-                .copied()
-                .unwrap_or(0)
-        });
-        // The PR-keyed outcomes: no PR number, no surface. A PR-bearing node
-        // is measured whenever its feed was readable; a red is at least one
-        // recorded ci_failure row (one row per red head).
-        let pr = node.get("pr_number").and_then(Value::as_i64);
-        let ci_red = match (pr, friction_by_node) {
-            (Some(_), Some(m)) => Some(
+        let ci_failure = if same_repo {
+            friction_by_node.map(|m| {
                 m.get(id)
                     .and_then(|f| f.get("ci_failure"))
+                    .copied()
+                    .unwrap_or(0)
+            })
+        } else {
+            None
+        };
+        // The PR-keyed outcomes: no in-repo PR number, no surface. A red is
+        // at least one recorded ci_failure row (one row per red head), and
+        // it is only measured when the review gate's coverage rows prove a
+        // loop actually read that PR - without one, a missing row is an
+        // unread, not a clean bill.
+        let pr = if same_repo {
+            node.get("pr_number").and_then(Value::as_i64)
+        } else {
+            None
+        };
+        let ci_red = match (pr, friction_by_node, feeds.review_fails_by_pr) {
+            (Some(p), Some(f), Some(rv)) if rv.contains_key(&p) => Some(
+                f.get(id)
+                    .and_then(|fr| fr.get("ci_failure"))
                     .copied()
                     .unwrap_or(0)
                     > 0,
@@ -346,7 +385,7 @@ pub fn build_records(
             _ => None,
         };
         let review_findings = match (pr, feeds.review_fails_by_pr) {
-            (Some(pr), Some(m)) => Some(m.get(&pr).copied().unwrap_or(0)),
+            (Some(pr), Some(m)) => m.get(&pr).copied(),
             _ => None,
         };
 
@@ -383,15 +422,21 @@ pub fn build_records(
 
 /// Stamps the fix-of-fix verdict onto each record after the blame read: the
 /// verdict set is keyed by PR number and only computed for the PRs this fold
-/// carries, so the read blames nothing else. A PR with no row (not a fix
-/// delivery, unmeasured, or outside the walk) stays unrecorded - null, never
-/// a measured clean.
+/// carries, so the read blames nothing else. Every record gains
+/// `fix_answered` (the walk ran; this PR is or is not one of its fix
+/// deliveries), so a cell can read "no fix PRs walked" apart from a walk
+/// that never ran - one carries coverage 0, the other stays null. A PR
+/// inside the map with no measurable verdict (blame read failed) answers
+/// without entering the rate: `fix_of_fix` stays null there, never a
+/// measured clean.
 pub fn stamp_fix_of_fix(records: &mut [Value], fix_by_pr: &HashMap<u64, Option<bool>>) {
     for r in records.iter_mut() {
+        r["fix_answered"] = json!(false);
         let Some(pr) = r.get("pr").and_then(Value::as_u64) else {
             continue;
         };
         if let Some(verdict) = fix_by_pr.get(&pr) {
+            r["fix_answered"] = json!(true);
             r["fix_of_fix"] = json!(verdict);
         }
     }
@@ -436,7 +481,7 @@ pub fn fix_by_pr(
         chrono::Utc::now(),
         &wanted,
     ) {
-        Ok(map) => Some(map),
+        Ok(map) => Some(map.into_iter().collect()),
         Err(err) => {
             eprintln!(
                 "fno backlog calibration: could not walk the merged line ({err}); \
@@ -466,6 +511,8 @@ struct CellAcc {
     review_measured: u64,
     fix_of_fix: u64,
     fix_measured: u64,
+    fix_answered: u64,
+    fix_walked: u64,
     shared: u64,
 }
 
@@ -519,6 +566,15 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
             if let Some(f) = r["review_findings"].as_u64() {
                 c.review_measured += 1;
                 c.review_findings += f;
+            }
+            // The walk mark rides on every record the stamp pass touched, so
+            // a cell with no marks at all is a walk that never ran, not a
+            // walk that found no fix deliveries.
+            if r.get("fix_answered").is_some() {
+                c.fix_walked += 1;
+                if r["fix_answered"].as_bool() == Some(true) {
+                    c.fix_answered += 1;
+                }
             }
             if let Some(v) = r["fix_of_fix"].as_bool() {
                 c.fix_measured += 1;
@@ -601,7 +657,11 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
                 },
                 "review_findings_coverage_pct": cover(c.review_measured),
                 "fix_of_fix_pct": rate(c.fix_of_fix, c.fix_measured),
-                "fix_of_fix_coverage_pct": cover(c.fix_measured),
+                "fix_of_fix_coverage_pct": if c.fix_walked > 0 {
+                    cover(c.fix_answered)
+                } else {
+                    None
+                },
                 "shared": c.shared,
             })
         })
@@ -744,10 +804,12 @@ mod tests {
         n
     }
 
-    /// Attaches a PR number to a fixture node, giving it the CI, review and
-    /// fix-of-fix surfaces.
-    fn with_pr(mut n: Value, pr: i64) -> Value {
+    /// Attaches an in-repo PR to a fixture node: the number plus a pr_url
+    /// naming this repo, the shape the same-repo scope gate reads. The pair
+    /// grants the CI, review and fix-of-fix surfaces.
+    fn with_pr_url(mut n: Value, pr: i64) -> Value {
         n["pr_number"] = json!(pr);
+        n["pr_url"] = json!(format!("https://github.com/bllshttng/fno/pull/{pr}"));
         n
     }
 
@@ -808,6 +870,7 @@ mod tests {
             &LedgerIndex::build(ledger_rows),
             Some(&BTreeMap::new()),
             &no_feeds(),
+            None,
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -929,6 +992,7 @@ mod tests {
             &LedgerIndex::build(&[]),
             None,
             &no_feeds(),
+            None,
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -1015,6 +1079,7 @@ mod tests {
             &LedgerIndex::build(&[]),
             Some(&BTreeMap::new()),
             &no_feeds(),
+            None,
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -1044,6 +1109,7 @@ mod tests {
             &LedgerIndex::build(&[]),
             Some(&BTreeMap::new()),
             &no_feeds(),
+            None,
             28,
             parse_local(NOW).unwrap(),
             None,
@@ -1091,22 +1157,39 @@ mod tests {
 
     #[test]
     fn unread_outcome_feeds_stay_null_never_zero() {
-        // AC3-EDGE shape: no node carries a PR, so no CI, review or
-        // fix-of-fix surface exists; the rates read null with coverage 0
-        // while merged_ci95 still reads from the cell's own counts.
-        let nodes = vec![node(
-            "x-nopr",
-            json!([session(
-                Some("claude"),
+        // AC3-EDGE shape: the node carries an in-repo PR, so every outcome
+        // surface exists, but each feed is unread - no friction store, no
+        // review feed, no fix walk. All three rates read null with coverage
+        // 0, and the fix coverage stays null too: a walk that never ran is
+        // not a walked zero. merged_ci95 still reads from the cell's own
+        // counts.
+        let n = with_pr_url(
+            node(
+                "x-nofeed",
+                json!([session(
+                    Some("claude"),
+                    None,
+                    "sess-nofeed",
+                    Some("2026-10-15T10:00:00Z")
+                )]),
+                "low",
                 None,
-                "sess-nopr",
-                Some("2026-10-15T10:00:00Z")
-            )]),
-            "low",
+            ),
+            4207,
+        );
+        let mut built = build_records(
+            &[n],
+            &LedgerIndex::build(&[]),
             None,
-        )];
-        let recs = records(&nodes, &[]);
-        let cells = fold_cells(&recs);
+            &no_feeds(),
+            None,
+            28,
+            parse_local(NOW).unwrap(),
+            None,
+        );
+        assert_eq!(built.records.len(), 1, "{:?}", built.records);
+        assert_eq!(built.records[0]["pr"], 4207);
+        let cells = fold_cells(&built.records);
         let c = &cells[0];
         assert_eq!(c["merged"], 1);
         assert_eq!(
@@ -1119,16 +1202,35 @@ mod tests {
         assert_eq!(c["review_findings_per_node"], Value::Null);
         assert_eq!(c["review_findings_coverage_pct"], 0);
         assert_eq!(c["fix_of_fix_pct"], Value::Null);
-        assert_eq!(c["fix_of_fix_coverage_pct"], 0);
+        assert_eq!(
+            c["fix_of_fix_coverage_pct"],
+            Value::Null,
+            "no stamp pass ran, which is not a walked zero: {c}"
+        );
+        // A walk that ran but answers no fix PRs is the other shape: the
+        // coverage reads its walked 0 while the rate stays null.
+        stamp_fix_of_fix(&mut built.records, &HashMap::new());
+        let cells = fold_cells(&built.records);
+        assert_eq!(cells[0]["fix_of_fix_pct"], Value::Null);
+        assert_eq!(
+            cells[0]["fix_of_fix_coverage_pct"], 0,
+            "walked, no fix PRs: a real coverage zero: {cells:?}"
+        );
     }
 
     #[test]
     fn pr_keyed_feeds_fold_to_cell_rates() {
-        // Two merged PR-bearing nodes on one lane: one recorded a red head
-        // and a fail verdict, one carried a measured-clean fix-of-fix; the
-        // rates read 50 with full coverage, and a PR the stability walk
-        // never answers stays null (not a measured clean).
-        let red_node = with_pr(
+        // Two merged in-repo PR nodes on one lane: one carries a recorded
+        // red head, a review-coverage row and 3 fail verdicts; one carries
+        // only a measured-clean fix verdict, so its CI and review columns
+        // stay unmeasured - the feeds never read its PR. A third node
+        // carries a foreign repo's PR URL with a colliding number: it joins
+        // nothing, record or cell.
+        let friction = BTreeMap::from([(
+            "x-red".to_string(),
+            BTreeMap::from([("ci_failure".to_string(), 1_u32)]),
+        )]);
+        let red_node = with_pr_url(
             node(
                 "x-red",
                 json!([session(
@@ -1142,7 +1244,7 @@ mod tests {
             ),
             4201,
         );
-        let clean_node = with_pr(
+        let clean_node = with_pr_url(
             node(
                 "x-clean",
                 json!([session(
@@ -1156,18 +1258,47 @@ mod tests {
             ),
             4202,
         );
+        let mut foreign = with_pr_url(
+            node(
+                "x-fn",
+                json!([session(
+                    Some("claude"),
+                    None,
+                    "sess-fn",
+                    Some("2026-10-16T11:00:00Z")
+                )]),
+                "low",
+                None,
+            ),
+            4201,
+        );
+        foreign["pr_url"] = json!("https://github.com/other/fno-books/pull/4201");
         let mut built = build_records(
-            &[red_node, clean_node],
+            &[red_node, clean_node, foreign],
             &LedgerIndex::build(&[]),
-            Some(&BTreeMap::new()),
+            Some(&friction),
             &OutcomeFeeds {
                 review_fails_by_pr: Some(&HashMap::from([(4201_i64, 3_u64)])),
             },
+            Some("github.com/bllshttng/fno"),
             28,
             parse_local(NOW).unwrap(),
             None,
         );
-        assert_eq!(built.records.len(), 2);
+        assert_eq!(built.records.len(), 3);
+        // The foreign node's colliding number joins nothing: no PR surface,
+        // no CI red, no review findings, no friction count.
+        assert_eq!(built.records[2]["pr"], Value::Null, "{:?}", built.records);
+        assert_eq!(built.records[2]["ci_red"], Value::Null);
+        assert_eq!(built.records[2]["review_findings"], Value::Null);
+        assert_eq!(built.records[2]["ci_failure"], Value::Null);
+        // In scope: the red node measures red with 3 findings; the clean
+        // node's CI and review stay unmeasured (no coverage row for its PR)
+        // while its fix verdict lands.
+        assert_eq!(built.records[0]["ci_red"], true);
+        assert_eq!(built.records[0]["review_findings"], 3);
+        assert_eq!(built.records[1]["ci_red"], Value::Null);
+        assert_eq!(built.records[1]["review_findings"], Value::Null);
         stamp_fix_of_fix(
             &mut built.records,
             &HashMap::from([(4202_u64, Some(false))]),
@@ -1175,11 +1306,19 @@ mod tests {
         let cells = fold_cells(&built.records);
         assert_eq!(cells.len(), 1, "{cells:?}");
         let c = &cells[0];
-        assert_eq!(c["ci_red_pct"], 50);
-        assert_eq!(c["ci_red_coverage_pct"], 100);
-        assert_eq!(c["review_findings_per_node"], 1.5, "3 fails / 2 nodes: {c}");
-        assert_eq!(c["review_findings_coverage_pct"], 100);
+        assert_eq!(c["nodes"], 3);
+        assert_eq!(c["merged"], 3);
+        assert_eq!(
+            c["ci_red_pct"], 100,
+            "the one coverage-proven PR recorded a red: {c}"
+        );
+        assert_eq!(c["ci_red_coverage_pct"], 33);
+        assert_eq!(
+            c["review_findings_per_node"], 3.0,
+            "3 fails over the one PR the review feed read: {c}"
+        );
+        assert_eq!(c["review_findings_coverage_pct"], 33);
         assert_eq!(c["fix_of_fix_pct"], 0, "measured clean, a real 0%: {c}");
-        assert_eq!(c["fix_of_fix_coverage_pct"], 50, "one PR answered: {c}");
+        assert_eq!(c["fix_of_fix_coverage_pct"], 33, "one fix PR walked: {c}");
     }
 }
