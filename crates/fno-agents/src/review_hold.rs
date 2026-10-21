@@ -161,10 +161,13 @@ in the PR conversation. A scoped fix-verification with {VERIFY_FIXES_FLAG} is th
 /// round the law reserved for the verify. Advisory only - it never refuses
 /// and never classifies the pass.
 pub(crate) fn verify_fixes_advisory(cwd: &Path, branch: &str, head: &str) -> String {
-    let answer = chain_answer(cwd, branch, head);
-    let last = match answer.get("last") {
-        Some(l) if l.is_object() => l.clone(),
-        _ => return String::new(),
+    // The advisory names the round that raised the blocking findings, not
+    // the newest verdict: the fixes a pass at the moved head would verify
+    // originate in the oldest blocking round. None, and there is nothing to
+    // verify - the advisory stays silent.
+    let last = match crate::loopcheck::coverage_gate::chain_first_blocking(cwd, branch, head) {
+        Some(l) => l,
+        None => return String::new(),
     };
     let last_head = last.get("head_sha").and_then(Value::as_str).unwrap_or("");
     if last_head.is_empty() || last_head == head {

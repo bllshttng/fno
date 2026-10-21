@@ -895,7 +895,15 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
         );
     }
     let key = format!("review:branch:{branch}");
-    let (state, record) = crate::claims::status(&key, None);
+    // A direct store read, not `claims::status`: the wrapper eprints the
+    // claim-status verb's diagnostic on a failed read, and this probe stays
+    // silent, the way the Python claim_status never printed on the way to
+    // Corrupted (the review_hold check_corrupted_hold golden is one line).
+    let (state, record) = match crate::claim_store::read(&key, None) {
+        Ok(Some(record)) => (crate::claim_verbs::status_verdict(&record).0, Some(record)),
+        Ok(None) => (crate::claims::ClaimState::Free, None),
+        Err(_) => (crate::claims::ClaimState::Corrupted, None),
+    };
     let hold_json = || -> Value {
         record
             .as_ref()
@@ -906,7 +914,13 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
         crate::claims::ClaimState::Corrupted => {
             return activity(
                 REVIEW_HOLD_UNREADABLE,
-                &format!("review hold on {branch} could not be parsed; refusing to assume unheld"),
+                // Python read `status.get('error', 'unknown error')`; the
+                // corrupted status never carried the key, so the fallback is
+                // the constant the parity golden pins.
+                &format!(
+                    "review hold on {branch} could not be parsed (unknown error); \
+                     refusing to assume unheld"
+                ),
                 hold_json(),
                 not_reached("not reached"),
             );
