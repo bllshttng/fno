@@ -3649,6 +3649,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--substrate",
         "--workspace",
         "--squad",
+        "--pane",
         "--split",
         "--portal",
         "--tab",
@@ -3771,6 +3772,15 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             }
             "--tab" => {
                 params.insert("tab".into(), str_arg(&mut it, "--tab")?);
+            }
+            "--pane" if verb == "spawn" => {
+                // The existing-pane attach: the spine resolves, checks and
+                // starts inside the named pristine shell.
+                let raw = str_arg(&mut it, "--pane")?;
+                let id: u64 = raw
+                    .parse()
+                    .map_err(|_| "--pane needs a positive integer pane id".to_string())?;
+                params.insert("pane".into(), Value::from(id));
             }
             "--at" => {
                 params.insert("at".into(), str_arg(&mut it, "--at")?);

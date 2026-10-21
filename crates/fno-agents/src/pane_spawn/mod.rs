@@ -101,6 +101,9 @@ pub struct PaneContext {
     pub at: Option<String>,
     /// The bounded lane's stable `id:<n>` tab token.
     pub tab_id: Option<String>,
+    /// A `--pane <id>` attach: start the worker inside this already-placed,
+    /// confirmed-pristine pane instead of running a new one.
+    pub pane: Option<u64>,
     /// The worker's registry name: the codex identity leaf renders from it
     /// (`mux_spawn.py:3506`).
     pub worker_name: String,
@@ -129,6 +132,7 @@ impl PaneContext {
             tab: None,
             at: None,
             tab_id: None,
+            pane: None,
             worker_name: String::new(),
             node: None,
             passthrough: Vec::new(),
@@ -178,6 +182,7 @@ impl PaneContext {
             tab: opt_str("tab"),
             at: opt_str("at"),
             tab_id: opt_str("tab_id"),
+            pane: params.get("pane").and_then(Value::as_u64),
             worker_name: params
                 .get("name")
                 .and_then(Value::as_str)
@@ -348,6 +353,21 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
             });
         }
     }
+    if let Some(line) = placement::pane_placement_conflict(
+        ctx.pane,
+        ctx.squad.as_deref(),
+        ctx.split.as_deref(),
+        ctx.at.as_deref(),
+        ctx.tab.as_deref(),
+        ctx.tab_id.as_deref(),
+        ctx.bounded_placement,
+    ) {
+        return refuse(&PaneRefusal {
+            line,
+            exit_code: EXIT_REFUSAL,
+            after_pane: None,
+        });
+    }
     let session = resolve_mux_session(ctx.session.as_deref());
     // The bounded wrapper holds the lease around everything below and drops
     // it after; a held lease refuses before any pane or row exists.
@@ -422,36 +442,77 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
     // leaking into the pane shell, where the child would inherit the "I am a
     // machine dispatch" mark.
     let spawn_trigger = capture_spawn_trigger();
-    let run_args = pane_run_args(ctx, &session, name, &plan);
-    let run_env = pane_run_env();
-    let proc = match FsMux.run(&run_args, &run_env) {
-        Ok(proc) => proc,
-        Err(exc) => {
-            // `_run_mux`'s FileNotFoundError/OSError arms: the front door
-            // never ran, so no pane exists and the line names the binary.
-            let (line, code) = spawn_exec_failure_line(&exc);
+    // The attach lane: an existing-pane spawn never runs `pane run`. The
+    // target is checked (found, unoccupied, a confirmed pristine idle
+    // shell), the worker start text is sent with `--guarded`, and the pane
+    // id is the caller's. Checks run on the fresh listing, never a stale
+    // context field.
+    let attach = match ctx.pane {
+        Some(target) => {
+            let (rows, detail) = pane_ls_detailed(&session, &FsMux);
+            let rows = rows.unwrap_or_default();
+            if rows.is_empty() && !detail.is_empty() {
+                return refuse(&PaneRefusal {
+                    line: format!("pane listing failed: {detail}"),
+                    exit_code: EXIT_SPAWN_FAILED,
+                    after_pane: None,
+                });
+            }
+            if let Err(refusal) = placement::resolve_existing_pane(&session, target, &rows) {
+                return refuse(&refusal);
+            }
+            Some(target)
+        }
+        None => None,
+    };
+    let pane_id = if let Some(target) = attach {
+        if let Err(line) =
+            placement::start_existing_pane(&session, target, &ctx.cwd, &plan.wrapped, &FsMux)
+        {
             return refuse(&PaneRefusal {
                 line,
-                exit_code: code,
-                after_pane: None,
-            });
-        }
-    };
-    let pane_id = match parse_pane_run(&proc, json_receipt(ctx), &session) {
-        Ok(PaneRunOutcome::Created { pane_id }) => pane_id,
-        Ok(PaneRunOutcome::ControlUnanswered) => {
-            match reconcile_unanswered_run(&session, &ctx.cwd, spawn_started_ms, &registry, &FsMux)
-            {
-                Ok(pane_id) => pane_id,
-                Err(refusal) => return refuse(&refusal),
-            }
-        }
-        Err(detail) => {
-            return refuse(&PaneRefusal {
-                line: pane_run_failure_line(&session, &detail),
                 exit_code: EXIT_SPAWN_FAILED,
                 after_pane: None,
             });
+        }
+        target
+    } else {
+        let run_args = pane_run_args(ctx, &session, name, &plan);
+        let run_env = pane_run_env();
+        let proc = match FsMux.run(&run_args, &run_env) {
+            Ok(proc) => proc,
+            Err(exc) => {
+                // `_run_mux`'s FileNotFoundError/OSError arms: the front door
+                // never ran, so no pane exists and the line names the binary.
+                let (line, code) = spawn_exec_failure_line(&exc);
+                return refuse(&PaneRefusal {
+                    line,
+                    exit_code: code,
+                    after_pane: None,
+                });
+            }
+        };
+        match parse_pane_run(&proc, json_receipt(ctx), &session) {
+            Ok(PaneRunOutcome::Created { pane_id }) => pane_id,
+            Ok(PaneRunOutcome::ControlUnanswered) => {
+                match reconcile_unanswered_run(
+                    &session,
+                    &ctx.cwd,
+                    spawn_started_ms,
+                    &registry,
+                    &FsMux,
+                ) {
+                    Ok(pane_id) => pane_id,
+                    Err(refusal) => return refuse(&refusal),
+                }
+            }
+            Err(detail) => {
+                return refuse(&PaneRefusal {
+                    line: pane_run_failure_line(&session, &detail),
+                    exit_code: EXIT_SPAWN_FAILED,
+                    after_pane: None,
+                });
+            }
         }
     };
     // The group-tab move lands between the parse and the bind: cosmetic by

@@ -250,3 +250,100 @@ fn join_own_tab(
         Err(e) => Err(format!("pane group tab join into {name:?} failed: {e}")),
     }
 }
+
+/// `pane_placement_conflict` (mux_spawn.py:90): `--pane` targets an
+/// already-placed pane, so it never combines with a placement flag.
+pub fn pane_placement_conflict(
+    pane: Option<u64>,
+    workspace: Option<&str>,
+    split: Option<&str>,
+    at: Option<&str>,
+    tab: Option<&str>,
+    tab_id: Option<&str>,
+    bounded: bool,
+) -> Option<String> {
+    let pane = pane?;
+    let labels = [
+        (workspace.is_some(), "--workspace"),
+        (split.is_some(), "--split"),
+        (at.is_some(), "--at"),
+        (tab.is_some(), "--tab"),
+        (bounded, "--bounded-placement"),
+        (tab_id.is_some(), "--tab-id"),
+    ];
+    let flag = labels
+        .iter()
+        .find(|(present, _)| *present)
+        .map(|(_, label)| *label)?;
+    Some(format!(
+        "--pane cannot be combined with {flag}; it targets an already-placed pane"
+    ))
+}
+
+/// POSIX `shlex.quote`: a token of shell-safe characters stays bare,
+/// everything else single-quotes with the `'\\''` escape.
+fn shlex_quote(token: &str) -> String {
+    let safe = token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if safe && !token.is_empty() {
+        return token.to_string();
+    }
+    format!("'{}'", token.replace('\'', "'\\''"))
+}
+
+/// `start_existing_pane` (mux_spawn.py:111): the worker start text sent into
+/// the pristine shell, answered by `pane send --submit --raw --guarded`.
+pub fn start_existing_pane(
+    session: &str,
+    pane_id: u64,
+    cwd: &std::path::Path,
+    wrapped: &[String],
+    mux: &dyn MuxCli,
+) -> Result<(), String> {
+    let joined: Vec<String> = wrapped.iter().map(|t| shlex_quote(t)).collect();
+    let text = format!(
+        "cd -- {} && exec {}",
+        shlex_quote(&cwd.to_string_lossy()),
+        joined.join(" ")
+    );
+    let proc = mux.run(
+        &[
+            "mux".into(),
+            "pane".into(),
+            "send".into(),
+            "--server".into(),
+            session.into(),
+            pane_id.to_string(),
+            "--text".into(),
+            text,
+            "--submit".into(),
+            "--raw".into(),
+            "--guarded".into(),
+        ],
+        &[],
+    );
+    match proc {
+        Ok(p) if p.status.success() => Ok(()),
+        Ok(p) => {
+            let detail = if p.stderr.is_empty() {
+                String::from_utf8_lossy(&p.stdout).trim().to_string()
+            } else {
+                String::from_utf8_lossy(&p.stderr).trim().to_string()
+            };
+            Err(format!(
+                "existing pane {pane_id} rejected the worker start in session {}: {}",
+                py_repr(session),
+                if detail.is_empty() {
+                    "no output"
+                } else {
+                    &detail
+                }
+            ))
+        }
+        Err(e) => Err(format!(
+            "existing pane {pane_id} rejected the worker start in session {}: {e}",
+            py_repr(session)
+        )),
+    }
+}
