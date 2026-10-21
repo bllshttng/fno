@@ -2808,7 +2808,7 @@ mod tests {
     #[test]
     fn derive_rows_reads_the_owner_edge_over_the_birth_edge() {
         // Succession re-homes the org. The FILE keeps the birth
-        // edge (the stepped_down lead) as history; the sideline joins the
+        // edge (the lead that stepped down) as history; the sideline joins the
         // CURRENT owner, so the lead label names the successor.
         let raw = reg(r#"{"name":"kestrel-successor","cwd":"/w","status":"live",
                  "harness_session_id":"01a0ee3f-successor"},

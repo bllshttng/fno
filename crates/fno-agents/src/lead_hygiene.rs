@@ -396,7 +396,7 @@ fn check2_spawn_step_down_rule(entries: &[Entry], shape: Option<&str>) -> CheckR
             "check2_spawn_step_down_rule",
             false,
             "not-applicable",
-            "no spawn in lead; pass-shape step_down rule does not apply",
+            "no spawn in lead; pass-shape step-down rule does not apply",
             None,
         );
     };
@@ -427,7 +427,7 @@ fn check2_spawn_step_down_rule(entries: &[Entry], shape: Option<&str>) -> CheckR
                 true,
                 "violation",
                 format!(
-                    "stepped_down at index {first_departure} then took orchestration action at index {} ('{}') - did not exit",
+                    "stepped down at index {first_departure} then took orchestration action at index {} ('{}') - did not exit",
                     entry.index,
                     entry.target.chars().take(60).collect::<String>()
                 ),
@@ -439,7 +439,7 @@ fn check2_spawn_step_down_rule(entries: &[Entry], shape: Option<&str>) -> CheckR
         "check2_spawn_step_down_rule",
         true,
         "clean",
-        format!("spawned at {first_spawn}, stepped_down at {first_departure}, no later action"),
+        format!("spawned at {first_spawn}, stepped down at {first_departure}, no later action"),
         None,
     )
 }
