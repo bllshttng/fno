@@ -3815,7 +3815,7 @@ mod tests {
         ];
         let (entries, receipts, changes) = settle_blocked_by_edges(original.clone());
         let by_id = index_by_id(&entries);
-        let trail = by_id["x-done"]["pruned_dependents"].clone();
+        let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
         assert_eq!(trail.len(), 2, "every pruned dependent rides the trail");
         assert_eq!(trail[0]["node"].as_str(), Some("x-open"), "{trail}");
         assert_eq!(trail[1]["node"].as_str(), Some("x-open2"), "{trail}");
@@ -3828,11 +3828,11 @@ mod tests {
         let mut live = original;
         crate::backlog::supersession::apply_edge_settlement(&mut live, &settlement);
         let by_id = index_by_id(&live);
-        let trail = by_id["x-done"]["pruned_dependents"].clone();
+        let trail = by_id["x-done"]["pruned_dependents"].as_array().unwrap();
         assert_eq!(
             trail.len(),
             2,
-            "the settlement application persists the trail: {trail}"
+            "the settlement application persists the trail: {trail:?}"
         );
     }
 }

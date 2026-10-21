@@ -2910,7 +2910,7 @@ mod tests {
         // The plan+PR parent. A warm Unmet verdict holds it, and the
         // walk does not close THROUGH it either; the satisfied verdict lets
         // the cascade close it exactly as before the gate existed.
-        let verdict = |outcome| super::promise::PromiseVerdict {
+        let verdict = |outcome| crate::backlog::promise::PromiseVerdict {
             outcome,
             reason: None,
             warning: None,
@@ -2923,18 +2923,18 @@ mod tests {
             json!({"id": "ab-aaaaaaaa", "parent": "ab-ffffffff", "status": "done",
                    "completed_at": "2026-09-01T00:00:00+00:00"}),
         ];
-        let unmet: super::promise::RollupVerdicts = [(
+        let unmet: crate::backlog::promise::RollupVerdicts = [(
             "ab-ffffffff".to_string(),
-            verdict(super::promise::PromiseOutcome::Unmet),
+            verdict(crate::backlog::promise::PromiseOutcome::Unmet),
         )]
         .into();
         let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &unmet);
         assert!(closed.is_empty(), "{closed:?}");
         assert!(rows[0].get("completed_at").is_none());
         // Warmed satisfied, the same shape closes.
-        let ok: super::promise::RollupVerdicts = [(
+        let ok: crate::backlog::promise::RollupVerdicts = [(
             "ab-ffffffff".to_string(),
-            verdict(super::promise::PromiseOutcome::Ok),
+            verdict(crate::backlog::promise::PromiseOutcome::Ok),
         )]
         .into();
         let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &ok);
