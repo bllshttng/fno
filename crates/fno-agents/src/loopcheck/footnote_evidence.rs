@@ -441,9 +441,9 @@ mod tests {
         let mut calls = Vec::new();
         let filed = ev.file_half_fails(&marks, Some("x-aaaa"), |argv| {
             calls.push(argv.to_vec());
-            idea_receipt_id("{\n  \"id\": \"x-beef\"\n}")
+            idea_receipt_id("{\n  \"id\": \"x-bbbb\"\n}")
         });
-        assert_eq!(filed, vec!["x-beef".to_string()]);
+        assert_eq!(filed, vec!["x-bbbb".to_string()]);
         assert_eq!(calls.len(), 1);
         let argv = calls[0].join(" ");
         assert!(argv.contains("--caused-by x-aaaa"), "{argv}");
