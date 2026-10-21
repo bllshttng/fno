@@ -156,7 +156,7 @@ Under an external backend, `fno backlog update <id> cwd=<checkout> plan_path=<pl
 
 ## Live gate
 
-`crates/fno-agents/tests/tracker_live.rs` holds two ignored tests, `github_journey` and `linear_journey`. Each drives the public `fno` verbs through one disposable issue: read, list next, bind, target start, PR bind, a bad-credential refusal, merge and close, board refresh, and a no-mirror check. Run them on purpose:
+`crates/fno-agents/tests/tracker_live.rs` holds two ignored tests, `github_journey` and `linear_journey`. Each drives the public `fno` verbs through one disposable issue. The steps are read, list next, bind, target start and PR bind. Then come a bad-credential refusal, merge and close, board refresh, and a no-mirror check. Run them on purpose:
 
 ```bash
 cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture
@@ -167,7 +167,7 @@ The gate needs a scratch repo and a scratch team that hold no real work. Create 
 1. A new, empty, private GitHub repo with a README, no branch protection, and a label named `fno-live-gate`.
 2. A fine-grained GitHub token limited to that one repo, with Contents, Issues and Pull requests read and write. Give it a short expiry.
 3. A Linear team used only by the gate, with the default workflow. A separate free workspace is best, so the key cannot reach real work.
-4. A Linear personal API key, limited to that team if the form offers it.
+4. A Linear personal API key. If the form offers a team limit, limit it to that team.
 
 The gate reads its own env names. It never reads `FNO_TRACKER_*` from the shell, so a tracker env already set can never point it at a real repo.
 
@@ -179,8 +179,8 @@ The gate reads its own env names. It never reads `FNO_TRACKER_*` from the shell,
 | `FNO_LIVE_LINEAR_TEAM` | The scratch team key, for example `FNOGATE`. |
 | `FNO_LIVE_FNO` | The `fno` binary under test. The default is `fno` on PATH. |
 
-A journey with a var unset prints `skipped: <name> unset` and writes no receipt. Before any write, the gate refuses when the scratch repo or team holds an open item without the `[fno-live-gate]` title prefix, or a gate item younger than 60 minutes. It closes older gate leftovers. Cleanup closes the PR, deletes the branch and closes the issue, and only for ids the run created.
+A journey with a var unset prints `skipped: <name> unset` and writes no receipt. The gate checks the scratch repo or team before any write. If it holds an open item without the `[fno-live-gate]` title prefix, the gate refuses. If it holds a gate item younger than 60 minutes, the gate refuses too. It closes older gate leftovers. Cleanup closes the PR, deletes the branch and closes the issue, and only for ids the run created.
 
-Each run writes `<state_dir>/live-gates/tracker-<backend>-<UTC ts>.json`. The receipt holds the backend, the scope, the issue and PR URLs, the token kind (never the value), the Linear viewer and organization, every step with its exit code and stderr tail, the failures, the cleanup actions, and `result`. One run spends about 40 GitHub REST calls.
+Each run writes `<state_dir>/live-gates/tracker-<backend>-<UTC ts>.json`. The receipt holds the backend, the scope, the issue and PR URLs, and the token kind (never the value). It names the Linear viewer and organization. It lists every step with its exit code and stderr tail, the failures, the cleanup actions, and `result`. One run spends about 40 GitHub REST calls.
 
 The `tracker-live` workflow runs the same tests on `workflow_dispatch` only. It reads the secrets `FNO_LIVE_GITHUB_TOKEN` and `FNO_LIVE_LINEAR_API_KEY` and the repo variables `FNO_LIVE_GITHUB_REPO` and `FNO_LIVE_LINEAR_TEAM`. Without the secrets it writes "not configured; skipped" and passes.
