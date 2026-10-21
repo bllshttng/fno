@@ -291,6 +291,22 @@ fn conventional_kind(subject: &str) -> Option<&'static str> {
     }
 }
 
+/// The conventional-commit type for the scorecard's second kind part: the
+/// four named buckets with the same aliases `conventional_kind` accepts,
+/// else `other` - a subject without a recognizable type still groups,
+/// visibly, instead of dropping the node's kind part.
+pub(crate) fn commit_type(subject: &str) -> &'static str {
+    let head = subject.split(':').next().unwrap_or(subject);
+    let kind = head.split('(').next().unwrap_or(head);
+    match kind.trim() {
+        "fix" | "bugfix" | "hotfix" => "fix",
+        "feat" | "feature" => "feat",
+        "docs" => "docs",
+        "refactor" => "refactor",
+        _ => "other",
+    }
+}
+
 fn branch_prefix_kind(branch: &str) -> Option<&'static str> {
     let head = branch.split('/').next().unwrap_or(branch);
     match head {
@@ -554,6 +570,99 @@ pub(crate) fn fix_of_fix_by_pr(
             Err(_) => None,
         };
         out.insert(delivery.pr, verdict);
+    }
+    Ok(out)
+}
+
+/// Slice 3's second glob table: the user's surface classes, first match per
+/// path wins. Order matters: the python mux-server lane reads ui before the
+/// python glob below it would, and crates/ reads rust so a mux-flavored
+/// subject on plain crates paths still reads rust. The web html pages carry
+/// ui by suffix, not by directory - they live inside crates sources.
+const SURFACE_GLOBS: &[(&str, &str)] = &[
+    ("cli/src/fno/agents/mux_", "ui"),
+    ("crates/", "rust"),
+    ("cli/src/fno/", "python"),
+];
+
+fn surface_of_path(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        return "ui";
+    }
+    for (glob, surface) in SURFACE_GLOBS {
+        if path.starts_with(glob) {
+            return surface;
+        }
+    }
+    "mixed"
+}
+
+/// The user's surface class for one merge commit's changed paths: `docs`
+/// when every path is docs/ or markdown, else the one glob class when every
+/// non-doc path agrees, else `mixed`. `None` when the diff carries no
+/// paths - unmeasured, never a class by default.
+pub(crate) fn surface_class(paths: &[&str]) -> Option<&'static str> {
+    if paths.is_empty() {
+        return None;
+    }
+    let is_doc = |path: &str| path.starts_with("docs/") || path.ends_with(".md");
+    if paths.iter().all(|path| is_doc(path)) {
+        return Some("docs");
+    }
+    let mut class: Option<&'static str> = None;
+    for path in paths {
+        if is_doc(path) {
+            continue;
+        }
+        match class {
+            None => class = Some(surface_of_path(path)),
+            Some(prev) if prev != surface_of_path(path) => return Some("mixed"),
+            _ => {}
+        }
+    }
+    class
+}
+
+fn diff_paths(repo: &std::path::Path, parent: &str, sha: &str) -> Result<Vec<String>, String> {
+    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
+    Ok(numstat
+        .lines()
+        .filter_map(|line| line.splitn(3, '\t').nth(2).map(str::to_string))
+        .collect())
+}
+
+/// Per-PR (commit type, surface class) for the scorecard's second kind
+/// part: the same first-parent delivery walk the fix-of-fix read runs,
+/// narrowed to the wanted PRs, with one numstat read per delivery. A wanted
+/// PR whose diff read fails, or that carries no paths, maps to `None` - the
+/// kind part is unmeasured and the fold reads it as `unknown`, never a
+/// guessed class.
+pub(crate) fn kind_parts_by_pr(
+    repo: &std::path::Path,
+    rev: &str,
+    days: i64,
+    now: DateTime<Utc>,
+    wanted: &std::collections::HashSet<u64>,
+) -> Result<BTreeMap<u64, Option<(&'static str, &'static str)>>, String> {
+    let since = now - Duration::days(days);
+    let since_iso = since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let (deliveries, _) = walk_deliveries(repo, rev, &since_iso, &BTreeMap::new())?;
+    let mut out: BTreeMap<u64, Option<(&'static str, &'static str)>> = BTreeMap::new();
+    for delivery in &deliveries {
+        if delivery.time < since || !wanted.contains(&delivery.pr) {
+            continue;
+        }
+        let parent = format!("{}^1", delivery.sha);
+        let paths = match diff_paths(repo, &parent, &delivery.sha) {
+            Ok(paths) if !paths.is_empty() => paths,
+            _ => {
+                out.insert(delivery.pr, None);
+                continue;
+            }
+        };
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let surface = surface_class(&refs).unwrap_or("mixed");
+        out.insert(delivery.pr, Some((commit_type(&delivery.subject), surface)));
     }
     Ok(out)
 }

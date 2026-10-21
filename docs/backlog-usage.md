@@ -470,7 +470,9 @@ The PR-keyed outcome columns measure only merged nodes that carry a PR number on
 
 The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
 
-The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
+`--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/, python for cli/src/fno/, and ui for the web html pages and the python mux-server lane. docs covers a commit whose every changed path is docs or markdown. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold. The default depth stays 1, so the plain by-lane read is unchanged.
+
+The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`. `--kind-depth` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
 ## Health and hygiene
 
