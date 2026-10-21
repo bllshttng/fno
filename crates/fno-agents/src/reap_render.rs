@@ -235,7 +235,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
                 "kept_planning_unclosed": planning_unclosed,
                 "kept_active": active,
                 "kept_attended": pair(&summary.kept_attended),
-                "kept_user_typed": pair(&summary.kept_user_typed),
                 "kept_other": pair(&summary.kept_other),
                 "kept_marked": pair(&summary.kept_marked),
                 "kept_probe_unread": probe_unread,
@@ -391,9 +390,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     }
     for (id, detail) in &summary.kept_attended {
         out.push_str(&format!("  kept {id} (attended: {detail})\n"));
-    }
-    for (id, detail) in &summary.kept_user_typed {
-        out.push_str(&format!("  kept {id} (user typed: {detail})\n"));
     }
     for (id, reason) in &summary.kept_other {
         out.push_str(&format!("  kept {id} ({reason})\n"));

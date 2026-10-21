@@ -114,7 +114,6 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
         live_claim: None,
         worked_node: true,
         node_held_elsewhere: None,
-        typed_turn_age_s: None,
     };
     assert_eq!(gc_decide(&live, 900).0, GcAction::Keep);
     assert_eq!(

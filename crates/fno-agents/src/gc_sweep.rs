@@ -116,13 +116,9 @@ pub struct GcSummary {
     /// `(id, age_s)`: the transcript was written inside the grace window.
     pub kept_active: Vec<(String, i64)>,
     /// `(id, detail)`: a typed user turn inside the attended window - the
-    /// user is talking to this session; a done ledger never overrides it.
+    /// user is talking to this session right now, so the idle clock that
+    /// decides retirement cannot have run out.
     pub kept_attended: Vec<(String, String)>,
-    /// `(id, detail)`: the person typed the session's LAST readable turn
-    /// and the work is not done - the row is a conversation the user may
-    /// still be in. A done row never lands here (the 2026-10-21 ruling):
-    /// a typed turn never keeps a done row.
-    pub kept_user_typed: Vec<(String, String)>,
     /// `(id, reason)`: the catch-all keep line. No judged row may render
     /// nowhere: a row whose reason reaches the bucket match's fallback
     /// lands here under its reason string, so the report's rows always
@@ -328,7 +324,6 @@ impl GcSummary {
             + self.kept_open_work_stale.len()
             + self.kept_active.len()
             + self.kept_attended.len()
-            + self.kept_user_typed.len()
             + self.kept_other.len()
             + self.kept_marked.len()
             + self.kept_probe_unread.len()
@@ -1801,7 +1796,11 @@ pub(crate) fn run_with_release(
                 staged_row,
                 Some((verdict, _)) if matches!(verdict.work, WorkState::AllDone { .. })
             );
-            let graded_eval = crate::eval_reap::is_graded_eval_row(&e.name, graded_evals.as_ref());
+            let graded_eval = crate::eval_reap::is_graded_eval_row(
+                &e.name,
+                e.harness_session_id.as_deref(),
+                graded_evals.as_ref(),
+            );
             if !done_work && !graded_eval {
                 continue;
             }
@@ -2185,21 +2184,13 @@ pub(crate) fn run_with_release(
                 .is_some_and(node_route::NodeSource::is_transcript),
             node_held_elsewhere,
             open_work_retire_s,
-            typed_turn_age_s: None,
-            eval_graded: crate::eval_reap::is_graded_eval_row(&e.name, graded_evals.as_ref()),
+            eval_graded: crate::eval_reap::is_graded_eval_row(
+                &e.name,
+                Some(sid),
+                graded_evals.as_ref(),
+            ),
         };
-        let (mut action, mut reason) = {
-            let verdict = gc_decide(&row, grace_secs);
-            crate::gc::resolve_typed_turn(&mut row, verdict, grace_secs, || {
-                crate::attended::last_turn_typed_age_for_row(
-                    store_matches(e),
-                    home,
-                    sid,
-                    now,
-                    e.spawn_payload.as_deref(),
-                )
-            })
-        };
+        let (mut action, mut reason) = gc_decide(&row, grace_secs);
         // d-81c6da7e: a release matched to the planning hold answers the
         // marker question by ruling. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,
@@ -2246,12 +2237,6 @@ pub(crate) fn run_with_release(
                 Some(KeepReason::Operator) => summary.kept_operator.push(id),
                 Some(KeepReason::Teamed) => summary.kept_teamed.push(id),
                 Some(KeepReason::NotSpawn { origin }) => summary.kept_not_spawn.push((id, origin)),
-                Some(KeepReason::UserTyped { age_s }) => {
-                    summary.kept_user_typed.push((
-                        id.clone(),
-                        format!("typed last turn {age_s}s ago, work open"),
-                    ));
-                }
                 Some(KeepReason::NoProvenance) => {
                     summary.kept_no_provenance.push(id.clone());
                     // The keep gets the same clocked-hold shape every

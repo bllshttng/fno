@@ -189,7 +189,9 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let a_path = quiet_transcript(transcripts.path(), "a.jsonl", 2 * 3600);
-    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 2 * 3600);
+    // B is kept as open-work stale: its age must sit inside the origin
+    // ruling's one idle hour, not merely past the old grace.
+    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 1800);
     let c_path = quiet_transcript(transcripts.path(), "c.jsonl", 2 * 3600);
     state::update_registry(&home.registry_json(), |r| {
         let mut a = ask_row("row-a", None);

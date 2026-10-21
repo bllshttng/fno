@@ -3,17 +3,17 @@
 //! can read a live transcript quiet (an account store the probe misses, a
 //! resumed session id); the turn record itself is the witness that cannot
 //! miss, classified by the same provenance rules `fno-agents intel` folds
-//! with. A done ledger never overrides an attended session.
+//! with. Retirement itself is the origin rule in `gc.rs`: an fno-started
+//! row retires after one idle hour and a user-started row never does;
+//! these reads are the stop verb's and the sweep's short-window witnesses.
 
 use crate::provenance::{
     classify_turn, is_user_turn, turn_text, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
 };
 use crate::state::RegistryEntry;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 /// How recent a typed turn must be to hold a session: 15 minutes.
 pub(crate) const WINDOW_SECS: i64 = 15 * 60;
@@ -122,63 +122,6 @@ fn typed_age_in_file(
     newest
 }
 
-/// The LAST readable turn in ONE transcript: the newest user-shaped row
-/// whose reminder-stripped text is non-empty, as `(ts, Some(age))` when it
-/// typed and `(ts, None)` when it did not; `None` when the file holds no
-/// readable turn. Empty rows are the harness delivering tool results -
-/// machinery, never a turn a person made, and never the turn that answers
-/// "did the person speak last". A row without a parseable timestamp cannot
-/// testify; a future stamp reads as now.
-fn last_turn_in_file(
-    path: &PathBuf,
-    bus: &BusIndex,
-    session: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<(f64, Option<i64>)> {
-    let Ok(file) = std::fs::File::open(path) else {
-        return None;
-    };
-    // The newest readable turn so far. `>=` so the row written later wins
-    // a shared stamp - append order is event order.
-    let mut last: Option<(f64, Option<i64>)> = None;
-    for line in std::io::BufReader::new(file).split(b'\n') {
-        let Ok(line) = line else { continue };
-        let Ok(obj) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
-        if !is_user_turn(&obj) {
-            continue;
-        }
-        // The readable-turn cut mirrors the classifier's own no_user_text
-        // shape: a turn whose reminder-stripped text is empty is the
-        // harness delivering tool results, not a turn that decides.
-        let cleaned_empty = crate::provenance::system_reminder_re()
-            .replace_all(turn_text(&obj).trim(), "")
-            .trim()
-            .is_empty();
-        if cleaned_empty {
-            continue;
-        }
-        let Some(ts) = turn_ts_epoch(&obj) else {
-            continue;
-        };
-        if last.is_some_and(|(prev, _)| ts < prev) {
-            continue;
-        }
-        let prov = classify_turn(&obj, bus, session);
-        let seed_command = matches!(prov, Provenance::Harness(HarnessKind::CommandInvocation))
-            && spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed));
-        let verdict = if !seed_command && typed(prov) {
-            Some((now - ts as i64).max(0))
-        } else {
-            None
-        };
-        last = Some((ts, verdict));
-    }
-    last
-}
-
 /// Age in seconds of the newest typed user turn across `paths`, `None`
 /// when no transcript holds one. A row without a parseable timestamp
 /// cannot testify; a future stamp reads as now. `spawn_payload` is the
@@ -211,83 +154,6 @@ pub(crate) fn newest_typed_turn_age_s(
     newest
 }
 
-/// The LAST-turn read with NO window and NO mtime skip: whether the
-/// session's newest readable turn was typed, whenever it was written. This
-/// is the fact the retirement policy reads, and the mtime short-circuit
-/// cannot answer it - the incident row sat quiet 17 minutes when the sweep
-/// retired it, past every window here. Across files, the newest readable
-/// turn decides, wherever it lives: a resumed session's CURRENT transcript
-/// answers, not whichever file happens to end on a person. The read's one
-/// process-lifetime memo, keyed by the file's stat trio (path, len, mtime
-/// secs) PLUS the recorded seed the read exempts by: two rows can resolve
-/// to one transcript with different payloads, and a memo keyed without it
-/// would answer one row with another row's exemption. An appended
-/// transcript misses (new len or mtime) and rescans; an unchanged one
-/// never pays the full read twice in this process - without it, a held
-/// row's transcript is read end-to-end on every sweep pass.
-fn scan_memo(
-) -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<(f64, Option<i64>)>>> {
-    static MEMO: OnceLock<
-        Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<(f64, Option<i64>)>>>,
-    > = OnceLock::new();
-    MEMO.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn last_turn_typed_age_ever(
-    paths: &[PathBuf],
-    bus: &BusIndex,
-    session: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<i64> {
-    // Across files the NEWEST readable turn decides: the winner's
-    // typed-ness is the session's answer, so a resumed session whose
-    // current transcript ends on a machine turn reads machine whatever an
-    // older file ends on. Ties keep the later-scanned file's row (append
-    // order is event order), matching the in-file rule.
-    let mut best: Option<(f64, Option<i64>)> = None;
-    for path in paths {
-        // A file that cannot stat cannot form a key: it reads fresh and
-        // answers None on the open failure, never from a stale entry.
-        let stat = std::fs::metadata(path).and_then(|m| {
-            m.modified().map(|t| {
-                (
-                    m.len(),
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0) as i64,
-                )
-            })
-        });
-        let Ok((len, mtime)) = stat else {
-            continue;
-        };
-        let key = (path.clone(), len, mtime, spawn_payload.map(str::to_string));
-        let file_fact = if let Some(hit) = scan_memo()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-        {
-            *hit
-        } else {
-            let fact = last_turn_in_file(path, bus, session, now, spawn_payload);
-            let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
-            if memo.len() >= 1024 {
-                memo.clear();
-            }
-            memo.insert(key, fact);
-            fact
-        };
-        let Some((ts, verdict)) = file_fact else {
-            continue;
-        };
-        if best.is_none_or(|(prev, _)| ts >= prev) {
-            best = Some((ts, verdict));
-        }
-    }
-    best.and_then(|(_, verdict)| verdict)
-}
-
 /// The sweep's one-row gate: `Some(hold)` when the row's transcript
 /// carries a typed turn inside the window. A row the age seam already
 /// reads fresh (`quiet`) skips the read - `kept_active` holds it.
@@ -317,22 +183,6 @@ pub(crate) fn sweep_hold(
     })
 }
 
-/// The all-time read a retirement sweep pays for: the row's store-resolved
-/// transcripts, keyed on the row's harness session id. The fact is the
-/// LAST readable turn: `None` answers "last turn was machine" AND "store
-/// unresolved" alike - the sweep treats both as no witness, and an
-/// unresolved store never invented quiet either.
-pub(crate) fn last_turn_typed_age_for_row(
-    hits: Option<Vec<PathBuf>>,
-    home: &crate::paths::AgentsHome,
-    sid: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<i64> {
-    let hits = hits?;
-    last_turn_typed_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
-}
-
 /// The stop-verb refusal: `Some(why)` when the row's store-resolved
 /// transcript carries a typed turn inside the window. The bus join keys on
 /// the row's harness session id, the same key `fno-agents intel` joins on.
@@ -351,108 +201,6 @@ pub(crate) fn stop_refusal(home: &crate::paths::AgentsHome, e: &RegistryEntry) -
 mod tests {
     use super::*;
     use serde_json::json;
-
-    /// The 2026-10-21 ruling's classifier half: the LAST readable turn
-    /// decides, not the newest typed turn at any age. Empty rows are
-    /// machinery, never a turn that decides; a machine shape after the
-    /// person's turn answers None; a person's turn after machinery
-    /// answers its age.
-    #[test]
-    fn the_last_readable_turn_decides_the_all_time_fact() {
-        let dir = tempfile::tempdir().unwrap();
-        let now = crate::daemon::now_epoch_secs();
-        let ts = |age: i64| {
-            chrono::DateTime::from_timestamp(now - age, 0)
-                .unwrap()
-                .to_rfc3339()
-        };
-        let bus = BusIndex::empty();
-        // A person typed at 120s; lead mail arrived at 30s. The old fact
-        // answered Some(120) forever; the last readable turn is the mail,
-        // so the all-time fact answers None.
-        let path = dir.path().join("mail_last.jsonl");
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n{}\n",
-                json!({"type":"user","timestamp":ts(120),"message":{"role":"user","content":"keep the notes coming"}}),
-                json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"`@lead · fmail-a1b2c3d4e5f6`\nLead here, on x-1"}}),
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            last_turn_typed_age_ever(&[path], &bus, "s", now, None),
-            None,
-            "the mail is the last readable turn; a machine turn never testifies"
-        );
-        // A person typed at 30s; empty rows (tool-result deliveries)
-        // followed at 20s and 10s. The empty rows never decide, so the
-        // person's turn is the last readable one.
-        let path = dir.path().join("empty_tail.jsonl");
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n{}\n{}\n",
-                json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"go on"}}),
-                json!({"type":"user","timestamp":ts(20),"message":{"role":"user","content":""}}),
-                json!({"type":"user","timestamp":ts(10),"message":{"role":"user","content":""}}),
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            last_turn_typed_age_ever(&[path], &bus, "s2", now, None),
-            Some(30),
-            "empty tail rows are machinery; the person's turn still decides"
-        );
-        // A machine shape after the person's turn flips the answer.
-        let path = dir.path().join("task_after.jsonl");
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n{}\n",
-                json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":"run it"}}),
-                json!({"type":"user","timestamp":ts(20),"message":{"role":"user","content":"<task-notification><task-id>x</task-id></task-notification>"}}),
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            last_turn_typed_age_ever(&[path], &bus, "s3", now, None),
-            None,
-            "a machine turn after the person's turn is the last turn"
-        );
-        // A resumed session: the older file ends on a person turn, the
-        // CURRENT transcript ends on a machine turn. The newest readable
-        // turn decides, wherever it lives, so the answer is None - and it
-        // stays None whichever order the files arrive in.
-        let older = dir.path().join("resume-a.jsonl");
-        std::fs::write(
-            &older,
-            format!(
-                "{}\n",
-                json!({"type":"user","timestamp":ts(300),"message":{"role":"user","content":"finish the thought"}})
-            ),
-        )
-        .unwrap();
-        let current = dir.path().join("resume-b.jsonl");
-        std::fs::write(
-            &current,
-            format!(
-                "{}\n",
-                json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":"<task-notification><task-id>x</task-id></task-notification>"}})
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            last_turn_typed_age_ever(&[older.clone(), current.clone()], &bus, "s4", now, None),
-            None,
-            "the current transcript's machine tail decides over the older file's person tail"
-        );
-        assert_eq!(
-            last_turn_typed_age_ever(&[current, older], &bus, "s4b", now, None),
-            None,
-            "the answer never depends on the order the files arrive in"
-        );
-    }
 
     #[test]
     fn typed_turn_age_reads_the_person_and_skips_the_machines() {
