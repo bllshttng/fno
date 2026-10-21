@@ -26,10 +26,10 @@
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::agent_lock::AgentLock;
-use crate::claims::{self, AcquireOpts, AcquireOutcome};
+use crate::claims::{self, now_ms, AcquireOpts, AcquireOutcome};
 use crate::claude_ask::py_repr;
 use crate::paths::AgentsHome;
 use crate::process_probe::process_start_time;
@@ -533,21 +533,11 @@ impl Drop for PlacementLease {
     }
 }
 
-/// 16 random hex chars for the lease holder's unique half. /dev/urandom read,
-/// the same source this crate used before declaring a CSPRNG crate; nanos
-/// fallback where /dev/urandom does not exist.
+/// 16 random hex chars for the lease holder's unique half, from the OS
+/// CSPRNG through the crate's declared `getrandom`.
 fn random_hex16() -> String {
     let mut bytes = [0u8; 8];
-    if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
-        .is_err()
-    {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        bytes[..4].copy_from_slice(&nanos.to_le_bytes());
-    }
+    getrandom::fill(&mut bytes).expect("OS CSPRNG unavailable");
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -1147,13 +1137,6 @@ pub fn stamp_late_bind(
                 .filter(|row| row.harness_session_id.as_deref() == Some(session_id))
         })
         .is_some()
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// Python `_RECLAIMABLE_STATUSES`: a row in one of these statuses does not own

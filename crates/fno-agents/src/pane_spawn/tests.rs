@@ -79,7 +79,6 @@ fn session_resolution_flag_server_legacy_main() {
     assert_eq!(resolve_mux_session_from(None, "other", "legacy"), "other");
     assert_eq!(resolve_mux_session_from(None, "", "legacy"), "legacy");
     assert_eq!(resolve_mux_session_from(None, "", ""), "main");
-    resolve_mux_session_from(None, "", "legacy");
 }
 
 #[test]
