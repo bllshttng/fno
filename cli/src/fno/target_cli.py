@@ -1097,7 +1097,7 @@ def _hold_branch_under_review(
                 "branch": branch,
                 "head": head_sha,
                 "holder": holder,
-                "verb": "/fno:review",
+                "verb": "/fno:review",  # verb-wording: allow (door payload key)
                 "cwd": str(cwd),
             },
         )

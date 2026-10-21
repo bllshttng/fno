@@ -507,7 +507,7 @@ def _parse_flags(flags_json: Optional[str]) -> Optional[List[str]]:
         "is RUNNING. Merge readiness only knows what verdicts EXIST for a head, "
         "so a review still writing its fixes is invisible to it. Actions: "
         "check <pr> (exit 0 clear, 3 held, 4 unanswered), acquire, release, "
-        "metadata, round. Answered by the fno-agents claim verb's review-hold "
+        "metadata, round. Answered by the fno-agents claim command's review-hold "
         "sub-token; the flags pass through unchanged."
     ),
 )

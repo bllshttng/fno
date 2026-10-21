@@ -583,7 +583,7 @@ fn hold_metadata(a: &Args, flags: &Option<Vec<String>>) -> serde_json::Map<Strin
     let mut metadata = serde_json::Map::new();
     metadata.insert("head_sha".into(), json!(a.head));
     for (key, value) in [
-        ("verb", &a.verb),
+        ("verb", &a.verb), // verb-wording: allow (event metadata key)
         ("invocation_id", &a.invocation_id),
         ("args_raw", &a.args_raw),
         ("level", &a.level),
@@ -650,7 +650,7 @@ fn run_stdin_door() -> (i32, String, String) {
             let branch = parsed.get("branch").and_then(Value::as_str).unwrap_or("");
             let head = parsed.get("head").and_then(Value::as_str).unwrap_or("");
             let holder = parsed.get("holder").and_then(Value::as_str).unwrap_or("");
-            let verb = parsed.get("verb").and_then(Value::as_str).unwrap_or("");
+            let verb = parsed.get("verb").and_then(Value::as_str).unwrap_or(""); // verb-wording: allow (door payload key)
             if branch.is_empty() || holder.is_empty() {
                 return (
                     1,
@@ -689,7 +689,7 @@ fn run_stdin_door() -> (i32, String, String) {
             let mut metadata = serde_json::Map::new();
             metadata.insert("head_sha".into(), json!(head));
             if !verb.is_empty() {
-                metadata.insert("verb".into(), json!(verb));
+                metadata.insert("verb".into(), json!(verb)); // verb-wording: allow (event metadata key)
             }
             if let Some(flags) = &flags {
                 metadata.insert("flags".into(), json!(flags));
