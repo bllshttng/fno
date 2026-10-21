@@ -6,18 +6,22 @@
 //! held on that inode. Keying a separate lockfile on the plan's resolved path
 //! avoids that. Advisory only - human editors are unguarded by design.
 //!
-//! Config-free (`$HOME/.fno/locks`), same as `fno.paths.locks_dir()`, so the
-//! Python body-append writer and the Rust writers agree without config.
+//! Config-free through `machine_locks_dir()` (the layout table's `locks`
+//! row), same as `fno.paths.locks_dir()`, so the Python body-append writer
+//! and the Rust writers agree without config.
 
 use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// `$HOME/.fno/locks`, deliberately config-free.
+/// The machine locks folder, deliberately config-free: the root chain is
+/// `machine_locks_dir()`'s (`FNO_STATE_DIR`, else `$HOME/.fno`), and the
+/// temp-dir fallback keeps a HOME-unset context taking locks instead of
+/// erroring.
 pub fn locks_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".fno").join("locks")
+    crate::agents_config::machine_locks_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("fno-locks"))
 }
 
 /// `~/.fno/locks/plan-<sha1(resolved path)>.lock`.
@@ -52,7 +56,6 @@ pub fn lock_path_for(plan_path: &Path) -> PathBuf {
 /// RAII lock file. Unlock happens on drop; the fd close releases the flock.
 pub struct PlanDocLock {
     file: fs::File,
-    lock_path: PathBuf,
 }
 
 impl PlanDocLock {
@@ -94,14 +97,20 @@ impl PlanDocLock {
         }
         let guard = PlanDocLock {
             file: file.unwrap(),
-            lock_path: lock_path.clone(),
         };
-        if guard.same_lock_inode() {
+        // Route 1's taker guard: compare the held fd against a resolve made
+        // after the flock, not the path string the open rode. The whole-dir
+        // fold of the machine locks folder moves every lock inode at once,
+        // so an open that straddled the rename holds either a vanished path
+        // or a stray recreated one; the fresh answer tells them apart, and
+        // the retry below re-resolves onto it.
+        if guard.same_lock_inode(&lock_path_for(path)) {
             Ok(guard)
         } else {
             drop(guard);
-            // The lockfile was swapped under us (reap or repair); retry until
-            // the deadline, mirroring the Python unlink-then-reacquire loop.
+            // The lockfile was swapped under us (reap, repair, or the
+            // state-root fold); retry until the deadline, mirroring the
+            // Python unlink-then-reacquire loop.
             if Instant::now() >= deadline {
                 return Err(format!(
                     "plan_doc_lock: {} busy > {}s",
@@ -113,13 +122,13 @@ impl PlanDocLock {
         }
     }
 
-    fn same_lock_inode(&self) -> bool {
+    fn same_lock_inode(&self, current_path: &Path) -> bool {
         use std::os::unix::fs::MetadataExt;
         let opened = match self.file.metadata() {
             Ok(m) => m,
             Err(_) => return false,
         };
-        let current = match fs::metadata(&self.lock_path) {
+        let current = match fs::metadata(current_path) {
             Ok(m) => m,
             Err(_) => return false,
         };

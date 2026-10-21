@@ -96,6 +96,34 @@ def test_graphql_quota_lock_revalidates_inode_after_path_replacement(
     assert result.ok
 
 
+def test_quota_lock_fresh_mode_retakes_when_the_folder_renames(tmp_path, monkeypatch):
+    from fno.pr import _quota
+
+    legacy = tmp_path / "locks"
+    moved = tmp_path / "state" / "locks"
+    legacy.mkdir(parents=True)
+    moved.mkdir(parents=True)
+    stray = legacy / "github-graphql-quota.lock"
+    stray.write_bytes(b"")
+    real = moved / "github-graphql-quota.lock"
+    real.write_bytes(b"")
+    first = {"open": True}
+
+    def flipping():
+        if first["open"]:
+            first["open"] = False
+            return stray
+        return real
+
+    monkeypatch.setattr(_quota, "quota_lock_path", flipping)
+    handle, locked = _quota._open_locked_path(None, fresh=True)
+    try:
+        assert locked == real, "the lock was retaken on the moved folder, not the stray"
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+
+
 def test_pr_list_names_the_missing_binary(monkeypatch):
     import fno.rust_binary
 

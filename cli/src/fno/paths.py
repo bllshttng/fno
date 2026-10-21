@@ -767,9 +767,8 @@ def locks_dir() -> Path:
     the config-loading append side from the config-free stamp side). The
     ``FNO_STATE_DIR`` carrier may: it needs no config load, so both writers
     agree under it, and the seal pins it around a forwarded HOME."""
-    if carrier := os.environ.get("FNO_STATE_DIR"):
-        return Path(os.path.expanduser(carrier)).resolve() / "locks"
-    return Path.home() / ".fno" / "locks"
+    root = os.environ.get("FNO_STATE_DIR") or str(Path.home() / ".fno")
+    return Path(_plan_path_door(["state", "path", "dir", "locks", "--root", root]))
 
 
 def place_anchor(root: Path) -> Path:
@@ -1312,7 +1311,10 @@ def _plan_path_door(args: list[str]) -> str:
             "the fno-agents binary was not found; reinstall footnote "
             "or set FNO_AGENTS_BIN"
         )
-    proc = subprocess.run([str(binary), *args], capture_output=True, text=True)
+    try:
+        proc = subprocess.run([str(binary), *args], capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"plan-path door timed out after 5s: {args}") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or "plan-path verb failed").strip()
         raise RuntimeError(detail)
