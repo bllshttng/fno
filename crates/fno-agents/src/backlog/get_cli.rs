@@ -146,7 +146,10 @@ pub fn run(tail: &[String]) -> i32 {
     // the live store - the archived tier above only sees rows the store
     // still carries. Resolve there before answering no. The same shared
     // reader the reaper's graph read uses; a failed archive read answers
-    // no rows, never an error.
+    // no rows, never an error. A serve the archive db cannot carry (a
+    // table the overlay reads that the archive lacks) degrades to the
+    // ordinary not-found line, never a harder error than no archive read
+    // at all.
     let state_dir = super::settings::state_dir();
     if let Some(state_dir) = state_dir.as_deref() {
         let archive_rows = crate::graph_store::archive_rows(state_dir);
@@ -160,7 +163,10 @@ pub fn run(tail: &[String]) -> i32 {
                 let archive_db = crate::state_layout::find("graph-archive.db")
                     .map(|row| state_dir.join(row.new))
                     .unwrap_or_else(|| state_dir.join("graph-archive.db"));
-                return serve_loaded(&archive_db, &id, true, &args.render, &args.id);
+                let code = serve_loaded(&archive_db, &id, true, &args.render, &args.id);
+                if code != GRAPH_UNREADABLE_EXIT {
+                    return code;
+                }
             }
         }
     }
