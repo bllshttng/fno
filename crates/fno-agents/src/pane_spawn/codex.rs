@@ -84,11 +84,24 @@ impl PaneArm for CodexArm {
         "codex"
     }
 
-    /// Refusals, daemon ensure, the loaded-ids baseline, then the wrapped
-    /// argv - the Python leg's ordering (`dispatch_spawn_bounded_pane`
-    /// refuses and snapshots before the pane exists).
+    /// The git-grant gate, the splice-site collision refusal, then daemon
+    /// ensure, the loaded-ids baseline and the wrapped argv - the Python
+    /// leg's ordering (the seam gate first, then `dispatch_spawn_pane`'s
+    /// collision before `ensure_codex_daemon` at :3655).
     fn prepare(&self, ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal> {
         refuse_without_git_grant(ctx)?;
+        // Python's splice-site refusal (`mux_spawn.py:3507`) precedes the
+        // daemon start (:3655): a colliding passthrough must refuse before
+        // any daemon side effect, like the Python leg's ordering.
+        refuse_passthrough_collision(
+            &ctx.passthrough,
+            &identity_leaf(Some(ctx.worker_name.as_str())),
+        )
+        .map_err(|line| PaneRefusal {
+            line,
+            exit_code: EXIT_REFUSAL,
+            after_pane: None,
+        })?;
         if let Err(error) = crate::codex_inject::ensure_codex_daemon() {
             return Err(PaneRefusal {
                 line: format!("codex app-server daemon ensure failed: {error}; no pane spawned"),
@@ -101,19 +114,6 @@ impl PaneArm for CodexArm {
         // An unreachable daemon stores None - distinct from empty, which
         // would let a loaded stranger bind (codex_pane.py:151-159).
         store_baseline(capture_baseline(ctx));
-        // Python's splice-site refusal (`mux_spawn.py:3507`): a passthrough
-        // token naming a flag the identity leaf emits is a named refusal,
-        // never a silent last-wins. The route-args leg is unreachable here
-        // (role-routed spawns are seam-shielded).
-        refuse_passthrough_collision(
-            &ctx.passthrough,
-            &identity_leaf(Some(ctx.worker_name.as_str())),
-        )
-        .map_err(|line| PaneRefusal {
-            line,
-            exit_code: EXIT_REFUSAL,
-            after_pane: None,
-        })?;
         Ok(build_wrapped(ctx))
     }
 
