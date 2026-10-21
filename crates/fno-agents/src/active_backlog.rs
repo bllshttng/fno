@@ -52,7 +52,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1601,10 +1601,10 @@ fn resolve_fanout_targets(fno_bin: &str) -> Vec<FanoutTarget> {
 
 /// One project's status-fanout loop: shell `fno doctor event fanout tick` in the
 /// project cwd on the configured cadence, best-effort. Independent of the drain
-/// loops; a tick failure is swallowed and the next tick retries. Between ticks it
-/// re-resolves its own enablement (codex P2): a new `interval_secs` is picked up,
-/// and removing the project's sinks EXITS the loop (so `retain(!is_finished)`
-/// reaps it) rather than ticking forever. Exits on shutdown.
+/// loops; a tick failure is swallowed and the next tick retries. The supervisor
+/// resolves enablement once per pass and owns it: a new `interval_secs` lands in
+/// the loop's `interval` cell, and removing the project's sinks aborts the loop.
+/// The loop itself never shells the config read. Exits on shutdown.
 /// Cap on a single `fno doctor event fanout tick` child. A legitimately slow tick
 /// (several stalled sinks x (retries+1) x http_timeout + backoff) can reach
 /// minutes; 300s bounds the pathological hang, not normal work.
@@ -1629,21 +1629,18 @@ async fn output_with_cap(mut cmd: tokio::process::Command, cap: Duration) -> boo
     }
 }
 
-async fn per_project_fanout_loop(target: FanoutTarget, fno_bin: String, shutdown: Arc<AtomicBool>) {
+async fn per_project_fanout_loop(
+    target: FanoutTarget,
+    fno_bin: String,
+    interval: Arc<AtomicU64>,
+    shutdown: Arc<AtomicBool>,
+) {
     let project = target.project.clone();
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
-        // Re-resolve between ticks so config changes land without a daemon
-        // restart; removing this project's sinks EXITS the loop.
-        let interval = match resolve_fanout_targets(&fno_bin)
-            .into_iter()
-            .find(|t| t.project == project)
-        {
-            Some(t) => Duration::from_secs(t.interval_seconds.max(1)),
-            None => break, // sinks removed for this project -> stop ticking.
-        };
+        let interval = Duration::from_secs(interval.load(Ordering::SeqCst).max(1));
         let mut cmd = tokio::process::Command::new(&fno_bin);
         cmd.args(["doctor", "event", "fanout", "tick"])
             .current_dir(&target.cwd);
@@ -1658,23 +1655,41 @@ async fn per_project_fanout_loop(target: FanoutTarget, fno_bin: String, shutdown
     }
 }
 
-/// Spawn one fanout loop per project not already live. Shared by the normal
-/// pass and the paused pass, which differ only in what they resolve.
+/// One live fanout loop and the interval cell the supervisor updates.
+type FanoutTasks = HashMap<String, (tokio::task::JoinHandle<()>, Arc<AtomicU64>)>;
+
+/// Reconcile the fanout loops with this pass's targets: stop a loop whose
+/// project left the set, update a live loop's interval, spawn a missing one.
+/// Shared by the normal pass and the paused pass, which differ only in what
+/// they resolve.
 fn spawn_fanout_loops(
     fanout_targets: Vec<FanoutTarget>,
     fno_bin: &str,
-    fanout_tasks: &mut HashMap<String, tokio::task::JoinHandle<()>>,
+    fanout_tasks: &mut FanoutTasks,
     shutdown: Arc<AtomicBool>,
 ) {
+    fanout_tasks.retain(|project, (handle, _)| {
+        let keep = fanout_targets.iter().any(|t| &t.project == project);
+        if !keep {
+            handle.abort();
+        }
+        keep
+    });
     for ft in fanout_targets {
-        if let std::collections::hash_map::Entry::Vacant(slot) =
-            fanout_tasks.entry(ft.project.clone())
-        {
-            slot.insert(tokio::spawn(per_project_fanout_loop(
-                ft,
-                fno_bin.to_string(),
-                Arc::clone(&shutdown),
-            )));
+        match fanout_tasks.entry(ft.project.clone()) {
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                slot.get().1.store(ft.interval_seconds, Ordering::SeqCst);
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                let interval = Arc::new(AtomicU64::new(ft.interval_seconds));
+                let handle = tokio::spawn(per_project_fanout_loop(
+                    ft,
+                    fno_bin.to_string(),
+                    Arc::clone(&interval),
+                    Arc::clone(&shutdown),
+                ));
+                slot.insert((handle, interval));
+            }
         }
     }
 }
@@ -1860,7 +1875,7 @@ pub async fn run_supervisor(
     // Sibling loop family: status-fanout ticks, keyed by project. A
     // separate enablement set (projects with >=1 status sink) from the drain
     // above, so a sinks-only project fans out without opting into the drain.
-    let mut fanout_tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut fanout_tasks: FanoutTasks = HashMap::new();
     let recheck = Duration::from_secs(60);
     // ONE gate for the whole drain: `max_concurrent` bounds concurrent converge
     // runs across every mission, never per mission.
@@ -1872,7 +1887,7 @@ pub async fn run_supervisor(
         }
         // Drop handles for loops that have exited (a mission retired / deactivated).
         tasks.retain(|_, h| !h.is_finished());
-        fanout_tasks.retain(|_, h| !h.is_finished());
+        fanout_tasks.retain(|_, (h, _)| !h.is_finished());
 
         // while dispatch is effectively paused, the supervisor must
         // NOT resolve drain targets. Resident mission handles are retained
@@ -1999,7 +2014,7 @@ pub async fn run_supervisor(
     for (_, h) in tasks {
         h.abort();
     }
-    for (_, h) in fanout_tasks {
+    for (_, (h, _)) in fanout_tasks {
         h.abort();
     }
     live.store(false, Ordering::SeqCst);
@@ -2256,14 +2271,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn status_fanout_targets_parse_from_json() {
-        let json = br#"[{"project":"fno","cwd":"/repo/fno","interval_seconds":5}]"#;
-        let targets: Vec<FanoutTarget> = serde_json::from_slice(json).unwrap();
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].project, "fno");
-        assert_eq!(targets[0].cwd, "/repo/fno");
-        assert_eq!(targets[0].interval_seconds, 5);
+    /// The supervisor owns fanout enablement: a pass updates a live loop's
+    /// interval, and a project whose sinks were removed has its loop stopped.
+    #[tokio::test]
+    async fn the_supervisor_pass_updates_and_stops_fanout_loops() {
+        let parse = |json: &[u8]| -> Vec<FanoutTarget> { serde_json::from_slice(json).unwrap() };
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut tasks: FanoutTasks = HashMap::new();
+        // A missing binary: each tick fails to execute and the loop sleeps on.
+        let bin = "/nonexistent/fno";
+        let first = parse(br#"[{"project":"fno","cwd":"/","interval_seconds":5}]"#);
+        assert_eq!(first[0].cwd, "/");
+        spawn_fanout_loops(first, bin, &mut tasks, Arc::clone(&shutdown));
+        let second = parse(br#"[{"project":"fno","cwd":"/","interval_seconds":30}]"#);
+        spawn_fanout_loops(second, bin, &mut tasks, Arc::clone(&shutdown));
+        assert_eq!(tasks["fno"].1.load(Ordering::SeqCst), 30, "one loop, new interval");
+        let handle = tasks["fno"].0.abort_handle();
+        spawn_fanout_loops(Vec::new(), bin, &mut tasks, Arc::clone(&shutdown));
+        assert!(tasks.is_empty(), "a removed project leaves the set");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(handle.is_finished(), "its loop was stopped");
+        shutdown.store(true, Ordering::SeqCst);
     }
 
     #[test]
