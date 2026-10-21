@@ -26,6 +26,20 @@ pub(crate) fn process_admission_gate() -> Result<(), Refusal> {
     if !gate_agent_origin() {
         return Ok(());
     }
+    // The fleet map's takes-work toggle: the user said this machine takes
+    // no new agent work, so no load figure needs to agree.
+    let home = crate::paths::AgentsHome::from_env();
+    if !crate::fleet_beacon::takes_work(&home) {
+        return Err(Refusal::code(EXIT_FLEET_STOP)
+            .ev("reason", serde_json::json!("machine-takes-no-work"))
+            .ev(
+                "detail",
+                serde_json::json!(format!(
+                    "this machine takes no new agent work; `fno agents fleet top --machines --takes-work on` clears {}",
+                    crate::fleet_beacon::takes_work_path(&home).display()
+                )),
+            ));
+    }
     match crate::machine_watch::brake_holds() {
         None => Ok(()),
         Some(hold) => {

@@ -29,6 +29,7 @@ pub(super) struct FleetArms {
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
     fleet_page: crate::fleet_page::Arm,
+    fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
     provider_cap: crate::provider_cap_verbs::Arm,
     slot_cutover: crate::slot_cutover::Arm,
@@ -102,6 +103,7 @@ impl FleetArms {
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_page: crate::fleet_page::Arm::new(opts.agents_config_cwd.clone()),
+            fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
             provider_cap: crate::provider_cap_verbs::Arm::new(opts.agents_config_cwd.clone()),
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
@@ -286,6 +288,7 @@ impl FleetArms {
         crate::rundown::maybe_tick(&self.team_ledger, ctx.home.clone());
         crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
         crate::fleet_page::maybe_tick(&self.fleet_page, ctx.home.clone());
+        crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
         crate::provider_cap_verbs::maybe_tick(&self.provider_cap, ctx.home.clone());
         crate::slot_cutover::maybe_tick(&self.slot_cutover, ctx.home.clone());
