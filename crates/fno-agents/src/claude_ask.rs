@@ -3197,9 +3197,8 @@ fn create(
     // A routed spawn stamps the route's vendor and model token where an
     // unrouted one stamps anthropic and its model (fork_lineage.axis_overrides).
     let route = flags.route;
-    let vendor = route.map_or("anthropic", |r| r.provider).to_string();
     let model = route.map(|r| r.model).or(model);
-    let new_entry = RegistryEntry {
+    let mut new_entry = RegistryEntry {
         // client-side mint - this process inherited the spawning
         // session's env, so the exported FNO_NODE names the node THIS spawn
         // is for.
@@ -3216,7 +3215,7 @@ fn create(
         short_id: short_id.clone(),
         launch_account_source,
         legacy_provider: String::new(),
-        provider: Some(vendor.clone()),
+        provider: Some("anthropic".to_string()),
         // The model the worker was launched with, and the basis
         // marking it REQUESTED - this is the spawn's own claim, never an
         // observed reading. The caller's model was in hand here and was
@@ -3246,7 +3245,7 @@ fn create(
         // provider-outage collector can join outage evidence to this row.
         // The vendor mirrors `provider` above; the account mirrors the
         // launch read (unknown stays unknown, never a guess).
-        route_provider_id: Some(vendor),
+        route_provider_id: Some("anthropic".to_string()),
         model_name: model.filter(|m| !m.is_empty()).map(str::to_string),
         account_record_id: launch_account,
         cwd: cwd.to_string_lossy().to_string(),
@@ -3293,6 +3292,10 @@ fn create(
         // the explicit field above keeps that semantics.
         ..RegistryEntry::new(session_uuid.clone(), spawned_by)
     };
+    if let Some(r) = route {
+        new_entry.provider = Some(r.provider.to_string());
+        new_entry.route_provider_id = Some(r.provider.to_string());
+    }
 
     // Re-check the name UNDER the registry lock before appending. The per-agent
     // flock serializes two Rust-client creates, but a concurrent daemon-PTY
