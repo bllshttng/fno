@@ -1510,7 +1510,8 @@ pub fn parse_usage(stdout: &[u8]) -> Option<Vec<(String, UsageCell)>> {
 /// `probe_usage_detail` names). Only a fresh login repairs the first two.
 fn unknown_usage(reason: &str) -> UsageCell {
     let (text, relogin) = match reason {
-        "unattributed" => ("stored login is another account: r to log in", true),
+        // A stored login that is another account's, or dead, both land here.
+        "unattributed" => ("no proven login for this account: r to log in", true),
         "credential-rejected" => ("login expired: r to log in", true),
         "not-probed" => ("not measured yet", false),
         "harness-unsupported" | "auth-unsupported" => ("no usage meter for this account", false),
@@ -1792,7 +1793,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("stored login is another account: r to log in"),
+            out.contains("no proven login for this account: r to log in"),
             "{out}"
         );
         assert!(out.contains("no usage meter for this account"), "{out}");

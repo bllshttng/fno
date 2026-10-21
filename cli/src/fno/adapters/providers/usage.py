@@ -481,7 +481,7 @@ def _probe_claude(
         # be proven. An out-of-band /login is the usual cause, so try the repair
         # once; the slot commonly turns out to belong to a DIFFERENT record,
         # which correctly leaves this one unknown.
-        _reconcile_slot_once(record, now)
+        _attributed_credential_dir(record)[0] and _reconcile_slot_once(record, now)
         return None, "unattributed"
     if rejected:
         # The endpoint was reached and it said no. Naming that separately is
