@@ -1847,10 +1847,31 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     )
     .unwrap();
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
-    // The page answers, the hold clears.
+    // An answer that rejects, or picks no option, keeps the hold.
+    for answer in [
+        "2. Hold for changes",
+        "Hold for changes",
+        "none of these",
+        "''",
+    ] {
+        std::fs::write(
+            &page,
+            format!(
+                "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+                 answer: {answer}\n---\nbody\n"
+            ),
+        )
+        .unwrap();
+        assert!(
+            crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some(),
+            "answer {answer:?} must not clear"
+        );
+    }
+    // The page answers with the approve option, the hold clears.
     std::fs::write(
         &page,
-        "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n---\nbody\n",
+        "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+         answer: 1. Merge as painted\n---\nbody\n",
     )
     .unwrap();
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
