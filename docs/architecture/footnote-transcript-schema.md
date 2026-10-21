@@ -28,7 +28,7 @@ The orchestrator writes one `LaunchSpec` to the harness's stdin. Its `v` is 2. T
 
 v2 adds `permission_mode`: `default`, `acceptEdits`, `plan`, `dontAsk` or `bypassPermissions`, from the capability row's `permission_modes`. Null runs the harness's own default. A resume sends the mode the registry row recorded at spawn. The key rides stdin, so it never reaches argv or the environment.
 
-A `fork` makes a new session `fno_id` from records `0` through `fork_seq` of the session `fork_from`. The source sidecar dir sits beside `session_dir`. The harness copies each record with its `seq`, `id` and `ts`, and sets its `session_id` to `fno_id`. The source does not change. Then the harness resumes the new session with `message`. It refuses a `fork_seq` past the source's last record, and a `fno_id` that exists. A harness that does not know `fork` refuses the mode.
+A `fork` makes a new session `fno_id` from records `0` through `fork_seq` of the session `fork_from`. The source sidecar dir sits beside `session_dir`. The harness copies each record with its `seq`, `id` and `ts`, and sets its `session_id` to `fno_id`. In the header it also sets `data.session_id` to `fno_id` and fills `forked_from`. The source does not change. Then the harness resumes the new session with `message`. It refuses a `fork_seq` past the source's last record, and a `fno_id` that exists. A harness that does not know `fork` refuses the mode.
 
 ## 2. Session record, v1
 
