@@ -172,10 +172,10 @@ shim instead of a real gh binary. Refusing to loop."
             std::time::Duration::from_secs(120),
         );
         if !result.stdout.is_empty() {
-            print!("{result.stdout}");
+            print!("{}", result.stdout);
         }
         if !result.stderr.is_empty() {
-            eprint!("{result.stderr}");
+            eprint!("{}", result.stderr);
         }
         return result.returncode;
     }

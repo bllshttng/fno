@@ -5,7 +5,6 @@
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crate::pr_status_facts::GhProbe;
 

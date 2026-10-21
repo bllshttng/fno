@@ -48,7 +48,25 @@ fn option(args: &[String], name: &str) -> Option<String> {
 /// The cwd every adapter leg reads from: the caller's cwd when given, else
 /// the process cwd (resolved once per call).
 fn cwd_path(cwd: Option<&Path>) -> PathBuf {
-    crate::pr_status::gh_run::cwd_or_dot(cwd.map(|p| p.to_string_lossy().as_ref()))
+    let owned = cwd.map(|p| p.to_string_lossy().into_owned());
+    crate::pr_status::gh_run::cwd_or_dot(owned.as_deref())
+}
+
+/// The runner's RunError rendered as the legacy probe shape: a missing tool
+/// is the 127 the Python `_proc.run` answered, other IO is 126.
+fn run_error_result(error: &crate::pr_status::gh_run::RunError) -> RunResult {
+    match error {
+        crate::pr_status::gh_run::RunError::ToolMissing(name) => RunResult {
+            returncode: 127,
+            stdout: String::new(),
+            stderr: format!("{name} not found on PATH"),
+        },
+        crate::pr_status::gh_run::RunError::Io(message) => RunResult {
+            returncode: 126,
+            stdout: String::new(),
+            stderr: message.clone(),
+        },
+    }
 }
 
 /// The plain REST GET through the conditional door, judged in process (the
@@ -129,9 +147,15 @@ impl AdapterRunner {
                     stderr: refusal,
                 };
             }
-            return run(&argv, cwd, Some(env), timeout);
+            return match run(&argv, cwd, Some(env), timeout) {
+                Ok(out) => out,
+                Err(error) => run_error_result(&error),
+            };
         }
-        run(&argv, cwd, None, timeout)
+        match run(&argv, cwd, None, timeout) {
+            Ok(out) => out,
+            Err(error) => run_error_result(&error),
+        }
     }
 }
 
@@ -423,7 +447,8 @@ pub(crate) fn execute(
     cwd: Option<&Path>,
     real_gh: Option<&str>,
 ) -> RunResult {
-    let gh = match real_gh.or_else(|| quota::resolve_real_gh().ok().flatten()) {
+    let resolved = quota::resolve_real_gh().ok().flatten();
+    let gh = match real_gh.or(resolved.as_deref()) {
         Some(gh) => gh,
         None => {
             return RunResult {
@@ -472,7 +497,7 @@ pub(crate) fn execute(
     // Anything else is a plain gh command: the runner's door + budget +
     // scrubbed-env transport, never the broker.
     let runner = AdapterRunner {
-        real_gh: gh.clone(),
+        real_gh: gh.to_string(),
     };
     let mut argv: Vec<String> = vec!["gh".to_string()];
     argv.extend(args.iter().cloned());
@@ -485,10 +510,10 @@ pub(crate) fn execute(
 pub fn run_main(purpose: &str, args: Vec<String>) -> i32 {
     let result = execute(purpose, &args, None, None);
     if !result.stdout.is_empty() {
-        print!("{result.stdout}");
+        print!("{}", result.stdout);
     }
     if !result.stderr.is_empty() {
-        eprint!("{result.stderr}");
+        eprint!("{}", result.stderr);
         if !result.stderr.ends_with('\n') {
             eprintln!();
         }

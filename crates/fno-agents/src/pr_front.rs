@@ -70,7 +70,7 @@ fn spelling_help(sub: &str) -> Option<&'static str> {
     HELP_ROWS
         .iter()
         .find(|(name, _)| name.split_whitespace().next() == Some(sub))
-        .map(|(_, wording)| wording)
+        .map(|(_, wording)| *wording)
 }
 
 /// Parse `--purpose X` / `--purpose=X` off the graphql-exec tail; `Err` when
@@ -110,6 +110,7 @@ fn select_worktree(tail: &[String]) -> Result<(), i32> {
     let pr = tail
         .iter()
         .find(|arg| !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit()))
+        .map(String::as_str)
         .or_else(|| {
             tail.iter()
                 .find_map(|arg| arg.strip_prefix("--pr-number=").filter(|v| !v.is_empty()))
@@ -368,11 +369,11 @@ fn sync_canonical(tail: &[String]) -> i32 {
         "cwd": current_cwd_string(),
         "pr": pr,
     });
-    let (exit, stdout, stderr) = crate::sync_canonical::run_sync_payload(&payload);
-    for line in stdout.lines() {
+    let (exit, out_lines, err_lines) = crate::sync_canonical::run_sync_payload(&payload);
+    for line in out_lines {
         println!("{line}");
     }
-    for line in stderr.lines() {
+    for line in err_lines {
         eprintln!("{line}");
     }
     exit

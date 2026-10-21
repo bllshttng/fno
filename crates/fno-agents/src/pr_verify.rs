@@ -539,14 +539,14 @@ fn remote_delete_cleanup(number: u64, cwd: &Path, run: RunProbe, err: &mut dyn W
 pub(crate) fn remote_delete_cleanup_op(payload: &Value) -> String {
     let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
     let cwd = std::path::PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
-    let mut sink = String::new();
+    let mut sink: Vec<u8> = Vec::new();
     let run = |args: &[&str], dir: &std::path::Path| -> Option<crate::gate_probes::Run> {
         let mut cmd = std::process::Command::new(args[0]);
         cmd.args(&args[1..]).current_dir(dir);
         crate::gate_probes::run_probe(cmd)
     };
     remote_delete_cleanup(pr, &cwd, &run, &mut sink);
-    serde_json::json!({"cleanup": sink}).to_string()
+    serde_json::json!({"cleanup": String::from_utf8_lossy(&sink).into_owned()}).to_string()
 }
 
 // ---------------------------------------------------------------------------

@@ -6,8 +6,9 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::Read as _;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -52,15 +53,20 @@ const REFUSE_EXIT: i32 = 2;
 #[derive(Debug)]
 pub(crate) struct ProxyIdentityError(pub String);
 
+impl std::fmt::Display for ProxyIdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// `Path::resolve` that survives a missing final component: Python's
 /// `Path.resolve()` answers on paths that do not exist yet, and the proxy
 /// dirs are resolved before the first install creates them.
 fn resolve_lenient(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| {
-        let mut out = PathBuf::from(path);
         // Normalize a leading `..` walk against the parent chain where it is
         // cheap: canonicalize already did the real work when the path exists.
-        out
+        PathBuf::from(path)
     })
 }
 
@@ -160,7 +166,7 @@ pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyId
         .collect();
     Ok(BTreeMap::from([(
         "PATH".to_string(),
-        scrubbed.join(path_sep.to_string()),
+        scrubbed.join(&path_sep.to_string()),
     )]))
 }
 
@@ -344,7 +350,7 @@ fn probe_quota(
     gh: &str,
     cwd: Option<&Path>,
     env: &BTreeMap<String, String>,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> Option<(i64, i64)> {
     if let Some(cache) = cache {
         if let Some(hit) = cache.read() {
@@ -565,7 +571,7 @@ impl QuotaLock {
             }
             let opened_meta = handle
                 .metadata()
-                .map(|m| ((m.dev(), m.ino())))
+                .map(|m| (m.dev(), m.ino()))
                 .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
             let current_meta = std::fs::metadata(&path)
                 .map(|m| (m.dev(), m.ino()))
@@ -676,7 +682,7 @@ could not be resolved"
     } else {
         Some(ProbeCache(lock.with_file_name("github-quota-probe.json")))
     };
-    let held = match QuotaLock::acquire(lock_path) {
+    let _held = match QuotaLock::acquire(lock_path) {
         Ok(held) => held,
         Err(e) => {
             return RunResult {
@@ -757,10 +763,10 @@ could not be resolved"
 pub(crate) fn run_graphql_exec_args(purpose: &str, gh_args: &[String]) -> i32 {
     let result = execute_graphql(purpose, gh_args, None, None, None, Duration::from_secs(120));
     if !result.stdout.is_empty() {
-        print!("{result.stdout}");
+        print!("{}", result.stdout);
     }
     if !result.stderr.is_empty() {
-        eprint!("{result.stderr}");
+        eprint!("{}", result.stderr);
     }
     result.returncode
 }
