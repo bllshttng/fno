@@ -927,6 +927,10 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn
 
+#: The pane harnesses the binary's own arm answers (codex now; row 8 widens): an explicit `-H <member>` pane spawn routes to Rust.
+_RUST_PANE_HARNESSES = frozenset({"codex"})
+
+
 def _is_pane_substrate_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` targeting the ``pane`` substrate (4a-G2).
 
@@ -945,7 +949,7 @@ def _is_pane_substrate_spawn(command: str, args: Sequence[str]) -> bool:
     """
     if command != "spawn":
         return False
-    substrate = "pane"
+    substrate = None
     it = iter(args)
     for a in it:
         if a == "--argv" or a == "--":
@@ -957,11 +961,14 @@ def _is_pane_substrate_spawn(command: str, args: Sequence[str]) -> bool:
             # and `-P` (vendor) are NOT here: they are value flags that do not
             # pick the lane.
             return False
-        if a == "--substrate":
+        if a == "--substrate" or a == "--as":
             substrate = next(it, "")
-        elif a.startswith("--substrate="):
+        elif a.startswith("--substrate=") or a.startswith("--as="):
             substrate = a.split("=", 1)[1]
-    return substrate == "pane"
+    if substrate is None or substrate != "pane":
+        return substrate is None
+    # An EXPLICIT -H naming the member set routes to the binary's arm; the absent -H keeps the Python leg.
+    return (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() not in _RUST_PANE_HARNESSES
 
 
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
@@ -1349,6 +1356,16 @@ def _is_retired_axis_spawn(command: str, args: Sequence[str]) -> bool:
     )
 
 
+def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
+    """footnote's headless arm is Rust-only and reads ``--once``, never ``--as``."""
+    head = list(_args_before_argv(args))
+    if head[:1] == ["spawn"] and (_spawn_flag_value(args, "--harness", "-H") or "").lower() == "footnote":
+        for i, a in enumerate(head):
+            if a == "--as=headless" or (a == "--as" and head[i + 1 : i + 2] == ["headless"]):
+                head[i : i + (1 if "=" in a else 2)] = ["--once"]
+    return head + list(args[len(_args_before_argv(args)) :])
+
+
 def _is_provenance_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--node``/``--slug``/``--plan``.
 
@@ -1606,6 +1623,7 @@ def make_agents_group_cls() -> type:
                             args, existing_pane = extract_existing_pane(
                                 compose_spawn_argv(args, node_command=node_command)
                             )
+                            args = _footnote_headless_as_once(args)
                         except ValueError as exc:
                             print(f"fno agents spawn: {exc}", file=sys.stderr)
                             raise SystemExit(2) from exc

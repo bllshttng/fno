@@ -477,17 +477,12 @@ pub fn run(tail: &[String]) -> i32 {
         print!("{}", UPDATE_HELP);
         return 0;
     }
-    // The tracker-owned refusal the python leg carried at its callback:
-    // update owns graph state, so under any external tracker backend it
-    // refuses before any read or write.
+    // Under an external tracker backend update owns only the sidecar: the
+    // footnote-side bindings write through the sidecar store, and every
+    // tracker-owned field refuses before any read or write.
     let backend = crate::tracker::backend_name(None);
     if backend != "graph" {
-        eprintln!(
-            "fno backlog update: this command owns graph state; under the \
-             {backend} tracker backend it is refused. Track the item in the \
-             tracker by its id."
-        );
-        return 1;
+        return run_external_bind(&args, &backend);
     }
     if let Some(new_id) = &args.reid_to {
         return run_reid(&args, new_id);
@@ -500,6 +495,90 @@ pub fn run(tail: &[String]) -> i32 {
         Err(r) => {
             eprintln!("{}", r.message);
             r.exit
+        }
+    }
+}
+
+/// The keys `update` binds on an external id: the checkout, the plan and
+/// the PR. They live in the sidecar, never in the tracker.
+const BINDABLE_KEYS: &[&str] = &["cwd", "plan_path", "pr_number", "pr_url"];
+
+fn run_external_bind(args: &UpdateArgs, backend: &str) -> i32 {
+    let tracker = match crate::tracker::backend(backend) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("fno backlog update: {e}");
+            return 1;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    run_external_bind_with(
+        args,
+        backend,
+        tracker.as_ref(),
+        &crate::tracker::sidecar::root(&cwd),
+    )
+}
+
+fn run_external_bind_with(
+    args: &UpdateArgs,
+    backend: &str,
+    tracker: &dyn crate::tracker::Tracker,
+    sidecar_root: &Path,
+) -> i32 {
+    let only_bindable = !args.ops.is_empty()
+        && args.door.is_empty()
+        && args.reid_to.is_none()
+        && args.details_file.is_none()
+        && !args.blocks_everything
+        && args.repo.is_none()
+        && args.add_pr_url.is_none()
+        && args.add_pr_note.is_none()
+        && args
+            .ops
+            .iter()
+            .all(|op| op.op == update_ops::Op::Set && BINDABLE_KEYS.contains(&op.field.as_str()));
+    if !only_bindable {
+        eprintln!(
+            "fno backlog update: under the {backend} tracker backend the tracker \
+             owns this item; update binds only {}. Edit every other field in \
+             the tracker.",
+            BINDABLE_KEYS.join(", ")
+        );
+        return 1;
+    }
+    let id = args.task_id.as_str();
+    if let Err(e) = tracker.read(id) {
+        eprintln!("fno backlog update: {e}");
+        return 1;
+    }
+    let mut fields = serde_json::Map::new();
+    for op in &args.ops {
+        let value = match op.field.as_str() {
+            "cwd" | "plan_path" => Value::String(abs_expand(&op.value)),
+            "pr_number" => match op.value.parse::<i64>() {
+                Ok(n) => Value::from(n),
+                Err(_) => {
+                    eprintln!(
+                        "Error: Invalid value for 'pr_number=': '{}' is not a valid integer.",
+                        op.value
+                    );
+                    return 2;
+                }
+            },
+            _ => Value::String(op.value.clone()),
+        };
+        fields.insert(op.field.clone(), value);
+    }
+    match crate::tracker::sidecar::save(sidecar_root, id, &fields) {
+        Ok(_) => {
+            let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
+            println!("bound {id}: {}", keys.join(", "));
+            0
+        }
+        Err(e) => {
+            eprintln!("fno backlog update: {e}");
+            1
         }
     }
 }
@@ -2536,5 +2615,39 @@ mod tests {
             .is_ok(),
             "an INVALID hold never refuses"
         );
+    }
+
+    #[test]
+    fn an_external_id_binds_sidecar_keys_and_refuses_tracker_fields() {
+        const FAKE: crate::tracker::FakeTracker = crate::tracker::FakeTracker(&["o/r#1"]);
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |tokens: &[&str]| match UpdateArgs::parse(
+            &tokens.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        ) {
+            ParsedUpdate::Args(a) => a,
+            ParsedUpdate::Refusal { message, .. } => panic!("parse: {message}"),
+        };
+        let bind = parse(&["o/r#1", "cwd=/tmp/x", "plan_path=/tmp/p.md"]);
+        assert_eq!(
+            run_external_bind_with(&bind, "github", &FAKE, dir.path()),
+            0
+        );
+        let got = crate::tracker::sidecar::load(dir.path(), "o/r#1").unwrap();
+        assert_eq!(got["cwd"], json!("/tmp/x"));
+        assert_eq!(got["plan_path"], json!("/tmp/p.md"));
+
+        let title = parse(&["o/r#1", "title=x"]);
+        assert_eq!(
+            run_external_bind_with(&title, "github", &FAKE, dir.path()),
+            1
+        );
+        let missing = parse(&["o/r#2", "cwd=/tmp/x"]);
+        assert_eq!(
+            run_external_bind_with(&missing, "github", &FAKE, dir.path()),
+            1
+        );
+        assert!(crate::tracker::sidecar::load(dir.path(), "o/r#2")
+            .unwrap()
+            .is_empty());
     }
 }

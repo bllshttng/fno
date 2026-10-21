@@ -388,10 +388,14 @@ fn leg_ensure(payload: &serde_json::Value) -> (i32, String, String) {
 
 fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     if external_backend_selected() {
-        return bind_envelope(
-            &refused(Some("graph backend is not active".to_string())),
-            &[],
-        );
+        let name = crate::tracker::backend_name(None);
+        return match crate::tracker::backend(&name) {
+            Ok(tracker) => {
+                let root = crate::tracker::sidecar::root(&current_dir());
+                bind_external(payload, tracker.as_ref(), &root)
+            }
+            Err(e) => bind_envelope(&refused(Some(e.to_string())), &[]),
+        };
     }
     let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let node = payload.get("node").and_then(|v| v.as_str());
@@ -451,6 +455,51 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
         }
     }
     bind_envelope(&bound, &matched)
+}
+
+/// The external-backend bind: the PR lands on the sidecar of the named id.
+/// No branch inference - an external id is never derived from a branch name.
+fn bind_external(
+    payload: &serde_json::Value,
+    tracker: &dyn crate::tracker::Tracker,
+    sidecar_root: &Path,
+) -> (i32, String, String) {
+    let Some(id) = payload
+        .get("node")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return bind_envelope(
+            &refused(Some(
+                "an external tracker backend needs the item named: pass --node <external id>"
+                    .to_string(),
+            )),
+            &[],
+        );
+    };
+    let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(pr_number) = pr_number_from_url(Some(url)) else {
+        return bind_envelope(&refused(Some(format!("not a PR url: {url:?}"))), &[]);
+    };
+    if let Err(e) = tracker.read(id) {
+        return bind_envelope(&refused(Some(e.to_string())), &[]);
+    }
+    let mut fields = serde_json::Map::new();
+    fields.insert("pr_number".into(), serde_json::Value::from(pr_number));
+    fields.insert("pr_url".into(), serde_json::Value::String(url.to_string()));
+    let claimed = [id.to_string()];
+    match crate::tracker::sidecar::save(sidecar_root, id, &fields) {
+        Ok(_) => bind_envelope(
+            &PrRowBindResult {
+                outcome: "bound",
+                bindings: Vec::new(),
+                refusal: None,
+            },
+            &claimed,
+        ),
+        Err(e) => bind_envelope(&refused(Some(e.to_string())), &claimed),
+    }
 }
 
 fn leg_trailer(argv: &[String]) -> i32 {
@@ -685,4 +734,33 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
         str_array_json(&files)
     );
     (0, out, String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_external_bind_records_the_pr_on_the_named_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = crate::tracker::FakeTracker(&["o/r#1"]);
+        let url = "https://github.com/o/r/pull/7";
+        let (code, out, _) = bind_external(
+            &serde_json::json!({"url": url, "node": "o/r#1"}),
+            &fake,
+            dir.path(),
+        );
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("\"outcome\":\"bound\""), "{out}");
+        let got = crate::tracker::sidecar::load(dir.path(), "o/r#1").unwrap();
+        assert_eq!(got["pr_number"], serde_json::json!(7));
+        assert_eq!(got["pr_url"], serde_json::json!(url));
+
+        let (code, out, _) = bind_external(&serde_json::json!({"url": url}), &fake, dir.path());
+        assert_eq!(code, 1);
+        assert!(
+            out.contains("\"refused\"") && out.contains("--node"),
+            "{out}"
+        );
+    }
 }

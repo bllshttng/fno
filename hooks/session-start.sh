@@ -173,13 +173,10 @@ hydrate_state_provider_context() {
 # 1. using-fno preamble — names both surfaces (slash commands + fno
 #    CLI) and the HARD-GATE forbidden writes. Highest priority because
 #    it teaches the agent the commands the rest of the context will use.
+# Codex runs this script under the cached context-run.sh, which replays the
+# project's previous pass; the using-fno preamble is per session (joined or
+# not), so codex-hooks.json runs session-start-using-fno.sh directly instead.
 using_fno_content=""
-if [[ -f "${SCRIPT_DIR}/session-start-using-fno.sh" ]]; then
-    raw_using_fno=$(bash "${SCRIPT_DIR}/session-start-using-fno.sh" 2>/dev/null || true)
-    if [[ -n "$raw_using_fno" ]]; then
-        using_fno_content=$(echo "$raw_using_fno" | jq -r '.hookSpecificOutput.additionalContext // .additional_context // .additionalContext // empty' 2>/dev/null || echo "$raw_using_fno")
-    fi
-fi
 
 # 2. project vision — what this codebase is and why.
 vision_content=""

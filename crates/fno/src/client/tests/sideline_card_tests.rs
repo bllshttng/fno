@@ -1328,3 +1328,61 @@ fn card_row_1_carries_the_role_and_the_lead_rollup() {
         "row 2 dropped the lead name: {line2:?}"
     );
 }
+
+#[test]
+fn a_narrow_card_keeps_the_slug_whole_and_cuts_only_the_role() {
+    // The name is the card's most important word: a long role is cut from
+    // its end, and a width that fits only the slug shows the slug alone.
+    let mut agents = lead_and_worker();
+    agents[0].role_title = Some("Lead of mux surfaces and fleet steering".into());
+    let mut v = card_view(agents);
+    v.term = (30, 140);
+    v.sideline_width = 40;
+    let text = frame_text(&v.compose());
+    let line = text
+        .lines()
+        .find(|l| l.contains("lead-a \u{b7} Lead of"))
+        .unwrap_or_else(|| panic!("line 1 keeps the slug and the role's start: {text:?}"));
+    assert!(
+        !line.contains("steering"),
+        "the role's end is cut: {line:?}"
+    );
+    assert_eq!(
+        card_line::card_label("lead-a", Some("Lead of mux"), 9),
+        "lead-a"
+    );
+    assert_eq!(
+        card_line::card_label("lead-a", Some("Lead of mux"), 4),
+        "ad-a"
+    );
+}
+
+#[test]
+fn card_model_names_the_family_alone_only_at_its_newest_version() {
+    let newest = card_line::newest_families([
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-5-5",
+    ]);
+    let short = |m: &str| card_line::short_model(m, &newest);
+    assert_eq!(short("claude-opus-5-5[1m]"), "opus");
+    assert_eq!(short("claude-opus-5"), "opus-5");
+    assert_eq!(short("claude-opus-4-8"), "opus-4.8");
+    assert_eq!(short("claude-haiku-4-5-20251001"), "haiku-4.5");
+    assert_eq!(short("glm-5.3-flash[1m]"), "glm-5.3-flash");
+    assert_eq!(short("gpt-5.5"), "gpt-5.5");
+    assert_eq!(
+        card_line::short_model("claude-opus-4-8", &Default::default()),
+        "opus",
+        "with no catalog the family alone"
+    );
+    // Line 2 paints the served model, observed or recorded, shortened.
+    let mut agents = lead_and_worker();
+    agents[1].model = Some("claude-opus-5-5".into());
+    let v = card_view(agents);
+    assert!(v
+        .card_detail_text(&v.layout.agents[1], 0, 60)
+        .starts_with("opus"));
+}

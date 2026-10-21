@@ -337,7 +337,7 @@ A rebase is destructive on a branch carrying attestations, and it does nothing a
 
 **Answer.** Read the gate, not the sentence that names it. A citation is a claim about behavior, and it drifts from behavior for free.
 
-**Specimen.** Principle 6 in AGENTS.md read "Never ticket/PR/node IDs (`scripts/ci/check-no-internal-refs.sh` fails on them)". That script blocks four leak classes, named in its own header: a vault path, a node id, a session URL, and a competitor name. It has no ticket pattern and no PR pattern. Its own help also says the code tree is not scanned, which holds for three of the four classes. The competitor class scans every tracked file, code included. Principle 6 governs code comments. So the rule named a gate that catches one of its three targets, in the one place the rule does not apply.
+**Specimen.** Principle 6 in AGENTS.md read "Never ticket/PR/node IDs (`scripts/ci/check-no-internal-refs.sh` fails on them)". At the time, that script blocked four leak classes, named in its own header: a vault path, a node id, a session URL, and a competitor name. The session-URL class is retired now. It has no ticket pattern and no PR pattern. Its own help also said the code tree is not scanned, which held for three of the four classes. The competitor class scans every tracked file, code included. Principle 6 governs code comments. So the rule named a gate that catches one of its three targets, in the one place the rule does not apply.
 
 Two leads acted on the false half within an hour. One warned the other that PR numbers fail the gate. The other stripped real PR numbers out of quoted specimens on that warning, then had to be told to keep them.
 

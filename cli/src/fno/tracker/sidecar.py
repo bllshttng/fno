@@ -20,8 +20,6 @@ dispatch.
 """
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
@@ -268,7 +266,8 @@ def save(sidecar: Sidecar) -> Path:
     physical path written (the graph file in graph mode, the per-id JSON
     otherwise).
 
-    External mode is temp-file + ``os.replace`` so a concurrent reader on
+    External mode writes through the Rust tracker door (temp file plus
+    rename) so a concurrent reader on
     another item never sees a half-written file; one file per item means
     writers on different ids never contend. Graph mode routes through
     ``locked_mutate_graph`` so the projection stays atomic with the rest of
@@ -280,24 +279,14 @@ def save(sidecar: Sidecar) -> Path:
 
 
 def _save_to_file(sidecar: Sidecar) -> Path:
-    path = sidecar_path(sidecar.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = sidecar.model_dump_json(indent=2, exclude_unset=True) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=".sidecar-tmp-", dir=str(path.parent))
-    raw = payload.encode("utf-8")
-    try:
-        # os.write may short-write; loop until every byte lands (mirrors
-        # fno.claims.io.atomic_create_exclusive).
-        view = memoryview(raw)
-        while view:
-            view = view[os.write(fd, view):]
-    except BaseException:
-        os.close(fd)
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-    os.close(fd)
-    os.replace(tmp_name, path)
-    return path
+    import json
+
+    from fno import rust_binary
+    from fno.tracker import TrackerError
+
+    fields = json.loads(sidecar.model_dump_json(exclude_unset=True))
+    fields.pop("id", None)
+    out = rust_binary.command_call(["backlog", "get"], {"tracker": "sidecar-set", "id": sidecar.id, "path": str(sidecar_path(sidecar.id)), "fields": fields}, TrackerError)
+    if out.get("error"):
+        raise TrackerError(out["error"])
+    return Path(out["saved"])

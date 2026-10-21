@@ -116,6 +116,11 @@ def resolve_self_identity(
         == session_identity_key(attested_session_id)
     )
 
+    if not canonical_proven and canonical.disposition == "complete":
+        canonical_proven = _stamp_witnessed_by_markerless_harness(
+            true_harness, canonical.harness, canonical.session_id
+        )
+
     # a name_only codex stamp carries no id and codex never carries
     # CODEX_THREAD_ID in its own env, so the attester cannot complete the
     # pair. A marker value the rollout witness sees in a live fd IS this
@@ -185,6 +190,19 @@ def resolve_self_identity(
             collide=None if canonical_proven else collide_with(own_pair),
         )
     )
+
+
+def _stamp_witnessed_by_markerless_harness(walked, stamped, session) -> bool:
+    """Prove a markerless harness's stamp from its own process env (Rust twin)."""
+    from fno.claims.session_pid import resolve_session_pid
+    from fno.harness_identity import HARNESS_SESSION_MARKERS, _read_ancestor_marker
+    walked = (walked or "").lower()
+    families = {family for _m, family in HARNESS_SESSION_MARKERS}
+    if not session or not walked or walked != (stamped or "").lower() or walked in families:
+        return False
+    pid = resolve_session_pid()
+    carried = _read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") if pid else None
+    return carried is not None and session_identity_key(carried) == session_identity_key(session)
 
 
 def _own_cwd() -> str:

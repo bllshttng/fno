@@ -27,8 +27,7 @@ const GUARD_TIMEOUT: Duration = Duration::from_secs(60);
 /// `PR_BASE_SHA` (merge-base of the resolved base ref and HEAD). A script missing
 /// from this repo is a `skip`, not a failure, so a repo carrying none of
 /// these guards passes vacuously.
-const GUARDS: [&str; 3] = [
-    "scripts/ci/check-no-session-urls.sh",
+const GUARDS: [&str; 2] = [
     "scripts/ci/check-pr-node-closure.sh",
     "scripts/ci/check-oos-tracked.sh",
 ];

@@ -160,7 +160,58 @@ pub fn run_door(payload: &Value) -> Value {
             },
             None => error_value(&TrackerError::Refused("close needs an id".into())),
         },
+        "sidecar-set" => {
+            let fields = payload.get("fields").and_then(Value::as_object);
+            match (id, fields) {
+                (Some(id), Some(fields)) => {
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+                    let saved = match payload.get("path").and_then(Value::as_str) {
+                        Some(path) => sidecar::save_at(std::path::Path::new(path), id, fields),
+                        None => sidecar::save(&sidecar::root(&cwd), id, fields),
+                    };
+                    match saved {
+                        Ok(path) => json!({ "saved": path }),
+                        Err(e) => error_value(&e),
+                    }
+                }
+                _ => error_value(&TrackerError::Refused(
+                    "sidecar-set needs an id and a fields object".into(),
+                )),
+            }
+        }
         other => json!({ "error": format!("unknown tracker op {other}") }),
+    }
+}
+
+/// A tracker holding a fixed set of open ids, for callers' unit tests.
+#[cfg(test)]
+pub(crate) struct FakeTracker(pub &'static [&'static str]);
+
+#[cfg(test)]
+impl Tracker for FakeTracker {
+    fn name(&self) -> &str {
+        "fake"
+    }
+    fn read(&self, id: &str) -> Result<TrackerNode, TrackerError> {
+        if !self.0.contains(&id) {
+            return Err(TrackerError::NotFound(id.to_string()));
+        }
+        Ok(TrackerNode {
+            id: id.to_string(),
+            title: Some("t".into()),
+            state: State::Open,
+            parent: None,
+            blocked_by: Vec::new(),
+            details: None,
+            url: None,
+            size: None,
+        })
+    }
+    fn list_open(&self) -> Result<Vec<Candidate>, TrackerError> {
+        Ok(Vec::new())
+    }
+    fn close(&self, _id: &str) -> Result<(), TrackerError> {
+        Ok(())
     }
 }
 

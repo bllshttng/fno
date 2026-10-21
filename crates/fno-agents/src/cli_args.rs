@@ -246,15 +246,29 @@ impl SpawnAxes {
                         }
                     }
                 } else if long == "--as" || long == "--substrate" {
-                    // The one lane this door selects: cloud has no template
-                    // lane, so `--as cloud` is its only selector. The Python
-                    // door routes thread, pane and headless itself.
+                    // The lanes this door selects. `--as` is the public axis:
+                    // cloud has no template lane (its original selector), and
+                    // the pane arm answers an explicit `-H <pane-arm harness>
+                    // --as pane` itself. The Python seam's harness scan
+                    // (`_RUST_PANE_HARNESSES`) only execs here for the
+                    // harnesses a pane arm owns, so accepting the public
+                    // vocabulary keeps the binary door as wide as the Python
+                    // door it replaced - a narrower refusal would strand an
+                    // argv the seam already routed. `--substrate` stays the
+                    // RETIRED spelling: cloud only, everything else refuses by
+                    // name (the retirement rows in client_tests pin it).
                     let value = inline.or_else(|| head.get(i + 1).cloned());
-                    if value.as_deref() != Some("cloud") {
+                    let accepted = match value.as_deref() {
+                        Some("cloud") => true,
+                        Some("pane") | Some("thread") | Some("headless") => long == "--as",
+                        _ => false,
+                    };
+                    if !accepted {
                         return Err(Self::refused_axis(long));
                     }
+                    let value = value.unwrap_or_default();
                     pairs.push("--substrate".to_string());
-                    pairs.push("cloud".to_string());
+                    pairs.push(value);
                     i += if tok.contains('=') { 1 } else { 2 };
                 } else {
                     // A short names its long, as the Python stubs print it.
@@ -562,7 +576,7 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
     }
 
     #[test]
-    fn spawn_axes_as_admits_cloud_alone() {
+    fn spawn_axes_as_admits_the_public_vocabulary() {
         for form in [
             vec!["--as", "cloud"],
             vec!["--as=cloud"],
@@ -573,12 +587,23 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
             assert_eq!(axes.substrate.as_deref(), Some("cloud"));
             assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
         }
-        for other in ["thread", "pane", "headless", "bg"] {
+        // The pane seam routes `-H <member> --as pane` argvs here, so the
+        // public substrate vocabulary rides --as beside cloud; a narrower
+        // refusal would strand an argv the seam already routed.
+        for word in ["pane", "thread", "headless"] {
+            let toks: Vec<String> = vec!["--as".to_string(), word.to_string()];
+            let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
+            assert_eq!(axes.substrate.as_deref(), Some(word));
+        }
+        let joined: Vec<String> = vec!["--as=pane".to_string()];
+        let (axes, _) = SpawnAxes::scan(&joined).expect("the joined spelling is admitted");
+        assert_eq!(axes.substrate.as_deref(), Some("pane"));
+        for other in ["bg"] {
             let toks: Vec<String> = ["--substrate", other]
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            let err = SpawnAxes::scan(&toks).expect_err("only cloud passes");
+            let err = SpawnAxes::scan(&toks).expect_err("bg is the retired thread spelling");
             assert!(err.contains("is retired"), "{err}");
         }
     }

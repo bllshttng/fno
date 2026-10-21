@@ -16,7 +16,18 @@ CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
 
 
 def _command(command: str) -> str:
-    return " ".join(shlex.split(command.removeprefix("PYTHONDONTWRITEBYTECODE=1 ")))
+    command = command.removeprefix("PYTHONDONTWRITEBYTECODE=1 ").removeprefix("FNO_HOOK_CONTEXT=1 ")
+    return " ".join(shlex.split(command))
+
+
+def test_every_hook_command_runs_in_hook_context() -> None:
+    # A hook's fno call must never join its session (crates/fno/src/join_marker.rs).
+    for manifest in (HOOKS_JSON, CODEX_HOOKS_JSON):
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        for registrations in data["hooks"].values():
+            for registration in registrations:
+                for hook in registration.get("hooks", []):
+                    assert "FNO_HOOK_CONTEXT=1 " in hook.get("command", ""), (manifest.name, hook)
 
 
 def test_codex_hooks_use_supported_event_names_and_existing_commands() -> None:

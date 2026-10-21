@@ -246,6 +246,7 @@ pub mod intel_lens;
 pub mod intel_rollup;
 pub mod intel_scorecard;
 pub mod interrupt_classify;
+pub mod join_marker;
 pub mod json_output;
 pub mod keep_mark;
 pub(crate) mod keeper_revival;
@@ -382,6 +383,7 @@ pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]
 mod pi_transcript_tests;
+pub mod plan_carry;
 pub mod plan_doc;
 pub mod planning_lane;
 pub mod plans_dirs;

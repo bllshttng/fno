@@ -231,6 +231,11 @@ pub(crate) fn handle_session_report(
         );
     }
 
+    // A spawned session is joined at birth, so its preamble carriers fire.
+    if launch_record.is_some() || agent_self.is_some() {
+        let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id);
+    }
+
     // The mint prediction runs BEFORE the locked write: building the row does
     // transcript IO (title, model), which must not hold the registry lock.
     // The write closure re-decides absence under the lock.
@@ -988,6 +993,13 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
                     is_session = true;
                     continue;
                 }
+                // The session join rides the same action: no command is added.
+                Some(v) if v == "join" => {
+                    let rest: Vec<String> = it.collect();
+                    let mut join_args = stripped;
+                    join_args.extend(rest);
+                    return crate::join_marker::run_join(&join_args, home);
+                }
                 other => {
                     stripped.push(a);
                     if let Some(v) = other {
@@ -1136,6 +1148,7 @@ mod tests {
         // --launch-name with NO matching record: the session is the user's
         // own. The row mints operator under the draw name, never the title.
         let (_dir, home) = temp_home("claim_name_operator");
+        crate::join_marker::write_marker(home.root(), "opencode", "ses_strayown1").unwrap();
         let resp = handle_session_report(
             &home,
             &emitter(&home),
@@ -1396,11 +1409,29 @@ mod tests {
         assert_eq!(row.transcript_path, None);
     }
 
-    /// Decision D3 revised: a session no row holds mints an operator row - the
-    /// user's own session. Occupant toward the cap, never managed.
+    /// A hand session that never joined fno gets no row, so it holds no
+    /// spawn-gate slot.
+    #[test]
+    fn an_unjoined_session_mints_no_row() {
+        let (_d, home) = temp_home("unjoined");
+        let params = report_params("codex", "0197eeee-1234-7abc-9def-0123456789ab", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert!(response_json(&resp)["result"]["minted"].is_null());
+        assert!(read_rows(&home).is_empty());
+    }
+
+    /// A joined session no row holds mints an operator row - the user's own
+    /// session. Occupant toward the cap, never managed. The same arm re-mints
+    /// a joined row that went missing.
     #[test]
     fn an_unknown_session_mints_an_operator_row() {
         let (_d, home) = temp_home("unknown");
+        crate::join_marker::write_marker(
+            home.root(),
+            "codex",
+            "0197dddd-1234-7abc-9def-0123456789ab",
+        )
+        .unwrap();
         let params = report_params("codex", "0197dddd-1234-7abc-9def-0123456789ab", json!({}));
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
         let body = response_json(&resp);

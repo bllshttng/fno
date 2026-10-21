@@ -335,10 +335,9 @@ done
 shopt -u nullglob
 
 # Reach: which sessions actually pay for a file's bytes. hooks/codex-hooks.json
-# SessionStart runs hooks/session-start.sh, which calls
-# session-start-using-fno.sh, so using-fno is hook-injected (claude plus
-# top-level codex sessions, but not codex subagent threads) rather than absent
-# from codex. CLAUDE.md and the rules directory reach claude only. A byte that
+# SessionStart runs session-start-using-fno.sh directly, so using-fno is
+# hook-injected (claude plus top-level codex sessions that joined fno, but not
+# codex subagent threads) rather than absent from codex. CLAUDE.md and the rules directory reach claude only. A byte that
 # must reach a session type none of these cover can live only in AGENTS.md,
 # which is exactly the trade the refusal text below names.
 reach_of() {

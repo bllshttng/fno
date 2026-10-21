@@ -1946,6 +1946,9 @@ fn base_command(
     // A pane host IS a terminal. It has no business inheriting a caller's
     // decision to suppress color in that caller's own output.
     cmd.env_remove("NO_COLOR");
+    // A server a hook lazy-started carries the hook's FNO_HOOK_CONTEXT=1; a
+    // session born in its pane is no hook and must be able to join fno.
+    cmd.env_remove("FNO_HOOK_CONTEXT");
     cmd.env("FNO_SERVER", session);
     cmd.env("FNO_SESSION", session);
     cmd.env("FNO_PANE", pane_id.to_string());
@@ -2449,6 +2452,24 @@ mod tests {
              COLORTERM, so a pane that carries it renders monochrome even \
              with both positives stated"
         );
+    }
+
+    /// A pane child is a session, not a hook: an inherited FNO_HOOK_CONTEXT
+    /// would bar every session in it from joining fno.
+    #[test]
+    fn pane_env_clears_inherited_hook_context() {
+        let _gate = PTY_GATE.blocking_lock();
+        let restore = std::env::var_os("FNO_HOOK_CONTEXT");
+        std::env::set_var("FNO_HOOK_CONTEXT", "1");
+
+        let cmd = base_command(OsStr::new("/bin/sh"), None, "main", 7);
+        let hook_context = cmd.get_env("FNO_HOOK_CONTEXT").map(|v| v.to_owned());
+
+        match restore {
+            Some(v) => std::env::set_var("FNO_HOOK_CONTEXT", v),
+            None => std::env::remove_var("FNO_HOOK_CONTEXT"),
+        }
+        assert_eq!(hook_context, None, "a pane must clear FNO_HOOK_CONTEXT");
     }
 
     #[test]

@@ -509,6 +509,21 @@ pub fn plan_rung(entry: &Value) -> &'static str {
     crate::graph_store::plan_rung_from_status(&s)
 }
 
+/// The declared plan file when it does not exist on this host (`#anchor`
+/// dropped, `~` expanded). A file that exists but is malformed is None.
+fn absent_plan_file(entry: &Value) -> Option<String> {
+    let declared = get_str(entry, "plan_path")?;
+    let bare = declared.split('#').next().unwrap_or("").trim();
+    if bare.is_empty() {
+        return None;
+    }
+    let path = match bare.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
+        None => PathBuf::from(bare),
+    };
+    (path.is_absolute() && !path.exists()).then(|| path.display().to_string())
+}
+
 // ---------------------------------------------------------------------------
 // The lifecycle command decision (harness_map.resolve_effective_command, ported)
 // ---------------------------------------------------------------------------
@@ -628,10 +643,17 @@ pub fn effective_command_with_floor(
         }
     }
     let refusal = |rung: &str, difficulty: &str| {
-        format!(
+        let base = format!(
             "dispatch command cannot be derived for node {node_id}: plan rung \
              {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
-        )
+        );
+        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
+            Some(path) => format!(
+                "{base}; plan file absent on this host ({path}); run fno agents \
+                 claim backlog sync to fetch it from the shared primary"
+            ),
+            None => base,
+        }
     };
     let rung = plan_rung(entry);
     let difficulty = get_str(entry, "difficulty")
@@ -2593,6 +2615,24 @@ mod tests {
         assert!(
             refusal.starts_with("dispatch command cannot be derived for node x-planless:"),
             "{refusal}"
+        );
+        // A plan written on another host names the path and the sync command;
+        // a malformed file that exists keeps the plain refusal.
+        let absent = dir.path().join("written-elsewhere.md");
+        let absent = absent.to_str().unwrap();
+        let refusal = effective_command(&row_with(&absent, serde_json::Map::new())).unwrap_err();
+        assert!(
+            refusal.contains("plan file absent on this host")
+                && refusal.contains("fno agents claim backlog sync"),
+            "{refusal}"
+        );
+        let malformed = plan_at(dir.path(), "bad.md", "---\nstatus: [ready\n---\n");
+        let refusal = effective_command(&row_with(&malformed, serde_json::Map::new()));
+        assert!(
+            refusal
+                .as_ref()
+                .map_or_else(|e| !e.contains("absent on this host"), |_| true),
+            "{refusal:?}"
         );
     }
 

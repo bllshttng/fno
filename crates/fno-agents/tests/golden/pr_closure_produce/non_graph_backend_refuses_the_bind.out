@@ -1,1 +1,1 @@
-{"outcome":"refused","claimed_ids":[],"refusal":"graph backend is not active"}
+{"outcome":"refused","claimed_ids":[],"refusal":"not a GitHub issue id: \"x-aaaa\" (expected owner/repo#N)"}
