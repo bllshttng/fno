@@ -1071,7 +1071,7 @@ mod plan_carry_miss_tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("p.md");
         let plan_s = plan.to_str().unwrap().to_string();
-        let fetch_writes = |_: &str| {
+        let fetch_writes = |_: &str| -> Result<Option<String>, String> {
             std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
             Ok(Some(plan_s.clone()))
         };
@@ -1079,7 +1079,7 @@ mod plan_carry_miss_tests {
         let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
         let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
         assert!(matches!(got, Ok(Some(_))));
-        // A null pointer with a carrier row binds the carrier's path (x-20a6).
+        // A null pointer with a carrier row binds the carrier's path.
         std::fs::remove_file(&plan).unwrap();
         let node = serde_json::json!({"id": "x-1", "plan_path": null});
         let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
@@ -1087,7 +1087,9 @@ mod plan_carry_miss_tests {
         // No copy anywhere: the refusal says so.
         std::fs::remove_file(&plan).unwrap();
         let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
-        let none = |_: &str| Err("no host pushed a plan for it".to_string());
+        let none = |_: &str| -> Result<Option<String>, String> {
+            Err("no host pushed a plan for it".to_string())
+        };
         let Err(fail) = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &none) else {
             panic!("a plan absent everywhere must refuse");
         };
