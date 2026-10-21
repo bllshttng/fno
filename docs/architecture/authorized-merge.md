@@ -118,7 +118,7 @@ Per outside, non-bot PR the steward takes one action per pass, tracked in stage 
 
 A merge freeze holds a release window. The team sets it, and only the user lifts it. The record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. The code is `merge_freeze.rs`.
 
-The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` verb:
+The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` command:
 
 ```
 fno-agents authorized-merge '{"op": "freeze-set", "subject": "rc 0.4", "set_by": "lead", "repo": "owner/repo", "sha": "<40 hex>", "prs": [3170]}'
