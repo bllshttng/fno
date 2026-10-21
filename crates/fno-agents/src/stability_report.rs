@@ -89,6 +89,9 @@ struct Delivery {
     kind: &'static str,
     classified_by: &'static str,
     subject: String,
+    /// The PR title a merge delivery carries in its body; `None` for a
+    /// squash. The scorecard's type read prefers it over the git subject.
+    title: Option<String>,
 }
 
 /// One output row, one merged PR.
@@ -296,15 +299,33 @@ fn conventional_kind(subject: &str) -> Option<&'static str> {
 /// else `other` - a subject without a recognizable type still groups,
 /// visibly, instead of dropping the node's kind part.
 pub(crate) fn commit_type(subject: &str) -> &'static str {
+    named_commit_type(subject).unwrap_or("other")
+}
+
+/// The named buckets only: `None` when the subject carries no
+/// conventional-commit type, so a caller can prefer one evidence source
+/// over another without reading `other` as a finding.
+pub(crate) fn named_commit_type(subject: &str) -> Option<&'static str> {
     let head = subject.split(':').next().unwrap_or(subject);
     let kind = head.split('(').next().unwrap_or(head);
     match kind.trim() {
-        "fix" | "bugfix" | "hotfix" => "fix",
-        "feat" | "feature" => "feat",
-        "docs" => "docs",
-        "refactor" => "refactor",
-        _ => "other",
+        "fix" | "bugfix" | "hotfix" => Some("fix"),
+        "feat" | "feature" => Some("feat"),
+        "docs" => Some("docs"),
+        "refactor" => Some("refactor"),
+        _ => None,
     }
+}
+
+/// The type evidence for one delivery: a merge commit's own subject is
+/// GitHub's `Merge pull request #N ...` line, so the PR title (which the
+/// walk already extracted) is tried first and the git subject stands as
+/// the fallback - a squash delivery reads its own subject, and a merge
+/// with a plain title reads other, truthfully.
+pub(crate) fn kind_commit_type(subject: &str, title: Option<&str>) -> &'static str {
+    title
+        .and_then(named_commit_type)
+        .unwrap_or_else(|| commit_type(subject))
 }
 
 fn branch_prefix_kind(branch: &str) -> Option<&'static str> {
@@ -526,6 +547,7 @@ fn walk_deliveries(
             kind,
             classified_by,
             subject: subject.to_string(),
+            title: title.map(str::to_string),
         });
     }
     Ok((deliveries, by_sha))
@@ -624,9 +646,8 @@ pub(crate) fn surface_class(paths: &[&str]) -> Option<&'static str> {
 }
 
 fn diff_paths(repo: &std::path::Path, parent: &str, sha: &str) -> Result<Vec<String>, String> {
-    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
-    Ok(numstat
-        .lines()
+    Ok(numstat_lines(repo, parent, sha)?
+        .iter()
         .filter_map(|line| line.splitn(3, '\t').nth(2).map(str::to_string))
         .collect())
 }
@@ -662,7 +683,8 @@ pub(crate) fn kind_parts_by_pr(
         };
         let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
         let surface = surface_class(&refs).unwrap_or("mixed");
-        out.insert(delivery.pr, Some((commit_type(&delivery.subject), surface)));
+        let kind_type = kind_commit_type(&delivery.subject, delivery.title.as_deref());
+        out.insert(delivery.pr, Some((kind_type, surface)));
     }
     Ok(out)
 }
@@ -679,6 +701,13 @@ pub(crate) fn scorecard_rev(repo: &std::path::Path) -> String {
     "HEAD".to_string()
 }
 
+/// The numstat lines for one commit against its parent: the one fetch both
+/// the fleet/product split and the scorecard's surface class read from.
+fn numstat_lines(repo: &std::path::Path, parent: &str, sha: &str) -> Result<Vec<String>, String> {
+    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
+    Ok(numstat.lines().map(str::to_string).collect())
+}
+
 /// (side, changed lines) for one PR: per-file first-match globs, the PR sits
 /// with the side holding more changed lines, ties read fleet.
 fn surface_split(
@@ -686,10 +715,10 @@ fn surface_split(
     parent: &str,
     sha: &str,
 ) -> Result<(&'static str, u64), String> {
-    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
+    let numstat = numstat_lines(repo, parent, sha)?;
     let mut product: u64 = 0;
     let mut fleet: u64 = 0;
-    for line in numstat.lines() {
+    for line in &numstat {
         let mut parts = line.splitn(3, '\t');
         let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             continue;

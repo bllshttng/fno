@@ -168,6 +168,21 @@ fn session_lane(session: &Value, ledger: &LedgerIndex) -> (String, String, Strin
     (harness, model, provider, effort)
 }
 
+/// One session's elapsed worker hours from its own span: None unstarted or
+/// unended, negative spans excluded, matching the execute-sum read.
+fn session_hours(session: &Value) -> Option<f64> {
+    match (
+        session.get("started_at").and_then(Value::as_str),
+        session.get("ended_at").and_then(Value::as_str),
+    ) {
+        (Some(a), Some(b)) => parse_local(a)
+            .zip(parse_local(b))
+            .map(|(x, y)| (y - x).num_minutes() as f64 / 60.0)
+            .filter(|h| *h > 0.0),
+        _ => None,
+    }
+}
+
 /// One build over the node set: the lane records plus the count of nodes
 /// dropped because their last execute session's timestamps did not parse -
 /// a silent drop would read the coverage denominator as smaller and cleaner
@@ -296,16 +311,8 @@ pub fn build_records(
                     .map(normalize_model)
                     .unwrap_or_else(|| UNKNOWN.to_string()),
             ));
-            let hours = match (
-                s.get("started_at").and_then(Value::as_str),
-                s.get("ended_at").and_then(Value::as_str),
-            ) {
-                (Some(a), Some(b)) => parse_local(a)
-                    .zip(parse_local(b))
-                    .map(|(x, y)| (y - x).num_minutes() as f64 / 60.0),
-                _ => None,
-            };
-            if let Some(h) = hours.filter(|h| *h >= 0.0) {
+            let hours = session_hours(s);
+            if let Some(h) = hours {
                 work_hours += h;
             }
         }
@@ -430,15 +437,7 @@ pub fn build_records(
             });
         if let Some(bp) = blueprint {
             let (bp_harness, bp_model, bp_provider, bp_effort) = session_lane(bp, ledger);
-            let bp_hours = match (
-                bp.get("started_at").and_then(Value::as_str),
-                bp.get("ended_at").and_then(Value::as_str),
-            ) {
-                (Some(a), Some(b)) => parse_local(a)
-                    .zip(parse_local(b))
-                    .map(|(x, y)| (y - x).num_minutes() as f64 / 60.0),
-                _ => None,
-            };
+            let bp_hours = session_hours(bp);
             records.push(json!({
                 "id": id,
                 "kind": format!("blueprint/{}",
@@ -450,7 +449,7 @@ pub fn build_records(
                 "merged": merged,
                 "pr": pr,
                 "cost_usd": cost_usd,
-                "work_hours": bp_hours.filter(|h| *h > 0.0).map(round2),
+                "work_hours": bp_hours.map(round2),
                 "bounce": bounce,
                 "ci_failure": ci_failure,
                 "ci_red": ci_red,
@@ -1492,6 +1491,49 @@ mod tests {
         );
         stamp_kind_parts(&mut untouched, &parts, 1);
         assert_eq!(untouched[0]["kind"], json!("target/medium"));
+        // The type evidence ladder: a merge delivery's git subject is
+        // GitHub's `Merge pull request #N ...` line, so a named type on the
+        // PR title wins; a squash reads its own subject; a merge with a
+        // plain title reads other, truthfully.
+        assert_eq!(
+            crate::stability_report::kind_commit_type(
+                "Merge pull request #7 from o/b",
+                Some("fix(mux): the thing"),
+            ),
+            "fix"
+        );
+        assert_eq!(
+            crate::stability_report::kind_commit_type("fix: direct", None),
+            "fix"
+        );
+        assert_eq!(
+            crate::stability_report::kind_commit_type(
+                "Merge pull request #7 from o/b",
+                Some("Add widget")
+            ),
+            "other"
+        );
+        assert_eq!(crate::stability_report::commit_type("docs: note"), "docs");
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs"]),
+            Some("rust")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["docs/x.md", "crates/a.rs"]),
+            Some("rust")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["docs/x.md"]),
+            Some("docs")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["crates/a.rs", "cli/src/fno/b.py"]),
+            Some("mixed")
+        );
+        assert_eq!(
+            crate::stability_report::surface_class(&["cli/src/fno/agents/mux_server.py"]),
+            Some("ui")
+        );
     }
 
     #[test]
