@@ -1717,30 +1717,26 @@ pub(crate) fn decide_with_payload(
                         &pr_info.head_oid,
                     );
                     // A claim the check rejected on a PR that passes anyway
-                    // is a half-fail; it files a node so someone owns it.
-                    let half_fails = footnotes.file_half_fails(
+                    // is a half-fail; it goes back to its origin node.
+                    let half_fails = footnotes.send_half_fails(
                         &cwd.join(".fno").join("footnote-half-fails"),
                         node_id.as_deref(),
                         |argv| {
                             let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-                            match run_bounded(
-                                parsed.fno_bin.as_ref(),
-                                &args,
-                                &cwd,
-                                read_bounds::stopgate_read_timeout(),
-                            ) {
-                                BoundedRun::Completed(out) if out.status.success() => {
-                                    footnote_evidence::idea_receipt_id(&String::from_utf8_lossy(
-                                        &out.stdout,
-                                    ))
-                                }
-                                _ => None,
-                            }
+                            matches!(
+                                run_bounded(
+                                    parsed.fno_bin.as_ref(),
+                                    &args,
+                                    &cwd,
+                                    read_bounds::stopgate_read_timeout(),
+                                ),
+                                BoundedRun::Completed(out) if out.status.success()
+                            )
                         },
                     );
-                    let with_half_fails = |msg: String| match half_fails.as_slice() {
-                        [] => msg,
-                        ids => format!("{msg}; half-fail filed: {}", ids.join(", ")),
+                    let with_half_fails = |msg: String| match (half_fails, node_id.as_deref()) {
+                        (0, _) | (_, None) => msg,
+                        (n, Some(node)) => format!("{msg}; {n} half-fail(s) sent back to {node}"),
                     };
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
