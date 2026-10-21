@@ -89,6 +89,9 @@ struct Delivery {
     kind: &'static str,
     classified_by: &'static str,
     subject: String,
+    /// The PR title a merge delivery carries in its body; `None` for a
+    /// squash. The scorecard's type read prefers it over the git subject.
+    title: Option<String>,
 }
 
 /// One output row, one merged PR.
@@ -289,6 +292,40 @@ fn conventional_kind(subject: &str) -> Option<&'static str> {
         "feat" | "feature" => Some("feat"),
         _ => None,
     }
+}
+
+/// The conventional-commit type for the scorecard's second kind part: the
+/// four named buckets with the same aliases `conventional_kind` accepts,
+/// else `other` - a subject without a recognizable type still groups,
+/// visibly, instead of dropping the node's kind part.
+pub(crate) fn commit_type(subject: &str) -> &'static str {
+    named_commit_type(subject).unwrap_or("other")
+}
+
+/// The named buckets only: `None` when the subject carries no
+/// conventional-commit type, so a caller can prefer one evidence source
+/// over another without reading `other` as a finding.
+pub(crate) fn named_commit_type(subject: &str) -> Option<&'static str> {
+    let head = subject.split(':').next().unwrap_or(subject);
+    let kind = head.split('(').next().unwrap_or(head);
+    match kind.trim_end_matches('!').trim() {
+        "fix" | "bugfix" | "hotfix" => Some("fix"),
+        "feat" | "feature" => Some("feat"),
+        "docs" => Some("docs"),
+        "refactor" => Some("refactor"),
+        _ => None,
+    }
+}
+
+/// The type evidence for one delivery: a merge commit's own subject is
+/// GitHub's `Merge pull request #N ...` line, so the PR title (which the
+/// walk already extracted) is tried first and the git subject stands as
+/// the fallback - a squash delivery reads its own subject, and a merge
+/// with a plain title reads other, truthfully.
+pub(crate) fn kind_commit_type(subject: &str, title: Option<&str>) -> &'static str {
+    title
+        .and_then(named_commit_type)
+        .unwrap_or_else(|| commit_type(subject))
 }
 
 fn branch_prefix_kind(branch: &str) -> Option<&'static str> {
@@ -510,6 +547,7 @@ fn walk_deliveries(
             kind,
             classified_by,
             subject: subject.to_string(),
+            title: title.map(str::to_string),
         });
     }
     Ok((deliveries, by_sha))
@@ -558,6 +596,108 @@ pub(crate) fn fix_of_fix_by_pr(
     Ok(out)
 }
 
+/// Slice 3's second glob table: the user's surface classes, first match per
+/// path wins. Order matters: the python mux-server lane reads ui before the
+/// python glob below it would, the root lockfile rides with crates/, and
+/// every cli/ path (source and tests) reads python so a python PR never
+/// lands in mixed on its own tests. The web html pages carry ui by suffix,
+/// not by directory - they live inside crates sources.
+const SURFACE_GLOBS: &[(&str, &str)] = &[
+    ("cli/src/fno/agents/mux_", "ui"),
+    ("crates/", "rust"),
+    ("Cargo.lock", "rust"),
+    ("cli/", "python"),
+];
+
+/// Paths that carry no surface vote, the way doc paths do not: support and
+/// fleet tooling a product PR drags along. `tests/` is the root shell
+/// suite, not a product surface.
+const SURFACE_SKIP_PREFIXES: &[&str] = &["scripts/", "skills/", "hooks/", "tests/", ".github/"];
+
+fn surface_of_path(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        return "ui";
+    }
+    for (glob, surface) in SURFACE_GLOBS {
+        if path.starts_with(glob) {
+            return surface;
+        }
+    }
+    "mixed"
+}
+
+/// The user's surface class for one merge commit's changed paths: `docs`
+/// when every path is docs/ or markdown, else the one glob class when every
+/// voting path agrees, else `mixed`. Doc paths and support paths carry no
+/// vote. `None` when the diff carries no paths - unmeasured, never a class
+/// by default.
+pub(crate) fn surface_class(paths: &[&str]) -> Option<&'static str> {
+    if paths.is_empty() {
+        return None;
+    }
+    let is_doc = |path: &str| path.starts_with("docs/") || path.ends_with(".md");
+    let is_support = |path: &str| SURFACE_SKIP_PREFIXES.iter().any(|p| path.starts_with(p));
+    if paths.iter().all(|path| is_doc(path)) {
+        return Some("docs");
+    }
+    let mut class: Option<&'static str> = None;
+    for path in paths {
+        if is_doc(path) || is_support(path) {
+            continue;
+        }
+        match class {
+            None => class = Some(surface_of_path(path)),
+            Some(prev) if prev != surface_of_path(path) => return Some("mixed"),
+            _ => {}
+        }
+    }
+    class
+}
+
+fn diff_paths(repo: &std::path::Path, parent: &str, sha: &str) -> Result<Vec<String>, String> {
+    Ok(numstat_lines(repo, parent, sha)?
+        .iter()
+        .filter_map(|line| line.splitn(3, '\t').nth(2).map(str::to_string))
+        .collect())
+}
+
+/// Per-PR (commit type, surface class) for the scorecard's second kind
+/// part: the same first-parent delivery walk the fix-of-fix read runs,
+/// narrowed to the wanted PRs, with one numstat read per delivery. A wanted
+/// PR whose diff read fails, or that carries no paths, maps to `None` - the
+/// kind part is unmeasured and the fold reads it as `unknown`, never a
+/// guessed class.
+pub(crate) fn kind_parts_by_pr(
+    repo: &std::path::Path,
+    rev: &str,
+    days: i64,
+    now: DateTime<Utc>,
+    wanted: &std::collections::HashSet<u64>,
+) -> Result<BTreeMap<u64, Option<(&'static str, &'static str)>>, String> {
+    let since = now - Duration::days(days);
+    let since_iso = since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let (deliveries, _) = walk_deliveries(repo, rev, &since_iso, &BTreeMap::new())?;
+    let mut out: BTreeMap<u64, Option<(&'static str, &'static str)>> = BTreeMap::new();
+    for delivery in &deliveries {
+        if delivery.time < since || !wanted.contains(&delivery.pr) {
+            continue;
+        }
+        let parent = format!("{}^1", delivery.sha);
+        let paths = match diff_paths(repo, &parent, &delivery.sha) {
+            Ok(paths) if !paths.is_empty() => paths,
+            _ => {
+                out.insert(delivery.pr, None);
+                continue;
+            }
+        };
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let surface = surface_class(&refs).unwrap_or("mixed");
+        let kind_type = kind_commit_type(&delivery.subject, delivery.title.as_deref());
+        out.insert(delivery.pr, Some((kind_type, surface)));
+    }
+    Ok(out)
+}
+
 /// The ref a scorecard read walks: the remote main when it exists, the local
 /// main as the fallback, HEAD last. A worktree session has no main checked
 /// out but shares the remote refs.
@@ -570,6 +710,13 @@ pub(crate) fn scorecard_rev(repo: &std::path::Path) -> String {
     "HEAD".to_string()
 }
 
+/// The numstat lines for one commit against its parent: the one fetch both
+/// the fleet/product split and the scorecard's surface class read from.
+fn numstat_lines(repo: &std::path::Path, parent: &str, sha: &str) -> Result<Vec<String>, String> {
+    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
+    Ok(numstat.lines().map(str::to_string).collect())
+}
+
 /// (side, changed lines) for one PR: per-file first-match globs, the PR sits
 /// with the side holding more changed lines, ties read fleet.
 fn surface_split(
@@ -577,10 +724,10 @@ fn surface_split(
     parent: &str,
     sha: &str,
 ) -> Result<(&'static str, u64), String> {
-    let numstat = git_out(repo, &["diff", "--no-renames", "--numstat", parent, sha])?;
+    let numstat = numstat_lines(repo, parent, sha)?;
     let mut product: u64 = 0;
     let mut fleet: u64 = 0;
-    for line in numstat.lines() {
+    for line in &numstat {
         let mut parts = line.splitn(3, '\t');
         let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
