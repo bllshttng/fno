@@ -100,11 +100,12 @@ mod tests {
         );
     }
 
-    /// The rendered set and the derivation must agree on the bundled
-    /// contract, so a rendering bug can never silently widen or narrow the
-    /// seam gate the Python side reads.
+    /// The rendered set must match the CONTRACT, row by row: a native row the
+    /// render drops (or an absent row it adds) is exactly the drift this verb
+    /// exists to prevent on the Python side. Not a self-comparison: the truth
+    /// comes from the contract, never from the render under test.
     #[test]
-    fn rendered_spawn_matches_the_derivation() {
+    fn rendered_spawn_matches_the_contract_rows() {
         let contract = HarnessContract::packaged().expect("bundled contract parses");
         let payload = roster_json();
         let rendered: Vec<&str> = payload["spawn"]
@@ -113,6 +114,16 @@ mod tests {
             .iter()
             .map(|v| v.as_str().expect("a name"))
             .collect();
-        assert_eq!(rendered, spawn_set(&contract));
+        for (name, caps) in &contract.harness {
+            let native = caps
+                .features
+                .get("spawn")
+                .is_some_and(|claim| claim.state == "native");
+            assert_eq!(
+                rendered.contains(name),
+                native,
+                "harness {name} renders/native disagreement"
+            );
+        }
     }
 }
