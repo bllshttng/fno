@@ -622,7 +622,7 @@ pub(crate) fn archive_rows_from(state_dir: &Path, name: &str) -> Vec<Value> {
 /// layout names it, else the legacy top-level spelling.
 pub(crate) fn archive_file_path(state_dir: &Path, name: &str) -> PathBuf {
     crate::state_layout::find(name)
-        .map(|row| state_dir.join(row.new))
+        .map(|row| state_dir.join(&row.new))
         .unwrap_or_else(|| state_dir.join(name))
 }
 
