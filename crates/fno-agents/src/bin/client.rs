@@ -3746,8 +3746,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // starts inside the named pristine shell.
                 let raw = str_arg(&mut it, "--pane")?;
                 let id: u64 = raw
-                    .parse()
-                    .map_err(|_| "--pane needs a positive integer pane id".to_string())?;
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| "--pane needs a positive integer pane id".to_string())?;
                 params.insert("pane".into(), Value::from(id));
             }
             "--at" => {
