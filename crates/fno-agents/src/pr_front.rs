@@ -95,7 +95,7 @@ fn parse_purpose(tail: &[String]) -> Result<(String, Vec<String>), String> {
         index += 1;
     }
     match purpose {
-        Some(purpose) => Ok((purpose, rest),
+        Some(purpose) => Ok((purpose, rest)),
         None => Err("graphql-exec: --purpose is required".to_string()),
     }
 }
@@ -111,10 +111,8 @@ fn select_worktree(tail: &[String]) -> Result<(), i32> {
         .iter()
         .find(|arg| !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit()))
         .or_else(|| {
-            tail.iter().find_map(|arg| {
-                arg.strip_prefix("--pr-number=")
-                    .filter(|v| !v.is_empty())
-            })
+            tail.iter()
+                .find_map(|arg| arg.strip_prefix("--pr-number=").filter(|v| !v.is_empty()))
         });
     let Some(pr) = pr else {
         return Ok(());
@@ -202,9 +200,9 @@ fn bound_tail(word: &str, tail: &[String]) -> Vec<String> {
 /// Python leg forwarded to; only info and graphql-exec wire new machinery.
 fn dispatch(sub: &str, tail: &[String]) -> i32 {
     match sub {
-        "merge" | "hold-check" => crate::authorized_merge::run_authorized_merge(
-            &bound_tail(sub, tail),
-        ),
+        "merge" | "hold-check" => {
+            crate::authorized_merge::run_authorized_merge(&bound_tail(sub, tail))
+        }
         "verify" => crate::pr_verify::run(tail),
         "status" => {
             let payload = json!({
@@ -263,9 +261,7 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
         }
         "list" => crate::pr_list::run_pr_list(tail),
         "graphql-exec" => match parse_purpose(tail) {
-            Ok((purpose, rest)) => {
-                crate::pr_status::quota::run_graphql_exec_args(&purpose, &rest)
-            }
+            Ok((purpose, rest)) => crate::pr_status::quota::run_graphql_exec_args(&purpose, &rest),
             Err(msg) => {
                 eprintln!("{msg}");
                 2
@@ -293,9 +289,7 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
             }
         }
         "base-lineage-check" => crate::gate_probes::run_base_lineage_verb(tail),
-        "merge-result-check" => {
-            crate::pr_merge_result::run_merge_result_verb(tail)
-        }
+        "merge-result-check" => crate::pr_merge_result::run_merge_result_verb(tail),
         "coverage-check" => {
             let pr = pr_operand(tail).unwrap_or_default().to_string();
             let mut argv = vec!["check".to_string(), pr];
@@ -314,33 +308,34 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
         }
         "review-hold" => crate::claim_verbs::run_claim(&bound_tail("review-hold", tail)),
         "evidence-check" => crate::verify_evidence::run_verify_evidence(tail),
-        "evidence-required" => crate::verify_evidence::run_verify_evidence(
-            &bound_tail("required", tail),
-        ),
-        "next-receipt-generation" => crate::verify_evidence::run_verify_evidence(
-            &bound_tail("next-generation", tail),
-        ),
-        "global-receipt-events-path" => crate::verify_evidence::run_verify_evidence(
-            &bound_tail("journal-path", tail),
-        ),
+        "evidence-required" => {
+            crate::verify_evidence::run_verify_evidence(&bound_tail("required", tail))
+        }
+        "next-receipt-generation" => {
+            crate::verify_evidence::run_verify_evidence(&bound_tail("next-generation", tail))
+        }
+        "global-receipt-events-path" => {
+            crate::verify_evidence::run_verify_evidence(&bound_tail("journal-path", tail))
+        }
         "sync-canonical" => sync_canonical(tail),
         "publish-review" => crate::publish_review::run_publish_review(tail),
         "rebase" => crate::pr_rebase::run_rebase(tail),
         "push" => crate::pr_push::run_push(tail),
         "create" => crate::pr_create::run_pr_create_verb(tail),
         "ritual" => crate::pr_watch::run(&bound_tail("ritual", tail)),
-        "closure-trailer" => crate::org_board::pr_closure::run_verb(
-            &bound_tail("pr-closure-trailer", tail),
-        ),
+        "closure-trailer" => {
+            crate::org_board::pr_closure::run_verb(&bound_tail("pr-closure-trailer", tail))
+        }
         "bind-created" => {
             let payload = json!({
                 "url": option_value(tail, "--url"),
                 "repo": option_value(tail, "--repo"),
                 "node": option_value(tail, "--node"),
             });
-            crate::org_board::pr_closure::run_verb(
-                &bound_tail("pr-closure-bind-created", &[payload.to_string()]),
-            )
+            crate::org_board::pr_closure::run_verb(&bound_tail(
+                "pr-closure-bind-created",
+                &[payload.to_string()],
+            ))
         }
         "attestation" => {
             // `fno do pr attestation retract <args>` re-spells onto the
@@ -382,4 +377,3 @@ fn sync_canonical(tail: &[String]) -> i32 {
     }
     exit
 }
-
