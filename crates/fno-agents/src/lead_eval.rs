@@ -1218,7 +1218,8 @@ fn checkin_seqs(journals: &[PathBuf]) -> Option<Vec<(PathBuf, i64)>> {
         .map(|journal| {
             let live = crate::event_store::live_journal(journal);
             let store = crate::event_store::store_path(&live);
-            if crate::event_store::stray_has_uningested_bytes(&live, &store) {
+            // A store with no raw journal beside it has no bytes to ingest.
+            if live.exists() && crate::event_store::stray_has_uningested_bytes(&live, &store) {
                 return None;
             }
             Some((live.clone(), crate::event_store::max_seq(&live).ok()?))
