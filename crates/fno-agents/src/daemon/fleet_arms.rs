@@ -76,7 +76,7 @@ pub(super) struct FleetArms {
     sandbox_ingest_in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
-/// The merged-cleanup command command the sweep arm runs, shared by the apply
+/// The merged-cleanup command the sweep arm runs, shared by the apply
 /// pass and the orders probe's dry-run read.
 fn cleanup_command(home: &crate::paths::AgentsHome, root: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());

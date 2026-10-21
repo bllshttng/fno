@@ -1779,7 +1779,7 @@ fn render_filtered_empty(
     } else {
         "decisions"
     };
-    let command = if unfiltered.len() == 1 { "sits" } else { "sit" };
+    let sits = if unfiltered.len() == 1 { "sits" } else { "sit" };
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     for d in &unfiltered {
         let key = match d.get("lane").and_then(Value::as_str) {
@@ -1812,7 +1812,7 @@ fn render_filtered_empty(
     }
     recovery_command.push_str(" --state all");
     eprintln!(
-        "{LABEL}: 0 {filter_label} decisions for '{}', but {} {noun} {command} under \
+        "{LABEL}: 0 {filter_label} decisions for '{}', but {} {noun} {sits} under \
          it: {lanes}.{hint} Read all lifecycle states with: {recovery_command}.",
         payload.get("subject").and_then(Value::as_str).unwrap_or(""),
         unfiltered.len(),

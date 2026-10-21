@@ -56,7 +56,7 @@ def parse_command_token(tok: str) -> Optional[Tuple[str, bool]]:
 
 
 def is_command_seed(seed: Optional[str]) -> bool:
-    """Whether ``seed``'s FIRST token is a command-shaped command token.
+    """Whether ``seed``'s FIRST token is a command-shaped token.
 
     Index 0 is load-bearing: only a position-0 command may be rewritten or
     run unattended. A command inside prose must not pass."""

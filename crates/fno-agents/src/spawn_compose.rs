@@ -89,7 +89,7 @@ pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
         argv,
         defaults: cfg(&["agents", "defaults"]),
         // The registered-command table. The leg this ports read a
-        // `dispatch.verbs` key no config model defines, so it never fired.
+        // dispatch key no config model defines, so it never fired.
         dispatch_commands: crate::agents_config::config_value_deep(
             cwd,
             &["dispatch", "command_registry"],

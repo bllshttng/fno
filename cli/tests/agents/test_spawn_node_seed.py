@@ -91,7 +91,7 @@ def _invoke(runner, *args):
 
 def test_node_seeded_pane_carries_command_and_brief(monkeypatch, runner, loop_admission_ready):
     """AC1-HP: no typed message + encoded node -> the pane seed is the node's
-    rendered command command, the brief rides TARGET_BRIEF, and the receipt names
+    rendered command line, the brief rides TARGET_BRIEF, and the receipt names
     both sources."""
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
     result = _invoke(runner, "--node", "x-1", "--here", "--as", "pane", "--split", "left")

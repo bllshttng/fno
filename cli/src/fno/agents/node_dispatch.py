@@ -83,7 +83,7 @@ def node_effective_command(
 
 
 def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]:
-    """Render a node's seed (command command + brief env) for the spawn door.
+    """Render a node's seed (command line + brief env) for the spawn door.
 
     Prints its own refusal and returns None when the node carries no
     dispatch_command, or when the seed render refuses (an unanswerable lifecycle

@@ -764,9 +764,9 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/ci/check-no-internal-refs.sh
 
-      # Not every fno command is a command: an added line of user-facing text
-      # says "command". The self-test watches the gate fail first.
-      - name: No "verb" wording on added user-facing lines
+      # The fno concept is "command", in identifiers, paths and prose alike:
+      # the gate scans the whole tree. The self-test watches it fail first.
+      - name: No "verb" wording anywhere in the tree
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: |

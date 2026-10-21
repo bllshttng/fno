@@ -527,7 +527,7 @@ pub struct Node {
     pub extras: Map<String, Value>,
 }
 
-/// The node key rows written before the verb-to-command rename carry.
+/// The node key rows written before the rename to `dispatch_command` carry.
 /// Readers take `dispatch_command` first and this key second; writers
 /// emit only `dispatch_command`. This constant is the one quoting of it.
 pub const LEGACY_DISPATCH_COMMAND_KEY: &str = "dispatch_verb"; // verb-wording: allow (stored key)
