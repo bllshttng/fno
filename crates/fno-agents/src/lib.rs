@@ -246,6 +246,7 @@ pub mod intel_lens;
 pub mod intel_rollup;
 pub mod intel_scorecard;
 pub mod interrupt_classify;
+pub mod join_marker;
 pub mod json_output;
 pub mod keep_mark;
 pub(crate) mod keeper_revival;

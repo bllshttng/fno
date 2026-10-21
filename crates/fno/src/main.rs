@@ -1051,6 +1051,7 @@ fn main() {
             std::process::exit(1);
         }
     }
+    fno::join_marker::join_if_needed();
     match decide_role(&args, is_tty) {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),

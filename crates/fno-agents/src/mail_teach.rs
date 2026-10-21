@@ -29,7 +29,23 @@ use crate::paths::AgentsHome;
 /// parent, so its due check never reads the ambient env - one root per
 /// store, and a test's tmp registry is its own world.
 fn teach_path_at(root: &Path, session: &str) -> PathBuf {
-    root.join("mail_teach").join(format!("{session}.json"))
+    lesson_path_at(root, Lesson::Mail, session)
+}
+
+/// One stamp per lesson: the fmail read verb and the using-fno preamble share
+/// the "due once, again after compaction" rule, each in its own directory.
+#[derive(Clone, Copy)]
+pub enum Lesson {
+    Mail,
+    UsingFno,
+}
+
+fn lesson_path_at(root: &Path, lesson: Lesson, session: &str) -> PathBuf {
+    let dir = match lesson {
+        Lesson::Mail => "mail_teach",
+        Lesson::UsingFno => "using_fno_teach",
+    };
+    root.join(dir).join(format!("{session}.json"))
 }
 
 fn taught_boundary(path: &Path) -> Option<i64> {
@@ -90,7 +106,19 @@ pub fn teach_if_due_at(
     registry: Option<&crate::state::Registry>,
     record: bool,
 ) -> bool {
-    let path = teach_path_at(root, session);
+    lesson_due_at(root, Lesson::Mail, session, transcript, registry, record)
+}
+
+/// [`teach_if_due_at`] for any [`Lesson`].
+pub fn lesson_due_at(
+    root: &Path,
+    lesson: Lesson,
+    session: &str,
+    transcript: Option<&Path>,
+    registry: Option<&crate::state::Registry>,
+    record: bool,
+) -> bool {
+    let path = lesson_path_at(root, lesson, session);
     let taught = taught_boundary(&path);
     let observed = resolve_transcript(root, session, transcript, registry)
         .as_deref()

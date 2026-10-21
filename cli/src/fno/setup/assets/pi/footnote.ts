@@ -79,6 +79,8 @@ function runBounded(
         {
           timeout: timeoutMs,
           killSignal: "SIGKILL",
+          // Hook context: a child's fno call never joins the session.
+          env: { ...process.env, FNO_HOOK_CONTEXT: "1" },
           maxBuffer: 10 * 1024 * 1024,
         },
         (err, stdout) => resolve(err ? "" : String(stdout)),

@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
 # fno hook: SessionStart - session start using fno
-# SessionStart hook: inject the using-fno SKILL.md as additionalContext.
+# Inject the using-fno SKILL.md as additionalContext, for a session that
+# joined fno only.
 #
-# It ensures every Claude session opened in a footnote-enabled project
-# starts with the two-surface preamble already loaded, so the agent knows
-# both /fno:* slash commands and the `fno <verb>` CLI exist from
-# turn one - even on a brand-new project or after a `clear` / `compact`.
+# A session joins at its first fno skill or verb (crates/fno-agents/src/
+# join_marker.rs). An unjoined session gets no preamble. A joined one gets it
+# once, and again after each compaction: `fno-agents report --kind join
+# --preamble-due --mark` answers `due` and stamps it taught.
 #
-# Modes:
-#   The matcher in hooks.json fires this on startup|clear|compact (or "")
-#   so the preamble reloads after every context compaction. Without that
-#   the agent would lose discoverability mid-session.
+# Usage: session-start-using-fno.sh [EVENT] [join]
+#   EVENT  the hookEventName to answer with (default SessionStart). The
+#          prompt and Skill join hooks pass UserPromptSubmit / PostToolUse.
+#   join   join the session first. Only a deliberate trigger passes it: the
+#          call clears FNO_HOOK_CONTEXT for that one join.
+# The hook payload on stdin supplies session_id and transcript_path.
 #
-# Output:
-#   Emits JSON with `hookSpecificOutput.additionalContext` (Claude Code)
-#   or `additionalContext` (Copilot / SDK) per platform. The harness
-#   injects the value into the system prompt of the next turn.
+# Output: hookSpecificOutput.additionalContext (claude, codex), or
+# `additional_context` (Cursor) / top-level `additionalContext` (Copilot).
 #
-# Failure mode:
-#   Hooks must NEVER block session start. If the skill body is missing
-#   or unreadable, emit an empty object so the harness sees a valid
-#   no-op response. Errors go to stderr where the harness logs them.
+# Failure mode: hooks must NEVER block. Any failure emits `{}`.
 
 set -uo pipefail
 
@@ -28,26 +26,65 @@ set -uo pipefail
 PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+EVENT="${1:-SessionStart}"
+JOIN="${2:-}"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
 if [[ -z "${PLUGIN_ROOT}" ]]; then
-    # Fall back to discovering the plugin root relative to this script
-    # (one level up from hooks/).
-    PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    PLUGIN_ROOT="$(cd "${HOOK_DIR}/.." && pwd)"
 fi
+
+noop() { echo '{}'; exit 0; }
 
 SKILL_PATH="${PLUGIN_ROOT}/skills/using-fno/SKILL.md"
 if [[ ! -r "${SKILL_PATH}" ]]; then
     echo "session-start-using-fno: SKILL.md missing or unreadable at ${SKILL_PATH}" >&2
-    # Silent no-op: emit empty object so the harness has a valid response.
-    echo '{}'
-    exit 0
+    noop
 fi
 
-# Read the SKILL.md content. Errors here are non-fatal: degrade to silent.
+PAYLOAD=""
+[[ ! -t 0 ]] && PAYLOAD="$(cat 2>/dev/null || true)"
+payload_field() {
+    [[ -n "$PAYLOAD" ]] && command -v jq >/dev/null 2>&1 || return 0
+    printf '%s' "$PAYLOAD" | jq -r --arg k "$1" '.[$k] // empty' 2>/dev/null || true
+}
+
+# The same harness and session-id env register-session-start.sh reads.
+if [[ "${FNO_PLATFORM:-}" == "codex" || -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
+    HARNESS="codex"; SESSION_ID=""
+    if [[ -z "${CODEX_THREAD_ID:-}" || -z "${CODEX_SESSION_ID:-}" \
+          || "${CODEX_THREAD_ID}" == "${CODEX_SESSION_ID}" ]]; then
+        SESSION_ID="${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}"
+    fi
+elif [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+    HARNESS="claude"; SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+else
+    noop
+fi
+[[ -z "$SESSION_ID" ]] && SESSION_ID="$(payload_field session_id)"
+[[ -z "$SESSION_ID" ]] && noop
+
+# shellcheck source=lib/agents-bin.sh
+source "$HOOK_DIR/lib/agents-bin.sh"
+# shellcheck source=scripts/lib/with-timeout.sh
+source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || noop
+BIN="$(fno_agents_bin "$PLUGIN_ROOT")"
+[[ -z "$BIN" ]] && noop
+
+ARGS=(report --kind join --harness "$HARNESS" --session-id "$SESSION_ID" --preamble-due --mark)
+TRANSCRIPT="$(payload_field transcript_path)"
+[[ -n "$TRANSCRIPT" ]] && ARGS+=(--transcript "$TRANSCRIPT")
+if [[ "$JOIN" == "join" ]]; then
+    DUE="$( unset FNO_HOOK_CONTEXT; with_timeout 3 "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"
+else
+    DUE="$( with_timeout 3 "$BIN" "${ARGS[@]}" --check 2>/dev/null </dev/null || true )"
+fi
+[[ "$DUE" == "due" ]] || noop
+
 SKILL_BODY="$(cat "${SKILL_PATH}" 2>/dev/null)" || {
     echo "session-start-using-fno: could not read ${SKILL_PATH}" >&2
-    echo '{}'
-    exit 0
+    noop
 }
 
 # JSON-escape via bash parameter substitution. Each ${s//old/new} is a
@@ -76,17 +113,13 @@ SKILL_ESCAPED="$(escape_for_json "${SKILL_BODY}")"
 # harness's high-attention path.
 CONTEXT="<EXTREMELY_IMPORTANT>\nYou are in a footnote-enabled project.\n\n**Below is the full content of the 'using-fno' skill - your introduction to the two surfaces (slash-command workflows and the fno CLI). Re-read it when in doubt about which surface to use:**\n\n${SKILL_ESCAPED}\n</EXTREMELY_IMPORTANT>"
 
-# Output context injection in the right JSON shape for the host platform.
-# Claude Code expects hookSpecificOutput.additionalContext (nested).
-# Cursor expects additional_context (snake_case, top-level).
-# Copilot CLI / SDK expects additionalContext (camelCase, top-level).
 # We use printf instead of heredoc to dodge a bash 5.3+ heredoc bug.
 if [[ -n "${CURSOR_PLUGIN_ROOT:-}" ]]; then
     printf '{\n  "additional_context": "%s"\n}\n' "${CONTEXT}"
-elif [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && [[ -z "${COPILOT_CLI:-}" ]]; then
-    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "${CONTEXT}"
-else
+elif [[ -n "${COPILOT_CLI:-}" ]]; then
     printf '{\n  "additionalContext": "%s"\n}\n' "${CONTEXT}"
+else
+    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "%s",\n    "additionalContext": "%s"\n  }\n}\n' "${EVENT}" "${CONTEXT}"
 fi
 
 exit 0

@@ -51,6 +51,10 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from "
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 
+// Every child this plugin runs is hook context: its fno calls never join the
+// session (crates/fno/src/join_marker.rs).
+const HOOK_ENV = () => ({ ...process.env, FNO_HOOK_CONTEXT: "1" })
+
 // The manifest resolver. `state path target-state` is the space-resolved
 // truth (manifests live at ~/.fno/spaces/<space>/worktrees/<name>/); the
 // legacy in-repo path is the fallback when the verb prints nothing or the
@@ -270,7 +274,7 @@ function makeHandler(io, dir) {
           const rulesBin = process.env.FNO_AGENTS_BIN || "fno-agents"
           const proc = Bun.spawn(
             [rulesBin, "hook", "rules", "--event", "stop"],
-            { cwd: dir, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+            { cwd: dir, stdin: "pipe", stdout: "pipe", stderr: "pipe", env: HOOK_ENV() },
           )
           proc.stdin.write(
             JSON.stringify({
@@ -571,7 +575,7 @@ function makeProcRunner(dir, root) {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root ?? "" },
+      env: { ...HOOK_ENV(), CLAUDE_PLUGIN_ROOT: root ?? "" },
     })
     proc.stdin.write(payload)
     proc.stdin.end()
@@ -833,7 +837,7 @@ function makeV2Io(ctx) {
     sendSynthetic: (sid, text) => ctx.session.synthetic({ sessionID: sid, text }),
     run: (argv, cwd) =>
       new Promise((resolve, reject) => {
-        execFile(argv[0], argv.slice(1), { cwd, timeout: SUBPROC_TIMEOUT_MS }, (err, stdout) => {
+        execFile(argv[0], argv.slice(1), { cwd, timeout: SUBPROC_TIMEOUT_MS, env: HOOK_ENV() }, (err, stdout) => {
           if (err) reject(err)
           else resolve(String(stdout ?? ""))
         })
