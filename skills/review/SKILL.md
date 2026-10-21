@@ -143,7 +143,7 @@ Load [single-lane.md](references/single-lane.md) and execute it in full, in this
 
 ### 2f. Run the lane fresh (`--fresh`)
 
-With `--fresh`, load [fresh.md](references/fresh.md) and execute it in full. It dispatches exactly ONE fresh-context reviewer that runs [single-lane.md](references/single-lane.md) with only the diff and the plan's acceptance criteria. Width is 1, never a panel. This session keeps ownership: it emits the head-pinned attestation (with `reviewer_context=fresh`, `execution_context=fork`), fixes the findings, and runs any `--verify-fixes`. The inline rule above does not apply to the reviewer's context. It still applies to everything this session itself does.
+With `--fresh`, load [fresh.md](references/fresh.md) and execute it in full. It dispatches exactly ONE fresh-context reviewer at first-round scope. The reviewer is an empty-context subagent, never a fork. It runs [single-lane.md](references/single-lane.md) with only the diff and the plan's acceptance criteria. Width is 1, never a panel. This session keeps ownership: it emits the head-pinned attestation (with `reviewer_context=fresh`, `execution_context=fork`), fixes the findings, and runs any `--verify-fixes`. The inline rule above does not apply to the reviewer's context. It still applies to everything this session itself does.
 
 ## Step 2p: prove-it mode (runtime evidence)
 

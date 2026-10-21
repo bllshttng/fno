@@ -46,6 +46,10 @@
 #   [--findings-file <path>]  a JSON findings payload; classified by `fno do
 #               review classify` and carried on the event as the finding record.
 #               A malformed or unreadable file is a refusal, never an empty record.
+#   [--refuse <reason>]  journal a terminal refused review_invocation row for an
+#               attempt that produced no verdict without failing a measurement
+#               (the fresh runner's silent reviewer). Emits NO attestation and
+#               exits 1: the exit is the refusal, the row is the record.
 set -euo pipefail
 
 usage() {
@@ -64,10 +68,18 @@ usage() {
 # gate. Any typo'd or stray flag did the same. There is no reviewer name in any
 # registry that begins with `-`, so refusing the whole shape costs nothing and
 # closes the class rather than the one spelling.
+refuse_reason=""
 case "${1:-}" in
   -h | --help)
     usage
     exit 0
+    ;;
+  --refuse)
+    refuse_reason="${2:-}"
+    if [[ -z "$refuse_reason" ]]; then
+      echo "emit-attestation: --refuse needs a reason; no event emitted" >&2
+      exit 2
+    fi
     ;;
   -*)
     echo "emit-attestation: '$1' is a flag, not a reviewer name; no event emitted" >&2
@@ -103,26 +115,31 @@ done
   exit 2
 }
 
-reviewer="${positional[0]:?reviewer name required: a built-in (sigma|code-review|declare) or a config.review.reviewer_registry name}"
-verdict="${positional[1]:-pass}"
-reviewer_context="${positional[2]:-unknown}"
-execution_context="${positional[3]:-inline}"
-output_contract="${positional[4]:-json_block}"
-case "$reviewer_context" in
-  fresh|shared|unknown) ;;
-  *)
-    echo "emit-attestation: reviewer_context must be fresh, shared, or unknown (got '$reviewer_context')" >&2
-    exit 2
-    ;;
-esac
-case "$execution_context" in
-  inline|fork) ;;
-  *) echo "emit-attestation: execution_context must be inline or fork (got '$execution_context')" >&2; exit 2 ;;
-esac
-case "$output_contract" in
-  report_findings|json_block|prose_unparseable) ;;
-  *) echo "emit-attestation: output_contract must be report_findings, json_block or prose_unparseable (got '$output_contract')" >&2; exit 2 ;;
-esac
+# The refusal mode names no reviewer and takes no verdict: it rides the shared
+# resolution below (head, branch, invocation id, verb) and journals one refused
+# row. Everything reviewer-shaped here is skipped when refusing.
+if [[ -z "$refuse_reason" ]]; then
+  reviewer="${positional[0]:?reviewer name required: a built-in (sigma|code-review|declare) or a config.review.reviewer_registry name}"
+  verdict="${positional[1]:-pass}"
+  reviewer_context="${positional[2]:-unknown}"
+  execution_context="${positional[3]:-inline}"
+  output_contract="${positional[4]:-json_block}"
+  case "$reviewer_context" in
+    fresh|shared|unknown) ;;
+    *)
+      echo "emit-attestation: reviewer_context must be fresh, shared, or unknown (got '$reviewer_context')" >&2
+      exit 2
+      ;;
+  esac
+  case "$execution_context" in
+    inline|fork) ;;
+    *) echo "emit-attestation: execution_context must be inline or fork (got '$execution_context')" >&2; exit 2 ;;
+  esac
+  case "$output_contract" in
+    report_findings|json_block|prose_unparseable) ;;
+    *) echo "emit-attestation: output_contract must be report_findings, json_block or prose_unparseable (got '$output_contract')" >&2; exit 2 ;;
+  esac
+fi
 while [[ "$reviewer" == /* ]]; do reviewer="${reviewer#/}"; done # strip ALL leading slashes (parity with both parsers' lstrip / trim_start_matches)
 
 head_sha="$(git rev-parse HEAD 2>/dev/null)" || {
@@ -236,6 +253,31 @@ review_verb="$(printf '%s' "$hold_json" | jq -r '.metadata.verb // "/code-review
 # defaults below are what cover that (same for the metadata fields that
 # follow, whose fallbacks ride the same empty-input shape).
 [[ -n "$review_verb" ]] || review_verb="/code-review"
+
+# The refusal mode terminal: same row shape as the unresolvable-base refusal
+# below, emitted here because the hoisted block above already resolved the
+# invocation id, the verb, the head and the branch, and the refusal names no
+# diff measurement. It closes the invocation's sent row, so an attempt that
+# produced no verdict reads as attempted-and-refused, never as
+# never-attempted. The exit stays 1: a refusal is a refusal even when it
+# journaled, and the caller reports the row note, never a pass.
+if [[ -n "$refuse_reason" ]]; then
+  refusal_row_note="the refused review_invocation row could NOT be journaled (the event writer failed); the attempt is unrecorded"
+  if "${FNO:-fno}" doctor event emit -t review_invocation -s daemon \
+    -d "$(jq -cn \
+      --arg invocation_id "$invocation_id" \
+      --arg stage refused \
+      --arg verb "$review_verb" \
+      --arg reason "$refuse_reason" \
+      --arg head_sha "$head_sha" \
+      --arg branch "$branch" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$verb,reason:$reason,head_sha:$head_sha,branch:$branch}')" \
+    >/dev/null 2>&1; then
+    refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id} (reason ${refuse_reason})"
+  fi
+  echo "emit-attestation: refusal journaled: $refuse_reason; no attestation emitted (${refusal_row_note})" >&2
+  exit 1
+fi
 
 # The diff under review, recorded with the event: its merge-base, its head, and
 # the added+deleted line count across it. Without these a clean review and a
