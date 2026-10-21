@@ -505,19 +505,21 @@ pub(crate) fn dispatch_with(
         ],
     );
 
-    // The receipt: the created-spawn shape the CLI prints. A verb-rendered
-    // seed carries the effective message and the pending verb-fired word; the
-    // verb-marker chain stays Python until the dispatch_spawn port (row 10).
+    // The receipt: the created-spawn shape the CLI prints, byte-parity JSON
+    // (the claude arm's `json_string_ascii` mirrors the Python `json.dumps`
+    // values). A verb-rendered seed carries the effective message and the
+    // pending verb-fired word; the verb-marker chain stays Python until the
+    // dispatch_spawn port.
     let mut receipt = format!(
         "{{\"name\": {}, \"short_id\": {}, \"harness\": {}, \"status\": \"live\"",
-        py_string(name),
-        py_string(&session_id),
-        py_string(harness),
+        crate::claude_ask::json_string_ascii(name),
+        crate::claude_ask::json_string_ascii(&session_id),
+        crate::claude_ask::json_string_ascii(harness),
     );
     if rendered != message {
         receipt.push_str(&format!(
             ", \"effective_message\": {}, \"verb_fired\": \"pending\"",
-            py_string(&rendered)
+            crate::claude_ask::json_string_ascii(&rendered)
         ));
     }
     receipt.push('}');
@@ -584,12 +586,6 @@ fn py_repr_opt(value: Option<&str>) -> String {
         None => "None".to_string(),
         Some(s) => format!("'{s}'"),
     }
-}
-
-/// Python `repr` of a str in the created receipt: a single-quoted string, the
-/// shape the Python lane prints for the same payload.
-fn py_string(value: &str) -> String {
-    format!("'{value}'")
 }
 
 fn thread_socket(state_root: &Path, name: &str) -> PathBuf {
