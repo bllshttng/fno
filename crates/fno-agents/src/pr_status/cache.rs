@@ -547,9 +547,7 @@ pub(crate) fn fresh_tick(
     let dir = cache_dir(cwd)?;
     let slug_key = slug.replace('/', "--");
     let answer = fresh_serve(&dir, &slug_key, &pr.to_string(), now_secs(), require_head)?;
-    let (code, stdout, stderr) = answer;
-    let payload = serde_json::from_str::<Value>(stdout.trim()).unwrap_or(Value::Null);
-    let lines: Vec<String> = stderr.lines().map(str::to_string).collect();
+    let (code, payload, lines, _) = into_answer(answer, 0);
     Some((code, payload, lines))
 }
 
