@@ -25,12 +25,13 @@
 #     capability-stage-review-commit-url-leak
 #     capability-stage-review-decorative-test
 #
-# bank_rev pins fcfcbeb545e913b43aa9b70524ba227cc01677f2, the origin/main
+# bank_rev pins ca8a544fc1fc2d7522da783f476c76ba9d428f76, the origin/main
 # sha this worker branched from (plan 1.3: the pin names a main commit, so
 # it stays reachable after any merge shape, including a squash). This is
-# the slice-4 re-pin: merged main carries the slice-3 stage tasks, so the
-# pin diff is empty again at this branch head and runs pass the gate.
-bank_rev: fcfcbeb545e913b43aa9b70524ba227cc01677f2
+# the slice-5 re-pin: merged main carries the lane-account seat-form fix
+# (PR 3660), so the eval runner reaches the zai trial lane, and the pin
+# diff is empty again at this branch head and runs pass the gate.
+bank_rev: ca8a544fc1fc2d7522da783f476c76ba9d428f76
 
 train:
   - capability-lane-blueprint
