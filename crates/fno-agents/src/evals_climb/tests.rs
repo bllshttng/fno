@@ -114,7 +114,9 @@ fn climb_of(tmp: &TempDir, lines: &[String], prices: Option<Value>) -> Value {
     fs::write(
         &yaml,
         format!(
-            "bank_rev: {PIN}\ntrain: [t1, t2]\nvalidation: []\nqualification: [h1, h2, h3, h4]\n"
+            // Quoted: a bare 40-digit pin parses as a YAML number, and the
+            // loader demands a string.
+            "bank_rev: '{PIN}'\ntrain: [t1, t2]\nvalidation: []\nqualification: [h1, h2, h3, h4]\n"
         ),
     )
     .unwrap();
