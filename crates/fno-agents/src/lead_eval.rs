@@ -641,6 +641,18 @@ fn fold_json(fold: &Fold) -> Value {
         .iter()
         .map(|turn| json!({"ts": turn.ts, "class": turn.class, "text": turn.text}))
         .collect::<Vec<_>>();
+    let mut asks = BTreeMap::<String, Vec<&str>>::new();
+    for turn in &fold.typed_turns {
+        let key = normalized_lead(turn.text.trim()).to_lowercase();
+        if !key.trim().is_empty() {
+            asks.entry(key).or_default().push(&turn.ts);
+        }
+    }
+    let repeated_asks = asks
+        .into_iter()
+        .filter(|(_, ts)| ts.len() > 2)
+        .map(|(lead, ts)| json!({"lead": lead, "count": ts.len(), "ts": ts}))
+        .collect::<Vec<_>>();
     let windows = fold.windows.iter().map(Window::json).collect::<Vec<_>>();
     let all_start = fold
         .windows
@@ -691,6 +703,7 @@ fn fold_json(fold: &Fold) -> Value {
         },
         "typed_turns": typed,
         "repeated_refusals": repeated,
+        "repeated_asks": repeated_asks,
         "hygiene": hygiene,
         "subagents": fold.subagents,
         "lead_checkin": {
@@ -1006,11 +1019,94 @@ fn write_fold_failed_index(
         .and_then(|name| name.to_str())
         .unwrap_or("eval");
     let path = dir.with_file_name(format!("{base}.md"));
+    let status = if transient_failure(reason) {
+        RETRY_STATUS
+    } else {
+        "fold-failed"
+    };
     let body = format!(
-        "---\nsession: {session}\nhandle: {}\ntranscript: {}\nstatus: fold-failed\n---\n\n# Lead eval\n\nThe mechanical fold failed: {}\n",
+        "---\nsession: {session}\nhandle: {}\ntranscript: {}\nstatus: {status}\n---\n\n# Lead eval\n\nThe mechanical fold failed: {}\n",
         &session[..session.len().min(8)], transcript.display(), reason.replace('\n', " ")
     );
     write_if_missing(&path, &body)
+}
+
+const RETRY_STATUS: &str = "fold-retry";
+
+/// EAGAIN (35 on macOS, 11 on Linux): the process table or a socket was
+/// briefly full. The transcript is fine, so the arm folds it again next tick.
+fn transient_failure(reason: &str) -> bool {
+    reason.contains("os error 35")
+        || reason.contains("os error 11)")
+        || reason.contains("Resource temporarily unavailable")
+}
+
+fn index_status(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let front = raw.strip_prefix("---\n")?.split("\n---").next()?;
+    front
+        .lines()
+        .find_map(|line| line.strip_prefix("status: "))
+        .map(|status| status.trim().to_string())
+}
+
+/// The previous lead over the same scope tag: the sibling eval whose fold
+/// ended last before this fold began.
+fn prior_fold(dir: &Path, value: &Value) -> Option<(String, Value)> {
+    let base = dir.file_name()?.to_str()?;
+    let prefix = &base[..=base.rfind('-')?];
+    let start = value["windows"][0]["start"].as_str()?;
+    let mut best: Option<(String, String, Value)> = None;
+    for entry in std::fs::read_dir(dir.parent()?).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == base || !name.starts_with(prefix) || !entry.path().is_dir() {
+            continue;
+        }
+        let Some(prior) = std::fs::read_to_string(entry.path().join("data/fold.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        else {
+            continue;
+        };
+        let Some(end) = prior["windows"]
+            .as_array()
+            .and_then(|w| w.last())
+            .and_then(|w| w["end"].as_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if end.as_str() < start && best.as_ref().is_none_or(|(_, e, _)| end > *e) {
+            best = Some((name, end, prior));
+        }
+    }
+    best.map(|(name, _, prior)| (name, prior))
+}
+
+fn lead_measures(value: &Value) -> [(&'static str, u64); 6] {
+    let len = |key: &str| value[key].as_array().map_or(0, Vec::len) as u64;
+    let num = |ptr: &str| value.pointer(ptr).and_then(Value::as_u64).unwrap_or(0);
+    [
+        ("Tool calls", num("/totals/tool_calls")),
+        ("Errors", num("/totals/errors")),
+        ("Typed user turns", num("/totals/typed")),
+        ("Repeated refusals", len("repeated_refusals")),
+        ("Asks repeated more than twice", len("repeated_asks")),
+        ("Merges", len("merges")),
+    ]
+}
+
+fn against_prior(dir: &Path, value: &Value) -> String {
+    let Some((name, prior)) = prior_fold(dir, value) else {
+        return "\n## Against the last lead\n\nNo earlier eval over this scope.\n".into();
+    };
+    let mut out = format!(
+        "\n## Against the last lead\n\nLast lead: [{name}](../{name}.md).\n\n| Measure | Last lead | This lead |\n|---|---:|---:|\n"
+    );
+    for ((label, then), (_, now)) in lead_measures(&prior).iter().zip(lead_measures(value)) {
+        out.push_str(&format!("| {label} | {then} | {now} |\n"));
+    }
+    out
 }
 
 fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
@@ -1113,6 +1209,7 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
     ] {
         metrics.push_str(&format!("\n## {title}\n\n```json\n{data}\n```\n"));
     }
+    metrics.push_str(&against_prior(dir, value));
     metrics.push_str(&format!("\n## Fold\n\n```json\n{}\n```\n", value));
     write_if_missing(&dir.join("part1-metrics.md"), &metrics)?;
     let mut timeline = format!("# Part 2: timeline\n\n{source}\n");
@@ -1162,6 +1259,13 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
                 summary,
             )?;
         }
+    }
+    // A failed fold's index gives way to the real one.
+    if matches!(
+        index_status(&index).as_deref(),
+        Some(RETRY_STATUS | "fold-failed")
+    ) {
+        let _ = std::fs::remove_file(&index);
     }
     write_if_missing(&index, &index_md)?;
     Ok(())
@@ -1420,6 +1524,15 @@ fn session_has_eval(session: &str) -> Result<bool, String> {
         let entry = entry.map_err(|error| format!("eval directory entry unreadable: {error}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.contains(sid8) {
+            // A retry index and the dir it sits beside both name the
+            // handle; neither is a written eval.
+            let index = match name.strip_suffix(".md") {
+                Some(_) => entry.path(),
+                None => entry.path().with_file_name(format!("{name}.md")),
+            };
+            if index_status(&index).as_deref() == Some(RETRY_STATUS) {
+                continue;
+            }
             return Ok(true);
         }
     }
@@ -1759,6 +1872,42 @@ mod tests {
         assert!(
             session_has_eval(session).unwrap(),
             "the written eval must satisfy the dedup read"
+        );
+    }
+
+    #[test]
+    fn an_eagain_fold_stays_retryable_and_the_eval_reads_the_last_lead() {
+        let leads = tempfile::tempdir().unwrap();
+        let dir = leads.path().join("lead-fno-246866bd");
+        let reason = "Resource temporarily unavailable (os error 35)";
+        write_fold_failed_index("246866bd-x", Path::new("/t.jsonl"), &dir, reason).unwrap();
+        let index = leads.path().join("lead-fno-246866bd.md");
+        assert_eq!(index_status(&index).as_deref(), Some(RETRY_STATUS));
+        let other = leads.path().join("lead-fno-11111111");
+        write_fold_failed_index("11111111-x", Path::new("/t.jsonl"), &other, "bad row").unwrap();
+        assert_eq!(
+            index_status(&leads.path().join("lead-fno-11111111.md")).as_deref(),
+            Some("fold-failed")
+        );
+
+        let prior = leads.path().join("lead-fno-0000aaaa");
+        std::fs::create_dir_all(prior.join("data")).unwrap();
+        let fold = json!({
+            "windows": [{"end": "2026-10-01T00:00:00Z"}],
+            "totals": {"tool_calls": 40, "errors": 4, "typed": 3},
+            "repeated_asks": [{"lead": "status?"}],
+        });
+        std::fs::write(prior.join("data/fold.json"), fold.to_string()).unwrap();
+        let now = json!({
+            "windows": [{"start": "2026-10-02T00:00:00Z"}],
+            "totals": {"tool_calls": 50, "errors": 1, "typed": 2},
+        });
+        let table = against_prior(&dir, &now);
+        assert!(table.contains("lead-fno-0000aaaa"), "{table}");
+        assert!(table.contains("| Tool calls | 40 | 50 |"), "{table}");
+        assert!(
+            table.contains("| Asks repeated more than twice | 1 | 0 |"),
+            "{table}"
         );
     }
 }

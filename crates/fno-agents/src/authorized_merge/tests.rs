@@ -11,6 +11,7 @@ struct Fake {
     dispatch_hold: Option<ProbeOutcome>,
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
+    merge_freeze: Option<ProbeOutcome>,
     review_posted: Option<ProbeOutcome>,
     /// The `reviewed_head` argument review_posted_gate last passed in, so a
     /// test can prove it threaded the attestation's own head, not a guess.
@@ -274,6 +275,9 @@ impl Probes for Fake {
     }
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.pr_hold.clone().unwrap_or(ProbeOutcome::Clear)
+    }
+    fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        self.merge_freeze.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
         *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
@@ -1553,6 +1557,15 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
             },
         ),
         (
+            "merge_freeze",
+            Fake {
+                merge_freeze: Some(ProbeOutcome::Refused(
+                    "merge_freeze: PR #7 is off the pin merge-freeze:o/r@prs:6".to_string(),
+                )),
+                ..base()
+            },
+        ),
+        (
             "review_in_flight",
             Fake {
                 review_hold: Some(ProbeOutcome::Refused(
@@ -1639,20 +1652,37 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
         )),
         ..base()
     };
+    let frozen = Fake {
+        merge_freeze: Some(ProbeOutcome::Refused(
+            "merge_freeze: PR #7 is off the pin".to_string(),
+        )),
+        ..base()
+    };
+    // An unreadable freeze fails closed on both effects.
+    let unreadable = Fake {
+        merge_freeze: Some(ProbeOutcome::Inconclusive(
+            "merge_freeze: the freeze is unreadable".to_string(),
+        )),
+        ..base()
+    };
     for (code, fake, word) in [
         ("outside_pr", outside, "refused"),
         ("pr_hold", held, "held"),
+        ("merge_freeze", frozen, "held"),
+        ("merge_freeze_unreadable", unreadable, "held"),
     ] {
-        let req_arm = Request {
-            require_checks: true,
-            ..request(Effect::Arm)
-        };
-        let outcome = run(&fake, &req_arm);
-        assert_eq!(
-            outcome.word(),
-            word,
-            "{code}: the arm did not answer {word}: {outcome:?}"
-        );
+        for effect in [Effect::Arm, Effect::Merge] {
+            let req = Request {
+                require_checks: true,
+                ..request(effect)
+            };
+            let outcome = run(&fake, &req);
+            assert_eq!(
+                outcome.word(),
+                word,
+                "{code}: the {effect:?} did not answer {word}: {outcome:?}"
+            );
+        }
     }
 }
 

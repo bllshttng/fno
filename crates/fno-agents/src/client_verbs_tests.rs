@@ -10,12 +10,19 @@ fn session_id_field_and_resume_argv_contract() {
     // break the byte-identity argv pinned below.
     std::env::remove_var("FNO_WORKER_ADD_DIRS");
     assert_eq!(session_id_field("claude"), Some("short_id"));
-    assert_eq!(session_id_field("codex"), Some("harness_session_id"));
-    assert_eq!(session_id_field("gemini"), Some("harness_session_id"));
-    assert_eq!(session_id_field("agy"), Some("harness_session_id"));
-    assert_eq!(session_id_field("opencode"), Some("harness_session_id"));
-    assert_eq!(session_id_field("cursor-agent"), Some("harness_session_id"));
+    // The claude exception is the whole table now: every other harness
+    // resolves through resume_session_id's harness_session_id fallback, so
+    // the match carries no per-name arm to rot when a harness lands.
+    assert_eq!(session_id_field("codex"), None);
     assert_eq!(session_id_field("unknown"), None);
+    let worker = serde_json::json!({ "short_id": "8hexjob", "harness_session_id": "canon-id" });
+    assert_eq!(resume_session_id(&worker, "claude"), "8hexjob");
+    // A claude PANE row carries no short_id by design; the fallback keeps it
+    // resumable instead of reporting "no session id" for a row that has one.
+    let pane = serde_json::json!({ "harness_session_id": "canon-id" });
+    assert_eq!(resume_session_id(&pane, "claude"), "canon-id");
+    assert_eq!(resume_session_id(&pane, "codex"), "canon-id");
+    assert_eq!(resume_session_id(&pane, "pi"), "canon-id");
 
     // --cd lands the resume in the row's own tree instead of the session
     // directory codex defaults to. It sits BEFORE the subcommand, where

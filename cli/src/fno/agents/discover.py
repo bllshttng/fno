@@ -911,13 +911,15 @@ def _discover_from_registry(
 
     A spawned worker registered under a name (e.g. ``x-aaaa-us8-build``) also
     answers to its bare ``<short8>`` handle, because its harness session id
-    is surfaced as a discover row. The harness -> id mapping is
-    ``HARNESS_SESSION_ID_FIELDS`` (the single source of truth also read by the
-    resume path), so a new harness needs a field there, not a resolver edit. For
+    is surfaced as a discover row. The known-harness gate reads the Rust
+    roster (``known_providers()``), so a new harness needs no edit here; ids
+    resolve off ``harness_session_id`` (claude's ``short_id`` jobId exception
+    is the registry map's one entry). For
     claude the row carries the FULL session uuid when known so it dedups against
     the roster/disk rows for the same session; ``short_id`` stays the 8-hex jobId
     the inject verb addresses."""
-    from fno.agents.registry import HARNESS_SESSION_ID_FIELDS, load_registry
+    from fno.agents.registry import load_registry
+    from fno.harness_names import known_providers
 
     exclude = {s for s in (exclude_session_ids or ()) if s}
     rows: list[dict] = []
@@ -937,7 +939,7 @@ def _discover_from_registry(
         # while remaining durably mail-routable -- the live/durable split the
         # relay peer table depends on, preserved, not widened.
         harness = getattr(e, "harness", None)
-        if harness not in HARNESS_SESSION_ID_FIELDS:
+        if harness not in known_providers():
             continue
         # Registry status is enumeration metadata, not a liveness verdict.
         # Family-1 transcript truth below decides whether callers may route.

@@ -193,20 +193,16 @@ def resolve_self_identity(
 
 
 def _stamp_witnessed_by_markerless_harness(walked, stamped, session) -> bool:
-    """A complete stamp for a harness with no vendor marker (footnote) is
-    proven when the walk names that harness and its process env carries the
-    same FNO_HARNESS_SESSION_ID. Mirror of the Rust function of this name."""
+    """Prove a markerless harness's stamp from its own process env (Rust twin)."""
     from fno.claims.session_pid import resolve_session_pid
     from fno.harness_identity import HARNESS_SESSION_MARKERS, _read_ancestor_marker
-
     walked = (walked or "").lower()
-    if not session or not walked or walked != (stamped or "").lower():
-        return False
-    if any(family == walked for _m, family in HARNESS_SESSION_MARKERS):
+    families = {family for _m, family in HARNESS_SESSION_MARKERS}
+    if not session or not walked or walked != (stamped or "").lower() or walked in families:
         return False
     pid = resolve_session_pid()
-    carried = (_read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") or "") if pid else ""
-    return bool(carried) and session_identity_key(carried) == session_identity_key(session)
+    carried = _read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") if pid else None
+    return carried is not None and session_identity_key(carried) == session_identity_key(session)
 
 
 def _own_cwd() -> str:

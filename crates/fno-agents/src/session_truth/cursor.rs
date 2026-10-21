@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::TailSummary;
 
@@ -122,6 +122,11 @@ pub struct TruthCursors {
         Vec<crate::claude_transcript_paths::Hit>,
         Instant,
     )>,
+    // Each claude project dir's last listing, keyed by the dir's mtime. A
+    // relist stats every dir and reads only those whose mtime moved: a new
+    // transcript bumps its own dir, an append to one bumps nothing.
+    claude_dirs: HashMap<PathBuf, (SystemTime, Vec<crate::claude_transcript_paths::Hit>)>,
+    claude_dirs_read: u64,
     codex_files: Option<(Option<PathBuf>, Vec<(String, PathBuf)>, Instant)>,
     last_bytes_read: u64,
     last_prune: Option<Instant>,
@@ -202,6 +207,12 @@ impl TruthCursors {
         self.misses.insert(handle.to_string(), Instant::now());
     }
 
+    /// Project dirs the claude relists have read since this set was made.
+    #[cfg(test)]
+    pub(crate) fn claude_dirs_read(&self) -> u64 {
+        self.claude_dirs_read
+    }
+
     /// End the beat: misses and store listings both expire.
     #[cfg(test)]
     pub(crate) fn expire_beat_for_test(&mut self) {
@@ -219,10 +230,36 @@ impl TruthCursors {
     ) -> &[crate::claude_transcript_paths::Hit] {
         let fresh = matches!(&self.claude_hits, Some((r, _, at)) if r.as_slice() == roots && at.elapsed() < max_age);
         if !fresh {
-            let hits = roots
-                .iter()
-                .flat_map(|root| crate::claude_transcript_paths::store_listing(root))
-                .collect();
+            let mut hits = Vec::new();
+            let mut live = std::collections::HashSet::new();
+            for root in roots {
+                let Ok(entries) = std::fs::read_dir(root) else {
+                    continue;
+                };
+                let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+                // The same order store_listing sorts into: every path in one
+                // dir sorts together, so dir order then file order is path order.
+                dirs.sort();
+                for dir in dirs {
+                    let Ok(mtime) = std::fs::metadata(&dir).and_then(|m| m.modified()) else {
+                        continue;
+                    };
+                    let stale = self
+                        .claude_dirs
+                        .get(&dir)
+                        .map_or(true, |(at, _)| *at != mtime);
+                    if stale {
+                        self.claude_dirs_read += 1;
+                        let listed = crate::claude_transcript_paths::dir_listing(&dir);
+                        self.claude_dirs.insert(dir.clone(), (mtime, listed));
+                    }
+                    if let Some((_, listed)) = self.claude_dirs.get(&dir) {
+                        hits.extend(listed.iter().cloned());
+                    }
+                    live.insert(dir);
+                }
+            }
+            self.claude_dirs.retain(|dir, _| live.contains(dir));
             self.claude_hits = Some((roots.to_vec(), hits, Instant::now()));
         }
         self.claude_hits
@@ -609,6 +646,61 @@ mod tests {
         assert!(cursors.last_bytes_read() <= REBUILD_CAP);
         assert_eq!(s.last_role(), Some("assistant"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AC3: a relist over an unchanged store reads no project dir.
+    #[test]
+    fn a_relist_of_an_unchanged_store_reads_no_project_dir() {
+        let root = dir("relist-same");
+        for d in ["-a", "-b"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+            std::fs::write(root.join(d).join(format!("{d}x.jsonl")), "{}\n").unwrap();
+        }
+        let roots = vec![root.clone()];
+        let mut cursors = TruthCursors::new();
+        let first: Vec<PathBuf> = cursors
+            .claude_hits(&roots, MISS_BEAT)
+            .iter()
+            .map(|h| h.path.clone())
+            .collect();
+        assert_eq!(cursors.claude_dirs_read(), 2);
+        let full: Vec<PathBuf> = crate::claude_transcript_paths::store_listing(&root)
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        assert_eq!(first, full, "the cursor lists what a full walk lists");
+        cursors.expire_beat_for_test();
+        assert_eq!(cursors.claude_hits(&roots, MISS_BEAT).len(), 2);
+        assert_eq!(cursors.claude_dirs_read(), 2, "no dir moved, none read");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// AC3: a transcript born in an existing dir after the first listing
+    /// resolves on the next relist.
+    #[test]
+    fn a_transcript_born_in_an_existing_dir_resolves_on_relist() {
+        let root = dir("relist-new");
+        let proj = root.join("-repo");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("old.jsonl"), "{}\n").unwrap();
+        let roots = vec![root.clone()];
+        let mut cursors = TruthCursors::new();
+        assert_eq!(cursors.claude_hits(&roots, MISS_BEAT).len(), 1);
+        // Pin the dir's mtime apart from the first stat, as a coarse clock
+        // could leave it equal.
+        std::fs::write(proj.join("new.jsonl"), "{}\n").unwrap();
+        std::fs::File::open(&proj)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
+        cursors.expire_beat_for_test();
+        let names: Vec<String> = cursors
+            .claude_hits(&roots, MISS_BEAT)
+            .iter()
+            .map(|h| h.name.clone())
+            .collect();
+        assert_eq!(names, ["new.jsonl", "old.jsonl"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

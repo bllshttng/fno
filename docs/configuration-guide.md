@@ -306,6 +306,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `status_fanout.interval_secs` | int | `5` | advanced | Seconds between status-fanout ticks per project (daemon host). |
 | `status_fanout.http_timeout_secs` | int | `5` | advanced | Bounded per-webhook HTTP timeout for a status sink. |
 | `status_fanout.retries` | int | `2` | advanced | Retry budget per webhook dispatch before drop/short-circuit. |
+| `status_fanout.short_circuit_backoff_secs` | int | `300` | advanced | Seconds a short-circuited status sink stays parked before the next retry; 0 retries every tick. |
 | `lead.enabled` | bool | `false` | advanced | Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false. |
 | `lead.autonomous_merge` | bool | `false` | advanced | Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work. |
 | `lead.wake_enabled` | bool | `false` | advanced | Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false. |

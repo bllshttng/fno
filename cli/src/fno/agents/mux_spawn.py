@@ -495,26 +495,6 @@ def claude_argv_is_interactive(argv: list[str]) -> bool:
     return not any(tok in ("-p", "--print") for tok in argv)
 
 
-# Providers with an interactive-pane form below. This is the pane-hostable set -
-# a DISTINCT invariant from READABLE_PROVIDERS (which only means "the registry
-# loader tolerates this string in a row"). The two coincide today (opencode
-# graduated from staged-manifest-only to hosted at) but diverge the
-# moment the next readable-but-argvless provider is staged. Gate the pane path
-# on THIS, so a staged provider is refused with an honest message rather than
-# slipping to build_pane_argv's backstop raise.
-# Keep in sync with the branches in build_pane_argv (the round-trip test enforces it).
-PANE_HOSTABLE_PROVIDERS: tuple[str, ...] = (
-    "claude",
-    "codex",
-    "gemini",
-    "agy",
-    "opencode",
-    "pi",
-    "cursor-agent",
-    "grok",
-    "footnote",
-)
-
 #: : the token shape an UNDECLARED harness name must match before the
 #: pane lane will even look it up on PATH. Checked first, so a shell-hostile
 #: string never reaches shutil.which() or an argv. Undeclared names name CLI
@@ -3135,9 +3115,7 @@ def validate_pane_provider(
     each before any pane exists; a declared harness skips all three. The
     declared/undeclared fact is read from the TABLE (is_declared), the same
     predicate build_pane_argv's generic arm and the UNDECLARED receipt below
-    read, so they can never disagree about a harness. PANE_HOSTABLE_PROVIDERS
-    stays the declared pane ROSTER (spawn defaults, probes); the roster gains
-    no member here."""
+    read, so they can never disagree about a harness."""
     from fno.agents.harness_map import is_declared
 
     if is_declared(provider):

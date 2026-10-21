@@ -62,7 +62,7 @@ from fno.agents.harness_map import DispatchResolveError, render_seed
 from fno.config._dispatch_verbs import is_verb_seed
 from fno.agents.lane_heal import lane_heal as _lane_heal
 from fno.agents.lock import AgentLockTimeout, hold_agent_lock
-from fno.agents.harnesses import KNOWN_PROVIDERS, SPAWN_HARNESSES
+from fno.agents.harnesses import KNOWN_PROVIDERS
 from fno.agents.keeper_thread import _mint_thread_session_id
 from fno.harness_names import unknown_thread_harness_message
 from fno.agents.harnesses.base import ProviderResult, ReachabilityProbeError
@@ -415,6 +415,7 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
     stance from the lanes that have run - the state-root gate downstream only
     refuses an ABSENT key, so an ``"unmeasured"`` value would pass it.
     """
+    from fno.agents.harnesses import SPAWN_HARNESSES  # call-time read (import-time crashes stale binaries)
     if name in SPAWN_HARNESSES:
         substrate = "headless" if headless else "thread"
         from fno.agents.harness_map import capabilities_or_undeclared
@@ -443,8 +444,7 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
         # an undeclared harness HAS a lane - the pane - so this refusal
         # must name that lane rather than the accept set. It must not fall into
         # the deprecated-harness text below either: that one names agy as a
-        # successor, a harness the operator never mentioned (the same trap the
-        # SPAWN_HARNESSES comment records for pi).
+        # successor, a harness the operator never mentioned.
         raise DispatchAskError(
             f"harness {name!r} declares no capability row (no entry in "
             "harness_capabilities.toml); the pane is the only lane "

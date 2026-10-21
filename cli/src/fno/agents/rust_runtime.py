@@ -1114,11 +1114,11 @@ def _is_dispatch_account_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
 def _is_resume_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--resume`` / ``-r``.
 
-    The front-door normalizer rewrites ``-r <id>`` into ``--resume <full-uuid>``,
-    and the Rust spawn parser does not (yet) know ``--resume``, so a resume-bearing
-    spawn that auto-routed to the binary would exit ``unknown flag: --resume``.
-    Keeping it Python routes it to ``cmd_spawn``, which owns the bg-thread revival
-    lane. (``-r`` is matched too for a pre-normalization raw argv.)
+    No longer a route: the Rust spawn grammar knows ``--resume`` and refuses
+    a resume-bearing spawn itself with the retired-axis line, so the flag
+    never reaches ``cmd_spawn``. The predicate now only reports the flag to
+    the ``spawn-axes`` node-seed derivation. (``-r`` is matched too for a
+    pre-normalization raw argv.)
     """
     if verb != "spawn":
         return False
@@ -1357,17 +1357,13 @@ def _is_retired_axis_spawn(verb: str, args: Sequence[str]) -> bool:
 
 
 def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
-    """footnote's headless lane lives only in the Rust client, which reads
-    ``--once`` and refuses ``--as``; left as ``--as headless`` the spawn stays
-    on the Python door, which has no footnote arm."""
+    """footnote's headless arm is Rust-only and reads ``--once``, never ``--as``."""
     head = list(_args_before_argv(args))
-    tail = list(args[len(head):])
     if head[:1] == ["spawn"] and (_spawn_flag_value(args, "--harness", "-H") or "").lower() == "footnote":
         for i, a in enumerate(head):
             if a == "--as=headless" or (a == "--as" and head[i + 1 : i + 2] == ["headless"]):
                 head[i : i + (1 if "=" in a else 2)] = ["--once"]
-                break
-    return head + tail
+    return head + list(args[len(_args_before_argv(args)) :])
 
 
 def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:

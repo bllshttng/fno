@@ -448,6 +448,11 @@ pub trait Probes {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// The merge freeze: an off-pin PR holds until the user lifts the pin.
+    /// Default `Clear` keeps an impl that does not read the record inert.
+    fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
     /// Has the round attested at `reviewed_head` (the newest branch
     /// attestation's own head, not necessarily `facts.head_sha` - a carried
     /// round never gets a fresh attestation at the new head) landed as a
@@ -572,6 +577,12 @@ fn decide_observed<P: Probes>(
     // The owner's per-PR hold answers beside the dispatch hold: held, not
     // refused, because the owner releasing it clears it.
     if let Some(blocked) = probes.pr_hold(cwd, &facts).fail_closed() {
+        return Err(Outcome::Held { reason: blocked });
+    }
+
+    // The merge freeze answers beside the per-PR hold, for every caller of
+    // `run`: finalize's auto-merge arm reads it here and nowhere else.
+    if let Some(blocked) = probes.merge_freeze(cwd, &facts).fail_closed() {
         return Err(Outcome::Held { reason: blocked });
     }
 
@@ -989,6 +1000,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
     if let Some(reason) = probes.pr_hold(cwd, facts).fail_closed() {
         blockers.push(Blocker::held("pr_hold", reason));
+    }
+    if let Some(reason) = probes.merge_freeze(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("merge_freeze", reason));
     }
 
     // (4b) the user's look: a PR touching the configured paint surface holds
@@ -1701,6 +1715,10 @@ impl Probes for RealProbes {
 
     fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         crate::pr_admission::pr_hold(cwd, facts)
+    }
+
+    fn merge_freeze(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        crate::merge_freeze::probe(facts)
     }
 
     fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
@@ -2667,9 +2685,10 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         );
         return (0, out, String::new());
     }
-    // The freeze ops are the scoped merge freeze's transport, riding the same
-    // payload the hold ops use: `{"op": "freeze-set"|"freeze-clear"|"freeze-check",
-    // ...}` writes and reads the team's freeze record.
+    // The freeze ops are the merge freeze's transport, riding the same payload
+    // the hold ops use: `{"op": "freeze-set"|"freeze-clear"|"freeze-check",
+    // ...}` writes and reads the freeze record. The gate reads the freeze as
+    // a probe in `decide_observed`.
     if payload
         .get("op")
         .and_then(Value::as_str)
@@ -2749,11 +2768,6 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
     // normally, and the quota ops above never touch the breaker.
     if !request.decide_only && matches!(request.effect, Effect::Merge | Effect::Arm) {
         if let Some((code, message)) = merges_breaker_refusal() {
-            return (code, String::new(), message);
-        }
-        // The scoped merge freeze: an off-list PR refuses with a receipt
-        // naming the freeze; an unreadable record refuses fail closed.
-        if let Some((code, message)) = crate::merge_freeze::refusal(request.pr) {
             return (code, String::new(), message);
         }
     }

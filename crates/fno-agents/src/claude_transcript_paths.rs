@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::provider_cap::ClaudePaths;
 
 /// One store hit: `<projects>/*/<id>*.jsonl`.
+#[derive(Clone)]
 pub(crate) struct Hit {
     pub(crate) path: PathBuf,
     /// The file name: the stem-identity key across project dirs.
@@ -23,30 +24,39 @@ pub(crate) struct Hit {
 /// transcript. Built once per batch and shared across the ids, the way the
 /// deleted Python bridge shared its listing.
 pub(crate) fn store_listing(projects_root: &Path) -> Vec<Hit> {
-    let mut hits = Vec::new();
     let Ok(dirs) = std::fs::read_dir(projects_root) else {
-        return hits;
+        return Vec::new();
     };
-    for dir in dirs.flatten() {
-        let Ok(files) = std::fs::read_dir(dir.path()) else {
+    let mut hits: Vec<Hit> = dirs
+        .flatten()
+        .flat_map(|dir| dir_listing(&dir.path()))
+        .collect();
+    hits.sort_by(|a, b| a.path.cmp(&b.path));
+    hits
+}
+
+/// The transcripts of one project dir, sorted by path. An unreadable dir
+/// lists nothing.
+pub(crate) fn dir_listing(dir: &Path) -> Vec<Hit> {
+    let Ok(files) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut hits = Vec::new();
+    for file in files.flatten() {
+        let name_os = file.file_name();
+        let Some(name) = name_os.to_str() else {
             continue;
         };
-        for file in files.flatten() {
-            let name_os = file.file_name();
-            let Some(name) = name_os.to_str() else {
-                continue;
-            };
-            let Some(stem) = name.strip_suffix(".jsonl") else {
-                continue;
-            };
-            if stem.contains('.') {
-                continue;
-            }
-            hits.push(Hit {
-                path: file.path(),
-                name: name.to_string(),
-            });
+        let Some(stem) = name.strip_suffix(".jsonl") else {
+            continue;
+        };
+        if stem.contains('.') {
+            continue;
         }
+        hits.push(Hit {
+            path: file.path(),
+            name: name.to_string(),
+        });
     }
     hits.sort_by(|a, b| a.path.cmp(&b.path));
     hits
