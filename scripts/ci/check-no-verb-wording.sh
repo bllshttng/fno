@@ -23,6 +23,8 @@
 #   - the node_dispatch.verb SQL column: older installed binaries share
 #     graph.db and select it by name, so the stored name stays.
 #   - role_migration's retired_verb, a frozen generated-copy source.
+#   - the graph keeper's old store method name "effective_verb", served
+#     beside "effective_command" so a client of an older build still reads.
 #   - this gate's own name.
 #   - files listed in ALLOW_FILES below.
 #
@@ -50,7 +52,7 @@ scan() {
         BEGIN {
             $files = qr{'"$ALLOW_FILES"'};
             $not = qr{verbatim|verbos|verbal|adverb|proverb|verbiage|reverb}i;
-            $keys = qr{(["\x27])(?:verbs?|verb_source|verb_hint)\1|\b(?:native_verbs|native_verb_meta|review_verbs|retired_verb)\b|--(?:dispatch-verb|next-verb|ack-verb-risk|verb)\b|check-no-verb-wording};
+            $keys = qr{(["\x27])(?:verbs?|verb_source|verb_hint)\1|\b(?:native_verbs|native_verb_meta|review_verbs|retired_verb)\b|--(?:dispatch-verb|next-verb|ack-verb-risk|verb)\b|check-no-verb-wording|"effective_verb"};
             $sql = qr{\b(?:d|excluded|node_dispatch)\.verb\b|\bverb TEXT\b|\(node_id, verb\b|\bSELECT verb\b|\bSET verb\b};
         }
         chomp;

@@ -1454,7 +1454,7 @@ def route_to_rust(
 
 
 def _make_rust_only_command(
-    command: str, help_text: str, *, hidden: bool = False
+    command_name: str, help_text: str, *, hidden: bool = False
 ) -> "click.Command":
     """A placeholder Click command for a Rust-only command, used for help + fallback.
 
@@ -1473,7 +1473,7 @@ def _make_rust_only_command(
     import click
 
     @click.command(
-        name=command,
+        name=command_name,
         help=f"{help_text} (Rust runtime).",
         hidden=hidden,
         # Don't choke on the command's real flags before we print the message --
@@ -1484,14 +1484,14 @@ def _make_rust_only_command(
     def _placeholder() -> NoReturn:
         if runtime_mode() == "python":
             print(
-                f"fno agents {command}: no Python implementation -- this command runs only on "
+                f"fno agents {command_name}: no Python implementation -- this command runs only on "
                 f"the '{rust_binary.BINARY_NAME}' Rust runtime. Unset {RUNTIME_ENV} (auto) with the "
                 f"binary installed, or set {RUNTIME_ENV}=rust to use a local cargo build.",
                 file=sys.stderr,
             )
         else:
             print(
-                f"fno agents {command}: requires the '{rust_binary.BINARY_NAME}' Rust runtime, which was "
+                f"fno agents {command_name}: requires the '{rust_binary.BINARY_NAME}' Rust runtime, which was "
                 "not found (bundled wheel dir, launcher sibling, PATH -- the default "
                 f"lookup deliberately ignores ${rust_binary.BINARY_ENV}). Get it via "
                 f"`pip install fno` (bundled), `cargo install fno-agents`, or set "

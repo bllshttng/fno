@@ -48,14 +48,14 @@ class _Settings:
 def _settings(
     profile_provider: Optional[str] = None,
     legacy_harness: Optional[str] = None,
-    command: str = "target",
+    command_name: str = "target",
     profile_route: Optional[str] = None,
 ) -> _Settings:
     from types import SimpleNamespace
 
     profiles = None
     if profile_provider or profile_route:
-        profiles = {command: {"provider": profile_provider, "route": profile_route}}
+        profiles = {command_name: {"provider": profile_provider, "route": profile_route}}
     # Attribute access, like the typed DispatchBlock the real model carries.
     dispatch = (
         SimpleNamespace(harness=legacy_harness, substrate="", command="")

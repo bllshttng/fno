@@ -1228,8 +1228,9 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
             crate::scoreboard_escalation::view(&params).map_err(StoreError::Invalid)
         }
         // The lifecycle command decision (backlog_ready::serve_effective_command):
-        // one answer per shipped row; a refusal rides its own row.
-        "effective_command" => {
+        // one answer per shipped row; a refusal rides its own row. The old
+        // method name stays served so a client of an older build still reads.
+        "effective_command" | "effective_verb" => {
             crate::backlog_ready::serve_effective_command(&params).map_err(StoreError::Invalid)
         }
         // One named op applied over client-shipped rows, no file I/O and no

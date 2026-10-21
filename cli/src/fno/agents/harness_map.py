@@ -1266,7 +1266,7 @@ def resolve_dispatch(
     cfg = (
         dict(dispatch_cfg)
         if dispatch_cfg is not None
-        else _load_dispatch_cfg(settings, command=lifecycle_command or command)
+        else _load_dispatch_cfg(settings, command=lifecycle_command or command_name)
     )
     # The command lane vendor rides the same stage-table row the harness does:
     # an autonomous dispatch that names the harness but not the route sends a
@@ -1371,15 +1371,15 @@ def resolve_dispatch(
     command_declares_no_id = False
     derived_blueprint = lifecycle_command == "/blueprint"
     if lifecycle_command == "/target":
-        command = None
+        command_name = None
     if command is not None and command.strip():
         template = command.strip()
         decision.append("command=explicit")
     elif derived_blueprint:
         template = f"{lifecycle_command} {{id}}"
         decision.append(f"command=derived({lifecycle_command})")
-    elif command is not None:
-        chosen_command = command.strip()
+    elif command_name is not None:
+        chosen_command = command_name.strip()
         if not chosen_command:
             raise DispatchResolveError("explicit dispatch command must not be empty")
         # A plugin-qualified command (`/fno:target`) canonicalizes to its bare form
