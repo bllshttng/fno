@@ -1049,6 +1049,7 @@ mod tests {
         // file write hits EISDIR.
         let existing = RegistryEntry {
             name: WK.to_string(),
+            harness: Some("pi".into()),
             harness_session_id: Some(SID.to_string()),
             cwd: "/tmp".into(),
             created_at: "2026-10-20T00:00:00Z".into(),
@@ -1086,6 +1087,7 @@ mod tests {
             launch: &|_spec| {
                 let foreign = RegistryEntry {
                     name: WK.to_string(),
+                    harness: Some("pi".into()),
                     harness_session_id: Some(SID.to_string()),
                     cwd: "/tmp".into(),
                     created_at: "2026-10-20T00:00:00Z".into(),
