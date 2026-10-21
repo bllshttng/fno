@@ -142,31 +142,30 @@ pub fn run(tail: &[String]) -> i32 {
             .to_string();
         return serve_loaded(&graph_path, &id, true, &args.render, &args.id);
     }
-    // Rows the store ARCHIVED live in the SQLite archive, not in
-    // the live store - the archived tier above only sees rows the store
-    // still carries. Resolve there before answering no. The same shared
-    // reader the reaper's graph read uses; a failed archive read answers
-    // no rows, never an error. A serve the archive db cannot carry (a
-    // table the overlay reads that the archive lacks) degrades to the
-    // ordinary not-found line, never a harder error than no archive read
-    // at all.
+    // Rows the store ARCHIVED live in the SQLite archive (or the legacy
+    // JSON), not in the live store - the archived tier above only sees rows
+    // the store still carries. Resolve there before answering no, serving
+    // from the spelling that matched. The same shared reader the reaper's
+    // graph read uses; a failed archive read answers no rows, never an
+    // error. A serve the archive file cannot carry (a table the overlay
+    // reads that the archive lacks) degrades to the ordinary not-found
+    // line, never a harder error than no archive read at all.
     let state_dir = super::settings::state_dir();
     if let Some(state_dir) = state_dir.as_deref() {
-        let archive_rows = crate::graph_store::archive_rows(state_dir);
-        if !archive_rows.is_empty() {
-            if let Some(hit) = resolve_tiers(&archive_rows, args.id) {
-                let id = hit
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let archive_db = crate::state_layout::find("graph-archive.db")
-                    .map(|row| state_dir.join(row.new))
-                    .unwrap_or_else(|| state_dir.join("graph-archive.db"));
-                let code = serve_loaded(&archive_db, &id, true, &args.render, &args.id);
-                if code != GRAPH_UNREADABLE_EXIT {
-                    return code;
-                }
+        for name in ["graph-archive.db", "graph-archive.json"] {
+            let rows = crate::graph_store::archive_rows_from(state_dir, name);
+            let Some(hit) = resolve_tiers(&rows, args.id) else {
+                continue;
+            };
+            let id = hit
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let archive_file = crate::graph_store::archive_file_path(state_dir, name);
+            let code = serve_loaded(&archive_file, &id, true, &args.render, &args.id);
+            if code != GRAPH_UNREADABLE_EXIT {
+                return code;
             }
         }
     }

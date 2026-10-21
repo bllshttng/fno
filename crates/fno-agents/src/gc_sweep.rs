@@ -1793,6 +1793,19 @@ pub(crate) fn run_with_release(
     let mut manifest_teams = crate::lead_state::ManifestRoleCache::new();
     for (e, staged_row) in registry.entries.iter().zip(staged.iter()) {
         let id = row_label(e);
+        // The --done scope: a row whose work is neither done nor a graded
+        // eval attempt is out of scope BEFORE any gate runs, so the scoped
+        // receipt renders only rows the pass actually judged.
+        if only_done {
+            let done_work = matches!(
+                staged_row,
+                Some((verdict, _)) if matches!(verdict.work, WorkState::AllDone { .. })
+            );
+            let graded_eval = crate::eval_reap::is_graded_eval_row(&e.name, graded_evals.as_ref());
+            if !done_work && !graded_eval {
+                continue;
+            }
+        }
         if e.origin.as_deref() == Some("operator") {
             summary.kept_operator.push(id);
             continue;
@@ -2187,13 +2200,6 @@ pub(crate) fn run_with_release(
                 )
             })
         };
-        // The --done scope (the bulk all-clear): the pass judges only rows
-        // whose work is done or whose graded eval attempt marks the row
-        // finished. Every other row is out of scope for this pass -
-        // untouched, unjudged, and rendered nowhere.
-        if only_done && !matches!(row.work, WorkState::AllDone { .. }) && !row.eval_graded {
-            continue;
-        }
         // d-81c6da7e: a release matched to the planning hold answers the
         // marker question by ruling. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,

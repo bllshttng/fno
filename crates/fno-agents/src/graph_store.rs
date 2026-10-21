@@ -595,16 +595,35 @@ pub(crate) fn archive_rows(state_dir: &Path) -> Vec<Value> {
     // the consumers' mention counts stay single.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for name in ["graph-archive.db", "graph-archive.json"] {
-        if let Some(row) = crate::state_layout::find(name) {
-            push_archive_rows(
-                &mut out,
-                &mut seen,
-                archive_rows_at(&state_dir.join(&row.new)),
-            );
-        }
-        push_archive_rows(&mut out, &mut seen, archive_rows_at(&state_dir.join(name)));
+        push_archive_rows(&mut out, &mut seen, archive_rows_from(state_dir, name));
     }
     out
+}
+
+/// One archive NAME's rows, the migrated `db/` spelling first, then the
+/// legacy top-level spelling, deduped per id within the name. The per-name
+/// reader `backlog get`'s archive tier iterates, so a hit serves from the
+/// spelling that actually matched (the legacy JSON root serves the JSON).
+pub(crate) fn archive_rows_from(state_dir: &Path, name: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(row) = crate::state_layout::find(name) {
+        push_archive_rows(
+            &mut out,
+            &mut seen,
+            archive_rows_at(&state_dir.join(&row.new)),
+        );
+    }
+    push_archive_rows(&mut out, &mut seen, archive_rows_at(&state_dir.join(name)));
+    out
+}
+
+/// The file one archive NAME reads: the migrated `db/` spelling when the
+/// layout names it, else the legacy top-level spelling.
+pub(crate) fn archive_file_path(state_dir: &Path, name: &str) -> PathBuf {
+    crate::state_layout::find(name)
+        .map(|row| state_dir.join(row.new))
+        .unwrap_or_else(|| state_dir.join(name))
 }
 
 /// Extend `out` with `rows` whose id is new; an id already read from an
