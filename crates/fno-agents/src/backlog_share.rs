@@ -1560,11 +1560,12 @@ pub fn run(args: &[String]) -> i32 {
         Some("seed") => seed(&graph),
         Some("sync") => flush(&graph).and_then(|sent| {
             let receipt = sync(&graph)?;
-            Ok(json!({"sent": sent, "sync": receipt}))
+            let plans = crate::plan_carry::sync(&graph)?;
+            Ok(json!({"sent": sent, "sync": receipt, "plans": plans.receipt()}))
         }),
         _ => {
             eprintln!(
-                "usage: fno agents claim backlog seed|sync\n  seed  copy this machine's backlog into an empty shared primary\n  sync  send this machine's outbox, then bring its replica up to the primary"
+                "usage: fno agents claim backlog seed|sync\n  seed  copy this machine's backlog into an empty shared primary\n  sync  send this machine's outbox, bring its replica up to the primary, then carry open nodes' plan bodies"
             );
             return 2;
         }
@@ -1616,6 +1617,9 @@ pub fn maybe_tick(arm: &Arm) {
         }
         if let Err(error) = sync(&graph) {
             eprintln!("backlog-share: sync: {error}");
+        }
+        if let Err(error) = crate::plan_carry::sync(&graph) {
+            eprintln!("backlog-share: plans: {error}");
         }
         flag.store(false, Ordering::SeqCst);
     });

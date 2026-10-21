@@ -382,6 +382,7 @@ pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]
 mod pi_transcript_tests;
+pub mod plan_carry;
 pub mod plan_doc;
 pub mod planning_lane;
 pub mod plans_dirs;
