@@ -98,14 +98,17 @@ fn capture_target(
         .collect();
     // A run_in_background shell can leave the tree (reparented to pid 1)
     // before the stop, so the tree walk misses it and it keeps polling.
-    // Claude stamps the full session id into such a shell's command line,
-    // and a full uuid names no other process, so those rows join too.
+    // Claude stamps the full session id into such a shell's command line
+    // as an env assignment (`NAME=<sid>`), so those rows join too. A bare
+    // argv mention is not enough: `fno agents session stop <sid>` or a
+    // mail send to the session names it too and is not the session's.
     if let Some(sid) = session_id.filter(|sid| sid.len() >= 32) {
         let me = std::process::id();
+        let assigned = format!("={sid}");
         deeper.extend(
             table
                 .iter()
-                .filter(|row| row.command.contains(sid))
+                .filter(|row| row.command.contains(&assigned))
                 .map(|row| row.pid)
                 .filter(|p| {
                     *p != me
@@ -528,6 +531,11 @@ mod tests {
                 "zsh -c CODEX_COMPANION_SESSION_ID=ee99ff00-7777-8888-9999-aaaabbbbcccc gh run watch 1",
             ),
             crate::census::test_proc_row(6100, 1, "zsh -c gh run watch 2"),
+            crate::census::test_proc_row(
+                6200,
+                1,
+                "fno agents session stop ee99ff00-7777-8888-9999-aaaabbbbcccc",
+            ),
         ];
         let got = capture_target(&roster, "ee99ff00", Some(sid), &table, &start_of_every)
             .expect("proved target");
