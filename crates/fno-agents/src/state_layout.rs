@@ -1521,8 +1521,8 @@ mod tests {
             None,
             "a file-only name is not a dir"
         );
-        // A self-mapped row declares the folder and owes nothing. `locks`
-        // is the last one: its slice-4 retarget is the node's final slice.
+        // A self-mapped row declares the folder and owes nothing: with no
+        // legacy/new split, migrate finds nothing to move.
         let rows = parse_table("locks\tlocks\tdir\tdaemon\n").unwrap();
         std::fs::create_dir_all(root.join("locks")).unwrap();
         let receipt = migrate_rows(&root, &rows, true, "test");
@@ -1531,10 +1531,11 @@ mod tests {
             "a self-mapped row is absent: {receipt:?}"
         );
         assert!(root.join("locks").is_dir());
-        // The shipped table pins the five non-lock rows at their folded
-        // destinations: reverting any row in any table copy fails here.
+        // The shipped table pins every dir row, locks included, at its
+        // folded destination: reverting any row in any table copy fails here.
         for name in [
             "attest",
+            "locks",
             "push-stamps",
             "retro-pending",
             "review-invocations",
