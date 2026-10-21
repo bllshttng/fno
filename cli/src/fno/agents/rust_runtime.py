@@ -1366,30 +1366,17 @@ def _is_retired_axis_spawn(verb: str, args: Sequence[str]) -> bool:
 
 
 def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
-    """Spell a footnote ``--as headless`` spawn as ``--once`` for the binary.
-
-    footnote's headless lane lives only in the Rust client
-    (``footnote_harness::dispatch_once``), which reads ``--once``; its axis scan
-    refuses ``--as`` for every lane but cloud. Left as ``--as headless``, the
-    pane predicate keeps the spawn on the Python door, whose dispatch has no
-    footnote arm and refuses it as an unknown thread harness.
-    """
-    if not args or args[0] != "spawn":
-        return list(args)
-    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() != "footnote":
-        return list(args)
-    head = _args_before_argv(args)
-    out: list[str] = []
-    i = 0
-    while i < len(head):
-        a = head[i]
-        if a == "--as" and i + 1 < len(head) and head[i + 1] == "headless":
-            out.append("--once")
-            i += 2
-            continue
-        out.append("--once" if a == "--as=headless" else a)
-        i += 1
-    return out + list(args[len(head):])
+    """footnote's headless lane lives only in the Rust client, which reads
+    ``--once`` and refuses ``--as``; left as ``--as headless`` the spawn stays
+    on the Python door, which has no footnote arm."""
+    head = list(_args_before_argv(args))
+    tail = list(args[len(head):])
+    if head[:1] == ["spawn"] and (_spawn_flag_value(args, "--harness", "-H") or "").lower() == "footnote":
+        for i, a in enumerate(head):
+            if a == "--as=headless" or (a == "--as" and head[i + 1 : i + 2] == ["headless"]):
+                head[i : i + (1 if "=" in a else 2)] = ["--once"]
+                break
+    return head + tail
 
 
 def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:

@@ -192,33 +192,21 @@ def resolve_self_identity(
     )
 
 
-def _stamp_witnessed_by_markerless_harness(
-    true_harness: Optional[str],
-    stamp_harness: Optional[str],
-    stamp_session: Optional[str],
-) -> bool:
-    """The proof for a COMPLETE stamp whose harness mints no vendor session
-    marker (footnote): the attester has no marker to corroborate, so it never
-    answers ``process``. The harness process itself is the witness instead.
-    The walk must name the stamp's harness, and that ancestor's own
-    environment must carry the same ``FNO_HARNESS_SESSION_ID``. The spawn
-    sets the stamp on the harness process, so a stamp exported in a shell
-    below it does not pass. Mirror of the Rust
-    ``stamp_witnessed_by_markerless_harness``.
-    """
+def _stamp_witnessed_by_markerless_harness(walked, stamped, session) -> bool:
+    """A complete stamp for a harness with no vendor marker (footnote) is
+    proven when the walk names that harness and its process env carries the
+    same FNO_HARNESS_SESSION_ID. Mirror of the Rust function of this name."""
     from fno.claims.session_pid import resolve_session_pid
     from fno.harness_identity import HARNESS_SESSION_MARKERS, _read_ancestor_marker
 
-    walked = (true_harness or "").strip().lower()
-    if not walked or not stamp_session or walked != (stamp_harness or "").strip().lower():
+    walked = (walked or "").lower()
+    if not session or not walked or walked != (stamped or "").lower():
         return False
-    if any(family == walked for _marker, family in HARNESS_SESSION_MARKERS):
+    if any(family == walked for _m, family in HARNESS_SESSION_MARKERS):
         return False
     pid = resolve_session_pid()
-    if pid is None:
-        return False
-    carried = (_read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") or "").strip()
-    return bool(carried) and session_identity_key(carried) == session_identity_key(stamp_session)
+    carried = (_read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") or "") if pid else ""
+    return bool(carried) and session_identity_key(carried) == session_identity_key(session)
 
 
 def _own_cwd() -> str:
