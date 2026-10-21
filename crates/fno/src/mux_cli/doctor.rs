@@ -272,6 +272,78 @@ pub(super) fn board_scope_check() -> Check {
     }
 }
 
+/// The venv check and the registry writes-landing check, pushed as one pair
+/// so the mux_cli.rs check list does not grow.
+pub(super) fn store_checks() -> [Check; 2] {
+    [canonical_venv_check(), registry_writes_check()]
+}
+
+/// A registry whose newest row stamp is older than this while sessions are
+/// live has stopped landing writes: a live worker stamps its row far sooner.
+const WRITES_STALL_SECS: u64 = 3600;
+
+/// Are registry writes landing? A table at revision 0 that holds rows was
+/// written by a path that skips the revision bump. Live sessions with no row
+/// stamp inside the stall window means writes stopped reaching the store.
+fn registry_writes_check() -> Check {
+    let path = crate::agents_view::registry_path();
+    let now = crate::squad_store::now_epoch_secs().unwrap_or_default() as u64;
+    let rows = crate::registry_read::registry_text(&path)
+        .ok()
+        .and_then(|raw| crate::agents_view::derive_rows(&raw, now))
+        .unwrap_or_default();
+    let newest = rows.iter().filter_map(|r| r.updated_at).max();
+    writes_landing_verdict(
+        crate::registry_read::revision(&path),
+        rows.len(),
+        crate::server::live_attach_ids_snapshot().len(),
+        newest.map(|t| now.saturating_sub(t)),
+    )
+}
+
+pub(super) fn writes_landing_verdict(
+    revision: Option<i64>,
+    rows: usize,
+    live: usize,
+    newest_age_secs: Option<u64>,
+) -> Check {
+    let check = |verdict, detail: String, remedy: Option<&str>| Check {
+        name: "registry writes landing".into(),
+        verdict,
+        detail,
+        remedy: remedy.map(Into::into),
+    };
+    let remedy = Some(
+        "a registry writer bypasses the store; run `fno agents status` and file the stalled writer",
+    );
+    let Some(revision) = revision else {
+        return check(
+            Verdict::Na,
+            "registry table not imported or unreadable".into(),
+            None,
+        );
+    };
+    if revision == 0 && rows > 0 {
+        return check(
+            Verdict::Warn,
+            format!("revision 0 with {rows} rows: writes skip the revision bump"),
+            remedy,
+        );
+    }
+    match newest_age_secs {
+        Some(age) if live > 0 && age > WRITES_STALL_SECS => check(
+            Verdict::Warn,
+            format!("revision {revision}, {live} live sessions, newest row stamp {age}s old"),
+            remedy,
+        ),
+        _ => check(
+            Verdict::Ok,
+            format!("revision {revision}, {rows} rows, {live} live"),
+            None,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +363,16 @@ mod tests {
         assert_eq!(Verdict::Ok.word(), "ok");
         assert_eq!(Verdict::Fail.word(), "fail");
         assert_eq!(Verdict::Na.word(), "n/a");
+
+        // Writes landing: the stuck-at-revision-0 registry and a stalled
+        // store under live sessions both warn; an idle store is ok.
+        let landing = |r, rows, live, age| writes_landing_verdict(r, rows, live, age).verdict;
+        assert_eq!(landing(None, 5, 3, Some(9_999)), Verdict::Na);
+        assert_eq!(landing(Some(0), 227, 0, Some(10)), Verdict::Warn);
+        assert_eq!(landing(Some(0), 0, 0, None), Verdict::Ok);
+        assert_eq!(landing(Some(40), 227, 3, Some(7_200)), Verdict::Warn);
+        assert_eq!(landing(Some(40), 227, 0, Some(7_200)), Verdict::Ok);
+        assert_eq!(landing(Some(40), 227, 3, Some(60)), Verdict::Ok);
 
         // The canonical-venv scan: a shebang inside the root passes,
         // any absolute shebang outside is named (even a system shim, which
