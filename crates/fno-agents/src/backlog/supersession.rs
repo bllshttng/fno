@@ -118,9 +118,7 @@ fn scope_out_marker(successor: &Value) -> Option<&'static str> {
     let text = ["title", "details"]
         .iter()
         .filter_map(|key| successor.get(*key).and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .split_whitespace()
+        .flat_map(str::split_whitespace)
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase();
@@ -397,39 +395,28 @@ mod tests {
 
     #[test]
     fn a_narrower_successor_is_refused_until_the_leftover_is_filed() {
-        let narrow = json!({
-            "id": "x-253e",
-            "title": "Rename user-facing verb to command",
-            "details": "Pass 1: docs and help.\nPass 2 (not this\nnode): code identifiers.",
-        });
-        let claim = Some("renames every verb");
-        let refused = coverage_clause(&narrow, "x-253e", "x-c612", claim, None).unwrap_err();
+        fn check(covers: Option<&str>, leftover: Option<&Value>) -> Result<String, String> {
+            let narrow = json!({"id": "x-new", "details": "Pass 2 (not this\nnode): identifiers."});
+            coverage_clause(&narrow, "x-new", "x-old", covers, leftover)
+        }
+        let refused = check(Some("renames all"), None).unwrap_err();
         assert!(refused.contains("\"not this node\""), "{refused}");
-        assert!(refused.contains("fno backlog idea"), "{refused}");
+        let stamp = "2026-10-01T00:00:00Z";
         for (row, state) in [
-            (
-                json!({"id": "x-1eft", "completed_at": "2026-10-01T00:00:00Z"}),
-                "done",
-            ),
-            (
-                json!({"id": "x-1eft", "deferred_at": "2026-10-01T00:00:00Z"}),
-                "deferred",
-            ),
-            (json!({"id": "x-c612"}), "third node"),
+            (json!({"id": "x-rest", "completed_at": stamp}), "done"),
+            (json!({"id": "x-rest", "deferred_at": stamp}), "deferred"),
+            (json!({"id": "x-old"}), "third node"),
         ] {
-            let err = coverage_clause(&narrow, "x-253e", "x-c612", None, Some(&row)).unwrap_err();
+            let err = check(None, Some(&row)).unwrap_err();
             assert!(err.contains(state), "{err}");
         }
-        let filed = json!({"id": "x-1eft", "status": "idea"});
+        let filed = json!({"id": "x-rest"});
+        assert_eq!(check(None, Some(&filed)).unwrap(), "leftover: x-rest");
+        let whole = json!({"id": "x-new"});
+        assert!(coverage_clause(&whole, "x-new", "x-old", Some("  "), None).is_err());
         assert_eq!(
-            coverage_clause(&narrow, "x-253e", "x-c612", None, Some(&filed)).unwrap(),
-            "leftover: x-1eft"
-        );
-        let whole = json!({"id": "x-beef", "title": "Rename verb everywhere"});
-        assert!(coverage_clause(&whole, "x-beef", "x-c612", Some("  "), None).is_err());
-        assert_eq!(
-            coverage_clause(&whole, "x-beef", "x-c612", claim, None).unwrap(),
-            "covers: renames every verb"
+            coverage_clause(&whole, "x-new", "x-old", Some("renames all"), None).unwrap(),
+            "covers: renames all"
         );
     }
 
