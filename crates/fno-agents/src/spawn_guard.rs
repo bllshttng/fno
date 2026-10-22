@@ -608,7 +608,7 @@ pub fn resolve_provenance(
     let mut plan = plan.map(str::to_string);
     let raw = node.clone().unwrap_or_default();
     if slug.is_none() || plan.is_none() || !crate::backlog::node_ref::has_node_id_prefix(&raw) {
-        match read_node_rows() {
+        match read_node_rows(&raw) {
             Ok(rows) => {
                 let found = rows.iter().find(|r| {
                     r.get("archived_at").filter(|v| !v.is_null()).is_none()
@@ -646,20 +646,35 @@ pub fn resolve_provenance(
         .collect()
 }
 
-fn read_node_rows() -> Result<Vec<Value>, String> {
-    crate::graph_store::read_rows_where_strict(
-        &crate::graph_get::default_graph_path(),
-        &crate::backlog::RowQuery {
-            fields: Some(
-                ["id", "slug", "plan_path", "archived_at"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
-            ),
-            ..Default::default()
-        },
-    )
-    .map_err(|e| e.to_string())
+/// The node's row by id first; the whole table only when the id read finds
+/// nothing, which is the slug case.
+fn read_node_rows(node: &str) -> Result<Vec<Value>, String> {
+    let graph = crate::graph_get::default_graph_path();
+    let read = |id_in: Option<Vec<String>>| {
+        crate::graph_store::read_rows_where_strict(
+            &graph,
+            &crate::backlog::RowQuery {
+                filter: crate::backlog::api::NodeFilter {
+                    id_in,
+                    ..Default::default()
+                },
+                fields: Some(
+                    ["id", "slug", "plan_path", "archived_at"]
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())
+    };
+    let rows = read(Some(vec![node.to_string()]))?;
+    if rows.is_empty() {
+        read(None)
+    } else {
+        Ok(rows)
+    }
 }
 
 /// The client door's guard for a node-bearing spawn. It clears the inherited
@@ -683,10 +698,17 @@ pub fn guard_client_spawn(
             .map(str::trim)
             .filter(|v| !v.is_empty())
     };
-    let Some(node) = param("node") else {
+    // An explicit --node is guarded even when it is empty: it then resolves
+    // to nothing and refuses, rather than launching with no key held.
+    let Some(raw_node) = params.get("node").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let provenance = resolve_provenance(node, param("slug"), param("plan"));
+    let node = raw_node.trim();
+    let provenance = if node.is_empty() {
+        Vec::new()
+    } else {
+        resolve_provenance(node, param("slug"), param("plan"))
+    };
     let Some(guarded) = provenance
         .iter()
         .find(|(k, _)| *k == "FNO_NODE")
@@ -695,7 +717,7 @@ pub fn guard_client_spawn(
         eprintln!(
             "refusing unresolved --node {}: cannot run the shared family-2 dispatch \
              guard; no worker launched",
-            crate::claude_ask::py_repr(node)
+            crate::claude_ask::py_repr(raw_node)
         );
         return Err(2);
     };
@@ -830,6 +852,9 @@ mod tests {
             "worker:t-x",
             AcquireOpts {
                 ttl_ms: Some(RESERVATION_TTL_MS),
+                // A foreign session: the ambient one would let a lead running
+                // this test delegate the claim to the handover holder.
+                identity: Some(("s-foreign-holder".into(), "claude".into())),
                 root: Some(tmp.path().to_path_buf()),
                 events_dir: Some(tmp.path().to_path_buf()),
                 ..Default::default()
