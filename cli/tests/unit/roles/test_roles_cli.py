@@ -174,13 +174,22 @@ def test_ac_r7_ui_resolve_is_typed_inert_and_has_stable_exit_codes(
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(project_root))
 
     dispatch_calls: list[tuple[object, ...]] = []
+    real = {"Popen": subprocess.Popen, "run": subprocess.run}
 
-    def _dispatch_tripwire(*args: object, **kwargs: object) -> None:
-        dispatch_calls.append((*args, kwargs))
-        raise AssertionError("roles inspection must not dispatch a process")
+    def _tripwire(name: str):
+        # Discovery is a read through the fno-agents spawn-overlay door; any
+        # other process is a dispatch.
+        def _guard(*args: object, **kwargs: object) -> object:
+            argv = args[0] if args else kwargs.get("args")
+            if isinstance(argv, list) and argv[1:2] == ["spawn-overlay"]:
+                return real[name](*args, **kwargs)
+            dispatch_calls.append((*args, kwargs))
+            raise AssertionError("roles inspection must not dispatch a process")
 
-    monkeypatch.setattr(subprocess, "Popen", _dispatch_tripwire)
-    monkeypatch.setattr(subprocess, "run", _dispatch_tripwire)
+        return _guard
+
+    monkeypatch.setattr(subprocess, "Popen", _tripwire("Popen"))
+    monkeypatch.setattr(subprocess, "run", _tripwire("run"))
 
     args = ["resolve", "owner", "--work-order", "x-a8c0", "--attempt", "attempt-1"]
     first = _invoke("agents", "roles", *args, "-J")
