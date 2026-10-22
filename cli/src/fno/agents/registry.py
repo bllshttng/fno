@@ -37,7 +37,6 @@ import os
 import random
 import re
 import sys
-import tempfile
 import time
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
@@ -1319,36 +1318,6 @@ def _validate_resolvable_handle(entry: AgentEntry) -> None:
     )
 
 
-class RegistryWriteRefused(RuntimeError):
-    """The shared-registry write guard, Python's mirror of ``registry_guard::check``."""
-
-
-def _refuse_probe_or_row_loss_write(target: Path, raw: Optional[dict], entries: list) -> None:
-    # Protect the shared runtime registry under the ambient home, even when
-    # config redirects writes. The Rust interop uses plain python3, and the
-    # declared-home branch matches the first resolution its fixtures seed.
-    sh = (paths.agents_home_dir() / "registry.json").resolve()
-    if sh != target.resolve() or sh.is_relative_to(Path(tempfile.gettempdir()).resolve()):
-        return  # another target is the caller's own store; a sandboxed HOME has no real registry
-    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("FNO_TEST_HERMETIC") == "1":
-        raise RegistryWriteRefused(
-            f"refusing {target}: a test or probe process never writes the shared registry; "
-            "pin its own home (FNO_AGENTS_HOME) instead."
-        )
-    if os.environ.get("FNO_REGISTRY_ALLOW_ROW_LOSS") == "1":
-        return
-    live = _OWNERSHIP_LIVE_STATUSES
-    before = sum(
-        r.get("status") in live for r in (raw or {}).get("agents", []) if isinstance(r, dict)
-    )
-    after = sum(e.status in live for e in entries)
-    if before >= 2 and after * 2 < before:
-        raise RegistryWriteRefused(
-            f"refusing {target}: this write drops live registry rows from {before} to {after}; "
-            "set FNO_REGISTRY_ALLOW_ROW_LOSS=1 when the drop is deliberate."
-        )
-
-
 def write_registry(
     entries: list[AgentEntry], path: Optional[Path] = None, *, revision: Optional[int] = None
 ) -> None:
@@ -1373,7 +1342,6 @@ def write_registry(
         raise RegistryRevisionConflict(f"revision_conflict: {target} moved past {revision}")
     revision = current
     _refuse_source_ahead_schema_bump(raw, target)
-    _refuse_probe_or_row_loss_write(target, raw, entries)
     existing = _existing_row_names(raw)
     for e in entries:
         _validate_single_live_ref(e)
@@ -1528,7 +1496,6 @@ def repair_registry_schema(
         raw, plan = _plan_registry_schema_repair(raw, target, to_version)
         if not apply:
             return plan
-        _refuse_probe_or_row_loss_write(target, raw, raw["agents"])
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = target.with_name(f"{target.name}.bak.schema-repair-{stamp}")
         backup.write_text(_json_dumps(raw, indent=2, sort_keys=False), encoding="utf-8")
