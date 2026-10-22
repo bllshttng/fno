@@ -744,6 +744,9 @@ mod tests {
             self.clears += 1;
             Ok(self.posture.clone())
         }
+        fn remove(&mut self, _p: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
         fn notify(&mut self, _t: &str, _b: &str) {}
     }
 

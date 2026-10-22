@@ -797,7 +797,6 @@ fn drain_duplicate_lost(
     if victims.is_empty() {
         return pages;
     }
-    let total = victims.len();
     let doomed: std::collections::HashSet<usize> =
         victims.into_iter().take(DRAIN_DUPLICATE_LOST_CAP).collect();
     let mut kept = Vec::with_capacity(pages.len() - doomed.len());
