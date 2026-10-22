@@ -23,6 +23,7 @@ pub mod session_state;
 pub mod stop;
 pub mod subagent_worktree_guard;
 pub mod test_run_guard;
+pub mod worktree_relocation_allow;
 pub mod write_gate;
 
 use serde_json::json;
@@ -48,10 +49,11 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("test-run-guard") => test_run_guard::run(&args[1..]),
         Some("stop") => stop::run(&args[1..]),
         Some("subagent-worktree-guard") => subagent_worktree_guard::run(&args[1..]),
+        Some("worktree-relocation-allow") => worktree_relocation_allow::run(&args[1..]),
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected bin-install-guard, diff-budget, edit-integrity, effect-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, rules, send-message-guard, session-state, subagent-worktree-guard, test-run-guard, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected bin-install-guard, diff-budget, edit-integrity, effect-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, rules, send-message-guard, session-state, subagent-worktree-guard, test-run-guard, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
