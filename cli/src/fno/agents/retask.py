@@ -291,7 +291,7 @@ def run_retask(
                 "op": "retask",
                 "worker": entry.name,
                 "node": node,
-                "target": asdict(target),
+                "target": {**asdict(target), "command": None, "verb": target.command},  # verb-wording: allow (older binaries read this key)
                 "target_command": command_template.format(id=node),
                 "mux": mux,
                 "graph": str(paths.graph_json()),

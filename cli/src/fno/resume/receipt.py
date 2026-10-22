@@ -126,7 +126,7 @@ class ResumeReceipt:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["identity"] = asdict(self.identity)
-        d["next_action"] = asdict(self.next_action)
+        d["next_action"] = {"verb": self.next_action.command, "target": self.next_action.target}  # verb-wording: allow (receipts cross binary ages)
         # tuples -> lists for JSON
         for k in (
             "completed_tasks",

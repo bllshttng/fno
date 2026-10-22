@@ -89,7 +89,9 @@ impl RetaskTarget {
             permission_mode: get("permission_mode"),
             route: get("route"),
             account: get("account"),
-            command: get("verb").unwrap_or_else(|| "target".to_string()),
+            command: get("command")
+                .or_else(|| get("verb"))
+                .unwrap_or_else(|| "target".to_string()),
         })
     }
 }
