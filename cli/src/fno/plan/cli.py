@@ -36,7 +36,7 @@ def _forward(command: str, extra_args: List[str]) -> int:
     """Send command + extra_args to the keeper-served plan-doc writer; return its exit code."""
     from fno.plan._project import plan_docs
 
-    return (plan_docs("argv", command=command, args=extra_args) or {"exit": 1})["exit"]
+    return (plan_docs("argv", verb=command, args=extra_args) or {"exit": 1})["exit"]  # verb-wording: allow (keeper wire key)
 
 
 @plan_app.command(

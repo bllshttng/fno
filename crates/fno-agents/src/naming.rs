@@ -585,7 +585,7 @@ pub fn run_name_mint(args: &[String]) -> i32 {
 }
 
 /// `fno-agents name-parse` reads one name per line on stdin and prints one
-/// JSON object per line: {name, source, command, node, tail} or {name, null}.
+/// JSON object per line: {name, source, verb, node, tail} or {name, null} (verb-wording: allow, wire key).
 pub fn run_name_parse() -> i32 {
     use std::io::{BufRead, Write};
     let stdin = std::io::stdin();
@@ -595,7 +595,7 @@ pub fn run_name_parse() -> i32 {
         let parsed = parse_dispatch_agent_name(Some(line.trim_end_matches('\n')));
         let json = match parsed {
             Some(p) => format!(
-                "{{\"name\":{},\"source\":{},\"command\":{},\"node\":{},\"tail\":{}}}",
+                "{{\"name\":{},\"source\":{},\"verb\":{},\"node\":{},\"tail\":{}}}", // verb-wording: allow (wire key)
                 serde_json::to_string(&p.name).unwrap_or_else(|_| "null".into()),
                 p.source
                     .as_ref()

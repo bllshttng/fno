@@ -52,8 +52,8 @@ def _codes():
         raw = json.loads(_run("name-codes", ["--json"]))
     except json.JSONDecodeError as exc:
         raise AgentNameError(f"name-codes payload unparsable: the fno-agents binary is stale ({exc})")
-    return (frozenset(raw["sources"]), frozenset(raw["commands"]), dict(raw["word_codes"]),
-            tuple((r["site"], r["source"], r["command"]) for r in raw["provenance"]))
+    return (frozenset(raw["sources"]), frozenset(raw["verbs"]), dict(raw["word_codes"]),  # verb-wording: allow
+            tuple((r["site"], r["source"], r["verb"]) for r in raw["provenance"]))  # verb-wording: allow
 
 def dispatch_sources():
     return _codes()[0]

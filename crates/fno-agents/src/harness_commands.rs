@@ -77,7 +77,7 @@ pub fn run_commands(args: &[String]) -> i32 {
 
     if caps.native_verbs.is_empty() {
         if json {
-            println!("{{\"harness\": {harness:?}, \"commands\": []}}");
+            println!("{{\"harness\": {harness:?}, \"verbs\": []}}"); // verb-wording: allow (wire key)
         } else {
             println!("{harness}: no native commands measured");
         }
