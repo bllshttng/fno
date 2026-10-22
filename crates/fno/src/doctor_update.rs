@@ -470,13 +470,18 @@ fn resolve_last_green(source: &Path) -> Result<Option<(String, String)>, String>
     Ok(Some((rev, published)))
 }
 
+/// Where `source` sits inside the last green checkout.
+fn last_green_source(source: &Path) -> PathBuf {
+    let prefix = git_in(source, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    install_dir().join("last-green").join(prefix)
+}
+
 /// Check `rev` out, detached, in the update's own worktree under the install
 /// dir, and return the source path inside it. The developer's checkout never
 /// moves backward.
 fn stage_last_green(source: &Path, rev: &str) -> Result<PathBuf, String> {
     let repo = git_in(source, &["rev-parse", "--show-toplevel"])
         .ok_or("--last-green needs a git source checkout")?;
-    let prefix = git_in(source, &["rev-parse", "--show-prefix"]).unwrap_or_default();
     let dir = install_dir().join("last-green");
     let dir_s = dir.to_string_lossy().into_owned();
     let git = |cwd: &str, args: &[&str]| {
@@ -503,7 +508,7 @@ fn stage_last_green(source: &Path, rev: &str) -> Result<PathBuf, String> {
             ],
         )?;
     }
-    Ok(dir.join(prefix))
+    Ok(last_green_source(source))
 }
 
 fn command_for(bin: &Path, args: &[String]) -> std::io::Result<Command> {
@@ -2079,14 +2084,20 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
 
     if flags.dry_run {
         let _ = sync_source_checkout(&resolved, true);
+        let mut last_green_crates: Option<String> = None;
         if flags.last_green {
             match resolve_last_green(&resolved) {
-                Ok(Some((r, crates))) => println!(
-                    "Would install the last green rev {} (crates {}) from {}",
-                    &r[..r.len().min(12)],
-                    &crates[..crates.len().min(12)],
-                    install_dir().join("last-green").display()
-                ),
+                Ok(Some((r, crates))) => {
+                    let dir = last_green_source(&resolved);
+                    println!(
+                        "Would check out the last green rev {} (crates {}) at {}",
+                        &r[..r.len().min(12)],
+                        &crates[..crates.len().min(12)],
+                        dir.display()
+                    );
+                    resolved = dir;
+                    last_green_crates = Some(crates);
+                }
                 Ok(None) => println!(
                     "--last-green: the source rev is published; a plain update installs it"
                 ),
@@ -2098,8 +2109,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         }
         // The rust leg still prints its plan here (a dry run states
         // everything an update would do); it EXECUTES only below, under the
-        // claim. A dry run writes NOTHING.
-        if !flags.no_rust {
+        // claim. A dry run writes NOTHING. The last green checkout does not
+        // exist yet, so its plan is the tarball it would deploy.
+        if let Some(crates) = &last_green_crates {
+            let _ = deploy_prebuilt(crates, &install_dir(), true);
+        } else if !flags.no_rust {
             refresh_rust_bins(&resolved, flags.rust, true, &mut failed);
         }
         if which_uv().is_some() {
