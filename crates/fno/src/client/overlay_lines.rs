@@ -220,3 +220,40 @@ pub(crate) fn peek_overlay_lines(
     }
     lines
 }
+
+impl View {
+    /// Paint the navigator: the filtered flat catalog + query/chip line. Rows
+    /// recompute per frame from the live layout (no cache), so a push
+    /// repopulates it. A no-op when the navigator is closed.
+    pub(super) fn draw_nav(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        overlay_origin: (usize, usize),
+        overlay_dims: (usize, usize),
+    ) {
+        let Some(nav) = &self.nav else {
+            return;
+        };
+        let filtered = self.nav_filtered(nav);
+        let lines = nav_overlay_lines(&filtered, nav);
+        let chrome = chrome::Chrome::new("navigator", Anchor::Center)
+            .footer("type to filter · ctrl-o actions · esc close");
+        draw_lines_overlay(
+            cells,
+            rows,
+            cols,
+            overlay_origin,
+            overlay_dims,
+            &chrome,
+            &lines,
+            &self.theme,
+            // The navigator is the uncapped selector this whole change
+            // points operators at, so its cursor must stay on screen too:
+            // a session with more rows than the viewport would otherwise
+            // drive the selection below the fold. +1 for the query line.
+            Some(nav.cursor + 1),
+        );
+    }
+}
