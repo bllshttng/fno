@@ -6,7 +6,7 @@ session and do not create review-worker rows. Coverage:
 
   - AC1: `spawn --node X --substrate bg` with a resolvable worker uuid opens a
     row carrying the WORKER's harness session id (never the spawner's, never
-    the 8-hex short id). Phase: the message's verb labels the row via the
+    the 8-hex short id). Phase: the message's command labels the row via the
     spawn_phase.toml table - do, blueprint, think, ship stamp their
     spellings. Review labels and seeds refuse before any worker launches.
     An unlabeled --node spawn is refused (x-007c), so rows stay labeled.
@@ -50,13 +50,13 @@ FULL_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 @pytest.fixture(autouse=True)
 def _readable_node_row(monkeypatch):
-    """A graph row for NODE, so the verb seam's `--node` consult passes.
+    """A graph row for NODE, so the command seam's `--node` consult passes.
 
     The seam refuses a `--node` spawn whose row it cannot read; these tests
-    drive the door for the session ROW, not the verb contract, so every test
+    drive the door for the session ROW, not the command contract, so every test
     sees one target-deriving row unless it stubs its own (the blueprint tests
-    re-stub with a medium row so the derived verb agrees with their seed)."""
-    row = {"id": NODE, "slug": "sess", "dispatch_verb": "/target", "difficulty": "low"}
+    re-stub with a medium row so the derived command agrees with their seed)."""
+    row = {"id": NODE, "slug": "sess", "dispatch_command": "/target", "difficulty": "low"}
 
     def _load_graph(path, tokens):
         return {"entries": [dict(row)], "missing": []}
@@ -161,7 +161,7 @@ def resolvable_uuid(monkeypatch):
 
 
 @pytest.mark.dev_build
-def test_spawn_with_node_and_review_verb_is_refused(
+def test_spawn_with_node_and_review_command_is_refused(
     workdir_claude, native_backlog_door, monkeypatch, capfd
 ) -> None:
     from fno.agents.cli import agents_app
@@ -188,8 +188,8 @@ def test_spawn_with_node_and_review_verb_is_refused(
 def test_spawn_with_prose_and_node_composes_a_labeled_seed(
     workdir_claude, resolvable_uuid, loop_admission_ready, graphless_seed_resolver
 ) -> None:
-    """Arbitrary prose with a `--node` is no longer unlabelable: the verb
-    seam composes the node's command in front, so the seed names the verb
+    """Arbitrary prose with a `--node` is no longer unlabelable: the command
+    seam composes the node's command in front, so the seed names the command
     and the row stamps from it instead of refusing a lying default."""
     from fno.agents.cli import agents_app
 
@@ -262,11 +262,11 @@ def test_spawn_without_uuid_parks_the_row(workdir_claude) -> None:
     assert row.pending_session_row["started_at"]
 
 
-def test_spawn_unlabelable_verb_refuses_before_spawn(
+def test_spawn_unlabelable_command_refuses_before_spawn(
     workdir_claude, resolvable_uuid
 ) -> None:
     """AC4 (x-007c): a /fno:triage worker with --node is none of the table's
-    verbs, so the spawn refuses fail-closed before anything launches: exit 2,
+    commands, so the spawn refuses fail-closed before anything launches: exit 2,
     the flag and the allowed values on stderr, no registry row, no claims
     taken, no sessions row."""
     from fno.agents.cli import agents_app
@@ -295,7 +295,7 @@ def test_spawn_unlabelable_verb_refuses_before_spawn(
 def _blueprint_row(monkeypatch) -> None:
     """Re-stub the graph row so the seam derives /blueprint (difficulty high
     earns it under the lean floor), matching the blueprint seed this types."""
-    row = {"id": NODE, "slug": "sess", "dispatch_verb": "", "difficulty": "high"}
+    row = {"id": NODE, "slug": "sess", "dispatch_command": "", "difficulty": "high"}
 
     def _load_graph(path, tokens):
         return {"entries": [dict(row)], "missing": []}
@@ -327,10 +327,10 @@ def test_spawn_bare_blueprint_spelling_stamps_blueprint(
     assert rows[0]["session_id"] == FULL_UUID
 
 
-def test_spawn_explicit_phase_rescues_unmapped_verb(
+def test_spawn_explicit_phase_rescues_unmapped_command(
     workdir_claude, resolvable_uuid
 ) -> None:
-    """AC5 (x-007c): an explicit --session-phase on an unmapped verb is the
+    """AC5 (x-007c): an explicit --session-phase on an unmapped command is the
     operator's label and stamps the row instead of refusing."""
     from fno.agents.cli import agents_app
 

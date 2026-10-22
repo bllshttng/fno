@@ -5,7 +5,7 @@ null-vs-omit semantics: PID-liveness claims OMIT the key from YAML output
 entirely (per the design doc's "Locked Decision #4"); TTL claims serialize
 it as an integer epoch-ms.
 
-ClaimState is the four-way classification used by status/list verbs.
+ClaimState is the four-way classification used by status/list commands.
 """
 from __future__ import annotations
 

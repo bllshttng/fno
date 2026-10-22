@@ -187,7 +187,7 @@ pub(crate) fn handle_plan_docs(state: &StoreState, params: &Value) -> Result<Val
         "argv" => match argv_params(params) {
             Ok(parsed) => {
                 let out = handle_plan_docs(state, &parsed)?;
-                // The CLI verb reports every failure, a missing doc included.
+                // The CLI command reports every failure, a missing doc included.
                 let exit = out["exit"].as_i64().unwrap_or(0) as i32;
                 let message = out["message"].as_str().unwrap_or_default().to_string();
                 Ok(op_result(exit, message))
@@ -204,7 +204,7 @@ pub(crate) fn handle_plan_docs(state: &StoreState, params: &Value) -> Result<Val
 /// Parse the retired stamp module's command line into op params, keeping the
 /// caller's `cwd` and `events_path`.
 fn argv_params(params: &Value) -> Result<Value, String> {
-    let verb = opt_str(params, "verb").unwrap_or_default();
+    let command = opt_str(params, "verb").unwrap_or_default();
     let args: Vec<&str> = params
         .get("args")
         .and_then(Value::as_array)
@@ -243,18 +243,18 @@ fn argv_params(params: &Value) -> Result<Value, String> {
             }
             "--expected-url-count" => out.insert("expected_url_count".into(), number()?),
             "--count" => out.insert("count".into(), number()?),
-            _ => return Err(format!("error: unknown {verb} flag {flag:?}")),
+            _ => return Err(format!("error: unknown {command} flag {flag:?}")),
         };
         i += 2;
     }
     if !out.contains_key("plan_path") {
-        return Err(format!("error: {verb} needs --plan-path"));
+        return Err(format!("error: {command} needs --plan-path"));
     }
-    let op = match verb {
+    let op = match command {
         "stamp" => "stamp",
         "graduate" => "graduate",
         "set-expected" => "set_expected",
-        _ => return Err(format!("error: unknown plan verb {verb:?}")),
+        _ => return Err(format!("error: unknown plan command {command:?}")),
     };
     out.insert("op".into(), Value::from(op));
     out.insert("urls".into(), Value::Array(urls));
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn argv_refuses_bad_input() {
-        let bad = |verb: &str, args: Value| argv_params(&json!({"verb": verb, "args": args}));
+        let bad = |command: &str, args: Value| argv_params(&json!({"verb": command, "args": args}));
         assert!(bad("stamp", json!(["--session-id", "s"])).is_err());
         assert!(bad("set-expected", json!(["--plan-path", "p", "--count", "x"])).is_err());
         assert!(bad("stamp", json!(["--plan-path"])).is_err());

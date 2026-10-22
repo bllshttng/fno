@@ -292,7 +292,7 @@ async fn registry_birth_since(cwd: &str, since_secs: u64) -> BirthCheck {
 /// answer settles the launch: a `workdir` replaces the request's cwd, a
 /// `hold` names why nothing may launch, and a transport failure refuses the
 /// same way - never a silent fall-back to the cwd the box promised to leave.
-/// The bound is its own 150s (the ensure leg inside the verb may itself
+/// The bound is its own 150s (the ensure leg inside the command may itself
 /// spend 120s), not the spawn's 75s deadline.
 async fn resolve_launch_workdir(req: &mut AgentLaunchRequest) -> Result<(), String> {
     const WORKDIR_TIMEOUT: Duration = Duration::from_secs(150);

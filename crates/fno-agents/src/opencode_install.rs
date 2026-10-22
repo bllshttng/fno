@@ -1,5 +1,5 @@
 //! One installer for footnote's OpenCode surface. Writes the stop bridge, one
-//! command file per shipped verb, one translated agent file per shipped
+//! command file per shipped command, one translated agent file per shipped
 //! agent, and the skill trees into the directories OpenCode already scans in
 //! its global config dir, so every project - not just this repository -
 //! sees the `fno:` names the dispatch seeds render. A manifest of every
@@ -202,17 +202,17 @@ fn yaml_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// The command file name a verb installs as - the same `fno:<verb>` string
-/// `render_verb_seed` and `opencode_run_tail` emit, so the catalog matches
+/// The command file name a command installs as - the same `fno:<command>` string
+/// `render_command_seed` and `opencode_run_tail` emit, so the catalog matches
 /// what a dispatch asks for.
-pub fn command_file_name(verb: &str) -> String {
-    format!("fno:{verb}.md")
+pub fn command_file_name(command: &str) -> String {
+    format!("fno:{command}.md")
 }
 
-fn command_stub(verb: &str, description: &str) -> Vec<u8> {
+fn command_stub(command: &str, description: &str) -> Vec<u8> {
     format!(
         "---\ndescription: {}\n---\n\
-         Load the footnote skill \"{verb}\" with the skill tool, then execute it \
+         Load the footnote skill \"{command}\" with the skill tool, then execute it \
          in this session with these arguments:\n\n$ARGUMENTS\n",
         yaml_quote(description)
     )
@@ -433,20 +433,21 @@ fn build_entries(
         std::fs::read(&bridge)
             .map_err(|e| format!("opencode install: {}: {e}", bridge.display()))?,
     );
-    let verbs = crate::provider::read_verbs_from(root);
-    for verb in &verbs {
-        let description = std::fs::read_to_string(root.join("commands").join(format!("{verb}.md")))
-            .ok()
-            .and_then(|md| frontmatter_value(&md, "description"))
-            .or_else(|| {
-                std::fs::read_to_string(root.join("skills").join(verb).join("SKILL.md"))
-                    .ok()
-                    .and_then(|md| frontmatter_value(&md, "description"))
-            })
-            .unwrap_or_else(|| format!("footnote {verb}"));
+    let commands = crate::provider::read_commands_from(root);
+    for command in &commands {
+        let description =
+            std::fs::read_to_string(root.join("commands").join(format!("{command}.md")))
+                .ok()
+                .and_then(|md| frontmatter_value(&md, "description"))
+                .or_else(|| {
+                    std::fs::read_to_string(root.join("skills").join(command).join("SKILL.md"))
+                        .ok()
+                        .and_then(|md| frontmatter_value(&md, "description"))
+                })
+                .unwrap_or_else(|| format!("footnote {command}"));
         entries.insert(
-            format!("commands/{}", command_file_name(verb)),
-            command_stub(verb, &description),
+            format!("commands/{}", command_file_name(command)),
+            command_stub(command, &description),
         );
     }
     if let Ok(agents) = std::fs::read_dir(root.join("agents")) {

@@ -1,6 +1,6 @@
 //! `team-rescope`: the role re-scope's team-name effect, reached as payload
-//! kind `team-rescope` on the existing `spawn-overlay` verb (law d-fe66560a
-//! bars new top-level verbs, hidden ones included).
+//! kind `team-rescope` on the existing `spawn-overlay` command (law d-fe66560a
+//! bars new top-level commands, hidden ones included).
 //!
 //! `org promote` re-scoping a promoted row used to leave the team's name
 //! record keyed on the vacated scope: the lead landed anonymous, and the name

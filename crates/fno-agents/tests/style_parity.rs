@@ -2,10 +2,10 @@
 //! parity-oracle: fno.style
 //!
 //! Characterization for the `fno doctor lint style` port: the Rust leg is the
-//! hidden `style-check` verb on the sibling fno-agents binary; the Python leg
+//! hidden `style-check` command on the sibling fno-agents binary; the Python leg
 //! was `cli/src/fno/style.py` plus the `style` action in `cli/src/fno/lint_cli.py`
 //! (deleted in the same change that flipped this file). Each case runs the
-//! Rust verb as a subprocess and asserts `(exit, stdout, stderr)` against the
+//! Rust command as a subprocess and asserts `(exit, stdout, stderr)` against the
 //! frozen goldens under `tests/golden/style/`, keyed by a slug of the case
 //! label. To regenerate them (only meaningful while the Python leg still
 //! lives), run with `FNO_CAPTURE_GOLDEN=1`: the helper then runs the Python

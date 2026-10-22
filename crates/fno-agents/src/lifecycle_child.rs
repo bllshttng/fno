@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::client_verbs::{backfill_row_aliases, is_identity_token, py_repr_str};
+use crate::client_commands::{backfill_row_aliases, is_identity_token, py_repr_str};
 
 /// The cwd a lifecycle child inherits: this process's cwd while getcwd still
 /// resolves, else `fallback`, else the temp dir. These children need no
@@ -145,7 +145,7 @@ pub(crate) fn heal_token(
     };
     // The healer adopts best-effort: a failed registry write still returns the
     // row, with the reason on stderr. Swallowing that would make the degradation
-    // invisible -- the verb works, the roster silently does not.
+    // invisible -- the command works, the roster silently does not.
     let mut parsed = parse_heal_token_output(token, &out);
     if let Ok(Some(mut row)) = parsed {
         recover_onto_healed_row(

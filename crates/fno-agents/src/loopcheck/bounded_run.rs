@@ -23,7 +23,7 @@ pub(crate) struct BoundedOutput {
 /// Outcome of a bounded, killable child run: the whole point is that a hang
 /// inside the child can never
 /// again read as "the read failed" or wedge forever - it reads as exactly
-/// what happened, with the verb and the elapsed time attached at the call
+/// what happened, with the command and the elapsed time attached at the call
 /// site.
 pub(super) enum BoundedRun {
     Completed(BoundedOutput),

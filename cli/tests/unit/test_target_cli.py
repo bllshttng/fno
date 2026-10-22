@@ -1,7 +1,7 @@
 """Unit tests for `fno do target init` and the `fno do state init` redirect.
 
 Change 3 of the worktree-binding plan (backlog ab-02e44aa6): a discoverable
-bootstrap verb that records input/plan_path + the owner_cwd binding and
+bootstrap command that records input/plan_path + the owner_cwd binding and
 refuses to write a stub, plus a redirect on the substitution-prone
 `fno do state init` bare bootstrap.
 """
@@ -220,10 +220,10 @@ def test_check_contained_refuses_with_the_shell_gates_own_code(tmp_path, monkeyp
 
 
 def test_init_script_wires_the_containment_gate():
-    """The verb is only a guard if the documented direct path actually calls it.
+    """The command is only a guard if the documented direct path actually calls it.
 
     A refusal nothing invokes is the decorative-guard failure this whole task is
-    about, so assert the wiring, not just the verb.
+    about, so assert the wiring, not just the command.
     """
     from pathlib import Path as _P
 
@@ -261,10 +261,10 @@ def test_check_contained_says_so_when_the_store_is_unavailable(tmp_path,
     assert "no store for you" in result.output
 
 
-def test_resolve_owned_identity_verb_proven_claude_wins_foreign_codex_refused(
+def test_resolve_owned_identity_command_proven_claude_wins_foreign_codex_refused(
     tmp_path, monkeypatch
 ) -> None:
-    """AC1-HP + AC3-ERR at the verb: the proven claude marker wins and the
+    """AC1-HP + AC3-ERR at the command: the proven claude marker wins and the
     foreign codex marker is refused by the walk (it contradicts the prover),
     with no registry collision consulted - a session with no stamp resolves by
     elimination and contradiction only, because colliding there read a
@@ -272,8 +272,8 @@ def test_resolve_owned_identity_verb_proven_claude_wins_foreign_codex_refused(
     every role grantor. Collision reporting lives on the stamped branches.
 
     Proven in Python so it does not depend on the PATH-resolved `fno` carrying
-    the verb - the bash hook test's CI limitation, since the PR's own CI runs a
-    `fno` that predates the verb. The prover is pinned to claude (a real claude
+    the command - the bash hook test's CI limitation, since the PR's own CI runs a
+    `fno` that predates the command. The prover is pinned to claude (a real claude
     process's view) so the claude marker is proven and wins. CI-robust: no real
     process tree.
     """

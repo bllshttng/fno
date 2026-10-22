@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Retro / auto-triage of left-out work
 
 Work that is *decided but not done* during a PR used to evaporate: skipped reviewer suggestions, deferred-for-clarity decisions, and out-of-scope bugs found while building something else rarely became backlog nodes. This feature harvests those left-out items at merge time and turns each into an *expanded* backlog node (or a queued draft, or an inbox line), deduped against existing nodes.
@@ -80,17 +80,17 @@ Bare `fno backlog retro run` reports the pending count on every one of its calle
 
 **The harvest is manual by design, and that is the trade, not an oversight.**
 This paragraph used to rest on a false claim: "there is no `fno backlog delete`, so every filed node is permanent".
-The verb is `fno backlog remove`, and it has always existed.
+The command is `fno backlog remove`, and it has always existed.
 The 23 surplus nodes another project believed un-file-able were removable the whole time.
 This was the third place that belief turned up.
-Nobody found the verb because of its name, which is what [the lifecycle-pairs gate](../../cli/tests/unit/test_lifecycle_pairs.py) now exists to prevent.
+Nobody found the command because of its name, which is what [the lifecycle-pairs gate](../../cli/tests/unit/test_lifecycle_pairs.py) now exists to prevent.
 
 The trade survives the correction, on narrower grounds.
 A background SessionStart hook that mints backlog nodes unattended is still the wrong shape.
 Cleaning up after it is manual work an operator never asked for.
 A duplicate that nobody notices is worse than one that never lands.
 
-The measured consequence of the rule stands for a node's OWN rows: condition D keeps refusing that node's close until a human runs the verb.
+The measured consequence of the rule stands for a node's OWN rows: condition D keeps refusing that node's close until a human runs the command.
 What changed is the escape hatch.
 A bad harvest is now recoverable with `fno backlog remove`, so being wrong here costs an annoyance rather than permanent graph litter.
 

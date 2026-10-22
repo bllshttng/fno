@@ -5,7 +5,7 @@
 # and the cross-project pipeline. One source of truth for path conventions,
 # branch naming, setup caching, env-file copying, and cleanup semantics.
 #
-# Verbs:
+# Commands:
 #   create   <project> <slug> [--mode=manual|ephemeral] [--branch=<name>]
 #   setup    <worktree-path> [--force]
 #   cleanup  [--mode=ephemeral|stale|all] [--older-than=Nd] [--dry-run] [--prefix=<prefix>]
@@ -70,7 +70,7 @@ else
 fi
 
 # Memoize the calling repo root. `setup` is a hot path for every cross-
-# project worker and every target worktree creation, and the verbs each call
+# project worker and every target worktree creation, and the commands each call
 # `git rev-parse` for the same answer 2-3 times. One subprocess per script
 # invocation is enough.
 _WTM_REPO_ROOT_CACHED=""
@@ -260,7 +260,7 @@ _wtm_env_files() {
 }
 
 # ----------------------------------------------------------------------
-# Verb: resolve
+# Command: resolve
 # ----------------------------------------------------------------------
 _wtm_cmd_resolve() {
     local project="${1:-.}"
@@ -268,7 +268,7 @@ _wtm_cmd_resolve() {
 }
 
 # ----------------------------------------------------------------------
-# Verb: create
+# Command: create
 # ----------------------------------------------------------------------
 _wtm_cmd_create() {
     local project="" slug=""
@@ -324,7 +324,7 @@ _wtm_cmd_create() {
     # Try to create with a new branch; if the branch already exists, attach to it.
     # IMPORTANT: redirect git's stdout to stderr - `git worktree add` prints
     # "HEAD is now at..." to stdout, which would otherwise pollute the JSON
-    # we emit at the end of this verb.
+    # we emit at the end of this command.
     local err_log
     err_log=$(mktemp) || { _wtm_err "failed to create temp file"; _wtm_json status=error error="mktemp failed"; return 1; }
     if git worktree add "$worktree_path" -b "$branch" >&2 2>"$err_log"; then
@@ -344,7 +344,7 @@ _wtm_cmd_create() {
 }
 
 # ----------------------------------------------------------------------
-# Verb: setup
+# Command: setup
 # ----------------------------------------------------------------------
 _wtm_cmd_setup() {
     local worktree_path=""
@@ -473,7 +473,7 @@ _wtm_cmd_setup() {
 }
 
 # ----------------------------------------------------------------------
-# Verb: cleanup
+# Command: cleanup
 # ----------------------------------------------------------------------
 # Wraps scripts/lib/worktree-lifecycle.sh with the manager's path
 # conventions and a mode selector.
@@ -514,7 +514,7 @@ _wtm_cmd_cleanup() {
     #   - all       -> no extra filter (default behavior of lifecycle script)
     #
     # Resolve the lifecycle script relative to THIS script (WTM_PLUGIN_ROOT),
-    # not the caller's cwd. The cleanup verb runs git operations in the
+    # not the caller's cwd. The cleanup command runs git operations in the
     # caller's repo, but the script itself ships alongside this manager.
     local lifecycle_script="$WTM_PLUGIN_ROOT/scripts/lib/worktree-lifecycle.sh"
     if [[ ! -f "$lifecycle_script" ]]; then
@@ -560,7 +560,7 @@ _wtm_cmd_cleanup() {
 }
 
 # ----------------------------------------------------------------------
-# Verb: migrate
+# Command: migrate
 # ----------------------------------------------------------------------
 # One-shot: scan known worktree locations, classify each as STALE or LIVE,
 # and (with --auto) remove the stale ones. Live = target-state.md status is
@@ -669,9 +669,9 @@ _wtm_is_live() {
 # Dispatcher
 # ----------------------------------------------------------------------
 main() {
-    local verb="${1:-}"
+    local command="${1:-}"
     shift || true
-    case "$verb" in
+    case "$command" in
         create)  _wtm_cmd_create  "$@" ;;
         setup)   _wtm_cmd_setup   "$@" ;;
         cleanup) _wtm_cmd_cleanup "$@" ;;
@@ -680,9 +680,9 @@ main() {
         version) echo "$WTM_VERSION" ;;
         ""|-h|--help|help)
             cat <<'USAGE' >&2
-Usage: worktree-manager.sh <verb> [args]
+Usage: worktree-manager.sh <command> [args]
 
-Verbs:
+Commands:
   create   <project> <slug> [--mode=manual|ephemeral] [--branch=<name>]
   setup    <worktree-path> [--force]
   cleanup  [--mode=ephemeral|stale|all] [--older-than=Nd] [--dry-run] [--prefix=<prefix>]
@@ -693,7 +693,7 @@ JSON output on stdout for create / setup / migrate / resolve. Logs on stderr.
 USAGE
             return 1
             ;;
-        *) _wtm_err "unknown verb: $verb"; return 1 ;;
+        *) _wtm_err "unknown command: $command"; return 1 ;;
     esac
 }
 

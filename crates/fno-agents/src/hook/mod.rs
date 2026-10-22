@@ -4,8 +4,8 @@
 //! these entries: the policy they carried in shell + Python + jq moves here,
 //! so a fire costs one process instead of five CLI startups plus interpreter
 //! spins (measured 9.3s of a 9.9s org trace at `hooks/lead-delegation-guard.sh`
-//! before the port). Transport, not client verbs: dispatched in `main()`
-//! before the tokio runtime builds, never in `run`, so the verb-surface
+//! before the port). Transport, not client commands: dispatched in `main()`
+//! before the tokio runtime builds, never in `run`, so the command-surface
 //! ratchet never sees them (shrink law d-fe66560a).
 
 pub mod adapter;
@@ -30,7 +30,7 @@ use serde_json::json;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// Dispatch one hook entry by name. Transport, not a client verb: `main()`
+/// Dispatch one hook entry by name. Transport, not a client command: `main()`
 /// calls this before the runtime builds, so a fire costs one process.
 pub fn dispatch(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {

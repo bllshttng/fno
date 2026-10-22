@@ -1,13 +1,13 @@
 //! Hidden binary-direct review doors. Dispatched from the client's
-//! hidden-verb run BEFORE the routable-verb table, so the routable-verb
-//! parity guard and CLIENT_VERB_USAGE never see these verbs: they read
-//! state and print, they are not `fno agents` verbs.
+//! hidden-command run BEFORE the routable-command table, so the routable-command
+//! parity guard and CLIENT_COMMAND_USAGE never see these commands: they read
+//! state and print, they are not `fno agents` commands.
 
-/// Route a hidden review door by verb, `None` when the verb is not one.
+/// Route a hidden review door by command, `None` when the command is not one.
 /// Returning `Some(exit)` is terminal for the dispatch (the caller returns
 /// the code).
-pub fn dispatch(verb: &str, rest: &[String]) -> Option<i32> {
-    match verb {
+pub fn dispatch(command: &str, rest: &[String]) -> Option<i32> {
+    match command {
         "review-summary" => Some(crate::review_summary::run_review_summary(rest)),
         "review-level" => Some(run_review_level_door(rest)),
         "review-policy" => Some(crate::review_policy::run_review_policy(rest)),
@@ -20,7 +20,7 @@ pub fn dispatch(verb: &str, rest: &[String]) -> Option<i32> {
 }
 
 /// The `review-level` door: the capability group and the findings actions
-/// ride UNDER it, so fno-agents gains no root verb and menu-caps stays at
+/// ride UNDER it, so fno-agents gains no root command and menu-caps stays at
 /// root 12/12. The interception runs before the level parser, and only when
 /// the second token is one of the action words - `capability` and
 /// `findings` are not level words, so no valid level call changes, and a

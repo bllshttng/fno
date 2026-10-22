@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # check-client-actions-shrink.sh - ALL_CLIENT_ACTIONS is shrink-only.
 #
-# Law d-fe66560a: top-level verbs are not allowed at all, hidden ones
+# Law d-fe66560a: top-level commands are not allowed at all, hidden ones
 # included. The fno-agents binary's action list may only shrink: a token
 # removed is banked, a token added refuses - a swap refuses too, since it
 # contains an addition. The vocabulary migration preserves action identity.
-# The gap that let a hidden verb in: the verb ratchet
+# The gap that let a hidden command in: the command ratchet
 # registers all of fno-agents as ONE baseline leaf, so nothing noticed the
 # list growing. This gate closes that gap for the binary the way
 # check-file-budget.sh closes it for file size.
 #
 # There is no exception label, because the law allows none. The remedy for a
 # refused grow is named in the refusal: an argument of an existing action, or
-# a field on an existing verb's output - never a new action.
+# a field on an existing command's output - never a new action.
 #
 # Run: bash scripts/ci/check-client-actions-shrink.sh [--quiet]
 # Exit: 0 pass, 1 an added action, 2 misuse, a missing/moved const, or an
@@ -146,7 +146,7 @@ if [[ -n "$added" ]]; then
         echo "added: $token"
     done
     echo "check-client-actions-shrink: ALL_CLIENT_ACTIONS grew; law d-fe66560a allows no new action, hidden or advertised." >&2
-    echo "       The remedy is an argument of an existing action, or a field on an existing verb's output - never a new action." >&2
+    echo "       The remedy is an argument of an existing action, or a field on an existing command's output - never a new action." >&2
     exit 1
 fi
 

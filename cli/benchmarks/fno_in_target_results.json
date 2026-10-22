@@ -143,5 +143,5 @@
   "calls_per_session": 19,
   "sample_size": 8,
   "skipped_count": 0,
-  "methodology": "fno_wall_seconds estimated as (calls_per_session * median_fno_latency_ms). phase_wall_seconds from ledger.json duration_minutes field. Verb call count derived from grep of skills/target/ + hooks/ for `fno ` invocations."
+  "methodology": "fno_wall_seconds estimated as (calls_per_session * median_fno_latency_ms). phase_wall_seconds from ledger.json duration_minutes field. Command call count derived from grep of skills/target/ + hooks/ for `fno ` invocations."
 }

@@ -352,7 +352,7 @@
     "protected_role": null,
     "role": null,
     "rung_base": "agents.profiles.target",
-    "slot_by_verb": {
+    "slot_by_command": {
       "blueprint": {
         "has_overlay": false,
         "lanes_raw": null,
@@ -430,7 +430,7 @@
       "claude": true,
       "codex": true
     },
-    "work_verb": "target"
+    "work_command": "target"
   },
   "transport_payload": {
     "capacity_refresh": true,
@@ -447,6 +447,6 @@
     "role": null,
     "rung_base": "agents.profiles.target",
     "substrate": null,
-    "work_verb": "target"
+    "work_command": "target"
   }
 }

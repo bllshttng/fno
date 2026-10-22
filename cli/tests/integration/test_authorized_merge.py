@@ -20,13 +20,13 @@ def _auto_merge(delete_branch: bool):
 
 
 def _arm_door(monkeypatch, *, cleanup: str) -> None:
-    def _door(verb, payload, timeout=None):
-        assert verb == "authorized-merge", verb
+    def _door(command, payload, timeout=None):
+        assert command == "authorized-merge", command
         assert payload["op"] == "merge-remote-delete", payload
         assert payload["pr"] == 1042
         return {"cleanup": cleanup}
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _door)
+    monkeypatch.setattr("fno.rust_binary.command_call", _door)
 
 
 def test_a_failed_cleanup_is_emitted_once(tmp_path, monkeypatch):
@@ -61,10 +61,10 @@ def test_a_clean_cleanup_emits_no_failure_event(tmp_path, monkeypatch):
 def test_a_disabled_delete_branch_gates_the_door_call(tmp_path, monkeypatch):
     from fno.pr_watch._dispatch import _finish_queue_merge
 
-    def _door(verb, payload, timeout=None):
-        raise AssertionError(f"cleanup must not reach the door: {verb} {payload!r}")
+    def _door(command, payload, timeout=None):
+        raise AssertionError(f"cleanup must not reach the door: {command} {payload!r}")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _door)
+    monkeypatch.setattr("fno.rust_binary.command_call", _door)
     monkeypatch.setattr(
         "fno.config.load_settings_for_repo",
         lambda _p: type("S", (), {"auto_merge": _auto_merge(False)})(),

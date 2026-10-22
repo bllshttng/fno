@@ -470,7 +470,7 @@ _cargo_target_inventory() {
         for target in "$wt/target" "$wt"/crates/*/target; do
             prot="$protection"
             if [[ -L "$target" ]]; then
-                # A cache the retired offload verb relocated. The sweep follows the link
+                # A cache the retired offload command relocated. The sweep follows the link
                 # or the relocation strands the bytes with no reclaimer at
                 # all. Following is gated by BOTH conjuncts of
                 # _cargo_cache_dir_owned (under an fno base, tagged
@@ -551,10 +551,10 @@ _cargo_build_base() {
 }
 
 _cargo_legacy_offload_base() {
-    # The retired offload verb's relocation base. Its symlinks survive in
+    # The retired offload command's relocation base. Its symlinks survive in
     # old trees; the sweep removes each link together with its resolved dir
     # when the dir sits under THIS base and is tagged. Never configurable: the
-    # base died with the verb, and a config key would teach it back.
+    # base died with the command, and a config key would teach it back.
     printf '%s\n' "${STATE_DIR:-$HOME/.fno}/cargo-targets"
 }
 
@@ -1160,7 +1160,7 @@ case "${1:-status}" in
                 #    only while it holds commits no remote carries
                 #    (wt_unpushed_count fails toward keep), because scratch
                 #    trees are detached BY CONSTRUCTION and a blanket keep
-                #    meant the disk-reclaim verb could never reap the
+                #    meant the disk-reclaim command could never reap the
                 #    population that grows. Branched trees keep the
                 #    merged-or-upstream logic below unchanged.
                 elif [[ "$branch" == "HEAD" || -z "$head" ]]; then
@@ -1264,10 +1264,10 @@ case "${1:-status}" in
                 echo "No non-canonical worktrees found."
             else
                 EXECUTED=""; [[ -n "$APPLY" && -z "$DRY_RUN" ]] && EXECUTED="1"
-                VERB="would archive"; [[ -n "$EXECUTED" ]] && VERB="archived"
+                COMMAND="would archive"; [[ -n "$EXECUTED" ]] && COMMAND="archived"
                 SUFFIX=""; [[ -z "$EXECUTED" ]] && SUFFIX="  [dry-run: no changes made; pass --apply to execute]"
                 printf 'Summary: %d %s (%d done-node), %d kept (%d unmerged, %d unpushed, %d unborn, %d dirty, %d live-session, %d processes, %d salvage-failed, %d needs-confirmation, %d app-owned, %d permanent), %d failed, enumerated %d judged %d%s\n' \
-                    "$N_REAP" "$VERB" "$N_DONE" "$KEPT" "$N_UNMERGED" "$N_UNPUSHED" "$N_UNBORN" "$N_DIRTY" "$N_LIVE" "$N_PROC" "$N_SALVAGE" "$N_NEEDCONF" "$N_APP_OWNED" "$N_PERM" "$N_FAIL" "$N_ENUM" "$N_TOTAL" "$SUFFIX"
+                    "$N_REAP" "$COMMAND" "$N_DONE" "$KEPT" "$N_UNMERGED" "$N_UNPUSHED" "$N_UNBORN" "$N_DIRTY" "$N_LIVE" "$N_PROC" "$N_SALVAGE" "$N_NEEDCONF" "$N_APP_OWNED" "$N_PERM" "$N_FAIL" "$N_ENUM" "$N_TOTAL" "$SUFFIX"
             fi
             exit 0
         fi

@@ -226,7 +226,7 @@ def read_events(
     events_path = Path(events_path)
 
     # SQL authority: committed rows in commit order; a journal with no store
-    # answers its raw pre-cutover bytes via the verb's legacy fallback. The
+    # answers its raw pre-cutover bytes via the command's legacy fallback. The
     # legacy raw-only parse below fires only when no binary is available.
     from fno.events.store_client import native_rows
 

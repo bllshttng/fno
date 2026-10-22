@@ -56,7 +56,7 @@ def typer_group_shape(attr: Any, info_overrides: Mapping[str, Any] | None = None
     ``typer.main.get_command`` collapses a one-command Typer app into a bare
     TyperCommand, which changes the invocation path from
     ``fno <group> <sub> <args>`` to ``fno <group> <args>``. Walkers that model
-    the live surface (the verb ratchet, the collapse-map tests) must resolve
+    the live surface (the command ratchet, the collapse-map tests) must resolve
     through the same group-preserving shape the runtime uses.
     """
     if isinstance(attr, typer.Typer):
@@ -100,12 +100,12 @@ class _CollapsedForward(click.Command):
 
 
 def collapse_click_group(group: click.Group, *, keep: set[str]) -> click.Group:
-    """Collapse non-KEEP children into one argument-dispatching group verb.
+    """Collapse non-KEEP children into one argument-dispatching group command.
 
     KEEP children remain registered leaves. Every other first token is resolved
     against the original group and forwarded to that command's own parser, so
     its options, validation, help, callback, and nested actions stay unchanged.
-    The marker is consumed by the verb-ratchet walker, which counts the group
+    The marker is consumed by the command-ratchet walker, which counts the group
     dispatcher once plus the deliberately retained children.
     """
     if getattr(group, "_fno_collapsed_dispatcher", False):
@@ -386,7 +386,7 @@ class LazyTypeGroup(typer.core.TyperGroup):
             return cmd
         if cmd_name in self._lazy:
             return self._make_stub(cmd_name)
-        # A removed top-level verb refuses BY NAME. The root group is a
+        # A removed top-level command refuses BY NAME. The root group is a
         # different class from TombstoneGroup (it owns lazy loading), so the
         # check has to live on both or removals are only taught one level down
         # - a guard on one of two reachable paths.
@@ -438,7 +438,7 @@ class LazyTypeGroup(typer.core.TyperGroup):
         # rewriting the argv and falling through to the normal path makes the
         # destination parse its own arguments exactly as a direct invocation
         # would, so stdout is byte-identical. The forward is gated on the
-        # destination root being registered, so a wave can seed VERB_MOVES
+        # destination root being registered, so a wave can seed COMMAND_MOVES
         # before it mints the destination; until then the OLD registration
         # serves the call without advertising a command that cannot resolve.
         # The gate is a
@@ -447,7 +447,7 @@ class LazyTypeGroup(typer.core.TyperGroup):
         # leaf path, and would raise the tombstone refusal should a
         # destination name ever be removed.
         if args:
-            from fno.verb_moves import (
+            from fno.command_moves import (
                 deprecation_line,
                 destination_is_registered,
                 forwarding_args,

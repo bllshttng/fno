@@ -1,10 +1,10 @@
 # `fno do pr` internalization
 
-The `fno do pr {merge,verify,rebase}` verbs used to be thin Typer wrappers that
+The `fno do pr {merge,verify,rebase}` commands used to be thin Typer wrappers that
 resolved `resolve_repo_root() / "scripts/lib/pr-*.sh"` and `subprocess.run`'d
 the bash. That worked in a clone but degraded on a bare `pip install fno` (the
 scripts are not on disk). This change ports the four scripts to in-package
-Python that shells to `gh` / `git`, so the verbs run from the installed wheel
+Python that shells to `gh` / `git`, so the commands run from the installed wheel
 with no repo-root dependency.
 
 This is a **port, not a rewrite**: the logic moved to Python, shells to the same
@@ -15,13 +15,13 @@ drift.
 ## Layout
 
 ```
-cli/src/fno/pr/cli.py       Typer verbs; dispatch in-package (no repo-root script)
+cli/src/fno/pr/cli.py       Typer commands; dispatch in-package (no repo-root script)
 cli/src/fno/pr/_proc.py     run() + ToolMissing: capture gh/git output, flag a missing binary
 cli/src/fno/pr/_merge.py    <- pr-merge.sh        (JSON line + merge guards + worktree recovery)
 cli/src/fno/pr/_rebase.py   <- rebase-resolve.sh  (exit-code protocol incl. 42)
 ```
 
-The verify, base-check, base-lineage-check and merge-result-check bodies are native now. The `pr-verify`, `pr-base-check`, `pr-base-lineage-check` and `pr-merge-result-check` verbs in `crates/fno-agents` answer them, and `cli.py` forwards the spellings.
+The verify, base-check, base-lineage-check and merge-result-check bodies are native now. The `pr-verify`, `pr-base-check`, `pr-base-lineage-check` and `pr-merge-result-check` commands in `crates/fno-agents` answer them, and `cli.py` forwards the spellings.
 
 The auto_merge config is read through the new typed `config.auto_merge`
 (`AutoMergeBlock`) instead of re-parsing `config.toml` in a subprocess, so the
@@ -31,7 +31,7 @@ The auto_merge config is read through the new typed `config.auto_merge`
 
 ## Preserved contracts
 
-| Verb | Contract held verbatim |
+| Command | Contract held verbatim |
 |---|---|
 | `pr merge` | JSON line `{pr, outcome, reason, strategy[, cleanup]}`; exit 0 merged\|queued, 1 failed, 2 skipped, 127 gh-missing; the canonical merge guards (`config.auto_merge` gating); the landed-merge guard (gh exits non-zero whenever a post-merge step fails after a successful server-side merge, so the failure path re-reads the PR's merged state before reporting failed - a merged PR is never misreported as failed, and the cleanup failure surfaces in its own `cleanup` field), plus the worktree server-side-recovery fallback for a branch a worktree refuses to merge; post-merge sentinels (`.memory-pass-pending`, `.triage-pending`), the `session_satisfied{source:pr_merge}` event, and the per-PR artifact consolidation, all best-effort. |
 | `pr verify --kind merged` | merge-state audit; the single bounded remediation (one auto-merge attempt + one 30s poll, never a retry loop); the `record_merge` frontmatter write (atomic `os.replace`, idempotent `merged_prs`); the audit events. Exit 0/1/2. |

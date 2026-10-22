@@ -28,7 +28,7 @@ enum Sec {
 const GRAPH_REASON: &str =
     "graph.json is retired; do not recreate it. Mutate the graph.db store via `fno backlog` commands.";
 const DB_REASON: &str = "graph.db is the authoritative store; direct writes to it or its WAL files are blocked. Mutate via `fno backlog` commands.";
-const MANIFEST_REASON: &str = "target-state.md is an immutable session manifest; direct Edit/Write is blocked. The only legal post-init write is first-fill of an empty plan_path via `fno do state set --field plan_path`. Use `fno do state` / `fno do target` verbs, not a hand edit.";
+const MANIFEST_REASON: &str = "target-state.md is an immutable session manifest; direct Edit/Write is blocked. The only legal post-init write is first-fill of an empty plan_path via `fno do state set --field plan_path`. Use `fno do state` / `fno do target` commands, not a hand edit.";
 const CONFIG_REASON: &str = "Do not edit an fno config.toml by hand. Run `fno config set <key> <value>` (add `--local` for a repo file). It checks the key against the schema. A hand-added key that is not in the schema prints a warning on every fno call. If `fno config set` refuses the key, the key is not modeled yet: file a node with `fno backlog idea`.";
 const BASH_BLOCK_SUFFIX: &str =
     " (this Bash write to a protected state file is blocked; use `fno backlog` / `fno do state`).";
@@ -386,7 +386,7 @@ fn bash_writes(cmd: &str, path: &str, clause_path: &str) -> bool {
     // In-place editors bind the editor to the protected path WITHIN its own
     // command clause: `echo see .fno/graph.json; sed -i x notes.md` mentions
     // the path in a different clause and must NOT match. `[^;|&]*` keeps the
-    // flag and the path in the same clause as the sed/perl/jq/ex/ed verb:
+    // flag and the path in the same clause as the sed/perl/jq/ex/ed command:
     // -i, combined short flags (-Ei, -ri), and the --in-place long form.
     arms.push(format!(
         r#"{lead}(sed|perl)[[:space:]]{nosep}(-[a-zA-Z]*i|--in-place){nosep}{path_in_clause}"#
@@ -421,7 +421,7 @@ pub(crate) fn drive_authority_active() -> bool {
     let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
         return false;
     };
-    let sessions = crate::client_verbs::active_drive_sessions(home.root());
+    let sessions = crate::client_commands::active_drive_sessions(home.root());
     let active = sessions.iter().any(|s| s.short_id == self_id);
     if std::env::var_os("FNO_GUARD_TRACE").is_some() {
         eprintln!(
@@ -1276,7 +1276,7 @@ mod tests {
             cmd_norm: norm(command),
         };
         // (tool, file_path, command, refused). Fixtures, reads, other config
-        // files and the verb itself stay allowed.
+        // files and the command itself stay allowed.
         let cases = [
             ("Edit", "/Users/x/.fno/config.toml", "", true),
             ("Write", "/repo/.fno//config.toml", "", true),

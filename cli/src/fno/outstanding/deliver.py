@@ -58,7 +58,7 @@ def _mail_send(argv: "list[str]") -> "tuple[int, str]":
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
         return (proc.returncode, detail[0] if detail else "no detail")
-    # The verb's own evidence line ("delivered (hosted)", "queued (durable)")
+    # The command's own evidence line ("delivered (hosted)", "queued (durable)")
     # is the delivery truth; exit 0 alone cannot tell landed from parked.
     out = (proc.stdout or "").strip().splitlines()
     return (0, out[-1] if out else "")

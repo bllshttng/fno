@@ -17,8 +17,8 @@ const ENCOUNTER_HELP: &str = "Usage: fno backlog encounter [OPTIONS] TASK_ID
   Record ONE encounter with this node, from this session, with evidence.
 
   An encounter is a thing that happened and cannot be edited or withdrawn:
-  there is no correction verb, and a later correction is a `fno backlog note`.
-  Full contract: docs/architecture/backlog-graph-verb-contracts.md
+  there is no correction command, and a later correction is a `fno backlog note`.
+  Full contract: docs/architecture/backlog-graph-command-contracts.md
 
 Arguments:
   TASK_ID  Node id this session hit while doing something else.  [required]
@@ -145,7 +145,7 @@ pub(crate) struct Voter {
 }
 
 /// The vote record, keyed in the order every reader has seen since the
-/// verb was Python: stamp, evidence, voter, then provenance.
+/// command was Python: stamp, evidence, voter, then provenance.
 pub(crate) fn vote_record(stamp_key: &str, evidence: &str, voter: &Voter) -> Map<String, Value> {
     let mut record = Map::new();
     record.insert(
@@ -269,7 +269,7 @@ pub fn run(tail: &[String]) -> i32 {
     )
 }
 
-/// The verb over an already-resolved identity, so a test injects the one
+/// The command over an already-resolved identity, so a test injects the one
 /// prover that walks the process tree and runs everything else for real.
 fn run_with(
     tail: &[String],

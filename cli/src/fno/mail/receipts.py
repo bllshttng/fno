@@ -26,11 +26,11 @@ def _render(argv: list[str]) -> str:
     pattern: Python keeps transports, the assembly lives in Rust). The
     receipt vocabulary is single-source, so a missing binary refuses rather
     than falling back to a second renderer."""
-    from fno.rust_binary import VerbUnavailable, resolve_binary
+    from fno.rust_binary import CommandUnavailable, resolve_binary
 
     binary = resolve_binary()
     if binary is None:
-        raise VerbUnavailable("fno-agents binary not found; run `fno doctor update`")
+        raise CommandUnavailable("fno-agents binary not found; run `fno doctor update`")
     proc = subprocess.run(
         [str(binary), "mail-receipt", *argv],
         capture_output=True,
@@ -38,7 +38,7 @@ def _render(argv: list[str]) -> str:
         timeout=10,
     )
     if proc.returncode != 0:
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             (proc.stderr or "fno-agents mail-receipt failed").strip()[:200]
         )
     return proc.stdout.rstrip("\n")
@@ -355,7 +355,7 @@ def _warn_deferred(target: str, *, project: bool = False, reason: Optional[str] 
     never the problem. A None or unreachable reason repeats a transcript verdict.
 
     A lock timeout gets its own arm for the same reason. The per-agent flock is
-    shared by every verb that touches the agent (send, ask, spawn, stop, rm), so
+    shared by every command that touches the agent (send, ask, spawn, stop, rm), so
     a timeout says nothing about the recipient's liveness in EITHER direction.
     The not-live copy would send the reader to resurrect a session that is
     working fine; naming the holder a peer sender would tell the reader a
@@ -445,7 +445,7 @@ def _escalate_to_human(
     from fno.paths import state_dir
 
     pair = hashlib.sha256(f"{sender}\x00{recipient}".encode()).hexdigest()[:16]
-    # The debounce marker state machine lives behind the mail-receipt verb
+    # The debounce marker state machine lives behind the mail-receipt command
     # (file budget): O_CREAT|O_EXCL claims the window atomically - exactly
     # one concurrent sender wins a fresh escalation, the rest see the marker
     # and debounce; a stale marker refreshes so the next window runs from now.

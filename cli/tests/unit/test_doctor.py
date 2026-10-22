@@ -7,7 +7,7 @@ partial evidence -> not stale, --fix rust-only leg runs the refresh helper,
 never shells out to cargo directly).
 
 The signal collectors (_resolve_source, _source_rev, _read_marker,
-_probe_installed_verb, _rust_report, _rust_source_rev,
+_probe_installed_command, _rust_report, _rust_source_rev,
 _cargo_bin) are module-level so each test stubs them for a hermetic,
 network-free verdict.
 """
@@ -51,7 +51,7 @@ def _stub_signals(
     monkeypatch.setattr(doctor, "_python_content_drift", lambda source: content_drift)
     monkeypatch.setattr(doctor, "_source_rev", lambda source: source_rev)
     monkeypatch.setattr(doctor, "_read_marker", lambda: marker)
-    monkeypatch.setattr(doctor, "_probe_installed_verb", lambda: capture_present)
+    monkeypatch.setattr(doctor, "_probe_installed_command", lambda: capture_present)
     # Config-schema surfaces (x-6c5b): default to EQUAL keysets so existing tests
     # exercise no drift; drift tests pass differing sets explicitly.
     monkeypatch.setattr(doctor, "_deployed_config_keys", lambda: deployed_config_keys)
@@ -143,10 +143,10 @@ def test_ac1_hp_fresh_install_reports_healthy(monkeypatch: pytest.MonkeyPatch) -
     assert "up to date" in result.stdout
 
 
-def test_ac1_err_missing_verb_reports_skew_and_exits_nonzero(
+def test_ac1_err_missing_command_reports_skew_and_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC1-ERR: capability probe proves a missing verb => stale, exit nonzero, names the verb + remediation."""
+    """AC1-ERR: capability probe proves a missing command => stale, exit nonzero, names the command + remediation."""
     _stub_signals(
         monkeypatch,
         src=Path("/src"),
@@ -205,7 +205,7 @@ def test_ac1_ui_json_is_single_object_on_stdout(monkeypatch: pytest.MonkeyPatch)
     assert payload["status"] == "stale"
     assert payload["python_stale"] is True
     assert payload["rust_stale"] is False
-    assert payload["missing_verbs"] == []
+    assert payload["missing_commands"] == []
     assert payload["source_rev"] == "newsha"
     assert payload["installed_rev"] == "oldsha"
     assert payload["rust_binary"] == "/cargo/bin/fno-agents"
@@ -372,7 +372,7 @@ def test_source_config_keys_reads_committed_head(tmp_path: Path) -> None:
         (dict(source_resolved=True, source_rev="a", marker="a", capture_present="present"), "fresh", False, False),
         (dict(source_resolved=True, source_rev="a", marker="b", capture_present="present"), "stale", True, False),
         (dict(source_resolved=True, source_rev="a", marker=None, capture_present="present"), "unknown", False, False),
-        # Probe proves missing verb => stale regardless of source/marker.
+        # Probe proves missing command => stale regardless of source/marker.
         (dict(source_resolved=True, source_rev="a", marker="a", capture_present="missing"), "stale", True, False),
         # Rust fold-in: full evidence mismatch + python fresh -> rust_stale True, status stale.
         (dict(source_resolved=True, source_rev="a", marker="a", capture_present="present",
@@ -460,7 +460,7 @@ def test_fix_refreshes_wedged_pr_watch_instead_of_healing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A wedged watermark is fresh, so the tick already runs: the cure is the
-    refresh verb, never the plain bounce."""
+    refresh command, never the plain bounce."""
     _stub_signals(monkeypatch, src=Path("/src"), source_rev="abc", marker="abc",
                   capture_present="present")
     _wedged_pr_watch(monkeypatch)
@@ -509,7 +509,7 @@ def test_ac3_hp_fix_delegates_to_update(monkeypatch: pytest.MonkeyPatch) -> None
         return 0
 
     monkeypatch.setattr(doctor, "_front_door", lambda: "/fake/fno")
-    monkeypatch.setattr(doctor, "_run_update_verb", _fake_run)
+    monkeypatch.setattr(doctor, "_run_update_command", _fake_run)
     result = runner.invoke(app, ["doctor", "--fix", "--source", "/src"])
     assert calls == [["/fake/fno", "doctor", "update", "--source", "/src"]]
     assert result.exception is None
@@ -518,7 +518,7 @@ def test_ac3_hp_fix_delegates_to_update(monkeypatch: pytest.MonkeyPatch) -> None
 def test_ac3_edge_fix_reports_the_update_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """--fix reports the native update verb's exit code; the verb's own
+    """--fix reports the native update command's exit code; the command's own
     IN_PROGRESS guard and source-pin gate are what refuse."""
     _stub_signals(
         monkeypatch,
@@ -532,7 +532,7 @@ def test_ac3_edge_fix_reports_the_update_exit_code(
         return 1
 
     monkeypatch.setattr(doctor, "_front_door", lambda: "/fake/fno")
-    monkeypatch.setattr(doctor, "_run_update_verb", _refusing_update)
+    monkeypatch.setattr(doctor, "_run_update_command", _refusing_update)
 
     result = runner.invoke(app, ["doctor", "--fix"])
     assert result.exit_code == 1
@@ -654,7 +654,7 @@ def test_rust_report_revision_comes_from_cargo_not_resolved(
         # `fno` on PATH but not a mux (probe says no) + no cargo mux -> not-installed
         (None, "/home/x/.local/bin/fno", False, "not-installed"),
         # custom --root mux: not at $CARGO_HOME/bin, but `fno` on PATH answers the
-        # mux verb -> active (this is the case the old code mislabeled not-installed)
+        # mux command -> active (this is the case the old code mislabeled not-installed)
         (None, "/custom/root/bin/fno", True, "active"),
         # cargo mux installed but a non-mux `fno` wins PATH -> shadowed
         ("/home/x/.cargo/bin/fno", "/home/x/.local/bin/fno", False, "shadowed"),
@@ -664,7 +664,7 @@ def test_mux_front_door_report_states(
     monkeypatch: pytest.MonkeyPatch, mux, which_fno, probe, expected
 ) -> None:
     """Front-door state: active when `fno` on PATH is the mux (== cargo binary OR
-    answers the mux verb, catching custom --root); shadowed when a cargo mux
+    answers the mux command, catching custom --root); shadowed when a cargo mux
     exists but isn't the `fno` on PATH; not-installed otherwise."""
     monkeypatch.setattr(doctor, "_cargo_installed_mux", lambda: Path(mux) if mux else None)
     monkeypatch.setattr(doctor.shutil, "which", lambda name: which_fno)
@@ -849,7 +849,7 @@ def test_codex_app_server_report_dead_socket_inode_reads_absent(tmp_path, monkey
 
 
 # ---------------------------------------------------------------------------
-# Deployed fno plugin roots freshness: the Rust verb enumerates every root
+# Deployed fno plugin roots freshness: the Rust command enumerates every root
 # (marketplace stage, registry installPath, orphan copies) and byte-checks
 # each against source HEAD. Same fresh|stale|unknown vocabulary; stale only
 # on proven evidence.
@@ -999,8 +999,8 @@ def test_old_git_echo_falls_back_and_doctor_names_the_git(monkeypatch):
 # `fno update` was measured against this artifact: 15m07s, exit 0,
 # installed_plugins.json byte-identical. update.py names ~/.claude/plugins only
 # as a SOURCE to install FROM. The registry belongs to claude, which mints its
-# own gitCommitSha, so the verb that can refresh it is `claude plugin update`.
-# These assert the RELATIONSHIP (the prescribed verb owns the artifact), not the
+# own gitCommitSha, so the command that can refresh it is `claude plugin update`.
+# These assert the RELATIONSHIP (the prescribed command owns the artifact), not the
 # sentence: a string-only test re-encodes the same guess it is meant to catch.
 
 

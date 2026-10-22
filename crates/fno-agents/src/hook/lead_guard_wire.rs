@@ -14,7 +14,7 @@ use std::path::Path;
 pub(super) fn deny_text(target: &str, repo_root: &Path) -> String {
     format!(
         "lead-delegation-guard: write target '{target}' is inside the repo ({repo}), and a promoted session does not write SOURCE.\n\
-         A lead operates the machine and does not author it: deploy and repair verbs (fno config plugin install, fno doctor update) run, build output and everything outside the repo allow, repo source does not. Delegate the edit or escalate. An operator can list an in-repo path in config.lead.write_roots.\n",
+         A lead operates the machine and does not author it: deploy and repair commands (fno config plugin install, fno doctor update) run, build output and everything outside the repo allow, repo source does not. Delegate the edit or escalate. An operator can list an in-repo path in config.lead.write_roots.\n",
         repo = repo_root.display(),
     )
 }

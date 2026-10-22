@@ -1452,7 +1452,7 @@ pub fn prune_decision_with_evidence(
 /// non-tombstone member is unknown-liveness and the squad is kept). `live_cwds`
 /// are the cwds of live mux panes; a pane mapped to the squad protects it.
 /// `origin_exists` is injected so the matrix is unit-testable without disk; the
-/// verb passes `|p| std::path::Path::new(p).exists()` and re-runs it under the
+/// command passes `|p| std::path::Path::new(p).exists()` and re-runs it under the
 /// lock.
 pub fn prune_decision(
     squad: &StoredSquad,

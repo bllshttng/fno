@@ -843,14 +843,14 @@ def _alias_predecessor(new_name: Optional[str], old_name: Optional[str]) -> None
 def _recovery_agent_name(
     predecessor: Optional[str], node_or_session: str, short: str
 ) -> Optional[str]:
-    """The ``rec-<verb>-<node-or-session>-<short>`` recovery name, or None when
-    the mint refuses; the verb parses from the predecessor (legacy spellings
+    """The ``rec-<command>-<node-or-session>-<short>`` recovery name, or None when
+    the mint refuses; the command parses from the predecessor (legacy spellings
     resolve in the binary, else t)."""
     from fno.agents.naming import mint_or_none, parse_dispatch_agent_name
 
     parsed = parse_dispatch_agent_name(predecessor or "")
-    verb = parsed.verb if parsed else "t"
-    return mint_or_none("rec", verb, node_or_session, slug=short)
+    command = parsed.command if parsed else "t"
+    return mint_or_none("rec", command, node_or_session, slug=short)
 
 
 def _redispatch(
@@ -919,9 +919,9 @@ def _redispatch(
                 text = out.decode("utf-8", "replace")
                 m = re.search(r"fno mux pane kill (\S+):(\d+)", text)
                 if m:
-                    # The daemon refuses `stop` on a pane row and names the verb
+                    # The daemon refuses `stop` on a pane row and names the command
                     # that reaches it (daemon.rs handle_stop). This caller is a
-                    # subprocess, so honor the named verb instead of treating the
+                    # subprocess, so honor the named command instead of treating the
                     # refusal as "worker may still be live" - which would degrade
                     # every pane-worker failover to a nudge. The pane kill does
                     # not touch the registry row; the claim release below still

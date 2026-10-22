@@ -74,7 +74,7 @@ SID="$(postcompact_resolve_sid "$SID" "$TRANSCRIPT")"
 # a short id in one field and the full harness id in the other.
 command -v fno >/dev/null 2>&1 || exit 0
 command -v jq  >/dev/null 2>&1 || exit 0
-# A hook is never a delegated one-verb child, so a FNO_AGENTS_RUNTIME pin here
+# A hook is never a delegated one-command child, so a FNO_AGENTS_RUNTIME pin here
 # has leaked off a spawned worker: strip it for this read and keep the exit
 # code, so a broken read never reads silently as "no row" (the team
 # was unreadable for a whole lead under the leaked pin).
@@ -100,7 +100,7 @@ Team: level ${TEAM_LEVEL:-?} over ${TEAM_SCOPE:-?}. Confirm with \`fno whoami\`.
 $(sed '/^<!--/d' "$BRIEF")"
 
 # This team's own FAQ, appended after the static brief: bounded on both axes
-# (the verb caps entry COUNT; FAQ_MAX_BYTES below caps the aggregate payload,
+# (the command caps entry COUNT; FAQ_MAX_BYTES below caps the aggregate payload,
 # since one detailed entry - or several - can still outgrow context on their
 # own) and degrade-safe (silence on a missing directory, an unreadable one, or
 # no entry for this scope - never a failed hook).
@@ -233,7 +233,7 @@ import json, os, sys
 
 cands = [c for c in os.environ.get('CANDIDATES', '').splitlines() if c]
 # A batch answer is always a JSON array (even an all-miss one). Empty or
-# unparseable stdout means the verb itself failed; emit nothing rather than
+# unparseable stdout means the command itself failed; emit nothing rather than
 # fabricate an unverified all-unresolved list.
 raw = os.environ.get('ROWS_JSON', '')
 try:
@@ -300,10 +300,10 @@ if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
 
 ## You are still leading (shape: ${LEAD_SHAPE})
 
-The beat and stop arm survive a compact: \`fno-agents harness-beat\` names the beat; on \`loop\`, verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents org verdict\` are demand reads, not beats. The \`loop\` beat's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one verb: \`fno agents org checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> priority=<p>\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
+The beat and stop arm survive a compact: \`fno-agents harness-beat\` names the beat; on \`loop\`, verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents org verdict\` are demand reads, not beats. The \`loop\` beat's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one command: \`fno agents org checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> priority=<p>\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
     fi
 fi
-# The read-verb lesson rides the post-compact brief: a compaction boundary
+# The read-command lesson rides the post-compact brief: a compaction boundary
 # newer than the taught one re-teaches it once, and the door prints nothing
 # when the session is current. Best-effort - a stale or absent binary
 # teaches nothing and never blocks the brief.

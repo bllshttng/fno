@@ -66,14 +66,14 @@ class MalformedReceiptError(ValueError):
 
 @dataclass(frozen=True)
 class NextAction:
-    """Exactly one next action a successor should take. verb is required."""
+    """Exactly one next action a successor should take. command is required."""
 
-    verb: str
+    command: str
     target: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.verb, str) or not self.verb.strip():
-            raise MalformedReceiptError("next_action.verb must be a non-empty string")
+        if not isinstance(self.command, str) or not self.command.strip():
+            raise MalformedReceiptError("next_action.command must be a non-empty string")
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ class ResumeReceipt:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["identity"] = asdict(self.identity)
-        d["next_action"] = asdict(self.next_action)
+        d["next_action"] = {"verb": self.next_action.command, "target": self.next_action.target}  # verb-wording: allow (receipts cross binary ages)
         # tuples -> lists for JSON
         for k in (
             "completed_tasks",
@@ -178,7 +178,7 @@ def build_receipt(
     worktree: str,
     branch: str,
     head: str,
-    next_verb: str,
+    next_command: str,
     next_target: Optional[str],
     written_at: str,
     completed_tasks: Sequence[str] = (),
@@ -203,7 +203,7 @@ def build_receipt(
         generation=generation,
         candidate_sha=_short_sha(head),
     )
-    next_action = NextAction(verb=next_verb, target=next_target)
+    next_action = NextAction(command=next_command, target=next_target)
     receipt = ResumeReceipt(
         version=RECEIPT_VERSION,
         identity=identity,
@@ -302,7 +302,7 @@ def _receipt_from_dict(d: Any, *, origin: str = "<receipt>") -> ResumeReceipt:
             candidate_sha=_req_str(ident_raw, "candidate_sha", origin),
         )
         next_action = NextAction(
-            verb=_req_str(next_raw, "verb", origin),
+            command=_req_str(next_raw, "verb", origin),
             target=_opt_str(next_raw, "target"),
         )
         version = _req_int(d, "version", origin)

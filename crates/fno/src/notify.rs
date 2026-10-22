@@ -1,6 +1,6 @@
 //! Client-side desktop-notification delivery (the OSC 777 leg). A pane's OSC
 //! 9 / 99 / 777 arrives re-emitted as [`ServerMsg::DesktopNotice`], and
-//! `fno notify`'s control verb lands the same way: this module turns
+//! `fno notify`'s control command lands the same way: this module turns
 //! `(title, body)` into the one escape shape the outer terminal understands,
 //! `ESC ] 777 ; notify ; TITLE ; BODY BEL` (rxvt-style, honored by Ghostty),
 //! and writes it to the client tty. The title is the pane name on the

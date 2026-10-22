@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# normalize.sh - deterministic input normalizer for the /mail skill write verbs.
+# normalize.sh - deterministic input normalizer for the /mail skill write commands.
 #
 # The /mail skill is a runner-less front door over `fno agents mail`: an operator on a
 # phone types `/mail send target "..."` and the model (the runner) must extract a
@@ -10,34 +10,34 @@
 # Contract (read line-by-line; never `eval`):
 #   status=ok | status=error
 #   error=<message>            (only when status=error)
-#   verb=send | reply
+#   command=send | reply
 #   recipient=<name>           (send, name mode; empty for broadcast)
 #   to_project=<project>       (send, broadcast mode; empty otherwise)
 #   msg_id=<id>                (reply)
 #   body=<body text>
 #
-# Only the WRITE verbs need normalization. Reads (unread/list/view/status/ack/
+# Only the WRITE commands need normalization. Reads (unread/list/view/status/ack/
 # drain) are thin pass-throughs the skill runs directly, so they are out of scope
 # here. Hermetic: no fno, no network. Exit is always 0 (the skill branches on the
 # status field, mirroring skills/agent/scripts/normalize.sh).
 
 set -uo pipefail
 
-VERB=""
+COMMAND=""
 INPUT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    # Guard value flags: a bare `--verb` / `--input` with no argument would make
+    # Guard value flags: a bare `--command` / `--input` with no argument would make
     # `shift 2` fail (no set -e) and spin the loop forever, so refuse it cleanly.
     # `--input ""` (an explicit empty value) is $#>=2 and still accepted.
-    --verb)
-      [[ $# -ge 2 ]] || { printf 'status=error\nerror=--verb needs a value\n'; exit 0; }
-      VERB="$2";  shift 2 ;;
+    --command)
+      [[ $# -ge 2 ]] || { printf 'status=error\nerror=--command needs a value\n'; exit 0; }
+      COMMAND="$2";  shift 2 ;;
     --input)
       [[ $# -ge 2 ]] || { printf 'status=error\nerror=--input needs a value\n'; exit 0; }
       INPUT="$2"; shift 2 ;;
     -h|--help)
-      echo "usage: normalize.sh --verb send|reply --input '<text after the verb>'"
+      echo "usage: normalize.sh --command send|reply --input '<text after the command>'"
       exit 0 ;;
     *)
       printf 'status=error\nerror=unknown argument: %s\n' "$1"
@@ -95,20 +95,20 @@ rest_after() { local s="$1" t; t="$(first_token "$s")"; trim "${s#"$t"}"; }
 # True when a string is empty OR only whitespace (a blank body is still empty).
 is_blank() { [[ -z "${1//[[:space:]]/}" ]]; }
 
-# Lowercase the verb defensively (the model normally passes it lowercase, but a
+# Lowercase the command defensively (the model normally passes it lowercase, but a
 # phone keyboard may auto-capitalize a hand-typed 'Send').
-VERB="$(printf '%s' "$VERB" | tr '[:upper:]' '[:lower:]')"
-case "$VERB" in
+COMMAND="$(printf '%s' "$COMMAND" | tr '[:upper:]' '[:lower:]')"
+case "$COMMAND" in
   send|reply) ;;
-  "") emit_error "missing --verb (expected send or reply)" ;;
-  *)  emit_error "unsupported verb '$VERB'; the /mail write verbs are send and reply (reads are pass-through)" ;;
+  "") emit_error "missing --command (expected send or reply)" ;;
+  *)  emit_error "unsupported command '$COMMAND'; the /mail write commands are send and reply (reads are pass-through)" ;;
 esac
 
 raw="$(strip_curly "$INPUT")"
 raw="$(trim "$raw")"
-[[ -z "$raw" ]] && emit_error "empty input: a $VERB needs a target and a body"
+[[ -z "$raw" ]] && emit_error "empty input: a $COMMAND needs a target and a body"
 
-if [[ "$VERB" == "send" ]]; then
+if [[ "$COMMAND" == "send" ]]; then
   # Split the first token from the rest (rest preserves interior + trailing
   # newlines so a multiline body is not truncated).
   first="$(first_token "$raw")"
@@ -123,7 +123,7 @@ if [[ "$VERB" == "send" ]]; then
       [[ -z "$to_project" ]] && emit_error "broadcast send needs a project: 'project <name> \"<body>\"'"
       body="$(strip_wrap "$(rest_after "$rest")")"
       is_blank "$body" && emit_error "empty body: nothing to send to project '$to_project'"
-      printf 'status=ok\nverb=send\nrecipient=\nto_project=%s\nmsg_id=\nbody=%s\n' "$to_project" "$body"
+      printf 'status=ok\ncommand=send\nrecipient=\nto_project=%s\nmsg_id=\nbody=%s\n' "$to_project" "$body"
       exit 0
       ;;
   esac
@@ -132,14 +132,14 @@ if [[ "$VERB" == "send" ]]; then
   [[ -z "$recipient" ]] && emit_error "empty recipient: who is this for?"
   body="$(strip_wrap "$rest")"
   is_blank "$body" && emit_error "empty body: nothing to send to '$recipient'"
-  printf 'status=ok\nverb=send\nrecipient=%s\nto_project=\nmsg_id=\nbody=%s\n' "$recipient" "$body"
+  printf 'status=ok\ncommand=send\nrecipient=%s\nto_project=\nmsg_id=\nbody=%s\n' "$recipient" "$body"
   exit 0
 fi
 
-# VERB == reply
+# COMMAND == reply
 msg_id="$(strip_token_quotes "$(first_token "$raw")")"
 [[ -z "$msg_id" ]] && emit_error "empty msg-id: which message are you replying to?"
 body="$(strip_wrap "$(rest_after "$raw")")"
 is_blank "$body" && emit_error "empty body: nothing to reply with to '$msg_id'"
-printf 'status=ok\nverb=reply\nrecipient=\nto_project=\nmsg_id=%s\nbody=%s\n' "$msg_id" "$body"
+printf 'status=ok\ncommand=reply\nrecipient=\nto_project=\nmsg_id=%s\nbody=%s\n' "$msg_id" "$body"
 exit 0

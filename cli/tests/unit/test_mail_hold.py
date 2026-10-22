@@ -22,7 +22,7 @@ HANDLE = "abcd1234"
 def _isolated_state(tmp_path, monkeypatch):
     """Point the clock directory at a tmp state root, not the real ~/.fno.
 
-    FNO_HOME aims the Rust writer (arm/clear shell the mail-hold verb) at
+    FNO_HOME aims the Rust writer (arm/clear shell the mail-hold command) at
     the same root the Python readers use; without it the arm writes
     the machine's state while read() checks the tmp one.
     """

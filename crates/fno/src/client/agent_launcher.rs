@@ -2547,7 +2547,7 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
 /// One project's facts read: current branch, local branches, and the
 /// worktree policy word - three bounded subprocess reads run in parallel
 /// under the probe's shared deadline. A non-git cwd yields no branch facts;
-/// the policy verb's failure lands in `policy` as the named reason.
+/// the policy command's failure lands in `policy` as the named reason.
 async fn probe_project_facts(
     projects: Vec<String>,
     fno: &str,
@@ -2602,11 +2602,11 @@ async fn probe_project_facts(
                 .next()
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty())
-                .ok_or_else(|| "policy verb printed nothing".to_string()),
+                .ok_or_else(|| "policy command printed nothing".to_string()),
             Some((false, _, stderr)) => Err(stderr
                 .lines()
                 .next()
-                .unwrap_or("policy verb failed")
+                .unwrap_or("policy command failed")
                 .trim()
                 .to_string()),
             None => Err("policy read timed out".to_string()),

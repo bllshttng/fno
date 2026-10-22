@@ -54,7 +54,7 @@ Free-text `data` strings (`title`, `reason`, `evidence`, `termination_reason`) a
 ## Push vs pull
 
 - **Pull (all four):** every event lands in `events.jsonl` behind the file lock. A log tailer or peek reads them. Ticks (`task_started`, `task_done`) are never pushed.
-- **Push (`blocked`, `run_summary`):** additionally sent to the `parent` handle over the mail bus (`fno agents mail send`) WHEN spawn lineage exists; no parent means no push. The mail verb writes the envelope durably BEFORE attempting live delivery, so the push is at-least-once. The push fires after the durable `events.jsonl` append, so the pull leg never depends on it.
+- **Push (`blocked`, `run_summary`):** additionally sent to the `parent` handle over the mail bus (`fno agents mail send`) WHEN spawn lineage exists; no parent means no push. The mail command writes the envelope durably BEFORE attempting live delivery, so the push is at-least-once. The push fires after the durable `events.jsonl` append, so the pull leg never depends on it.
 
 ## Sink contract
 

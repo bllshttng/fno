@@ -10,7 +10,7 @@ This is the one inventory of what each product surface needs from the others. `c
 | Agent runtime (overlays, lifecycle views, digest) | `fno-agents` | `fno` |
 | Agent daemon | `fno-agents-daemon` | `fno-agents` |
 | Graph keeper | `fno-agents-worker` | `fno` |
-| Python porcelain (delivery verbs, config, the do namespace) | `python3 (fno cli)` | `python3` |
+| Python porcelain (delivery commands, config, the do namespace) | `python3 (fno cli)` | `python3` |
 
 The mux is the plain workspace. A plain shell, splits, detach and reattach, and `fno mux doctor` need none of the optional components. Missing optional components stay advisory for a plain workspace. They never make doctor exit non-zero. An explicitly requested backend operation reports its typed failure, the required component, and the repair.
 
@@ -25,7 +25,7 @@ The mux is the plain workspace. A plain shell, splits, detach and reattach, and 
 | mux clients to server | protocol | crates/fno/src/proto.rs | versioned control socket |
 | fno-agents views to daemon | protocol | crates/fno/src/agents_view.rs | agent.watch unix protocol (failed watch degrades to the file scan) |
 | mux to keeper | protocol | crates/fno/src/store_client.rs | framed tag, length, payload protocol, versioned through Identify |
-| graph.json | state writer | crates/fno-agents (keeper) and the Python backlog verbs | two writers, one file format (the keeper is the canonical store) |
+| graph.json | state writer | crates/fno-agents (keeper) and the Python backlog commands | two writers, one file format (the keeper is the canonical store) |
 | claims, detach records, squads | state writer | crates/fno-agents and crates/fno | each state file names its owner in its module docs |
 | generated capability copies | artifact | build.rs | generated, freshness-gated in CI, not dual logic |
 
@@ -51,7 +51,7 @@ Warning prose in doctor checks is per-check wording, not a parity surface. Gener
 | Plain workspace | everything works (doctor reports the absence as advisory) |
 | Agent lifecycle overlays | overlays yield nothing (attach stays usable) |
 | Requested graph operation | typed refusal naming the component and repair (live panes stay usable) |
-| Forwarded porcelain verb | the existing provisioning failure, unchanged |
+| Forwarded porcelain command | the existing provisioning failure, unchanged |
 | Digest | disabled-by-config and backend-unavailable are distinct states |
 
 ## Verification

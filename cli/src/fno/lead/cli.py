@@ -510,10 +510,10 @@ def cancel_cmd(
         raise typer.Exit(1) from exc
 
 
-def _own_role_argv(verb: str, scope: str) -> tuple[list[str], str]:
-    """The caller ladder every ``term-*`` verb needs: resolve the caller's
+def _own_role_argv(command: str, scope: str) -> tuple[list[str], str]:
+    """The caller ladder every ``term-*`` command needs: resolve the caller's
     own role, refuse an unregistered caller or a foreign scope, resolve the
-    binary, and return the argv prefix (binary, verb, --scope, --root, and
+    binary, and return the argv prefix (binary, command, --scope, --root, and
     --session when known) plus the resolved scope. Shared by ``shape`` and
     ``term`` so the ladder is written once (law d-b6cc1a2a: new logic in
     crates, this shell only relays).
@@ -559,7 +559,7 @@ def _own_role_argv(verb: str, scope: str) -> tuple[list[str], str]:
             "FNO_AGENTS_BIN."
         )
     root = _owner_state_root(getattr(caller, "cwd", None))
-    argv = [str(binary), verb, "--scope", own,
+    argv = [str(binary), command, "--scope", own,
             "--root", str(root.parent if root.name == ".fno" else root)]
     if session_id:
         argv += ["--session", session_id]
@@ -605,7 +605,7 @@ def term_cmd(ctx: typer.Context) -> None:
     Usage: ``lead term <spec> [--reason TEXT] [--scope SCOPE]``, spec being
     ``span:<N>[smhd]`` or ``compactions:<N>``. Undeclared reads a 96h
     default. Flags pass through as raw args (the flag-registry ratchet bars
-    new ``typer.Option`` calls in this tree; a new verb belongs in crates),
+    new ``typer.Option`` calls in this tree; a new command belongs in crates),
     so this shell scans them by hand rather than declaring them. The write
     lives in Rust; this shell keeps the caller ladder (Python self-stamp).
     """
@@ -754,7 +754,7 @@ def ledger_cmd(
 ) -> None:
     """Render the term ledger page: every role, its territory, its nodes.
 
-    The page assembly is the native ``lead-rundown`` verb; this shell resolves
+    The page assembly is the native ``lead-rundown`` command; this shell resolves
     the team and the paths. Contract: docs/architecture/lead.md.
     """
     from fno.lead.ledger import build_ledger_data, write_ledger
@@ -998,9 +998,9 @@ def _render(board: dict, max_rows: int) -> None:
             typer.echo(f"  {q['name']:<20} NOT READ    {q['error']}")
         else:
             mark = "*" if q["actionable"] and q["count"] else " "
-            verb = f"  -> {q['verb']}" if q.get("verb") else ""
+            command = f"  -> {q['verb']}" if q.get("verb") else ""
             note = f"  ({q['note']})" if q["note"] and q["count"] else ""
-            typer.echo(f" {mark}{q['name']:<20} {q['count']}{verb}{note}")
+            typer.echo(f" {mark}{q['name']:<20} {q['count']}{command}{note}")
             for row in q["rows"][:max_rows]:
                 typer.echo(f"      {row}")
             hidden = max(0, len(q["rows"]) - max_rows)
@@ -1026,8 +1026,8 @@ agents_lead_app.command(
     "term",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(term_cmd)
-# The stop hooks resolve the role manifest through this hidden verb: the
-# deprecated `fno lead` spelling once missed the verb_moves fold and burned
+# The stop hooks resolve the role manifest through this hidden command: the
+# deprecated `fno lead` spelling once missed the command_moves fold and burned
 # every stop's unavailable-retries. The hooks now name `agents lead` directly.
 agents_lead_app.command("manifest-path", hidden=True)(manifest_path_cmd)
 # Here only, like the faq typer: the retired bare `fno lead` menu stays capped.

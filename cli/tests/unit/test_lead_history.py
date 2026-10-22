@@ -1,7 +1,7 @@
 """Tests for `fno agents lead history` - the role-scope term readback.
 
 The journal scan and the caller-role scope resolution are the Rust
-lead-history verb (tested there); Python is the relay. Covers the relay
+lead-history command (tested there); Python is the relay. Covers the relay
 wiring and the refusal taxonomy.
 """
 from __future__ import annotations

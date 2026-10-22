@@ -1,18 +1,18 @@
-//! Native law-door verbs under `fno inbox law`.
+//! Native law-door commands under `fno inbox law`.
 //!
 //! The Python `fno inbox` group keeps every other name; `law set`, `law
 //! stage`, and `law match` run natively. The door's machinery stays in the
 //! runtime crate, reached through the worker's one-shot `--law-exec` lane:
 //! the mux never links the runtime (crates/fno/tests/product_boundary.rs),
-//! so these verbs spawn the worker exactly the way the store's `--store-exec`
-//! clients do. No top-level verb exists (law d-fe66560a); the group stays
+//! so these commands spawn the worker exactly the way the store's `--store-exec`
+//! clients do. No top-level command exists (law d-fe66560a); the group stays
 //! nested under `inbox`.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
-/// The verbs the native surface serves. The Python `fno inbox law` group
+/// The commands the native surface serves. The Python `fno inbox law` group
 /// forwards here instead of holding its own write path.
 pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &["set", "stage", "match", "retract", "history"];
 
@@ -33,7 +33,7 @@ pub fn classify_inbox_law(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// Classify `fno inbox decide ...` for the front door: the decide record
-/// verb runs natively through the same worker lane as the law door,
+/// command runs natively through the same worker lane as the law door,
 /// `None` forwards to the Python CLI for the rest of the `inbox` tree.
 pub fn classify_inbox_decide(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 2 {
@@ -84,7 +84,7 @@ pub fn run(args: &[OsString]) -> i32 {
                 .collect();
             // A piped stdin rides the request ONLY for `--decision-file -`:
             // every other call never touches stdin, so a daemon whose stdin
-            // is an open pipe cannot block the verb.
+            // is an open pipe cannot block the command.
             let stdin_text = if stdin_requested(&argv) {
                 let mut buf = String::new();
                 let _ = std::io::stdin().read_to_string(&mut buf);
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn stdin_only_for_decision_file_dash() {
         // A daemon whose stdin is an open pipe must never block the
-        // verb. Only `--decision-file -` (either spelling) asks for stdin.
+        // command. Only `--decision-file -` (either spelling) asks for stdin.
         assert!(stdin_requested(&[
             "subject".to_string(),
             "--decision-file".to_string(),

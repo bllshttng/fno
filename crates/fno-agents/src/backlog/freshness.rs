@@ -4,7 +4,7 @@
 //! Read-only and advisory: every verdict exits 0, nothing blocks, and the
 //! one write is the best-effort `backlog_freshness_verdict` event the
 //! false-positive rate is measured from (d-44800d59). v1 warns; turning a
-//! verdict into a refusal is a measured follow-up, never this verb.
+//! verdict into a refusal is a measured follow-up, never this command.
 use crate::events::EventEmitter;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -501,7 +501,7 @@ pub(crate) fn premise_marks_rows(repo: &Path, rows: &[&Value]) -> BTreeMap<Strin
 
 /// The premise marks for many ids off one shared git read. The batch is a
 /// display read (the board and the list): it emits no verdict events, so a
-/// glance never floods the measurement stream the explicit verb feeds.
+/// glance never floods the measurement stream the explicit command feeds.
 pub fn premise_marks(graph: &Path, repo: &Path, ids: &[String]) -> Value {
     let entries = crate::graph_store::read_rows_where(
         graph,
@@ -603,7 +603,7 @@ pub fn run_report(
 
 const USAGE: &str = "usage: fno backlog freshness --ids <comma-separated-node-ids> [--graph <path>]\n       fno backlog freshness <node> [--plan <path>] [--json] [--graph <path>]";
 
-/// Dispatch body for the `fno backlog freshness` native aux verb.
+/// Dispatch body for the `fno backlog freshness` native aux command.
 pub fn run(tail: &[String]) -> i32 {
     let mut node: Option<&String> = None;
     let mut ids: Option<Vec<String>> = None;
@@ -878,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_marks_match_the_single_verb_on_one_shared_read() {
+    fn batch_marks_match_the_single_command_on_one_shared_read() {
         let repo_dir = tempfile::tempdir().unwrap();
         init_repo(repo_dir.path());
         commit(

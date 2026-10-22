@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# x-a6b9's real proof: one restore verb answers for every held portal across
+# x-a6b9's real proof: one restore command answers for every held portal across
 # a server SIGKILL - a claude Drive seat RESUMES in its recorded leaf and
 # ANSWERS a prompt read off its pane grid, a refused portal is NAMED with a
 # reason instead of skipping silently, and the codex pane worker's child pid
@@ -128,7 +128,7 @@ ROSTER
 fi
 
 # The one non-passive client attach that makes a fresh server read its
-# persisted workspace: the precondition the restore verb refuses without.
+# persisted workspace: the precondition the restore command refuses without.
 ATTACH_CLIENT="$TMP_DIR/attach_client.py"
 cat >"$ATTACH_CLIENT" <<'PY'
 import json, socket, struct, sys, time
@@ -282,7 +282,7 @@ print(pids[0])' "$PANE_ID")"
 SURVIVOR_PIDS="$CHILD_PID"
 echo "[before] portals planted; pane worker pane=$PANE_ID child=$CHILD_PID"
 
-# ── first kill: the verb restores what the workspace held ───────────────
+# ── first kill: the command restores what the workspace held ───────────────
 kill -9 "$SERVER_PID"
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""

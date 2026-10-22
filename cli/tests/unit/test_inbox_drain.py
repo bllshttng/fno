@@ -125,7 +125,7 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
         if cmd[1:3] == ["mail-envelope", "--classify"]:
             return _FakeRun(stdout='[{"ids": []}]')
         # The native create door: drain resolves fno-agents and argv[0] is
-        # its path, so the fake matches on the verb words, not the binary.
+        # its path, so the fake matches on the command words, not the binary.
         if cmd[1:3] == ["backlog", "new"]:
             return _FakeRun(stdout='{"id": "ab-abc123", "title": "t"}\n')
         raise AssertionError(f"unexpected subprocess: {cmd}")

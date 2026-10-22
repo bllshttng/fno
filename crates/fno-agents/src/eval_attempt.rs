@@ -928,7 +928,7 @@ pub fn run_evals_attempt(args: &[String]) -> i32 {
         }
     }
     if args.is_empty() {
-        // stdin classify: a JSON payload on stdin (the verb_call shape),
+        // stdin classify: a JSON payload on stdin (the command_call shape),
         // `{"op": "classify", "row": {...}, "expected_rev": "..."}`.
         use std::io::Read;
 

@@ -567,7 +567,7 @@ mod mappable_tests {
     }
 }
 
-/// The hidden client verb: one JSON payload in
+/// The hidden client command: one JSON payload in
 /// (`{"provider", "mode", "substrate"?}`), one answer out. No `substrate`
 /// asks the pane vocabulary; a `substrate` asks the mappability answer. A
 /// mapping refusal lands as `{"refusal": "..."}` so the Python bridge can

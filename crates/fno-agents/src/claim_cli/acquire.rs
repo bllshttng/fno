@@ -356,7 +356,7 @@ fn ordinary_acquire(
     // them: a pid-less thread claim is assessed through it on contention.
     let outcome = if key.starts_with("task:") || key.starts_with("node:") {
         let witness = |record: &ClaimRecord| {
-            let (witness, _drain) = crate::claim_verbs::default_session_witness();
+            let (witness, _drain) = crate::claim_commands::default_session_witness();
             witness(record)
         };
         let witness: claims::SessionWitness<'_> = &witness;
@@ -533,7 +533,7 @@ fn rebind_locked(
             existing.holder
         ));
     }
-    let state = crate::claim_verbs::status_verdict(&existing).0;
+    let state = crate::claim_commands::status_verdict(&existing).0;
     // ONLY a launch-window holder may be replaced: naming the prior holder is
     // the proof, and `spawn-handover:<worker>` reaches only that worker.
     let handover_allowed = !holder_flag.is_empty()

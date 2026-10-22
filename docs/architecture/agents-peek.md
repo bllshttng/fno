@@ -4,7 +4,7 @@
 
 Peek output is NOT a liveness signal. A transcript is a file, and a dead session's file still reads fine. Recent-looking content here proves only that bytes were written at some point, never that anyone is home now. This was misread as proof of life for a session that had been dead 43 minutes, alongside two other surfaces saying the same wrong thing. For a reachability verdict use `fno agents fleet truth <handle>` (or the `reachability` field on `fno agents session list`), which is the one derivation with a declared basis and the falsifiers applied. See `fno.agents.reachability`.
 
-Reply is agent-native: `mail send` resolves `<handle>` across every live source. Observe was tribal knowledge: `agents logs` is registry-only, and a live codex thread or an unrostered `claude --bg` session had no single observe verb. `peek` closes the asymmetry: the same union resolver as send for transcript-backed peers, plus a mux-pane arm for pane-substrate workers (the default substrate), whose content is a PTY rather than a transcript.
+Reply is agent-native: `mail send` resolves `<handle>` across every live source. Observe was tribal knowledge: `agents logs` is registry-only, and a live codex thread or an unrostered `claude --bg` session had no single observe command. `peek` closes the asymmetry: the same union resolver as send for transcript-backed peers, plus a mux-pane arm for pane-substrate workers (the default substrate), whose content is a PTY rather than a transcript.
 
 Two data paths, tried in order:
 

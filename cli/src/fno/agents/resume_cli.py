@@ -113,7 +113,7 @@ def _build_resume_argv(
         # `sandbox_flag_resume`, because it is handed a known posture. Nothing
         # calls it from here, and that is the gap, not an oversight to route
         # around: this lane has no posture to hand it. Clearing the approval
-        # modal needs an operator opt-in this verb does not have yet. Hook
+        # modal needs an operator opt-in this command does not have yet. Hook
         # trust is posture-free, so it rides every resume, as a global.
         from fno.agents.mux_spawn import codex_hook_trust_args
         place = ["--cd", cwd] if cwd else []

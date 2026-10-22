@@ -2,7 +2,7 @@
 //! parity-oracle: cli/src/fno/pr_watch/_install.py:uninstall
 //!
 //! Characterization for the pr-watch install and uninstall ports: the Rust
-//! verbs (`fno-agents pr-watch install`, its `--ensure` coupling mode, and
+//! commands (`fno-agents pr-watch install`, its `--ensure` coupling mode, and
 //! `fno-agents pr-watch uninstall`, plus `--unload-only`) are pinned by the
 //! frozen goldens under tests/golden/pr-watch-install/. While each Python leg
 //! lived, this file ran as a LIVE differential under `FNO_CAPTURE_GOLDEN=1`:
@@ -275,7 +275,7 @@ fn rust_leg(dir: &Path, case: &Case) -> Golden {
     }
     // The Python leaf always passes the resolved binary; the stub path is the
     // fixture's stand-in for it, the same value FNO_TEST_FNO_BINARY hands the
-    // oracle. The uninstall verb takes nothing else: no binary, no interval.
+    // oracle. The uninstall command takes nothing else: no binary, no interval.
     if !matches!(case.mode, Mode::Uninstall { .. }) {
         cmd.args([
             "--fno-binary",
@@ -288,7 +288,7 @@ fn rust_leg(dir: &Path, case: &Case) -> Golden {
     cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.current_dir(dir);
     // All three handles piped: wait_with_output captures only piped handles,
-    // and an inherited stdout would land the verb's bytes on the test console
+    // and an inherited stdout would land the command's bytes on the test console
     // with an empty Output.stdout.
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
@@ -374,7 +374,7 @@ fn python_oracle(dir: &Path, case: &Case) -> Golden {
 fn cases() -> Vec<Case> {
     vec![
         // Dry run: the full render with a non-default interval, and a --model
-        // the verb must tolerate.
+        // the command must tolerate.
         Case {
             label: "dry run renders the plist",
             mode: Mode::Install {

@@ -193,13 +193,13 @@ $(cat "$STDERR_C")"
 fi
 pass "(c): init stderr free of command-substitution errors"
 
-# Orphan-run the init: reparent it to PID 1 so its owned-identity verb sees no
-# harness ancestor. The verb proves the harness by walking the process tree, so
+# Orphan-run the init: reparent it to PID 1 so its owned-identity command sees no
+# harness ancestor. The command proves the harness by walking the process tree, so
 # under a live harness session (e.g. this test run from inside claude) it would
 # prove THAT harness and override the CODEX_THREAD_ID marker - the documented
 # design at init-target-state.sh:924-927 ("a claude session carrying a foreign
 # CODEX_THREAD_ID resolves to claude as the owned provider, so its session_id reads cl,
-# never cx"). Reparenting to init gives the verb no harness ancestor - the same
+# never cx"). Reparenting to init gives the command no harness ancestor - the same
 # condition a CI runner runs under - so detect_provider honors CODEX_THREAD_ID
 # -> codex -> cx, deterministically, regardless of who launched the test. A test
 # whose verdict depends on who ran it is the bug this pins.
@@ -244,7 +244,7 @@ SESSION_ID_D=$(grep '^session_id:' "$STATE_D" | sed 's/^session_id:[[:space:]]*/
 # ambient harness ancestor visible, else the cx tag below fails for an
 # environmental reason, not a regression. Reparenting to PID 1 is the
 # macOS/CI-docker behaviour; on Linux a subreaper (systemd user session,
-# some container inits) can adopt the orphan and the verb's walk may still
+# some container inits) can adopt the orphan and the command's walk may still
 # find an ancestor. Asserting the resolved harness here turns a future ubuntu
 # red into a diagnosis instead of a mystery.
 HARNESS_D=$(grep '^harness:' "$STATE_D" | sed 's/^harness:[[:space:]]*//' | tr -d '\r')
@@ -311,10 +311,10 @@ grep -q "fno doctor update" "${TMP_E}/init-stderr.txt" \
 pass "(e): a mint failure refuses init and names the remedy"
 
 # AC1-HP (claude wins over an inherited foreign codex id) and AC3-ERR (the id a
-# live row owns is refused) are proven at the verb level in Python
-# (test_target_cli.py::test_resolve_owned_identity_verb_refuses_collision):
-# the bash hook cannot reliably invoke the source verb during THIS PR's CI,
-# because the PATH-resolved `fno` predates the verb. Post-merge the deployed
+# live row owns is refused) are proven at the command level in Python
+# (test_target_cli.py::test_resolve_owned_identity_command_refuses_collision):
+# the bash hook cannot reliably invoke the source command during THIS PR's CI,
+# because the PATH-resolved `fno` predates the command. Post-merge the deployed
 # fno carries it and the hook exercises it identically to the local e2e.
 
 log "All session_id scenarios passed"

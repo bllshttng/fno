@@ -64,7 +64,7 @@ pub fn is_system_sender(sender: &str) -> bool {
 /// the fleet cannot answer.
 pub fn guard_sender(sender: &str) -> Result<(), String> {
     if sender == "fno" {
-        return Err("mail sender 'fno' is not a name: pass --from-name fno/<arm> (the daemon arm or verb that sends), or send from a session".to_string());
+        return Err("mail sender 'fno' is not a name: pass --from-name fno/<arm> (the daemon arm or command that sends), or send from a session".to_string());
     }
     Ok(())
 }

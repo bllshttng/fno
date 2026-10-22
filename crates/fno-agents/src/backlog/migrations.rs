@@ -1,6 +1,6 @@
 //! Native one-shot row migrations: legacy p0, difficulty, __updated_at.
 //!
-//! Each verb is a dry run by default and prints one `sort_keys` JSON receipt.
+//! Each command is a dry run by default and prints one `sort_keys` JSON receipt.
 //! The dry run reads the live rows; `--apply` rewrites the whole store in one
 //! locked mutation.
 
@@ -392,11 +392,11 @@ pub(crate) fn migrate_updated_at(rows: &mut [Value], apply: bool) -> Value {
     receipt
 }
 
-// -- verbs -----------------------------------------------------------------
+// -- commands -----------------------------------------------------------------
 
 /// The parsed boolean flags, or the exit code the parse already answered.
 fn parse_flags(
-    verb: &str,
+    command: &str,
     tail: &[String],
     known: &[&str],
     help: &str,
@@ -416,7 +416,7 @@ fn parse_flags(
                     format!("Got unexpected extra argument ({other})")
                 };
                 eprintln!(
-                    "Usage: fno backlog {verb} [OPTIONS]\nTry 'fno backlog {verb} -h' for help.\n\nError: {message}"
+                    "Usage: fno backlog {command} [OPTIONS]\nTry 'fno backlog {command} -h' for help.\n\nError: {message}"
                 );
                 return Err(2);
             }
@@ -467,18 +467,18 @@ fn apply_receipt(
     receipt.unwrap_or_else(|| Err("store: the migration never ran".into()))
 }
 
-fn finish(verb: &str, outcome: Result<Value, String>) -> i32 {
+fn finish(command: &str, outcome: Result<Value, String>) -> i32 {
     match outcome {
         Ok(receipt) => {
             println!("{}", sorted_json(&receipt));
             0
         }
         Err(message) if message.starts_with("store: ") => {
-            eprintln!("fno backlog {verb}: {}", &message["store: ".len()..]);
+            eprintln!("fno backlog {command}: {}", &message["store: ".len()..]);
             1
         }
         Err(message) => {
-            eprintln!("fno backlog {verb}: {message}");
+            eprintln!("fno backlog {command}: {message}");
             2
         }
     }
@@ -493,8 +493,8 @@ fn read_then(
 
 /// `fno backlog migrate-priorities [--apply | --rollback]`.
 pub fn run_migrate_priorities(tail: &[String]) -> i32 {
-    let verb = "migrate-priorities";
-    let flags = match parse_flags(verb, tail, &["--apply", "--rollback"], PRIORITIES_HELP) {
+    let command = "migrate-priorities";
+    let flags = match parse_flags(command, tail, &["--apply", "--rollback"], PRIORITIES_HELP) {
         Ok(flags) => flags,
         Err(code) => return code,
     };
@@ -511,13 +511,13 @@ pub fn run_migrate_priorities(tail: &[String]) -> i32 {
     } else {
         read_then(|rows| Ok(migrate_legacy_p0(rows, false)))
     };
-    finish(verb, outcome)
+    finish(command, outcome)
 }
 
 /// `fno backlog migrate-difficulty [--apply] [--backfill]`.
 pub fn run_migrate_difficulty(tail: &[String]) -> i32 {
-    let verb = "migrate-difficulty";
-    let flags = match parse_flags(verb, tail, &["--apply", "--backfill"], DIFFICULTY_HELP) {
+    let command = "migrate-difficulty";
+    let flags = match parse_flags(command, tail, &["--apply", "--backfill"], DIFFICULTY_HELP) {
         Ok(flags) => flags,
         Err(code) => return code,
     };
@@ -535,13 +535,13 @@ pub fn run_migrate_difficulty(tail: &[String]) -> i32 {
     } else {
         read_then(migrate)
     };
-    finish(verb, outcome)
+    finish(command, outcome)
 }
 
 /// `fno backlog migrate-updated-at [--apply]`.
 pub fn run_migrate_updated_at(tail: &[String]) -> i32 {
-    let verb = "migrate-updated-at";
-    let flags = match parse_flags(verb, tail, &["--apply"], UPDATED_AT_HELP) {
+    let command = "migrate-updated-at";
+    let flags = match parse_flags(command, tail, &["--apply"], UPDATED_AT_HELP) {
         Ok(flags) => flags,
         Err(code) => return code,
     };
@@ -551,7 +551,7 @@ pub fn run_migrate_updated_at(tail: &[String]) -> i32 {
     } else {
         read_then(|rows| Ok(migrate_updated_at(rows, false)))
     };
-    finish(verb, outcome)
+    finish(command, outcome)
 }
 
 #[cfg(test)]

@@ -41,7 +41,7 @@ const ARCHIVE_HELP: &str = "Usage: fno backlog archive [OPTIONS]
 
   Sweep old terminal (done/superseded) nodes into archive residency: same
   store, but they stop answering default reads. Full contract:
-  docs/architecture/backlog-graph-verb-contracts.md
+  docs/architecture/backlog-graph-command-contracts.md
 
 Options:
   --apply                    Move the entries (default: dry-run, report only).
@@ -50,13 +50,13 @@ Options:
   --roadmap-id TEXT          Restrict the sweep to this roadmap group.
   -h, --help                 Show this message and exit.
 
-Paired verb: `fno backlog unarchive <id>` moves one node back into the working
+Paired command: `fno backlog unarchive <id>` moves one node back into the working
 graph. Unlike `remove`, archiving keeps the node readable.";
 
 const UNARCHIVE_HELP: &str = "Usage: fno backlog unarchive [OPTIONS] TASK_ID
 
   Clear one node's archive stamp: it answers default reads again. Full
-  contract: docs/architecture/backlog-graph-verb-contracts.md
+  contract: docs/architecture/backlog-graph-command-contracts.md
 
 Arguments:
   TASK_ID  Feature ID (ab-XXXXXXXX)  [required]
@@ -341,8 +341,8 @@ struct ArchiveArgs {
     roadmap_id: Option<String>,
 }
 
-fn usage_error(verb: &str, message: &str) -> i32 {
-    eprintln!("Usage: fno backlog {verb} [OPTIONS]\nTry 'fno backlog {verb} -h' for help.\n\nError: {message}");
+fn usage_error(command: &str, message: &str) -> i32 {
+    eprintln!("Usage: fno backlog {command} [OPTIONS]\nTry 'fno backlog {command} -h' for help.\n\nError: {message}");
     2
 }
 

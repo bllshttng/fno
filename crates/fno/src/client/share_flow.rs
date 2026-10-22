@@ -48,8 +48,8 @@ impl Share {
 }
 
 fn parse_line(line: &str) -> Option<ShareMsg> {
-    let (verb, rest) = line.split_once(' ')?;
-    match verb {
+    let (command, rest) = line.split_once(' ')?;
+    match command {
         "link" => Some(ShareMsg::Link(rest.to_string())),
         "knock" => {
             let (id, name) = rest.split_once(' ')?;
@@ -244,13 +244,13 @@ fn open_knocks(view: &mut View) {
 }
 
 /// Answer one knock through the child's stdin, then show the next.
-async fn answer(view: &mut View, id: u64, verb: char) {
+async fn answer(view: &mut View, id: u64, command: char) {
     let sent = match view.share.as_mut() {
         Some(share) => {
             share.knocks.retain(|(k, _)| *k != id);
             share
                 .stdin
-                .write_all(format!("{verb} {id}\n").as_bytes())
+                .write_all(format!("{command} {id}\n").as_bytes())
                 .await
                 .is_ok()
         }

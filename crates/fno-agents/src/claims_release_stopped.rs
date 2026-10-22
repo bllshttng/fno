@@ -120,7 +120,7 @@ fn release_stopped_at(
 /// stop leaves behind. `None` when no row names the worker or the row
 /// carries no session; the release then matches holder shapes only.
 pub fn session_for_name(registry_path: &Path, name: &str) -> Option<String> {
-    let rows = crate::client_verbs::read_registry_entries(registry_path).ok()?;
+    let rows = crate::client_commands::read_registry_entries(registry_path).ok()?;
     rows.iter()
         .filter(|row| row.get("name").and_then(Value::as_str) == Some(name))
         .find_map(|row| {

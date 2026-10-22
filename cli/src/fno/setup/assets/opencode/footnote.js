@@ -29,7 +29,7 @@
 //
 //   1. resolves the session's target manifest via `fno-agents state path
 //      target-state` (the space-resolved manifest; the legacy in-repo
-//      .fno/target-state.md is the fallback when the verb prints nothing),
+//      .fno/target-state.md is the fallback when the command prints nothing),
 //   2. reads the turn's assistant text,
 //   3. synthesizes a minimal claude-shaped transcript jsonl,
 //   4. shells `fno-agents loop-check` (the SAME completion gate claude uses)
@@ -57,12 +57,12 @@ const HOOK_ENV = () => ({ ...process.env, FNO_HOOK_CONTEXT: "1" })
 
 // The manifest resolver. `state path target-state` is the space-resolved
 // truth (manifests live at ~/.fno/spaces/<space>/worktrees/<name>/); the
-// legacy in-repo path is the fallback when the verb prints nothing or the
-// printed file does not exist. 5s bound: a wedged verb must never hold an
+// legacy in-repo path is the fallback when the command prints nothing or the
+// printed file does not exist. 5s bound: a wedged command must never hold an
 // idle event.
-const MANIFEST_VERB_TIMEOUT_MS = 5000
+const MANIFEST_COMMAND_TIMEOUT_MS = 5000
 
-// The 2.x subprocess bound. The gate verbs are reads, but a wedged read must
+// The 2.x subprocess bound. The gate commands are reads, but a wedged read must
 // never hold the 2.x event subscription forever.
 const SUBPROC_TIMEOUT_MS = 120_000
 
@@ -77,7 +77,7 @@ async function resolveManifest(dir, io) {
     const out = (await Promise.race([
       run,
       new Promise((resolve) => {
-        timer = setTimeout(() => resolve(""), MANIFEST_VERB_TIMEOUT_MS)
+        timer = setTimeout(() => resolve(""), MANIFEST_COMMAND_TIMEOUT_MS)
       }),
     ])) || ""
     clearTimeout(timer)
@@ -91,7 +91,7 @@ async function resolveManifest(dir, io) {
       }
     }
   } catch {
-    // verb unavailable (old fno-agents, no PATH): legacy fallback below
+    // command unavailable (old fno-agents, no PATH): legacy fallback below
   }
   clearTimeout(timer)
   const legacy = join(dir, ".fno", "target-state.md")
@@ -243,7 +243,7 @@ function makeHandler(io, dir) {
             if (role) {
               await io.sendSynthetic(
                 sid,
-                `${role}\nYou hold this role. Before you reach for any CLI verb, Read skills/lead/references/cli-commands.md.`,
+                `${role}\nYou hold this role. Before you reach for any CLI command, Read skills/lead/references/cli-commands.md.`,
               )
             }
           } catch (e) {

@@ -200,7 +200,7 @@ def _codex_install(run: Runner) -> IntegrationResult:
 # --- opencode ---------------------------------------------------------------
 # OpenCode is a loop-wrapper harness (scripts/lib/driver-opencode.sh). Its
 # integration is one fno-agents install (opencode_install.rs) that writes the
-# stop bridge, generated fno:<verb> command files, translated agent files and
+# stop bridge, generated fno:<command> command files, translated agent files and
 # the skill trees into the directories OpenCode already scans in the global
 # config dir. The Python side reads JSON receipts through the fno-agents door
 # and owns no install logic of its own; the receipt decides "installed".

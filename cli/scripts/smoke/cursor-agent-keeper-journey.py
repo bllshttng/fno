@@ -464,7 +464,7 @@ def main() -> None:
         ok("recall", f"codeword={CODEWORD}")
 
         # Free the seat so the mail injector can take it, then drive one real
-        # turn through the mail lane's keeper injector: the same verb
+        # turn through the mail lane's keeper injector: the same command
         # `fno agents mail send` runs, whose cursor-agent confirm reads the
         # pty repaint on its own connection.
         seat.close()

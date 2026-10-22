@@ -1,8 +1,8 @@
-//! The hold front verbs: `hold` (alias `dnd`) and `hold-release`.
+//! The hold front commands: `hold` (alias `dnd`) and `hold-release`.
 //!
 //! Port of the Python hold front onto the native mail-hold clock and the
 //! registry delivery stamp. The receipt and help name do-not-disturb (DND);
-//! the verb stays `hold` with `dnd` accepted as an alias everywhere the
+//! the command stays `hold` with `dnd` accepted as an alias everywhere the
 //! front dispatches.
 
 use crate::mail_header::{render_held_release, HeldMessage, HeldRelease};
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The identity refusal shared by both verbs: hold stamps a delivery policy
+/// The identity refusal shared by both commands: hold stamps a delivery policy
 /// on a registry row, so an unprovable self is a hard stop, not a default.
 /// The ambiguous case prints its own detail; the generic line is the
 /// missing-identity message only, matching the Python leg's per-case output.
@@ -417,7 +417,7 @@ fn entry_for(session_id: &str) -> Option<crate::state::RegistryEntry> {
         .find(|e| row_matches_token(e, session_id))
 }
 
-/// The register refusals, checked alone so the hold verb can refuse before
+/// The register refusals, checked alone so the hold command can refuse before
 /// it arms a clock.
 fn registrable(harness: &str, session_id: &str) -> Result<(), String> {
     if std::env::var_os("FNO_AGENT_SELF").is_some_and(|v| !v.is_empty()) {
@@ -438,7 +438,7 @@ fn registrable(harness: &str, session_id: &str) -> Result<(), String> {
 /// register_existing_session: refusal inside a self-spawn, a known-harness
 /// check, idempotent refresh on (harness, harness_session_id).
 ///
-/// `stamp` is the hold verb's bus-only stamp, journaled here so no caller
+/// `stamp` is the hold command's bus-only stamp, journaled here so no caller
 /// can stamp without a `mail_hold_stamped` row. A join registers with
 /// `stamp = false`: joining fno is not a do-not-disturb. A minted row gets
 /// `created_at` now, so the orphan sweep can age a stamp whose clock is gone.
@@ -492,7 +492,7 @@ pub(crate) fn register_existing_session(
     })
     .map_err(|e| format!("registry write failed: {e}"))?;
     if stamp {
-        crate::mail_hold::record_stamp("hold_verb", session_id);
+        crate::mail_hold::record_stamp("hold_verb", session_id); // verb-wording: allow (event writer enum value)
     }
     Ok(())
 }

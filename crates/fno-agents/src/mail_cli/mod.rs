@@ -1,8 +1,8 @@
-//! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
+//! The `mail` front commands on the Rust leg: the do-not-disturb hold, its
 //! release timer, the pane-send renderer, the session seed-provenance leaf,
 //! the `team` broadcast, the outbound sent view, the withdraw leaf, the
 //! unread listing, the ack leaf, the raw prompt-line send, the reply leaf,
-//! and the drain-self leaf. Dispatch only; the verbs live in [hold],
+//! and the drain-self leaf. Dispatch only; the commands live in [hold],
 //! [pane_prepare], [seed_provenance], [team], [sent], [withdraw], [unread],
 //! [ack], [send_raw], [reply], and [drain_self].
 pub mod ack;

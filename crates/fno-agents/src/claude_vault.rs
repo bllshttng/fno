@@ -20,11 +20,11 @@ const SECURITY_ITEM_NOT_FOUND: i32 = 44;
 const SECURITY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Eq)]
-pub(crate) struct Principal {
-    account_uuid: String,
-    organization_uuid: String,
+pub struct Principal {
+    pub account_uuid: String,
+    pub organization_uuid: String,
     // Carried for receipts ("wrong-account (<email>)"); identity is the uuids.
-    email: Option<String>,
+    pub email: Option<String>,
 }
 
 impl PartialEq for Principal {
@@ -39,7 +39,7 @@ pub(crate) struct LiveClaude {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ExternalFailure {
+pub enum ExternalFailure {
     Rejected,
     Unavailable,
     Malformed,
@@ -55,10 +55,12 @@ pub(crate) trait External {
     fn login(&self, config_dir: Option<&Path>, email: Option<&str>) -> Result<(), ExternalFailure>;
 }
 
-struct SystemExternal;
+pub(crate) struct SystemExternal;
 
-impl External for SystemExternal {
-    fn keychain(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
+impl SystemExternal {
+    /// One Keychain item as stored, trimmed, with no credential-shape filter:
+    /// the binding counts an opaque blob as a candidate, so it must see it.
+    pub(crate) fn keychain_raw(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
         if !cfg!(target_os = "macos") {
             return Ok(None);
         }
@@ -98,7 +100,15 @@ impl External for SystemExternal {
             return Err(ExternalFailure::Unavailable);
         }
         let blob = stdout.trim().to_string();
-        Ok(has_credential(&blob).then_some(blob))
+        Ok((!blob.is_empty()).then_some(blob))
+    }
+}
+
+impl External for SystemExternal {
+    fn keychain(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
+        Ok(self
+            .keychain_raw(service)?
+            .filter(|blob| has_credential(blob)))
     }
 
     fn profile(&self, bearer: &str) -> Result<Principal, ExternalFailure> {
@@ -937,7 +947,7 @@ fn principal_from_profile(value: &Value) -> Option<Principal> {
     })
 }
 
-fn principal_from_meta(value: &Value) -> Option<Principal> {
+pub(crate) fn principal_from_meta(value: &Value) -> Option<Principal> {
     let principal = value.get("principal")?;
     let account_uuid = principal.get("account_uuid")?.as_str()?.to_string();
     let organization_uuid = principal.get("organization_uuid")?.as_str()?.to_string();
@@ -1025,7 +1035,7 @@ fn slot_blobs(slot_dir: &Path, external: &dyn External) -> Result<Vec<SlotBlob>,
     Ok(blobs)
 }
 
-fn scoped_service(slot_dir: &Path) -> Result<String, String> {
+pub(crate) fn scoped_service(slot_dir: &Path) -> Result<String, String> {
     if !is_ascii_path(slot_dir) {
         return Err("non-ascii-slot-dir".to_string());
     }
@@ -1080,11 +1090,11 @@ fn merge_refresh(blob: &str, response: &Value) -> Option<String> {
     serde_json::to_string(&root).ok()
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+pub(crate) fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
-fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
     })?;

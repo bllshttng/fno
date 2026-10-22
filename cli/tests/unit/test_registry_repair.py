@@ -1,4 +1,4 @@
-"""Twice by hand is a verb.
+"""Twice by hand is a command.
 
 The operator repaired a poisoned `registry.json` by hand on 2026-08-28, and a
 surviving `.bak.poison-repair` sibling shows someone did the same on
@@ -8,7 +8,7 @@ keys, set the integer, replace atomically.
 
 The third step is the point. The 2026-08-28 rollback was lossless BY LUCK: all
 33 rows happened to carry the v20 fields empty. One real value written five
-minutes later and no safe rollback would have existed. This verb turns that
+minutes later and no safe rollback would have existed. This command turns that
 luck into an assertion.
 
 Prevention is not retroactive, which is why this ships even though the write
@@ -150,11 +150,11 @@ def test_a_version_not_strictly_above_the_target_refuses(
 
 
 # --------------------------------------------------------------------------
-# The verb itself
+# The command itself
 # --------------------------------------------------------------------------
 
 
-def test_the_cli_verb_is_registered_hidden_and_dry_runs_by_default(
+def test_the_cli_command_is_registered_hidden_and_dry_runs_by_default(
     tmp_path: Path,
 ) -> None:
     from typer.testing import CliRunner

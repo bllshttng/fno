@@ -109,13 +109,13 @@ def classify_effect(effect_class: str) -> EffectDisposition:
     state (crates/fno-agents/src/effect_gate.rs); unknown classes require
     approval, so a new effect class is safe by default.
     """
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        out = verb_call(
+        out = command_call(
             "authorized-merge", {"op": "effect-classify", "effect_class": effect_class}
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         _unavailable_refusal(f"the effect classifier is unavailable ({exc})")
     disposition = out.get("disposition")
     if disposition not in ("allow", "require_approval", "deny"):

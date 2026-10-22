@@ -39,9 +39,9 @@ def _stub_fno(tmp_path: Path, name: str, script: str) -> list[str]:
     return [str(p)]
 
 
-# A verb module that shells out to a resolve_repo_root()-rooted script (the
+# A command module that shells out to a resolve_repo_root()-rooted script (the
 # canonical AC4-ERR shape).
-BAD_VERB = '''
+BAD_COMMAND = '''
 import subprocess
 from fno.paths import resolve_repo_root
 
@@ -58,7 +58,7 @@ def go():
 
 def test_ac4_ui_output_is_actionable(tmp_path):
     scan_root = tmp_path / "cli" / "src" / "fno"
-    _make_module(scan_root, "badverb.py", BAD_VERB)
+    _make_module(scan_root, "badverb.py", BAD_COMMAND)
     al = _write_allowlist(tmp_path, [])
 
     report = g.run(repo_root=tmp_path, scan_root=scan_root, allowlist_path=al,
@@ -74,16 +74,16 @@ def test_ac4_ui_output_is_actionable(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# AC4-EDGE: an allowlist entry whose verb does not degrade is rejected
+# AC4-EDGE: an allowlist entry whose command does not degrade is rejected
 # --------------------------------------------------------------------------- #
-def test_ac4_edge_nondegrading_verb_rejected_exit_zero(tmp_path):
+def test_ac4_edge_nondegrading_command_rejected_exit_zero(tmp_path):
     stub = _stub_fno(tmp_path, "fake-fno", "#!/bin/sh\nexit 0\n")
     failures = g.degrade_proof({"scripts/x.sh": ["bogus"]}, fno_cmd=stub)
     assert len(failures) == 1
     assert "exited 0" in failures[0].reason
 
 
-def test_ac4_edge_traceback_verb_rejected(tmp_path):
+def test_ac4_edge_traceback_command_rejected(tmp_path):
     stub = _stub_fno(tmp_path, "fake-fno",
                      "#!/bin/sh\necho 'Traceback (most recent call last):' >&2\nexit 1\n")
     failures = g.degrade_proof({"scripts/x.sh": ["bogus"]}, fno_cmd=stub)

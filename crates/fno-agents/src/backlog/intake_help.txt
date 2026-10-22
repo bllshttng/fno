@@ -1,6 +1,6 @@
 Pull an existing plan file in as a backlog node.
 
-A plan is one delivery unit: plan == PR == node. The verb refuses a plan
+A plan is one delivery unit: plan == PR == node. The command refuses a plan
 already intaked, resolves claims (--claims strict, frontmatter lenient),
 enforces the difficulty gate, and mints or updates through the shared graph
 write pipeline.
@@ -28,4 +28,4 @@ Options:
   -N, --dry-run               Preview without writing
   -h, --help                  Print help
 
-Paired verb: `fno backlog remove <id>` deletes the node this creates.
+Paired command: `fno backlog remove <id>` deletes the node this creates.

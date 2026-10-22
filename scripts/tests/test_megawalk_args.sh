@@ -42,7 +42,7 @@ cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fi
 JSON
 
 # Case 1: intake's `--batch` redirect answers from the native door now. The
-# verb and its redirect moved into the Rust dispatcher, and the wheel keeps
+# command and its redirect moved into the Rust dispatcher, and the wheel keeps
 # only the route (the triage shape), so the shim's forward lands on the
 # native removal refusal - the redirect alive, one implementation.
 OUT=$(python3 "$REPO_ROOT/scripts/roadmap-tasks.py" intake --batch plans/foo 2>&1 || true)

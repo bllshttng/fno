@@ -90,7 +90,7 @@ pub fn run(args: &[String]) -> i32 {
         return 3;
     }
     let before = transaction.document.clone();
-    // The schema repair verb drops newer-schema keys on purpose, so a merge
+    // The schema repair command drops newer-schema keys on purpose, so a merge
     // that carries disk fields forward would undo it.
     let replace = payload.get("replace").and_then(Value::as_bool) == Some(true);
     let next = if replace {
@@ -223,7 +223,7 @@ fn merge(
     let payload_object = payload.as_object().expect("validated payload object");
     let target = disk.as_object_mut().expect("root checked above");
     for (key, value) in payload_object {
-        // Request fields steer this verb; they are not registry data.
+        // Request fields steer this command; they are not registry data.
         if !matches!(
             key.as_str(),
             "path" | "agents" | "schema_version" | "revision" | "replace" | "op"

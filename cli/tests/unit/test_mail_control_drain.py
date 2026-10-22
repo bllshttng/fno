@@ -4,7 +4,7 @@ A control body that demoted durable must reach the recipient at its next
 TOOL boundary, not wait for the prompt boundary a busy worker never
 reaches. The durable write stamps a per-recipient pending flag the
 PreToolUse hook gates on; the drain itself is the fno-agents
-``mail-control-drain`` verb (see crates/fno-agents/src/mail_control_drain.rs).
+``mail-control-drain`` command (see crates/fno-agents/src/mail_control_drain.rs).
 """
 from __future__ import annotations
 

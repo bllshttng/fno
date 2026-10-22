@@ -821,7 +821,7 @@ pub(crate) fn records_in(
     // One primed witness for the whole scan: a per-row verdict paid one cold
     // `fno agents truth` interpreter per unresolved session, in series, and a
     // loaded host stretched a lead check-in past half an hour on 11 rows.
-    let (witness, _answer) = crate::claim_verbs::session_witness_primed_for(&records);
+    let (witness, _answer) = crate::claim_commands::session_witness_primed_for(&records);
     Ok(records
         .iter()
         .filter(|record| {
@@ -1076,7 +1076,7 @@ pub(crate) fn renew(
     // reads live or suspect extends, exactly as `claim status` reports it.
     // The verdict runs only once expired, so a routine renewal skips its probes.
     if observed.expires_at.is_some_and(|at| at <= claims::now_ms())
-        && crate::claim_verbs::status_verdict(&observed).0 == ClaimState::Stale
+        && crate::claim_commands::status_verdict(&observed).0 == ClaimState::Stale
     {
         return Ok(false);
     }
@@ -1225,7 +1225,7 @@ pub fn list_db(
 ) -> Result<Value, String> {
     let records = records_db(prefix, include_stale, root)?;
     Ok(
-        json!({"rows": records.into_iter().map(|r| crate::claim_verbs::claim_status_value(&r)).collect::<Vec<_>>() }),
+        json!({"rows": records.into_iter().map(|r| crate::claim_commands::claim_status_value(&r)).collect::<Vec<_>>() }),
     )
 }
 

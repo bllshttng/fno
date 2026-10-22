@@ -146,7 +146,7 @@ fn run_global(a: &LeafArgs, key: &str, holder: &str) -> i32 {
     }
     // STALE is the only refused verdict, matching the engine's own renew
     // gate; the named refusal is the legacy body's message.
-    if crate::claim_verbs::status_verdict(&record).0 == ClaimState::Stale {
+    if crate::claim_commands::status_verdict(&record).0 == ClaimState::Stale {
         eprintln!(
             "validation error: claim '{key}' expired and its holder reads dead; \
              refusing to resurrect it"

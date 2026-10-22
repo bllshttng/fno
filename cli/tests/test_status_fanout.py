@@ -597,7 +597,7 @@ def _seed(graph_path, entry):
     seed_graph(graph_path, _json.dumps({"entries": [entry]}) + "\n")
 
 
-def test_backlog_note_cli_verb(tmp_graph, monkeypatch):
+def test_backlog_note_cli_command(tmp_graph, monkeypatch):
     from typer.testing import CliRunner
     from fno.cli import app
     from types import SimpleNamespace

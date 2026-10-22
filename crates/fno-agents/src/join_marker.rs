@@ -1,4 +1,4 @@
-//! A session joins fno at its first fno skill or verb.
+//! A session joins fno at its first fno skill or command.
 //!
 //! Joining is opt-in: a session the user opened but never pointed at fno owns
 //! no registry row, holds no spawn-gate slot and gets no using-fno preamble.
@@ -9,7 +9,7 @@
 //! door; the layout is a wire format between the two crates.
 //!
 //! Every hook command runs with `FNO_HOOK_CONTEXT=1`. 25 hook scripts run fno
-//! verbs inside every session, so a join fired from a hook would join every
+//! commands inside every session, so a join fired from a hook would join every
 //! session at its first SessionStart. The join act refuses there. The prompt
 //! and Skill hooks that ARE deliberate triggers clear the variable for their
 //! one call.
@@ -112,7 +112,7 @@ pub fn preamble_due(
 // Without --check it joins (refused in hook context, exit 3). --preamble-due
 // prints `due` when the preamble is due, nothing otherwise; with --compacted
 // it is due for any joined session. Rides the report
-// action so no verb is added.
+// action so no command is added.
 // ---------------------------------------------------------------------------
 
 pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {

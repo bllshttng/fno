@@ -1,7 +1,7 @@
 """The sandbox probe bridge (x-6863 task 3.2).
 
 The probe itself is Rust (crates/fno-agents/src/sandbox_probe.rs); these tests
-pin the bridge contract: the verdict/blocked/note triple crosses the verb
+pin the bridge contract: the verdict/blocked/note triple crosses the command
 boundary, an unavailable owner answers `unknown` with the reason (never a
 guessed `reachable`), and the exit-85 contract stays Python-side. No test
 runs a live `codex sandbox` - the binary's own unit tests cover the argv and
@@ -22,7 +22,7 @@ def test_bridge_replays_the_rust_answer(tmp_path):
         "posture": "workspace-write:on-request",
     }
     with mock.patch(
-        "fno.rust_binary.verb_call", return_value=fake
+        "fno.rust_binary.command_call", return_value=fake
     ) as call:
         probe = probe_codex_sandbox(tmp_path, mode="workspace-write:on-request")
     assert probe.verdict == "reachable"
@@ -38,7 +38,7 @@ def test_bridge_answers_unknown_when_the_owner_is_unavailable(tmp_path):
     from unittest import mock
 
     with mock.patch(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         side_effect=_unavailable,
     ):
         probe = probe_codex_sandbox(tmp_path)
@@ -47,6 +47,6 @@ def test_bridge_answers_unknown_when_the_owner_is_unavailable(tmp_path):
 
 
 def _unavailable(*_args, **_kwargs):
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
-    raise VerbUnavailable("binary missing")
+    raise CommandUnavailable("binary missing")

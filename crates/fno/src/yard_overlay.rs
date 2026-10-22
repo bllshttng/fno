@@ -42,7 +42,7 @@ pub struct YardItem {
 
 /// Resolve the `fno` binary through the server's one resolver
 /// (`$FNO_BIN`, else the running executable - the mux binary forwards
-/// non-native verbs to Python - else PATH). The crate already holds the
+/// non-native commands to Python - else PATH). The crate already holds the
 /// never-drift rule for this (connections_view imports the same fn), so a
 /// second resolver with different semantics would let the yard degrade on a
 /// checkout where every sibling leg still works.
@@ -56,7 +56,7 @@ fn fno_bin() -> PathBuf {
 pub async fn fold_now() -> Option<Vec<YardItem>> {
     let mut command = crate::process_admission::tokio_command(fno_bin());
     command
-        // the yard verb lives under `agents` now; the bare root
+        // the yard command lives under `agents` now; the bare root
         // spelling is a one-release shim whose stderr move-line this call
         // would otherwise pay on every overlay open.
         .args(["agents", "yard", "--json"])
@@ -76,7 +76,7 @@ pub async fn fold_now() -> Option<Vec<YardItem>> {
     parse(&output.stdout)
 }
 
-/// Parse the verb's JSON payload. Fails quiet (returns `None`) on
+/// Parse the command's JSON payload. Fails quiet (returns `None`) on
 /// unparseable output so a torn stdout degrades the overlay, not crashes it.
 /// A species index outside the shipped table is the same class of damage:
 /// the two halves of the fold upgrade independently, and `% SPECIES_COUNT`

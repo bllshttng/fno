@@ -1,5 +1,5 @@
 //! The `fno mux workspace prune` receipt must name what a run actually did,
-//! and the scope flags must let one verb do either half alone.
+//! and the scope flags must let one command do either half alone.
 //!
 //! The headline assertions run against the real binary with a real server and
 //! real panes where the behavior needs them: an apply run that closes a tab
@@ -67,7 +67,7 @@ fn store_after(scratch: &Scratch) -> String {
 }
 
 #[test]
-fn tab_close_without_a_target_names_the_bulk_verb() {
+fn tab_close_without_a_target_names_the_bulk_command() {
     let scratch = Scratch::new("receipt-tab-refusal");
     let out = scratch
         .command()
@@ -82,7 +82,7 @@ fn tab_close_without_a_target_names_the_bulk_verb() {
     );
     assert!(
         stderr.contains("fno mux workspace prune"),
-        "the refusal must point at the bulk close verb: {stderr}"
+        "the refusal must point at the bulk close command: {stderr}"
     );
 }
 
@@ -146,7 +146,7 @@ fn dry_run_tabs_clause_says_would_close() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("tabs would close"),
-        "the dry-run tabs clause carries its mood in the verb: {stdout}"
+        "the dry-run tabs clause carries its mood in the command: {stdout}"
     );
     assert!(
         !stdout.contains("tabs closed"),

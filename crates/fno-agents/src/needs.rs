@@ -14,7 +14,7 @@
 //!
 //! The two event envelopes (Python nested `{"type","data":{...}}` and the
 //! retired Rust flat `{"kind",...}`) are both read, same as digest. Read-only:
-//! the verb writes nothing and is rerunnable at will.
+//! the command writes nothing and is rerunnable at will.
 
 use crate::paths::AgentsHome;
 use serde::Serialize;
@@ -1534,7 +1534,7 @@ pub fn carveout_age_item(carveouts_raw: &str, now: u64) -> Option<NeedItem> {
 }
 
 /// A claim's identity + age, read by the IO layer from the claims directory
-/// (mirrors what `client_verbs::claim_sweep_payload` already scans) and handed
+/// (mirrors what `client_commands::claim_sweep_payload` already scans) and handed
 /// to [`stale_claim_item`], which stays pure and testable.
 pub struct ClaimAge {
     pub key: String,
@@ -1679,7 +1679,7 @@ fn now_secs() -> u64 {
 }
 
 /// Scan `dir` for `node:` / `dispatch:` claim files and their age, for
-/// [`stale_claim_item`]. Same prefix pair `client_verbs::claim_sweep_payload`
+/// [`stale_claim_item`]. Same prefix pair `client_commands::claim_sweep_payload`
 /// scans (an orphaned dispatch lock is as dead as an orphaned node lock), and
 /// the same read primitives. Fail-open: a missing/unreadable dir or an
 /// unparseable lockfile yields fewer entries, never an error - same posture
@@ -1698,7 +1698,7 @@ fn scan_claim_ages(dir: &Path) -> Vec<ClaimAge> {
         .collect();
     // One primed witness: a per-row verdict paid a cold truth run per session.
     let states: Vec<_> = {
-        let (witness, _answer) = crate::claim_verbs::session_witness_primed_for(&records);
+        let (witness, _answer) = crate::claim_commands::session_witness_primed_for(&records);
         records
             .iter()
             .map(|rec| {
@@ -1727,9 +1727,9 @@ fn scan_claim_ages(dir: &Path) -> Vec<ClaimAge> {
 
 /// The whole needs fold over explicit sources: events read + fold + the three
 /// non-event legs (carveout age, stale claims, refused workers) + liveness
-/// stamp. Shared by the `needs` verb and the lead board's in-process needs
+/// stamp. Shared by the `needs` command and the lead board's in-process needs
 /// read, so the two surfaces cannot drift (the lead board is why this is `pub`).
-/// `cwd` anchors the carveout leg: the verb passes the process cwd it inherits,
+/// `cwd` anchors the carveout leg: the command passes the process cwd it inherits,
 /// the board passes its own resolved cwd (the process cwd is not guaranteed to
 /// be the project for an in-process caller).
 pub fn collect_needs_items(
@@ -1781,7 +1781,7 @@ pub fn collect_needs_items(
     stamp_liveness(items)
 }
 
-/// The `fno-agents needs` verb. Read-only; exits 0 on empty/corrupt input (only
+/// The `fno-agents needs` command. Read-only; exits 0 on empty/corrupt input (only
 /// a usage error exits 2), so the overlay caller never sees a failure it must
 /// handle beyond a nonzero exit.
 pub async fn run_needs(rest: &[String], home: &AgentsHome) -> i32 {

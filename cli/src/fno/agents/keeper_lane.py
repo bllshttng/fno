@@ -322,7 +322,7 @@ def discover(
     """Enumerate keepers, probe their sockets, join the registry, and decide.
 
     Read-only. The kill lives in :func:`reap_keepers`, behind ``--apply-all``
-    at the verb."""
+    at the command."""
     now_s = now_s if now_s is not None else time.time()
     iter_fn = iter_fn or iter_processes
     probe = sock_probe_fn or sock_state_of

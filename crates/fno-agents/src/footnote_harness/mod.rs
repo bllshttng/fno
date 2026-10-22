@@ -22,7 +22,7 @@ use crate::paths::AgentsHome;
 use crate::state::{load_registry, update_registry, RegistryEntry};
 
 const INSTALL_HINT: &str =
-    "build it from bllshttng/fnh: cargo install --locked --path ~/code/footnote/fnh";
+    "build it from bllshttng/fnh: cargo install --locked --path <your fnh checkout>";
 
 /// The `footnote` binary: `FNO_FOOTNOTE_BIN`, else a sibling of this
 /// executable, else `footnote` on PATH.

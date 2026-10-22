@@ -96,7 +96,7 @@ def _fno_on_path() -> str:
 
     A dev machine's installed fno can lag this source (fno doctor reports the
     lag); the docs under test describe THIS source. The Rust front build of
-    this checkout wins first (mux verbs exec it), then the venv entrypoint,
+    this checkout wins first (mux commands exec it), then the venv entrypoint,
     then whatever PATH offers.
     """
     candidates = (
@@ -115,9 +115,9 @@ def _fno_on_path() -> str:
 def _probe(argv):
     """(ok, detail) for a documented command; --help short-circuits any run.
 
-    Fallback: the Rust front's mux verbs print no per-verb help and exit 2
+    Fallback: the Rust front's mux commands print no per-command help and exit 2
     with a usage line that names the accepted form, so a usage line carrying
-    the command's own path also proves the verb exists.
+    the command's own path also proves the command exists.
     """
     probe = argv if "--version" in argv else argv + ["--help"]
     try:
@@ -134,18 +134,18 @@ def _probe(argv):
     return False, out[:200]
 
 
-def _skill_verbs():
+def _skill_commands():
     found = set()
     for doc in DOC_PATHS:
         found |= set(SKILL_RE.findall(doc.read_text()))
     return found
 
 
-def _skill_path(verb):
+def _skill_path(command):
     for cand in (
-        REPO_ROOT / "skills" / verb / "SKILL.md",
-        REPO_ROOT / "commands" / f"{verb}.md",
-        REPO_ROOT / "commands" / f"fno-{verb}.md",
+        REPO_ROOT / "skills" / command / "SKILL.md",
+        REPO_ROOT / "commands" / f"{command}.md",
+        REPO_ROOT / "commands" / f"fno-{command}.md",
     ):
         if cand.exists():
             return cand
@@ -191,7 +191,7 @@ def test_documented_fno_commands_resolve(cwd_tmp):
 
 
 def test_documented_skill_spellings_exist():
-    missing = sorted(v for v in _skill_verbs() if _skill_path(v) is None)
+    missing = sorted(v for v in _skill_commands() if _skill_path(v) is None)
     assert not missing, f"/fno: spellings with no shipped skill or command: {missing}"
 
 

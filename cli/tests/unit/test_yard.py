@@ -84,9 +84,9 @@ def test_yard_cli_json_emits_citizens(tmp_path, monkeypatch):
         lambda: [_row(name="cli-cat", sid="cli-id", role=1)],
     )
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
-    # The canonical spelling: the root `fno yard` is a VERB_MOVES shim whose
+    # The canonical spelling: the root `fno yard` is a COMMAND_MOVES shim whose
     # move notice rides stderr, which CliRunner mixes into `output` and would
-    # trail the JSON document. Forwarding itself is covered in test_verb_moves.
+    # trail the JSON document. Forwarding itself is covered in test_command_moves.
     r = runner.invoke(app, ["agents", "yard", "--json"])
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)

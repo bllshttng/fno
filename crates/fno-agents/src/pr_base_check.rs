@@ -6,7 +6,7 @@
 //! Two transports over one walk: argv (`--base <ref>`, the skill reads the
 //! stderr message and the exit code) and one JSON payload on stdin
 //! (`{"base": ..., "cwd": ...}` answered with `{"code", "message"}`, which
-//! the Python ship paths read through `verb_call`).
+//! the Python ship paths read through `command_call`).
 
 use serde_json::Value;
 use std::io::Read;
@@ -58,7 +58,7 @@ pub fn run(argv: &[String]) -> i32 {
 }
 
 /// The stdin transport: one JSON payload in, one JSON answer on stdout, exit
-/// 0 always (the code rides inside the answer, which is what `verb_call`
+/// 0 always (the code rides inside the answer, which is what `command_call`
 /// parses; a nonzero exit here would raise past the caller's own handling).
 pub fn run_stdin() -> i32 {
     let mut payload = String::new();

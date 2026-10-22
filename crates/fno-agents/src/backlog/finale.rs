@@ -1500,7 +1500,7 @@ const REQUEUE_HELP: &str = "Usage: fno backlog requeue NODE [--json|-J]
 
 Return a node wedged in_progress by a dead worker to the queue. The re-lock
 door retired with the graph claim mirror; re-acquisition is a claim store
-acquire, not a backlog verb.
+acquire, not a backlog command.
 ";
 
 /// The wheel's allowlist, fail closed: suspect is still owned, corrupted is
@@ -1665,7 +1665,7 @@ pub fn run_requeue(tail: &[String]) -> i32 {
     if !REQUEUEABLE_CLAIM_STATES.contains(&state_str) {
         let claim_row = record
             .as_ref()
-            .map(super::super::claim_verbs::claim_status_value)
+            .map(super::super::claim_commands::claim_status_value)
             .unwrap_or(Value::Null);
         let holder = claim_row
             .get("holder")

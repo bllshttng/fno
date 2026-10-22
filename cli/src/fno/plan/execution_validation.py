@@ -55,7 +55,7 @@ _QUICK_PLACEHOLDERS = (
     "replace me",
     "fill in",
 )
-# Command names that are also ordinary English verbs, so a prose line can lead
+# Command names that are also ordinary English commands, so a prose line can lead
 # with one, plus the determiners that follow them in a sentence but never in an
 # invocation. Matching the PAIR is what keeps `cargo check` and `make test`
 # runnable while `make sure the button works` is not.

@@ -1171,7 +1171,7 @@ fn cap_rows() {
     // so base..shas[0] is an uncovered gap and the fail arm contributes no
     // verdict. Before the discharge this was Covered(0) - "uncovered" - and
     // the gate refused, naming a terminal act the same call would not permit.
-    // Every remedy for it names a review verb, and running one spends a round
+    // Every remedy for it names a review command, and running one spends a round
     // already spent, so nothing could ever clear it.
     let events = events_file(
         repo,
@@ -1321,7 +1321,7 @@ fn cap_rows() {
     // takes to hold both verdicts at once - local_latest_passes keys on
     // (reviewer, attester), so one session's later fail replaces its own
     // pass. The shape is ordinary: a handoff, or a review fork, re-runs the
-    // same verb under a new session id.
+    // same command under a new session id.
     //
     // The pass loop pushes a verdict for "code-review"; the spent-budget
     // fail arm keys on the reviewer NAME alone, so without the guard it

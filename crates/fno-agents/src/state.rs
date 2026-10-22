@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 // - to REJECT the store rather than silently treat an interactive row as exec
 // and orphan a live TUI during reconcile. Readers stay backward-compatible:
 // the accepted-version set still spans 1..=4 (see ACCEPTED_SCHEMA_VERSIONS in
-// client_verbs.rs and the Python load_registry range check).
+// client_commands.rs and the Python load_registry range check).
 //
 // v5 (inside-out E3.1, X2/X3) is the same kind of forward-compat bump for the
 // additive `inside_leg` field: structurally identical to v4 (an absent
@@ -208,7 +208,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 // v31 adds `harness_args` - the fenced `--` tokens a codex thread spawn
 // carried, re-parsed onto thread/resume after a daemon restart.
 //
-// v32 adds `stop` - fno's own stop of a worker (the stop verb and the
+// v32 adds `stop` - fno's own stop of a worker (the stop command and the
 // terminal-stop sweep), so the harness `stopped` state it leaves behind is
 // never read as finished work by the retirement sweep.
 //
@@ -302,7 +302,7 @@ pub struct Registry {
     /// Rows. Python's `registry.write_registry` (cli/.../agents/registry.py)
     /// stores these under the canonical top-level `"agents"` key and reads ONLY
     /// that key (no `entries` fallback). Serialize under `agents` so a Rust write
-    /// verb (`rm`/`stop`/reconcile) that rewrites a Python-authored registry
+    /// command (`rm`/`stop`/reconcile) that rewrites a Python-authored registry
     /// leaves it readable by Python rather than stranding the surviving rows
     /// under an `entries` key Python ignores (Codex P1, PR #364). `alias =
     /// "entries"` keeps reading older daemon-written registries. Combined with
@@ -351,7 +351,7 @@ fn label_matches(e: &RegistryEntry, token: &str) -> bool {
 }
 
 /// Stamp fno's own stop on a row, at the doors that stop a worker without
-/// retiring it: the stop handler (the `fno agents stop` verb and the
+/// retiring it: the stop handler (the `fno agents stop` command and the
 /// provider-cap stop) and the terminal-stop sweep. The record is the row's
 /// memory that fno did this, so the work readers never read the harness
 /// `stopped` state as finished work. A resume clears it.
@@ -562,7 +562,7 @@ pub struct InsideLegReport {
 }
 
 /// fno's own stop of a worker, so the harness `stopped` state it leaves
-/// behind is never read as finished work. `by` is `stop-verb` (the stop
+/// behind is never read as finished work. `by` is `stop-command` (the stop
 /// handler serves `fno agents stop` and the provider-cap stop) or
 /// `terminal-sweep` (the finalize-marked bg worker teardown). A resume
 /// clears the record; absence means fno never stopped the row.
@@ -961,7 +961,7 @@ pub struct RegistryEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
     /// v36: why a mint could not bind the node the spawn NAMED -
-    /// the seed's verb argument read as a node id but the seam resolved no
+    /// the seed's command argument read as a node id but the seam resolved no
     /// readable row for it. Set only in that one case; absent when the node
     /// resolved and absent when the spawn genuinely named none, so the three
     /// states stay distinguishable. Mirrors Python's `AgentEntry.node_reason`;
@@ -1785,7 +1785,7 @@ impl RegistryEntry {
     /// none: the non-empty `short_id`. For claude it is the jobId (`claude
     /// attach/logs <jobId>`); for a daemon PTY row the worker-socket key. The
     /// single accessor consumers use to reach a session's wire handle, so no
-    /// verb re-implements the empty-string guard. [ transport extraction]
+    /// command re-implements the empty-string guard. [ transport extraction]
     pub fn transport_short(&self) -> Option<&str> {
         (!self.short_id.is_empty()).then_some(self.short_id.as_str())
     }
@@ -2121,12 +2121,12 @@ pub(crate) fn decode_registry_value(
         }
     }
     // Forward-compat guard on the TYPED daemon path (Codex P2):
-    // the raw client path (client_verbs::load_registry_entries) already rejects
+    // the raw client path (client_commands::load_registry_entries) already rejects
     // unsupported versions, but the daemon reads through here and previously
     // accepted any u32. Reject anything outside 1..=REGISTRY_SCHEMA_VERSION so a
     // pre-inside-leg daemon refuses a v5 store (instead of silently dropping the
     // inside-leg report) and the current daemon refuses a future v6 store.
-    // READ FORWARD (see Python load_registry and client_verbs). The writer
+    // READ FORWARD (see Python load_registry and client_commands). The writer
     // floor lets additive bumps remain readable; flattened maps preserve
     // unknown top-level and row fields across an allowed read-modify-write.
     //
@@ -2409,7 +2409,7 @@ fn source_root_for_detached_build(exe: &Path) -> Option<PathBuf> {
 ///
 /// The Rust half of, and the exact mirror of Python's
 /// `_refuse_source_ahead_schema_bump`. `registry.json` has writers in two
-/// languages: a guard on one leaves the daemon, mux, and every client verb
+/// languages: a guard on one leaves the daemon, mux, and every client command
 /// still able to poison the file, which is the lesson recorded when its
 /// own read fix had to land on four readers rather than one.
 ///
@@ -2849,12 +2849,12 @@ fn project_identity(registry_path: &Path, before: &[RegistryEntry], entries: &[R
     }
 }
 
-/// Rename a row's LABEL in one transaction, the verb's only implementation.
+/// Rename a row's LABEL in one transaction, the command's only implementation.
 /// Label-only: the
 /// harness identity `(harness, harness_session_id, short_id)` is the lock, so a
 /// rename never crosses into the worker's own harness - claude and codex keep
 /// their native session names. The old label lands in `aliases` and keeps
-/// resolving. `token` resolves through the same tiers the sibling verbs accept
+/// resolving. `token` resolves through the same tiers the sibling commands accept
 /// (`find_name_or_full_session_id`: label, full session id + canonical handle,
 /// related/predecessor ids) plus the transport short id and a prior label held
 /// as an alias. A label held only by terminal rows is vacated and taken; a
@@ -3192,7 +3192,7 @@ pub(crate) fn account_for_removed_rows(
         crate::receipt::stage_removal_accounting(&home, entry, &remover, &emitter);
     }
     // One grouped `registry_rows_lost` beside the per-row events: the
-    // per-row events carry receipts, this one names the writer, pid and verb,
+    // per-row events carry receipts, this one names the writer, pid and command,
     // so a save that drops rows can no longer vanish without a door being
     // named. Emitted after the per-row events, so a reader taking the first
     // line still sees a row receipt.
@@ -3210,7 +3210,7 @@ pub(crate) fn account_for_removed_rows(
         &serde_json::json!({
             "writer": "rust",
             "pid": std::process::id(),
-            "verb": invocation_verb(),
+            "verb": invocation_command(),
             "lost": lost,
         }),
     );
@@ -3221,7 +3221,7 @@ pub(crate) fn account_for_removed_rows(
 /// to five following arguments, 200 chars. The binary name alone cannot tell
 /// `agents reap --apply` from `board --json`, and which door dropped rows is
 /// exactly the question the grouped loss event exists to answer.
-pub(crate) fn invocation_verb() -> String {
+pub(crate) fn invocation_command() -> String {
     let mut parts: Vec<String> = std::env::args_os()
         .take(6)
         .map(|a| a.to_string_lossy().into_owned())

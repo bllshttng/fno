@@ -210,7 +210,7 @@ def _link(raw_index: str, node_id: str) -> None:
 
 
 # One dispatched leaf instead of four (add/done/drop/link): the CLI-surface
-# ratchet (scripts/ci/verb-collapse-map.tsv, test_verb_collapse_map.py) caps
+# ratchet (scripts/ci/command-collapse-map.tsv, test_command_collapse_map.py) caps
 # total registered Click leaves; four separate commands, doubled by the
 # pre-existing bare `outstanding` alias, would blow that budget.
 _ACTIONS = {"add": 1, "done": 1, "drop": 1, "link": 2}

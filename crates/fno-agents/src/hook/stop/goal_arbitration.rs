@@ -182,7 +182,7 @@ pub(super) fn arbitrate_codex_continuation(
 }
 
 /// The objective a resume wrote over the promoted one: the bare word alone,
-/// no scope, no verb spelling.
+/// no scope, no command spelling.
 pub(super) fn is_bare_resume_objective(objective: &str) -> bool {
     objective.trim() == "resume"
 }

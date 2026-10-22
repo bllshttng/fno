@@ -3,7 +3,7 @@
 Each skill in this file once restated a policy its owning implementation had
 replaced, so an LLM following the prose could re-run a mutation the helper
 refuses or gate a launch the helper frees. These tests assert the skill names
-the receipt fields and verbs it obeys; skills/agent/tests/test_confirm.sh runs
+the receipt fields and commands it obeys; skills/agent/tests/test_confirm.sh runs
 the confirm helper itself. Positive markers first - a stale prose absence alone
 proves nothing about what replaced it.
 """
@@ -67,7 +67,7 @@ def test_lead_checkin_names_the_merge_finish_line():
     # The check-in printed open-PR indicators and a lever list that never
     # merged, so a lead following the skill read a ready PR as report-only and
     # escalated it instead of merging. The merge law makes the team the
-    # merger, so the skill must carry the verb, the gate, and the merge rule
+    # merger, so the skill must carry the command, the gate, and the merge rule
     # together: a lever the file cannot name is a law rediscovered by
     # exhaustion.
     text = _skill("skills/lead/SKILL.md")

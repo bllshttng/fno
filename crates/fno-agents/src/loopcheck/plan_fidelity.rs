@@ -10,7 +10,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) enum FidelityGate {
     /// No plan, or the probe degraded. A missing/stale `fno` (one without the
-    /// `plan fidelity` verb) must NOT wedge the stop gate - the merge gate is the
+    /// `plan fidelity` command) must NOT wedge the stop gate - the merge gate is the
     /// backstop, and `fno doctor` flags the staleness. Fail open here.
     Absent,
     Pass,

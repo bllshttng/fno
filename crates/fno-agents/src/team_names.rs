@@ -550,6 +550,31 @@ pub(crate) fn used_for_canon(
     Ok(used)
 }
 
+/// Names `session` already holds, lowercased: its `bound` history entries and
+/// its registry rows' names and aliases.
+fn session_own_names(
+    store_path: &Path,
+    registry_path: &Path,
+    session: &str,
+) -> Result<BTreeSet<String>, String> {
+    let mut own: BTreeSet<String> = history_read(store_path)?
+        .names
+        .into_iter()
+        .filter(|e| e.kind == "bound" && e.session.as_deref() == Some(session))
+        .map(|e| e.name.to_ascii_lowercase())
+        .collect();
+    let registry = crate::state::load_registry(registry_path).map_err(|e| e.to_string())?;
+    for row in registry
+        .entries
+        .iter()
+        .filter(|row| row.harness_session_id.as_deref() == Some(session))
+    {
+        own.insert(row.name.to_ascii_lowercase());
+        own.extend(row.aliases.iter().map(|a| a.to_ascii_lowercase()));
+    }
+    Ok(own)
+}
+
 /// Name an un-named live team. Refusals (pattern, a duplicate live name,
 /// a retired name, an already-named team) name the holder so the lead can
 /// pick again.
@@ -569,7 +594,14 @@ pub fn name_team(
     }
     let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
-    let used = used_for_canon(store_path, registry_path, &canon, &live)?;
+    let mut used = used_for_canon(store_path, registry_path, &canon, &live)?;
+    // A resumed lead lost its store record but not its identity: the names
+    // its own session bound or carries are its own, not a reuse.
+    if let Some(session) = live.get(&canon).and_then(|c| c.holder_session.as_deref()) {
+        for own in session_own_names(store_path, registry_path, session)? {
+            used.remove(&own);
+        }
+    }
     let shown = update(store_path, |store| {
         let names = live_names_in(store, &live);
         if let Some(existing) = names.get(&canon) {
@@ -2064,7 +2096,29 @@ mod tests {
             assert!(snapshot(&store).unwrap()["teams"].get("x-eeee").is_none());
             assert!(snapshot(&store).unwrap()["teams"].get("x-ffff").is_none());
         }
+        fn a_resumed_lead_rebinds_the_name_its_own_session_held() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            write_registry(tmp.path(), json!([team_row("hazel", "fno", 1, "sess-h")]));
+            name_team(&store, &registry, "fno", "hazel").unwrap();
+            // The resume drops the store record; the ledger and row stay.
+            std::fs::remove_file(&store).unwrap();
+            assert_eq!(
+                name_team(&store, &registry, "fno", "hazel").unwrap(),
+                "Hazel"
+            );
+            // A different session still cannot take the retired name.
+            write_registry(
+                tmp.path(),
+                json!([team_row("lead-b", "x-bbbb", 1, "sess-b")]),
+            );
+            let err = name_team(&store, &registry, "x-bbbb", "hazel").unwrap_err();
+            assert!(err.contains("retired"), "{err}");
+        }
+
         an_org_promote_rescope_carries_the_record_and_the_carry_names_an_unnamed_team();
+        a_resumed_lead_rebinds_the_name_its_own_session_held();
         an_unnamed_live_team_cannot_complete_checkin();
         a_successor_checkin_carries_the_name_into_its_registry_label();
         a_duplicate_live_name_refuses_naming_and_names_the_holder();

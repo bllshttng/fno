@@ -185,7 +185,7 @@ def test_hook_ignores_a_hatch_that_is_not_an_assignment_prefix(node_branch_repo)
     [
         # A shell runner holds the whole create in one quoted token.
         'bash -c "gh pr create --title t --body no-trailer-here"',
-        # A wrapper carrying its OWN option, which used to hide the verb.
+        # A wrapper carrying its OWN option, which used to hide the command.
         "timeout 60 gh pr create --title t --body no-trailer-here",
     ],
 )
@@ -270,10 +270,10 @@ def test_hook_denies_an_existing_untrailered_body_file(node_branch_repo, tmp_pat
     assert payload["permissionDecision"] == "deny"
 
 
-def test_hook_refusal_names_the_judged_path_not_a_missing_verb(node_branch_repo, tmp_path):
+def test_hook_refusal_names_the_judged_path_not_a_missing_command(node_branch_repo, tmp_path):
     # The refusal names the file the guard opened. It must NOT name
     # `fno do pr create`, which does not exist; a refusal naming a missing
-    # verb sends the reader into a second error.
+    # command sends the reader into a second error.
     body = tmp_path / "pr-body.md"
     body.write_text("Summary only.\n")
     payload = _hook_main(

@@ -88,7 +88,7 @@ The caller sets one value on the effort axis. Each harness spells the reasoning-
 
 claude accepts `max`, and codex does not. codex accepts `minimal`, and claude does not. An `--effort` value valid for one harness can be invalid for another, so `effort_tokens` validates against the resolved harness's own set, not the union.
 
-Because the accepted set differs per harness, effort is STORED per verb and per harness: `config.agents.profiles.<verb>.harness.<harness>.effort` re-answers the scalar for one harness (`xhigh` on codex, `high` on claude), with `config.agents.defaults.harness.<harness>.effort` beneath it. The scalar stays the base that works for most; `fno config doctor` names a scalar a harness cannot serve.
+Because the accepted set differs per harness, effort is STORED per command and per harness: `config.agents.profiles.<command>.harness.<harness>.effort` re-answers the scalar for one harness (`xhigh` on codex, `high` on claude), with `config.agents.defaults.harness.<harness>.effort` beneath it. The scalar stays the base that works for most; `fno config doctor` names a scalar a harness cannot serve.
 
 ## Provider translation, and why an unset effort costs money
 
@@ -124,7 +124,7 @@ Absence of a `requested_*` stamp means unknown, never a default. Adoption reuses
 
 "Pays" and "sees" move by different steps, so they can split. A reconnect moves "sees". A login moves "pays" only for sessions that read the item it wrote. Those sessions move only after they re-read it. See [Switching claude accounts is manual, by design](../provider-rotation.md#switching-claude-accounts-is-manual-by-design) for the steps. The mobile app shows "sees" and says nothing about billing.
 
-For a spawn, `--account`, `agents.defaults.account`, `agents.profiles.<verb>.account` and a lane's `account` choose "pays". `accounts.active` is not one of them.
+For a spawn, `--account`, `agents.defaults.account`, `agents.profiles.<command>.account` and a lane's `account` choose "pays". `accounts.active` is not one of them.
 
 An unpinned claude spawn bills whatever login its launching process holds. Read which login that is in the identity column of `fno config accounts list`. See [What chooses the account a spawn bills](../provider-rotation.md#what-chooses-the-account-a-spawn-bills).
 
@@ -152,7 +152,7 @@ When the surrounding type or field name does not reveal the axis, document the a
 
 The frontmatter keys and the flag carry the plan-link sense, never the work lock.
 
-Intake prints `linked plan to <id>`, not `claimed`, and names the verb that takes the lock: `fno do target start <id>`.
+Intake prints `linked plan to <id>`, not `claimed`, and names the command that takes the lock: `fno do target start <id>`.
 
 A receipt that said a plan was claimed stated a fact about the first sense while writing the second. The word is retired from that line.
 
@@ -162,7 +162,7 @@ A receipt that said a plan was claimed stated a fact about the first sense while
 
 | Sense | Surface | Means |
 |---|---|---|
-| harness session | `FNO_HARNESS_SESSION_ID`, the `--session-id` flag on backlog and resume verbs, `mail-inject --session` | one transcript, roughly pane-level; this sense keeps the word |
+| harness session | `FNO_HARNESS_SESSION_ID`, the `--session-id` flag on backlog and resume commands, `mail-inject --session` | one transcript, roughly pane-level; this sense keeps the word |
 | mux server | `--server`, `FNO_SERVER` | one socket and its workspaces; `fno mux server --server main` is repetitive and never ambiguous |
 
 `host` was rejected: `claims.rs` writes `host` as the machine into every claim record, and `registry.py` defines `host_mode` as the interactive-drive axis.
@@ -187,9 +187,9 @@ A literal like `agy` or `openclaw` under a provider-named binding is still a def
 | `config.model_routing.providers` | provider | the genuine provider axis |
 | `config.accounts.records` | account | |
 | `config.agent_harnesses` | harness | |
-| `config.agents.defaults.effort`, `config.agents.profiles.<verb>.effort` | effort | |
-| `config.agents.defaults.harness.<h>.effort`, `config.agents.profiles.<verb>.harness.<h>.effort` | effort | the per-harness overlay rungs |
-| `config.agents.defaults.provider`, `config.agents.profiles.<verb>.provider` | harness | the field name is parked by the value rule; the resolver receipt names the axis it feeds, not the field |
+| `config.agents.defaults.effort`, `config.agents.profiles.<command>.effort` | effort | |
+| `config.agents.defaults.harness.<h>.effort`, `config.agents.profiles.<command>.harness.<h>.effort` | effort | the per-harness overlay rungs |
+| `config.agents.defaults.provider`, `config.agents.profiles.<command>.provider` | harness | the field name is parked by the value rule; the resolver receipt names the axis it feeds, not the field |
 | `FNO_AGENT_HARNESS` | harness | injected at spawn, read for identity |
 | `FNO_HARNESS_NAME` | harness | fno-owned canonical family stamp on spawned children; vendor markers remain the fallback for operator-started or adopted sessions |
 | `FNO_HARNESS_SESSION_ID` | harness session identity | fno-owned exact bound harness session id; absent when the launcher does not know it before exec |
@@ -210,7 +210,7 @@ A literal like `agy` or `openclaw` under a provider-named binding is still a def
 
 ## Lane names are keys, not axis values
 
-A lane name (an `agents.profiles.<verb>.lanes` entry) is a `[[routing.models]]` row key and never an axis value. The row carries the axes: `harness`, `model`, `route` and `account`. The name is only the handle a lane list refers to it by. A lane named `flash-zai` asserts nothing about any axis. Reading a lane name as a provider, vendor or model value is the same conflation this document exists to kill.
+A lane name (an `agents.profiles.<command>.lanes` entry) is a `[[routing.models]]` row key and never an axis value. The row carries the axes: `harness`, `model`, `route` and `account`. The name is only the handle a lane list refers to it by. A lane named `flash-zai` asserts nothing about any axis. Reading a lane name as a provider, vendor or model value is the same conflation this document exists to kill.
 
 ## Canonical spawned-session identity
 

@@ -1023,7 +1023,7 @@ def taint_writers_still_live(cli: str, root: Path) -> list[str]:
         # No taint means nothing recorded a writer, which is different from a
         # marker that cannot say. Falling through to a live scan here would let
         # any pinned session block the out-of-band-/login repair - the case the
-        # verb exists for, and the one where a live pin is routinely the very
+        # command exists for, and the one where a live pin is routinely the very
         # session running it.
         return []
     recorded = tainting_writers(cli, root)
@@ -1496,7 +1496,7 @@ def reconcile_backoff_active(
 
     Bounds the cost of a slot whose principal matches nothing: without it every
     usage probe would re-hit the profile endpoint. Only the EXPLICIT
-    ``reconcile-slot`` verb ignores this, so an operator repairing the store is
+    ``reconcile-slot`` command ignores this, so an operator repairing the store is
     never told to wait.
     """
     try:
@@ -1572,7 +1572,7 @@ def reconcile_slot(
         return _reconcile_locked(cli, by_id=by_id, root=root)
     except ManagedStoreError as exc:
         # A `security` timeout or denial is a slot we could not read, which is
-        # a refusal like any other - not a traceback out of an operator verb.
+        # a refusal like any other - not a traceback out of an operator command.
         return ReconcileResult("slot-unreadable", detail=str(exc))
     finally:
         lock.release()

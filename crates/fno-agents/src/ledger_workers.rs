@@ -105,7 +105,7 @@ pub(crate) fn parse_roster(code: i32, stdout: &str, stderr: &str) -> Result<Work
 }
 
 pub(crate) fn read() -> Result<Workers, String> {
-    let (code, out, err) = crate::lead_checkin::fno_verb(&["agents", "list", "--json"])?;
+    let (code, out, err) = crate::lead_checkin::fno_command(&["agents", "list", "--json"])?;
     parse_roster(code, &out, &err)
 }
 

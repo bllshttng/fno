@@ -17,7 +17,7 @@ Two modes:
   ``{"exit","stdout","stderr"}`` JSON object with RAW streams. The caller
   owns the env pins and the masking.
 
-The legs re-implement only the cli.py glue semantics and the verb
+The legs re-implement only the cli.py glue semantics and the command
 contracts; every scanner, trailer, and bind decision comes from the real
 ``fno`` library functions, so the frozen goldens pin the library's
 behavior rather than a re-derivation of it. The bind stamp loop
@@ -155,7 +155,7 @@ def build_fixture(root, case, index):
 
 # -------------------------------------------------------------------------
 # Legs. Each returns (exit, stdout, stderr) with the trailing newlines the
-# real verb would have printed.
+# real command would have printed.
 # -------------------------------------------------------------------------
 
 def leg_branch_ids(case):
@@ -258,16 +258,16 @@ def leg_bind(case_dir, case):
 
 
 def run_leg(case_dir, case):
-    verb = case.get("verb", "trailer")
-    if verb == "branch-ids":
+    command = case.get("verb", "trailer")
+    if command == "branch-ids":
         return leg_branch_ids(case)
-    if verb == "ensure":
+    if command == "ensure":
         return leg_ensure(case)
-    if verb == "trailer":
+    if command == "trailer":
         return leg_trailer(case)
-    if verb == "bind":
+    if command == "bind":
         return leg_bind(case_dir, case)
-    raise SystemExit(f"oracle: unknown verb {verb!r}")
+    raise SystemExit(f"oracle: unknown command {command!r}")
 
 
 def run_case(case_dir, case, *, own_env):

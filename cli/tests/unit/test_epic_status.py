@@ -1,6 +1,6 @@
 """Tests for `fno backlog epic status` - the native children-rollup door.
 
-The verb answers from the binary, so these exec it over a fixture store the
+The command answers from the binary, so these exec it over a fixture store the
 way the other native-door suites do (HOME/FNO_STATE_DIR pinned at the seed's
 parent); they skip where this checkout has no dev build.
 """

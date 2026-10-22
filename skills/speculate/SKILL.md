@@ -99,7 +99,7 @@ wait
 **Note:** Speculate uses `--mode=ephemeral` because the losing variations
 get cleaned up at the end of the run. The decision matrix doc explains
 when ephemeral is the right call vs manual production worktrees. The
-shared module's `setup` verb caches install on lockfile hash, so the N
+shared module's `setup` command caches install on lockfile hash, so the N
 parallel installs only do real work the first time.
 
 ### 4. Spawn Parallel Agents

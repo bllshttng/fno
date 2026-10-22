@@ -210,7 +210,7 @@ def observed_model(agent: str, transcript_path: Optional[Path]) -> dict[str, Any
         #
         # Ceiling, measured 2026-08-04: a full scan of the largest local rollout
         # (15 MB) is 56 ms. That matters because on the Rust list path this whole
-        # verb runs inside the family-1 probe's 5s budget, and a probe timeout
+        # command runs inside the family-1 probe's 5s budget, and a probe timeout
         # costs `status` too -- the row would render `unknown` and drop out of
         # `--status live`, so a reporting field would have degraded the liveness
         # field it rides along with. At ~1% of the budget there is headroom; if

@@ -47,7 +47,7 @@ def _observe_as(monkeypatch, model: str) -> None:
 
 
 def _dispatch(name: str, *, model: str, resume: str | None = None):
-    """The dispatch door the respawn ladder uses: the spawn verb's --model and
+    """The dispatch door the respawn ladder uses: the spawn command's --model and
     --resume spellings are retired, so the request rides in as a parameter."""
     from pathlib import Path
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Golden capture driver for the `mail reply` wrapped-verb port.
+"""Golden capture driver for the `mail reply` wrapped-command port.
 
 Plays the case tables against the live Python leg (`fno agents mail reply`,
-the typer verb) and freezes `tests/golden/mail_reply/` in the `assert_golden`
+the typer command) and freezes `tests/golden/mail_reply/` in the `assert_golden`
 on-disk format: `<key>.exit` ("<code>\\n"), `<key>.out`, `<key>.err`. The
 `mail_reply_parity.rs` tables mirror these cases; keep them in lockstep when a
 case is added (the same rule mail_send_capture.py records in its header).
@@ -53,7 +53,7 @@ DROP_PREFIXES = (
     "  obsidian enabled:",
     "  sentinel:",
     # The escalation stderr advisory names whether the OS notifier displayed,
-    # which is a property of the host, not of the verb: a mac capture has a
+    # which is a property of the host, not of the command: a mac capture has a
     # channel, a headless CI runner does not. The receipt is the contract.
     "escalated to human (",
 )
@@ -84,11 +84,11 @@ def installed_agents_bin() -> str:
 
 
 def installed_front() -> str:
-    """The installed `fno` front. The shim routes every non-reply verb here, so
+    """The installed `fno` front. The shim routes every non-reply command here, so
     the Python leg's internal doors behave as production."""
     found = shutil.which("fno")
     if found is None:
-        raise SystemExit("fno not on PATH; the capture routes non-reply verbs to it")
+        raise SystemExit("fno not on PATH; the capture routes non-reply commands to it")
     return found
 
 

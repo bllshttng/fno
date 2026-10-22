@@ -30,7 +30,7 @@ Membership meant "a claude agent row was attached here", not "a worker pane live
 
 ## Startup restore holds by default; only policy respawns
 
-A worker pane's pty was a child of the previous mux server pid and died with it. After a restart such a member is always dead. No liveness probe runs, because probing an already-known answer is the receipt-can-lie shape. By default no process starts either: `[mux.restore] policy` is `hold` (named held panes, resume on focus), or `idle` (members stay idle rows). Only the explicit `resume` policy respawns at startup, and only the explicit `fno mux workspace restore` verb respawns on demand - both name every member they could not bring back.
+A worker pane's pty was a child of the previous mux server pid and died with it. After a restart such a member is always dead. No liveness probe runs, because probing an already-known answer is the receipt-can-lie shape. By default no process starts either: `[mux.restore] policy` is `hold` (named held panes, resume on focus), or `idle` (members stay idle rows). Only the explicit `resume` policy respawns at startup, and only the explicit `fno mux workspace restore` command respawns on demand - both name every member they could not bring back.
 
 The member stays as-is and the row renders idle in the agent panel. Restore also prints one notice naming how many idle worker rows it created. That makes "nothing resumed" distinguishable from "the counter never ran".
 

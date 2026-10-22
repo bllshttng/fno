@@ -20,7 +20,7 @@
 #   - AC4-ERR: stub exits 2 (Click's "No such command" on a STALE fno) => same
 #              note-and-proceed, NEVER a refusal
 #   - AC5-ERR: no fno on PATH => `fno absent` note, manifest still written
-#   - AC3-CON: FNO_TARGET_INIT_GATED=1 => the verb is never invoked at all
+#   - AC3-CON: FNO_TARGET_INIT_GATED=1 => the command is never invoked at all
 #
 # Exit codes:
 #   0  all scenarios passed
@@ -144,7 +144,7 @@ grep -q "review capability gate unavailable (rc=1)" "$TMP_BROKEN/err.log" \
 pass "AC4-ERR: note names the return code"
 
 # ── AC4-ERR (stale CLI): rc 2 is Click's UsageError, NOT a refusal ──
-# Found by running this for real: an installed `fno` predating the verb prints
+# Found by running this for real: an installed `fno` predating the command prints
 # "No such command 'check-review-gate'" and exits 2. If 2 meant "refused", every
 # direct bootstrap would hard-refuse the moment the CLI fell behind source -
 # the exact broken-gate-bricks-bootstrap failure the design forbids.
@@ -206,7 +206,7 @@ pass "AC5-ERR: absent-fno note printed"
 pass "AC5-ERR: manifest written"
 
 # ── AC3-CON: the wrapper already paid; do not probe GitHub twice ──
-log "AC3-CON: FNO_TARGET_INIT_GATED=1 => verb never invoked"
+log "AC3-CON: FNO_TARGET_INIT_GATED=1 => command never invoked"
 make_repo TMP_MARKED 9
 _ALL_TMPS+=("$TMP_MARKED")
 

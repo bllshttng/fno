@@ -27,7 +27,7 @@ def test_guard_blocks_unisolated_provider_exec(tmp_path, monkeypatch):
 
 
 def test_guard_blocks_live_launchctl_mutation(tmp_path, monkeypatch):
-    """A mutating launchctl verb resolved outside the tmp tree would change the
+    """A mutating launchctl command resolved outside the tmp tree would change the
     operator's real launchd domain, so the guard must raise before any process
     starts (x-63aa: two unstubbed pr-watch install tests re-registered
     sh.fno.pr-watcher from a pytest tempdir and killed every launchd arm)."""
