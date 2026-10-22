@@ -1,5 +1,5 @@
-//! Native `fno inbox user` commands, and the hidden `fno inbox operator`
-//! spelling of the same group.
+//! Native `fno inbox user` commands, the hidden `fno inbox operator` spelling
+//! of the same group, and `fno inbox peers`.
 //!
 //! The queue reader lives in the runtime crate as `fno-agents compaction
 //! operator-turns`, so the front classifies the command and execs that action:
@@ -54,6 +54,18 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
+/// Classify `fno inbox peers [--json|-J|--help]`: the argv tail for
+/// `fno-agents compaction inbox-peers`. Python has no peers command, so any
+/// other argument still runs native and the runtime prints the usage refusal.
+pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 2 || args[0].to_str()? != "inbox" || args[1].to_str()? != "peers" {
+        return None;
+    }
+    let mut argv = vec![OsString::from("inbox-peers")];
+    argv.extend_from_slice(&args[2..]);
+    Some(argv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +102,10 @@ mod tests {
             assert!(classify_inbox_user(&mk(&["inbox", group])).is_none());
         }
         assert!(classify_inbox_user(&mk(&["inbox", "law", "status"])).is_none());
+        assert_eq!(
+            classify_inbox_peers(&mk(&["inbox", "peers", "--json"])),
+            Some(mk(&["inbox-peers", "--json"]))
+        );
+        assert!(classify_inbox_peers(&mk(&["inbox", "user", "status"])).is_none());
     }
 }

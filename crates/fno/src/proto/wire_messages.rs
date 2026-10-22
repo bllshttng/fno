@@ -189,9 +189,11 @@ pub enum ServerMsg {
     /// The squad/tab catalog + computed rects for the receiving client's
     /// viewed tab, relative to the CONTENT AREA. The server sends rects,
     /// never the tree; the client never runs the layout algorithm. Reliable.
-    /// `area` is the clamped (rows, cols) the rects were computed for
-    /// (view-scoped smallest-client clamp); a client larger than `area`
-    /// letterboxes client-side without inferring the bound from the rects.
+    /// `area` is the (rows, cols) the rects were computed for, picked by the
+    /// server's window-size policy (`mux.window_size`: smallest, latest or
+    /// largest viewer). A client larger than `area` letterboxes client-side
+    /// without inferring the bound from the rects; a smaller one crops,
+    /// anchored top-left.
     Layout {
         squads: Vec<SquadMeta>,
         active_squad: u64,
