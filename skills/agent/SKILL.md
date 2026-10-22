@@ -1,7 +1,7 @@
 ---
 name: agent
 description: Control Footnote workers by spawning, handing off, inspecting, messaging, driving, or stopping sessions.
-argument-hint: "<verb> [args]  |  [handoff] <ab-xxxxxxxx | feature | doc-path | /command> [provider] [drive] [yolo] [model <name>] [effort <value>] [as <name>] [merge]"
+argument-hint: "<verb> [args]  |  [handoff] <ab-xxxxxxxx | feature | doc-path | /command> [provider] [drive] [as <name>] [merge]"
 metadata:
   internal: false
   requires:
@@ -12,7 +12,7 @@ metadata:
       - spawn
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Agents
 
 **Describe the agent outcome you want; this skill remembers the command.**
@@ -34,7 +34,7 @@ dashless parsing also keep it reliable from remote or runner-less controls.
 
 `SKILL_DIR` below is `skills/agent` inside this plugin.
 
-## Verb router
+## Command router
 
 The first whitespace token of the argument is the **verb**. An unrecognized
 leading token means the whole argument is a `spawn` payload (this preserves the
@@ -44,7 +44,7 @@ means start a session with what you pass, nothing more : an explicit
 via `/target`, and any other free text is sent **verbatim as the session seed** -
 no `/target` wrap, no build inference. The focused core:
 
-> **Retired verbs :** `bare` and `discuss` are gone. A conversational
+> **Retired commands :** `bare` and `discuss` are gone. A conversational
 > session is just `spawn "<seed>"` (the default); a one-shot Q&A to a NEW
 > worker is `spawn "<question>" headless`. (The `--ask`/`--discuss` normalize
 > flags remain hard errors.)
@@ -56,7 +56,7 @@ no `/target` wrap, no build inference. The focused core:
 > 600s), and prints it on stdout. Async fire-and-receipt stays on `send`
 > (`fno agents mail send`). See the `ask` section for the boundary.
 
-| Verb | Envelope | Routes to | Cost |
+| Command | Envelope | Routes to | Cost |
 |------|----------|-----------|------|
 | `spawn` (default) | normalize + honest-receipt (no confirm: free lane) | `fno agents spawn` - substrate axis : default `thread` where the harness seats one (persistent, portal view; `pane` placement flags or a `--` fence imply pane); `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot (`claude -p` / `codex --exec` / `agy -p`) | free (claude subscription) |
 | `handoff <doc>` | normalize `--handoff` + honest-receipt (free lane) | `fno agents spawn` (Claude/Codex/Gemini continuation seed, NO `/target`; default `thread`) | free (provider subscription) |
@@ -78,7 +78,7 @@ machine-internal vs exploratory channel infra - see
 
 Machine and targeted loop halts use existing `fno agents audit incident stop|clear` commands. Matching sessions refuse watchdog resumes and PR nudges until clear or expiry.
 
-Route on the verb, then run the matching section below.
+Route on the command, then run the matching section below.
 
 ## Launch a worker
 
@@ -98,7 +98,7 @@ fno gates, records and adopts every native line. The PreToolUse Bash hook asks t
 
 ---
 
-## `spawn` (default verb) - launch a worker or seed a session
+## `spawn` (default command) - launch a worker or seed a session
 
 Start a session with what you pass : a `/skill` passthrough, a node-id
 build, or a verbatim free-text seed. Strip a leading `spawn` verb if present;
@@ -118,7 +118,7 @@ never corrupt it. The user types barewords or natural language; you map them to
 the structured fields. The canonical form:
 
 ```
-<payload> [provider] [drive] [yolo] [model <name>] [effort <value>] [as <name>] [merge]
+<payload> [provider] [drive] [as <name>] [merge]
 ```
 
 The angle brackets are placeholder notation, not literal syntax. Infer the
@@ -143,27 +143,17 @@ see below):
 - **`drive`** (alias `interactive`, optional): route codex/agy to a drivable
   `host` session instead of an autonomous `spawn`. No-op for claude. "drive it"
   / "interactive" map here.
-- **`yolo`** (aliases `auto`, `-Y`, `--yolo`, optional): drops the sandbox for
-  this launch. You rarely need it: a headless codex/agy worker is already
-  BOUNDED - sandboxed AND never-prompt - without it. On claude it maps to
-  `--permission-mode bypassPermissions`; an explicit `--permission-mode` wins.
-  Deep behavior per provider: [references/workflow-routes.md](references/workflow-routes.md).
-- **`model <name>`** (optional): exact model for the worker, plumbed to `fno
-  agents spawn --model`. Two-word posture (`spawn ab-X model opus`). Default =
-  the provider's default. There is NO short flag: `-m` is `--allow-merge`, so a
-  bare `-m opus` would set merge, not the model - always write `model <name>`.
-- **`effort <value>`** (optional): reasoning-effort tier, plumbed to `fno
-  agents spawn --effort`. Orthogonal to `model`; the CLI validates the
-  provider-specific vocabulary before spawning.
 - **`as <name>`** (optional): explicit agent name. Default is derived
   (`<verb>-<node-id>-<slug>` / `<verb>-<slug>`). "call it X" / "name it X" map here.
 - **`merge`** (optional): do NOT inject the no-merge intent. Default injects it
   so a fire-from-phone autonomous worker lands a PR for review, not an
   auto-merge. (`merge` only omits the no-merge intent; true auto-merge stays a
   separate opt-in.) "let it merge" / "can merge" map here.
-- **`--permission-mode <v>`** (optional): the worker's harness permission posture,
-  passed straight to `fno agents spawn --permission-mode`. Value validation is
-  the CLI's (fail-closed), not the skill's.
+
+The model, effort, provider, harness, substrate, yolo and permission-mode
+postures are RETIRED: the spawn axes died and each lane template owns its own
+launch line (docs/HARNESSES.md names the native form per harness). A model
+pin rides the route; the lane default owns the permission posture.
 - **`-r`/`--role <role>`** (optional): per-spawn model-routing role
   (`coordinate|tidy|orient|consolidate` route to the secondary GLM; production
   roles stay primary). Model routing ONLY - it does not affect pane/layout.
@@ -407,7 +397,7 @@ bash "${SKILL_DIR}/scripts/spawn.sh" --name "$name" --provider "$provider" \
   [--permission-mode "$permission_mode"] [--role "$role"] [--timeout "$timeout"] [--fresh] [--here]
 ```
 
-Pass `--self "$self_holder"` only for a confirmed self-handoff (your `target_claim_holder` matched the live `.holder` in the collision pre-check); it makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. Pass `--model "$model"` only when normalize emitted a non-empty `model` (spawn.sh forwards it to `fno agents spawn --model`; omit it for the provider default). Pass `--effort "$effort"` only when normalize emitted a non-empty `effort`; `spawn.sh` forwards it to the fail-closed CLI mapper. Pass `--permission-mode "$permission_mode"` / `--role "$role"` / `--timeout "$timeout"` only when normalize emitted a non-empty value; pass `--fresh` only when `fresh=1` and `--here` only when `here=1` (spawn.sh forwards each to `fno agents spawn`, which validates values fail-closed). Pass `--yolo` only when normalize emitted `yolo=1`. Pass `--substrate "$substrate"` only when normalize emitted a non-empty `substrate` (`thread` -> a persistent thread; `headless` -> a one-shot `claude -p` / `codex --exec` / `agy -p`);
+Pass `--self "$self_holder"` only for a confirmed self-handoff (your `target_claim_holder` matched the live `.holder` in the collision pre-check); it makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. Pass `--role "$role"` / `--timeout "$timeout"` only when normalize emitted a non-empty value; pass `--fresh` only when `fresh=1` and `--here` only when `here=1` (spawn.sh forwards each to `fno agents spawn`, which validates values fail-closed). A normalized `substrate=headless` rides `--once` (the one-shot); thread and pane are the native lane's own defaults. The model/effort/yolo/permission-mode forwards are gone: those axes are retired and the lane template owns the launch line.
 
 An empty `substrate` is the built-in default: `thread` where the harness seats one (else `pane`), injected explicitly by the spawn seam. A spawn with no placement flag opens no view. A default never creates one. When the work needs a screen, the mux thread door tunes one.
 Pass `--node` whenever `node` is non-empty. The spawn derives the verb from the node, so a build message need not name one; a typed `/fno:target` or `/fno:blueprint` that disagrees with the node's verb is refused. Choose the `--cwd` source in this priority order, so launch cwd
@@ -495,13 +485,13 @@ Read `spawn.sh`'s single outcome line and relay it faithfully:
 - `result=failed reason="<...>"` -> report **FAILED** with the real reason. NEVER
   emit a short-id, fabricate a reply, or claim a worker launched.
 
-### Receipt families (keyed by the verb spawn.sh ran)
+### Receipt families (keyed by the command spawn.sh ran)
 
 `spawn.sh` branches the receipt parse on the verb/mode it ran - never on
 sniffing output (Group 1 put claude creation on `spawn`, so claude
 takes the JSON `.short_id` family below, not a bare 8-hex line):
 
-- **`spawn --once` / `--substrate headless`**: a **client-side one-shot**
+- **`spawn --once` / `--as headless`**: a **client-side one-shot**
   (`codex exec` / `gemini -p`). stdout is the model REPLY verbatim, not a
   short-id. Success = exit 0 AND a non-empty reply; an empty reply (even on
   exit 0) is FAILED, never a fabricated answer.
@@ -570,11 +560,11 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
 
 ---
 
-> **Retired verbs :** `discuss` no longer exists - a verbatim
+> **Retired commands :** `discuss` no longer exists - a verbatim
 > conversational session is the default free-text **seed** (`spawn "<seed>"`
 > opens a drivable pane with the words as its opening turn). The OLD one-shot
 > `ask` is gone too; that shape is the **`headless` substrate**
-> (`spawn "<question>" headless` returns a single reply). Today's `ask` verb
+> (`spawn "<question>" headless` returns a single reply). Today's `ask` command
 > is the sync request-reply lane to an existing worker (its own section
 > above). `handoff` stays: its guardrail preamble and
 > continue-don't-re-derive contract are content, not routing.
@@ -619,7 +609,7 @@ destructive).
 ## `send` - message an agent or project over the bus
 
 > Prefer the dedicated **`/mail`** skill for messaging (send / reply / unread / ack), which is the runner-less front door over `fno agents mail`.
-> This convenience verb keeps a spawn-and-message flow inside one skill.
+> This convenience command keeps a spawn-and-message flow inside one skill.
 
 The accepted forms are explicit and positional:
 
@@ -696,7 +686,7 @@ STOP without stopping the worker.
    that the helper or `fno agents` command actually captured. "No receipt" is
    FAILED. This is the cardinal guard.
 2. **claude stays on the subscription lane.** claude spawns via
-   `fno agents spawn --harness claude` (-> client-side `claude --bg --name`).
+   `fno agents spawn` (-> client-side `claude --bg --name`; the harness axis is retired and the session's own harness seats it).
    NEVER `-p` / `--bare`, and NEVER route claude through `host`.
 3. **Obey `confirm-decision.sh`; never re-derive its decision.** Run the helper
    and follow its `confirm_required` field. spawn is a free lane: `auto`

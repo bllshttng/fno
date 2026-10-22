@@ -265,7 +265,7 @@ It stays the right shape for a one-shot. It is not a thread lane.
 
 The journey shape `opencode_serve.rs` established, kept here as the standing bar rather than a checklist that was ticked once.
 
-1. Spawn a codex worker with `--substrate thread`. Assert the registry row carries `harness=codex`, a full `harness_session_id`, and `substrate=thread`. When either identity field is missing, refuse by name.
+1. Spawn a codex worker with `--as thread`. Assert the registry row carries `harness=codex`, a full `harness_session_id`, and `substrate=thread`. When either identity field is missing, refuse by name.
 2. Drive one real turn that writes a file in the worker's own worktree, not the canonical checkout. Assert the file lands on the correct branch.
 3. Kill the mux server. Assert the row survives and the thread is still resumable. Against the shared daemon this holds by construction, and so does killing `fno-agents-daemon`.
 4. Resume from a cold process. Assert a second turn quotes a fact introduced in the first. A recalled token is the positive marker. A non-empty reply is not.

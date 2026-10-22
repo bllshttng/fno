@@ -8,6 +8,10 @@ Why inline, always: a fan-out needs a provider that permits it, and a native ver
 
 Inputs from the router: a level (`low` `medium` `high` `xhigh` `max`), optional flags (`--comment`, `--fix`), and an optional target (PR number, branch, or path).
 
+## Fresh dispatch
+
+When `--fresh` dispatched this lane ([fresh.md](fresh.md)), everything here runs unchanged in the fresh reviewer's own context. The inputs are the same: the diff and the plan's acceptance criteria, and nothing about how the work was built. One exception: Phase 2's carry-forward stays builder-side. The fresh context runs first-round scope, skips the journal read for PRIOR_HEAD, never narrows to incremental, and re-validates no carried finding. The builder owns carried findings and their dispositions. The dispatching session, not the reviewer, owns the emit, the fixes, and `--verify-fixes`. The reviewer reports findings and stops. The lane text needs no fresh-specific branch beyond this exception - the context stamp on the row is what records the difference.
+
 ## Phase 0 - gather the diff
 
 Run `git diff @{upstream}...HEAD` (or `git diff main...HEAD` / `git diff HEAD~1` if there's no upstream) to get the unified diff under review. If there are uncommitted changes, or the range diff is empty, also run `git diff HEAD` and include the working-tree changes in scope - the review often runs before the commit. If a PR number, branch name, or file path was passed as an argument, review that target instead. Treat this diff as the review scope.

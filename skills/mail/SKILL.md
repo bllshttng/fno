@@ -37,7 +37,7 @@ local command.
 
 Delivered mail opens with one backticked line, `` `@sender · fmail-<12 hex> · summary` ``, and the full message follows, wholly visible. The summary is the body's first sentence capped at 12 words. The `@` lives inside inline code on purpose: a bare `@` in harness text can open a mention picker or read as an address, so each harness's contract row (`mail_header_at` in `harness_capabilities.toml`) rules which spelling its composer gets, set by the composer check. Old `<fno_mail>` turns in existing transcripts still resolve everywhere.
 
-## The delivery model (so the verbs make sense)
+## The delivery model (so the commands make sense)
 
 **A send injects into the recipient's live session. The durable queue is what
 happens when that misses, and it is recovery, not delivery.**
@@ -72,13 +72,13 @@ A harness-prefixed address (`claude-<short-id>`) is refused, not translated. If 
 
 No probe is proof a peer is dead. `peek`, discovery, a status token, and a claim pid can all read stale at once. A peer that ran `EnterWorktree` moved its transcript to a worktree-keyed project dir, so a probe pointed at the old path reads empty. The one authoritative pre-dead-declaration check is the session's transcript file itself (its worktree-keyed project dir, by mtime/tail). Any receipt or probe that names a store must say WHICH store it read.
 
-## Verb router
+## Command router
 
 The first whitespace token of the argument is the **verb**. Route on it, then run
 the matching section. Messaging is free, so **nothing here confirms** (contrast
 `/agent`, where `chat`/`stop` confirm).
 
-| Verb | Routes to | Needs normalize | Cost |
+| Command | Routes to | Needs normalize | Cost |
 |------|-----------|-----------------|------|
 | `send <name> "<body>"` | `fno agents mail send <name> "<body>"` | yes (refuse empty) | free |
 | `send project <X> "<body>"` | `fno agents mail send --to-project <X> "<body>"` | yes (broadcast) | free |
@@ -107,7 +107,7 @@ The core verb (US4). Strip the leading `send`; the rest is `<recipient> <body>`
 
 #### 1. NORMALIZE (deterministic helper)
 
-Run the normalizer with everything after the `send` verb as ONE `--input`:
+Run the normalizer with everything after the `send` command as ONE `--input`:
 
 ```bash
 bash "${SKILL_DIR}/scripts/normalize.sh" --verb send --input "<recipient/project + body>"
@@ -195,7 +195,7 @@ Strip the leading `reply`; the rest is `<msg-id> <body>`.
 
 ## `unread [name]` / `list` / `show` / `status` - read your inbox (thin pass-through)
 
-Reads. No normalize, no confirm. Run the raw verb and relay its output faithfully.
+Reads. No normalize, no confirm. Run the raw command and relay its output faithfully.
 
 ```bash
 fno agents mail unread                 # my default inbox (project 'footnote')
@@ -249,7 +249,7 @@ nothing drains.
 - **Lane** - HOW it travels. Live-inject first, durable bus as the fallback. You
   do not choose this; the delivery model does. A durable receipt names WHY it is
   durable (`[live-miss]`, `[self-send]`, `[param-forced: --kind ...]`).
-- **`[agent-lock-timeout]`** - the odd durable reason. Another verb on the same agent held the per-agent lock. `send`, `ask`, `spawn`, `stop` and `rm` all take it. No live attempt ran. The token says nothing about the recipient in either direction. Do not resurrect it on that evidence. Do not read it as healthy either. `peek` first, then withdraw before you re-send.
+- **`[agent-lock-timeout]`** - the odd durable reason. Another command on the same agent held the per-agent lock. `send`, `ask`, `spawn`, `stop` and `rm` all take it. No live attempt ran. The token says nothing about the recipient in either direction. Do not resurrect it on that evidence. Do not read it as healthy either. `peek` first, then withdraw before you re-send.
 - **Kind** - a **project-inbox drain contract**, set with `--kind`. The
   recipient project's drain dispatches on it: `heads-up` -> LLM triage (may file
   a graph node with provenance back to your thread); `question` -> drops a

@@ -473,6 +473,18 @@ A `--fix` that touches only documentation now carries rather than invalidates. T
 
 NO `--fix` remains the review contract. The author applies findings and re-attests. The reviewer's prior attestation is then stale by design.
 
+## The fresh reviewer round
+
+`/fno:review --fresh` runs the default lane once in a fresh context. One reviewer subagent. Width 1. The brief is the diff and the plan's acceptance criteria, never the builder's reasoning. The lane itself is unchanged (skills/review/references/single-lane.md). The runner contract is skills/review/references/fresh.md. The building session keeps ownership of the attestation, the fixes, and `--verify-fixes`. The reviewer emits nothing.
+
+The emit receipt names the round's independence in one word, composed from fields the row already carries. `peer` marks a cross-model peer verdict (`reviewer=peer`). `fresh` marks a round whose row carries `reviewer_context=fresh`. `self` covers everything else, the inline lane and `declare` self-cert included. No new payload field exists behind the word.
+
+Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` gates the dispatch. A refusal ends the fresh attempt rather than widening. Silence is not clean. No return, an error, or a findings-free response with no report is journaled as `review_invocation` `stage=refused` `reason=fresh_reviewer_silent`. It attests nothing and reads as not reviewed. A fresh promise never silently degrades into a self review. On a harness with no subagent dispatch the fresh attempt is not run. The inline lane is an explicit fallback whose level records `self`.
+
+The fresh row's provenance feeds the posture `independent` component, which rewards only a positive `reviewer_context=fresh` marker at the reviewed head. Coverage counting is unchanged: every `reviewed` verdict counts regardless of origin. Two readings are pinned. A fresh round runs FIRST-ROUND SCOPE. The reviewer never reads prior rounds' findings and never narrows to the incremental delta. The fresh marker therefore never rides a round that reviewed only part of the diff. And `execution_context=fork` names not-the-builder's-context. It never means an Agent-tool fork, which inherits the builder's whole conversation. The fresh dispatch is a subagent that starts empty.
+
+The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Its designed readers are setup, for the install offer, and the lane, for the fresh-vs-self pick. None ships here. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
+
 ## The pass condition and the four verdict states
 
 The merge gate's pass condition is disposition-complete at the head, not clean. The attestation chain's ranges must tile `merge_base..head`. Every finding in the chain must be terminal. Terminal means fixed with the fix delta reviewed. It also means non-blocking by the gate's own class re-derivation. It means declined with corroboration the author cannot mint alone. And it means waived by the override label. The producer's own `findings_blocking` count is never the answer. The gate re-derives from the per-finding primitives. A hand-written event claiming zero blocking over a CONFIRMED finding is refused.

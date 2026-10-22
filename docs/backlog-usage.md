@@ -17,9 +17,7 @@ Not for: why one card sits above another, or how the render pipeline works. That
 
 ## Mental model: the board is derived
 
-You never drag a card. Both boards (`graph.md` Obsidian Kanban and the
-`fno backlog view` HTML) render from node fields, so you "move" a card by
-changing the field that drives its placement:
+You never drag a card. Every board renders from node fields: the `graph.md` Obsidian Kanban, the HTML board, and the mux board. So you "move" a card by changing the field that drives its placement. [See the backlog](#see-the-backlog) lists each board.
 
 | What you see | What controls it |
 |--------------|------------------|
@@ -376,7 +374,19 @@ fno backlog get <id|slug|hex>     # resolve and inspect one node
 fno backlog find "query"          # high-recall search over title/slug/details
 ```
 
-## Board at a glance
+## See the backlog
+
+One graph feeds every view. Pick the view by where you are.
+
+| Where | Command | What you see |
+|-------|---------|--------------|
+| Terminal | `fno backlog board` | Three short sections: just finished, in progress, on deck |
+| The mux | prefix+O inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
+| A local HTML file | `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
+| A browser, private | `fno mux serve --web`, then the backlog link | The live board behind the bridge token |
+| A browser, public | `fno backlog publish` | Open, public rows only, on any static host |
+
+### In the terminal
 
 ```bash
 fno backlog board                  # three sections, one line each: just finished, in progress, on deck
@@ -384,13 +394,63 @@ fno backlog board --project fno    # scope to one project (default: the current 
 fno backlog board --json           # same three sections, machine-readable
 ```
 
-Reads only the graph and the on-disk pr-status cache under the state root. It never makes a live GitHub call, so this verb can never exhaust the GraphQL quota.
+It reads the graph, the on-disk pr-status cache under the state root, and local git against `origin/main`. It never makes a live GitHub call, so this verb can never exhaust the GraphQL quota.
 
 Each section caps at five rows and shows `... and N more` past that. Each row caps at twelve words after the node id, so the whole board fits on one screen.
 
 When a source cannot be read, the section renders an explicit `(unknown: ...)`. It never renders as an empty section: an empty "Just finished" means nothing landed, not that the read failed.
 
 The "In progress" blocking fact comes from the cache's newest row for that PR. That row can be stale by up to the cache TTL. When the PR stays quiet, the row can be older still. The line prints the age beside the verdict, so nobody reads it as the current state.
+
+### In the mux
+
+Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
+
+![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
+
+The board shows one lane per project or epic, and a card for each node. `Tab` flips between kanban and list. `/` searches, `f` filters, and `enter` opens the node details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
+
+The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
+
+![The mux node details view: a node's fields, plan path, parent epic, pull request, two sessions with their adopt commands, and its comment thread](images/backlog-mux-details.png)
+
+The list view shows the same nodes as rows, grouped by project and column. The filter bar at the top narrows it, here to in-progress and ready nodes in two projects.
+
+![The mux backlog list view filtered to in-progress and ready nodes, with an epic's details and its children on the right](images/backlog-mux-list.png)
+
+Press prefix+V to cycle the left sideline between agents, backlog and org. The backlog view there is a short work queue in board order.
+
+![The mux sideline in its backlog view: a short queue of demo nodes grouped by column, beside an idle pane](images/backlog-mux-sideline.png)
+
+### A local HTML file
+
+The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+
+![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
+
+When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
+
+`fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same verb. Set `FNO_NO_OPEN=1` to print the path only.
+
+To keep more boards current, add rows to `backlog.render_targets` (see [configuration-guide.md](configuration-guide.md)). Each row is a `path`, a `scope`, and a `projection`. The `scope` is one project slug, or `all` for every project. The `projection` is `local`, which is the default. The `backlog` and `roadmap` projections are retired and skip with a warning.
+
+```bash
+fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "scope": "fno"}, {"path": "~/notes/all/backlog.html", "scope": "all"}]'
+```
+
+`fno config set` writes the global config by default. Keep these rows there. The renderer reads the global config only and warns about a project-local list.
+
+The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
+
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+
+`fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
+
+### Served on the web
+
+`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. On a loopback bind the page can also write. It runs the same backlog verbs an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
+
+For a board anyone can open, use `fno backlog publish` (also `fno backlog board publish`). It renders the public projection: open, public rows only, with titles gated for leaks. [Publish a public board](#publish-a-public-board) covers the targets and the schedule.
 
 ## Delivery flow panel
 
@@ -399,6 +459,20 @@ The HTML boards carry a flow panel under the status tiles. It answers three ques
 The panel has three groups. Delivered counts confirmed deliveries in the window, split into code and documents, with per-local-week counts and a `*` marker on partial weeks. Code means merged PRs and explicit delivery terminals. Documents mean DoneAdvisory. Elapsed shows the PR open-to-merge median and nearest-rank p85 with the sample count, plus the current open PR population and its oldest age. Waiting shows the canonical in-progress, review and blocked counts with the oldest age of each.
 
 Read the fine print before comparing numbers. The scope line names the window, the local timezone, and the fact that the panel does not follow row filters. Searching, hiding Done, or picking projects moves the rows, never the throughput denominator. Ages are measured from node `created_at`, and accumulated blocked time is unmeasured because the graph keeps no interval history. PRs the graph cannot link to a node ride the coverage line as unlinked deliveries instead of the weekly counts. When the ledger or the keeper cannot be read, the panel names the reason and shows no numbers at all.
+
+## Scorecard by lane
+
+`fno backlog calibration --by-lane` answers which lane did which kind of work, and how it went. It folds every node whose last execute session ended inside the window into cells keyed by task kind, harness, provider and model. The window defaults to 28 days. `--since 90` widens it.
+
+Each cell carries outcome and cost columns. `nodes` counts the records in the cell. `merged` and `merged_pct` give the merge outcome. `merged_ci95` is the Wilson 95% interval over the merged share, computed from the cell's own counts. `spend_usd` and `cost_per_merged_usd` are the money columns. `median_work_hours` is elapsed worker time. `bounce_pct` is the share of merged nodes that drew a fix node in the follow-up window. `ci_failure_per_node` is the friction count per node. `shared` counts nodes whose execute sessions ran on more than one lane.
+
+The PR-keyed outcome columns measure only merged nodes that carry a PR number on this repo. A `pr_url` naming another repository joins no feed. A node without a `pr_url` stays in scope. Each column carries its own coverage percent, so a rate over nobody reads null, never 0. `ci_red_pct` is the share of those nodes that recorded at least one red CI head in the friction store. It measures only where a review-coverage row proves the loop gate read that PR. `review_findings_per_node` is the mean count of fail review verdicts on the node's PR. The latest verdict per reviewer and head decides, so a round answered with a pass counts resolved. `fix_of_fix_pct` is the share of measured fix PRs whose diff removed lines that a PR merged within the 7 days before the fix had introduced. `fix_of_fix_pct` walks the merged line of the repo at the current directory, so outside a git repo it reads unknown. The friction-based `review_round_per_node` column is gone. The review feed replaced it.
+
+The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
+
+`--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/ and Cargo.lock, python for cli/ with its tests, and ui for the web pages and the mux-server lane. docs covers a commit whose every changed path is docs or markdown. Support paths (scripts, skills, hooks, the root tests/) carry no vote. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold at every depth. Its cost is its own session's ledger row, not the node's whole bill. The coverage block counts the population once: credit records never double it. The default depth stays 1. The plain by-lane read keeps its cell shape, and the blueprint kind is the one addition at that depth. The router rides the same read. `--propose --stage <verb>` folds one verdict per candidate lane per kind, names the contradicted seat laws, and writes nothing to config. The stage takes target or blueprint. A blueprint proposal comes only from the blueprint seat law's model families.
+
+The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`. `--kind-depth` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
 ## Health and hygiene
 

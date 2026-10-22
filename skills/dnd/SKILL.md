@@ -44,4 +44,4 @@ The hold applies to the session that runs the command. When the ask arrives by c
 
 ## Known Limitations and Deferred Work
 
-- No shell verb or help text names DND yet: the hold help says "Busy mode" and never DND. See [LIMITATIONS.md](LIMITATIONS.md).
+- No shell command or help text names DND yet: the hold help says "Busy mode" and never DND. See [LIMITATIONS.md](LIMITATIONS.md).

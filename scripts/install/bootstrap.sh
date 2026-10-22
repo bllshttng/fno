@@ -387,7 +387,7 @@ mode_from_source() {
   fi
   # Registering the checkout as the harness's plugin edits harness config, so
   # it is printed for the user, never run here.
-  say "from-source done. Register the plugin for your harness from $checkout yourself (Claude Code: /plugin marketplace add + /plugin install; see docs/getting-started.md)."
+  say "from-source done. Register the plugin for your harness from $checkout yourself (Claude Code: /plugin marketplace add + /plugin install; see docs/install.md)."
   EXTRA_JSON=",\"from_source\":{\"ran\":true,\"checkout\":\"$(json_escape "$checkout")\",\"actions\":[$actions]}"
   return 0
 }

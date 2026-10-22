@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/write-gate.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/write-gate.sh\"",
             "statusMessage": "checking protected write surfaces"
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/worktree-write-protect.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/worktree-write-protect.sh\"",
             "statusMessage": "checking worktree location"
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/plan-location-guard.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/plan-location-guard.sh\"",
             "statusMessage": "checking plan save location"
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\"",
             "statusMessage": "checking Bash tool guards"
           }
         ]
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
             "timeout": 4
           }
         ]
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\"",
             "statusMessage": "checking role delegation"
           }
         ]
@@ -67,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex PreToolUse"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex PreToolUse"
           }
         ]
       }
@@ -78,36 +78,41 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex UserPromptSubmit"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex UserPromptSubmit"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex bash \"${PLUGIN_ROOT}/hooks/session-join-prompt.sh\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\"",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/inject-mail-notify.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/inject-mail-notify.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
             "timeout": 4
           }
         ]
@@ -118,23 +123,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/code-review-attest.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/code-review-attest.sh\""
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/codex-review-findings.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/codex-review-findings.sh\""
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex Stop"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex Stop"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/context-nudge.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/context-nudge.sh\""
           }
         ]
       }
@@ -145,12 +150,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/format-on-edit.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/format-on-edit.sh\"",
             "statusMessage": "formatting the edited file"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/edit-integrity.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/edit-integrity.sh\"",
             "statusMessage": "checking the edited file",
             "timeout": 10
           }
@@ -161,7 +166,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
             "statusMessage": "recording the refusal streak",
             "timeout": 4
           }
@@ -172,15 +177,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/claim-heartbeat.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/claim-heartbeat.sh\""
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
             "timeout": 3
           }
         ]
@@ -191,7 +196,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
           }
         ]
       }
@@ -201,7 +206,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
           }
         ]
       }
@@ -211,11 +216,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${PLUGIN_ROOT}/scripts/save-session.py\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 python3 \"${PLUGIN_ROOT}/scripts/save-session.py\""
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/precompact-canon-doc.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/precompact-canon-doc.sh\""
           }
         ]
       }
@@ -225,13 +230,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-post-compact",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-post-compact",
             "timeout": 50
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" compact",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" compact",
             "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/session-start-using-fno.sh\" PostCompact",
+            "timeout": 5
           }
         ]
       }
@@ -242,15 +252,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-session-start"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-session-start"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/codex-app-server-nudge-session-start.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/session-start-using-fno.sh\"",
+            "timeout": 5
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 \"${PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/codex-app-server-nudge-session-start.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\""
           }
         ]
       },
@@ -259,7 +274,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-whoami"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-whoami"
           }
         ]
       }

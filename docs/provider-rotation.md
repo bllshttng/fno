@@ -338,6 +338,8 @@ A source that fails to prove refuses as `ambiguous-slot: <source> failed to prov
 Two disagreeing sources refuse as `ambiguous-slot: <a> and <b> disagree`, and nothing live refuses as `expired-slot: <sources>`.
 
 The same rule reaches the usage probe. A slot proving more than one distinct principal reports `unknown`, however well the bearer it holds proves out. The platform split causes this. `claude` reads the scoped Keychain item first, while the probe reads the unscoped one. The earlier version counted credentials instead. A machine running a claude daemon always writes its own scoped Keychain item. One account presented twice therefore read as ambiguous, and the operator's own usage went dark.
+
+A managed account that is off the slot is measured through its own stored credential, the copy `register` captured. That copy can go stale or hold another account's login. So the probe first proves the bearer's principal against the record's bound principal. A match reads the inactive account's own windows. A mismatch reports `unattributed` and requests nothing. A dead stored token reads the same way, because the profile call that proves it answers 401 first. The Connections modal turns `unattributed` and `credential-rejected` into `r to log in`: the first `r` opens a `claude /login` pane, and the second `r` saves that login with `register`. Before this rule, every account except the slot occupant read `unknown` forever. The account an operator wanted to switch to had no number.
 Capture-before-overwrite reads the same candidates, so the two cannot disagree about which credential belongs to a record; with more than one distinct credential present it captures nothing, since a lost rotated token is recoverable with a login while another account's credential filed under this record is silent.
 The pin check runs before the profile call rather than after it, and the slot is re-read and compared before anything is written, so a writer that replaces the credential during that call and then exits refuses with `slot-changed` instead of getting its credential stamped under the proven account's name.
 A reconciliation against a store that does not exist yet returns `no-managed-store` without creating it: `matched` is the only outcome allowed to touch disk, and that includes the directory.
@@ -497,7 +499,7 @@ Every door that re-enters or re-launches a Claude session, and what fno does at 
 | `fno agents session resume`, live arm (`claude attach` wake) | yes | restore + wake + verify, or refuse (exit 2). Rust delegates to the Python implementation |
 | mux attach gestures (`AttachAgent`, open-here, split/drop, restore, picker) | yes | resolve through the same re-entry plan. A resolver refusal starts no pane. |
 | mux `ResumeAgent` gesture | yes | run the same re-entry plan in the selected pane, never bare provider argv |
-| `fno agents spawn --resume <uuid>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. |
+| `fno agents session resume <name>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. The spawn `--resume` fork door is retired. |
 | `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the verb refuses until `--session` names one. |
 | native background / left-arrow fork (Claude-owned) | yes, Claude's own | not blockable pre-transition. SessionStart observes and records the second id. |
 | explicit `--fork-session` / SessionStart `source=fork` | yes, Claude's own | same: apply the row's binding on any fno re-entry, and record the id |
@@ -729,7 +731,7 @@ This is Spec 1 of 4. Specs 2-4 extend the substrate with automation:
 
 **`fno`: command not found**
 
-To install `fno`, follow [Verify it worked](getting-started.md#verify-it-worked). In a dev checkout, run `uv run fno ...` from the `cli/` directory, or install the package into your virtualenv with `uv pip install -e cli/`.
+To install `fno`, follow [Verify it worked](install.md#verify-it-worked). In a dev checkout, run `uv run fno ...` from the `cli/` directory, or install the package into your virtualenv with `uv pip install -e cli/`.
 
 **OAuth refresh failing through the symlink**
 
@@ -1541,7 +1543,7 @@ When the resolved signal is `UNKNOWN` for any reason and the launch proceeds any
 
 `usage=never` names a record with no landed probe. `usage=<age> (STALE, ttl=<ttl>)` names a cached reading older than `probe_ttl_seconds`.
 
-`list` prints a footer naming whichever half is off. When neither knob is set, it reads `quota observation is OFF`. When only `observe` is set, it reads `observation is ON and rotation is DISARMED`. Both default off, so a fresh install never probes. The footer recommends `observe` first because it is the reversible half. This display gap is what let quota-aware dispatch go unobserved for months.
+`list` prints a footer naming whichever half is off. When neither knob is set, it reads `quota observation is OFF`. When only `observe` is set, it reads `observation is ON and rotation is DISARMED`. Both default off, so dispatch never probes. The daemon's usage-refresh arm (`crates/fno-agents/src/usage_refresh.rs`) still runs `usage --refresh` at four fifths of `probe_ttl_seconds`, never under a minute. At the 300-second default that is every 4 minutes, so the meter stays live on an idle machine. Opening the Connections modal also refreshes it. The footer recommends `observe` first because it is the reversible half. This display gap is what let quota-aware dispatch go unobserved for months.
 
 ### A partial reading, a missing reset, and how precise a reading is
 

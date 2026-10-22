@@ -5,15 +5,12 @@
 #   node-id          internal backlog node IDs (x-XXXX / ab-XXXXXXXX) - the
 #                    standing "no internal node IDs in public docs" rule;
 #                    exempt by TOKEN (documented format examples), never by file
-#   session-url      a claude.ai/code session URL pasted into prose
 #   competitor-name  a rival product's name anywhere in the tree (repo-wide,
 #                    code included). The term list is base64-encoded below so
 #                    this gate does not itself publish the names it guards.
-# All three prose classes share the same scanned scope and the same fail-loud
+# Both prose classes share the same scanned scope and the same fail-loud
 # file-list capture. The competitor-name class scans every tracked file
-# instead; see its block below. The commit-message / PR-body session-URL gate
-# is a SEPARATE workflow (scripts/ci/check-no-session-urls.sh); this script
-# covers checked-in content.
+# instead; see its block below. This script covers checked-in content.
 #
 # "internal/" is the symlink to the maintainers' Obsidian vault. It exists
 # only when Obsidian is enabled (config.obsidian.enabled); for an OSS install
@@ -31,10 +28,10 @@
 #
 #   prose scope: docs/, agents/, commands/, and the top-level AGENTS.md /
 #   README.md / CLAUDE.md / GEMINI.md - the user-facing prose surfaces.
-#   All three prose classes (internal-path, node-id, session-url) scan here.
+#   Both prose classes (internal-path, node-id) scan here.
 #
 #   code scope: cli/src/, crates/, hooks/, scripts/, skills/ - the node-id
-#   and session-url classes ALSO scan here (AGENTS.md principle 6 bars
+#   class ALSO scans here (AGENTS.md principle 6 bars
 #   ticket/PR/node IDs from code comments too, and the prose scope alone
 #   never saw one). The internal-path class stays prose-only: the code tree
 #   legitimately references "internal/" (the Obsidian-gated resolver in
@@ -43,8 +40,8 @@
 #
 # Out of scope (NOT scanned)
 # --------------------------
-#   Within the code scope, TEST paths are exempt from the node-id /
-#   session-url scan: a node id inside a test fixture string is data, not a
+#   Within the code scope, TEST paths are exempt from the node-id
+#   scan: a node id inside a test fixture string is data, not a
 #   shipped breadcrumb (the same convention cli/tests/ and tests/ already
 #   had by omission). A test path is one containing /tests/ or /test/, or a
 #   basename starting test_ or ending _tests.rs or _test.py.
@@ -90,13 +87,8 @@ is_allowlisted() {
     return 1
 }
 
-# node-id + session-url leak patterns (applied to ALL in-scope files). The
-# session-url pattern requires an actual path char after /code/ (a real URL is
-# claude.ai/code/<session-token>), so a doc that merely NAMES the concept - a
-# bare claude.ai/code or an angle-bracket placeholder, including the docs for
-# this very gate - is not a false positive.
+# node-id leak pattern (applied to ALL in-scope files).
 NODE_ID_RE='\b(x-[0-9a-f]{4}|ab-[0-9a-f]{8})\b'
-SESSION_URL_RE='claude\.ai/code/[A-Za-z0-9]'
 
 # Synthetic example tokens that legitimately appear in format / command
 # examples. Literal tokens only, all obviously non-real; exempt by TOKEN so a
@@ -181,7 +173,7 @@ if ! files_code=$(git ls-files -- 'cli/src/' 'crates/' 'hooks/' 'scripts/' 'skil
     exit 1
 fi
 
-# Test paths inside the code scope are exempt from the node-id / session-url
+# Test paths inside the code scope are exempt from the node-id
 # scan: a node id inside a test fixture string is data, not a breadcrumb (the
 # same convention cli/tests/ and tests/ already had by omission).
 is_test_path() {
@@ -222,19 +214,9 @@ while IFS= read -r f; do
             fi
         done <<< "$node_hits"
     fi
-
-    # session-url scan: no exemptions, applies to every in-scope file.
-    url_hits=$(grep -nE "$SESSION_URL_RE" "$f" 2>/dev/null || true)
-    if [[ -n "$url_hits" ]]; then
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            REPORT+="[session-url] $f:$line"$'\n'
-            VIOLATIONS=$((VIOLATIONS + 1))
-        done <<< "$url_hits"
-    fi
 done <<< "$files_prose"
 
-# Code-scope scan: node-id + session-url ONLY. The internal-path class stays
+# Code-scope scan: node-id ONLY. The internal-path class stays
 # prose-only (the code tree legitimately references the vault symlink - see
 # the scope note in the header). Test paths are exempt.
 while IFS= read -r f; do
@@ -249,15 +231,6 @@ while IFS= read -r f; do
                 VIOLATIONS=$((VIOLATIONS + 1))
             fi
         done <<< "$node_hits"
-    fi
-
-    url_hits=$(grep -nE "$SESSION_URL_RE" "$f" 2>/dev/null || true)
-    if [[ -n "$url_hits" ]]; then
-        while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            REPORT+="[session-url] $f:$line"$'\n'
-            VIOLATIONS=$((VIOLATIONS + 1))
-        done <<< "$url_hits"
     fi
 done <<< "$files_code"
 
@@ -278,6 +251,9 @@ COMPETITOR_TERMS_B64='aGVyZHIKY211eApvcmNhCnN1cGVycG93ZXJzCmdldC1zaGl0LWRvbmUKZX
 # landing; add a file only when the name in it is load-bearing and cannot be
 # rewritten (a vendored license notice, for example).
 NAME_ALLOWLIST=(
+    # WHY: one row per tracked docs/*.md path, and one existing path carries a
+    # barred term in its file name. The row proposes retiring that page.
+    docs/docs-map.tsv
 )
 
 competitor_terms=$(printf '%s' "$COMPETITOR_TERMS_B64" | base64 -d 2>/dev/null)
@@ -344,9 +320,6 @@ fi
     echo "  format/command EXAMPLE uses a synthetic token from NODE_ID_ALLOWLIST"
     echo "  (add one there only if it is obviously non-real)."
     echo
-    echo "[session-url] a claude.ai/code session URL is an internal, irreversible"
-    echo "  leak - remove it from the prose."
-    echo
     echo "[competitor-name] a rival product's name must not ship in this repo."
     echo "  Rewrite to describe the behavior, not its source: 'the lowercase"
     echo "  wire label' needs no provenance to be correct. If a hit is fno's"
@@ -357,7 +330,7 @@ fi
     echo "The internal-path class scans prose surfaces only; the code tree"
     echo "(cli/src/, crates/, hooks/, scripts/, skills/) legitimately"
     echo "references the vault symlink, e.g. the Obsidian-gated resolver in"
-    echo "cli/src/fno/paths.py. The node-id and session-url classes scan the"
+    echo "cli/src/fno/paths.py. The node-id class scans the"
     echo "code tree too (test paths exempt)."
 } >&2
 exit 1

@@ -121,7 +121,7 @@ staleness_days = 21
 # epic_max_open_children = <unset>   # optional; no default
 # Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads it from the config.toml beside graph.json.
 max_open_ideas = 25
-# Auto-rendered boards (GLOBAL config file only): every graph mutation re-renders each {path, scope, projection=local|backlog|roadmap} target; local (the default) writes the unified board page, backlog and roadmap are retired and warn-skip.
+# Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file).
 render_targets = []
 # Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
 page_reload_s = 60
@@ -207,6 +207,10 @@ peers = []
 # peer_identity = <unset>   # optional; no default
 # Optional legacy carrier: env var holding the PAT for peer_identity used to post peer reviews to the PR.
 # peer_token_env = <unset>   # optional; no default
+# The distinct GitHub login the reviewer lane's bot-review mirror posts under (must not be the PR author: GitHub silently demotes an author's approving review to COMMENTED). Unset skips the bot-review leg of publish-review entirely, before any network call.
+# bot_identity = <unset>   # optional; no default
+# Optional env var holding the PAT for review.bot_identity, used to post the verdict to the PR as the bot.
+# bot_token_env = <unset>   # optional; no default
 # Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.
 # optional_apps = <unset>   # optional; no default
 # Per-App override for the bot-review nudge, as [review.nudge.<login>] tables with {review_handle, wait_minutes, ceiling, enabled}. A github_apps bot that reviews on MENTION not on push never reviews unless something posts its trigger; the loop-check stop gate posts review_handle (default from the built-in profile), waits wait_minutes (default 15), and after ceiling (default 3) unanswered nudges gives up rather than idling to the budget ceiling. enabled=false opts a repo back into plain block-and-wait. Ships populated for chatgpt-codex-connector, which wears three distinct names for one bot: match the review-author login chatgpt-codex-connector, trigger a fresh review with '@codex review', and address an in-thread reply to '@chatgpt-codex-connector'.
@@ -327,7 +331,7 @@ fallback = {}
 silence_deadline_seconds = 600
 # Agent-launch confirmation policy (auto/always/never).
 confirm = "auto"
-# Auto-join every hand-started session to the roster at SessionStart (default false = opt-in via /fno-me). Spawned workers register regardless.
+# Auto-join every hand-started session to the roster at SessionStart (default false: a session joins at its first fno skill or command, or via /fno-me). Spawned workers register regardless.
 auto_register_sessions = false
 # Launch routed claude panes through happy for remote monitoring; default false and pane-only.
 happy_routed_panes = false
@@ -767,6 +771,8 @@ interval_secs = 5
 http_timeout_secs = 5
 # Retry budget per webhook dispatch before drop/short-circuit.
 retries = 2
+# Seconds a short-circuited status sink stays parked before the next retry; 0 retries every tick.
+short_circuit_backoff_secs = 300
 
 [lead]
 # Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false.

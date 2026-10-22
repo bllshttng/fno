@@ -233,6 +233,8 @@ The helper writes a minimal `config.toml` and sets `FNO_CONFIG`. The settings ca
 
 Confirm with a read before the first write: `fno backlog get <live node id>` must answer "No node matching". A read that returns the live node means the sandbox is not on. Do not write.
 
+The Rust legs read two more locations past `FNO_CONFIG`. They read the global config at `~/.fno/config.toml`, so a global `store.share_backlog = true` still syncs the sandbox with the shared primary. Set `FNO_GLOBAL_SETTINGS_PATH=<tmp dir>/settings.yaml` so the global config resolves to `<tmp dir>/config.toml`. The board renderer reads the graph at `FNO_GRAPH_JSON`, else `~/.fno`, so also set `FNO_GRAPH_JSON=<state dir>/graph.json` and `FNO_STATE_DIR=<state dir>`. `scripts/ops/mux-demo-snapshot.sh` also sets `HOME`, so the mux sideline lists no real sessions.
+
 Known leak: the graph.html render can still drop a file in `~/.fno` under this recipe, even though the store itself stays in the sandbox. A later fix retires this note.
 
 ## Settings cache key
