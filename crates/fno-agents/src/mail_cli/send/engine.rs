@@ -1834,10 +1834,9 @@ pub(super) fn peer_project_hints(start: &Path) -> std::collections::HashMap<Stri
                     .and_then(Value::as_object)
             });
             for (name, block) in peers.into_iter().flatten() {
-                if let Some(p) = block.get("project").and_then(Value::as_str) {
-                    if !p.is_empty() {
-                        out.insert(name.clone(), p.to_string());
-                    }
+                let project = block.get("project").and_then(Value::as_str);
+                if let Some(p) = project.filter(|p| !p.is_empty()) {
+                    out.insert(name.clone(), p.to_string());
                 }
             }
             return out;

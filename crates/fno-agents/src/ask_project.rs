@@ -13,7 +13,10 @@ pub fn take_flag(
     if flag == "--any" {
         params.insert("any".into(), Value::Bool(true));
     } else {
-        let project = it.next().ok_or("--to-project needs a value")?;
+        let project = it
+            .next()
+            .filter(|p| !p.is_empty())
+            .ok_or("--to-project needs a project")?;
         params.insert("to_project".into(), Value::String(project));
     }
     Ok(())

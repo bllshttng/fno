@@ -515,6 +515,8 @@ fn ask_rows() {
     )
     .unwrap_err();
     assert!(err.contains("--to-project"), "{err}");
+    let err = build_request("ask", &["--to-project=".to_string(), "hi".to_string()]).unwrap_err();
+    assert!(err.contains("needs a project"), "{err}");
     // AC3 (Rust path, equals form): the retired --provider spelling is a
     // tombstone in both syntaxes - it must NOT silently route.
     let err = build_request(
