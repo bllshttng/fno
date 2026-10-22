@@ -295,6 +295,7 @@ fn ac3_hp_the_release_retires_the_ruled_row_and_keeps_the_rest() {
         &no_agents,
         &|_| (None, None),
         &|_| None,
+        false,
         Some(&release),
     );
 
@@ -355,6 +356,7 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
         &no_agents,
         &|_| (None, None),
         &|_| None,
+        false,
         Some(&release),
     );
 
@@ -670,7 +672,9 @@ fn ac2_hp_dead_worker_on_in_progress_node_is_kept_and_laddered() {
         let home = tmp_home("gc-dead-work-guess");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
-        let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
+        // Inside the origin ruling's idle hour: the stale keep this shape
+        // asserts needs an age past the old grace but inside the hour.
+        let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 1800);
         let mention = transcripts.path().join("mention.jsonl");
         std::fs::write(
             &mention,
@@ -749,7 +753,10 @@ fn ac2_hp_dead_worker_on_in_progress_node_is_kept_and_laddered() {
         let home = tmp_home("gc-dead-work-claimheld");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
-        let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
+        // Inside the origin ruling's idle hour: the row's open-work keep
+        // (and the nothing-retires assertion below) needs an age past the
+        // old grace but inside the hour.
+        let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 1800);
         state::update_registry(&home.registry_json(), |r| {
             let mut row = claude_worker_row("held-row", "ffff2222");
             row.origin = Some("spawn".into());
@@ -832,23 +839,24 @@ fn ac2_hp_dead_worker_on_in_progress_node_is_kept_and_laddered() {
     }
 }
 
-/// A blocked row WITH a pid is a live session: it keeps under the ordinary
-/// open-work reasons and is never laddered as a dead worker.
+/// A blocked row WITH a pid is never laddered as a dead worker: a live
+/// process is not a lost one. But a roster pid is not liveness for the
+/// reaper either (the 2026-10-21 origin ruling): the row's 2h-old
+/// transcript is past the one idle hour, so the row retires on the idle
+/// gate whatever its roster state answers.
 #[test]
-fn a_blocked_row_with_a_pid_stays_open_work_and_is_not_laddered() {
+fn a_blocked_row_with_a_pid_is_not_laddered_and_idles_out_past_the_hour() {
     let agents = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
         crate::claude_roster::ClaudeAgentRow::new("cccc9999", Some("blocked")).with_pid(Some(5003)),
         crate::claude_roster::ClaudeAgentRow::new("peer0001", Some("working")).with_pid(Some(5001)),
     ]);
     let summary = dead_work_sweep("gc-dead-work-alive", agents, false);
     assert_eq!(summary.dead_work_rows, vec![]);
-    assert_eq!(summary.retired, vec![]);
-    // A live row on open work keeps under either open-work reason: the
-    // 2h-old fixture transcript sits inside the retire window, so the stale
-    // bucket is the one that names it.
+    assert_eq!(summary.retired.len(), 1, "{summary:?}");
+    assert_eq!(summary.retired[0].0, "cccc9999");
     assert!(
-        !summary.kept_open_work.is_empty() || !summary.kept_open_work_stale.is_empty(),
-        "the ordinary open-work keep holds: {:?} / {:?}",
+        summary.kept_open_work.is_empty() && summary.kept_open_work_stale.is_empty(),
+        "no open-work keep survives a spent idle hour: {:?} / {:?}",
         summary.kept_open_work,
         summary.kept_open_work_stale
     );
