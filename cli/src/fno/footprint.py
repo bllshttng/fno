@@ -369,6 +369,7 @@ def parse_footprint(
     }
     excluded_cache: dict[int, bool] = {}
     attributed_cache: dict[int, bool] = {}
+    owned_cache: dict[int, bool] = {}
     attributed_marks = frozenset(p for p, d in direct.items() if d)
 
     def chain_reaches(pid: int, marks: frozenset[int], cache: dict[int, bool]) -> bool:
@@ -424,7 +425,9 @@ def parse_footprint(
             measured_cpu_percent += process.cpu_percent
             if is_test_runner(process.command):
                 test_process_count += 1
-            if is_claude_spare_pool(process.command):
+            if is_claude_spare_pool(process.command) and not chain_reaches(
+                pid, attributed_roots, owned_cache
+            ):
                 spare_pool_count += 1
                 spare_pool_cpu_percent += process.cpu_percent
         if not is_attributed(pid):

@@ -204,6 +204,22 @@ def test_ac_hp_spare_pool_rows_are_counted_but_never_fleet_attributed() -> None:
     assert reading.process_count == 1
 
 
+def test_a_claimed_spare_that_a_live_session_owns_is_not_the_pool() -> None:
+    """A claimed spare keeps its bg-spare argv while it runs a session."""
+    reading = parse_footprint(
+        """\
+        PID PPID ELAPSED %CPU RSS COMMAND
+        300 1 00:05:00 15.0 118784 {bg_spare}
+        301 1 00:05:00 12.0 118784 {bg_spare}
+        302 300 00:05:00 10.0 118784 {bg_spare}
+        """.format(bg_spare=_BG_SPARE),
+        attributed_root_pids={300},
+    )
+
+    assert reading.spare_pool_process_count == 1
+    assert reading.spare_pool_cpu_cores == 0.12
+
+
 _GOOD_ROW = "100 1 01:00:00 20.0 1024 fno-agents-worker --run"
 
 
