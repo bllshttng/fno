@@ -31,7 +31,6 @@ class Footprint(NamedTuple):
     direct_process_count: int
     transient_call_count: int
     process_count: int
-    rss_gb: float
     measured_cpu_cores: float
     top: list[tuple[float, str]]
     unparsed_lines: int
@@ -49,13 +48,14 @@ class Footprint(NamedTuple):
     # name them sends its reader after the wrong cause.
     spare_pool_process_count: int = 0
     spare_pool_cpu_cores: float = 0.0
-    spare_pool_rss_gb: float = 0.0
     # Whole-machine census (AC10), beside the roster-scoped counts.
     machine_process_count: int = 0
     runnable_count: int = 0
     # Masked unparsed-row evidence; unparsed_pids feeds the root arm.
     unparsed_samples: tuple[UnparsedRow, ...] = ()
     unparsed_pids: frozenset[int] = frozenset()
+    # Physical footprint by group, read by the Rust census door (memory_groups.rs).
+    memory: dict | None = None
 
 
 class UnparsedRow(NamedTuple):
@@ -148,7 +148,6 @@ class _Process(NamedTuple):
     ppid: int | None
     elapsed_seconds: int
     cpu_percent: float
-    rss_kb: int
     command: str
     # ps state letter(s); empty when the snapshot has no state column.
     state: str = ""
@@ -359,7 +358,7 @@ def parse_footprint(
             if len(samples) < _MAX_UNPARSED_SAMPLES:
                 samples.append(UnparsedRow(row_number, salvaged, _unparsed_reason(line, new_format, new_state_format), _mask_row(line)))
             continue
-        processes[pid] = _Process(pid, ppid, elapsed, cpu_percent, rss, command, state)
+        processes[pid] = _Process(pid, ppid, elapsed, cpu_percent, command, state)
 
     excluded = frozenset(excluded_root_pids or ())
     attributed_roots = frozenset(attributed_root_pids or ())
@@ -415,13 +414,11 @@ def parse_footprint(
     descendant_process_count = 0
     direct_process_count = 0
     process_count = 0
-    rss_kb = 0
     measured_cpu_percent = 0.0
     sustained: list[tuple[float, str]] = []
     test_process_count = 0
     spare_pool_count = 0
     spare_pool_cpu_percent = 0.0
-    spare_pool_rss_kb = 0
     for pid, process in processes.items():
         if not is_excluded(pid):
             measured_cpu_percent += process.cpu_percent
@@ -430,12 +427,10 @@ def parse_footprint(
             if is_claude_spare_pool(process.command):
                 spare_pool_count += 1
                 spare_pool_cpu_percent += process.cpu_percent
-                spare_pool_rss_kb += process.rss_kb
         if not is_attributed(pid):
             continue
 
         process_count += 1
-        rss_kb += process.rss_kb
         if not direct[pid]:
             descendant_process_count += 1
             descendant_cpu_percent += process.cpu_percent
@@ -463,7 +458,6 @@ def parse_footprint(
         direct_process_count=direct_process_count,
         transient_call_count=transient_call_count,
         process_count=process_count,
-        rss_gb=rss_kb / (1024 * 1024),
         measured_cpu_cores=measured_cpu_percent / 100,
         top=sustained,
         unparsed_lines=unparsed_lines,
@@ -472,7 +466,6 @@ def parse_footprint(
         test_process_count=test_process_count,
         spare_pool_process_count=spare_pool_count,
         spare_pool_cpu_cores=spare_pool_cpu_percent / 100,
-        spare_pool_rss_gb=spare_pool_rss_kb / (1024 * 1024),
         machine_process_count=len(processes),
         runnable_count=sum(
             1 for process in processes.values() if process.state.startswith("R")
