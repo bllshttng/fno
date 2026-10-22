@@ -6,7 +6,6 @@ import shutil
 import stat
 import sys
 import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
@@ -57,58 +56,25 @@ def _bundled_helper(name: str) -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-def _is_retired_script(path: Path) -> bool:
-    # The console script for the entry point pr port 7 retired. Its import
-    # dies on any fno newer than its own interpreter's, which is the stale
-    # dev-venv link that broke every gh read on 2026-10-22.
+def _helper_resolvable() -> bool:
+    """True when the bare ``fno-gh-proxy`` name the wrapper execs resolves:
+    on PATH, co-located in the wheel's ``_bin``, or beside the interpreter.
+    Without it the wrapper would strand every gh call behind a not-found
+    exec (the symlink that backs the bare name is skipped), so the
+    installers degrade and leave the real gh unswrapped."""
+    if shutil.which("fno-gh-proxy"):
+        return True
+    if _bundled_helper("fno-gh-proxy") is not None:
+        return True
+    return Path(sys.executable).with_name("fno-gh-proxy").is_file()
+
+
+def _is_retired_script(path: str) -> bool:
     try:
-        with path.open("rb") as handle:
+        with open(path, "rb") as handle:
             return b"from fno.pr.gh_proxy import main" in handle.read(4096)
     except OSError:
         return False
-
-
-def _resolve_helper(root: Path) -> Optional[Path]:
-    """The ``fno-gh-proxy`` the shim's link points at: on PATH, co-located in
-    the wheel's ``_bin``, or beside the interpreter. The PATH search skips
-    ``root``, where the link itself would answer for its own stale target."""
-    own = os.path.realpath(root)
-    on_path = [
-        Path(found)
-        for part in os.environ.get("PATH", "").split(os.pathsep)
-        if part and os.path.realpath(part) != own
-        if (found := shutil.which("fno-gh-proxy", path=part))
-    ]
-    for candidate in (
-        *on_path,
-        _bundled_helper("fno-gh-proxy"),
-        Path(sys.executable).with_name("fno-gh-proxy"),
-    ):
-        if candidate is not None and candidate.is_file() and not _is_retired_script(candidate):
-            return candidate
-    return None
-
-
-def _helper_resolvable() -> bool:
-    """True when a helper exists for the bare ``fno-gh-proxy`` name the
-    wrapper execs. Without it the wrapper would strand every gh call behind
-    a not-found exec, so the installers degrade and leave the real gh
-    unswrapped."""
-    return _resolve_helper(github_cli_proxy_dir()) is not None
-
-
-def _link_helper(root: Path, helper: Path) -> bool:
-    """Point ``root/fno-gh-proxy`` at ``helper``. True when the link
-    changed. A link left on an old target outlives the install it named, so
-    a mismatch is replaced, never kept."""
-    link = root / "fno-gh-proxy"
-    if link.is_symlink() and os.path.realpath(link) == os.path.realpath(helper):
-        return False
-    staged = root / f".fno-gh-proxy.{os.getpid()}"
-    staged.unlink(missing_ok=True)
-    staged.symlink_to(helper)
-    os.replace(staged, link)
-    return True
 
 
 def _is_wrapper(path: Path) -> bool:
@@ -130,23 +96,43 @@ def ensure_proxy(
         raise FileNotFoundError("real gh executable not found on PATH")
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
-    helper = _resolve_helper(root)
+    link = root / "fno-gh-proxy"
+    # Skip the link's own dir (it would answer for its own stale target) and
+    # the console script pr port 7 retired: its import dies on a newer fno.
+    found = (
+        shutil.which("fno-gh-proxy", path=part)
+        for part in os.environ.get("PATH", "").split(os.pathsep)
+        if part and os.path.realpath(part) != os.path.realpath(root)
+    )
+    helper = next((h for h in found if h and not _is_retired_script(h)), None)
+    if not helper:
+        bundled = _bundled_helper("fno-gh-proxy")
+        if bundled is not None:
+            helper = str(bundled)
+    if not helper:
+        sibling = Path(sys.executable).with_name("fno-gh-proxy")
+        helper = str(sibling) if sibling.is_file() else None
     if helper is None:
         # Nothing provides the name the wrapper execs, so the install would
         # strand every gh call behind a not-found exec. Degrade: leave the
         # real gh unswrapped and let the quota policy stand down for this
         # process tree.
         return InstallResult(proxy=resolved, delegate=resolved, changed=False)
-    relinked = _link_helper(root, helper)
+    # A link left on an old target outlives the install it named: replace it.
+    relinked = os.path.realpath(link) != os.path.realpath(helper)
+    if relinked:
+        staged = root / f".fno-gh-proxy.{os.getpid()}"
+        staged.unlink(missing_ok=True)
+        staged.symlink_to(helper)
+        os.replace(staged, link)
     proxy = root / "gh"
     resolved = resolved.resolve()
     if resolved == proxy.resolve():
         raise RuntimeError("resolved gh delegate points back to the Footnote proxy")
 
     backup = None
-    rewrap = not proxy.exists() or not _is_wrapper(proxy)
-    changed = rewrap or relinked
-    if rewrap:
+    changed = not proxy.exists() or not _is_wrapper(proxy)
+    if changed:
         if proxy.exists():
             backup = proxy.with_name("gh.pre-fno")
             if not backup.exists():
@@ -162,7 +148,7 @@ def ensure_proxy(
             os.replace(tmp, proxy)
         finally:
             Path(raw_tmp).unlink(missing_ok=True)
-    return InstallResult(proxy=proxy, delegate=resolved, changed=changed, backup=backup)
+    return InstallResult(proxy=proxy, delegate=resolved, changed=changed or relinked, backup=backup)
 
 
 def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
@@ -218,10 +204,6 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
             except Exception:
                 keep = True
         if keep:
-            helper = _resolve_helper(parent)
-            if helper is not None:
-                with suppress(OSError):
-                    _link_helper(parent, helper)
             env[_PROXY_DIR_ENV] = str(parent)
             env.pop("FNO_REAL_GH", None)
             return env
