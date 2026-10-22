@@ -11,9 +11,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from fno.paths_testing import use_tmpdir
 
 
+@pytest.mark.dev_build
 def test_ac1_manifest_written_by_init_carries_shape_pass(tmp_path: Path) -> None:
     from fno.lead.state import lead_manifest_path, parse_manifest, write_manifest
 

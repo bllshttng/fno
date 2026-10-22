@@ -49,6 +49,7 @@ def _init(team, scope: str):
     )
 
 
+@pytest.mark.dev_build
 def test_promoting_output_names_the_settled_children(team) -> None:
     _seed(
         [

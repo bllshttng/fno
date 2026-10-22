@@ -18,6 +18,9 @@ from fno.agents.registry import AgentEntry, load_registry, update_registry
 from fno.lead.state import lead_manifest_path, lead_state_root, write_manifest
 from fno.paths_testing import use_tmpdir
 
+# The manifest fixtures write through the Rust creator.
+pytestmark = pytest.mark.dev_build
+
 CALLER_SESSION = "0c1f2f9a-1111-4000-8000-000000000001"
 SCOPE = "epic-x"
 

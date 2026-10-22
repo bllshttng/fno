@@ -12,6 +12,7 @@ from tests.fixtures.graph_seed import seed_graph
 import json
 from pathlib import Path
 
+import pytest
 
 from fno.paths_testing import use_tmpdir
 
@@ -287,6 +288,7 @@ def _agreeing_reader(scope: str, session: str) -> dict:
     }
 
 
+@pytest.mark.dev_build
 def test_team_names_the_manifest_and_role_source_per_scope(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -332,6 +334,7 @@ def test_team_names_the_manifest_and_role_source_per_scope(
     assert team["summary"]["splits"] == 0
 
 
+@pytest.mark.dev_build
 def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -379,6 +382,7 @@ def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
     assert team["summary"]["splits"] == 1
 
 
+@pytest.mark.dev_build
 def test_a_manifest_role_survives_its_project_having_no_rows_at_all(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -419,6 +423,7 @@ def test_a_manifest_role_survives_its_project_having_no_rows_at_all(
     assert "no live registry row" in orphan["reason"]
 
 
+@pytest.mark.dev_build
 def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
     tmp_path: Path, monkeypatch
 ) -> None:

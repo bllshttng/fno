@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from fno.paths import space_dir
 
 
@@ -17,6 +19,7 @@ def _cancel(*args: str):
     return CliRunner().invoke(agents_lead_app, ["cancel", *args])
 
 
+@pytest.mark.dev_build
 def test_lead_state_root_from_linked_worktree_is_canonical(
     tmp_path: Path, monkeypatch, loop_admission_ready
 ) -> None:
@@ -66,6 +69,7 @@ def test_lead_state_root_from_linked_worktree_is_canonical(
     assert str(leads / "cli.md") in result.output
 
 
+@pytest.mark.dev_build
 def test_lead_cancel_sets_signal_and_emits_event(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
