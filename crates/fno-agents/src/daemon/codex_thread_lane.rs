@@ -36,6 +36,25 @@ pub(super) async fn spawn_codex_thread_lane(
         );
     }
     let model = req.params.get("model").and_then(Value::as_str);
+    // Fenced `--` tokens the front door carried here BECAUSE this lane takes
+    // them. A token the lane does not carry is a router bug, refused by name
+    // rather than dropped: the operator typed it expecting it to land.
+    let harness_args: Vec<String> = req
+        .params
+        .get("harness_args")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let carry = match crate::codex_thread::parse_harness_args(&harness_args) {
+        Ok(carry) => carry,
+        Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
+    };
     // Both spellings, resolved by one reader. Reading `yolo` alone dropped
     // `permission_mode` silently and started bounded, which downgrades the very
     // posture the caller was naming; an unrecognized value is refused here
@@ -44,12 +63,20 @@ pub(super) async fn spawn_codex_thread_lane(
     // resume, never a bool.
     let posture = match crate::codex_thread::resolve_thread_posture(
         req.params.get("yolo").and_then(Value::as_bool),
-        req.params.get("permission_mode").and_then(Value::as_str),
+        // A fenced flag is what the operator typed on this spawn, so it
+        // outranks the request's config-injected value.
+        carry
+            .permission_mode
+            .as_deref()
+            .or(req.params.get("permission_mode").and_then(Value::as_str)),
     ) {
         Ok(posture) => posture,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
-    let effort = req.params.get("effort").and_then(Value::as_str);
+    let effort = carry
+        .effort
+        .as_deref()
+        .or(req.params.get("effort").and_then(Value::as_str));
     let node = req.params.get("node").and_then(Value::as_str);
     // The role rides the request so the row is promoted AT MINT: the seed
     // turn below enqueues inside this lane, and a role settled by the
@@ -88,25 +115,6 @@ pub(super) async fn spawn_codex_thread_lane(
                 .collect()
         })
         .unwrap_or_default();
-    // Fenced `--` tokens the front door carried here BECAUSE this lane takes
-    // them. A token the lane does not carry is a router bug, refused by name
-    // rather than dropped: the operator typed it expecting it to land.
-    let harness_args: Vec<String> = req
-        .params
-        .get("harness_args")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    let carry = match crate::codex_thread::parse_harness_args(&harness_args) {
-        Ok(carry) => carry,
-        Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
-    };
     let mut state_dirs = state_dirs;
     for dir in carry.add_dirs {
         if !state_dirs.iter().any(|existing| existing == &dir) {

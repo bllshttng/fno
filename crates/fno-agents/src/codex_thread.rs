@@ -2601,12 +2601,17 @@ pub struct HarnessCarry {
     pub add_dirs: Vec<String>,
     /// `--model`/`-m`: the thread's model, the last one winning.
     pub model: Option<String>,
+    /// `--effort`: the reasoning level, read as the typed effort axis.
+    pub effort: Option<String>,
+    /// `--permission-mode`: codex's `sandbox:approval` pair or a shortcut,
+    /// read as the typed permission axis.
+    pub permission_mode: Option<String>,
 }
 
 /// Parse the fenced `--` tokens a spawn routed to this lane. Only the
 /// spellings the codex CLI itself takes are accepted: `-c`/`--config
-/// key=value`, `--add-dir <dir>`, `--model`/`-m <model>` and `--effort <level>`
-/// (a `model_reasoning_effort` config pair), two-token or
+/// key=value`, `--add-dir <dir>`, `--model`/`-m <model>`, `--effort <level>`
+/// and `--permission-mode <mode>` (the last two are the typed axes), two-token or
 /// `=`-joined on the long
 /// forms. Anything else is a front-door contract break - the spawn front
 /// door demotes a flag this lane cannot carry to the pane, so a stray token
@@ -2626,12 +2631,17 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
         config: serde_json::Map::new(),
         add_dirs: Vec::new(),
         model: None,
+        effort: None,
+        permission_mode: None,
     };
     let mut values = tokens.iter();
     while let Some(token) = values.next() {
         let (flag, inline): (&str, Option<&str>) = match token.split_once('=') {
             Some((flag, rest))
-                if matches!(flag, "--config" | "--add-dir" | "--model" | "--effort") =>
+                if matches!(
+                    flag,
+                    "--config" | "--add-dir" | "--model" | "--effort" | "--permission-mode"
+                ) =>
             {
                 (flag, Some(rest))
             }
@@ -2640,19 +2650,19 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
         match (flag, inline) {
             ("--add-dir", Some(dir)) => carry.add_dirs.push(dir.to_string()),
             ("--model", Some(model)) => carry.model = Some(model.to_string()),
-            // codex spells reasoning effort as a config key; the
-            // effort_surface owner holds the same mapping for the pane lanes.
-            ("--effort", inline) => {
+            ("--effort" | "--permission-mode", inline) => {
                 let value = match inline {
                     Some(v) => v.to_string(),
                     None => values
                         .next()
                         .cloned()
-                        .ok_or("--effort arrives with no level")?,
+                        .ok_or_else(|| format!("{flag} arrives with no value"))?,
                 };
-                carry
-                    .config
-                    .insert("model_reasoning_effort".to_string(), json!(value));
+                if flag == "--effort" {
+                    carry.effort = Some(value);
+                } else {
+                    carry.permission_mode = Some(value);
+                }
             }
             ("--model", None) | ("-m", None) => match values.next() {
                 Some(model) => carry.model = Some(model.clone()),
@@ -2680,7 +2690,7 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
             _ => {
                 return Err(format!(
                     "harness token {token:?} is not one the codex thread lane carries \
-                     (-c/--config key=value, --add-dir dir, --model model, --effort level); the spawn front door owns \
+                     (-c/--config key=value, --add-dir dir, --model model, --effort level, --permission-mode mode); the spawn front door owns \
                      the -- fence and should have routed it to the pane"
                 ));
             }
@@ -2969,14 +2979,19 @@ mod tests {
             "the refusal names the flag: {error}"
         );
 
-        // --effort is codex's `model_reasoning_effort` config key; a flag
-        // codex has no spelling for (--permission-mode) refuses by name.
-        let effort = parse_harness_args(&["--effort".to_string(), "xhigh".to_string()]).unwrap();
-        assert_eq!(effort.config["model_reasoning_effort"], json!("xhigh"));
-        let error = parse_harness_args(&["--permission-mode".to_string(), "plan".to_string()])
-            .err()
-            .expect("codex has no --permission-mode");
-        assert!(error.contains("--permission-mode"), "{error}");
+        // --effort and --permission-mode are the typed axes, not config pairs.
+        let typed = parse_harness_args(&[
+            "--effort".to_string(),
+            "xhigh".to_string(),
+            "--permission-mode=workspace-write:never".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(typed.effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            typed.permission_mode.as_deref(),
+            Some("workspace-write:never")
+        );
+        assert!(typed.config.is_empty());
     }
 
     /// The turn replaces the WHOLE policy, so a bounded thread whose server

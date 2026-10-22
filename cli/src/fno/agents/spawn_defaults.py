@@ -829,6 +829,10 @@ def _scan_projection(tail: Sequence[str]) -> dict:
         from fno.agents.mux_spawn import passthrough_model
 
         has_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :]) is not None
+    # The head spelling of --effort lands behind the fence too, so a fenced
+    # one is the operator's choice and a config default must not stack on it.
+    if "--" in tail and not has_effort:
+        has_effort = _flag_value(list(tail)[list(tail).index("--") + 1 :], "--effort") is not None
     explicit_vendor = _flag_value(tail, "--provider", "-P")
     explicit_route = _flag_present(tail, "--route")
     role = _role_of(tail)
