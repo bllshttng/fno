@@ -2772,14 +2772,6 @@ event_types:
       properties:
         name: { type: string }
         reason: { type: string }
-  - name: salvage_ref_pruned
-    description: "The daemon deleted a recovery/* salvage ref whose stray changes already sit on origin/main. The sha recovers it with git branch."
-    sources: [daemon]
-    data:
-      required: [ref, sha]
-      properties:
-        ref: { type: string }
-        sha: { type: string }
   - name: agent_followup_started
     description: "An fno-agents followup ask started against a live registry entry."
     sources: [daemon, agents]

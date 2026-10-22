@@ -704,7 +704,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             break;
         }
     }
-    prune_salvage_refs(&registry, &dir, &emitter, now)?;
+    prune_salvage_refs(&registry, &dir, now)?;
     Ok(())
 }
 
@@ -715,7 +715,6 @@ const SALVAGE_PRUNE_INTERVAL_SECS: i64 = 3600;
 fn prune_salvage_refs(
     registry: &crate::state::Registry,
     dir: &Path,
-    emitter: &crate::events::EventEmitter,
     now: i64,
 ) -> Result<(), String> {
     let stamp = dir.join("salvage-prune.epoch");
@@ -736,12 +735,7 @@ fn prune_salvage_refs(
             }
         };
         for p in pruned {
-            emitter
-                .emit(
-                    "salvage_ref_pruned",
-                    &json!({"ref": p.refname, "sha": p.sha}),
-                )
-                .map_err(|e| e.to_string())?;
+            eprintln!("salvage ref pruned {}: {}", p.refname, p.sha);
         }
     }
     std::fs::write(&stamp, now.to_string()).map_err(|e| e.to_string())
