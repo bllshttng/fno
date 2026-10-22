@@ -168,6 +168,14 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr-worktree") {
         std::process::exit(fno_agents::pr_worktree::run());
     }
+    if args.first().map(String::as_str) == Some("do")
+        && args.get(1).map(String::as_str) == Some("pr")
+    {
+        std::process::exit(fno_agents::pr_front::run(&args[2..]));
+    }
+    if args.first().map(String::as_str) == Some("pr") {
+        std::process::exit(fno_agents::pr_front::run(&args[1..]));
+    }
     // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
     // base-lineage reach it through verb_call; transport-only.
     if args.first().map(String::as_str) == Some("gh-cache") {

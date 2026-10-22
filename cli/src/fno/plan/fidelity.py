@@ -217,18 +217,36 @@ def _plan_frontmatter(plan_file: Path) -> dict:
 
 def _read_pr_body(pr_number: int, repo_root: Optional[str]) -> Optional[str]:
     """REST read, never `gh pr view` (the GraphQL reserve refuses it)."""
+    import json
+
     from fno import paths as _paths
-    from fno.pr._proc import run
+    from fno.graph._reconcile import resolve_current_repo_slug
+    from fno.rust_binary import call_binary_json
 
     try:
         cwd = repo_root or str(_paths.resolve_repo_root())
-        res = run(
-            ["gh", "api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}", "--jq", ".body"],
-            cwd=cwd, timeout=30,
+        slug = resolve_current_repo_slug(cwd) or ""
+        error, row = call_binary_json(
+            "authorized-merge",
+            [
+                json.dumps(
+                    {
+                        "op": "status-rest-get",
+                        "cwd": cwd,
+                        "path": f"repos/{slug}/pulls/{pr_number}",
+                    }
+                )
+            ],
+            timeout=60,
         )
     except Exception:  # noqa: BLE001 - any read failure is unreadable
         return None
-    return res.stdout if res.ok else None
+    if error is not None or not isinstance(row, dict) or not row.get("ok"):
+        return None
+    try:
+        return (json.loads(row.get("stdout") or "")).get("body")
+    except ValueError:
+        return None
 
 
 def _body_carveout_refusal(pr_body: str) -> Optional[str]:

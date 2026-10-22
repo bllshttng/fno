@@ -29,8 +29,8 @@ fail() { FAIL=$((FAIL+1)); printf '[heartbeat] FAIL: %s\n' "$*" >&2; }
 command -v jq >/dev/null 2>&1 || { echo "[heartbeat] SKIP: jq not on PATH"; exit 77; }
 
 # setup_env: build a tmp project with a manifest + stubbed `fno`/`fno-agents`
-# on PATH. The hook's claim traffic runs through the native `fno-agents` leaf;
-# its PR binder still runs through `fno`. Env knobs read by the
+# on PATH. The hook's claim traffic and its PR binder both run through the
+# native `fno-agents` leaf. Env knobs read by the
 # stubs: STUB_HOLDER/STATE/STATUS_JSON, STUB_REFRESH_RC, STUB_BIND_RC/OUTPUT.
 # Every claim call (either binary) is appended to $CALLLOG; the state-path
 # reads go to $AGENTSLOG. Sets: TMP_DIR CWD CALLLOG (and prepends the stubs
@@ -62,18 +62,6 @@ EOF
   cat > "${bindir}/fno" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "${CALLLOG}"
-case "\$1 \$2" in
-  "do pr")
-    [[ "\${3:-}" == "bind-created" ]] || exit 0
-    printf '%s\n' "\${STUB_BIND_OUTPUT:-{\"outcome\":\"bound\"}}"
-    [[ -n "\${STUB_BIND_SLEEP:-}" ]] && sleep "\$STUB_BIND_SLEEP"
-    exit "\${STUB_BIND_RC:-0}"
-    ;;
-  "pr bind-created")
-    echo "deprecated pr root reached" >&2
-    exit 2
-    ;;
-esac
 exit 0
 EOF
   chmod +x "${bindir}/fno"
@@ -90,6 +78,13 @@ EOF
   : > "$AGENTSLOG"
   cat > "${bindir}/fno-agents" <<EOF
 #!/usr/bin/env bash
+if [[ "\${1:-} \${2:-}" == "do pr" ]]; then
+  echo "\$*" >> "${CALLLOG}"
+  [[ "\${3:-}" == "bind-created" ]] || exit 0
+  printf '%s\n' "\${STUB_BIND_OUTPUT:-{\"outcome\":\"bound\"}}"
+  [[ -n "\${STUB_BIND_SLEEP:-}" ]] && sleep "\$STUB_BIND_SLEEP"
+  exit "\${STUB_BIND_RC:-0}"
+fi
 if [[ "\${1:-} \${2:-} \${3:-}" == "state path target-state" ]]; then
   echo "\$*" >> "${AGENTSLOG}"
   [[ -n "\${STUB_STATE_PATH:-}" ]] && printf '%s\n' "\${STUB_STATE_PATH}"
@@ -662,28 +657,27 @@ REAL_TMP="$(mktemp -d)"
 REAL_REPO="$REAL_TMP/repo"
 REAL_GRAPH="$REAL_TMP/graph.json"
 REAL_CONFIG="$REAL_TMP/config.toml"
-REAL_BIN="$REAL_TMP/bin"
-mkdir -p "$REAL_REPO/.fno" "$REAL_BIN"
+mkdir -p "$REAL_REPO/.fno"
 git init -q "$REAL_REPO"
 git -C "$REAL_REPO" checkout -q -b feature/x-a166-real
 printf '{"entries":[{"id":"x-a166","status":"ready","title":"live node","priority":"p1","type":"feature","blocked_by":[],"locked_by":null,"session_id":null,"pr_number":null,"pr_url":null}]}\n' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$REAL_GRAPH"
 printf 'state_dir = "%s"\n' "$REAL_TMP" > "$REAL_CONFIG"
-cat > "$REAL_BIN/fno" <<EOF
-#!/usr/bin/env bash
-exec uv run --project "$REPO_ROOT/cli" python -m fno.cli "\$@"
-EOF
-chmod +x "$REAL_BIN/fno"
-payload="$(jq -cn --arg cwd "$REAL_REPO" '{cwd:$cwd,session_id:"owner-session",tool_name:"Bash",tool_input:{command:"gh pr create --fill"},tool_response:{stdout:"https://github.com/acme/widgets/pull/42"}}')"
-err="$(printf '%s' "$payload" | PATH="$REAL_BIN:$PATH" FNO_CONFIG="$REAL_CONFIG" CODEX_THREAD_ID= CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash "$HOOK" 2>&1 >/dev/null)"; rc=$?
-# The bind lands in graph.db and the read comes back through the keeper.
-row_json="$(uv run --project "$REPO_ROOT/cli" python -c "import json; from pathlib import Path; from fno.graph.store import read_graph_strict; print(json.dumps(read_graph_strict(Path('$REAL_GRAPH'))[0]))")"
-if [[ "$rc" -eq 0 && "$(jq -r '.status' <<<"$row_json")" == in_review \
-      && "$(jq -r '.pr_number' <<<"$row_json")" == 42 ]]; then
-  # Ownership reads through the claim store now, so the bind stamps no
-  # locked_by mirror: the row lands in_review with the PR bound.
-  pass "T33 real PostToolUse binds the graph and removes the node from ready"
+REAL_AGENTS="${FNO_AGENTS_FRONT:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents}"
+if [[ -x "$REAL_AGENTS" ]]; then
+  payload="$(jq -cn --arg cwd "$REAL_REPO" '{cwd:$cwd,session_id:"owner-session",tool_name:"Bash",tool_input:{command:"gh pr create --fill"},tool_response:{stdout:"https://github.com/acme/widgets/pull/42"}}')"
+  err="$(printf '%s' "$payload" | FNO_AGENTS_BIN="$REAL_AGENTS" FNO_CONFIG="$REAL_CONFIG" CODEX_THREAD_ID= CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash "$HOOK" 2>&1 >/dev/null)"; rc=$?
+  # The bind lands in graph.db and the read comes back through the keeper.
+  row_json="$(uv run --project "$REPO_ROOT/cli" python -c "import json; from pathlib import Path; from fno.graph.store import read_graph_strict; print(json.dumps(read_graph_strict(Path('$REAL_GRAPH'))[0]))")"
+  if [[ "$rc" -eq 0 && "$(jq -r '.status' <<<"$row_json")" == in_review \
+        && "$(jq -r '.pr_number' <<<"$row_json")" == 42 ]]; then
+    # Ownership reads through the claim store now, so the bind stamps no
+    # locked_by mirror: the row lands in_review with the PR bound.
+    pass "T33 real PostToolUse binds the graph and removes the node from ready"
+  else
+    fail "T33 rc=$rc row=$row_json stderr=[$err]"
+  fi
 else
-  fail "T33 rc=$rc row=$row_json stderr=[$err]"
+  echo "[heartbeat] SKIP T33: no real fno-agents binary at $REAL_AGENTS (build crates/fno-agents first)"
 fi
 rm -rf "$REAL_TMP"
 

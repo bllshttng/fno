@@ -313,6 +313,10 @@ enum Role {
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
     Backlog,
+    /// `fno do pr ...` (except watch and stub-manifest): the whole pr
+    /// namespace execs the sibling Rust binary's pr dispatcher. The argv
+    /// passes through byte-verbatim, the backlog namespace's contract.
+    DoPr,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -850,6 +854,32 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if args.first().and_then(|a| a.to_str()) == Some("backlog") {
         return Role::Backlog;
     }
+    // The pr namespace claims itself lexically, like backlog: the sibling
+    // dispatcher owns the 29 spellings and the handover stays byte-verbatim
+    // (pr port 7). The two carve-outs stay with the Python wheel: `watch`
+    // and `stub-manifest` are the watcher's own surface, and do_cli.py keeps
+    // their mounts answering under `fno do pr`. Bare `fno do pr` claims too:
+    // the grouped help is native once the Python pr_app is gone.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(2).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
+    }
+    // The bare `fno pr` legacy spelling claims natively too: the wheel's
+    // hidden lazy entry points at the deleted Python pr_app, so a claim here
+    // keeps the muscle-memory spelling answering instead of a traceback.
+    if args.first().and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(1).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1097,6 +1127,7 @@ fn main() {
     match decide_role(&args, is_tty) {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
+        Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -1447,6 +1478,36 @@ mod tests {
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn do_pr_claims_the_namespace_and_leaves_the_mounts_to_python() {
+        assert_eq!(
+            decide_role(&os(&["do", "pr", "status", "41"]), false),
+            Role::DoPr
+        );
+        assert_eq!(decide_role(&os(&["do", "pr", "--help"]), false), Role::DoPr);
+        // Bare `fno do pr` claims too: the grouped help is native.
+        assert_eq!(decide_role(&os(&["do", "pr"]), false), Role::DoPr);
+        // The bare `fno pr` legacy spelling claims natively as well: the
+        // wheel's hidden lazy entry died with the Python pr_app.
+        assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
+        assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
+        // The two Python mounts stay unclaimed: they forward to the wheel.
+        assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
+        assert_ne!(
+            decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false),
+            Role::DoPr
+        );
+        // A non-pr `do` tree stays with its owners.
+        assert_ne!(
+            decide_role(&os(&["do", "wizard", "--json"]), false),
+            Role::DoPr
+        );
+        assert_ne!(
+            decide_role(&os(&["do", "review", "--help"]), false),
+            Role::DoPr
+        );
     }
 
     #[test]

@@ -225,8 +225,8 @@ else:
   elif [[ "$_GH_ATTRIBUTION" == compound || "$_GH_ATTRIBUTION" == invalid ]]; then
     echo "claim-heartbeat: gh pr create not attributable ($_GH_ATTRIBUTION command); binding skipped" >&2
   fi
-  if [[ "$_BARE_GH_CREATE" -eq 1 ]] && ! command -v fno >/dev/null 2>&1; then
-    echo "claim-heartbeat: gh pr create observed but fno is unavailable; binding skipped" >&2
+  if [[ "$_BARE_GH_CREATE" -eq 1 ]] && [[ -z "$AGENTS_BIN" ]]; then
+    echo "claim-heartbeat: gh pr create observed but fno-agents is unavailable; binding skipped" >&2
   elif [[ "$_BARE_GH_CREATE" -eq 1 ]]; then
     _CREATED_PR_FAILED="$(printf '%s' "$STDIN" | jq -r '
       if (.tool_response | type) == "object" and (
@@ -254,7 +254,7 @@ else:
       while [[ "$_BIND_ATTEMPT" -lt 2 && "$_BIND_RC" -ne 0 ]]; do
         _BIND_ATTEMPT=$((_BIND_ATTEMPT + 1))
         _BIND_OUTPUT="$(with_timeout "$_BIND_TIMEOUT" \
-          fno "${_bind_args[@]}" 2>&1)"
+          "$AGENTS_BIN" "${_bind_args[@]}" 2>&1)"
         _BIND_RC=$?
       done
       if [[ "$_BIND_RC" -ne 0 ]]; then
