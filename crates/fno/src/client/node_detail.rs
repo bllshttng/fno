@@ -514,17 +514,25 @@ fn render_details(view: &crate::backlog_model::NodeView, w: usize, out: &mut Vec
 /// whitespace. The one wrap rule: a word wider than `w` breaks across lines,
 /// and a wide char never straddles a break.
 pub(crate) fn wrap_line(para: &str, w: usize, out: &mut Vec<String>) {
-    use crate::chrome::{char_cols, str_cols};
+    out.extend(wrap_line_joined(para, w).into_iter().map(|(line, _)| line));
+}
+
+/// [`wrap_line`] with how each piece follows the one before it: `Space` when
+/// the break fell between words, `Seam` when it split a word.
+pub(crate) fn wrap_line_joined(para: &str, w: usize) -> Vec<(String, crate::chrome::Join)> {
+    use crate::chrome::{char_cols, str_cols, Join};
     let w = w.max(1);
     if para.is_empty() {
-        out.push(String::new());
-        return;
+        return vec![(String::new(), Join::Line)];
     }
+    let mut out: Vec<(String, Join)> = Vec::new();
+    let mut join = Join::Line;
     let mut line = String::new();
     let mut used = 0;
     for word in para.split_whitespace() {
         if used > 0 && used + 1 + str_cols(word) > w {
-            out.push(std::mem::take(&mut line));
+            out.push((std::mem::take(&mut line), join));
+            join = Join::Space;
             used = 0;
         }
         if used > 0 {
@@ -534,7 +542,8 @@ pub(crate) fn wrap_line(para: &str, w: usize, out: &mut Vec<String>) {
         for ch in word.chars() {
             let cw = char_cols(ch);
             if used > 0 && used + cw > w {
-                out.push(std::mem::take(&mut line));
+                out.push((std::mem::take(&mut line), join));
+                join = Join::Seam;
                 used = 0;
             }
             line.push(ch);
@@ -542,8 +551,9 @@ pub(crate) fn wrap_line(para: &str, w: usize, out: &mut Vec<String>) {
         }
     }
     if !line.is_empty() {
-        out.push(line);
+        out.push((line, join));
     }
+    out
 }
 
 /// Relative age for a thread row, from the row's RFC 3339 stamp.

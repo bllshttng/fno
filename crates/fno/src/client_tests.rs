@@ -6571,6 +6571,7 @@ async fn update_modal_footer_esc_close_click_closes() {
                     text: l.text.clone(),
                     roles: l.roles.clone(),
                     hits: l.hits.clone(),
+                    body: None,
                 })
                 .collect(),
             width: r.width,

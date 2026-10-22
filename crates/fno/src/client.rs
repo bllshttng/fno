@@ -1808,7 +1808,7 @@ mod experimental;
 mod lane_entry;
 mod node_detail;
 mod share_flow;
-pub(crate) use node_detail::wrap_line;
+pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;
 mod keys_settings;
 mod messages_detail;
