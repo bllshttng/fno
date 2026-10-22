@@ -40,12 +40,12 @@ pub(crate) fn entry_status<'a>(entry: &'a Value) -> &'a str {
 /// operator override in the meantime.
 pub(crate) fn default_graph_path() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
-        return crate::state_layout::graph_anchor(&expand_home_prefix(&v));
+        return expand_home_prefix(&v).join("graph.json");
     }
     if let Some(v) = std::env::var_os("FNO_HOME").filter(|v| !v.is_empty()) {
-        return crate::state_layout::graph_anchor(&PathBuf::from(v));
+        return PathBuf::from(v).join("graph.json");
     }
-    crate::state_layout::graph_anchor(&var_os_home().join(".fno"))
+    var_os_home().join(".fno").join("graph.json")
 }
 
 /// The store an owner at `cwd` reads: the configured Python state root

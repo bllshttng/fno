@@ -2307,7 +2307,17 @@ pub(crate) fn curation_key(entry: &Value) -> Value {
 /// `graph.json.lock` so an older binary that only knows the anchor spelling
 /// shares the same lock.
 pub fn graph_lock_path(path: &Path) -> PathBuf {
-    let anchor = crate::backlog::anchor_path(path);
+    let is_graph_spelling = matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("graph.json" | "graph.db" | "graph-archive.json" | "graph-archive.db")
+    );
+    // Other callers lock their own sibling files (`graph.share`, a chats db):
+    // those keep their raw name, so each stays its own lock.
+    let anchor = if is_graph_spelling {
+        crate::backlog::anchor_path(path)
+    } else {
+        path.to_path_buf()
+    };
     let base = anchor.canonicalize().unwrap_or(anchor);
     PathBuf::from(format!("{}.lock", base.display()))
 }
@@ -3516,6 +3526,11 @@ mod tests {
                 "{spelling}"
             );
         }
+        // A sibling lock that is not a graph spelling stays its own file.
+        assert_eq!(
+            graph_lock_path(&root.join("db/graph.share")).file_name(),
+            Some(std::ffi::OsStr::new("graph.share.lock"))
+        );
     }
 
     /// The timeout refusal names the recorded holder: pid and hold age land
