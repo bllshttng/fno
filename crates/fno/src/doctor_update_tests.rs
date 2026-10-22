@@ -38,8 +38,8 @@ fn parse_args_reads_every_flag() {
     assert_eq!(f.source, Some(PathBuf::from("/tmp/src")));
     assert!(f.dry_run && f.force && f.rust && !f.no_rust && !f.check);
 
-    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--last-green"])).expect("parses");
-    assert!(f.dry_run && f.force && f.no_rust && f.check && f.last_green);
+    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--published"])).expect("parses");
+    assert!(f.dry_run && f.force && f.no_rust && f.check && f.published);
 
     assert!(parse_args(&os(&["--bogus"])).is_err());
     assert!(parse_args(&os(&["--source"])).is_err());
