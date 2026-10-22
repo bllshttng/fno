@@ -271,7 +271,12 @@ fn gc_sweep_keeps_a_rebound_worker_on_its_current_node_open_pr() {
     );
     let mut row = bg_claude_row("t-x0ld1-fix", "rebd0001");
     row.cwd = repo.to_string_lossy().into_owned();
-    row.log_path = Some(stale_log(&repo));
+    // Quiet past the grace but inside the idle hour, so the open-PR keep holds.
+    row.log_path = Some(
+        quiet_transcript(&repo, "transcript.jsonl", 1800)
+            .to_string_lossy()
+            .into_owned(),
+    );
     row.harness_session_id = Some("rebound-uuid".into());
     state::update_registry(&home.registry_json(), |r| r.entries.push(row)).unwrap();
 

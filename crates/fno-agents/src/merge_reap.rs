@@ -671,6 +671,7 @@ fn run_request(
             // reads the stop gate from the stop itself.
             crate::gc_sweep::StopObservation::Unproven,
             false,
+            false,
             &stop,
             &crate::pane_stop::run_mux_pane_kill,
             seams.surface_removal,
@@ -683,6 +684,7 @@ fn run_request(
                     crate::gc_sweep::RetireOrder {
                         id: entry.name.clone(),
                         released: false,
+                        idle_hour_past: false,
                         via_release: false,
                         pr_settled_live: false,
                         basis: format!(

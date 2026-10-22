@@ -38,6 +38,28 @@ pub(crate) fn origin_corpse(
     false
 }
 
+/// Ruling d-1538e896: an adopted claude row whose roster state reads done,
+/// stopped or failed follows the idle-hour rule a spawn row follows. The
+/// read is stop-aware like the sweep's `session_terminal`: a `stopped` row
+/// fno stopped itself is not the harness finishing the work.
+pub(crate) fn adopted_claude_terminal(
+    e: &state::RegistryEntry,
+    agents_memo: &std::cell::RefCell<Option<ClaudeAgentsSnapshot>>,
+    agents_read: &dyn Fn() -> ClaudeAgentsSnapshot,
+) -> bool {
+    if e.origin.as_deref() != Some("adopted") || e.harness_name() != "claude" {
+        return false;
+    }
+    let mut memo = agents_memo.borrow_mut();
+    let snapshot = memo.get_or_insert_with(|| agents_read());
+    crate::daemon::claude_row_id(e)
+        .and_then(|rid| snapshot.find(&rid).and_then(|row| row.state.clone()))
+        .is_some_and(|state| {
+            !(state == "stopped" && e.stop.is_some())
+                && crate::claude_roster::is_terminal_roster_state(&state)
+        })
+}
+
 /// The adopted-retire carve-out, resolved once per row and shared by the
 /// staging filter (pass 1) and the origin pre-gate (pass 2): an adopted
 /// row whose registry status reads terminal and that no known roster

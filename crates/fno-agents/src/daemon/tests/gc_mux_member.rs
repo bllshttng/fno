@@ -39,6 +39,7 @@ fn stage(
         RetireMode::Apply,
         StopObservation::Unproven,
         false,
+        false,
         &|_| true,
         &|_, _| Ok(true),
         &|_| CascadeOutcome::Removed,
