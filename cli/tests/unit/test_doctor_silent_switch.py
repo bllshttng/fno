@@ -59,7 +59,7 @@ def _emit_minimal(monkeypatch: pytest.MonkeyPatch, *, pw: dict) -> str:
     monkeypatch.setattr(doctor, "_review_invocation_report", lambda: [])
     result = {
         "status": "fresh",
-        "missing_verbs": [],
+        "missing_commands": [],
         "pr_watch": pw,
     }
     import io
@@ -149,7 +149,7 @@ def _stub_quiet_machine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Silence the expensive doctor collectors so the verdict is 'fresh' and the
     silent-switch lines are the interesting output."""
     monkeypatch.setattr(doctor, "_resolve_source", lambda source: None)
-    monkeypatch.setattr(doctor, "_probe_installed_verb", lambda: "present")
+    monkeypatch.setattr(doctor, "_probe_installed_command", lambda: "present")
     monkeypatch.setattr(doctor, "_python_content_drift", lambda source: 0)
     monkeypatch.setattr(
         doctor, "_rust_report", lambda: {"binary": None, "revision": None}
@@ -231,15 +231,15 @@ def _patch_gap(
     monkeypatch.setattr(doctor, "_cwd_repo_root", lambda: repo)
     import fno.rust_binary as rust_binary
 
-    def fake_lane_door(verb, payload, unavailable=None, **kw):
+    def fake_lane_door(command, payload, unavailable=None, **kw):
         if isinstance(payload, dict) and payload.get("op") == "lane":
             calls.append(
                 {"cwd": payload.get("cwd"), "code_payload": payload.get("code_payload")}
             )
             return {"lane": lane}
-        raise AssertionError(f"unexpected door call {verb} {payload}")
+        raise AssertionError(f"unexpected door call {command} {payload}")
 
-    monkeypatch.setattr(rust_binary, "verb_call", fake_lane_door)
+    monkeypatch.setattr(rust_binary, "command_call", fake_lane_door)
     if review is not None:
         monkeypatch.setattr(
             "fno.config.load_settings_for_repo",

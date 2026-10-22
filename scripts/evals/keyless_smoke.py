@@ -38,7 +38,7 @@ def _journal_text(path: Path) -> str:
     the journal first so a symlinked journal still finds its sibling.
 
     The store commit is the write boundary, so each sibling is read through
-    the native rows verb (raw fallback built in); the raw bytes only serve a
+    the native rows command (raw fallback built in); the raw bytes only serve a
     box with no binary at all."""
     from fno.paths import journal_and_ephemeral_sibling
 

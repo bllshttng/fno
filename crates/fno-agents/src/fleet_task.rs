@@ -14,7 +14,7 @@
 //!
 //! [`run_fleet_task`] is the transport-only arm (`fno-agents fleet-task`,
 //! wired in bin/client.rs): the Python reconcile lanes reach [`reconcile`]
-//! through one `verb_call`. It registers no client verb — the shrink law
+//! through one `command_call`. It registers no client command — the shrink law
 //! allows none.
 
 use serde_json::{json, Value};
@@ -339,7 +339,7 @@ pub fn legacy_question_ids(raw: &str) -> Vec<String> {
 }
 
 /// `fno-agents fleet-task`: the hidden binary-direct transport the Python
-/// reconcile lanes ride (`verb_call`). One JSON request on stdin,
+/// reconcile lanes ride (`command_call`). One JSON request on stdin,
 /// `{"op":"reconcile","lane","key","cwd","text","run","empty"}`; one JSON
 /// answer on stdout, `{"outcome","id"}`. Exit 2 on bad input; the store
 /// resolves through `AgentsHome::from_env()`.

@@ -53,9 +53,9 @@ def _observe_lane(
 ) -> dict[str, object]:
     """The native observe door (``evals-attempt`` stdin ``op: observe``):
     identity and usage read back from the attempt's own transcript store. A
-    ``VerbUnavailable`` keeps the row honest - ``unverified`` with a named
+    ``CommandUnavailable`` keeps the row honest - ``unverified`` with a named
     reason, never a guessed status (AC10-EDGE)."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     payload = {
         "op": "observe",
@@ -68,8 +68,8 @@ def _observe_lane(
         "started_epoch": started_wall,
     }
     try:
-        return dict(verb_call("evals-attempt", payload))
-    except VerbUnavailable:
+        return dict(command_call("evals-attempt", payload))
+    except CommandUnavailable:
         return {"lane_status": "unverified", "lane_reason": "observe door unavailable",
                 "usage": None, "usage_source": None}
 
@@ -277,11 +277,11 @@ def _native_verdict(row: dict[str, object]) -> Optional[dict[str, object]]:
     door is unreachable - the row still persists with its observations, and
     the read side re-asks natively over the batch. The verdict is NEVER
     re-derived in Python."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        verdict = verb_call("evals-attempt", {"op": "classify", "row": row})
-    except VerbUnavailable:
+        verdict = command_call("evals-attempt", {"op": "classify", "row": row})
+    except CommandUnavailable:
         return None
     return verdict if isinstance(verdict, dict) else None
 

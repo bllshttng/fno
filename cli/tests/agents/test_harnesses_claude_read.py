@@ -4,7 +4,7 @@ Covers:
 - ``claude_agents_json()`` — best-effort shellout, all-failure-modes return ({}, warnings).
 
 The logs shellout this file once covered was ported to the Rust client
-(run_logs in crates/fno-agents/src/client_verbs.rs); its contracts are
+(run_logs in crates/fno-agents/src/client_commands.rs); its contracts are
 frozen as goldens in crates/fno-agents/tests/golden/logs.
 
 The actual ``claude`` binary is not invoked; ``subprocess.run`` is

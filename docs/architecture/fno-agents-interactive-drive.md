@@ -15,11 +15,11 @@ The key realization (verified against the live CLIs): this is **not** a grid cha
 
 **Round-trip:** a Rust exec row omits the key (skip-when-None) and Python's coercion maps the absence back to `exec`; Python always emits the key via `asdict` (as `exec`/`interactive`) and Rust reads the concrete value. Both directions agree. No `SCHEMA_VERSION` bump was needed: the field is additive-optional and absent-key handling is version-independent on both sides (a bump would also break the `schema_version: 4`-is-unknown contract test). Note the residual mixed-registry gap from [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) still applies: a real interactive PTY row carries a non-empty `short_id` Python rejects, so the Python CLI reaches interactive rows through the auto-routed Rust daemon, not `load_registry`.
 
-## Verbs
+## Commands
 
-Both are thin front-doors that call the spawn IPC (`agent.spawn`) with `host_mode=interactive`. Added to the hand-rolled dispatch in `crates/fno-agents/src/bin/client.rs` (`build_request`) and to `AUTO_ROUTE_VERBS` in `cli/src/fno/agents/rust_runtime.py`. The custom agents group intercepts before Typer, so these daemon-native verbs route to the Rust binary without a Python Typer command (like `spawn`/`drive`).
+Both are thin front-doors that call the spawn IPC (`agent.spawn`) with `host_mode=interactive`. Added to the hand-rolled dispatch in `crates/fno-agents/src/bin/client.rs` (`build_request`) and to `AUTO_ROUTE_COMMANDS` in `cli/src/fno/agents/rust_runtime.py`. The custom agents group intercepts before Typer, so these daemon-native commands route to the Rust binary without a Python Typer command (like `spawn`/`drive`).
 
-| Verb | Form | Meaning |
+| Command | Form | Meaning |
 |---|---|---|
 | `host` | `fno agents host <name> --harness codex\|gemini ["<task>"]` | Fresh interactive host. Empty task = bare interactive session. |
 | `promote` | `fno agents promote <name> --from <uuid>` | Resume an existing session into a drivable TUI. The daemon **infers the provider from the source row**, so `--provider` is not required. `--from` accepts the `=`equals form. |
@@ -63,7 +63,7 @@ Exec mode confirms readiness later from the `--json` stream; an interactive TUI 
 - painted AND alive AND survived the dwell (1s) -> **ready/live**. Survival, not first paint, is the discriminator, so a resume that prints an error *then* exits cannot pass on its dying first paint.
 - alive but unpainted at the 4s deadline -> **live** (a slow first paint / warming model; never reap a live process).
 
-The verb therefore reports either a `live` summary (name, short_id, provider, drive hint, exit 0) or a `spawn-failed` (nonzero exit) — never exit 0 on a worker that died (AC1-UI).
+The command therefore reports either a `live` summary (name, short_id, provider, drive hint, exit 0) or a `spawn-failed` (nonzero exit) — never exit 0 on a worker that died (AC1-UI).
 
 ## Reconcile / liveness branch
 

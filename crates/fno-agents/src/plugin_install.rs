@@ -5,7 +5,7 @@
 //! files only, rebuilt wholesale), never from the repo root, because harness
 //! caches copy what they are pointed at.
 //!
-//! This module owns stage build, the `--check`/`--restage` deploy verbs, the
+//! This module owns stage build, the `--check`/`--restage` deploy commands, the
 //! claude, opencode and agy arms plus the old env-export cleanup. The codex arm stays on
 //! the Python `converge` engine in the Python shim.
 use std::path::{Path, PathBuf};
@@ -1003,7 +1003,7 @@ fn marked_block_end(text: &str, mark_at: usize) -> usize {
 /// the shell rc, Claude settings env and Codex shell env. That moved every
 /// Rust project's build files under ~/.fno, where reclaim sweeps them. Install
 /// now removes those lines instead. Footnote builds still land in the fno
-/// base: fno verbs, the target stop hook and the daemon set the build dir per
+/// base: fno commands, the target stop hook and the daemon set the build dir per
 /// process, and the repo's rustc wrapper sets SCCACHE_DIR. Returns the files
 /// rewritten, and an error line per file left alone.
 fn retract_env_exports() -> (Vec<PathBuf>, Vec<String>) {
@@ -1772,7 +1772,7 @@ fn print_status_prose(value: &serde_json::Value) {
 ///   directory and a rename, so a half-written extension is never loadable.
 /// - `--status`: answer `{"installed", "dest", "agent_dir_source", "skills"}`;
 ///   `installed` means the dest exists and, when a source was named, is
-///   byte-equal to it. `skills` reads the same plugin-root pointer the verb
+///   byte-equal to it. `skills` reads the same plugin-root pointer the command
 ///   renderer reads.
 fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
     let dest = crate::pi::pi_agent_dir()
@@ -2019,8 +2019,8 @@ fn install_harness(harness: &str, force: bool) -> Result<String, String> {
 
 /// Persist the installed stage to `<state-root>/install/plugin-root`, the
 /// pointer the session-start hook primes and every env-less reader (provider
-/// verb rosters, opencode install, the lead skill's fallback) resolves. The
-/// install verb must not depend on a session ever starting: on a fresh machine
+/// command rosters, opencode install, the lead skill's fallback) resolves. The
+/// install command must not depend on a session ever starting: on a fresh machine
 /// the first `fno config plugin install` is exactly when no hook has run yet
 /// (2026-10-02 gap audit 6). Best-effort: a failed write never fails the
 /// install. The stage is a self-contained copy (no `.git`), so unlike a
@@ -2739,7 +2739,7 @@ mod tests {
                 .unwrap();
         assert_eq!(public["plugins"][0]["source"]["ref"], json!("stable"));
         assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-        // The install verb primes the plugin-root pointer from the built
+        // The install command primes the plugin-root pointer from the built
         // stage and ignores a manifest-less one, so the same contract rides
         // this real stage: the pointer lands at <state>/install/plugin-root.
         let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
@@ -2805,7 +2805,7 @@ mod tests {
     /// Regression: the --force arm once skipped `i += 1`, so the parse loop
     /// spun on the flag forever. The test returning at all is the proof.
     /// Also pins B5 at the same parser boundary: a mode flag after a harness
-    /// positional is recorded, and the verb refuses before any install work -
+    /// positional is recorded, and the command refuses before any install work -
     /// `plugin-install claude --check` once dropped the flag and ran the full
     /// mutating install.
     #[test]

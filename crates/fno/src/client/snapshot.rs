@@ -21,7 +21,7 @@ use serde_json::Value;
 
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
-[--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
+[--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
 [--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model]";
 
@@ -156,6 +156,9 @@ pub struct SnapshotArgs {
     /// Attach as a sizing client, so the server lays its panes out at `size`.
     /// It resizes every pane, so it is for a throwaway server only.
     pub fit: bool,
+    /// `(rows, cols)` of a second window held attached as a sizing client
+    /// while the shot is taken, so the shot sees a tab two windows share.
+    pub peer: Option<(u16, u16)>,
     /// The font family drawn first, ahead of the common monospace stack: an
     /// image has no terminal, so its font is named here or left to the stack.
     pub font: Option<String>,
@@ -183,6 +186,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut format = None;
     let mut size = None;
     let mut fit = false;
+    let mut peer = None;
     let mut font = None;
     let mut message = None;
     let mut view = None;
@@ -238,6 +242,12 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
                     }
                 })
             }
+            "--peer" => {
+                let v = value()?;
+                peer = Some(parse_size(&v).ok_or_else(|| {
+                    format!("fno mux serve --snapshot: --peer wants <cols>x<rows>, got {v:?}")
+                })?)
+            }
             "--size" => {
                 let v = value()?;
                 size = Some(parse_size(&v).ok_or_else(|| {
@@ -279,6 +289,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         format,
         size,
         fit,
+        peer,
         font,
         message,
         view,
@@ -304,6 +315,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         args.squad.as_deref(),
         args.size,
         args.fit,
+        args.peer,
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
@@ -450,6 +462,7 @@ fn live_frame(
     squad: Option<&str>,
     size: Option<(u16, u16)>,
     fit: bool,
+    peer: Option<(u16, u16)>,
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
@@ -463,6 +476,11 @@ fn live_frame(
     let dims = size
         .filter(|_| fit)
         .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims());
+    // The peer attaches first and stays until the shot is composed.
+    let _peer = peer
+        .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims())
+        .map(|d| runtime.block_on(hold_peer(&socket, cwd.clone(), d)))
+        .transpose()?;
     let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims))?;
     if let Some(name) = squad {
         let target = seen
@@ -661,7 +679,7 @@ shoot a root seeded with questions, mail or backlog activity \
             if !read {
                 return Err(
                     "org block rendered without a reading: fno doctor lanes returned none; \
-shoot from a host where the lanes verb answers"
+shoot from a host where the lanes command answers"
                         .into(),
                 );
             }
@@ -761,6 +779,45 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
+}
+
+/// Attach a second sizing client at `dims` and keep it attached until the
+/// returned half drops. Its stream is drained so the server never stalls on it.
+async fn hold_peer(
+    socket: &Path,
+    cwd: String,
+    dims: (u16, u16),
+) -> Result<tokio::net::unix::OwnedWriteHalf, String> {
+    let stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|e| format!("peer cannot connect to {}: {e}", socket.display()))?;
+    let (mut reader, mut writer) = stream.into_split();
+    let attach = ClientMsg::Attach {
+        proto: PROTO_VERSION,
+        build: BUILD_VERSION.to_string(),
+        rows: dims.0,
+        cols: dims.1,
+        cwd,
+    };
+    proto::write_msg(&mut writer, &attach)
+        .await
+        .map_err(|e| format!("peer attach write failed: {e}"))?;
+    loop {
+        let read = proto::read_msg::<_, ServerMsg>(&mut reader);
+        match tokio::time::timeout(Duration::from_secs(10), read).await {
+            Ok(Ok(ServerMsg::Layout { .. })) => break,
+            Ok(Ok(ServerMsg::Bye { reason })) => {
+                return Err(format!("server refused the peer attach: {reason}"))
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(format!("peer read failed: {e}")),
+            Err(_) => return Err("peer saw no layout within 10s".into()),
+        }
+    }
+    tokio::spawn(
+        async move { while proto::read_msg::<_, ServerMsg>(&mut reader).await.is_ok() {} },
+    );
+    Ok(writer)
 }
 
 /// `dims` set attaches as a sizing client at that content area and reads
@@ -898,6 +955,13 @@ mod tests {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
         }
+        // --peer holds a second window; a malformed size is a usage error.
+        assert_eq!(
+            parse_extra(&["--peer", "120x40"]).unwrap().peer,
+            Some((40, 120))
+        );
+        let e = parse_extra(&["--peer", "wide"]).expect_err("malformed peer");
+        assert!(e.contains("--peer wants <cols>x<rows>"), "{e}");
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(

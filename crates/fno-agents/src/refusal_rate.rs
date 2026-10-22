@@ -17,7 +17,7 @@
 //! `is_error: false`, or no flag at all (codex has none) - still has to
 //! pass a text check, because a clean exit is not proof of a clean answer:
 //! `spawn-gate` exits 0 even when its own answer IS a refusal ("a refusal
-//! is data now, not a process exit", `spawn_gate_verb.rs`), so the words
+//! is data now, not a process exit", `spawn_gate_command.rs`), so the words
 //! are the whole, short output. What a `false`/absent flag DOES rule out
 //! is matching those same words buried deep in an unrelated, multi-line
 //! successful read (the lead check-in's own capacity line, which quotes a

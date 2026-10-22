@@ -216,7 +216,7 @@ fn normalize(raw: &str, root: &Path) -> String {
     // legs' tempdirs; the root itself is the only variable part.
     let root_str = root.display().to_string();
     let raw = raw.replace(&root_str, "<ROOT>");
-    // The python events layer's store-client verb is skewed against the
+    // The python events layer's store-client command is skewed against the
     // rust front (a pre-existing break, filed separately); its best-effort
     // refusal banner is oracle-infra noise, not leaf contract, so the whole
     // embedded block is dropped before comparison.

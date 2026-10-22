@@ -373,7 +373,7 @@ const CASES: &[Case] = &[
         setup: Setup::Agent(Row::A1),
     },
     Case {
-        label: "real send dollar verb unconfirmed",
+        label: "real send dollar command unconfirmed",
         args: &["worker-1", "$fno:review high", "--raw"],
         setup: Setup::Agent(Row::A1),
     },

@@ -32,9 +32,9 @@ Post-epic retro for <epic> (your node: <node>). You are one of several builders 
 
 Lens: footnote building footnote. Answer as the fresh agent you were when you jumped in cold.
 
-1. GAPS - what did you need that was not there, or was there but wrong? Name the verb, file, or receipt.
+1. GAPS - what did you need that was not there, or was there but wrong? Name the command, file, or receipt.
 2. ROUGH EDGES needing polish - what worked but cost you time, retries, or a workaround? Include anything you had to rediscover that should have been handed to you.
-3. WHAT WORKED vs WHAT DID NOT - which contracts/gates/verbs earned their place, and which fought you? Be specific about which, not "the tooling".
+3. WHAT WORKED vs WHAT DID NOT - which contracts/gates/commands earned their place, and which fought you? Be specific about which, not "the tooling".
 4. CEREMONY audit - which steps felt unnecessary, confusing, or inverted for the size of your change? Which would you delete, and which would you keep even though they slowed you?
 5. <session-specific questions - the lead fills these from what it saw this builder hit: a claim flap, a stale base, a review it drained, a fork it survived. One or two, concrete. Omit the line if none.>
 

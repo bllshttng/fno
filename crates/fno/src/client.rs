@@ -106,7 +106,7 @@ pub(crate) use name_fit::pad_to;
 /// How long to wait for a just-spawned server to accept.
 const SPAWN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One connect attempt on the attach path. Longer than the scriptable verbs'
+/// One connect attempt on the attach path. Longer than the scriptable commands'
 /// probe. A script refuses when it expires; a human attach says it is still
 /// waiting and tries again.
 const ATTACH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1242,7 +1242,7 @@ pub(crate) struct View {
     /// Generation token, bumped per open/refresh so a read landing after
     /// the modal closed or refreshed again is discarded.
     conn_gen: u64,
-    /// A mutation/login verb wanted by a keypress; the run loop spawns
+    /// A mutation/login command wanted by a keypress; the run loop spawns
     /// it at loop top (the sender lives there, out of the stdin handler) and
     /// clears this. `(argv, child-env, is_login)`: `is_login` runs `fno mux pane
     /// run` (opens the login pane, keeps the pending notice), else a single-flight
@@ -1262,13 +1262,13 @@ pub(crate) struct View {
     /// An update-readiness probe is in flight; bounds concurrent
     /// probes to one, mirroring `conn_inflight`.
     update_probe_inflight: bool,
-    /// A pending sweep verb (counts probe or scoped apply) for the run
+    /// A pending sweep command (counts probe or scoped apply) for the run
     /// loop to spawn off the UI thread, mirroring `conn_action`.
     sweep_action: Option<SweepAction>,
     /// A queued release upgrade and its one-in-flight bound, mirroring the
     /// sweep pair. (The restart is not queued: its tap unwinds the run loop.)
-    update_verb_want: Option<release_check::Channel>,
-    update_verb_inflight: bool,
+    update_command_want: Option<release_check::Channel>,
+    update_command_inflight: bool,
     /// The update modal's restart tap detached the client; the detach exit reads this.
     restart_pending: bool,
     /// The open new-agent popup, or the RETAINED draft after Esc
@@ -1287,7 +1287,7 @@ pub(crate) struct View {
     /// A catalog probe is wanted/in flight (the update-probe discipline).
     catalog_want: bool,
     catalog_inflight: bool,
-    /// A sweep verb is in flight; one at a time, so a second tap queues
+    /// A sweep command is in flight; one at a time, so a second tap queues
     /// nothing and is told so.
     sweep_inflight: bool,
 }
@@ -1308,7 +1308,7 @@ enum SweepScope {
     Squads,
 }
 
-/// A sweep verb the run loop should spawn: a counts probe for the choice
+/// A sweep command the run loop should spawn: a counts probe for the choice
 /// modal, or an apply of one scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SweepAction {
@@ -1316,7 +1316,7 @@ enum SweepAction {
     Apply(SweepScope),
 }
 
-/// What a finished sweep verb reports back to the UI loop.
+/// What a finished sweep command reports back to the UI loop.
 #[derive(Debug, Clone)]
 enum SweepMsg {
     Counts(SweepCounts),
@@ -1657,7 +1657,7 @@ impl MenuAction {
     /// The stable id this action's in-menu accelerator is registered
     /// under in `keys::menu_bindings`, when it has one. The drawn hint and the
     /// dispatched byte both resolve through this id, so the key the menu
-    /// advertises and the key it answers cannot drift. The tab verbs and the
+    /// advertises and the key it answers cannot drift. The tab commands and the
     /// settled rename/close/remove pair carry one; everything else is
     /// Enter/click only and renders no key.
     fn accelerator_id(&self) -> Option<&'static str> {
@@ -1673,7 +1673,7 @@ impl MenuAction {
             }),
             MenuAction::TabMoveTo => Some("move-tab-to"),
             MenuAction::Remove => Some("remove-row"),
-            // The row-menu verbs join the keyboard: every entry that
+            // The row-menu commands join the keyboard: every entry that
             // can carry a key now shows one, and the drawn glyph and the
             // dispatched byte both resolve through the same menu-scope id.
             MenuAction::Stop => Some("stop-row"),
@@ -1874,12 +1874,12 @@ fn begin_sweep_apply(view: &mut View, scope: SweepScope) {
     }
 }
 
-/// Run one `mux workspace prune` verb off the UI thread: a `--dry-run --json`
+/// Run one `mux workspace prune` command off the UI thread: a `--dry-run --json`
 /// probe for the choice modal's counts, or a scoped apply whose JSON receipt
 /// becomes the notice. Bounded so a wedged server cannot hold the UI loop's
 /// sweep slot forever; the counts parse fails loud rather than opening a
 /// modal with fabricated zeros.
-async fn run_sweep_verb(action: SweepAction) -> SweepMsg {
+async fn run_sweep_command(action: SweepAction) -> SweepMsg {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     let mut args = vec![
         "mux".to_string(),
@@ -2120,8 +2120,8 @@ impl View {
             update_probe_want: false,
             update_probe_inflight: false,
             sweep_action: None,
-            update_verb_want: None,
-            update_verb_inflight: false,
+            update_command_want: None,
+            update_command_inflight: false,
             restart_pending: false,
             sweep_inflight: false,
             launcher: None,
@@ -3106,11 +3106,11 @@ impl View {
     /// relative; the content origin is `(TAB_BAR_ROWS, left_chrome_w)`.
     fn hit_test(&self, row: u16, col: u16) -> Option<(u64, u16, u16)> {
         let left_w = self.left_chrome_w();
-        if row < TAB_BAR_ROWS || col < left_w {
+        let (cr, cc) = (row.checked_sub(TAB_BAR_ROWS)?, col.checked_sub(left_w)?);
+        // A pane cropped by a smaller window answers only inside it.
+        if !self.in_visible(cr, cc) {
             return None;
         }
-        let cr = row - TAB_BAR_ROWS;
-        let cc = col - left_w;
         for (pid, rect) in &self.layout.panes {
             // A framed pane answers for its CONTENT: the border ring is the
             // frame's own surface (it focuses, it never forwards), and the
@@ -3487,7 +3487,7 @@ impl View {
             return None;
         }
         let (cr, cc) = (row - TAB_BAR_ROWS, col - left_w);
-        let (a_rows, a_cols) = self.layout.area;
+        let (a_rows, a_cols) = self.visible_area();
         if a_rows == 0 || a_cols == 0 || cr >= a_rows || cc >= a_cols {
             return None;
         }
@@ -5290,13 +5290,13 @@ impl View {
     /// refuses a stale id regardless.
     fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
         const W: usize = 40;
-        let verb = match &picker.src {
+        let command = match &picker.src {
             MoveSrc::Tab(_) => "move tab to:",
             MoveSrc::Pane(_) => "move pane to:",
             MoveSrc::Row { .. } => "move session to:",
             MoveSrc::Folder { .. } => "add folder:",
         };
-        let mut lines = vec![pad_to(&format!(" {verb}"), W)];
+        let mut lines = vec![pad_to(&format!(" {command}"), W)];
         for (i, &sid) in picker.squads.iter().enumerate() {
             let folder = workspace_folder::folder_label(&picker.src, sid);
             let name = folder.as_deref().unwrap_or_else(|| {
@@ -7327,7 +7327,7 @@ async fn attach_and_run(
     let (conn_tx, mut conn_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, crate::connections_view::ReadOutcome)>();
 
-    // a Connections single-flight mutation verb reports its result here,
+    // a Connections single-flight mutation command reports its result here,
     // gen-tagged like the read, so a result for a closed/superseded modal is
     // dropped and a live one surfaces the notice + triggers the read-after-write.
     let (conn_act_tx, mut conn_act_rx) = tokio::sync::mpsc::unbounded_channel::<(
@@ -7336,7 +7336,7 @@ async fn attach_and_run(
         bool, // is_login: keep the pending notice on success, no acting flip
     )>();
 
-    // The sweep verbs (counts probe, scoped apply) run off the UI loop and
+    // The sweep commands (counts probe, scoped apply) run off the UI loop and
     // report back here. The in-flight flag bounds them to one at a time;
     // the message carries what the tap asked for.
     let (sweep_tx, mut sweep_rx) = tokio::sync::mpsc::unbounded_channel::<SweepMsg>();
@@ -7352,7 +7352,7 @@ async fn attach_and_run(
     let (catalog_tx, mut catalog_rx) =
         tokio::sync::mpsc::unbounded_channel::<agent_launcher::CatalogOutcome>();
 
-    // The queued update verb (restart or release upgrade) runs off the UI loop
+    // The queued update command (restart or release upgrade) runs off the UI loop
     // and reports its verdict here. The View's inflight flag bounds it to one
     // at a time; the notice is the receipt.
     let (restart_tx, mut restart_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -7424,7 +7424,7 @@ async fn attach_and_run(
         org_board::maybe_kick(&mut view, &org_tx);
         messages_view::maybe_kick(&mut view, &messages_tx);
         bell::maybe_kick(&mut view, &bell_tx);
-        // a queued board write verb runs off the UI loop too.
+        // a queued board write command runs off the UI loop too.
         if let Some(action) = view
             .backlog_board
             .as_mut()
@@ -7435,10 +7435,10 @@ async fn attach_and_run(
             tokio::spawn(async move {
                 let notice = match action {
                     backlog_board::WriteAction::Args(args, stdin) => {
-                        crate::backlog_write::run_verb(&args, stdin).await.1
+                        crate::backlog_write::run_command(&args, stdin).await.1
                     }
                 };
-                let _ = tx.send((gen, backlog_board::BoardMsg::VerbDone { notice }));
+                let _ = tx.send((gen, backlog_board::BoardMsg::CommandDone { notice }));
             });
         }
         // task 2.2: kick a queued MINE mutation off the UI loop.
@@ -7486,11 +7486,11 @@ async fn attach_and_run(
             let tx = conn_act_tx.clone();
             let gen = view.conn_gen;
             tokio::spawn(async move {
-                let result = crate::connections_view::run_verb_env(argv, env).await;
+                let result = crate::connections_view::run_command_env(argv, env).await;
                 let _ = tx.send((gen, result, is_login));
             });
         }
-        // Kick any wanted update probe/verb off the UI loop (one in flight
+        // Kick any wanted update probe/command off the UI loop (one in flight
         // each); the update surface owns the discipline.
         update_menu::pump_wants(&mut view, &update_tx, &restart_tx);
         // Kick a wanted harness-catalog probe, same one-in-flight
@@ -7506,13 +7506,13 @@ async fn attach_and_run(
         }
         // Kick the harness-flags capture when the rows in hand are stale.
         harness_flags::kick(&mut view, flags_tx.clone());
-        // Kick a wanted sweep verb off the UI loop, at most one in flight.
+        // Kick a wanted sweep command off the UI loop, at most one in flight.
         if let Some(action) = view.sweep_action.take() {
             if !view.sweep_inflight {
                 view.sweep_inflight = true;
                 let tx = sweep_tx.clone();
                 tokio::spawn(async move {
-                    let msg = run_sweep_verb(action).await;
+                    let msg = run_sweep_command(action).await;
                     let _ = tx.send(msg);
                 });
             }
@@ -7701,7 +7701,7 @@ async fn attach_and_run(
                     }
                 }
                 Ok(ServerMsg::Info { .. }) => {} // pre-Attach-only answer; stray here
-                // v4 control-verb replies belong to one-shot `fno mux pane`
+                // v4 control-command replies belong to one-shot `fno mux pane`
                 // connections, never an attached client's stream: ignore.
                 Ok(ServerMsg::PaneList { .. }
                     | ServerMsg::PaneText { .. }
@@ -8102,7 +8102,7 @@ async fn attach_and_run(
                 }
             }
             Some((gen, result, is_login)) = conn_act_rx.recv() => {
-                // a mutation/login verb finished. Clear the single-flight
+                // a mutation/login command finished. Clear the single-flight
                 // guard UNCONDITIONALLY (the subprocess has exited, whatever the
                 // modal's read-gen), so a manual R during the mutation can never
                 // wedge `acting` on nor let a second write overlap this one. The
@@ -8502,7 +8502,7 @@ async fn attach_and_run(
             if let Some(n) = NOTICE.with(|n| n.borrow_mut().take()) {
                 eprintln!("fno: {n}");
             }
-            // The update modal's restart unwinds here: run the verb in the foreground, exec the fresh client.
+            // The update modal's restart unwinds here: run the command in the foreground, exec the fresh client.
             if let Some(err) = update_menu::maybe_reattach(code, &mut view).await {
                 return Err(err);
             }
@@ -9275,7 +9275,7 @@ async fn execute_aux_action(
         AuxAction::SweepBoth => begin_sweep_apply(view, SweepScope::Both),
         AuxAction::UpgradeRelease(c) => {
             if update_menu::update_tap(view) {
-                view.update_verb_want = Some(c);
+                view.update_command_want = Some(c);
             }
         }
         AuxAction::RestartAgents => {
@@ -9657,7 +9657,7 @@ async fn selector_keys(
     let keys = fold_selector_keys(&mut esc, &cleaned2);
     view.sel_esc = esc;
     for _ in 0..rights {
-        // Same cursor as every other selector verb: pointer-follow works
+        // Same cursor as every other selector command: pointer-follow works
         // through the hover-ARMED selector, and an explicit prefix+w
         // selector keeps keyboard control even with the pointer parked on an
         // inert sideline cell.
@@ -9683,7 +9683,7 @@ async fn selector_keys(
     }
     for delta in shifts.drain(..) {
         // The agent reorder acts on the same per-key cursor the other
-        // selector verbs read, so a close mid-chunk swallows the rest.
+        // selector commands read, so a close mid-chunk swallows the rest.
         let Some(cur) = view.selector else {
             break;
         };
@@ -9899,7 +9899,7 @@ async fn selector_keys(
                     .map_err(|e| format!("dismiss send failed: {e}"))?;
                     continue;
                 }
-                // A WATCH-ONLY (paneless) agent row gets the lifecycle verb
+                // A WATCH-ONLY (paneless) agent row gets the lifecycle command
                 // a live row (`!exited`) stops, an exited row removes.
                 // The registry poll's state flip IS the stage separator - stop,
                 // wait ≤1s for the row to flip exited, then `x` again removes (no
@@ -9911,7 +9911,7 @@ async fn selector_keys(
                 // `pane_id.is_none()` is load-bearing (codex review): a PANE-hosted
                 // Agent row is either a real agent's pane or a bare shell pane that
                 // agent_rows() surfaces as a first-class Agent row labelled from its
-                // cmd/cwd - NOT a registry entry. Arming the verb there would shell
+                // cmd/cwd - NOT a registry entry. Arming the command there would shell
                 // `fno-agents` on a label that could collide with an unrelated
                 // agent's name and stop the wrong one. Pane-hosted rows are managed
                 // via their tab (CloseTab); only the paneless rows - the bg/headless
@@ -9919,7 +9919,7 @@ async fn selector_keys(
                 //
                 // An EXTERNAL row (claude-daemon roster or a persisted external
                 // tombstone) routes by stable `attach_id` to the
-                // External verbs instead of `fno-agents` by name: a live row
+                // External commands instead of `fno-agents` by name: a live row
                 // (`!exited`) stops (`claude stop <id>`), a stopped tombstone
                 // (`exited`) removes (`claude rm <id>`). The server re-validates
                 // the exact id + gates rm on a persisted `stopped` state; a

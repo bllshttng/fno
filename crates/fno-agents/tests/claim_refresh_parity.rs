@@ -196,7 +196,7 @@ fn plant(root: &Path, args: &[&str]) {
     assert_eq!(code, 0, "setup acquire failed: {stderr}");
 }
 
-/// Plant a claim FILE directly, for states the verbs cannot mint on demand
+/// Plant a claim FILE directly, for states the commands cannot mint on demand
 /// (a stale lease with a past expires_at) and for receipts whose bytes the
 /// two runtimes would otherwise diverge on: the engine backfills a missing
 /// session_id on renew and the legacy body does not, so a JSON receipt must
@@ -238,7 +238,7 @@ fn normalize(raw: &str, root: &Path) -> String {
     // by the gap between the two runs; the FACT of an extension is the
     // contract, the wall-clock digit is not.
     let raw = scrub_expires_at(&raw);
-    // The python events layer's store-client verb is skewed against the
+    // The python events layer's store-client command is skewed against the
     // rust front (a pre-existing break, filed separately); its best-effort
     // refusal banner is oracle-infra noise, not leaf contract, so the whole
     // embedded block is dropped before comparison.

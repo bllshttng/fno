@@ -1,7 +1,7 @@
 //! The plans-path chain, ported from Python `fno.paths`
 //! (`plans_content_dir` -> `plans_dir` -> `plan_doc_filename`): where plan
 //! docs live for one project, and the filename a new doc takes. One owner:
-//! the `fno do plan path` verb forwards here through the pydoor, and
+//! the `fno do plan path` command forwards here through the pydoor, and
 //! `plans_dirs.rs` resolves every registered project in-process instead of
 //! paying one Python CLI startup per project.
 //!
@@ -27,7 +27,7 @@ const DEFAULT_PLANS_FILENAME: &str = "%Y%m%d-{slug}-{node}.md";
 
 /// The plans dir for `anchor` (the project root): chain tiers 1-2, then the
 /// config tier. `None` when the chain errors; the probe treats that the way
-/// it treated a failed verb: fewer accepted dirs, never a wrong one.
+/// it treated a failed command: fewer accepted dirs, never a wrong one.
 pub(crate) fn plans_content_dir(anchor: &Path) -> Option<PathBuf> {
     for name in ["settings.local.json", "settings.json"] {
         let path = anchor.join(".claude").join(name);
@@ -591,11 +591,11 @@ pub fn run_plan_dir(args: &[String]) -> i32 {
 
 /// `fno-agents state plan-path [--slug S] [--node N] [--name-only]
 /// [--now EPOCH] [cwd]`: the save path (or bare filename) for a new plan
-/// doc. The `fno do plan path` verb forwards here.
+/// doc. The `fno do plan path` command forwards here.
 pub fn run_plan_path(args: &[String]) -> i32 {
     // An empty --slug is a real input the chain renders (an id-less,
     // slug-less date file); only a MISSING --slug is a usage error, which is
-    // what the deleted Python verb's typer requirement did too.
+    // what the deleted Python command's typer requirement did too.
     let mut slug: Option<String> = None;
     let mut node = String::new();
     let mut name_only = false;

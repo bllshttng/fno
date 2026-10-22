@@ -5,14 +5,14 @@
 //! The sweep owns the sequence (stop, active-surface removal, registry drop,
 //! tree prune); this module owns the ACTIVE-SURFACE removal - claude's agent
 //! list, codex's session index, cursor-agent's detached worker servers,
-//! opencode's active session listing - through the same cascade the `rm` verb
+//! opencode's active session listing - through the same cascade the `rm` command
 //! walks. A history deletion never happens here: the codex index drop keeps
 //! the rollout files, the claude list removal keeps the transcript, and an
 //! archive op (codex `thread/archive`, opencode `time.archived`) is
 //! history-preserving by construction.
 //!
 //! opencode is the one arm that does NOT run through the shared cascade. The
-//! cascade is also the `rm` verb's, and the deleted Python rm twin left an
+//! cascade is also the `rm` command's, and the deleted Python rm twin left an
 //! opencode record alone on purpose. Archiving inside the cascade would move
 //! one of those two legs and not the other, so the arm lives here, in the
 //! retirement lane, which has no twin.
@@ -202,7 +202,7 @@ pub(crate) fn cascade_harness_session_result_with(
             // redirect must move this removal, or the default index reads
             // absent, absence reads as a confirmed effect, and the REAL index
             // keeps the session alive after the row is dropped.
-            let Some(codex_dir) = crate::client_verbs::codex_home() else {
+            let Some(codex_dir) = crate::client_commands::codex_home() else {
                 return CascadeOutcome::Failed(
                     "no codex home: CODEX_HOME and HOME are both unset".into(),
                 );

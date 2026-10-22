@@ -1,7 +1,7 @@
 # The dispatch-provenance vocabulary: data behind
 # cli/src/fno/agents/naming.py, the single owner of worker-name generation.
 # A code here is contract, not decoration: autonomy status, the CI provenance
-# audit, and `fno agents name --source/--verb` all read this table.
+# audit, and `fno agents name --source/--command` all read this table.
 schema_version: 1
 sources:
   # ab covers BOTH active-backlog rows (parallel fill + mission converge):
@@ -21,14 +21,14 @@ sources:
   - oh   # provider outage handoff
   - sh   # target self-handoff
   - ex   # execute foreign wave
-  - jn   # backlog join (operator verb)
-verbs:
+  - jn   # backlog join (operator command)
+commands:
   - t   # target
   - bp  # blueprint
   - r   # research/review
   - th  # think
   - f   # fix
-# Harness-map work-verb words -> codes; `builtin` is the no-declared-verb
+# Harness-map work-command words -> codes; `builtin` is the no-declared-command
 # target path. One table so no producer keeps a second mapping that drifts.
 word_codes:
   target: t
@@ -50,24 +50,24 @@ model_codes:
   luna: luna
   astra: astra
   sol: sol
-# Every dispatch path with its codes. verb "resolved" = decided at dispatch
+# Every dispatch path with its codes. command "resolved" = decided at dispatch
 # time from the harness-map receipt. The CI audit refuses when a path loses
 # its row or the two ab rows stop holding.
 provenance:
-  - { site: "dispatch_lanes (parallel fill)",      source: ab,  verb: resolved }
-  - { site: "epic converge (mission drain)",       source: ab,  verb: resolved }
-  - { site: "advance (node-walk)",                 source: ac,  verb: resolved }
-  - { site: "reconcile_dispatch (G4 de-stub)",     source: rd,  verb: t }
-  - { site: "spawn_think (context /think)",        source: th,  verb: th }
-  - { site: "post-merge ritual",                   source: pm,  verb: r }
-  - { site: "pr_watch (headless PR poll)",         source: pw,  verb: r }
-  - { site: "recovery sweep (crash respawn)",      source: rec, verb: resolved }
-  - { site: "keep_going (autonomous follow-up)",   source: kg,  verb: t }
-  - { site: "groom (_spawn_groom_worker)",         source: gr,  verb: th }
-  - { site: "restart (_revive_orphans)",           source: ro,  verb: resolved }
-  - { site: "evals runner",                        source: ev,  verb: th }
-  - { site: "lead loop",                           source: kl,  verb: th }
-  - { site: "outage handoff",                      source: oh,  verb: t }
-  - { site: "target self-handoff",                 source: sh,  verb: t }
-  - { site: "execute foreign wave",                source: ex,  verb: t }
-  - { site: "backlog join",                        source: jn,  verb: t }
+  - { site: "dispatch_lanes (parallel fill)",      source: ab,  command: resolved }
+  - { site: "epic converge (mission drain)",       source: ab,  command: resolved }
+  - { site: "advance (node-walk)",                 source: ac,  command: resolved }
+  - { site: "reconcile_dispatch (G4 de-stub)",     source: rd,  command: t }
+  - { site: "spawn_think (context /think)",        source: th,  command: th }
+  - { site: "post-merge ritual",                   source: pm,  command: r }
+  - { site: "pr_watch (headless PR poll)",         source: pw,  command: r }
+  - { site: "recovery sweep (crash respawn)",      source: rec, command: resolved }
+  - { site: "keep_going (autonomous follow-up)",   source: kg,  command: t }
+  - { site: "groom (_spawn_groom_worker)",         source: gr,  command: th }
+  - { site: "restart (_revive_orphans)",           source: ro,  command: resolved }
+  - { site: "evals runner",                        source: ev,  command: th }
+  - { site: "lead loop",                           source: kl,  command: th }
+  - { site: "outage handoff",                      source: oh,  command: t }
+  - { site: "target self-handoff",                 source: sh,  command: t }
+  - { site: "execute foreign wave",                source: ex,  command: t }
+  - { site: "backlog join",                        source: jn,  command: t }

@@ -1,6 +1,6 @@
 //! P2 loop-boundary announcement nudge.
 //!
-//! When the loop-check verb returns a `block` decision (the loop-yield
+//! When the loop-check command returns a `block` decision (the loop-yield
 //! boundary), it enriches the decision `message` with the session's unread
 //! fleet announcement, so an autonomous loop surfaces it at its next safe
 //! boundary (US3/US4). The `message` reaches the continuing model via the

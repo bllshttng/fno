@@ -1,4 +1,4 @@
-//! PR attribution for the update verb. The url grammar is ported from
+//! PR attribution for the update command. The url grammar is ported from
 //! `cli/src/fno/graph/_reconcile.py` verbatim: the host is anchored, never
 //! searched for, and the two-segment path depth is the contract a looser
 //! parser would break.
@@ -65,7 +65,7 @@ pub fn slug_from_remote(raw: &str) -> Option<String> {
 }
 
 /// One subprocess for the repo-slug read, bounded like the Python caller
-/// (`GH_QUERY_TIMEOUT_S`): a hung gh must not hang the verb.
+/// (`GH_QUERY_TIMEOUT_S`): a hung gh must not hang the command.
 fn run_slug_cmd(argv: &[&str], cwd: Option<&str>) -> (i32, String) {
     use std::io::Read;
     use std::process::{Command, Stdio};

@@ -2,7 +2,7 @@
 
 Every backend answers in Rust (``crates/fno-agents/src/tracker/``); the
 backends' behavior is tested there (AC1-AC5 of the seam plan). This module
-covers the exec client, the footnote-owned sidecar store, and the verb
+covers the exec client, the footnote-owned sidecar store, and the command
 refusals. The partition invariant itself (zero overlap between sidecar and
 read interface) has its own CI gate in scripts/ci/check-tracker-partition.sh,
 exercised in test_partition_gate.py.
@@ -43,11 +43,11 @@ def _write_graph(path: Path, entries: list[dict]) -> Path:
     return path
 
 
-def _stub_verb_call(answer_by_op: dict):
-    """A verb_call stand-in keyed by the door's ``tracker`` op."""
+def _stub_command_call(answer_by_op: dict):
+    """A command_call stand-in keyed by the door's ``tracker`` op."""
 
-    def _call(verb, payload, unavailable, *, timeout=30, passthrough_stderr=False):
-        assert verb == ["backlog", "get"]
+    def _call(command, payload, unavailable, *, timeout=30, passthrough_stderr=False):
+        assert command == ["backlog", "get"]
         op = payload["tracker"]
         answer = answer_by_op[op]
         if isinstance(answer, Exception):
@@ -62,8 +62,8 @@ def _stub_verb_call(answer_by_op: dict):
 
 def test_client_read_maps_node_payload(monkeypatch):
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        _stub_verb_call({"read": {"node": {
+        "fno.rust_binary.command_call",
+        _stub_command_call({"read": {"node": {
             "id": "E-1", "title": "T", "state": "open", "parent": None,
             "blocked_by": [], "details": "d", "url": "u", "size": None,
         }}}),
@@ -79,8 +79,8 @@ def test_client_read_maps_node_payload(monkeypatch):
 
 def test_client_read_maps_not_found(monkeypatch):
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        _stub_verb_call({"read": {"not_found": True}}),
+        "fno.rust_binary.command_call",
+        _stub_command_call({"read": {"not_found": True}}),
     )
     with pytest.raises(NodeNotFound):
         get_tracker("graph").read("E-gone")
@@ -182,40 +182,40 @@ def test_sidecar_external_mode_never_reads_the_graph(
     assert read_graph_strict(g)[0]["cwd"] == "/graph-sentinel"
 
 
-# -- verb refusal on an external backend --
+# -- command refusal on an external backend --
 
 
 @pytest.mark.parametrize(
-    ("verb", "args"),
+    ("command", "args"),
     [
         ("add", ["add", "t"]),
         ("decompose", ["decompose", "ab-deadbeef", "--groups", "x"]),
         ("intake", ["intake", "someplan.md"]),
     ],
 )
-def test_create_verbs_refuse_on_external_backend(verb, args, monkeypatch, tmp_path):
+def test_create_commands_refuse_on_external_backend(command, args, monkeypatch, tmp_path):
     # Every creation entry point must refuse on an external backend. The
     # guard lives at the top of the native create path (add, idea and the
     # new word all ride it) AND of the native decompose / intake doors,
     # which write through their own mutators. A guard on only some
     # reachable paths is decorative, so this exercises each path: if a
-    # future creation verb bypasses the guard, this fails loudly.
+    # future creation command bypasses the guard, this fails loudly.
     import os
     import subprocess
 
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
-    if verb in {"add", "idea", "new"}:
-        # The create verbs answer natively now; their guard rides the
+    if command in {"add", "idea", "new"}:
+        # The create commands answer natively now; their guard rides the
         # binary under the same backend selection (the door pins graph, so
         # the github selection merges over it).
         result = run_native_create(
             tmp_path / "graph.json",
-            verb,
+            command,
             "t",
             auto_difficulty=False,
             extra_env={"FNO_TRACKER_BACKEND": "github"},
         )
-        assert result.exit_code == 1, f"{verb} did not refuse: {result.output + result.stderr}"
+        assert result.exit_code == 1, f"{command} did not refuse: {result.output + result.stderr}"
         assert "github" in (result.output + result.stderr)
         assert "tracker" in (result.output + result.stderr).lower()
         return
@@ -240,6 +240,6 @@ def test_create_verbs_refuse_on_external_backend(verb, args, monkeypatch, tmp_pa
     )
     out = proc.stdout + proc.stderr
     code = proc.returncode
-    assert code == 1, f"{verb} did not refuse: {out}"
+    assert code == 1, f"{command} did not refuse: {out}"
     assert "github" in out
     assert "tracker" in out.lower()

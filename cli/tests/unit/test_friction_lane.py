@@ -1,6 +1,6 @@
 """The friction lane after the fleet-task port: the contended and
 polling_settled verdicts ride ``reconcile_friction``, which is ONE transport
-call through ``verb_call("fleet-task", ...)``.
+call through ``command_call("fleet-task", ...)``.
 
 The fold's behavior is characterized in Rust
 (``fleet_task_reconcile_parity.rs``); what stays testable here is the lane's
@@ -26,22 +26,22 @@ def isolate_question_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def _friction_run(root, rows, transcripts, monkeypatch, pr_state_for=None, captured=None):
-    """The verb's flow with the fleet-enumeration seams injected and the
+    """The command's flow with the fleet-enumeration seams injected and the
     transport stubbed: classification runs for real, the fold's payload is
     captured and a canned outcome comes back."""
     import fno.rust_binary
     from fno.agents import friction_lane as fl
     from fno.agents import watchdog as wd
 
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        assert verb == "fleet-task"
+    def fake_command_call(command, payload, *args, **kwargs):
+        assert command == "fleet-task"
         if captured is not None:
             captured.append(payload)
         return {"outcome": "asked", "id": "ft-friction00"}
 
     import fno.agents.stale_escalate as se
 
-    monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
+    monkeypatch.setattr(fno.rust_binary, "command_call", fake_command_call)
 
     payload, out_rows = wd.run_sweep(
         now_s=_NOW,

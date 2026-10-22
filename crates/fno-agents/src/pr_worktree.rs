@@ -198,8 +198,8 @@ mod tests {
         assert_eq!(resolve(&canonical, "feature/pr-42").unwrap(), feature);
         assert_eq!(resolve(&nested, "feature/pr-42").unwrap(), feature);
         assert!(resolve(&canonical, "main").unwrap() == PathBuf::from(&canonical));
-        // The Python verb_call seam (pr/cli.py _select_pr_worktree) reads the
-        // verb's exit 3 as "no local worktree"; a reword here silently
+        // The Python command_call seam (pr/cli.py _select_pr_worktree) reads the
+        // command's exit 3 as "no local worktree"; a reword here silently
         // restores the traceback blocker there.
         let err = resolve(&canonical, "feature/missing").unwrap_err();
         assert!(

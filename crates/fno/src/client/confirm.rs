@@ -8,7 +8,7 @@ use super::{agent_lattice_state, LatticeState, SectionKey, TabId};
 use crate::proto::Command;
 
 /// The command that clears ONE dead row, by what kind of row it is. Three
-/// stores hold dead rows and each has its own verb: a member TOMBSTONE lives in
+/// stores hold dead rows and each has its own command: a member TOMBSTONE lives in
 /// the squad's member list (`RemoveAgent` resolves only against the agent
 /// registry, so it would answer "no such agent" and leave the row on screen), an
 /// EXTERNAL row routes by its stable attach_id, and a registry row goes
@@ -40,7 +40,7 @@ pub(crate) fn remove_dead(a: &super::AgentRow) -> Command {
 /// `fno agents rm` subprocess (`agent_action` spawns one per command, unbounded),
 /// so an unbounded fan-out would let a long-lived section stampede the daemon.
 /// ponytail: a flat cap, repeat to clear the rest; the upgrade is a section-scoped
-/// bulk verb server-side, which the single-process `ReapAgents` already models.
+/// bulk command server-side, which the single-process `ReapAgents` already models.
 pub(crate) const CLEAR_DEAD_MAX: usize = 25;
 
 /// A pending destructive/costly action awaiting the operator's one-keypress
@@ -84,7 +84,7 @@ pub(crate) enum ConfirmKind {
         measure: bool,
     },
     /// Bulk-reap every exited fno-agent registry row (uppercase `X`).
-    /// No payload - the server's reap verb owns the candidate set.
+    /// No payload - the server's reap command owns the candidate set.
     ReapAgents,
     /// Stop a live external claude-daemon row by stable `attach_id`.
     /// The captured attach id, not the row index, commits; `name` is cosmetic.

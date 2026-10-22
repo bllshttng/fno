@@ -62,6 +62,6 @@ A climb round turns one comparison into a verdict the user can accept in one ste
 
 1. Pick one stage and one candidate lane from `fno config route inventory`. For the blueprint stage the candidates are only the blueprint-floor models: opus, fable, gpt-5.6-sol, gpt-6-astra. A cheaper model never drafts a plan.
 2. Run each task of that stage separately. Command shape: `fno doctor evals run --task <task id> --lane <baseline lane> --cohort <baseline id> --repeat K`. The trial arm repeats the shape with the trial lane and trial cohort id. Cover the stage's train and held-out tasks in both arms. The fold scores every split task present in the cohort.
-3. Fold it: `fno doctor evals report --climb --baseline <baseline id> --trial <trial id> [--stage <verb> --trial-lane <trial lane>] --json`.
+3. Fold it: `fno doctor evals report --climb --baseline <baseline id> --trial <trial id> [--stage <command> --trial-lane <trial lane>] --json`.
 4. On `propose`, write the JSON to `evals/climbs/<date>-<stage>.json` and ask the user with the printed accept line. On `overfit` or `regression`, read the reason and stop. On `underpowered` or `hold`, commit nothing: post the fold JSON in the PR conversation and record the cohort ids and the rows' location in the plan.
 5. Choosing the next candidate reads only train transcripts. Held-out rows are never inspected to steer the climb. The held-out set stays a test, not a tuning surface.

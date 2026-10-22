@@ -47,7 +47,7 @@ sys.path.insert(0, str(CLI_SRC))
 TTL = 15
 HEAD_PLACEHOLDER = "<head9>"
 
-# The corpus the plan froze: the four verbs, the plugin-qualified spelling,
+# The corpus the plan froze: the four commands, the plugin-qualified spelling,
 # every level word, ultra, the flags in all three spellings, targets, the
 # quote fallback, and the null rows.
 PARSE_CASES = [
@@ -72,7 +72,7 @@ PARSE_CASES = [
     ("branch target", "/review feature/x"),
     ("quoted target", '/review high --comment "two words"'),
     ("unbalanced quote falls back", "/review high 'unclosed"),
-    ("non review verb", "/compact"),
+    ("non review command", "/compact"),
     ("empty payload", ""),
     ("leading slashes", "///review high"),
     ("double dash comment", "/review high -- --comment"),

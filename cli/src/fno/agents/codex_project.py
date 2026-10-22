@@ -5,7 +5,7 @@ ChatGPT desktop and mobile apps as its own Project keyed on the worktree
 path - for fno worktrees, a Project named after the node id. A thread's
 project is an explicit ``projectId``, and the codex CLI exposes no argv
 flag to set it, so the assignment rides the ``fno-agents`` binary's
-hidden ``codex-assign-project`` verb: it resolves or creates the repo's
+hidden ``codex-assign-project`` command: it resolves or creates the repo's
 project and patches the bound thread with ``thread/metadata/update``.
 """
 
@@ -19,8 +19,8 @@ from typing import Optional
 def assign_project_detached(cwd: Path, session_id: Optional[str]) -> None:
     """Assign a bound headless codex thread to its repo's codex project.
 
-    Fire-and-forget by contract: this execs the verb detached and never
-    waits, and the verb itself is fail-open (an absent daemon, a refused
+    Fire-and-forget by contract: this execs the command detached and never
+    waits, and the command itself is fail-open (an absent daemon, a refused
     write, or a cwd outside a repo leaves the thread unassigned, which is
     the pre-assignment behavior). A missing binary or a refused spawn is
     equally silent - a project we cannot assign must never delay or fail

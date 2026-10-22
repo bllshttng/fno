@@ -14,14 +14,14 @@ import typer
 
 
 
-# Eight subcommands became one verb taking the check NAME as an argument, so
-# `fno doctor lint verb-ratchet` still reads and types exactly the same while costing
+# Eight subcommands became one command taking the check NAME as an argument, so
+# `fno doctor lint command-ratchet` still reads and types exactly the same while costing
 # one leaf instead of eight. Six of the eight only ever ran in CI, where a
 # distinct leaf per check bought nothing a dict key does not.
 #
-# The per-check options survive as options on the one verb, dispatched by
+# The per-check options survive as options on the one command, dispatched by
 # signature rather than by name: a check is called with only the parameters it
-# declares, so `--update` reaches `verb-ratchet` and `seam-crossings` and
+# declares, so `--update` reaches `command-ratchet` and `seam-crossings` and
 # nothing else.
 #
 # A check's option must still be DECLARED on `lint` below, and forgetting one is
@@ -35,7 +35,7 @@ CHECKS: dict[str, str] = {
     "provider-stderr-merge": "provider_stderr_merge",
     "shellout-drift": "shellout_drift",
     "spawn-flag-owners": "spawn_flag_owners",
-    "verb-ratchet": "verb_ratchet",
+    "command-ratchet": "command_ratchet",
     "stale-skill-refs": "stale_skill_refs",
     "retired-commands": "retired_commands",
     "registry": "registry",
@@ -594,9 +594,9 @@ def hook_tombstones(base: Optional[str] = None) -> None:
 
     The harness answers hook config from an init-time snapshot, and a
     PreToolUse hook that cannot launch fails the whole matched tool call -
-    on the Bash matcher that is every shell verb at once. So a commit that
+    on the Bash matcher that is every shell command at once. So a commit that
     deletes a referenced script bricks every session started before the
-    merge, including the verbs needed to diagnose it. Retiring a hook is
+    merge, including the commands needed to diagnose it. Retiring a hook is
     two steps across two releases: remove its config entry and leave a
     no-op stub this release, delete the stub in a later one. This gate
     fails the one-commit version of that.
@@ -657,7 +657,7 @@ def flock_pattern(dispatch_path: Optional[Path] = None) -> None:
     script = resolve_repo_root() / "scripts" / "lint-flock-pattern.sh"
     if not script.is_file():
         typer.echo(
-            "fno doctor lint flock-pattern: this verb lints the repo's own source and "
+            "fno doctor lint flock-pattern: this command lints the repo's own source and "
             "needs the footnote checkout's lint scripts, which a bare "
             "`pip install fno` does not ship. Run it from a clone (or install "
             "the plugin).",
@@ -745,10 +745,10 @@ def provider_stderr_merge(providers_dir: Optional[Path] = None) -> None:
 def shellout_drift(no_degrade: bool = False) -> None:
     """Forbid repo-root shell-outs without a proven clone-only degrade path (US4).
 
-    Scans cli/src/fno/ for verbs that bash-exec a resolve_repo_root()/
+    Scans cli/src/fno/ for commands that bash-exec a resolve_repo_root()/
     resolve_plugin_script()-rooted script; every such script must be on the
     CLONE_ONLY_SCRIPTS allowlist (scripts/lint/.clone-only-scripts.txt) and each
-    allowlisted verb must degrade gracefully on a bare install. Fail-closed.
+    allowlisted command must degrade gracefully on a bare install. Fail-closed.
     """
     from fno import lint_shellout_drift
 
@@ -762,7 +762,7 @@ def shellout_drift(no_degrade: bool = False) -> None:
 def spawn_flag_owners() -> None:
     """Every ``fno agents spawn`` flag names an owner, and the count is capped.
 
-    ``menu-caps`` ratchets VERBS; nothing ratcheted FLAGS. Introspecting the
+    ``menu-caps`` ratchets COMMANDS; nothing ratcheted FLAGS. Introspecting the
     live Typer command is what makes this a gate and not a stale list: a flag
     added to ``cmd_spawn`` and not to ``FLAG_OWNERS`` fails here, in the PR
     that adds it.
@@ -868,33 +868,33 @@ def spawn_flag_owners() -> None:
     )
 
 
-def verb_ratchet(update: bool = False) -> None:
-    """Ratchet the REAL verb count.
+def command_ratchet(update: bool = False) -> None:
+    """Ratchet the REAL command count.
 
-    ``menu-caps`` caps how many verbs each group holds; this pins WHICH exist.
-    Fails when the live surface and ``scripts/ci/verb-baseline.txt`` disagree,
-    naming the added or removed verbs. Covers BOTH binaries (the fno-py
+    ``menu-caps`` caps how many commands each group holds; this pins WHICH exist.
+    Fails when the live surface and ``scripts/ci/command-baseline.txt`` disagree,
+    naming the added or removed commands. Covers BOTH binaries (the fno-py
     registry and the Rust front's mux + version surface) and fails closed with
     a named error - writing no baseline - when the Rust front cannot be reached,
     so the ratchet can never pass by reporting only half the surface. ``--update``
     regenerates the baseline after an intentional change.
     """
-    from fno import lint_verb_ratchet as vr
+    from fno import lint_command_ratchet as vr
 
     if update:
         try:
             leaves = vr.enumerate_all_leaves()
-        except vr.VerbRatchetError as exc:
+        except vr.CommandRatchetError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1)
         path = vr.baseline_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(vr.generate(leaves), encoding="utf-8")
-        typer.echo(f"verb-ratchet: regenerated {path.name} ({len(leaves)} leaves)")
+        typer.echo(f"command-ratchet: regenerated {path.name} ({len(leaves)} leaves)")
         return
     try:
         report = vr.check()
-    except vr.VerbRatchetError as exc:
+    except vr.CommandRatchetError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1)
     typer.echo(report.message, err=not report.ok)
@@ -944,7 +944,7 @@ def _run_ci_gate(rel_path: str) -> None:
 def preamble_budget() -> None:
     """Report the SessionStart preamble byte budget; refuse when over it.
 
-    This verb is the local signal, not a second CI registration: the gate
+    This command is the local signal, not a second CI registration: the gate
     already runs in guards.yml on every push and pull_request.
     """
     _run_ci_gate("scripts/ci/check-preamble-budget.sh")
@@ -1404,7 +1404,7 @@ def lint(
         "--update",
         help=(
             "Regenerate a baseline after an intentional change. "
-            "verb-ratchet: scripts/ci/verb-baseline.txt. "
+            "command-ratchet: scripts/ci/command-baseline.txt. "
             "seam-crossings: scripts/ci/seam-crossings-baseline.txt."
         ),
     ),

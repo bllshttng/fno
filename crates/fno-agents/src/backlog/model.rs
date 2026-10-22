@@ -281,7 +281,8 @@ pub struct NodeClaim {
 /// The dispatch fields (one node_dispatch row).
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct Dispatch {
-    pub verb: Option<String>,
+    #[serde(alias = "verb")] // verb-wording: allow (stored rows before the rename)
+    pub command: Option<String>,
     pub brief: Option<String>,
     pub model: Option<String>,
 }
@@ -526,7 +527,17 @@ pub struct Node {
     pub extras: Map<String, Value>,
 }
 
-const DISPATCH_KEYS: &[&str] = &["dispatch_verb", "dispatch_brief", "model"];
+/// The node key rows written before the rename to `dispatch_command` carry.
+/// Readers take `dispatch_command` first and this key second; writers
+/// emit only `dispatch_command`. This constant is the one quoting of it.
+pub const LEGACY_DISPATCH_COMMAND_KEY: &str = "dispatch_verb"; // verb-wording: allow (stored key)
+
+const DISPATCH_KEYS: &[&str] = &[
+    "dispatch_command",
+    LEGACY_DISPATCH_COMMAND_KEY,
+    "dispatch_brief",
+    "model",
+];
 const PROVENANCE_KEYS: &[&str] = &[
     "source",
     "source_kind",
@@ -645,7 +656,8 @@ impl Node {
                 work: false,
             },
             dispatch: Dispatch {
-                verb: sub_opt_str(&dispatch_part, "dispatch_verb"),
+                command: sub_opt_str(&dispatch_part, "dispatch_command")
+                    .or_else(|| sub_opt_str(&dispatch_part, LEGACY_DISPATCH_COMMAND_KEY)),
                 brief: sub_opt_str(&dispatch_part, "dispatch_brief"),
                 model: sub_opt_str(&dispatch_part, "model"),
             },
@@ -972,9 +984,9 @@ impl Node {
                 .unwrap_or(Value::Null),
         );
         put(
-            "dispatch_verb",
+            "dispatch_command",
             self.dispatch
-                .verb
+                .command
                 .clone()
                 .map(Value::String)
                 .unwrap_or(Value::Null),
@@ -1941,7 +1953,8 @@ fn is_known_key(key: &str) -> bool {
             | "locked_by_harness"
             | "locked_by_harness_session"
             | "locked_at"
-            | "dispatch_verb"
+            | "dispatch_command"
+            | LEGACY_DISPATCH_COMMAND_KEY
             | "dispatch_brief"
             | "model"
             | "source"

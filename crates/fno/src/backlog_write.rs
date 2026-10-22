@@ -1,13 +1,13 @@
 //! One write path for every backlog board (the mux TUI and the web bridge):
-//! the argv builders and the one bounded shell-out. The verbs themselves are
+//! the argv builders and the one bounded shell-out. The commands themselves are
 //! Python-served `fno backlog` commands; a board builds argv here, runs it
-//! through [`run_verb`], and shows the verb's own last line back as the
+//! through [`run_command`], and shows the command's own last line back as the
 //! notice. No board builds a write argv by hand.
 
 use std::time::Duration;
 
-/// One `fno backlog ...` write verb's budget (the board read's).
-const VERB_BUDGET: Duration = Duration::from_secs(10);
+/// One `fno backlog ...` write command's budget (the board read's).
+const COMMAND_BUDGET: Duration = Duration::from_secs(10);
 
 /// Where a rank move puts the card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,13 +41,13 @@ pub fn rank_argv(id: &str, place: Place, anchor: Option<&str>) -> Result<Vec<Str
 
 /// The one bounded shell-out for every board write: argv as an array, off
 /// the UI loop, `kill_on_drop`, a 10 s budget. The notice is the last
-/// stderr line on a non-zero exit (the verb's refusal, verbatim), else the
+/// stderr line on a non-zero exit (the command's refusal, verbatim), else the
 /// last stdout line, else the updated fallback; the bool is the exit fact
 /// so the web bridge can answer `{"ok": false, ...}` without re-reading the
 /// text. Sibling of the foreground restart runner
 /// ([`crate::client::update_menu::run_restart_foreground`]), which instead
 /// inherits stdio so the operator watches the receipts.
-pub(crate) async fn run_verb(args: &[String], stdin: Option<String>) -> (bool, String) {
+pub(crate) async fn run_command(args: &[String], stdin: Option<String>) -> (bool, String) {
     use std::process::Stdio;
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command
@@ -71,9 +71,9 @@ pub(crate) async fn run_verb(args: &[String], stdin: Option<String>) -> (bool, S
         }
         child.wait_with_output().await.ok()
     };
-    let output = match tokio::time::timeout(VERB_BUDGET, fut).await {
+    let output = match tokio::time::timeout(COMMAND_BUDGET, fut).await {
         Ok(Some(o)) => o,
-        Ok(None) => return (false, "the verb could not start".into()),
+        Ok(None) => return (false, "the command could not start".into()),
         Err(_) => {
             return (
                 false,
@@ -88,14 +88,14 @@ pub(crate) async fn run_verb(args: &[String], stdin: Option<String>) -> (bool, S
         let stderr = String::from_utf8_lossy(&output.stderr);
         return (
             false,
-            last_line(&stderr).unwrap_or_else(|| "the verb refused".into()),
+            last_line(&stderr).unwrap_or_else(|| "the command refused".into()),
         );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     (true, last_line(&stdout).unwrap_or_else(|| "updated".into()))
 }
 
-/// The last non-blank line of a verb's output.
+/// The last non-blank line of a command's output.
 fn last_line(text: &str) -> Option<String> {
     text.lines()
         .rev()
@@ -129,11 +129,11 @@ mod tests {
         );
     }
 
-    // AC4/AC8 halves: the shell-out reports the exit fact and the verb's own
+    // AC4/AC8 halves: the shell-out reports the exit fact and the command's own
     // last line. FNO_BIN is process-global, so the existing guard serializes
     // the tests that repoint it.
     #[tokio::test]
-    async fn run_verb_reports_the_last_stdout_line_on_success() {
+    async fn run_command_reports_the_last_stdout_line_on_success() {
         let _guard = crate::pane_send_audit::FNO_BIN_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -153,7 +153,7 @@ mod tests {
         let _ = std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755));
         let previous = std::env::var_os("FNO_BIN");
         std::env::set_var("FNO_BIN", &stub);
-        let (ok, notice) = run_verb(
+        let (ok, notice) = run_command(
             &rank_argv("x-1", Place::Top, None).expect("top needs no anchor"),
             None,
         )
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_verb_reports_the_verb_refusal_on_failure() {
+    async fn run_command_reports_the_command_refusal_on_failure() {
         let _guard = crate::pane_send_audit::FNO_BIN_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -186,7 +186,7 @@ mod tests {
         let previous = std::env::var_os("FNO_BIN");
         std::env::set_var("FNO_BIN", &stub);
         let (ok, notice) =
-            run_verb(&rank_argv("x-1", Place::Top, None).expect("passes"), None).await;
+            run_command(&rank_argv("x-1", Place::Top, None).expect("passes"), None).await;
         std::env::remove_var("FNO_BIN");
         if let Some(prev) = previous {
             std::env::set_var("FNO_BIN", prev);

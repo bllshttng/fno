@@ -12,7 +12,7 @@
 //!
 //! ## Two namespaces, one socket
 //!
-//! Methods are namespaced by a `<namespace>.<verb>` prefix:
+//! Methods are namespaced by a `<namespace>.<command>` prefix:
 //!
 //! - `agent.*` — `fno-agents` client (spawn / ask / list / stop / rm /
 //!   reconcile / status).
@@ -55,7 +55,7 @@ pub enum ProtocolError {
 }
 
 /// A request from a client to the daemon. `id` correlates the response on a
-/// multiplexed connection; `method` is `<namespace>.<verb>`; `params` is an
+/// multiplexed connection; `method` is `<namespace>.<command>`; `params` is an
 /// opaque JSON object the handler interprets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Request {
@@ -219,7 +219,7 @@ pub struct RpcError {
 }
 
 /// Stable machine-readable error codes. Clients map these to exit codes; the
-/// design's per-verb exit codes (13/14/15/18, ...) are applied client-side from
+/// design's per-command exit codes (13/14/15/18, ...) are applied client-side from
 /// these. Serialized snake_case for cross-language parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -258,7 +258,7 @@ pub enum ErrorCode {
     ShuttingDown,
 }
 
-/// Method namespace, derived from the `<namespace>.<verb>` method prefix.
+/// Method namespace, derived from the `<namespace>.<command>` method prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Namespace {
     /// `agent.*` — the `fno-agents` client surface.
@@ -279,8 +279,8 @@ impl Namespace {
         }
     }
 
-    /// The verb portion after the namespace prefix (`agent.spawn` -> `spawn`).
-    pub fn verb(method: &str) -> Option<&str> {
+    /// The command portion after the namespace prefix (`agent.spawn` -> `spawn`).
+    pub fn command(method: &str) -> Option<&str> {
         method.split_once('.').map(|(_, v)| v)
     }
 }

@@ -536,7 +536,7 @@ def test_peek_reads_adopted_orphan_row_instead_of_lying(tmp_path, monkeypatch):
     resolver skips it because it is not alive, so peek answered "peer not found
     in the registry" for a row it had already read, and pointed the caller back
     at adopt: a closed loop that left a 2,830-line conversation unreachable
-    through the documented observe verb.
+    through the documented observe command.
     """
     from fno import paths
     from fno.agents.registry import AgentEntry, write_registry

@@ -93,7 +93,7 @@ fn codex_target() -> RetaskTarget {
         permission_mode: None,
         route: None,
         account: None,
-        verb: "target".to_string(),
+        command: "target".to_string(),
     }
 }
 

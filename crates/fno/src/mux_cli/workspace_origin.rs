@@ -1,12 +1,12 @@
-//! `fno mux workspace`: the verb family's dispatch, and its `origin` verb.
+//! `fno mux workspace`: the command family's dispatch, and its `origin` command.
 //! A child module of `mux_cli`: the file budget gate keeps the parent
 //! shrink-only, and `use super::*` keeps every helper in one place.
 
 use super::*;
 
-/// `fno mux workspace <verb> ...`: the workspace-store maintenance family.
-/// `prune`, `restore` and `origin` exist; a bare or unknown verb is usage.
-/// Tokens after the family verb carry verbatim, like `pane`/`block`.
+/// `fno mux workspace <command> ...`: the workspace-store maintenance family.
+/// `prune`, `restore` and `origin` exist; a bare or unknown command is usage.
+/// Tokens after the family command carry verbatim, like `pane`/`block`.
 ///
 /// The retired `fno mux squad` spelling is GONE: an unadvertised alias named
 /// by nothing outside its own test. `--squad` stays a hidden-deprecated flag
@@ -113,7 +113,7 @@ fn workspace_origin(args: &[OsString]) -> i32 {
         let Ok(sock) = proto::socket_path(&session) else {
             continue;
         };
-        let control = ControlVerb::WorkspaceOrigin {
+        let control = ControlCommand::WorkspaceOrigin {
             workspace: name.to_string(),
             path: path.clone(),
             remove: action == "remove",

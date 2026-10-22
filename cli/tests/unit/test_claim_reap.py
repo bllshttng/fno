@@ -54,7 +54,7 @@ def classify_for_sweep(claim: Claim, _now: int | None = None) -> tuple[bool, str
 def _probe_sweep(claim: Claim, root):
     """Judge one claim the way the pre-forward `reap` sweep did.
 
-    The verb now forwards to Rust, whose own roster arms answer fail-closed,
+    The command now forwards to Rust, whose own roster arms answer fail-closed,
     so the probe wiring is exercised directly: the same `sweep_verdict` call
     the old CLI loop made, with a root-resolved native verdict row and a
     fresh lazily-reading abandonment probe. Node settlement stays unwired -
@@ -107,7 +107,7 @@ class TestTheSweepNeverReapsAnUnexpiredDispatchReservation:
 class TestCliProbeWiring:
     """The roster join is injected by sweep_verdict's callers: the spawn
     guard in fno.agents.cli passes abandonment_probe for every suspect
-    claim, and the pre-forward `reap` sweep was the other caller. The verb
+    claim, and the pre-forward `reap` sweep was the other caller. The command
     itself now forwards to Rust, whose own roster arms answer fail-closed,
     so these tests drive the Python wiring directly - a probe that exists
     but is never passed is a decorative guard."""

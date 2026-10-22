@@ -32,7 +32,7 @@ pub(crate) struct CancelHit {
     pub author: Option<String>,
     pub reason: Option<String>,
     /// Who invoked the cancel: `user` when the newest user entry carries
-    /// the cancel verb, `assistant` when the session itself asked (F6: a
+    /// the cancel command, `assistant` when the session itself asked (F6: a
     /// self-cancel is a stuck signal, not a stop). Advisory; the loop
     /// check re-derives it from the transcript at honor time.
     pub via: Option<String>,

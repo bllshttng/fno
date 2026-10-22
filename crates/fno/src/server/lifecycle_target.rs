@@ -5,7 +5,7 @@
 //! never written). `stop` and `remove` used to resolve through the registry
 //! alone and answered `no such agent` for exactly those rows, stranding a
 //! live process behind a live pane. This module owns the one
-//! resolver both verbs route through, with the pane-table fallback.
+//! resolver both commands route through, with the pane-table fallback.
 //!
 //! Resolution rules (fail-closed, one unambiguous target per keypress):
 //! 1. A non-empty harness session id against the registry, identity first.
@@ -19,7 +19,7 @@
 //! Nothing answering names every lookup that was tried, so a refusal says
 //! what was searched instead of implying the row does not exist.
 //!
-//! `StopAgent`/`RemoveAgent` on a registry target shell the fno-agents verbs
+//! `StopAgent`/`RemoveAgent` on a registry target shell the fno-agents commands
 //! as before; on a pane target stop signals the child and leaves the pane,
 //! remove kills it and drops the pane. Neither gesture is gated behind the
 //! other, and remove never asks twice unless the operator turned the confirm
@@ -36,7 +36,7 @@ pub(crate) struct PaneFacts {
 }
 
 /// What a resolved lifecycle gesture acts on: a registry row (the fno-agents
-/// verbs own it) or a bare pane (this server owns the child directly).
+/// commands own it) or a bare pane (this server owns the child directly).
 #[derive(Debug)]
 pub(crate) enum Target<'a> {
     Registry(&'a RegistryAgent),
@@ -165,7 +165,7 @@ pub(crate) fn row_identity_state(row: &RegistryAgent) -> &'static str {
     identity_cell(row.session_id.as_deref(), Some(&row.name)).0
 }
 
-/// The pane-table side of the same question, for the CLI verbs: one pane in
+/// The pane-table side of the same question, for the CLI commands: one pane in
 /// a session's listing that hosts `row`. A session-id-shaped identity joins
 /// on the pane's resolved fno_id; a row with no usable id can still join on
 /// its name (the spawned-name state). `None` = no pane in this listing hosts
@@ -198,7 +198,7 @@ impl super::Core {
     /// Fail-closed: absent, any external row sharing the name, or a >1
     /// non-external collision are all refused, so a keypress can only ever
     /// act on exactly one unambiguous registry agent. The registry-only
-    /// callers (rename) resolve here; the lifecycle verbs take
+    /// callers (rename) resolve here; the lifecycle commands take
     /// [`Self::resolve_lifecycle_full`], which also answers from the pane
     /// the row was drawn from.
     pub(super) fn resolve_lifecycle_target(
@@ -492,7 +492,7 @@ pub(crate) fn pane_table_host(
     let stream = crate::proto::connect_unix_timeout(&sock, crate::mux_cli::PROBE_TIMEOUT).ok()?;
     let reply = crate::mux_cli::send_control(
         stream,
-        crate::proto::ControlVerb::PaneLs,
+        crate::proto::ControlCommand::PaneLs,
         crate::mux_cli::CONTROL_TIMEOUT,
         crate::mux_cli::CONTROL_REPLY_DEADLINE,
         session,

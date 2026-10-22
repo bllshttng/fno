@@ -1,6 +1,6 @@
 """The native `fno backlog decompose` door.
 
-The Python decompose verb moved into the Rust dispatcher; these tests
+The Python decompose command moved into the Rust dispatcher; these tests
 exercise the door the way an operator does: one binary invocation per case,
 the fixture root pinned (cwd, HOME, state dir) so no subprocess write
 escapes to operator state.
@@ -84,7 +84,7 @@ def test_decompose_door_re_run_updates_in_place(tmp_path: Path) -> None:
 
 
 def test_decompose_door_refuses_a_planless_epic_and_names_contain(tmp_path: Path) -> None:
-    """The plan-less-epic refusal names the folding verb, not a dead end.
+    """The plan-less-epic refusal names the folding command, not a dead end.
 
     An epic with no plan_path cannot address group fragments; the remedy is
     `fno backlog contain`, moved here from the wheel plan_base pin when the

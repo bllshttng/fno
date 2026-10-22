@@ -40,12 +40,7 @@ be owned by more than one peer (the backend that implements it AND the
 docs project that references it), without forcing a peer's surface list to
 explode into raw glob soup.
 
-`fno.inbox.settings.read_peer_surfaces()` and
-`read_surface_patterns()` return these maps as plain `dict[str, list[str]]`
-values. Both walk up to the nearest `.fno/config.toml` (project-
-local override → global), and both return `{}` silently when the block is
-absent. The opt-in default is "no peer messaging", so a workspace without
-this configuration sees no extra prompts and sends no messages.
+`fno inbox peers --json` prints these maps as `peers`, `surface_patterns` and `projects` (the `--to-project` hint). The read walks up to the nearest `.fno/config.toml` (or legacy `settings.yaml`). When the block is absent, it prints empty maps. A peer that is not a mapping, or a `surfaces` or glob value that is not a list, drops with one stderr warning. The opt-in default is "no peer messaging", so a workspace without this configuration sees no extra prompts and sends no messages.
 
 Skills consume the maps via the same algorithm:
 
@@ -110,7 +105,7 @@ entries; only triaged heads-up threads do (via `fno agents mail triage` ->
                 |     (interrupts mid-feature)       |
 ```
 
-Sender resolution: `resolve_project()` walks up from cwd looking for `.fno/config.toml` with a `project:` field. Without that field, every `fno agents mail` verb errors with the exact fix string `"set 'project:' in .fno/config.toml or pass --from"` (the reply/drain verbs keep `--from`; the cursor `unread`/`ack` take `--name`; the send verb `fno agents mail send` uses `--from-name`).
+Sender resolution: `resolve_project()` walks up from cwd looking for `.fno/config.toml` with a `project:` field. Without that field, every `fno agents mail` command errors with the exact fix string `"set 'project:' in .fno/config.toml or pass --from"` (the reply/drain commands keep `--from`; the cursor `unread`/`ack` take `--name`; the send command `fno agents mail send` uses `--from-name`).
 
 ## Three message kinds (post-2026-05)
 
@@ -139,7 +134,7 @@ complete -> fyi-with-replies-to).
 
 Concurrent writers to the same thread file serialize via a
 `mkdir <path>.lock.d` mutex (POSIX-atomic, macOS portable). Read-only
-verbs (`unread`, `list`, `find_thread_by_msg_id`) skip the lock. Writes
+commands (`unread`, `list`, `find_thread_by_msg_id`) skip the lock. Writes
 go through `_atomic_write_text(path, content)`: write to a sibling
 tempfile (mkstemp), then `os.replace(tmp, target)` so a partial write
 under SIGKILL or disk-full cannot leave the live thread file
@@ -240,7 +235,7 @@ The substrate ships as a single feature. Four follow-up backlog entries land in 
 ## Files
 
 - `cli/src/fno/inbox/store.py` - Markdown parser, `Message`/`Kind`/`Status`, filelock, monotonic transitions, `resolve_project()`
-- `cli/src/fno/mail/cli.py` - `fno agents mail` Typer verbs (send/unread/ack/reply/list/lint/drain/status) over the store data model
+- `cli/src/fno/mail/cli.py` - `fno agents mail` Typer commands (send/unread/ack/reply/list/lint/drain/status) over the store data model
 - `cli/src/fno/inbox/triage.py` - `claude -p` subprocess wrapper with retry-once and env-stub override
 - `cli/src/fno/graph/store.py` - Provenance setdefaults in `_apply_graph_defaults`
 - `cli/src/fno/graph/load.py` - `query_by_source_inbox_msg` helper

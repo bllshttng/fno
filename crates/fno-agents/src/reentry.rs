@@ -2,7 +2,7 @@
 //!
 //! Every door that re-enters a Claude session (`fno agents attach`, the dead
 //! and live resume arms, the mux attach/ResumeAgent gestures, the recovery
-//! verb) must restore the SAME launch context the worker was spawned with or
+//! command) must restore the SAME launch context the worker was spawned with or
 //! refuse before launching anything. Before this module each door rebuilt its
 //! own provider argv, and the account binding dispatch applies at spawn was
 //! applied on none of them - a worker launched under one account was

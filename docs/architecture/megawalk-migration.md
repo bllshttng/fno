@@ -2,11 +2,11 @@
 note: "Historical record. The megawalk surface itself has since been retired entirely; see the supported routes in guides/megawalk-walker.md."
 ---
 
-<!-- prescribed-verbs: describe -->
+<!-- prescribed-commands: describe -->
 
 # Megawalk Migration (2026-04-20)
 
-> **Historical.** Every `/megawalk` spelling below is retired. The whole megawalk surface is gone: the skill, the CLI verbs, and the loop driver. The supported routes are `/fno:target` per node. Use `/fno:target bg --all-ready` for a board, `fno backlog advance` for merge-triggered continuation, and `/fno:lead` for a titled ongoing session. This page keeps the before/after shape visible for old links and old muscle memory.
+> **Historical.** Every `/megawalk` spelling below is retired. The whole megawalk surface is gone: the skill, the CLI commands, and the loop driver. The supported routes are `/fno:target` per node. Use `/fno:target bg --all-ready` for a board, `fno backlog advance` for merge-triggered continuation, and `/fno:lead` for a titled ongoing session. This page keeps the before/after shape visible for old links and old muscle memory.
 
 Four subcommands were removed as part of the megawalk surface cleanup. This page is the single source of truth for the before/after so users who hit a "command was removed" message can see the whole shape in one place.
 
@@ -60,7 +60,7 @@ Bare invocation is resume-aware - it reads `megawalk-state.md` and picks the nex
 
 **Replacement:** `/megawalk roadmap <vision.md>`
 
-Top-level positionals are now either verbs (`roadmap`, `adopt`, `status`, `defer`, `cancel`, `retro`) or graph IDs (`ab-xxxxxxxx`). Arbitrary paths at the root were inconsistent with that grammar and made the Commands section harder to scan.
+Top-level positionals are now either commands (`roadmap`, `adopt`, `status`, `defer`, `cancel`, `retro`) or graph IDs (`ab-xxxxxxxx`). Arbitrary paths at the root were inconsistent with that grammar and made the Commands section harder to scan.
 
 ```bash
 # Before

@@ -7,7 +7,7 @@ Pick the stage you are at. Each entry page answers one question and links onward
 | Discover | What does fno do, and is it safe to point at my repo? | [overview.md](overview.md) |
 | Install | How do I install it, and how do I know it worked? | [install.md](install.md) |
 | First target | How do I ship my first PR with it? | [quickstart.md](quickstart.md) |
-| Daily driver | Which verb do I run for this task? | [workflows.md](workflows.md) |
+| Daily driver | Which command do I run for this task? | [workflows.md](workflows.md) |
 | Fleet | How do I spawn, watch, route and recover workers? | [fleet.md](fleet.md) |
 | Contribute | How is fno built, and where does my change go? | [contributing/README.md](contributing/README.md) |
 

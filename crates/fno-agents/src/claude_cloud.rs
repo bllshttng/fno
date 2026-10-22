@@ -28,8 +28,8 @@ use crate::AgentStatus;
 const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Bound one queued follow-up. The measured delivery prints one line and
-/// exits; 120s covers a slow enqueue without wedging the mail verb (the
-/// Python transport budget bounds the whole verb besides this).
+/// exits; 120s covers a slow enqueue without wedging the mail command (the
+/// Python transport budget bounds the whole command besides this).
 const FOLLOWUP_TIMEOUT_SECS: u64 = 120;
 
 /// One cloud create's read-back: the parsed id plus what the CLI printed
@@ -597,7 +597,7 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
         return Some(2);
     }
     // Passthrough tokens travel to the client as harness_args (the spawn
-    // verb's --harness-arg door), so the refusal lives here with the rest of
+    // command's --harness-arg door), so the refusal lives here with the rest of
     // the lane's fail-closed matrix.
     if params
         .get("harness_args")
@@ -613,8 +613,8 @@ pub fn refuse_cloud_axes(params: &serde_json::Value) -> Option<i32> {
     None
 }
 
-/// The client spawn verb's cloud arm. The fail-closed axis matrix for the
-/// payload-only lane runs here (it moved out of the verb's pre-launch matrix
+/// The client spawn command's cloud arm. The fail-closed axis matrix for the
+/// payload-only lane runs here (it moved out of the command's pre-launch matrix
 /// to keep client.rs under its line budget): every axis including passthrough
 /// refuses by name before anything launches, a non-claude provider refuses,
 /// and claude dispatches the pty-held create.

@@ -205,7 +205,7 @@ pub(crate) fn classify_planned_unclaimed(
                 "mission_id",
                 "roadmap_id",
                 "parent",
-                "dispatch_verb",
+                "dispatch_command",
                 "dispatch_brief",
             ] {
                 let value = entry.get(key).filter(|v| !v.is_null());
@@ -353,7 +353,7 @@ pub fn run(args: &[String]) -> i32 {
                         "model",
                         "provider",
                         "effort",
-                        "dispatch_verb",
+                        "dispatch_command",
                         "dispatch_brief",
                         "mission_id",
                         "mission_wave",

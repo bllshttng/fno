@@ -33,7 +33,7 @@ from fno.harness_identity import claude_transport_short_id
 # number once; the same NAME at the same number in both trees is byte-parity,
 # and cli/tests/unit/test_exit_code_allocation.py fails any duplicate. The
 # convention band stays outside the claim: small ints 0-5 and 13-25 repeat per
-# verb by design, and 124/127/137/143 mirror the standard timeout/signal codes.
+# command by design, and 124/127/137/143 mirror the standard timeout/signal codes.
 #   75-77, 79   capacity refusals, both gates (queue, no-wait, RAM, load)
 #   78          provider cap; the quota lock and the lane faults keep it so
 #               exit-code consumers are unaffected
@@ -43,10 +43,10 @@ from fno.harness_identity import claude_transport_short_id
 #   85          Python sandbox probe: sandbox unreachable.
 #   86          territory cap (Rust gate only)
 #   87          the spawn-gate transport could not get an answer at all (the
-#               gate verb missing, failed, or timed out); fail closed, never
+#               gate command missing, failed, or timed out); fail closed, never
 #               admit on an unreadable gate.
 #   88          blueprint thread cap (Rust gate only)
-#   90, 91      Rust fleet-incident check verb (fleet_incident.rs).
+#   90, 91      Rust fleet-incident check command (fleet_incident.rs).
 #   92          node-occupancy refusal: a live worker is on the spawn's
 #               node, claimed or not (Rust gate only).
 EXIT_QUEUE_TIMEOUT = 75
@@ -897,15 +897,15 @@ def _acquire_worker_slot(
         _warn(f"spawn-gate note: worker slot claim {key} unavailable; proceeding uncounted")
 
 
-def _call_gate_verb(payload: dict) -> dict:
+def _call_gate_command(payload: dict) -> dict:
     """One round trip to the Rust gate (``fno-agents spawn-gate``, mode
     ``gate``). The child's stderr stays attached to this process, so a gate
     that queues streams its ``spawn queued: ...`` prose live. The timeout
-    bounds the verb's own 600s queue plus prose and startup.
+    bounds the command's own 600s queue plus prose and startup.
     """
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    return verb_call(
+    return command_call(
         "spawn-gate",
         payload,
         timeout=QUEUE_TIMEOUT_S + 100.0,
@@ -967,7 +967,7 @@ def run_gate(
         "holder_pid": os.getpid(),
     }
     try:
-        answer = _call_gate_verb(payload)
+        answer = _call_gate_command(payload)
     except Exception as exc:  # noqa: BLE001 - an unanswered gate never admits
         _warn(f"spawn-gate: refused on gate (gate_unavailable, exit {EXIT_GATE_UNAVAILABLE}): {exc}")
         _refuse(
@@ -988,7 +988,7 @@ def run_gate(
             _substrate=substrate,
             _admission_token=_PROVIDER_ADMISSION_TOKEN,
         )
-    # The verb produced an answer, and the answer is a refusal: the exit code
+    # The command produced an answer, and the answer is a refusal: the exit code
     # and the receipt travelled inside the answer (a refusal is data).
     _refuse(
         int(answer.get("exit_code", EXIT_GATE_UNAVAILABLE)),
@@ -1012,10 +1012,10 @@ def probe_capacity(only: Optional[list[str]] = None) -> dict:
         caller = resolve_self_identity().session_id
     except Exception:  # noqa: BLE001 - no identity, no share check
         caller = None
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
     try:
-        return verb_call(
+        return command_call(
             "spawn-gate", {"mode": "probe", "caller_session": caller, "only": only}
         )
     except Exception as exc:  # noqa: BLE001 - an unanswered gate is unknown

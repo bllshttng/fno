@@ -203,7 +203,7 @@ pub(super) fn render_continuation_for_harness(
     };
     if value.get("continuation").and_then(Value::as_str) == Some("/target --resume") {
         value["continuation"] =
-            serde_json::Value::String(crate::provider::render_verb_seed("/target resume", "pi"));
+            serde_json::Value::String(crate::provider::render_command_seed("/target resume", "pi"));
         return (code, value.to_string());
     }
     (code, out)

@@ -17,7 +17,7 @@
 //!   so the driver's agent processes it on the driver's account.
 //!
 //! No viewer byte reaches a pty: watch and coach carry nothing from a viewer to
-//! the mux socket, and steer reaches the agent only through the mail verb after
+//! the mux socket, and steer reaches the agent only through the mail command after
 //! consent. Each admitted viewer also holds a presence-only attach whose one
 //! message is the viewer's cleaned name, so the mux can show who watches.
 
@@ -39,7 +39,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::mux_cli::control_roundtrip;
-use crate::proto::{self, ControlVerb, Frame, ObserverHello, ObserverVia, PaneInfo, ServerMsg};
+use crate::proto::{self, ControlCommand, Frame, ObserverHello, ObserverVia, PaneInfo, ServerMsg};
 use crate::server::agent_actions::{run_mail_send, sanitize_mail_text};
 use crate::server::observers::clean_label;
 use crate::{redact, web};
@@ -423,15 +423,15 @@ const COMMANDS: &str =
 
 fn parse_cmd(line: &str) -> Option<Cmd> {
     let mut words = line.split_whitespace();
-    let verb = words.next()?;
-    if verb == "q" {
+    let command = words.next()?;
+    if command == "q" {
         return words.next().is_none().then_some(Cmd::Quit);
     }
     let n: u64 = words.next()?.trim_start_matches('s').parse().ok()?;
     if words.next().is_some() {
         return None;
     }
-    match verb {
+    match command {
         "a" => Some(Cmd::Admit(n)),
         "d" => Some(Cmd::Deny(n)),
         "y" => Some(Cmd::Approve(n)),
@@ -518,7 +518,7 @@ fn run_effects(ctx: &Ctx, hub: &mut Hub, effects: Vec<Effect>) {
 }
 
 pub(crate) fn list_panes(socket: &Path, session: &str) -> Result<Vec<PaneInfo>, String> {
-    match control_roundtrip(socket, session, ControlVerb::PaneLs) {
+    match control_roundtrip(socket, session, ControlCommand::PaneLs) {
         Ok(ServerMsg::PaneList { panes }) => Ok(panes),
         Ok(ServerMsg::Err { msg, .. }) => Err(msg),
         Ok(_) => Err("unexpected reply to pane ls".to_string()),
@@ -534,12 +534,12 @@ async fn list_panes_async(ctx: &Ctx) -> Result<Vec<PaneInfo>, String> {
 }
 
 fn read_history(socket: &Path, session: &str, pane: u64, lines: u16) -> Result<String, String> {
-    let verb = ControlVerb::PaneRead {
+    let command = ControlCommand::PaneRead {
         pane,
         lines: Some(lines),
         block: None,
     };
-    match control_roundtrip(socket, session, verb) {
+    match control_roundtrip(socket, session, command) {
         Ok(ServerMsg::PaneText { text, .. }) => Ok(text),
         Ok(ServerMsg::Err { msg, .. }) => Err(msg),
         Ok(_) => Err("unexpected reply to pane read".to_string()),

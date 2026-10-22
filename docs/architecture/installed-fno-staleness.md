@@ -1,10 +1,10 @@
 # Detecting a stale installed `fno`
 
-The `fno` on a developer's PATH is a snapshot, not a live repo view. `uv tool install` or `pip` installs the Python wheel. `cargo install --path crates/fno-agents` installs the Rust agent bins. Neither refreshes alone. `fno doctor update` reinstalls the Python wheel. Rust bins require a separate refresh. Verbs added after the last install remain invisible to the deployed CLI. Previously, nothing detected that skew.
+The `fno` on a developer's PATH is a snapshot, not a live repo view. `uv tool install` or `pip` installs the Python wheel. `cargo install --path crates/fno-agents` installs the Rust agent bins. Neither refreshes alone. `fno doctor update` reinstalls the Python wheel. Rust bins require a separate refresh. Commands added after the last install remain invisible to the deployed CLI. Previously, nothing detected that skew.
 
 The concrete failure involved a new capture group. The `deferrals_captured` gate depended on an event from that group. Older installed CLIs lacked the subcommand. The documented invocation then failed with `No such command`. No event landed, so the documented path was unable to satisfy the gate.
 
-That group was reachable as both `fno backlog capture` and `fno backlog inbox` at the time. The duplicate `inbox` spelling has since been removed, and the surviving spelling is `capture`. The staleness failure is unchanged by that: it is about a deployed binary predating a verb, not about which name the verb has.
+That group was reachable as both `fno backlog capture` and `fno backlog inbox` at the time. The duplicate `inbox` spelling has since been removed, and the surviving spelling is `capture`. The staleness failure is unchanged by that: it is about a deployed binary predating a command, not about which name the command has.
 
 ## `fno doctor` (detection)
 
@@ -15,7 +15,7 @@ The resolved local source checkout is the comparison boundary. Doctor does not f
 `--fix` refuses while source-checkout sync is behind. Repairing from stale source cannot establish freshness.
 
 - **Revision compare (high-signal).** `fno doctor update` records source `git rev-parse HEAD` into `~/.fno/installed-rev` after a successful install. Source precedence is `--source`, `$FNO_SOURCE`, the main checkout of the repo the command runs in, `~/.fno/source-path`, then well-known paths. `doctor` reads and compares source HEAD. A marker behind source means stale. An absent marker means "rev unknown" and falls back to the probe.
-- **Capability probe (always available).** Runs `fno backlog capture --help` (the capture-tier verb, formerly named `backlog inbox`) against the installed CLI. A `No such command` failure proves the verb is missing regardless of any marker. The probe outcome is a three-valued `present | missing | unknown` so a "could not probe" result can never be conflated with "proven missing".
+- **Capability probe (always available).** Runs `fno backlog capture --help` (the capture-tier command, formerly named `backlog inbox`) against the installed CLI. A `No such command` failure proves the command is missing regardless of any marker. The probe outcome is a three-valued `present | missing | unknown` so a "could not probe" result can never be conflated with "proven missing".
 
 The source-checkout sync field is independent of installed-binary freshness. `source_checkout_sync.status` is `current`, `behind`, or `unknown`. A `behind` result carries the positive `behind` commit count plus both heads. Unknown source-sync evidence never invents a distance or changes the binary freshness fields.
 
@@ -23,7 +23,7 @@ The source-checkout sync field is independent of installed-binary freshness. `so
 
 Source selection is itself a freshness hazard. The resolution cache stored a bare path. A linked worktree whose HEAD had diverged from the remote default branch was measured installing machine-wide twice (2026-09-09 and 2026-09-13). Every later `fno doctor update` re-installed that branch. The stale pin and the pin-relative freshness check were self-consistent and permanently wrong.
 
-The whole decision is now native, in `crates/fno-agents/src/source_pin.rs`, served by the hidden `fno-agents source-pin resolve|record|sync` verb. Python (`cli/src/fno/update.py`, `cli/src/fno/doctor.py`) is transport only: it assembles the precedence inputs (`--source`, `$FNO_SOURCE`, the `~/.fno/source-path` cache, the fixed candidates), parses the JSON answer, and renders. Rust adds one input itself. It is the `cli/` of the main checkout that owns the process cwd, found with `paths::canonical_repo_root`. The precedence ORDER, package-identity validation, worktree classification (main checkout / linked worktree / non-git), live ancestry evidence, and the allow/refuse decision all live in Rust. A pre-`source-pin` helper fails update closed with the repair named. It never falls back to the unsafe cache path.
+The whole decision is now native, in `crates/fno-agents/src/source_pin.rs`, served by the hidden `fno-agents source-pin resolve|record|sync` command. Python (`cli/src/fno/update.py`, `cli/src/fno/doctor.py`) is transport only: it assembles the precedence inputs (`--source`, `$FNO_SOURCE`, the `~/.fno/source-path` cache, the fixed candidates), parses the JSON answer, and renders. Rust adds one input itself. It is the `cli/` of the main checkout that owns the process cwd, found with `paths::canonical_repo_root`. The precedence ORDER, package-identity validation, worktree classification (main checkout / linked worktree / non-git), live ancestry evidence, and the allow/refuse decision all live in Rust. A pre-`source-pin` helper fails update closed with the repair named. It never falls back to the unsafe cache path.
 
 - An implicit linked-worktree pick must prove its HEAD is an ancestor of the local remote-default ref (`refs/remotes/origin/HEAD`, else `origin/main`). Otherwise update refuses before any install or pin write. Unprovable ancestry refuses too, naming the failed instrument.
 - An implicit main-checkout pick must prove the same ancestry. A proven non-ancestor refuses. That is the canonical checkout after a pull merged a ref origin never merged. The post-merge sync's update then fails and nothing installs. A main checkout whose ancestry cannot be proven keeps installing, as before.
@@ -98,7 +98,7 @@ A second update joins the first. It names the running pid, waits for it to exit,
 
 ## Layer 2: the deferrals gate self-explains
 
-When the `deferrals_captured` gate is unsatisfied in strict mode, the audit probes whether the installed `fno` exposes `backlog capture` (`capture_verb_available` in `scripts/lib/gates-reality.sh`). If the verb is missing, the message says the installed CLI predates it. It instructs the operator to run `fno doctor update` or `fno doctor --fix`, then retry. `translate_capture_unknown_command` fires only on a non-zero exit carrying Typer's unknown-command signature for `capture` or its legacy `inbox` spelling. A real `empty-pass` runtime error keeps its existing handling.
+When the `deferrals_captured` gate is unsatisfied in strict mode, the audit probes whether the installed `fno` exposes `backlog capture` (`capture_command_available` in `scripts/lib/gates-reality.sh`). If the command is missing, the message says the installed CLI predates it. It instructs the operator to run `fno doctor update` or `fno doctor --fix`, then retry. `translate_capture_unknown_command` fires only on a non-zero exit carrying Typer's unknown-command signature for `capture` or its legacy `inbox` spelling. A real `empty-pass` runtime error keeps its existing handling.
 
 The gate path **instructs only**. It never invokes `fno doctor update`. Auto-fixing mid-gate can re-exec the CLI during a stop-hook check and risk a reinstall loop. Therefore, `--fix` is the only path that runs `fno doctor update`. It preserves update's refusal during an `IN_PROGRESS` target session.
 
@@ -120,7 +120,7 @@ fno doctor update --check --json   # the one resolver, the mux TUI's only consum
 
 A "fresh" verdict once rested on one instrument per surface: a marker for the Python tool, the client binary's rev for all of Rust. The August 2026 skew incident broke both assumptions. A cache-hit reinstall renewed the marker while shipping old bytes, and four cargo binaries drifted while the client's rev check saw only the client.
 
-The classification is now native. `crates/fno-agents/src/component_update.rs` owns the verdict table. Each verdict carries the expected and observed revision, the executable path, a named instrument failure, and a repair command. Status is Fresh, Updated, Stale, Missing, Failed or Unknown. The hidden `fno-agents component-verdict` verb serves it. Python is the transport: `cli/src/fno/update.py` sends the probe request and renders the rows.
+The classification is now native. `crates/fno-agents/src/component_update.rs` owns the verdict table. Each verdict carries the expected and observed revision, the executable path, a named instrument failure, and a repair command. Status is Fresh, Updated, Stale, Missing, Failed or Unknown. The hidden `fno-agents component-verdict` command serves it. Python is the transport: `cli/src/fno/update.py` sends the probe request and renders the rows.
 
 Convergence is strict. A no-op success or an attempted build proves nothing. Every component must show a post-effect probe matching the expected revision. A repair that lands nothing is Failed, never fresh. A probe that cannot answer is Unknown with the named instrument, never collapsed into fresh or missing. For the Python tool, a positive content-drift count beats a matching marker.
 
@@ -136,7 +136,7 @@ The front door's own re-provision passes `--refresh` to `uv tool install`. A whe
 
 When the install is a directory marketplace, Claude does not copy the footnote plugin into its own cache. It executes hooks and skills straight from `~/.fno/plugin-stage/fno`. A restage of that directory IS the deploy for every Claude session on the machine. The only writer was `fno config plugin install`, run by hand, so the stage lagged main until someone noticed hooks behaving oddly. One stale staged hook produced 738 watch-lease refusals across 99 sessions before anyone named the cause.
 
-Whenever the stage directory exists, `fno doctor update` now restages it after a successful install. `fno-agents plugin-install --restage --source <checkout>` is the deploy verb it chains. On a machine that never set up the directory marketplace, restage rebuilds nothing. The rebuild swaps by rename, so a live session never sees a half-built tree. Hook scripts the old stage's config references are carried forward, so pre-restage sessions keep their Bash. Codex keeps its own copy of the stage. It re-copies that copy only on a forced converge at an unchanged version. When codex's dev channel is installed, the chain also runs `fno config plugin install codex --force`. That step builds its stage from the chain's cwd, so run `fno doctor update` from the checkout.
+Whenever the stage directory exists, `fno doctor update` now restages it after a successful install. `fno-agents plugin-install --restage --source <checkout>` is the deploy command it chains. On a machine that never set up the directory marketplace, restage rebuilds nothing. The rebuild swaps by rename, so a live session never sees a half-built tree. Hook scripts the old stage's config references are carried forward, so pre-restage sessions keep their Bash. Codex keeps its own copy of the stage. It re-copies that copy only on a forced converge at an unchanged version. When codex's dev channel is installed, the chain also runs `fno config plugin install codex --force`. That step builds its stage from the chain's cwd, so run `fno doctor update` from the checkout.
 
 `fno-agents plugin-install --check [--json]` is the drift verdict: one byte comparison of the stage against the source checkout's HEAD. Exit 0 is fresh or absent, 3 is stale, 4 is unknown. When the install registry carries no `gitCommitSha`, `fno doctor` runs that check and exits 1 on a stale stage. The report names the differing and missing counts with a sample. The repair is `cd <source root> && fno config plugin install claude`, or wait for `fno doctor update` on the next merge.
 
@@ -148,7 +148,7 @@ A machine can host several full copies of the footnote plugin tree, and they dri
 
 The removal guard reads the marketplace shape, not the harness version. If a future Claude Code loads a local marketplace by copying it into the cache, the guard reads wrong: removal then deletes the loaded tree. The doctor lane survives that change, because it reports every root whatever the shape. The ceiling is stated here rather than hidden.
 
-When the install succeeds on a local marketplace and the cache is not the live root, the install verb removes the copy at `~/.claude/plugins/cache/footnote`. The removal is reversible. If the marketplace shape changes back, the install verb recreates the cache from the stage.
+When the install succeeds on a local marketplace and the cache is not the live root, the install command removes the copy at `~/.claude/plugins/cache/footnote`. The removal is reversible. If the marketplace shape changes back, the install command recreates the cache from the stage.
 
 ## Locked decisions
 
@@ -157,7 +157,7 @@ When the install succeeds on a local marketplace and the cache is not the live r
 3. The gate path instructs, it never executes the fix.
 4. Rust freshness requires a cargo binary, embedded `crates_rev`, source `crates/` tip, and a clean build. When these are known, `doctor` compares the embedded revision with the source tip. A mismatch proves Rust staleness. Missing evidence yields `unknown`. `doctor` still reports the resolved binary.
 5. The `installed-rev` marker is written only after a successful install. Absence means "rev unknown", never "fresh".
-6. `fno doctor update --check --json` is the single resolver for mux update readiness. The TUI renders it and computes nothing. Guidance routes restart recovery through `fno agents session restart --mux` only, never `fno mux kill-server` (that routing fix is tracked separately). A verb guaranteed to fail in the case it is offered for is worse than no guidance.
+6. `fno doctor update --check --json` is the single resolver for mux update readiness. The TUI renders it and computes nothing. Guidance routes restart recovery through `fno agents session restart --mux` only, never `fno mux kill-server` (that routing fix is tracked separately). A command guaranteed to fail in the case it is offered for is worse than no guidance.
 
 Implementation: `cli/src/fno/doctor.py`, `cli/src/fno/update.py`, `cli/src/fno/restart.py`, `crates/fno/src/client.rs`, `crates/fno/src/mux_cli.rs`, `scripts/lib/gates-reality.sh`, `scripts/lib/gate-audit.sh`.
 
@@ -194,7 +194,7 @@ When the running daemon reads `drifted` after the triad sync, `fno doctor update
 
 `crates/fno-agents/src/codex_daemon_readiness.rs` owns the readiness snapshot. It carries `healthy`, pid, start token, endpoint, `CODEX_HOME`, the installed CLI version (`codex --version`), the live version, and a `verdict` of `current`, `stale`, `ahead`, or `unknown`.
 
-The live version needs TWO agreeing positive readings. One is the initialize response's server info. The other is the vendor `codex app-server daemon version` verb as a positive control. Disagreeing or unreadable readers read `unknown`, never `current`. A socket or pid answer alone is never evidence of a version.
+The live version needs TWO agreeing positive readings. One is the initialize response's server info. The other is the vendor `codex app-server daemon version` command as a positive control. Disagreeing or unreadable readers read `unknown`, never `current`. A socket or pid answer alone is never evidence of a version.
 
 The census emits one `codex-app-server` row from this single owner. A healthy daemon on an older version reads healthy + `stale`, never healthy alone. `fno agents fleet census --json` exposes it beside the daemon, keeper, and mux rows.
 

@@ -51,14 +51,14 @@ Footnote loads as a local plugin file, `~/.config/opencode/plugins/footnote.js`.
 | File | Why |
 |---|---|
 | `plugins/footnote.js` | The bridge: footnote's hook host. It runs hooks.json through opencode's plugin events (guards on tool calls, prompt injections, compaction context, the identity stamp), and drives the target loop's completion gate on idle. |
-| `commands/fno:<verb>.md` | One per shipped verb, so `/fno:target` and friends exist in every project. |
+| `commands/fno:<command>.md` | One per shipped command, so `/fno:target` and friends exist in every project. |
 | `agents/fno:<name>.md` | One per shipped agent, permissions rendered for the contract opencode reports. |
 | `agents/fno.md` | The `fno` primary agent: footnote's orchestrator, Tab-selectable beside opencode's build and plan. |
 | `skills/<name>/**` | The skill trees the commands and agents load. |
 | `~/.fno/opencode-install-<hash>.json` | The manifest: every written path and its content hash. The basis for honest upgrades and uninstall. |
 | `<file>.fno-backup-<timestamp>` | Any config file the disable step edits, backed up first, plus the replaced legacy bridge. |
 
-`fno:<verb>` and `fno:<name>` are namespaced on purpose. They coexist with everything else opencode loads. A bare `target` command name is a collision with other plugins.
+`fno:<command>` and `fno:<name>` are namespaced on purpose. They coexist with everything else opencode loads. A bare `target` command name is a collision with other plugins.
 
 ## Idempotent re-install
 

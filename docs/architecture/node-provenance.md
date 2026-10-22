@@ -6,7 +6,7 @@ This feature records that backward edge at the moment of creation, so a node or 
 
 ## The load-bearing principle: capture is ambient, never volunteered
 
-Any provenance design whose correctness depends on the model remembering to pass an arg is already broken. The direct evidence in this repo is `.fno/carveouts.jsonl`. It first failed in the obvious direction, staying empty while the structured `fno backlog carveout add` verb went unused. Adoption fixed that and exposed the same defect underneath. Measured 2026-08-12, 13 of 39 rows carry no `session_id`. A third of the ledger cannot be traced back to the session that filed it. Capture that hinges on a verb being called at the right moment is unreliable. So is a field that hinges on a caller passing it.
+Any provenance design whose correctness depends on the model remembering to pass an arg is already broken. The direct evidence in this repo is `.fno/carveouts.jsonl`. It first failed in the obvious direction, staying empty while the structured `fno backlog carveout add` command went unused. Adoption fixed that and exposed the same defect underneath. Measured 2026-08-12, 13 of 39 rows carry no `session_id`. A third of the ledger cannot be traced back to the session that filed it. Capture that hinges on a command being called at the right moment is unreliable. So is a field that hinges on a caller passing it.
 
 So provenance is stamped from the environment at the moment of node birth and worker spawn, inside the originating session. That session is the only place the full context exists; everything later is reconstruction. No caller passes anything.
 
@@ -26,7 +26,7 @@ Every graph node carries (all nullable, defaulted on read in `cli/src/fno/graph/
 | `spawned_by_cwd` | parent cwd, for the transcript-path slug resolver | worker spawn |
 | `lineage_reason` | why no parent session could be proved: the identity disposition the capture read, or the daemon-mint miss. An origin=spawn row carries a session or a reason, never neither | worker spawn (schema v33) |
 | `node` | the backlog node the worker is FOR, stamped at the spawn seam - never the spawner's ambient value | worker spawn (registry v21) |
-| `node_reason` | why the row works no node when the spawn NAMED one: the seed's verb argument read as a node id but resolved to no readable row. Absent when the node resolved; absent when none was named | worker spawn (registry v36) |
+| `node_reason` | why the row works no node when the spawn NAMED one: the seed's command argument read as a node id but resolved to no readable row. Absent when the node resolved; absent when none was named | worker spawn (registry v36) |
 
 The `agent_spawned` event (`cli/src/fno/events/schema.yaml`) carries the same `spawned_by_*` triple, so the durable event log keeps the parent edge even if a registry row is later rewritten.
 

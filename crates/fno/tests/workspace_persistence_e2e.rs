@@ -879,7 +879,7 @@ fn symptom_restore_rebuilds_no_thread_pane() {
 /// under its folder rendered under `~ elsewhere`. It now takes the folder it
 /// was made from, and `fno mux workspace origin` edits it live.
 #[test]
-fn symptom_named_workspace_takes_the_creator_folder_and_the_verb_edits_it() {
+fn symptom_named_workspace_takes_the_creator_folder_and_the_command_edits_it() {
     let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = Scratch::new("origin");
     let _server = spawn_server(&scratch.main_sock(), &[]);
@@ -904,24 +904,24 @@ fn symptom_named_workspace_takes_the_creator_folder_and_the_verb_edits_it() {
             .any(|s| s.name == "w" && s.canonical_cwd == creator)
     });
 
-    let origin = |verb: &str, path: &str| {
+    let origin = |command_name: &str, path: &str| {
         let out = scratch
             .command()
             .args([
                 "mux",
                 "workspace",
                 "origin",
-                verb,
+                command_name,
                 "w",
                 path,
                 "--server",
                 "main",
             ])
             .output()
-            .expect("origin verb runs");
+            .expect("origin command runs");
         assert!(
             out.status.success(),
-            "origin {verb} failed: stderr={}",
+            "origin {command_name} failed: stderr={}",
             String::from_utf8_lossy(&out.stderr)
         );
     };

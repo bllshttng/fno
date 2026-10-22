@@ -6,31 +6,31 @@ After a reboot or a killed mux server, every worker pane is gone. A pane's pty w
 
 **Update:** the keeper now hosts every pane, so a restart is no longer "every worker pane is gone". A keeper-hosted pane re-adopts into the fresh server at its birth pane id. A stored leaf records that id at capture. The pane therefore returns to its own leaf instead of a fresh shell minting beside it. Restore's role shifts to the seats nobody holds. A portal whose viewer did not come back re-arms held. One whose viewer did come back re-arms live. A worker member whose pane is already live is focused, never spawned twice.
 
-You are bringing worker panes back after a reboot or a killed mux server, or choosing `[mux.restore] policy` in your config. This page owns what `hold`, `idle`, and `resume` do to worker members, and what the on-demand verb relaunches. Misreading it picks the wrong knob for your symptom. On 2026-09-04 an operator set `idle` to cut a 28-tab restore. `idle` does not govern tabs at all.
+You are bringing worker panes back after a reboot or a killed mux server, or choosing `[mux.restore] policy` in your config. This page owns what `hold`, `idle`, and `resume` do to worker members, and what the on-demand command relaunches. Misreading it picks the wrong knob for your symptom. On 2026-09-04 an operator set `idle` to cut a 28-tab restore. `idle` does not govern tabs at all.
 
 Not for: the tab count. Tabs rebuild from each workspace's stored tab trees under every policy value. No value restores zero tabs. Only `hold` skips tabs whose every slot binds a done worker. Held-pane and idle-row mechanics: [pane-worker-relaunch](pane-worker-relaunch.md). What a client reconnect preserves versus a server restart: [mux-restart-recovery](mux-restart-recovery.md).
 
-The destructive edge: `resume`, as the startup policy or the on-demand verb, relaunches every worker member that is not tombstoned, gone, or reap-retired. Finished-and-merged work relaunches too. Run `fno mux workspace restore --dry-run --json` first. It classifies and spawns nothing.
+The destructive edge: `resume`, as the startup policy or the on-demand command, relaunches every worker member that is not tombstoned, gone, or reap-retired. Finished-and-merged work relaunches too. Run `fno mux workspace restore --dry-run --json` first. It classifies and spawns nothing.
 
-## The verb
+## The command
 
 ```bash
 fno mux workspace restore [--dry-run] [--harness <harness>] [--member-session <full-session-id>] [--json]
 ```
 
-The verb enumerates every live, non-tombstoned worker member in the workspace store. It joins each to its registry row and resumes it: the pane runs the harness's own resume argv with the member's full session id. `--dry-run` classifies every member and spawns nothing. `--harness` narrows the run to one harness. `--json` prints one row per member with its outcome, so a script can branch without parsing prose.
+The command enumerates every live, non-tombstoned worker member in the workspace store. It joins each to its registry row and resumes it: the pane runs the harness's own resume argv with the member's full session id. `--dry-run` classifies every member and spawns nothing. `--harness` narrows the run to one harness. `--json` prints one row per member with its outcome, so a script can branch without parsing prose.
 
 `--member-session` restores only the member with that exact native session ID and skips unrelated portals. An absent match returns a refusal. The CLI refuses servers below protocol 109 before sending this filter. Servers below protocol 109 ignore it and can restore every member.
 
 Every member that cannot come back is named, with the reason. The reasons include: no registry row, no session id, a harness the table gives no resume form, an ambiguous name, and a failed spawn. A seat already live in this session names the pane. Silence is never an outcome. A run that resumes two and refuses one prints all three.
 
-The verb answers for portals too. After the members it walks every stored portal slot and reports one row per seat, classified by the same door the focus fill uses. A held seat whose claude Drive row answers resumes through the same off-loop re-entry plan batch the members use. A seat already showing its row reports `focused`. A seat whose row answers nothing, or answers ambiguously, is refused with the key named. A filled Locate-tier portal carries a notice, because it shows where the thread lives, not the thread. `--json` splits the reply: `members` for workspace members, `portals` for held seats, and the counts sum both. Under `--dry-run` every held portal reads `planned` and nothing spawns. The change answers a 2026-09-13 measurement. The verb then reported 7 members and 6 refusals with zero portal rows. The store held 3 portal slots. The portals array is the fix. `tests/mux-portal-restore-server-kill.sh` proves it with a real kill and a real restore.
+The command answers for portals too. After the members it walks every stored portal slot and reports one row per seat, classified by the same door the focus fill uses. A held seat whose claude Drive row answers resumes through the same off-loop re-entry plan batch the members use. A seat already showing its row reports `focused`. A seat whose row answers nothing, or answers ambiguously, is refused with the key named. A filled Locate-tier portal carries a notice, because it shows where the thread lives, not the thread. `--json` splits the reply: `members` for workspace members, `portals` for held seats, and the counts sum both. Under `--dry-run` every held portal reads `planned` and nothing spawns. The change answers a 2026-09-13 measurement. The command then reported 7 members and 6 refusals with zero portal rows. The store held 3 portal slots. The portals array is the fix. `tests/mux-portal-restore-server-kill.sh` proves it with a real kill and a real restore.
 
 A member the registry forgot and the spawn journal never received does not come back. Restore retires it from the store: no pane, no dim card, no member row on the next persist. The restore receipt names the count. Nothing that does not belong returns.
 
-Two preconditions are refusals, not empty results. The verb refuses before the session's first real attach. At that point startup restore has not run and the persisted workspaces were never read. Answering "nothing to restore" there is a lie. It also reads the registry file itself before classifying. The off-loop registry reader ticks independently, and a headless restore can otherwise refuse every member with "no such agent" while its row sits on disk.
+Two preconditions are refusals, not empty results. The command refuses before the session's first real attach. At that point startup restore has not run and the persisted workspaces were never read. Answering "nothing to restore" there is a lie. It also reads the registry file itself before classifying. The off-loop registry reader ticks independently, and a headless restore can otherwise refuse every member with "no such agent" while its row sits on disk.
 
-The server's member list is authoritative while the server runs. The workspace store file is that list's persist target, not its source. Every pane event re-writes the file from memory. So any write to `squads.json` from outside a live server, such as `fno mux workspace prune`, must be followed by the `SquadReload` control verb to every answering session. Without the reload, the next pane event writes the old members back over the pruned file. Restore then reads memory-shaped rows, not the file a prune just shrank.
+The server's member list is authoritative while the server runs. The workspace store file is that list's persist target, not its source. Every pane event re-writes the file from memory. So any write to `squads.json` from outside a live server, such as `fno mux workspace prune`, must be followed by the `SquadReload` control command to every answering session. Without the reload, the next pane event writes the old members back over the pruned file. Restore then reads memory-shaped rows, not the file a prune just shrank.
 
 ## The declared resume form
 
@@ -40,9 +40,9 @@ The resume lane is stricter than the attach lane, because the resume builder hon
 
 Claude is the one special case. A claude member never resumes as a foreground `claude --resume` pane. It resolves a `revive` re-entry plan off the core loop (`fno-agents reentry-plan <name> --transition revive`), and the plan reads `claude agents --json --all`, never the files under `~/.claude/jobs/`. A running job attaches: `claude attach <job id>`. A listed job that is not running is respawned, then attached: `claude respawn <job id>`. An unlisted job comes back under its own id, then is attached: `claude --bg --resume <full session id>`. The seat runs that one argv, so it shows the session it just brought back. A member whose plan fails or is absent is refused, never resumed bare. The mux tap on a sideline row and the focus of a held pane take the same plan.
 
-## Startup policy and the on-demand verb
+## Startup policy and the on-demand command
 
-Startup restore is governed by `[mux.restore] policy`. `hold` (default) rebuilds named held panes and resumes on focus. `idle` leaves members as idle rows. `resume` runs the bulk restore at startup, without being asked. The verb is the same bulk resume, on demand. A session that started under `hold` or `idle` can be restored in one command later. A script can drive the whole reboot-recovery without opening the TUI. See [pane-worker-relaunch](pane-worker-relaunch.md) for the held-pane and idle-row mechanics this builds on. A held portal follows the same shape: it resumes on focus of its seat, or on the row's reach.
+Startup restore is governed by `[mux.restore] policy`. `hold` (default) rebuilds named held panes and resumes on focus. `idle` leaves members as idle rows. `resume` runs the bulk restore at startup, without being asked. The command is the same bulk resume, on demand. A session that started under `hold` or `idle` can be restored in one command later. A script can drive the whole reboot-recovery without opening the TUI. See [pane-worker-relaunch](pane-worker-relaunch.md) for the held-pane and idle-row mechanics this builds on. A held portal follows the same shape: it resumes on focus of its seat, or on the row's reach.
 
 ## A live proof
 
@@ -77,7 +77,7 @@ Not necessarily. The label means fno holds no session id for the member. The spa
 
 ## No spawn gate
 
-A revival re-seats a row that already held a seat, so it never asks the spawn gate and never needs `FNO_SPAWN_GATE=0`. That holds for the restore verb, the sideline tap, the held-pane focus and `fno agents session resume`. Every restore member that can spawn resolves to a registry row, so no member is new, and the restore asks no headroom probe.
+A revival re-seats a row that already held a seat, so it never asks the spawn gate and never needs `FNO_SPAWN_GATE=0`. That holds for the restore command, the sideline tap, the held-pane focus and `fno agents session resume`. Every restore member that can spawn resolves to a registry row, so no member is new, and the restore asks no headroom probe.
 
 ## After a reboot, without a tap
 
@@ -91,7 +91,7 @@ The first `fno-agents` daemon start of a boot revives the fleet on its own (`cra
 - `crates/fno/src/server.rs` - `declared_resume_form` (the thin view), `resume_one` (the shared gate walk), `restore_candidates`
 - `crates/fno/src/agents_view.rs` - `declared_form` (the one reader), `FormLane`, `resume_form`, `attach_form`
 - `crates/fno/src/mux_cli.rs` - `workspace` / `workspace_restore` CLI parsing and output
-- `crates/fno/src/proto.rs` - `ControlVerb::WorkspaceRestore`, `ServerMsg::WorkspaceRestored`, `RestoreRow`, the `RESTORE_NOT_RUN` error class
+- `crates/fno/src/proto.rs` - `ControlCommand::WorkspaceRestore`, `ServerMsg::WorkspaceRestored`, `RestoreRow`, the `RESTORE_NOT_RUN` error class
 - `crates/fno/src/digest_overlay.rs` - `MuxRestorePolicy` (hold | idle | resume)
 - `crates/fno/tests/server_spine.rs` - the wire-tolerance arms for the new reply
 

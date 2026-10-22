@@ -3,7 +3,7 @@
 
 Runs the Python leg (`refresh_watcher` + `heal_status_line`, the body the
 `fno do pr watch refresh` leaf used before its forward) over the same
-fixture the Rust verb reads, with the tick-in-flight answer and the
+fixture the Rust command reads, with the tick-in-flight answer and the
 launchctl steps injected through the same env pins the Rust side reads.
 Captured goldens freeze its bytes; the Python function survives only for
 its remaining callers (`groom.py`, the `heal` leaf) until wave 6, so

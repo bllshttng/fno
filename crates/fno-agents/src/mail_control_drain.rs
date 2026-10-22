@@ -4,7 +4,7 @@
 //! The recipient-side half of the control lane. A control body that demoted
 //! durable waits on `notify-self`, which fires only at a prompt boundary; a
 //! worker holding one long turn never reaches one. The PreToolUse hook runs
-//! this verb at every tool call instead, gated on the sender-stamped pending
+//! this command at every tool call instead, gated on the sender-stamped pending
 //! flags so a clean tool call pays three stat calls.
 //!
 //! The scan ports the Python bus read semantics it replaces
@@ -336,7 +336,7 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 /// How far ahead the stamp is set when the ordinary lane did not read the
-/// bus (key off, or a live hold): the hook's `-nt` gate then skips the verb
+/// bus (key off, or a live hold): the hook's `-nt` gate then skips the command
 /// until this passes, so an off session pays one run per window, not one
 /// per bus append, and still sees a later key change.
 const RECHECK: std::time::Duration = std::time::Duration::from_secs(300);
@@ -677,7 +677,7 @@ mod tests {
             let mtime = |p: PathBuf| std::fs::metadata(p).unwrap().modified().unwrap();
 
             // Key off: nothing ordinary prints, the main cursor stays, and the
-            // stamp sits ahead of the bus so the hook gate skips the verb.
+            // stamp sits ahead of the bus so the hook gate skips the command.
             let (_d, bus) = bus_fixture("ordinary-off");
             let id = msg_id("lead", &handle, "status please");
             append(&bus, "lead", &handle, "status please");

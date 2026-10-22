@@ -414,7 +414,7 @@ fn cursor_on(v: &View, name: &str) -> usize {
 #[tokio::test]
 async fn portal_pick_refusal_names_the_portal_state_and_reseat() {
     // AC1-HP: `P` on a row already shown through a portal names the row,
-    // its portal and tab, and the verb that moves it - not the old
+    // its portal and tab, and the command that moves it - not the old
     // state-free rule sentence that contradicted the picker listing.
     let mut v = portal_pick_view();
     let cur = cursor_on(&v, "nairobi");

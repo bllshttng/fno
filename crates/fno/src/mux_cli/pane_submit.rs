@@ -10,7 +10,7 @@ pub(super) fn pane_text(sock: &Path, session: &str, pane: u64) -> Result<String,
     match control_roundtrip(
         sock,
         session,
-        ControlVerb::PaneRead {
+        ControlCommand::PaneRead {
             pane,
             lines: None,
             block: None,
@@ -36,7 +36,7 @@ pub(super) fn send_pane_bytes(
     match control_roundtrip(
         sock,
         session,
-        ControlVerb::PaneSend {
+        ControlCommand::PaneSend {
             pane,
             bytes,
             guarded,

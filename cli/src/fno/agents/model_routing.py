@@ -1050,7 +1050,7 @@ def declared_lane(
 ) -> Optional[dict]:
     """The one declared lane row, matched by name or by the resolved
     (provider, model), as a plain dict. The match rule lives in the
-    route-slot verb beside the inventory fold; an unmatched or unreadable
+    route-slot command beside the inventory fold; an unmatched or unreadable
     lane reads None and the spawn still launches."""
     from fno.route_slot_client import route_slot_call
 
@@ -1284,9 +1284,9 @@ def resolve_codex_route(
     closed with the same typed errors as the Claude lane.
 
     The provider half (record read, protocol check, key, TOML tokens) is owned
-    by Rust (`codex_route.rs`) through the spawn-overlay verb: ONE builder
+    by Rust (`codex_route.rs`) through the spawn-overlay command: ONE builder
     serves spawn and every relaunch door, so the two cannot disagree. The key
-    resolves in the verb's process env, so tests pin it with ``monkeypatch
+    resolves in the command's process env, so tests pin it with ``monkeypatch
     .setenv`` and a temp ``FNO_CONFIG``. The answer's ``refusal`` surfaces as a
     notice; ``unrouted`` (the claude-lane case) stays silent, exactly as
     before.

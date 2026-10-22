@@ -24,7 +24,7 @@ async fn rm_blocking_subprocess_work_does_not_stall_the_runtime() {
     // AC1-HP, and the regression this node exists for: `handle_rm_with`
     // shells out for up to ~435s, most of it after the registry row is
     // already gone. Run inline it owns a worker thread for that whole
-    // span and every other verb queues behind it.
+    // span and every other command queues behind it.
     //
     // `worker_threads = 1` is what makes this discriminating ONLY when
     // the call under test is itself a SPAWNED task, matching how the real

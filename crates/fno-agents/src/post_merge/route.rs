@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The injected turn: the SAME mechanical verb the cold path self-execs.
+/// The injected turn: the SAME mechanical command the cold path self-execs.
 /// Warm and cold differ only in transport, never in what runs.
 const WARM_PROMPT_TEMPLATE: &str = "fno do pr ritual {pr} --autonomous";
 
@@ -291,13 +291,13 @@ fn result(outcome: &str, pr: i64) -> DispatchResult {
 }
 
 /// The transport seams, split from the decision so tests fake the edges the
-/// oracle faked (resolver, inject, verb runner, finalize, receipt) and the
+/// oracle faked (resolver, inject, command runner, finalize, receipt) and the
 /// dedup layers stay real on-disk state.
 struct Seams {
     resolve_warm: Box<dyn Fn(&str, Option<&str>) -> Option<String>>,
     death_confirmed: Box<dyn Fn(&str, Option<&str>, &str) -> bool>,
     inject: Box<dyn Fn(&str, i64, Option<&str>) -> (bool, String)>,
-    run_verb: Box<dyn Fn(i64, &Path, f64) -> (bool, String)>,
+    run_command: Box<dyn Fn(i64, &Path, f64) -> (bool, String)>,
     finalize_origin: Box<dyn Fn(&str, &str, Option<&str>) -> bool>,
     emit: Box<dyn Fn(Option<&Path>, &Receipt) -> bool>,
 }
@@ -362,7 +362,7 @@ fn read_auto_run(canonical: &Path) -> Option<bool> {
 }
 
 /// Step 0.5 read: the ritual's mutex claim on the GLOBAL root. Live means the
-/// verb is running right now; suspect means a crashed run's TTL still covers.
+/// command is running right now; suspect means a crashed run's TTL still covers.
 fn ritual_claim_state(pr: i64, claim_root: Option<&Path>) -> Option<&'static str> {
     let key = format!("reconcile:pr-{pr}");
     let (state, _) = crate::claims::status(&key, claim_root);
@@ -490,7 +490,7 @@ fn dispatch_claim_root(
         r.detail = Some("marker-exists".to_string());
         return r;
     }
-    // Re-entrancy guard: a live holder of the ritual's mutex means the verb
+    // Re-entrancy guard: a live holder of the ritual's mutex means the command
     // is already running for this PR. Global claims root.
     if ritual_claim_state(pr, claim_root) == Some("live") {
         persist_marker(canonical, &dispatch_id);
@@ -629,7 +629,7 @@ fn run_dispatch(
     }
     // Direct-finalize rung (cold prelude): a provably dead origin whose
     // manifest + transcript survive gets its full-fidelity ledger row, then
-    // control FALLS THROUGH to the verb. A finalize failure degrades to cold.
+    // control FALLS THROUGH to the command. A finalize failure degrades to cold.
     if verdict.origin_dead
         && source_cwd.is_some()
         && origin_transcript_exists(source_session_id, source_cwd, source_harness)
@@ -643,15 +643,15 @@ fn run_dispatch(
         }
     }
     let canonical_str = canonical.display().to_string();
-    let (ok, tail) = (seams.run_verb)(pr, Path::new(&canonical_str), timeout_s);
+    let (ok, tail) = (seams.run_command)(pr, Path::new(&canonical_str), timeout_s);
     if !ok {
-        let mut failed = base.clone_receipt("failed", "verb-nonzero");
+        let mut failed = base.clone_receipt("failed", "command-nonzero");
         failed.detail = Some(tail.clone());
         let _ = (seams.emit)(events_path().as_deref(), &failed);
         let mut r = result("failed", pr);
         let cut: String = tail.chars().take(200).collect();
         r.detail = Some(if cut.is_empty() {
-            "verb-nonzero".to_string()
+            "command-nonzero".to_string()
         } else {
             cut
         });
@@ -703,9 +703,9 @@ fn events_path() -> Option<PathBuf> {
 /// The cold run self-execs the binary's own `pr-watch ritual` arm from the
 /// canonical root under the caller's timeout: a self call, not a seam
 /// crossing.
-fn run_ritual_verb(pr: i64, cwd: &Path, timeout: f64) -> (bool, String) {
+fn run_ritual_command(pr: i64, cwd: &Path, timeout: f64) -> (bool, String) {
     let Ok(exe) = std::env::current_exe() else {
-        return (false, "verb-error: no current exe".to_string());
+        return (false, "command-error: no current exe".to_string());
     };
     let mut cmd = Command::new(&exe);
     cmd.args(["pr-watch", "ritual", &pr.to_string(), "--autonomous"])
@@ -810,7 +810,7 @@ fn inject_codex(session: &str, pr: i64) -> (bool, String) {
             Ok(()) => (true, "delivered".to_string()),
             // A transportless row is a hosted thread: its delivery lane was
             // the switchboard exchange, which has no native arm yet. Name
-            // the lane, not the session; the cold path still runs the verb.
+            // the lane, not the session; the cold path still runs the command.
             Err(_) => (false, "unsupported-lane:codex-thread".to_string()),
         }
     }
@@ -894,7 +894,7 @@ fn candidate_dir_names(cwd: &str) -> Vec<String> {
 }
 
 /// The production seams: roster-backed claude probe+inject, the codex
-/// registry row (pane lane first), the self-exec cold verb, in-process
+/// registry row (pane lane first), the self-exec cold command, in-process
 /// finalize, and the global events log.
 fn real_seams() -> Seams {
     Seams {
@@ -937,7 +937,7 @@ fn real_seams() -> Seams {
             "codex" => inject_codex(session, pr),
             other => (false, format!("unsupported-harness:{other}")),
         }),
-        run_verb: Box::new(run_ritual_verb),
+        run_command: Box::new(run_ritual_command),
         finalize_origin: Box::new(finalize_origin_impl),
         emit: Box::new(|path, r| emit_receipt(path, r)),
     }
@@ -947,7 +947,7 @@ fn real_seams() -> Seams {
 mod tests {
     use super::*;
 
-    fn recording_seams(verb_ok: bool) -> (Seams, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    fn recording_seams(command_ok: bool) -> (Seams, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&log);
         (
@@ -955,8 +955,8 @@ mod tests {
                 resolve_warm: Box::new(|_, _| None),
                 death_confirmed: Box::new(|_, _, _| false),
                 inject: Box::new(|_, _, _| (false, "not-live".to_string())),
-                run_verb: Box::new(move |_, _, _| {
-                    if verb_ok {
+                run_command: Box::new(move |_, _, _| {
+                    if command_ok {
                         (true, "step=reap-rows status=ok".to_string())
                     } else {
                         (false, String::new())
@@ -1100,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_cold_verb_decides_marker_and_receipt() {
+    fn dispatch_cold_command_decides_marker_and_receipt() {
         let canon = tempfile::tempdir().expect("tempdir");
         let (ok_seams, ok_log) = recording_seams(true);
         let out = dispatch_all(44, true, canon.path(), &ok_seams);
@@ -1122,14 +1122,14 @@ mod tests {
         let (bad_seams, bad_log) = recording_seams(false);
         let out = dispatch_all(45, true, canon2.path(), &bad_seams);
         assert_eq!(out.outcome, "failed");
-        assert_eq!(out.detail.as_deref(), Some("verb-nonzero"));
+        assert_eq!(out.detail.as_deref(), Some("command-nonzero"));
         assert!(
             !marker_path(canon2.path(), "sha-45").exists(),
             "no marker on failure"
         );
         assert_eq!(
             bad_log.lock().unwrap().as_slice(),
-            ["reserved:reserved", "failed:verb-nonzero"]
+            ["reserved:reserved", "failed:command-nonzero"]
         );
     }
 }

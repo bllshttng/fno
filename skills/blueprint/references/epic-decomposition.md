@@ -128,7 +128,7 @@ is known):
 
    Before the epic is blueprinted (no plan yet), the same fold is available directly: `fno backlog contain <epic> <id>...` stamps containment with no group scaffolding. A later decompose that names those ids in a group converges, re-stamping the group child. A decompose that leaves one out names it in the unadopted warning.
 
-   There is no epic-scoped child listing verb, so let decompose tell you. It is
+   There is no epic-scoped child listing command, so let decompose tell you. It is
    idempotent, so running it and refining the spec is safe: any child no group
    adopted is named on stderr as
 
@@ -184,7 +184,7 @@ is known):
    One node may appear in at most one group's `adopt` list, and a group child
    (this epic's or another epic's) can never be adopted - demoting a group into
    a task reshapes the epic.
-   The verb creates one child node per group (`parent=$EPIC_ID`, its own
+   The command creates one child node per group (`parent=$EPIC_ID`, its own
    self-contained quick-plan scaffold at the canonical `fno do plan path` name in
    the child's own project plans dir - the path it prints as `scaffolded plan:`
    / reports in the `--json` `scaffolded[]`), `blocked_by` resolved from
@@ -194,7 +194,7 @@ is known):
    group slug) rather than duplicating (US4). A bad spec leaves the
    graph untouched (AC1-FR) because the whole decomposition lands in one
    locked mutation. If a re-decomposition drops a slug that already
-   shipped a PR, the verb refuses (exit 2) unless you pass `--force`; unshipped
+   shipped a PR, the command refuses (exit 2) unless you pass `--force`; unshipped
    dropped groups are left in place and reported as a warning.
 
    **Set `needs_think: true` on a group that owns genuine unknowns** - a

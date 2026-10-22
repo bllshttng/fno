@@ -317,7 +317,7 @@ If user picks a "Change" option -> ask the specific follow-up, then re-show summ
 
 **5. Write to config.toml & confirm:**
 
-Append to the target workspace's projects list through `fno config set`, never a hand edit (the write gate refuses one). The verb replaces the whole list, so read it, add the row, and write it back:
+Append to the target workspace's projects list through `fno config set`, never a hand edit (the write gate refuses one). The command replaces the whole list, so read it, add the row, and write it back:
 
 ```bash
 fno config get work.workspaces.{WORKSPACE_NAME}.projects

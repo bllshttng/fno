@@ -73,7 +73,7 @@ def _runner(remote: str):
 
 def test_a_recorded_but_missing_cwd_refuses_rather_than_guessing():
     """A recorded cwd IS evidence the node belongs to another repo, and these
-    verbs can name any node in the cross-project graph."""
+    commands can name any node in the cross-project graph."""
     from fno.graph._reconcile import pr_url_for_repo
 
     assert pr_url_for_repo(

@@ -4,7 +4,7 @@ Exposes:
     fno inbox notify TITLE MESSAGE
 
 Formerly a thin wrapper that sourced ``scripts/lib/notify.sh``; the dispatch is
-now internalized in :mod:`fno.notify._impl` so the verb runs from the installed
+now internalized in :mod:`fno.notify._impl` so the command runs from the installed
 wheel with no repo-root dependency (US2). macOS uses ``osascript``, Linux uses
 ``notify-send``; with neither available it degrades loudly (non-zero + one-line
 message) rather than silently no-opping (AC2-FR).
@@ -29,7 +29,7 @@ def send(
     title: str = typer.Argument(..., help="Notification title"),
     message: str = typer.Argument(..., help="Notification message body"),
     pointer: str = typer.Option(
-        "", "--pointer", help="Verb or URL naming the durable state this notice points at"
+        "", "--pointer", help="Command or URL naming the durable state this notice points at"
     ),
 ) -> None:
     """Send an OS notification.

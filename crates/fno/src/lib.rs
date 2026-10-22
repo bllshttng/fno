@@ -64,8 +64,8 @@ pub mod mux_cli;
 pub mod mux_rows;
 pub mod needs_overlay;
 pub mod notify;
-#[path = "mux_cli/notify_verb.rs"]
-pub mod notify_verb;
+#[path = "mux_cli/notify_command.rs"]
+pub mod notify_command;
 pub mod observe;
 pub mod open_router;
 pub mod org_model;

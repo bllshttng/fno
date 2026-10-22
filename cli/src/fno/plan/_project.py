@@ -2,7 +2,7 @@
 
 One-way graph->doc mirror: the graph is the authority, the plan frontmatter
 carries a PROJECTION so the Obsidian Bases can order "Next up" by priority and
-show blockers without a second lookup. Written only by fno verbs (intake,
+show blockers without a second lookup. Written only by fno commands (intake,
 `backlog update`); never read back into the graph here (`size` and `type` flow
 doc->graph at intake, a separate reverse path in `_intake`).
 """

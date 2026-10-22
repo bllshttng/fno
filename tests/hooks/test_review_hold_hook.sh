@@ -91,13 +91,13 @@ skill_call() {
       tool_input:({skill:$s} + (if $a == "" then {} else {args:$a} end))}'
 }
 
-echo "-- the review verbs register a hold --"
-for verb in code-review review review-changes sigma-review; do
-  run_hook acquire "$(skill_call "$verb")"
-  expect_registered "skill=$verb"
+echo "-- the review commands register a hold --"
+for command in code-review review review-changes sigma-review; do
+  run_hook acquire "$(skill_call "$command")"
+  expect_registered "skill=$command"
 done
 
-echo "-- plugin-qualified and slash-prefixed spellings are the same verb --"
+echo "-- plugin-qualified and slash-prefixed spellings are the same command --"
 run_hook acquire "$(skill_call "fno:review")"
 expect_registered "skill=fno:review"
 run_hook acquire "$(skill_call "/code-review")"
@@ -166,9 +166,9 @@ else
 fi
 
 echo "-- a name that merely CONTAINS review registers nothing --"
-for verb in code-review-attest pr-review-fixes reviewer brainstorming; do
-  run_hook acquire "$(skill_call "$verb")"
-  expect_silent "skill=$verb"
+for command in code-review-attest pr-review-fixes reviewer brainstorming; do
+  run_hook acquire "$(skill_call "$command")"
+  expect_silent "skill=$command"
 done
 
 echo "-- the payload has to be a Skill call --"

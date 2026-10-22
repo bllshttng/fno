@@ -7,10 +7,10 @@
 //! [`crate::claude_ask::claude_cwd_slug`] - the transcript store this crate
 //! already resolves for `resume`/`adopt`, not a second path guess.
 //!
-//! The census this verb answers directly: 64,792 Bash calls over 21 days, 91%
-//! compound, 30% led by a defensive `cd`, 20% `fno` verbs led by `backlog get`
-//! at 1,516 single-node calls. `--allow` turns the top 20 fno verbs into
-//! `Bash(fno <verb>:*)` lines ready to paste into `permissions.allow`,
+//! The census this command answers directly: 64,792 Bash calls over 21 days, 91%
+//! compound, 30% led by a defensive `cd`, 20% `fno` commands led by `backlog get`
+//! at 1,516 single-node calls. `--allow` turns the top 20 fno commands into
+//! `Bash(fno <command>:*)` lines ready to paste into `permissions.allow`,
 //! feeding `/fewer-permission-prompts` with a measured allowlist instead of a
 //! guessed one.
 
@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 
 const DEFAULT_DAYS: u64 = 21;
 const HEAD_TABLE_SIZE: usize = 30;
-const VERB_TABLE_SIZE: usize = 20;
+const COMMAND_TABLE_SIZE: usize = 20;
 /// Command heads whose census-worthy identity is TWO words, not one: `fno
 /// backlog` and `git push` mean something different from `fno` and `git`
 /// alone, so these key on the first two whitespace-separated tokens.
@@ -37,10 +37,10 @@ struct Census {
     leading_cd: usize,
     heredoc: usize,
     heads: HashMap<String, usize>,
-    /// The `fno <verb>` breakdown: keyed on the two tokens AFTER `fno`
+    /// The `fno <command>` breakdown: keyed on the two tokens AFTER `fno`
     /// (`backlog get`, not `fno backlog`), because that is the shape
-    /// `/fewer-permission-prompts` turns into `Bash(fno <verb>:*)`.
-    fno_verbs: HashMap<String, usize>,
+    /// `/fewer-permission-prompts` turns into `Bash(fno <command>:*)`.
+    fno_commands: HashMap<String, usize>,
 }
 
 /// Fold one raw command string into `census`'s counters.
@@ -72,12 +72,12 @@ fn classify_one(command: &str, census: &mut Census) {
     *census.heads.entry(head).or_insert(0) += 1;
 
     if first == "fno" && words.len() >= 2 {
-        let verb = if words.len() >= 3 {
+        let command_name = if words.len() >= 3 {
             format!("{} {}", words[1], words[2])
         } else {
             words[1].to_string()
         };
-        *census.fno_verbs.entry(verb).or_insert(0) += 1;
+        *census.fno_commands.entry(command_name).or_insert(0) += 1;
     }
 }
 
@@ -151,7 +151,12 @@ fn pct(n: usize, total: usize) -> f64 {
     }
 }
 
-fn print_report(census: &Census, heads: &[(String, usize)], verbs: &[(String, usize)], days: u64) {
+fn print_report(
+    census: &Census,
+    heads: &[(String, usize)],
+    commands: &[(String, usize)],
+    days: u64,
+) {
     println!(
         "bash-census: {} file(s), {} Bash call(s) over {} day(s) \
          (compound {} [{:.0}%], leading-cd {} [{:.0}%], heredoc {} [{:.0}%])",
@@ -169,9 +174,9 @@ fn print_report(census: &Census, heads: &[(String, usize)], verbs: &[(String, us
     for (head, count) in heads {
         println!("    {count:>6}  {head}");
     }
-    println!("  top fno verbs:");
-    for (verb, count) in verbs {
-        println!("    {count:>6}  {verb}");
+    println!("  top fno commands:");
+    for (command, count) in commands {
+        println!("    {count:>6}  {command}");
     }
 }
 
@@ -243,11 +248,11 @@ pub fn run_bash_census(args: &[String]) -> i32 {
     }
 
     let top_heads = top_n(&census.heads, HEAD_TABLE_SIZE);
-    let top_verbs = top_n(&census.fno_verbs, VERB_TABLE_SIZE);
+    let top_commands = top_n(&census.fno_commands, COMMAND_TABLE_SIZE);
 
     if allow {
-        for (verb, _) in &top_verbs {
-            println!("Bash(fno {verb}:*)");
+        for (command, _) in &top_commands {
+            println!("Bash(fno {command}:*)");
         }
         return 0;
     }
@@ -260,7 +265,7 @@ pub fn run_bash_census(args: &[String]) -> i32 {
             "leading_cd": census.leading_cd,
             "heredoc": census.heredoc,
             "heads": top_heads,
-            "fno_verbs": top_verbs,
+            "fno_commands": top_commands,
         });
         println!(
             "{}",
@@ -269,7 +274,7 @@ pub fn run_bash_census(args: &[String]) -> i32 {
         return 0;
     }
 
-    print_report(&census, &top_heads, &top_verbs, days);
+    print_report(&census, &top_heads, &top_commands, days);
     0
 }
 
@@ -362,7 +367,7 @@ mod tests {
         assert_eq!(census.compound, 1);
         assert_eq!(census.leading_cd, 1);
         assert_eq!(census.heredoc, 1);
-        assert_eq!(census.fno_verbs.get("backlog get"), Some(&1));
+        assert_eq!(census.fno_commands.get("backlog get"), Some(&1));
     }
 
     #[test]
@@ -376,9 +381,9 @@ mod tests {
             fx.cwd.display().to_string(),
             "--allow".to_string(),
         ];
-        // --allow's own assertion is on the top_verbs computation, since this
+        // --allow's own assertion is on the top_commands computation, since this
         // module does not capture stdout in-process; the printed line is
-        // `Bash(fno {verb}:*)` per verb, verified against the same top_n the
+        // `Bash(fno {command}:*)` per command, verified against the same top_n the
         // binary path calls.
         let slug = claude_cwd_slug(&fx.cwd);
         let dir = claude_projects_dir().join(&slug);
@@ -395,8 +400,8 @@ mod tests {
                 }
             }
         }
-        let verbs = top_n(&census.fno_verbs, VERB_TABLE_SIZE);
-        assert_eq!(verbs, vec![("backlog get".to_string(), 1)]);
+        let commands = top_n(&census.fno_commands, COMMAND_TABLE_SIZE);
+        assert_eq!(commands, vec![("backlog get".to_string(), 1)]);
         assert_eq!(run_bash_census(&args), 0);
     }
 

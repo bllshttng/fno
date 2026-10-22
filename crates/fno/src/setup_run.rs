@@ -310,7 +310,7 @@ pub const STEPS: &[Step] = &[
         layer: Layer::Global,
         kind: Kind::Report,
         question: "Provider accounts and rotation?",
-        effect: "review later with `fno config accounts`; login needs a browser, so setup only names the verb",
+        effect: "review later with `fno config accounts`; login needs a browser, so setup only names the command",
     },
     Step {
         id: "guardrails",
@@ -426,7 +426,7 @@ pub const STEPS: &[Step] = &[
     },
 ];
 
-/// This verb's argv, claimed lexically before clap: exactly
+/// This command's argv, claimed lexically before clap: exactly
 /// `config setup run` plus the flags `parse_opts` accepts. The sibling
 /// `auto-wire` and `plan` spellings stay with their owners.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
@@ -442,7 +442,7 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
 
 /// `--yes` / `--once` / `--scope` / `--only` / `--list` / `--json` /
 /// `--dry-run` / `--scan-repos` / `--scan-dirs` / `--export` / `--out` /
-/// `--join`, hand parsed: the verb is claimed before clap, so the flags
+/// `--join`, hand parsed: the command is claimed before clap, so the flags
 /// are ours. An unknown flag or value refuses with the usage line and
 /// exit 2.
 pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
@@ -683,7 +683,7 @@ fn config_set_split(
     }
 }
 
-/// Fold one auto-wire outcome line into the report. The verb's lines are
+/// Fold one auto-wire outcome line into the report. The command's lines are
 /// stable human text pinned by its own tests: `Label: installed`,
 /// `Label: already installed`, `needs a manual finish`, `FAILED`.
 fn fold_wire_line(line: &str, rep: &mut Report) {
@@ -748,8 +748,8 @@ fn step_gh_auth(rep: &mut Report) {
     }
 }
 
-/// The proposal half of the harness-wiring step: what the auto-wire verb
-/// would do, without running it. The run path runs the verb; `--dry-run`
+/// The proposal half of the harness-wiring step: what the auto-wire command
+/// would do, without running it. The run path runs the command; `--dry-run`
 /// prints this row. Empty `key` marks a command proposal.
 fn propose_harness_wiring() -> Proposal {
     Proposal {
@@ -2009,7 +2009,7 @@ pub(crate) fn apply_wizard_join(
     crate::setup_profile::redact(&rep.to_json())
 }
 
-/// The verb. `--list` prints the table; `--once` stops at its markers; the
+/// The command. `--list` prints the table; `--once` stops at its markers; the
 /// no-prompt path takes every recommended default. A layer's marker is
 /// written only when that layer left nothing needs-human, so `--once` never
 /// papers over a blocked step. Exit 0 unless the argv was wrong.
@@ -2281,9 +2281,9 @@ pub fn run(tail: &[OsString]) -> i32 {
                             fold_wire_line(line, &mut rep);
                         }
                     }
-                    Err(e) => rep
-                        .needs_human
-                        .push(format!("harness-wiring: cannot run the wiring verb ({e})")),
+                    Err(e) => rep.needs_human.push(format!(
+                        "harness-wiring: cannot run the wiring command ({e})"
+                    )),
                 }
             }
             (Layer::Global, "gh-auth") => step_gh_auth(&mut rep),

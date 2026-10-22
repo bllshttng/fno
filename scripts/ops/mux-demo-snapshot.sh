@@ -2,12 +2,13 @@
 # Shoot the mux for a public page without one byte of a real session in it.
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
+#       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
 # leads, mail, feed questions and harness panes, then shoots it with
 # `fno mux serve --snapshot --server`, kills the server and deletes the root.
-# Every view a paint PR changes renders populated: the verb itself refuses an
+# Every view a paint PR changes renders populated: the command itself refuses an
 # empty view render, and the refusal dies here.
 set -euo pipefail
 
@@ -20,12 +21,22 @@ PANES=()
 
 # The shot runs from $ROOT/code/checkout, so a relative --out would land in
 # the throwaway root and die with it. Absolutize against the caller's cwd.
+# --window-size and --no-fit are this script's own: the first sets the demo
+# server's mux.window_size policy by env (the server inherits it), the second
+# shoots as a passive observer so the shot crops instead of resizing the tab.
 ARGS=()
+FIT=(--fit)
 PREV=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
     ARGS+=("$(cd "$(dirname -- "$a")" && pwd -P)/$(basename -- "$a")")
+  elif [ "$PREV" = "--window-size" ]; then
+    export FNO_MUX_WINDOW_SIZE="$a"
+  elif [ "$a" = "--window-size" ]; then
+    :
+  elif [ "$a" = "--no-fit" ]; then
+    FIT=()
   else
     ARGS+=("$a")
   fi
@@ -145,7 +156,7 @@ done
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
-# The first backlog verb migrates the store and publishes its tombstone AS
+# The first backlog command migrates the store and publishes its tombstone AS
 # the claims path: a marker file where the lock needs a directory. The
 # marker's backup imported at publish, so retiring the marker and
 # recreating the directory hands the path back to the legacy lock writer.
@@ -313,7 +324,7 @@ agents = [
 ]
 import sqlite3
 conn = sqlite3.connect(db)
-# The registry rides the graph store the verbs migrated to .fno/db. Its
+# The registry rides the graph store the commands migrated to .fno/db. Its
 # tables are created lazily by the first Rust registry writer, so the seed
 # matches that DDL instead of assuming they exist.
 if not conn.execute(
@@ -443,4 +454,4 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout "$@"
+"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"

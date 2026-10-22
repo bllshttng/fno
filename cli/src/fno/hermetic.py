@@ -188,7 +188,7 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL",
     # Same launch-context family: the router exports it beside the model and
-    # base URL, and the encounter verb reads it for vote provenance. A test
+    # base URL, and the encounter command reads it for vote provenance. A test
     # must not see the developer's effort value.
     "CLAUDE_EFFORT",
     "DATABASE_URL",

@@ -1,4 +1,4 @@
-"""Unit tests for fno.claims.session_pid: the shim over the native verb.
+"""Unit tests for fno.claims.session_pid: the shim over the native command.
 
 The ancestor walk itself lives in Rust (`spawn_context.rs`, served by
 `fno agents claim session-pid`); its semantics - nearest harness wins, the
@@ -6,7 +6,7 @@ claude exe-only substring rule, segment-vs-substring matching, the node-shim
 stem rule, pool-machinery refusal, and the FNO_SESSION_PID stamp pair - are
 pinned by spawn_context's own tests (session_identity_*, ambient_stamp_pair,
 harness_walk_still_proves_claude_behind_a_spare). What stays testable here is
-the Python contract: exec the verb once per from_pid, cache the answer,
+the Python contract: exec the command once per from_pid, cache the answer,
 answer both halves from that one read, and degrade to (None, None) on any
 failure mode instead of raising into a caller that holds a claim lock.
 """
@@ -36,13 +36,13 @@ def _fresh_identity_cache():
 
 
 def _reply(payload=None, rc=0, stdout=None):
-    """A CompletedProcess shaped like the verb's answer."""
+    """A CompletedProcess shaped like the command's answer."""
     if stdout is None:
         stdout = "" if payload is None else json.dumps(payload)
     return subprocess.CompletedProcess([], rc, stdout=stdout, stderr="")
 
 
-def test_verb_answer_fills_both_halves():
+def test_command_answer_fills_both_halves():
     """One JSON read answers pid and harness together (AC6). The native
     front is the first exec, located through the rust_binary door; the
     Python front is its fallback."""

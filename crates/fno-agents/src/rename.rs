@@ -1,4 +1,4 @@
-//! The `rename` verb's client half: argv-to-request shaping and the success
+//! The `rename` command's client half: argv-to-request shaping and the success
 //! receipt. The daemon owns the transaction, except `--from-journal`, the
 //! daemon-free label rebuild that reads the registry and journal directly.
 

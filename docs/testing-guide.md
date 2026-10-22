@@ -54,15 +54,15 @@ All test scripts follow the same convention:
 
 ### Smoke runner coverage (the two-test-trees trap)
 
-`fno doctor test smoke` is the one-command gate, but it has two layers and a gap that a verb-surface change falls straight through.
+`fno doctor test smoke` is the one-command gate, but it has two layers and a gap that a command-surface change falls straight through.
 
 - A pytest step (unit + integration under `cli/tests/`).
 - Auto-included shell steps from `_SMOKE_HARNESS_GLOBS` in `cli/src/fno/test_cmd.py`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
 - The pytest step is fail-fast: while it is red, the shell steps never run.
 
-Two shell trees are NOT in the smoke globs and never run unless invoked directly: `cli/tests/smoke/*.sh` and `cli/tests/scenarios/*.sh`. These call verbs (`fno backlog new`, `fno agents mail send`, and friends) that the pytest suite does not exercise.
+Two shell trees are NOT in the smoke globs and never run unless invoked directly: `cli/tests/smoke/*.sh` and `cli/tests/scenarios/*.sh`. These call commands (`fno backlog new`, `fno agents mail send`, and friends) that the pytest suite does not exercise.
 
-When you kill, rename, or nest a CLI verb, run the shell layer explicitly: `bash cli/tests/smoke/*.sh`, `bash cli/tests/scenarios/*.sh`, and root `tests/*.sh`. When a verb surface changes, a green `fno doctor test smoke` does not prove the shell layer still resolves. A red pytest step can stop fail-fast before shell steps. This happened on a PR that passed 12525 pytest cases while two shell tests still invoked removed verbs.
+When you kill, rename, or nest a CLI command, run the shell layer explicitly: `bash cli/tests/smoke/*.sh`, `bash cli/tests/scenarios/*.sh`, and root `tests/*.sh`. When a command surface changes, a green `fno doctor test smoke` does not prove the shell layer still resolves. A red pytest step can stop fail-fast before shell steps. This happened on a PR that passed 12525 pytest cases while two shell tests still invoked removed commands.
 
 ### Validation Scripts
 
@@ -161,7 +161,7 @@ until ! grep -q pending out; do sleep 45; fno do pr status "$PR" --json > out; d
 until grep -q '"settled": true' out; do sleep 45; fno do pr status "$PR" --json > out; done
 ```
 
-The sanctioned watcher applies this rule for you. `fno do pr wait "$PR" --until settled --timeout 15m` polls the positive settled marker through the coalescing cache. N waiters on one PR cost one network read per TTL. The verb exits with the status verb's own code. Reach for it instead of writing either loop by hand.
+The sanctioned watcher applies this rule for you. `fno do pr wait "$PR" --until settled --timeout 15m` polls the positive settled marker through the coalescing cache. N waiters on one PR cost one network read per TTL. The command exits with the status command's own code. Reach for it instead of writing either loop by hand.
 
 Both wait on a file the loop keeps rewriting, and they are one condition apart.
 The first tests for an ABSENCE, and an absence has two explanations: the checks really finished, or the command never produced usable output.
@@ -171,7 +171,7 @@ The second waits for a string that only the real outcome produces, so a broken c
 Pin the pattern to the thing being measured, too.
 A monitor armed on `verdict=` fired on `PASS: verdict=canonical-protected` from an unrelated harness while its gate was at step 10 of 124.
 
-A fail-fast gate hides the same way, with no pipe and no pattern involved. Once one step is permanently red, every later step stops running. A check that never ran reports the same nothing as a passing check. A local gate stopped at step 32 on a known baseline failure and never reached the verb-surface ratchet around step 40. Therefore, "the gate did not complain" meant "the gate never looked", and CI caught it. Once a step is known red, run `fno doctor test --keep-going` so later steps still report. `--keep-going` belongs to `fno doctor test`. `scripts/ci/preflight.sh` rejects it as an unknown argument and exits 2.
+A fail-fast gate hides the same way, with no pipe and no pattern involved. Once one step is permanently red, every later step stops running. A check that never ran reports the same nothing as a passing check. A local gate stopped at step 32 on a known baseline failure and never reached the command-surface ratchet around step 40. Therefore, "the gate did not complain" meant "the gate never looked", and CI caught it. Once a step is known red, run `fno doctor test --keep-going` so later steps still report. `--keep-going` belongs to `fno doctor test`. `scripts/ci/preflight.sh` rejects it as an unknown argument and exits 2.
 
 Last, and it is the one a control does not save you from: believe the reading once you have it. A helper had a real bug and received a fix. Two people had already recorded a search proving no source called it. Neither concluded that the fix executed nowhere. Running the control is the cheap half. Acting on it gets skipped because contradictory evidence is easier to note than obey.
 
@@ -263,7 +263,7 @@ Where `AC<N>` = acceptance criterion number, `HP` = happy path (or `EP` for erro
 
 ## Completion (external truth)
 
-The target pipeline has no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees, decided by the read-only `fno-agents loop-check` verb:
+The target pipeline has no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees, decided by the read-only `fno-agents loop-check` command:
 
 | Read | What it checks |
 |------|----------------|
@@ -436,7 +436,7 @@ The target pipeline runs as a persistent loop until the feature is complete.
 
 **Cross-session loop:**
 
-- One Rust runtime drives the loop: `fno-agents loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` verb is gone too
+- One Rust runtime drives the loop: `fno-agents loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` command is gone too
 - The walk stops on a `TerminationReason` event (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted, Aborted) or the iteration ceiling
 
 **External review polling:**
@@ -508,7 +508,7 @@ Before resetting a `COMPLETE` or `BLOCKED` state file, the helper checks the `cr
 - Enforces the interactive spend cap
 - Checks the routed model against the attested one
 
-**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs` and exposed through the Python bridge `cli/src/fno/context_probe.py`; the skill-local probe is a shim over the verb):**
+**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs` and exposed through the Python bridge `cli/src/fno/context_probe.py`; the skill-local probe is a shim over the command):**
 
 - Counts tokens from the transcript and reports `used_pct` against a per-family window
 

@@ -13,7 +13,7 @@
 # frontmatter.
 #
 # The former template/DOC grep tail (quick-template placeholder, LOCKED_SECTION
-# variable, parser-reference and transcription-verb strings) was junk under
+# variable, parser-reference and transcription-command strings) was junk under
 # the test-audit authoring gate: exact source greps of doc prose, not behavior.
 
 set -uo pipefail

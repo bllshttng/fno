@@ -9,7 +9,7 @@ use std::path::Path;
 
 /// A team mid-handoff is briefly empty by design, so the alarm waits this
 /// long from the first tick that saw the scope empty. The number is not
-/// invented: it is the floor `stuck_work` already applies to a hung verb
+/// invented: it is the floor `stuck_work` already applies to a hung command
 /// (its `DEFAULT_HUNG_FLOOR_S`), the `notify.arm_failing_after_s` default the
 /// confirmed send already pages at, two lead_wake beats, and six arm_watch
 /// beats. One control plane, one meaning of "long enough".
@@ -173,8 +173,8 @@ fn empty_team_finding(
     }
 }
 
-/// The daemon-facing read: shell the Python org verb, then judge its
-/// payload. The Python verb is the one decider for the held list; a native
+/// The daemon-facing read: shell the Python org command, then judge its
+/// payload. The Python command is the one decider for the held list; a native
 /// second builder of the held list would be the dual implementation the
 /// port law refuses.
 pub fn collect(config_cwd: &Path) -> Result<(Vec<Finding>, String), String> {

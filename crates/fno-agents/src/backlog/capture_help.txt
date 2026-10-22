@@ -5,7 +5,7 @@ checkbox items, each with a stable fu-id. Capture is a cheap markdown append,
 not a graph mutation; triage promotes warranted items into real graph nodes.
 Struck lines are never deleted, so provenance survives.
 
-Verbs:
+Commands:
   add TITLE --source SUBSTRATE --why TEXT [--where AREA] [--priority p0-p3]
       Shorts: -s source, -w where, -p priority.
       Capture an item (dedup: an open item covering title+where is reused).

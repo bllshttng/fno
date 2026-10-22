@@ -1,5 +1,5 @@
 //! `fno agents reap --release <row>` : apply an operator ruling to
-//! one escalated hold. The verb classifies with the dry run the report came
+//! one escalated hold. The command classifies with the dry run the report came
 //! from, refuses a fresh hold or open work by name, and applies through the
 //! sweep's own door: `run_with_release` runs the full real sweep with the
 //! ruling, so other retire-eligible rows retire on it too and the receipt

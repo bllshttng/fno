@@ -1,9 +1,9 @@
-//! The `fno mux web reap` verb: the corpse sweep for the `--web` bridge marker
+//! The `fno mux web reap` command: the corpse sweep for the `--web` bridge marker
 //! (`web-<session>.json`, written and Drop-removed by `mux serve --web`,
 //! crates/fno/src/web.rs). A bridge killed by anything but its own Drop -
 //! SIGKILL, a crash, a machine reboot - leaves the file and its 64-hex token
 //! on disk forever. Stopping a live bridge is `fno mux serve --web --stop`;
-//! this verb removes what a death without Drop left behind: every marker whose
+//! this command removes what a death without Drop left behind: every marker whose
 //! port refuses.
 
 use std::ffi::OsString;
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn bare_reap_and_unexpected_arguments_are_usage() {
-        // Unknown verbs and a bare `mux web` refuse at the classifier now;
+        // Unknown commands and a bare `mux web` refuse at the classifier now;
         // what reaches this parser is a well-formed reap, and its own flag
         // grammar still refuses the junk.
         // A bare reap is the happy empty answer, not a usage error.

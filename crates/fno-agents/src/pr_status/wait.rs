@@ -75,7 +75,7 @@ pub(crate) fn resume_phase(slug: &str, pr: u64, interval: f64) -> f64 {
     (h % 10_000) as f64 / 10_000.0 * interval
 }
 
-/// The note that separates this verb from the hand-rolled loops it
+/// The note that separates this command from the hand-rolled loops it
 /// replaces: the spender sees its spend at exit.
 fn spend_note(calls: usize, ticks: usize, noun: &str) -> String {
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());

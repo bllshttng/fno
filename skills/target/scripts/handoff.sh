@@ -136,7 +136,7 @@ EVENTS_FILE="$FNO_DIR/events.jsonl"
 # cwd-relative defaults above parked every self-handoff from a space-keyed
 # worktree ("manifest .fno/target-state.md not found", exit 10). An explicit
 # FNO_DIR is the test override and keeps the cwd-relative layout verbatim; an
-# fno-agents that cannot answer (missing binary, pre-verb install) falls back
+# fno-agents that cannot answer (missing binary, pre-command install) falls back
 # to the same layout rather than parking blind.
 if [ -z "$_FNO_DIR_EXPLICIT" ]; then
   _AGENTS_BIN="$(_handoff_agents_bin)"
@@ -368,8 +368,8 @@ set -o pipefail
 if [ "$_RUNG_EC" -ne 0 ]; then
   _RUNG="$(printf '%s' "$_RUNG_OUT" | sed -n 's/^rung=//p' | head -1)"
   if [ -z "$_RUNG" ]; then
-    # No `rung=` line at all: the verb did not answer. An installed fno older
-    # than this verb exits 2 the same way a usage error does, so name the
+    # No `rung=` line at all: the command did not answer. An installed fno older
+    # than this command exits 2 the same way a usage error does, so name the
     # likely cause - a bare "rung 'unknown'" would send the operator hunting
     # through the plan for a problem that is in their PATH.
     echo "parked $NODE_ID reason=\"'fno do plan rung' did not answer; installed fno may predate it - run 'fno doctor update' or 'fno doctor --fix'\""
@@ -442,7 +442,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --verb t \
+_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --command t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then
@@ -628,7 +628,7 @@ if ${_TC_EMBED:+FNO_TASK_CONTEXT_FILE="$_TASK_CONTEXT_FILE"} fno do resume recei
       --worktree "$PWD" \
       --branch "${_RECEIPT_BRANCH:-}" \
       --head "${_RECEIPT_HEAD:-}" \
-      --next-verb "/fno:target" \
+      --next-command "/fno:target" \
       --next-target "$NODE_ID" \
       >/dev/null 2>"$_TMP_RECEIPT_ERR"; then
   :
@@ -802,14 +802,14 @@ fi
 SPAWN_FLAGS="$(printf '%s' "$SPAWN_FLAGS" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
 
 case "$DEST_HARNESS" in
-  codex) _TARGET_VERB='$fno:target' ;;
-  opencode) _TARGET_VERB='/fno:target' ;;
-  *) _TARGET_VERB='/fno:target' ;;
+  codex) _TARGET_COMMAND='$fno:target' ;;
+  opencode) _TARGET_COMMAND='/fno:target' ;;
+  *) _TARGET_COMMAND='/fno:target' ;;
 esac
 if [ -n "$SPAWN_FLAGS" ]; then
-  CHILD_CMD="$_TARGET_VERB $SPAWN_FLAGS $NODE_ID"
+  CHILD_CMD="$_TARGET_COMMAND $SPAWN_FLAGS $NODE_ID"
 else
-  CHILD_CMD="$_TARGET_VERB $NODE_ID"
+  CHILD_CMD="$_TARGET_COMMAND $NODE_ID"
 fi
 
 _ASK_RC=0
@@ -959,7 +959,7 @@ _emit_event "session_satisfied" \
 # 8c. Delegating session's ledger session-record (step 6, / AC7-EDGE).
 # The manifest was archived in Step 4, so the stop-hook shim's finalize cannot
 # read it (and in fact the shim exits early on the now-missing manifest). Write
-# the paper-trail row HERE via the `finalize` verb against the ARCHIVED manifest,
+# the paper-trail row HERE via the `finalize` command against the ARCHIVED manifest,
 # with termination_reason=delegated. `delegated` is a non-ship reason, so finalize
 # writes ONLY the ledger row (stamp/graduate/handoff stay the SUCCESSOR's job)
 # and emits session_finalized for observability. Best-effort: failure never

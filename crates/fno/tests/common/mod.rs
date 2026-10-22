@@ -102,7 +102,7 @@ impl Scratch {
         // watchdog reaps it when this test binary exits. Applied after the
         // FNO_* strip above; a later explicit .env still overrides.
         cmd.envs(test_owner::self_owner_env());
-        // A verb that delegates to the Python CLI (claims, events) resolves
+        // A command that delegates to the Python CLI (claims, events) resolves
         // its native event-store writer through FNO_BIN first. Without this
         // the installed copy falls back to PATH, which carries no `fno` on a
         // CI runner, and the write dies with EventStoreUnavailable.
@@ -1141,7 +1141,7 @@ impl FakeClient {
             } => self.link_hovers.push((pane_id, seq, cells)),
             // Answers a pre-Attach Query only; stray on an attached client.
             ServerMsg::Info { .. } => {}
-            // v4 control-verb replies belong to one-shot `fno mux pane`
+            // v4 control-command replies belong to one-shot `fno mux pane`
             // connections, never this attached client - ignore.
             ServerMsg::PaneList { .. }
             | ServerMsg::PaneText { .. }
@@ -1149,7 +1149,7 @@ impl FakeClient {
             | ServerMsg::Ok
             | ServerMsg::WaitDone { .. }
             | ServerMsg::Err { .. }
-            // (x-d865) v41 layout script-verb replies: one-shot control
+            // (x-d865) v41 layout script-command replies: one-shot control
             // connections only, never this attached client - ignore.
             | ServerMsg::TabList { .. }
             | ServerMsg::LayoutTree { .. }

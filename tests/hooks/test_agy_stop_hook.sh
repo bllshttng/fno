@@ -47,7 +47,7 @@ setup_env() {
 
 # Same resolution order as scripts/lib/events.sh: checkout build first, PATH
 # second. The store commit is the write boundary: the pinned journal keeps no
-# byte trace, so emission asserts read committed rows through the verb and
+# byte trace, so emission asserts read committed rows through the command and
 # jq -r unwraps the escaped envelope strings back to plain JSON lines.
 ROWS_BIN="${FNO_BIN:-}"
 if [[ -z "$ROWS_BIN" ]]; then
@@ -77,7 +77,7 @@ attended: false
 ---
 STATE
     # Pin `fno-agents state path` into the sandbox (x-3227 review, T6): the
-    # real verb answers the SPACES slice of whatever cwd it runs in, so an
+    # real command answers the SPACES slice of whatever cwd it runs in, so an
     # ambient binary scatters the adapter's events journal outside TMP_DIR.
     cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${TMP_DIR}/bin/fno-agents"
     chmod 755 "${TMP_DIR}/bin/fno-agents"
@@ -403,7 +403,7 @@ STUB
     cleanup
 }
 
-# ── T14: broken resolver -> verbs run from ROOT, counter persists ─────────────
+# ── T14: broken resolver -> commands run from ROOT, counter persists ─────────────
 # agy fires the global hooks.json from ~/.gemini/config (not a git repo): the
 # real manifest-for-session refuses there (rc=2) and the pre-fix counter write
 # silently failed, so the give-up ceiling never fired and agy never exited.
@@ -451,7 +451,7 @@ STUB
         || { fail "T14: counter did not persist in the created SPACE_DIR"; t14=false; }
     [[ "$(cat "$CWD_MARK" 2>/dev/null)" == "$TMP_DIR" ]] \
         || { fail "T14: manifest-for-session ran from $(cat "$CWD_MARK" 2>/dev/null), not ROOT"; t14=false; }
-    [[ "$t14" == true ]] && pass "T14: broken resolver bounded-continues 3 then gives up; verbs run from ROOT"
+    [[ "$t14" == true ]] && pass "T14: broken resolver bounded-continues 3 then gives up; commands run from ROOT"
     cleanup
 }
 

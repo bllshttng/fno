@@ -1,7 +1,7 @@
 //! `fno-agents pr-merge-result-check <pr>`: the standalone merge-result
-//! verb, over the same walk the merge gate probes in process
+//! command, over the same walk the merge gate probes in process
 //! ([`crate::gate_probes::merge_result_verdict`]). Ported from
-//! `cli/src/fno/pr/_merge_result.py`, which this verb replaces.
+//! `cli/src/fno/pr/_merge_result.py`, which this command replaces.
 
 use crate::authorized_merge::PrFacts;
 use crate::gate_probes::{merge_result_verdict, run_probe};
@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// One `gh pr view` read fills the base/head the probe needs. Output is the
-/// Python verb's contract: stdout `merge-result: ok - <reason>` at 0, stderr
+/// Python command's contract: stdout `merge-result: ok - <reason>` at 0, stderr
 /// `REFUSED` plus the rebase remedy at 3, `unknown - <reason>` at 4. Dead
 /// probes answer unknown, never a crash: the Python `_probe` contract.
-pub fn run_merge_result_verb(argv: &[String]) -> i32 {
+pub fn run_merge_result_command(argv: &[String]) -> i32 {
     const USAGE: &str = "usage: fno-agents pr-merge-result-check <pr-number>";
     let number = match argv.first().map(String::as_str).map(str::parse::<u64>) {
         Some(Ok(number)) => number,

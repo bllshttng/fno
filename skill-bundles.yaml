@@ -27,7 +27,7 @@
 #
 # When a skill needs a script, two valid call shapes exist:
 #   - ${SKILL_DIR}/scripts/X (preferred for portability/self-containment)
-#   - fno <verb> (preferred when the polished CLI surface is the right
+#   - fno <command> (preferred when the polished CLI surface is the right
 #     abstraction, e.g. cross-skill or cross-tool calls)
 #
 # Both paths trace back to the same canonical source declared here.

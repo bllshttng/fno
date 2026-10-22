@@ -7,7 +7,7 @@
 //! does not touch.
 
 use super::env_wrap::{
-    enrich_spawn_payload, is_verb_seed, mesh_env_wrapper, normalize_command, qos_wrap_for,
+    enrich_spawn_payload, is_command_seed, mesh_env_wrapper, normalize_command, qos_wrap_for,
     seed_provenance_env,
 };
 use super::readiness::{
@@ -83,12 +83,12 @@ pub(crate) fn grant_tokens(harness: &str) -> Vec<String> {
         .collect()
 }
 
-/// The per-spawn seed text: normalize a verb seed, then the one payload
+/// The per-spawn seed text: normalize a command seed, then the one payload
 /// entry (brevity block once) - the Python leg's render_seed/prepare ordering.
 /// `pub(crate)` for the claude arm, which composes the same seed.
 pub(crate) fn seed_text(ctx: &PaneContext) -> String {
     let message = ctx.message.as_str();
-    if is_verb_seed(message) {
+    if is_command_seed(message) {
         let normalized = normalize_command(message, ctx.provider.as_str());
         enrich_spawn_payload(&normalized)
     } else {

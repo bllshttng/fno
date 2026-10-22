@@ -1,7 +1,7 @@
 """Tests for `fno backlog contain` and the containment contract it stamps.
 
 Covers:
-- the contain verb: a done-owner refusal, target refusals (live claim / open
+- the contain command: a done-owner refusal, target refusals (live claim / open
   PR) with batch atomicity
 - ``_container_ids`` treating an all-contained parent as a delivery unit
 - the named-dispatch redirect (``_redirect_if_contained``)
@@ -149,7 +149,7 @@ def _seed_owner_with_children(g: Path, n: int = 3) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# The verb: owner refusals
+# The command: owner refusals
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
 
 
 # ---------------------------------------------------------------------------
-# The verb: target refusals, batch atomicity
+# The command: target refusals, batch atomicity
 # ---------------------------------------------------------------------------
 
 

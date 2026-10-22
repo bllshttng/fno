@@ -373,7 +373,7 @@ def test_control_registry_claimed_keeper_survives_both(tmp_path, monkeypatch) ->
         shutil.rmtree(sock_parent, ignore_errors=True)
 
 
-# --- the verb's flag contract ----------------------------------------------
+# --- the command's flag contract ----------------------------------------------
 
 
 def test_apply_all_kills_through_the_real_command(tmp_path, monkeypatch) -> None:

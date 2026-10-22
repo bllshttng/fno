@@ -51,7 +51,7 @@ def test_resume_and_route_detectors_catch_attached_short_forms() -> None:
     # --provider is the decomposed route spelling; the Rust client would launch
     # it on the primary model.
     assert _is_route_bearing_spawn("spawn", ["spawn", "w", "--provider", "zai"])
-    # Non-matching flags and other verbs do not trip them.
+    # Non-matching flags and other commands do not trip them.
     assert not _is_resume_bearing_spawn("spawn", ["spawn", "w", "--name", "n"])
     assert not _is_route_bearing_spawn("role", ["role", "w", "-Pzai"])
 
@@ -83,7 +83,7 @@ def test_long_only_detectors_detect_and_respect_argv_boundary() -> None:
         (_is_dispatch_account_bearing_spawn, "--dispatch-account"),
     ):
         assert not det("spawn", ["spawn", "w", "--argv", flag, "x"])
-    # Other verbs never route.
+    # Other commands never route.
     assert not _is_dispatch_account_bearing_spawn(
         "role", ["role", "w", "--dispatch-account", "ci"]
     )

@@ -1,37 +1,14 @@
 ---
 name: harness-verbs
-description: Show the safe native command roster before using harness-specific commands.
+description: Renamed to harness-commands. Load that skill instead.
 ---
 
-# Know your own harness before you run or mail a native command
+<!-- verb-wording: allow (redirect stub for the old skill name, one release) -->
 
-footnote drives several coding CLIs (claude, codex, opencode, agy, pi, cursor-agent, grok). Each has its own native slash commands. The measured roster, each command's risk class, and a one-line when-to-use live in the capability table. `fno-agents verbs` renders your row of it.
+# Renamed: harness-commands
 
-## Run this first
-
-```bash
-fno-agents verbs
-```
-
-Bare form detects your own harness from the session env. On a refusal, pass the name: `fno-agents verbs claude`. `--json` for machines.
-
-Read the roster before you reach for a native command you have not run in this harness. The risk column is the mail guard's own vocabulary: `safe`, `context-destroying` (clears or swaps the session's context), `session-ending` (exits or logs out).
-
-## The two raw-mail rules
-
-`fno agents mail send --raw` runs a command on another session, as user-shaped text. Two rules:
-
-1. `--raw` is commands only, never a message. A message goes wrapped (the plain send wraps it, and the sender stays visible).
-2. A `session-ending` or `context-destroying` command is refused by the mail guard unless the send names it: `--ack-verb-risk <command>`. The refusal names the risk class and the remedy. An acked send still carries the command's full effect. The ack is an acknowledgment, not a safety net.
-
-## Pitfalls
-
-Harness-specific failure modes (symptom, cause, fix) are tabled per harness in `docs/HARNESSES.md`. Read your harness's table before debugging anything harness-specific.
-
-## Honesty
-
-The table says which rows are vendor-measured and which are name-derived, right beside the data. Never claim a command does what the table does not say.
+This skill is now `harness-commands`. Load it with `/fno:harness-commands` (Codex: `$fno:harness-commands`). This stub goes away after one release.
 
 ## Known Limitations and Deferred Work
 
-- The render is only as current as the table's measurement date. A harness newer than its row drifts it. See [LIMITATIONS.md](LIMITATIONS.md).
+- This stub only points to the new name. See [LIMITATIONS.md](LIMITATIONS.md).

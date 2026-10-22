@@ -333,7 +333,7 @@ pub(crate) fn fetch_with(
     Ok(row.plan_path)
 }
 
-/// The tick's and the sync verb's pass, on the configured shared primary.
+/// The tick's and the sync command's pass, on the configured shared primary.
 pub fn sync(graph: &Path) -> Result<Outcome, String> {
     let Some(remote) = crate::store_remote::share_backlog()? else {
         return Ok(Outcome::default());

@@ -1,7 +1,7 @@
 //! `fno config paths emit-shell`, `shell-stub`, `verify` and `handoff`: the
-//! paths verbs answered natively.
+//! paths commands answered natively.
 //!
-//! One verb per PR (law d-450caaeb): all four landed across four PRs; the
+//! One command per PR (law d-450caaeb): all four landed across four PRs; the
 //! Python paths group is gone. The route execs the worker's `--paths-exec`
 //! lane (worker_binary resolution like the law door), argv and exit code
 //! pass through unchanged.
@@ -9,13 +9,13 @@
 use std::ffi::OsString;
 use std::process::Command;
 
-/// All four paths verbs, one per PR (law d-450caaeb): emit-shell,
+/// All four paths commands, one per PR (law d-450caaeb): emit-shell,
 /// shell-stub, verify, handoff. The Python group is retired whole.
-pub const NATIVE_PATHS_VERBS: &[&str] = &["emit-shell", "shell-stub", "verify", "handoff"];
+pub const NATIVE_PATHS_COMMANDS: &[&str] = &["emit-shell", "shell-stub", "verify", "handoff"];
 
-/// Classify the paths verb for the front door: `fno config paths <v> ...`
+/// Classify the paths command for the front door: `fno config paths <v> ...`
 /// and its deprecated top-level spelling `fno paths <v> ...` both route
-/// here when the verb is served natively.
+/// here when the command is served natively.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     let w0 = args.first().and_then(|a| a.to_str());
     let start = match w0 {
@@ -23,8 +23,8 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
         Some("paths") => 1,
         _ => return None,
     };
-    let verb = args.get(start).and_then(|a| a.to_str())?;
-    if !NATIVE_PATHS_VERBS.contains(&verb) {
+    let command = args.get(start).and_then(|a| a.to_str())?;
+    if !NATIVE_PATHS_COMMANDS.contains(&command) {
         return None;
     }
     Some(args[start..].to_vec())
@@ -90,10 +90,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_leaves_other_verbs_to_python() {
-        for verb in ["bogus"] {
-            assert!(classify(&oss(&["config", "paths", verb])).is_none());
-            assert!(classify(&oss(&["paths", verb])).is_none());
+    fn classify_leaves_other_commands_to_python() {
+        for command in ["bogus"] {
+            assert!(classify(&oss(&["config", "paths", command])).is_none());
+            assert!(classify(&oss(&["paths", command])).is_none());
         }
         assert!(classify(&oss(&["config", "setup", "auto-wire"])).is_none());
         assert!(classify(&oss(&["paths"])).is_none());

@@ -1,7 +1,7 @@
-//! `org-remote`: the cross-machine lead hand-off relay verb.
+//! `org-remote`: the cross-machine lead hand-off relay command.
 //!
 //! The front door claims `agents org promote <name>@<host> --scope <scope>`
-//! and execs this verb on the predecessor's machine. One ssh hop runs
+//! and execs this command on the predecessor's machine. One ssh hop runs
 //! `record-succession` ON the target host: the remote machine's own
 //! `fno agents org promote` grants, then a pending succession record
 //! attaches, so the successor's next beat runs verify, the release readback,
@@ -121,7 +121,7 @@ fn vacate_scope_holder(
 }
 
 /// The remote leg, run ON the target host by the ssh hop: grant through the
-/// machine's own verb, then attach the pending record. Grant first, record
+/// machine's own command, then attach the pending record. Grant first, record
 /// only on grant success; a grant failure refuses having written nothing,
 /// and a record failure after a successful grant exits non-zero with a loud
 /// warning (the sending machine then holds, both seated).
@@ -300,7 +300,7 @@ fn caller_check(holder: &(String, Option<String>)) {
     }
 }
 
-/// The verb dispatcher: `promote` (the relay, on the predecessor's machine)
+/// The command dispatcher: `promote` (the relay, on the predecessor's machine)
 /// and `record-succession` (the remote leg, on the target host).
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(|a| a.as_str()) {

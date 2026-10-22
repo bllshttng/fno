@@ -74,7 +74,7 @@ pub struct CapMember {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapLane {
-    /// `<provider>:<account>`; the token every verb and decision names.
+    /// `<provider>:<account>`; the token every command and decision names.
     pub lane: String,
     pub provider: String,
     pub account: String,
@@ -618,7 +618,7 @@ pub fn settings_candidates(cwd: &Path) -> Vec<PathBuf> {
 pub type ClaudePaths = Box<dyn Fn(&[String]) -> Result<BTreeMap<String, String>, String>>;
 
 /// One scan's resolved inputs. The env-resolving wrapper builds this; tests
-/// and the verbs pass paths directly, so nothing under test reads env vars.
+/// and the commands pass paths directly, so nothing under test reads env vars.
 pub struct CapScan {
     pub registry: std::path::PathBuf,
     pub projects_dir: std::path::PathBuf,
@@ -640,7 +640,7 @@ pub struct CapScan {
     pub codex_sessions_dir: Option<std::path::PathBuf>,
 }
 
-/// The env-resolved scan, built once and shared by the status verb and the
+/// The env-resolved scan, built once and shared by the status command and the
 /// armed arm so the two cannot resolve different inputs.
 pub fn default_scan(home: &AgentsHome, cwd: &Path) -> CapScan {
     let projects_dir = crate::claude_drive::claude_projects_dir();

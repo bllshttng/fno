@@ -1,4 +1,4 @@
-"""Tests for fno.plan._folder_audit (x-8c05 precondition verb)."""
+"""Tests for fno.plan._folder_audit (x-8c05 precondition command)."""
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,10 +1,10 @@
 //! Acceptance evidence: the outcome-probe substrate, and the bindings that
 //! connect a plan's compiled acceptance criteria to it.
 //!
-//! ONE runner (`run_probe`), ONE parser (`parse_probes_for`), ONE verb
+//! ONE runner (`run_probe`), ONE parser (`parse_probes_for`), ONE command
 //! (`probe-run`) serve both gates: `done_probes` (session termination, via
 //! `evaluate_done_probes`) and `close_probes` (node closure, shelled by the
-//! close verbs). The `acceptance_evidence` frontmatter binds a compiled AC id
+//! close commands). The `acceptance_evidence` frontmatter binds a compiled AC id
 //! to a probe index, so a criterion's satisfaction is MEASURED by a fresh run
 //! with its own positive marker, never witnessed.
 //!
@@ -204,7 +204,7 @@ fn parse_done_probes(content: &str) -> ProbeDecl {
 }
 
 /// Key-parameterized probe-list parser. `done_probes` (loop-check's
-/// session-termination gate) and `close_probes` (the close verbs' node-closure
+/// session-termination gate) and `close_probes` (the close commands' node-closure
 /// gate) share one parser so the two gates cannot drift on what counts as a
 /// declared probe list. Anything else declared under `key` is `Unparseable`.
 fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
@@ -252,7 +252,7 @@ fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
             // A plain scalar (`close_probes: cmd`) is ONE probe. The plan
             // schema advertises `str | list`, so refusing the scalar here made
             // a documented-legal declaration an unevaluable gate (a hard
-            // refusal at the close verbs). A YAML block scalar (`|` / `>`) puts
+            // refusal at the close commands). A YAML block scalar (`|` / `>`) puts
             // the value on the following lines and is still unreadable here.
             if !rest.is_empty() {
                 if rest.starts_with('|') || rest.starts_with('>') {
@@ -984,7 +984,7 @@ pub(crate) fn acceptance_coverage(
 /// `fno-agents probe-run --plan <path> --key <name> --cwd <root> --json`.
 ///
 /// Evaluates one named probe list (`done_probes` or `close_probes`) from a plan
-/// doc and exits 0 when every probe passes. The close verbs shell out to this
+/// doc and exits 0 when every probe passes. The close commands shell out to this
 /// for `close_probes`, mirroring how `active_backlog` shells out to
 /// `fno backlog done`: the node-closure gate and the session-termination gate
 /// share ONE runner. The process-group kill, the pipe-buffer drain, and

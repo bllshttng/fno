@@ -2383,7 +2383,7 @@ class TestRegisterCommitSafety:
 
 class TestUnreadableSlotIsARefusal:
     def test_a_keychain_timeout_is_typed_not_raised(self, tmp_path, monkeypatch):
-        """`security` can time out or be denied; an operator verb must report
+        """`security` can time out or be denied; an operator command must report
         that, not surface a traceback."""
         def _boom(cli):
             raise managed.KeychainError("`security find-generic-password` timed out")

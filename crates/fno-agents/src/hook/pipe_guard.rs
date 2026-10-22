@@ -51,7 +51,7 @@ const STATUS_REASON: &str = "[fno pipe guard] `{cmd}` reads `$?` right after a p
 
 /// Bare `backlog` in command position resolves to the third-party
 /// Backlog.md CLI, not fno; the remedy is the fno prefix.
-const BACKLOG_REASON: &str = "[fno pipe guard] `{cmd}` runs bare `backlog`, which resolves to the third-party Backlog.md CLI at ~/.bun/bin/backlog, not fno. On 2026-09-26 that CLI's guidelines block rewrote AGENTS.md and CLAUDE.md in canonical (627 lines telling agents to run `backlog task create`), and every session in canonical loaded it. Prefix the verb: `fno backlog find|get|idea|update` is the node graph.";
+const BACKLOG_REASON: &str = "[fno pipe guard] `{cmd}` runs bare `backlog`, which resolves to the third-party Backlog.md CLI at ~/.bun/bin/backlog, not fno. On 2026-09-26 that CLI's guidelines block rewrote AGENTS.md and CLAUDE.md in canonical (627 lines telling agents to run `backlog task create`), and every session in canonical loaded it. Prefix the command: `fno backlog find|get|idea|update` is the node graph.";
 
 /// Entry: read the payload once, judge, print, always exit 0.
 pub fn run(_args: &[String]) -> i32 {

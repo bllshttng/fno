@@ -1,7 +1,7 @@
 //! `org_rivals`: the org view's rivalry scan, answered from the SAME
 //! ladder-aware rule the grant path enforces (`loop_lead::team_rivals`), so
 //! the view and the grant-time refusal cannot disagree. Reached as payload
-//! kind `team-rivals` on the spawn-overlay verb.
+//! kind `team-rivals` on the spawn-overlay command.
 //!
 //! Input: `rows` of (name, role_scope, role_level); rows without a
 //! non-blank `role_scope` claim nothing. Output: one rival PAIR per

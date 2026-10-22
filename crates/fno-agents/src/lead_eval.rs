@@ -102,7 +102,7 @@ struct Fold {
     merges: Vec<Value>,
     spawns: Vec<Value>,
     team_moves: Vec<Value>,
-    verbs: BTreeMap<String, u64>,
+    commands: BTreeMap<String, u64>,
     checkins: Vec<Value>,
     subagents: Value,
     first_ts: Option<String>,
@@ -182,11 +182,11 @@ fn add(map: &mut BTreeMap<String, u64>, key: &str) {
     *map.entry(key.to_string()).or_default() += 1;
 }
 
-fn fno_verb(target: &str) -> Option<(String, Option<String>)> {
-    static VERB: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let regex = VERB.get_or_init(|| {
+fn fno_command(target: &str) -> Option<(String, Option<String>)> {
+    static COMMAND: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let regex = COMMAND.get_or_init(|| {
         regex::Regex::new(r"\bfno(?:-agents|-py)? ([a-z-]+)(?: ([a-z-]+))?")
-            .expect("fno verb matcher is valid")
+            .expect("fno command matcher is valid")
     });
     let captures = regex.captures(target)?;
     Some((
@@ -243,7 +243,7 @@ fn fold_transcript(
         merges: Vec::new(),
         spawns: Vec::new(),
         team_moves: Vec::new(),
-        verbs: BTreeMap::new(),
+        commands: BTreeMap::new(),
         checkins: Vec::new(),
         subagents: json!({"files": 0, "tool_calls": 0}),
         first_ts: None,
@@ -351,11 +351,11 @@ fn fold_transcript(
                 codex_tool_name.unwrap_or_else(|| entry.tool.as_deref().unwrap_or("")),
             );
             if entry.tool.as_deref() == Some("Bash") {
-                if let Some((verb, subverb)) = fno_verb(&entry.target) {
-                    let key = subverb
-                        .map(|s| format!("{verb} {s}"))
-                        .unwrap_or(verb.clone());
-                    add(&mut fold.verbs, &key);
+                if let Some((command, subcommand)) = fno_command(&entry.target) {
+                    let key = subcommand
+                        .map(|s| format!("{command} {s}"))
+                        .unwrap_or(command.clone());
+                    add(&mut fold.commands, &key);
                     if entry.target.contains("fno do pr merge") {
                         fold.merges.push(json!({"ts": ts, "command": entry.target}));
                     }
@@ -718,7 +718,7 @@ fn fold_json(fold: &Fold) -> Value {
         "merges": fold.merges,
         "spawns": fold.spawns,
         "team_moves": fold.team_moves,
-        "verbs": fold.verbs,
+        "verbs": fold.commands,
     })
 }
 
@@ -1200,7 +1200,7 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
     for (title, data) in [
         ("Error buckets", &value["totals"]["buckets"]),
         ("Tools", &value["totals"]["tools"]),
-        ("Top fno verbs", &value["verbs"]),
+        ("Top fno commands", &value["verbs"]),
         ("Wake economy by class", &value["totals"]["wakes_by_class"]),
         ("Merges", &value["merges"]),
         ("Spawns and subagents", &value["spawns"]),

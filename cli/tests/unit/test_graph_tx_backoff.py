@@ -28,15 +28,15 @@ class _FakeClient:
         self.commits = 0
         self.version = 0
 
-    def request(self, verb: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if verb == "begin":
+    def request(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if command == "begin":
             self.version += 1
             return {
                 "version": f"v{self.version}",
                 "entries": self.entries,
                 "base_digests": {e["id"]: f"d{self.version}" for e in self.entries},
             }
-        if verb == "commit_rows":
+        if command == "commit_rows":
             self.commits += 1
             if self.commits <= self.conflicts:
                 raise store._Conflict()
@@ -46,7 +46,7 @@ class _FakeClient:
                 "closure_releases": [],
                 "entries": payload["changed"],
             }
-        raise AssertionError(f"unexpected verb {verb}")
+        raise AssertionError(f"unexpected command {command}")
 
 
 @pytest.fixture

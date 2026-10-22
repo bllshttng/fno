@@ -379,7 +379,7 @@ pub fn machine_locks_dir() -> Option<PathBuf> {
 /// answer: the state root the inherited env actually resolves. A binary
 /// built before the carrier existed fails the echo check, and the parent
 /// refuses instead of letting the reads strand under the moved HOME.
-/// Transport-only (registers no verb; the shrink law allows none) and
+/// Transport-only (registers no command; the shrink law allows none) and
 /// matched in main() before the runtime builds, so a probe is microseconds.
 pub fn run_state_root_probe() -> i32 {
     match state_root_probe_line() {
@@ -1128,7 +1128,7 @@ pub fn worker_qos_enabled(cwd: &Path) -> bool {
 /// "true", "yes", "1", "on". It was deliberately stricter while it read only
 /// for the native arm. Now `fno do pr merge` resolves its own standing switch
 /// through here, so a stricter reader would refuse a documented spelling that
-/// the same verb honored a release ago. Any change to either spelling set
+/// the same command honored a release ago. Any change to either spelling set
 /// must move both readers and the git-protection hook, or the gates split on
 /// exactly that spelling.
 pub fn auto_merge_enabled(cwd: &Path) -> bool {
@@ -1218,7 +1218,7 @@ fn affirmative(value: &toml::Value) -> bool {
 /// This is now the ONE enforcement arm of that floor: the Python twin
 /// (`automerge_floor_refusal` in `fno/review_capability.py`) deleted with the
 /// module, which had no production caller left. Without this arm a
-/// below-floor repo that can never pass the merge verb could still hand the
+/// below-floor repo that can never pass the merge command could still hand the
 /// merge to GitHub at the green terminal.
 ///
 /// The below-floor set is derived from the legacy-inference mirror in
@@ -1430,7 +1430,7 @@ pub fn auto_merge_require_checks_pass(cwd: &Path) -> bool {
 }
 
 /// Resolve `[auto_merge] remediation` (default `attempt`). The only other
-/// legal value is `verify_only`, which the verify verb's remediation arm
+/// legal value is `verify_only`, which the verify command's remediation arm
 /// refuses on; anything else coerces to `attempt`, exactly the Python
 /// validator's stance - a config error never grants a merge attempt.
 pub fn auto_merge_remediation(cwd: &Path) -> String {
@@ -1446,7 +1446,7 @@ pub fn auto_merge_remediation(cwd: &Path) -> String {
 }
 
 /// Resolve `[auto_merge] delete_branch_on_merge` (default ON). The verify
-/// remediation's post-merge cleanup reads the same switch the merge verb does,
+/// remediation's post-merge cleanup reads the same switch the merge command does,
 /// so both executors treat cleanup identically.
 pub fn auto_merge_delete_branch_on_merge(cwd: &Path) -> bool {
     resolve(cwd, |t| {
@@ -1642,7 +1642,7 @@ pub fn slot_cutover_threshold_pct(cwd: &Path) -> f64 {
 
 /// `recovery.self_heal.enabled` (default ON): the arm_watch tick runs the
 /// safe repairs (dead flight holds, the launchd refresh, the install from
-/// main) before it pages. Off, the rows still name the repair verb.
+/// main) before it pages. Off, the rows still name the repair command.
 pub fn self_heal_enabled(cwd: &Path) -> bool {
     resolve(cwd, |t| {
         t.get("recovery")?
@@ -2264,7 +2264,7 @@ mod tests {
     #[test]
     fn auto_merge_enabled_accepts_the_python_affirmative_spellings() {
         // This reader now decides `fno do pr merge` too. A stricter set here
-        // would refuse `enabled = "true"` at the verb that honored it before.
+        // would refuse `enabled = "true"` at the command that honored it before.
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for (i, literal) in ["true", "\"true\"", "\"yes\"", "\"1\"", "\"ON\"", "1"]
             .iter()

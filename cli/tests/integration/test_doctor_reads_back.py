@@ -98,7 +98,7 @@ def test_cross_model_enabled_with_no_dispatchable_peer_is_named(
     monkeypatch.setenv("FNO_CONFIG", str(f))
     monkeypatch.setattr(
         "fno.rust_binary.call_binary_json",
-        lambda verb, args=(), **_: (None, {"available": ["claude"]}),
+        lambda command, args=(), **_: (None, {"available": ["claude"]}),
     )
     problems = doctor_mod.check_enabled_with_empty_population()
     assert len(problems) == 1, problems
@@ -151,7 +151,7 @@ def test_an_overridden_bad_cap_is_not_a_finding(
 
 
 def test_a_dict_keyed_block_is_not_read_as_a_typo(tmp_path: Path) -> None:
-    """`agents.profiles.<verb>` keys are operator-chosen names, not field names.
+    """`agents.profiles.<command>` keys are operator-chosen names, not field names.
 
     The walker resolved `dict[str, SpawnProfileBlock]` to its VALUE model and
     then checked the map's own keys against that model's fields, so every real
@@ -175,7 +175,7 @@ def test_a_json_read_stays_parseable_with_an_unknown_key(
 ) -> None:
     """--json is a machine surface and a reader may capture stderr with
     stdout, so the load warning stays off it entirely (x-dddb). argv carries
-    the verb's own flag in a real process, so it is pinned here. Paired
+    the command's own flag in a real process, so it is pinned here. Paired
     negative: without --json the warning prints."""
     import json as _json
 

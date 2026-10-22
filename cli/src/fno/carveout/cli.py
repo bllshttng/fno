@@ -1,6 +1,6 @@
 """`fno backlog carveout` - capture left-out work to a session ledger.
 
-Machine-first surface (Locked Decision #3: a CLI verb, not a transcript tag):
+Machine-first surface (Locked Decision #3: a CLI command, not a transcript tag):
 the new carve-out id prints to stdout; warnings and errors go to stderr;
 exit codes are predictable (0 ok / 2 invalid args / 1 write failure).
 """
@@ -41,7 +41,7 @@ _PRIORITY_RE = re.compile(r"^p[0-3]$")
 
 @carveout_app.command(
     "add",
-    epilog="Paired verbs: `fno backlog carveout update <id>` corrects one in place "
+    epilog="Paired commands: `fno backlog carveout update <id>` corrects one in place "
     "(the id survives); `fno backlog carveout resolve <id>` retires it.",
 )
 def add(
@@ -196,7 +196,7 @@ def list_carveouts(
     Powers /fno:ship pr merged's backfill slot via
     `--kind backfill --pr-number <n> --json`, whose `sessions_resolved` (and,
     when empty, `reason`) drives the consume-vs-read-only branch - so that
-    branch keys on verb output, never on an empty shell variable of unknowable
+    branch keys on command output, never on an empty shell variable of unknowable
     provenance (US2).
     """
     if kind is not None and kind not in VALID_KINDS:
@@ -221,10 +221,10 @@ def list_carveouts(
     if pr_number is not None:
         from fno.graph._reconcile import resolve_current_repo_slug
         from fno.paths import ledger_json
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            out = verb_call(
+            out = command_call(
                 ["pr-watch", "pr-sessions"],
                 {
                     "ledger": str(ledger_json()),
@@ -237,7 +237,7 @@ def list_carveouts(
             # a reason, so an absent one must stay None.
             got_reason = out.get("reason")
             reason = None if got_reason is None else str(got_reason)
-        except VerbUnavailable as exc:
+        except CommandUnavailable as exc:
             session_id, reason = [], f"ledger unreadable: {exc}"
 
     # Typer gives [] for an unset repeatable option; pass None so "no filter"
@@ -378,7 +378,7 @@ def update(
 
     Refuses rather than guessing:
       - no field given (exit 2) - a no-op that prints a success line is exactly
-        the lie this verb exists to stop
+        the lie this command exists to stop
       - an id that is not on the ledger (exit 1) - never creates it, since that
         would resurrect a row ``/fno:ship pr merged`` already consumed, under a later
         PR's number
@@ -476,7 +476,7 @@ def update(
         )
 
     # Same machine-first stdout contract as `add`: the id, which is the value
-    # this verb exists to preserve.
+    # this command exists to preserve.
     typer.echo(cv_id)
 
 
@@ -507,7 +507,7 @@ def resolve_carveouts(
     indistinguishable from dropping the work on the floor.
 
     This docstring used to justify that flag by asserting the backlog had no
-    delete verb, so a junk node was permanent. That was FALSE: ``fno backlog
+    delete command, so a junk node was permanent. That was FALSE: ``fno backlog
     remove`` has always existed, and ``fno backlog reopen`` now reverses a
     close. The claim was read by an agent, which repeated it to an operator as
     the load-bearing reason for a ruling; another project kept 23 nodes it
