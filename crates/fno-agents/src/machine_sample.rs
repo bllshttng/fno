@@ -262,6 +262,9 @@ pub struct MachineSample {
     pub top_parents: Option<Value>,
     pub sessions_error: Option<String>,
     pub mux_issues: Option<Value>,
+    /// The `memory_groups` reading, so each tick records the daemon's peak.
+    #[serde(default)]
+    pub memory: Option<Value>,
     #[serde(skip)]
     pub(crate) procs: Vec<crate::census::ProcRow>,
     #[serde(skip)]
@@ -343,6 +346,7 @@ pub fn read(
         top_parents: None,
         sessions_error: None,
         mux_issues: Some(mux_issues),
+        memory: None,
         procs,
         top_cpu: Vec::new(),
         throttle_minutes: 60,

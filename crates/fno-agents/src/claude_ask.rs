@@ -821,19 +821,28 @@ pub struct HarnessFlags<'a> {
     pub route: Option<RouteStamp<'a>>,
 }
 
-/// The model a fenced passthrough names (`--model M`, `--model=M`, `-m M`),
-/// last one winning as the harness CLI reads it.
-pub fn passthrough_model(tokens: &[String]) -> Option<&str> {
+/// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
+/// the `short` spelling), last one winning as the harness CLI reads it.
+pub fn passthrough_value<'t>(
+    tokens: &'t [String],
+    long: &str,
+    short: Option<&str>,
+) -> Option<&'t str> {
     let mut found = None;
     let mut it = tokens.iter();
     while let Some(tok) = it.next() {
-        if tok == "--model" || tok == "-m" {
+        if tok == long || short.is_some_and(|s| tok == s) {
             found = it.next().map(String::as_str).or(found);
-        } else if let Some(value) = tok.strip_prefix("--model=") {
+        } else if let Some(value) = tok.strip_prefix(long).and_then(|r| r.strip_prefix('=')) {
             found = Some(value);
         }
     }
-    found.filter(|m| !m.is_empty())
+    found.filter(|v| !v.is_empty())
+}
+
+/// The model a fenced passthrough names (`--model M`, `--model=M`, `-m M`).
+pub fn passthrough_model(tokens: &[String]) -> Option<&str> {
+    passthrough_value(tokens, "--model", Some("-m"))
 }
 
 /// The identity of a routed thread spawn (see `spawn_route::route_seam`).
@@ -2405,7 +2414,9 @@ pub fn dispatch_claude_ask(
 /// reused directly; only the output shape differs from `dispatch_claude_ask`.
 ///
 /// Receipt (byte-parity with Python `cmd_spawn` on the complete path):
-/// `{"name": "<name>", "short_id": "<8hex>", "harness": "claude", "status": "live"}\n`.
+/// `{"name": "<name>", "short_id": "<8hex>", "harness": "claude", "model_basis": "lane-default", "status": "live"}\n`.
+/// A named model adds `"model"` and the basis `requested`; a route adds
+/// `"provider"` and the basis `route`.
 /// A bounded identity miss reports `status: "spawning"` and carries a warning.
 /// A prompt claude never recorded in job state also reports `spawning`, plus
 /// `seed: "unverified"` and a `seed_unverified` reason.
@@ -2610,14 +2621,23 @@ pub fn dispatch_claude_spawn(
     // Placed before `status`, where Python's cmd_spawn puts it, and encoded
     // with the same full JSON-string encode Python's `json.dumps` applies -
     // a `"`-only escape diverges on a backslash and can emit invalid JSON.
-    let model_field = match (flags.route, model.filter(|m| !m.is_empty())) {
+    // The basis names where the model came from: the route, a model the
+    // caller typed (a fenced `--model` counts), or the lane's own default,
+    // which the receipt cannot name before the first turn lands.
+    let named = model
+        .filter(|m| !m.is_empty())
+        .or_else(|| passthrough_model(flags.passthrough));
+    let model_field = match (flags.route, named) {
         (Some(r), _) => format!(
-            ", \"provider\": {}, \"model\": {}, \"model_basis\": \"requested\"",
+            ", \"provider\": {}, \"model\": {}, \"model_basis\": \"route\"",
             json_string_ascii(r.provider),
             json_string_ascii(r.model)
         ),
-        (None, Some(m)) => format!(", \"model\": {}", json_string_ascii(m)),
-        (None, None) => String::new(),
+        (None, Some(m)) => format!(
+            ", \"model\": {}, \"model_basis\": \"requested\"",
+            json_string_ascii(m)
+        ),
+        (None, None) => ", \"model_basis\": \"lane-default\"".to_string(),
     };
     // append the effective launch dir on the default canonical move
     // (surface_cwd, decided by the caller alongside the redirect note), so the
@@ -3270,7 +3290,12 @@ fn create(
         // ride through verbatim.
         requested_model: model.filter(|m| !m.is_empty()).map(str::to_string),
         requested_provider: route.map(|r| r.provider.to_string()),
-        requested_effort: effort.filter(|v| !v.is_empty()).map(str::to_string),
+        requested_effort: effort
+            .filter(|v| !v.is_empty())
+            .or_else(|| passthrough_value(flags.passthrough, "--effort", None))
+            .map(str::to_string),
+        requested_permission_mode: passthrough_value(flags.passthrough, "--permission-mode", None)
+            .map(str::to_string),
         // Canonical identity at birth: the session id rides the
         // struct-update base below. A bounded miss stays a named spawning row,
         // so the constructor's Option is exactly the observed semantics.

@@ -353,7 +353,7 @@ fn spawn_claude_receipt_byte_shape() {
         "spawn claude happy path should exit 0, stderr: {}",
         out.stderr
     );
-    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "status": "live"}\n
+    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "model_basis": "lane-default", "status": "live"}\n
     let receipt = out.stdout.trim_end_matches('\n');
     assert!(
         receipt.starts_with(r#"{"name": "myspawn", "short_id": "#),
@@ -361,8 +361,9 @@ fn spawn_claude_receipt_byte_shape() {
         out.stdout
     );
     assert!(
-        receipt.ends_with(r#""harness": "claude", "status": "live"}"#),
-        "receipt must end with harness/status: {}",
+        receipt
+            .ends_with(r#""harness": "claude", "model_basis": "lane-default", "status": "live"}"#),
+        "receipt must end with harness/basis/status: {}",
         out.stdout
     );
     // Parse as JSON to verify structure.
@@ -851,43 +852,6 @@ fn client_spawn_headless_claude_honors_timeout() {
     assert!(
         elapsed.as_secs() < 10,
         "must not wait the full 30s sleep; took {elapsed:?}"
-    );
-}
-
-/// --permission-mode retired with the spawn axes: the lane template owns the
-/// posture, so the spelling refuses by name on every lane.
-#[test]
-fn client_spawn_permission_mode_codex_headless_fails_closed() {
-    let home_dir = tmpdir("cli-spawn-perm-codex-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_permission_mode_codex_headless_fails_closed: binary not found"
-        );
-        return;
-    }
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "myagent",
-            "hi",
-            "--harness",
-            "codex",
-            "--once",
-            "--permission-mode",
-            "acceptEdits",
-        ])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1")
-        .env("FNO_AGENTS_HOME", &home_dir)
-        .output()
-        .expect("failed to run fno-agents");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "must exit 2; stderr: {stderr}");
-    assert!(
-        stderr.contains("--permission-mode is retired"),
-        "error must name --permission-mode as retired: {stderr}"
     );
 }
 

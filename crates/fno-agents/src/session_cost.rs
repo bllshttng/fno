@@ -242,35 +242,18 @@ pub fn top_by_rss(table: &[ProcRow], owners: &HashMap<u32, String>, limit: usize
 }
 
 pub fn footprint_mb(pids: &[u32]) -> (Option<f64>, u64) {
-    #[cfg(target_os = "macos")]
-    {
-        let mut total_bytes = 0u64;
-        let mut unread = 0u64;
-        for pid in pids {
-            let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
-            // The prototype says `rusage_info_t *`, but the kernel copies the
-            // whole struct to that address. Pass the struct itself: the address
-            // of a pointer local lets 296 bytes overwrite the saved registers.
-            let result = unsafe {
-                libc::proc_pid_rusage(
-                    *pid as libc::c_int,
-                    libc::RUSAGE_INFO_V4,
-                    (&mut info as *mut libc::rusage_info_v4).cast(),
-                )
-            };
-            if result == 0 {
-                total_bytes = total_bytes.saturating_add(info.ri_phys_footprint);
-            } else {
-                unread = unread.saturating_add(1);
-            }
+    if !cfg!(target_os = "macos") {
+        return (None, 0);
+    }
+    let mut total_bytes = 0u64;
+    let mut unread = 0u64;
+    for pid in pids {
+        match crate::memory_groups::phys_footprint(*pid) {
+            Some((now, _)) => total_bytes = total_bytes.saturating_add(now),
+            None => unread = unread.saturating_add(1),
         }
-        (Some(total_bytes as f64 / 1024.0 / 1024.0), unread)
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = pids;
-        (None, 0)
-    }
+    (Some(total_bytes as f64 / 1024.0 / 1024.0), unread)
 }
 
 pub fn session_roots(home: &crate::paths::AgentsHome, table: &[ProcRow]) -> Vec<SessionRoot> {
@@ -457,7 +440,13 @@ pub fn price(home: &crate::paths::AgentsHome, table: &[ProcRow]) -> Result<Value
     let test_pids = test_pids();
     let queued = queued_test_pids();
     let out = attribute(table, &roots, &phases, &test_pids, &queued);
-    Ok(json!({ "sessions": out.sessions, "unresolved": out.unresolved, "top_rss": out.top_rss }))
+    let memory = crate::memory_groups::reading_for(table, &roots);
+    Ok(json!({
+        "sessions": out.sessions,
+        "unresolved": out.unresolved,
+        "top_rss": out.top_rss,
+        "memory": memory,
+    }))
 }
 
 /// The test feed the spawn-gate probe serves: which managed sessions run or

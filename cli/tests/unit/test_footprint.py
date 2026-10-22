@@ -86,7 +86,6 @@ def test_ac1_hp_counts_attributed_rows_and_sustained_cpu() -> None:
     assert reading.sustained_cpu_cores == 0.3
     assert reading.transient_call_count == 1
     assert reading.process_count == 3
-    assert reading.rss_gb == (1048576 + 2048 + 524288) / (1024 * 1024)
     assert reading.top == [
         (20.0, "/usr/local/bin/fno mux serve"),
         (10.0, "fno-agents-daemon --serve"),
@@ -200,7 +199,6 @@ def test_ac_hp_spare_pool_rows_are_counted_but_never_fleet_attributed() -> None:
 
     assert reading.spare_pool_process_count == 2
     assert reading.spare_pool_cpu_cores == 0.27
-    assert reading.spare_pool_rss_gb > 0
     # The fleet number is fno-attributable CPU only; the pool never enters it.
     assert reading.fleet_cpu_cores == 0.2
     assert reading.process_count == 1

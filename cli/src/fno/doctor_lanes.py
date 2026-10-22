@@ -23,7 +23,7 @@ resource arms (whole-machine CPU and memory) measured. Anything else refuses
 by name rather than guessing from the arms that survived.
 
 The per-lane cost is measured, not assumed: the fleet's own attributed CPU
-and RSS (footprint's descendant attribution) divided by the live roster, with
+and physical footprint of the sessions' own trees, divided by the live roster, with
 the observed resident sizes from this node as the fallback seed when no rows
 are live.
 """
@@ -317,7 +317,7 @@ def _fleet_snapshot() -> tuple[Any, Optional[list], Optional[str], int]:
     from fno.doctor_footprint import cause_reading, live_registry_rows
 
     started = time.monotonic()
-    reading, error = cause_reading()
+    reading, error = cause_reading(memory=True)
     rows, rows_error = live_registry_rows()
     read_ms = int((time.monotonic() - started) * 1000)
     return (None if error is not None else reading), rows, rows_error, read_ms
@@ -331,7 +331,10 @@ def _fleet_cost(reading: Any, rows: Optional[list]) -> tuple[float, float, int, 
         why = "footprint unavailable" if reading is None else "no live roster rows to measure"
         return SEED_PER_LANE_CORES, SEED_PER_LANE_GB, 0, f"seed ({why})"
     per_cpu = max(0.01, reading.fleet_cpu_cores / count)
-    per_gb = max(0.01, reading.rss_gb / count)
+    fleet = (reading.memory or {}).get("fleet") or {}
+    if not isinstance(fleet.get("mb"), (int, float)):
+        return per_cpu, SEED_PER_LANE_GB, count, "cpu measured; memory seed (physical footprint unread)"
+    per_gb = max(0.01, fleet["mb"] / 1024 / count)
     return per_cpu, per_gb, count, "measured from the live roster's attributed footprint"
 
 

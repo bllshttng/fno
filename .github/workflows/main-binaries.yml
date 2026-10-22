@@ -25,12 +25,14 @@ on:
       - .github/workflows/release-binaries.yml
   workflow_dispatch:
 
-# Only the newest main head builds. A burst of crates merges cancels the
-# older builds in flight; the update and the post-merge sync read the
-# newest published rev, so a cancelled middle build never stalls them.
+# A build in flight always finishes. GitHub keeps one pending run per group
+# and replaces it with the newest head, so a burst queues one build, not
+# many. Cancelling in flight starved the bin cache: merges landed faster
+# than a build finished, nothing published, and fno doctor update stayed
+# on an old rev for hours.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
