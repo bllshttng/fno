@@ -71,6 +71,7 @@ def _manifest_path(*args: str):
     )
 
 
+@pytest.mark.dev_build
 def test_manifest_path_keys_on_the_role_row_cwd(team, monkeypatch) -> None:
     """The writer arms under the role row's cwd space; the reader must key
     the same row. A lead whose shell sits outside the repo still resolves its
@@ -126,6 +127,7 @@ def test_manifest_path_frees_a_stranger(team) -> None:
     )
 
 
+@pytest.mark.dev_build
 def test_deprecated_lead_spelling_forwards_onto_the_agents_app(team) -> None:
     """The stop hook's literal argv: `fno lead manifest-path ...`. The banner
     must stay on stderr so the hook's stdout capture reads a clean path."""

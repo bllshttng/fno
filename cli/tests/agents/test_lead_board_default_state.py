@@ -49,7 +49,7 @@ def captured_argv(monkeypatch):
     real_binary = rust_binary.resolve_binary()
 
     def fake_run(cmd, *args, **kwargs):
-        if list(cmd[1:2]) == ["registry-commit"]:
+        if list(cmd[1:2]) in (["registry-commit"], ["spawn-overlay"]):
             return real_run([str(real_binary), *cmd[1:]], *args, **kwargs)
         seen.append(cmd)
         if str(cmd[0]) == "/fake/fno-agents":
@@ -106,6 +106,7 @@ def _promoted_caller():
     )
 
 
+@pytest.mark.dev_build
 def test_promoted_caller_defaults_to_its_own_manifest(
     team, captured_argv, monkeypatch
 ) -> None:
@@ -132,6 +133,7 @@ def test_role_without_manifest_file_stays_fleet_wide(
     assert "--state" not in captured_argv(), captured_argv()
 
 
+@pytest.mark.dev_build
 def test_explicit_state_wins_over_the_default(
     team, captured_argv, monkeypatch
 ) -> None:

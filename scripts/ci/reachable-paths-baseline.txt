@@ -298,7 +298,6 @@ A	shipped (pr #{pr}, awaiting merge)	py=cli/src/fno/target/orient.py;rs=crates/f
 A	single_flight_join_budget_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	single_flight_ttl_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	skills-dir; no `claude plugin update`	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs|crates/fno/src/setup_autowire_tests.rs	# CLASSIFY protocol|msg-twin|data
-A	skipped {total} machine turn(s): {detail}	py=cli/src/fno/inbox/operator_turns.py;rs=crates/fno-agents/src/operator_turns.rs	# msg-twin: the Python user list command still prints the skip report until the ack port deletes format_skip_report
 A	stale >30d, drained by maintain	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-quarantine (guard)	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/maintenance.rs|crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-verdict-fresher-event	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data

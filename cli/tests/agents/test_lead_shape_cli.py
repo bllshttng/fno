@@ -103,6 +103,7 @@ def _shape(*args: str):
 
 
 @pytest.mark.skipif(not _binary_available(), reason="fno-agents binary not built")
+@pytest.mark.dev_build
 def test_shape_team_lands_on_the_manifest_and_echoes(team) -> None:
     _seat("serving-lead", CALLER_SESSION, cwd=str(team))
     manifest = _manifest(team)

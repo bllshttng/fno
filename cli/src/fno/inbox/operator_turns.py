@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 from typing import Optional
@@ -112,36 +111,6 @@ def _resolve_session(require_transcript: bool = True) -> tuple[str, Optional[Pat
     return sid, transcript
 
 
-def _read_queue(sid: str, path: Path) -> dict:
-    """The pending turns and depth; the Rust reader owns the scan, the cursor and classify."""
-    from fno.rust_binary import call_binary_json
-
-    err, payload = call_binary_json(
-        "compaction",
-        [
-            "operator-turns",
-            "--session", sid,
-            "--transcript", str(path),
-            "--capture-dir", str(_capture_dir()),
-        ],
-    )
-    if err is not None or not isinstance(payload, dict):
-        typer.echo(f"error: operator turn reader failed: {err or 'no JSON object'}", err=True)
-        raise typer.Exit(code=1)
-    if payload.get("cursor_error"):
-        typer.echo(f"warning: scan cursor not saved: {payload['cursor_error']}", err=True)
-    return payload
-
-
-def format_skip_report(skipped: dict[str, int]) -> str:
-    """One stderr line naming every refused shape and count; empty when none."""
-    if not skipped:
-        return ""
-    total = sum(skipped.values())
-    detail = ", ".join(f"{reason}={n}" for reason, n in sorted(skipped.items()))
-    return f"skipped {total} machine turn(s): {detail}"
-
-
 def _ledger_path(session_id: str) -> Path:
     return _capture_dir() / f"{session_id}.jsonl"
 
@@ -166,37 +135,14 @@ def _resolve_or_fail(require_transcript: bool = True) -> tuple[str, Optional[Pat
         raise typer.Exit(code=1)
 
 
-def _resolve_with_transcript() -> tuple[str, Path]:
-    sid, path = _resolve_or_fail(require_transcript=True)
-    assert path is not None  # require_transcript=True guarantees it
-    return sid, path
-
-
 @operator_app.command("list")
-def cmd_list(
+def list_forward(
     limit: int = typer.Option(None, "--limit", "-L", min=1, help="Max turns to show."),
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit a JSON array."),
 ) -> None:
     """Undispositioned user turns, oldest first."""
-    sid, path = _resolve_with_transcript()
-    payload = _read_queue(sid, path)
-    report = format_skip_report(payload.get("skipped") or {})
-    if report:
-        typer.echo(report, err=True)
-    pending = payload.get("turns") or []
-    if limit is not None:
-        pending = pending[:limit]
-    if json_output:
-        typer.echo(json.dumps(pending, indent=2))
-        return
-    if not pending:
-        typer.echo("no undispositioned user turns")
-        return
-    now = datetime.now(timezone.utc).timestamp()
-    for t in pending:
-        age = f"{int(now - t['ts_epoch'])}s" if t.get("ts_epoch") is not None else "age-unknown"
-        marker = "[stand-down] " if t.get("stand_down") else ""
-        typer.echo(f"{t['turn_id']}\t{age}\t{marker}{t['excerpt']}")
+    extra = (["--limit", str(limit)] if limit is not None else []) + (["--json"] if json_output else [])
+    _forward_render("list", extra)
 
 
 @operator_app.command("ack")
@@ -224,6 +170,11 @@ def status_forward(
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit the depth payload."),
 ) -> None:
     """Queue depth for this session - the number the capture hook reads."""
+    _forward_render("status", ["--json"] if json_output else [])
+
+
+def _forward_render(mode: str, extra: list[str]) -> None:
+    """Exec the native render; the binary owns the output and the exit code."""
     import subprocess
 
     from fno.rust_binary import resolve_binary
@@ -232,5 +183,5 @@ def status_forward(
     if binary is None:
         typer.echo("error: the fno-agents binary was not found", err=True)
         raise typer.Exit(code=127)
-    argv = [str(binary), "compaction", "operator-turns", "--render", "status"]
-    raise typer.Exit(code=subprocess.run(argv + (["--json"] if json_output else [])).returncode)
+    argv = [str(binary), "compaction", "operator-turns", "--render", mode, *extra]
+    raise typer.Exit(code=subprocess.run(argv).returncode)

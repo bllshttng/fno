@@ -1,6 +1,10 @@
 //! Thread promotion and the registry effects shared by spawn carriers.
 
+use crate::claude_ask::emit_event;
+use crate::lead_state::{self, ManifestRefusal, ManifestSpec};
+use crate::paths::AgentsHome;
 use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
 
 pub fn resolve(payload: &Value) -> Result<Value, String> {
     match payload.get("op").and_then(Value::as_str) {
@@ -25,8 +29,310 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
         Some("journal") => Ok(journal(payload)),
         Some("receipt") => Ok(receipt(payload)),
         Some("validate") => Ok(json!({"refusal": validate(payload)})),
-        _ => Err("spawn-team: expected seed|apply|journal|receipt|validate".into()),
+        Some("manifest") => Ok(manifest_op(payload)),
+        Some("arm") => Ok(arm_op(payload)),
+        Some("record") => Ok(json!({"notices": record(payload, &events_path(payload))})),
+        Some("missions") => {
+            let scope = payload["scope"].as_str().unwrap_or("");
+            let (armed, notices) = arm_missions(scope, &events_path(payload));
+            Ok(json!({"armed": armed, "notices": notices}))
+        }
+        Some("settle") => Ok(settle(payload)),
+        _ => Err(concat!(
+            "spawn-team: expected seed|apply|journal|receipt|validate",
+            "|manifest|arm|record|missions|settle"
+        )
+        .into()),
     }
+}
+
+fn manifest_spec(payload: &Value) -> Result<ManifestSpec, String> {
+    serde_json::from_value(payload.clone()).map_err(|e| format!("lead manifest payload: {e}"))
+}
+
+/// A caller-named path, else the agents home the Rust runtime resolves.
+fn home_path(payload: &Value, key: &str, default: impl FnOnce(&AgentsHome) -> PathBuf) -> PathBuf {
+    match payload[key].as_str() {
+        Some(path) => PathBuf::from(path),
+        None => default(&AgentsHome::from_env()),
+    }
+}
+
+fn events_path(payload: &Value) -> PathBuf {
+    home_path(payload, "events", crate::client_commands::trace_events_path)
+}
+
+fn cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_default()
+}
+
+/// `config.lead.enabled`, unless the caller already resolved it.
+fn lead_enabled(payload: &Value) -> bool {
+    payload["lead_enabled"]
+        .as_bool()
+        .unwrap_or_else(|| lead_state::lead_loop_enabled(&cwd()))
+}
+
+/// Manifests live in the space of the role row's cwd.
+fn state_root(payload: &Value, owner_cwd: Option<&str>) -> PathBuf {
+    if let Some(root) = payload["state_root"].as_str() {
+        return PathBuf::from(root);
+    }
+    let cwd = owner_cwd
+        .filter(|c| !c.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(cwd);
+    crate::paths::space_dir(&cwd)
+}
+
+/// Python `write_manifest`: one manifest at an explicit path.
+fn manifest_op(payload: &Value) -> Value {
+    let written = manifest_spec(payload).and_then(|spec| {
+        let path = payload["path"]
+            .as_str()
+            .ok_or_else(|| "lead manifest: path must be a string".to_string())?;
+        Ok(lead_state::write_lead_manifest(
+            Path::new(path),
+            &spec,
+            payload["force"] == true,
+        ))
+    });
+    match written {
+        Ok(Ok(fields)) => json!({"fields": fields}),
+        Ok(Err(ManifestRefusal::Exists(m))) => json!({"exists": m}),
+        Ok(Err(ManifestRefusal::Failed(m))) | Err(m) => json!({"error": m}),
+    }
+}
+
+/// Python `arm_lead_manifest`, once the caller has read the holder row.
+fn arm_op(payload: &Value) -> Value {
+    let armed = manifest_spec(payload).and_then(|spec| {
+        let root = state_root(payload, spec.owner_cwd.as_deref());
+        lead_state::arm_manifest(&root, &spec, lead_enabled(payload))
+    });
+    match armed {
+        Ok(path) => json!({"path": path.map(|p| p.display().to_string())}),
+        Err(m) => json!({"error": m}),
+    }
+}
+
+/// Settle a launched promoted spawn: stamp the successor's role under the
+/// registry lock, arm its lead manifest, journal the grant, arm the scope's
+/// epics and answer the receipt notices. A failure after launch leaves the
+/// worker running with no role and answers the remedy.
+fn settle(payload: &Value) -> Value {
+    let registry = home_path(payload, "registry", AgentsHome::registry_json);
+    match stamp(&registry, payload) {
+        Ok(answer) => {
+            let mut notices = record(&answer, &events_path(payload));
+            notices.extend(
+                receipt(&answer)["notices"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| n.as_str().map(str::to_owned)),
+            );
+            json!({"notices": notices})
+        }
+        Err(e) => {
+            let name = crate::claude_ask::py_repr(payload["name"].as_str().unwrap_or(""));
+            json!({"notices": [format!(
+                "spawn: promotion settlement failed after launch: {e}; {name} runs \
+                 without a confirmed role. Grant it with fno agents org promote."
+            )]})
+        }
+    }
+}
+
+/// The locked registry write. A decision this op cannot apply declines and
+/// leaves every row as it was.
+fn stamp(registry: &Path, payload: &Value) -> Result<Value, String> {
+    let name = payload["name"].as_str().unwrap_or("");
+    let session = payload["session_id"].as_str().unwrap_or("");
+    let mut answer = payload.clone();
+    answer["found"] = json!(false);
+    answer["armed"] = Value::Null;
+    answer["arm_error"] = json!("");
+    crate::state::update_registry(registry, |doc| -> Result<Value, String> {
+        let rows = doc
+            .entries
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let decided = apply(&json!({
+            "scope": payload["scope"], "plan": payload["plan"], "successor": name,
+            "rows": rows, "stamp": true, "level": payload["level"], "grantor": payload["grantor"],
+            "successor_identity": {"harness": payload["harness"], "session_id": session,
+                "cwd": payload["cwd"]},
+        }))
+        .and_then(|decision| staged(&doc.entries, &rows, &decision).map(|s| (decision, s)));
+        let (outcome, vacated) = match decided {
+            Ok((decision, (entries, vacated))) => {
+                doc.entries = entries;
+                (decision["outcome"].clone(), vacated)
+            }
+            Err(_) => (json!("declined"), Vec::new()),
+        };
+        answer["outcome"] = outcome;
+        answer["vacated"] = json!(vacated);
+        let successor = doc.entries.iter().find(|r| {
+            r.name == name
+                && [
+                    r.harness_session_id.as_deref(),
+                    r.cc_session_id.as_deref(),
+                    Some(r.short_id.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .find(|s| !s.is_empty())
+                    == Some(session)
+        });
+        answer["found"] = json!(successor.is_some());
+        let Some(row) = successor else {
+            return Ok(answer.clone());
+        };
+        let Some(role_scope) = row.role_scope.clone().filter(|s| !s.is_empty()) else {
+            return Ok(answer.clone());
+        };
+        if answer["outcome"] != "declined" {
+            let spec = ManifestSpec {
+                scope: role_scope.clone(),
+                harness_session_id: Some(session.to_owned()),
+                owner_cwd: Some(row.cwd.clone()),
+                role_level: row.role_level.map(|l| json!(l)),
+                role_scope: Some(role_scope),
+                role_grantor: row.role_grantor.clone(),
+                model: row.requested_model.clone(),
+                harness: row.harness.clone(),
+                ..Default::default()
+            };
+            match lead_state::arm_manifest(
+                &state_root(payload, Some(row.cwd.as_str())),
+                &spec,
+                lead_enabled(payload),
+            ) {
+                Ok(path) => answer["armed"] = json!(path.is_some()),
+                Err(e) => {
+                    answer["armed"] = json!(false);
+                    answer["arm_error"] = json!(e);
+                }
+            }
+        }
+        Ok(answer.clone())
+    })
+    .map_err(|e| e.to_string())?
+}
+
+/// The rows after `decision`'s updates, and each vacated row (as it stood
+/// before the write) with its cause. Errs before any row changes.
+fn staged(
+    entries: &[crate::state::RegistryEntry],
+    rows: &[Value],
+    decision: &Value,
+) -> Result<(Vec<crate::state::RegistryEntry>, Vec<Value>), String> {
+    let merged = |i: usize, fields: &Value| -> Result<Value, String> {
+        let mut row = rows
+            .get(i)
+            .ok_or("spawn-team: row index out of bounds")?
+            .clone();
+        for (key, value) in fields
+            .as_object()
+            .ok_or("spawn-team: fields must be an object")?
+        {
+            row[key.as_str()] = value.clone();
+        }
+        Ok(row)
+    };
+    let mut out = entries.to_vec();
+    for (index, fields) in decision["updates"]
+        .as_object()
+        .ok_or("spawn-team: missing updates")?
+    {
+        let i: usize = index.parse().map_err(|_| "spawn-team: invalid row index")?;
+        out[i] = serde_json::from_value(merged(i, fields)?).map_err(|e| e.to_string())?;
+    }
+    let vacated = decision["vacated"]
+        .as_array()
+        .ok_or("spawn-team: missing vacated")?
+        .iter()
+        .map(|v| {
+            let i = v[0].as_u64().ok_or("spawn-team: invalid row index")? as usize;
+            Ok(json!([merged(i, &v[2])?, v[1]]))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((out, vacated))
+}
+
+/// Journal one committed spawn write: a vacate line per cleared holder, a
+/// reown line per team child that followed the role, the grant line, then
+/// the scope's missions on a grant.
+fn record(payload: &Value, events: &Path) -> Vec<String> {
+    let answer = journal(payload);
+    for event in answer["events"].as_array().into_iter().flatten() {
+        let fields: Vec<(&str, Value)> = event["data"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect();
+        emit_event(events, event["kind"].as_str().unwrap_or(""), &fields);
+    }
+    if answer["arm_missions"] != true {
+        return Vec::new();
+    }
+    arm_missions(payload["scope"].as_str().unwrap_or(""), events).1
+}
+
+/// Set mission_active on every open epic container in a granted scope: an
+/// epic with an owner is a mission, or no drain loop sees its children. A
+/// childless epic is skipped, because the mission command refuses it as not a
+/// container and the flag would stand forever. Answers the ids newly armed,
+/// or None and the warning when the graph write failed.
+fn arm_missions(scope: &str, events: &Path) -> (Option<Vec<String>>, Vec<String>) {
+    match arm_open_epics(scope, events) {
+        Ok(armed) => (Some(armed), Vec::new()),
+        Err(e) => (
+            None,
+            vec![format!(
+                "role: WARNING: mission arming failed for scope {} ({e}); \
+                 arm it with: fno backlog advance --epic <id>",
+                crate::claude_ask::py_repr(scope)
+            )],
+        ),
+    }
+}
+
+fn arm_open_epics(scope: &str, events: &Path) -> Result<Vec<String>, String> {
+    // An external tracker owns the node types; the local graph cannot say
+    // which member is an epic.
+    if crate::graph_get::external_backend_selected() {
+        return Ok(Vec::new());
+    }
+    let entries = crate::backlog::read_entries(&crate::backlog::settings::graph_path())?;
+    let mut armed = Vec::new();
+    for member in scope.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+        let Some(entry) = entries.iter().find(|e| e["id"] == member) else {
+            continue;
+        };
+        let open = !matches!(entry["status"].as_str(), Some("done" | "superseded"));
+        let container = entries
+            .iter()
+            .any(|e| e["parent"] == member && e["contained_in"] != member);
+        if entry["type"] == "epic"
+            && open
+            && container
+            && crate::backlog::advance_cli::mission_active(member, true)?
+        {
+            emit_event(
+                events,
+                "mission_activated",
+                &[("epic_id", json!(member)), ("source", json!("role"))],
+            );
+            armed.push(member.to_owned());
+        }
+    }
+    Ok(armed)
 }
 
 fn validate(payload: &Value) -> Option<String> {

@@ -60,7 +60,6 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -784,22 +783,11 @@ fn frontmatter_field(line: &str, key: &str) -> Option<u64> {
 
 /// +1 the manifest's `respawn_count`, returning the new count.
 ///
-/// Takes the same `<scope>.md.lock` file the Python arming path flocks, so a
+/// Takes the same `<scope>.md.lock` file the arming path flocks, so a
 /// concurrent re-team (which rewrites the whole manifest) and a bump cannot
 /// interleave. All other lines pass through untouched.
 pub(crate) fn bump_respawn_count(path: &Path) -> Result<u64, String> {
-    let lock_path = path.with_extension("md.lock");
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
-    let result = (|| {
+    crate::lead_state::with_manifest_lock(path, || {
         let content =
             fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let count = content
@@ -848,9 +836,7 @@ pub(crate) fn bump_respawn_count(path: &Path) -> Result<u64, String> {
         }
         fs::rename(&tmp, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
         Ok(count)
-    })();
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
-    result
+    })
 }
 
 impl LeadQueue {
