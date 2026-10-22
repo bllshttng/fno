@@ -4,7 +4,7 @@ Two or more machines run one fleet. Each machine dials out to one libSQL server 
 
 ## The key
 
-`store.remote_url` in the per-machine global config (`~/.fno/config.toml`) turns it on. It holds the primary's URL, for example `http://r2d2:18080` on the tailnet. `store.remote_token` is optional. When it is set, each request carries it as a bearer token. `store.remote_addrs` is optional too: a list of IPs, such as `["100.101.102.103"]` (the primary's Tailscale IP), dialed in order when the host name does not resolve or does not answer. A bare IP takes the URL's port. Only the connect moves to the next address, so a request is never sent twice. The key is per machine and never enters git. A project config cannot set it, because the reader reads the global file only.
+`store.remote_url` in the per-machine global config (`~/.fno/config.toml`) turns it on. It holds the primary's URL, for example `http://r2d2:18080` on the tailnet. `store.remote_token` is optional. When it is set, each request carries it as a bearer token. `store.remote_addrs` is optional too. It lists IPs, such as `["100.101.102.103"]`, the primary's Tailscale IP. When the host name does not resolve or answer, the client dials each one in order. A bare IP takes the URL's port. Only the connect moves to the next address, so a request is never sent twice. The key is per machine and never enters git. A project config cannot set it, because the reader reads the global file only.
 
 Unset is the stock install. Every store stays a local file and no fno process opens a socket for it. That holds forever: a machine with no account and no network keeps working.
 
