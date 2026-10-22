@@ -39,6 +39,7 @@ type Ctx = {
     buildContextEntries?: () => unknown[]
     getBranch?: () => unknown[]
   }
+  model?: { id?: string; provider?: string }
   isIdle?: () => boolean
   hasUI?: boolean
   ui?: { notify?: (message: string, level?: string) => unknown }
@@ -96,6 +97,38 @@ function runBounded(
       resolve("")
     }
   })
+}
+
+// Per-turn session-state push: working and done reach the daemon row through
+// `fno-agents hook session-state --harness pi <Event>`, the same entry claude
+// and codex use, so the row reads inside-leg state and a verified model
+// instead of the screen scrape. The payload is claude-shaped;
+// hook/adapter/pi.rs reads it. pi exposes no permission-prompt event, so
+// there is no blocked push. Fire-and-forget: a missing binary or a failed run
+// costs the push, never the turn.
+function pushState(
+  event: string,
+  ctx: unknown,
+  extra: Record<string, unknown> = {},
+): void {
+  try {
+    const c = ctx as Ctx
+    const sid = c?.sessionManager?.getSessionId?.() || ""
+    if (!sid) return
+    const m = c?.model
+    const model = m?.id ? (m.provider ? `${m.provider}/${m.id}` : m.id) : ""
+    const payload = JSON.stringify({
+      hook_event_name: event,
+      cwd: process.cwd(),
+      session_id: sid,
+      ...(model ? { model } : {}),
+      ...extra,
+    })
+    const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+    void runBounded(bin, ["hook", "session-state", "--harness", "pi", event], 3000, payload)
+  } catch {
+    // best-effort
+  }
 }
 
 // The space-resolved manifest for `dir`, when one exists. The verb is the
@@ -251,6 +284,7 @@ export default function (pi: {
   })
 
   pi.on("before_agent_start", async (_event: unknown, ctx: unknown) => {
+    pushState("UserPromptSubmit", ctx)
     try {
       const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
       const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `pi:${process.cwd()}`
@@ -334,6 +368,9 @@ export default function (pi: {
   // nothing and the tool proceeds - the never-block contract
   // hooks/lead-delegation-guard.sh ships under.
   pi.on("tool_call", async (event: unknown, ctx: unknown) => {
+    pushState("PreToolUse", ctx, {
+      tool_name: (event as { toolName?: string })?.toolName || "",
+    })
     try {
       const ev = event as { toolName?: string; input?: Record<string, unknown> }
       const input = ev?.input || {}
@@ -377,6 +414,7 @@ export default function (pi: {
   })
 
   pi.on("agent_settled", async (_event: unknown, ctx: unknown) => {
+    pushState("Stop", ctx)
     const dir = process.cwd()
     const sm = (ctx as Ctx)?.sessionManager
     const sid = sm?.getSessionId?.() || ""
