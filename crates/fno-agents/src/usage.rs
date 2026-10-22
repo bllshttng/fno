@@ -1,18 +1,18 @@
-//! The `fno-agents --help` surface: one usage line per dispatchable verb.
+//! The `fno-agents --help` surface: one usage line per dispatchable command.
 //!
 //! LIVES OUTSIDE THE BIN so the file-budget guard stays honest: the bin grew
 //! past its 5,000-line budget long ago and is shrink-only; this table is the
-//! one piece a new verb still has to touch, so it moved to a module named for
+//! one piece a new command still has to touch, so it moved to a module named for
 //! the question it answers. Display order == slice order == `--help` order.
 
-/// Usage line per dispatchable verb; the leading token is the verb name and the
+/// Usage line per dispatchable command; the leading token is the command name and the
 /// slice order is the `--help` display order. This MUST cover every routable
-/// verb (the `build_request` match arms plus the directly-dispatched specials).
-/// `test_rust_client_verbs_match_client_rs` (Python) guards client.rs<->router
-/// parity; `print_help_lists_every_routable_verb` (below) guards this display
-/// list against that set, so a new verb cannot land without a `--help` entry
+/// command (the `build_request` match arms plus the directly-dispatched specials).
+/// `test_rust_client_commands_match_client_rs` (Python) guards client.rs<->router
+/// parity; `print_help_lists_every_routable_command` (below) guards this display
+/// list against that set, so a new command cannot land without a `--help` entry
 ///.
-pub const CLIENT_VERB_USAGE: &[&str] = &[
+pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "spawn <name> --provider <p> [--substrate pane|thread|headless] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
@@ -48,29 +48,29 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "digest --session <s> [--since <ts> | --since-epoch <secs>] [--json]",
     "needs [--since-epoch <secs>] [--fires-floor <n>] [--json]",
     "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json] [--otlp]",
-    // `review-coverage` deliberately has NO entry here: the per-verb --help
-    // intercept would print a one-line usage and shadow the verb's own
+    // `review-coverage` deliberately has NO entry here: the per-command --help
+    // intercept would print a one-line usage and shadow the command's own
     // --help, which states the load-bearing contract (no way to assert
     // coverage without the reads, and the strict manifest-less defaults).
     //
     // `distress-scan` deliberately has NO entry here either, same reason:
     // it intercepts its own --help (DISTRESS_SCAN_USAGE in distress.rs)
     // with the fuller best-effort-always-exits-0 contract a one-liner would
-    // shadow, and it is a hidden verb with no external callers to discover
+    // shadow, and it is a hidden command with no external callers to discover
     // it from a top-level list.
 ];
 
-/// Return the usage line for `verb` (matched on the leading token), or `None`
-/// for an unrecognized verb.
-pub fn verb_usage(verb: &str) -> Option<&'static str> {
-    CLIENT_VERB_USAGE
+/// Return the usage line for `command` (matched on the leading token), or `None`
+/// for an unrecognized command.
+pub fn command_usage(command: &str) -> Option<&'static str> {
+    CLIENT_COMMAND_USAGE
         .iter()
         .copied()
-        .find(|usage| usage.split_whitespace().next() == Some(verb))
+        .find(|usage| usage.split_whitespace().next() == Some(command))
 }
 
-/// Full per-verb help for a verb whose contract does not fit the one-line
-/// table above; checked before `verb_usage` by the per-verb `--help`
+/// Full per-command help for a command whose contract does not fit the one-line
+/// table above; checked before `command_usage` by the per-command `--help`
 /// intercept in the bin. Same reason `review-coverage` owns its `--help`
 /// inline: the load-bearing contract has to live in a string the
 /// binary prints, next to the table entry that stays one line for the
@@ -82,7 +82,7 @@ usage: fno-agents loop-check --state <manifest> --transcript <transcript.jsonl> 
        [--author-harness <h>] [--hook-input-stdin] [--gh-bin <p>] [--git-bin <p>]
        [--fno-bin <p>] [--read-timeout-ms <n>] [--harness <h>] [--harness-session <id>]
 
-The stop-hook decision verb: it decides whether a driven session may stop,
+The stop-hook decision command: it decides whether a driven session may stop,
 and every verdict comes from external truth read fresh on each fire - PR
 existence, CI, required-bot review, plan done_probes, budget. The
 session's own claim of done is not an input.
@@ -103,10 +103,10 @@ shim forward-compat. stdout is one JSON decision; exit 0 = a decision
 (verdict allow or block), 2 = bad arguments.
 ";
 
-/// The fuller help body for `verb`, when one exists above. `None` falls
-/// through to the one-line `verb_usage` entry.
-pub fn verb_help(verb: &str) -> Option<&'static str> {
-    match verb {
+/// The fuller help body for `command`, when one exists above. `None` falls
+/// through to the one-line `command_usage` entry.
+pub fn command_help(command: &str) -> Option<&'static str> {
+    match command {
         "loop-check" => Some(LOOP_CHECK_USAGE),
         _ => None,
     }
@@ -170,7 +170,7 @@ mod tests {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(verb_help("loop-check").is_some());
+        assert!(command_help("loop-check").is_some());
         assert!(one_line.contains("target (the default)"));
         assert!(one_line.contains("target manifest"));
         assert!(one_line.contains("lead manifest"));

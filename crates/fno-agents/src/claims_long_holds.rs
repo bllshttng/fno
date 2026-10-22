@@ -139,7 +139,7 @@ fn render_lines(rows: &[LongHoldRow], min_hold_s: i64) -> Vec<String> {
 /// `flight:` holds older than `min_hold_s` across the given claims
 /// directories, longest hold first, with the `top` text block.
 pub fn long_holds(dirs: &[PathBuf], min_hold_s: i64) -> Result<Value, String> {
-    let (witness, _) = crate::claim_verbs::default_session_witness();
+    let (witness, _) = crate::claim_commands::default_session_witness();
     let witness: SessionWitness = &witness;
     long_holds_with(dirs, min_hold_s, Some(witness))
 }

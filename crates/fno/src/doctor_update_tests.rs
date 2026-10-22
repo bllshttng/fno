@@ -1,4 +1,4 @@
-//! Tests for the native `fno doctor update` verb. Unit-shaped: pure parsing,
+//! Tests for the native `fno doctor update` command. Unit-shaped: pure parsing,
 //! marker IO, guard parsing, and verdict-row folding. Anything that shells to
 //! cargo/uv belongs to the manual verify pass on a scratch CARGO_INSTALL_ROOT.
 

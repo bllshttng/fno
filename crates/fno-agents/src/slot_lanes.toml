@@ -3,7 +3,7 @@
 # Lane fields are closed: every field has resolver code behind it
 # (provider becomes harness, passthrough fields skip ranking, args is
 # a validated string list, utc_hours gates the lane on a UTC hour
-# window). Slot verbs are open instead: SLOT_VERBS
+# window). Slot commands are open instead: SLOT_COMMANDS
 # plus every agents.profiles key.
 fields = ["provider", "model", "effort", "substrate", "permission_mode", "route", "account", "pane_group", "args", "utc_hours"]
 passthrough = ["substrate", "permission_mode", "pane_group", "args"]

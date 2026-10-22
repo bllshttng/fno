@@ -300,7 +300,7 @@ def test_tokenization_matches_command_position_rows():
     # what makes line 2 its own segment.
     assert fm(seg(f"git status\n{_MERGE} 356 --squash")) is not None
     assert fg(seg("git log | grep foo")) == ["git log"]
-    # Wrapper/assignment/path/subshell prefixes must not hide the merge verb.
+    # Wrapper/assignment/path/subshell prefixes must not hide the merge command.
     for cmd in (
         f"GH_TOKEN=x {_MERGE} 356 --squash",
         f"env {_MERGE} 356",
@@ -336,7 +336,7 @@ def test_tokenization_matches_command_position_rows():
 def _run_hook_subprocess(command, fno_home, cwd=None, extra_env=None):
     env = dict(os.environ, FNO_HOME=str(fno_home))
     # Give the fail-closed hold veto an explicit unheld answer while preserving
-    # the fail-open behavior of unrelated missing probe verbs.
+    # the fail-open behavior of unrelated missing probe commands.
     bin_dir = Path(fno_home).parent / "hook-bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     fno = bin_dir / "fno"
@@ -351,7 +351,7 @@ def _run_hook_subprocess(command, fno_home, cwd=None, extra_env=None):
         '#!/usr/bin/env bash\n'
         'cat >/dev/null\n'
         '# The hold reader also asks the one roster (the self-review floor\n'
-        '# enumerates the verbless harnesses through it); serve it beside the\n'
+        '# enumerates the commandless harnesses through it); serve it beside the\n'
         '# claim door the way the real binary does.\n'
         'if [[ "$1" == "harness-roster" ]]; then\n'
         '  printf \'{"known":["claude","codex","gemini","agy","opencode","pi",'
@@ -498,7 +498,7 @@ def test_marker_and_flag_are_single_use():
 
 def test_evasion_rows_are_denied():
     """Rows: one token away from a bare push/merge. Each is a distinct
-    construct that once hid the verb from both gates."""
+    construct that once hid the command from both gates."""
     deny_rows = [
         "! git push origin main",
         "if git push origin main; then true; fi",
@@ -515,7 +515,7 @@ def test_evasion_rows_are_denied():
         'eval "git push origin main"',
         'bash -c "git push origin main"',
         'sh -c "git push origin main"',
-        # A wrapper that takes its own option pushed the verb past argv[0].
+        # A wrapper that takes its own option pushed the command past argv[0].
         "bash -lc 'git push origin main'",
         "sh -cx 'git push origin main'",
         "bash -lc 'gh pr merge 42'",
@@ -598,7 +598,7 @@ def test_hooks_path_and_message_text_rows():
         assert '"permissionDecision": "allow"' in out2
         assert not flag.exists(), "the approval was actually consumed"
 
-    # The runner's quoted argument is re-tokenized so the inner verb is gated.
+    # The runner's quoted argument is re-tokenized so the inner command is gated.
     with tempfile.TemporaryDirectory() as td:
         fno, marker = _with_marker(td)
         out, _ = _run_hook_subprocess(

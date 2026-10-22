@@ -4,12 +4,12 @@
 # A worker that dies before `target init` writes a manifest has no state
 # file, so the shim takes the pre-manifest visitor-allowed exit and never
 # calls loop-check. Before this test's change that exit read the <help> tag
-# and dropped it on the floor; now it calls the `distress-scan` verb.
+# and dropped it on the floor; now it calls the `distress-scan` command.
 #
 # Tests (against the REAL shim + REAL fno-agents binary):
 #   T1 (AC8-HP)   a real codex help-tag transcript -> exit 0 + one blocked row
 #                 carrying the evidence string and harness: codex.
-#   T2 (AC9-EDGE) empty transcript_path -> exit 0, verb not called, no row.
+#   T2 (AC9-EDGE) empty transcript_path -> exit 0, command not called, no row.
 #   T3 (AC11-EDGE) same wiring, a help-tag-free transcript -> no NEW row,
 #                 proven against T1's already-written row (positive control
 #                 in the same run, not an absence asserted alone).
@@ -111,7 +111,7 @@ log "T1: pre-manifest stop with a real help-tag transcript"
     # asserting a second, separate re-derivation lands on the identical path.
     # The store commit is the write boundary: the hook's rows land in the
     # events.db beside the journal, so the db is what this test finds, and
-    # the rows verb reads it back in the envelope shape every reader sees.
+    # the rows command reads it back in the envelope shape every reader sees.
     EVENTS_DB="$(find "$SPACES_DIR" "$HOME_DIR" -type f -name events.db 2>/dev/null | head -1)"
     EVENTS_FILE="${EVENTS_DB%.db}.jsonl"
     if [[ -z "$EVENTS_DB" ]]; then

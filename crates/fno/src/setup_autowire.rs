@@ -10,7 +10,7 @@
 //! converge engine (ship-phase ruling): the front door reaches it through the
 //! wheel's fno-py, adding no Python of its own. Every outcome prints; nothing
 //! is silent. Best-effort by design: a harness that fails to wire never fails
-//! the CLI install that already succeeded, so the verb always exits 0.
+//! the CLI install that already succeeded, so the command always exits 0.
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -34,7 +34,7 @@ const REPO_URL: &str = "https://github.com/bllshttng/fno";
 /// directory, not the binary.
 pub(crate) const SKILLS_DROP: &str = "fno";
 
-/// The one argv this verb claims, lexically, before clap: exactly
+/// The one argv this command claims, lexically, before clap: exactly
 /// `fno config setup auto-wire`, no flags. Everything else forwards to the
 /// Python `config setup` namespace untouched.
 pub fn classify(args: &[OsString]) -> Option<()> {

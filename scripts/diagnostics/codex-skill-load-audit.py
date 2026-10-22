@@ -3,7 +3,7 @@
 
 Answers one question: when a codex worker is spawned with a
 wrapped prose prompt ("run $fno:target x-.... <prose>") instead of a bare
-verb-first prompt ("$fno:target x-...."), does the skill body reach context
+command-first prompt ("$fno:target x-...."), does the skill body reach context
 before the first tool call?
 
 Markers are POSITIVE, never absences (AGENTS.md pitfalls), and NAME-SPECIFIC:
@@ -37,7 +37,7 @@ from pathlib import Path
 
 SKILL_MSG = re.compile(r"<skill>\s*<name>([a-zA-Z0-9:_-]+)</name>")
 SKILL_PATH = re.compile(r"skills/[a-z0-9-]+/SKILL\.md")
-VERB_TOKEN = re.compile(r"[$/]fno:[a-z0-9-]+")
+COMMAND_TOKEN = re.compile(r"[$/]fno:[a-z0-9-]+")
 NOISE_PREFIXES = (
     "# AGENTS.md",
     "<recommended_plugins>",
@@ -87,14 +87,14 @@ def classify(path):
                 tool_calls.append(str(p.get("input") or p.get("arguments") or ""))
 
     head = " ".join((prompt or "").split())
-    named = VERB_TOKEN.search(prompt or "")
+    named = COMMAND_TOKEN.search(prompt or "")
     if (prompt or "").lstrip().startswith(("$", "/")) and named:
-        shape = "verb-first"
+        shape = "command-first"
     elif named:
         shape = "wrapped"
     else:
         shape = "prose"
-    named_skill = named.group(0).lstrip("$/") if named else None  # "fno:target" or bare verb
+    named_skill = named.group(0).lstrip("$/") if named else None  # "fno:target" or bare command
     named_dir = named_skill.split(":")[-1] if named_skill else None
     if named_dir and any(s == named_skill for s in skills_injected):
         return shape, True, "injected", named_skill, head
@@ -147,8 +147,8 @@ def self_check():
         # wrapped, first action reads the skill -> loaded by self-read
         ("wrapped-selfread", [usermsg("run $fno:target x-3 read node"),
                               tool("sed -n 1p /cache/skills/target/SKILL.md")], ("wrapped", True, "selfread")),
-        # bare verb-first prompt
-        ("verb-first", [usermsg("$fno:target x-4"), tool("fno whoami")], ("verb-first", False, "not-loaded")),
+        # bare command-first prompt
+        ("command-first", [usermsg("$fno:target x-4"), tool("fno whoami")], ("command-first", False, "not-loaded")),
         # noise messages must not become the prompt
         ("noise", [usermsg("# AGENTS.md instructions <INSTRUCTIONS>x"),
                    usermsg("run $fno:target x-5 go"), tool("git status")], ("wrapped", False, "not-loaded")),

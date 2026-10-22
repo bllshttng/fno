@@ -96,7 +96,7 @@ impl GhProbe for JudgedGhProbe {
 }
 
 /// Dispatch one `status-` op from an `authorized-merge` payload. Always
-/// answers with a JSON receipt; the verb's exit status answers only whether
+/// answers with a JSON receipt; the command's exit status answers only whether
 /// the op RAN.
 pub fn run_op(op: &str, payload: &Value) -> String {
     match op {
@@ -161,7 +161,7 @@ pub(crate) fn status_cache_key(payload: &Value) -> Value {
     let hold_word = match payload.get("hold_probe_word").and_then(Value::as_str) {
         Some(word) => word.to_string(),
         None => {
-            let mut flow = crate::merge_verb::hold_check_flow(pr as i64, &cwd);
+            let mut flow = crate::merge_command::hold_check_flow(pr as i64, &cwd);
             let mut stderr = String::new();
             for (err, line) in std::mem::take(&mut flow.lines) {
                 if err {

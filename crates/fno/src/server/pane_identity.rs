@@ -104,7 +104,7 @@ impl Core {
     }
 
     /// Fold the cached registry rows and the spawn journal into the same
-    /// evidence the standalone workspace-prune verb computes - one shared
+    /// evidence the standalone workspace-prune command computes - one shared
     /// fold (`fold_registry_rows`), so the daemon sweep and the CLI apply
     /// can never drift on what a row or a reaped name proves. Unknown rows
     /// contribute no verdict; only a positive `Alive` or `Dead` reading

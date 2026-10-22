@@ -65,7 +65,7 @@ fn codex_home_guard() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// `fno` never links `fno-agents` (it shells the binary at runtime), so the
 /// mux viewport's renderer (`fno::agents_view::attach_form(...).render(...)`)
-/// and the CLI verb's renderer (`render_session_argv_with_ids`) are two
+/// and the CLI command's renderer (`render_session_argv_with_ids`) are two
 /// functions over the same declaration. For every harness the CONTRACT says
 /// declares a form, both doors must render byte-identically; for every
 /// harness it says declares none, the viewport must find none. Change either

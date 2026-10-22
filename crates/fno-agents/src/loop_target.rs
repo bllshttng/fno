@@ -1,4 +1,4 @@
-//! Target driver: TargetQueue + the `loop run` CLI verb.
+//! Target driver: TargetQueue + the `loop run` CLI command.
 //!
 //! ## Degenerate walk (one unit, re-dispatch until terminal event)
 //!
@@ -284,7 +284,7 @@ pub(crate) fn exit_code_for_reason(reason: &TerminationReason) -> i32 {
     }
 }
 
-// ── CLI verb ──────────────────────────────────────────────────────────────────
+// ── CLI command ──────────────────────────────────────────────────────────────────
 
 /// Entry point for `fno-agents loop run ...`.
 ///
@@ -309,8 +309,8 @@ pub(crate) fn exit_code_for_reason(reason: &TerminationReason) -> i32 {
 /// - 2: usage error / internal error
 /// - 77: driver binary missing from PATH (preflight failure)
 /// - 130: Interrupted (SIGINT)
-pub fn run_loop_verb(args: &[String]) -> i32 {
-    match run_loop_verb_inner(args) {
+pub fn run_loop_command(args: &[String]) -> i32 {
+    match run_loop_command_inner(args) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("fno-agents loop: {e}");
@@ -390,7 +390,7 @@ fn try_resume_codex_goal_on_wake(
     resume().map(Some)
 }
 
-fn run_loop_verb_inner(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
+fn run_loop_command_inner(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
     // ── subcommand check ──────────────────────────────────────────────────────
     let subcommand = args.first().map(|s| s.as_str()).unwrap_or("");
     if subcommand == "readiness" {

@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Frontend-craft gate
 
 Stops frontend work from silently skipping the frontend-craft (`/impeccable`)

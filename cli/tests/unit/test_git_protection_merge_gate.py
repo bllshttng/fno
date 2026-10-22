@@ -2,7 +2,7 @@
 posture - live config armed or the run's spawn-time env grant - instead of
 the manifest snapshot alone. Before this, the hook authorized on a manifest
 whose `true` merely mirrored config an operator had since flipped off, making
-the raw path the weaker gate (the sanctioned verb refused what raw gh merged).
+the raw path the weaker gate (the sanctioned command refused what raw gh merged).
 """
 import importlib.util
 import json
@@ -33,7 +33,7 @@ def gp(monkeypatch, tmp_path):
 def _arm(monkeypatch, gp, enabled):
     """Arm/disarm the live switch by scripting the resolver CLI's answer.
     The hook reads config through `fno config get auto_merge.enabled`; the
-    resolver's layer precedence is that verb's own tested contract, so the
+    resolver's layer precedence is that command's own tested contract, so the
     hook-side test scripts its answer instead of re-parsing TOML."""
     class _R:
         returncode = 0
@@ -171,7 +171,7 @@ class _Proc:
         self.stdout = ""
 
 
-def test_ac7_err_exit_three_denies_with_the_verbs_first_line(gp, monkeypatch):
+def test_ac7_err_exit_three_denies_with_the_commands_first_line(gp, monkeypatch):
     monkeypatch.setattr(
         gp.subprocess,
         "run",

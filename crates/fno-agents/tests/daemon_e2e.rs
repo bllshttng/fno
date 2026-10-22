@@ -205,7 +205,7 @@ fn wait_for_successor_reconcile_order(home: &AgentsHome, successor_pid: u32, bud
             // third daemon sweeps, and an earlier version of this code
             // asserted `sweeps.len() <= 2` to say so out loud. That assert was
             // wrong: the calling test documents a third daemon reaching the
-            // accept loop as LEGITIMATE ("a verb in the burst can legitimately
+            // accept loop as LEGITIMATE ("a command in the burst can legitimately
             // win the lock ahead of restart's own child"), and the assert sits
             // inside this poll loop, so a legal outcome became an unwaitable
             // panic and a flake source in the 20-trial job.
@@ -594,9 +594,9 @@ async fn cold_start_serves_while_the_startup_sweep_is_still_running() {
 /// holds the singleton lock WAITS for the incumbent instead of forking a
 /// competitor for it.
 ///
-/// `call()` reaches `ensure_daemon` from every client verb, so with a fleet
+/// `call()` reaches `ensure_daemon` from every client command, so with a fleet
 /// firing loop-check at each turn boundary, a daemon too busy to accept in time
-/// minted a new supervisor per timed-out verb. A failed connect has two
+/// minted a new supervisor per timed-out command. A failed connect has two
 /// explanations, dead and merely busy, and only the lock separates them.
 ///
 /// The two outcomes are separated by whether the child RAN, read from a file
@@ -688,34 +688,34 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
     // production orphans for free.
     let reaper = std::thread::spawn(move || incumbent.wait());
 
-    // The storm: a restart and a burst of ordinary client verbs at the same
-    // moment. Every verb routes through `ensure_daemon`, which is the site that
+    // The storm: a restart and a burst of ordinary client commands at the same
+    // moment. Every command routes through `ensure_daemon`, which is the site that
     // used to treat a failed connect as licence to fork.
-    const CONCURRENT_VERBS: u64 = 8;
+    const CONCURRENT_COMMANDS: u64 = 8;
     let restart = {
         let h = home.clone();
         let b = daemon_bin.clone();
         tokio::spawn(async move { fno_agents::client::restart_daemon(&h, &b, false).await })
     };
-    let mut verbs = Vec::new();
-    for i in 0..CONCURRENT_VERBS {
+    let mut commands = Vec::new();
+    for i in 0..CONCURRENT_COMMANDS {
         let h = home.clone();
         let b = daemon_bin.clone();
-        verbs.push(tokio::spawn(async move {
+        commands.push(tokio::spawn(async move {
             call(&h, &b, &Request::new(100 + i, "agent.status", json!({}))).await
         }));
     }
 
     let restart_result = restart.await;
 
-    // A verb that races the teardown can legitimately lose its connection
+    // A command that races the teardown can legitimately lose its connection
     // mid-frame: the incumbent is being SIGTERMed underneath it. That shape is
     // expected, and it is checked for BY NAME below rather than folded into a
     // numeric tolerance, so any other failure still fails this test.
     let mut answered = 0;
     let mut teardown_casualties = 0;
     let mut failures = Vec::new();
-    for v in verbs {
+    for v in commands {
         match v.await {
             Ok(Ok(resp)) if !resp.is_err() => answered += 1,
             // The daemon answered, but with its own ShuttingDown code: a
@@ -735,10 +735,10 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
     let outcome = restart_result
         .expect("restart task joins")
         .expect("restart over a large roster succeeds");
-    // Every concurrent verb above may legitimately have reached the incumbent
+    // Every concurrent command above may legitimately have reached the incumbent
     // before SIGTERM and lost that socket during teardown. Prove the successor
     // is serving with a fresh positive probe inside the same latency window,
-    // instead of requiring one raced verb to win scheduler timing. The old
+    // instead of requiring one raced command to win scheduler timing. The old
     // awaited-startup implementation still cannot answer this before the 3s
     // delay. The 2.5s discriminator this sentence used to point at is gone; the
     // positive probe below is now the whole proof.
@@ -771,7 +771,7 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
         let lowered = f.to_lowercase();
         assert!(
             TEARDOWN_SHAPES.iter().any(|shape| lowered.contains(shape)),
-            "a verb failed during the restart storm for a reason other than \
+            "a command failed during the restart storm for a reason other than \
              racing the teardown: {f}"
         );
     }
@@ -812,7 +812,7 @@ async fn restart_leaves_exactly_one_daemon(rows: usize) {
          {} daemons started, {alive:?} still alive",
         started.len()
     );
-    // Deliberately not asserting WHICH pid survives. A verb in the burst can
+    // Deliberately not asserting WHICH pid survives. A command in the burst can
     // legitimately win the lock ahead of restart's own child, and then restart's
     // child is the one that defers and exits. One supervisor is the invariant;
     // which process holds the role is not.
@@ -1436,7 +1436,7 @@ exit 2
 
 /// A daemon lazy-started by a pinned child (`FNO_AGENTS_RUNTIME=python`) must
 /// shed the pin at startup so it does not hold it for the daemon's whole life.
-/// Every arm child would otherwise inherit it and refuse the verbs with no
+/// Every arm child would otherwise inherit it and refuse the commands with no
 /// Python leg (`rm` exits 127). Proven by having the daemon spawn a real
 /// `rm` child (a `claude` stub, same shape as the surface reap test above)
 /// and having that child record what it sees.
@@ -1552,7 +1552,7 @@ exit 2
 // ---------------------------------------------------------------------------
 
 /// `agent.stop` refuses a pane row without hiding the non-pane no-op receipt:
-/// the refusal names the row's session:pane and clearing verb, while a codex
+/// the refusal names the row's session:pane and clearing command, while a codex
 /// ask row with an empty short id remains a successful no-op.
 #[tokio::test]
 async fn stop_refuses_a_pane_row_and_names_the_row_ref() {
@@ -1602,7 +1602,7 @@ async fn stop_refuses_a_pane_row_and_names_the_row_ref() {
     assert!(msg.contains("main:10"), "refusal names session:pane: {msg}");
     assert!(
         msg.contains("fno agents rm pane-worker-stop"),
-        "refusal names the clearing verb: {msg}"
+        "refusal names the clearing command: {msg}"
     );
 
     let registry = state::load_registry(&home.registry_json()).unwrap();
@@ -1741,7 +1741,7 @@ async fn a_restart_successor_dies_with_its_test_owner() {
 #[tokio::test]
 async fn restart_force_recovers_a_wedged_holder() {
     // x-3498 acceptance: a daemon frozen with SIGSTOP holds the singleton lock
-    // and never accepts. A client verb must fail PROMPTLY (bounded, never a
+    // and never accepts. A client command must fail PROMPTLY (bounded, never a
     // hang), and ONE `restart --force` must recover the machine with no
     // operator kill: SIGKILL the holder before any probe, fresh daemon serves.
     let home = short_home();
@@ -1756,7 +1756,7 @@ async fn restart_force_recovers_a_wedged_holder() {
     }
     std::thread::sleep(Duration::from_millis(100));
 
-    // A verb against the wedge fails within the client's read deadline, not by
+    // A command against the wedge fails within the client's read deadline, not by
     // hanging. Driven through a CHILD client with a short injected deadline:
     // the default (120s, sized above the daemon's legit slow-handler budgets)
     // is far too long for a test, and the env override must never touch this
@@ -1793,7 +1793,7 @@ async fn restart_force_recovers_a_wedged_holder() {
     };
     assert!(
         !status_out.status.success(),
-        "a verb against the wedge must fail, got: {:?}",
+        "a command against the wedge must fail, got: {:?}",
         String::from_utf8_lossy(&status_out.stdout)
     );
     let stderr = String::from_utf8_lossy(&status_out.stderr);
@@ -1806,7 +1806,7 @@ async fn restart_force_recovers_a_wedged_holder() {
         "the injected deadline bounded the failure: {stderr}"
     );
 
-    // The recovery: one verb, no operator kill.
+    // The recovery: one command, no operator kill.
     let outcome = fno_agents::client::restart_daemon(&home, &daemon_bin, true)
         .await
         .expect("--force recovers the wedge");
@@ -1845,7 +1845,7 @@ async fn restart_force_recovers_a_wedged_holder() {
 async fn restart_force_refuses_to_signal_a_recycled_pid() {
     // x-3498 acceptance: a lockfile whose pid has been recycled by an unrelated
     // process must NOT be signalled. The positive marker is the stranger
-    // SURVIVING the verb that had every reason to kill it.
+    // SURVIVING the command that had every reason to kill it.
     let home = short_home();
     home.ensure_root().unwrap();
     let daemon_bin = daemon_env_bin(&home, "restart-recycled", None, &[]);
@@ -2068,7 +2068,7 @@ async fn drift_warned_on_list_stderr_only() {
         !stdout.contains("restart") && !stdout.contains("older build"),
         "warning leaked into stdout: {stdout}"
     );
-    // AC1-HP: the warning is on stderr and names the restart verb.
+    // AC1-HP: the warning is on stderr and names the restart command.
     assert!(
         stderr.contains("fno agents restart") && stderr.contains("build"),
         "expected drift warning on stderr, got: {stderr}"

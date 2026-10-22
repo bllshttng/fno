@@ -4,7 +4,7 @@ The closing follow-up of the codex auto-routing work ([`fno-agents-ask-auto-rout
 
 ## What this completes
 
-`ask` was the last `fno agents` verb with a provider carve-out. claude shipped client-side first, then codex + a provider-conditional flip (claude/codex routed to Rust, gemini stayed on Python). This node ports gemini and drops the carve-out: `PYTHON_AGENT_VERBS` is now empty, so `AUTO_ROUTE_VERBS == RUST_CLIENT_VERBS` is the whole routing contract.
+`ask` was the last `fno agents` command with a provider carve-out. claude shipped client-side first, then codex + a provider-conditional flip (claude/codex routed to Rust, gemini stayed on Python). This node ports gemini and drops the carve-out: `PYTHON_AGENT_COMMANDS` is now empty, so `AUTO_ROUTE_COMMANDS == RUST_CLIENT_COMMANDS` is the whole routing contract.
 
 ## The gemini cleavage from codex
 
@@ -39,7 +39,7 @@ codex now delegates to this module; its 58-test regression suite proves the extr
 
 ## The unconditional flip
 
-`cli/src/fno/agents/rust_runtime.py` now has an empty `PYTHON_AGENT_VERBS`, so `make_context` routes `ask` through the same `verb in AUTO_ROUTE_VERBS` branch as every other verb. The provider-conditional special case (`RUST_CLIENT_ASK_PROVIDERS`, `_resolve_ask_provider`, the `elif verb == "ask"` branch, the `_ASK_VALUE_FLAGS` scanner, the `FNO_AGENTS_DEBUG_ROUTING` breadcrumb) is deleted — the Rust client now owns the full create/resume decision for all three providers.
+`cli/src/fno/agents/rust_runtime.py` now has an empty `PYTHON_AGENT_COMMANDS`, so `make_context` routes `ask` through the same `command in AUTO_ROUTE_COMMANDS` branch as every other command. The provider-conditional special case (`RUST_CLIENT_ASK_PROVIDERS`, `_resolve_ask_provider`, the `elif command == "ask"` branch, the `_ASK_VALUE_FLAGS` scanner, the `FNO_AGENTS_DEBUG_ROUTING` breadcrumb) is deleted — the Rust client now owns the full create/resume decision for all three providers.
 
 The one case that previously stayed on Python — an `ask` with no resolvable provider (new agent, no `--provider`) — is now surfaced by the Rust client itself in `bin/client.rs::unresolvable_ask_exit`: it reproduces Python's `select_provider` exit-2 error byte-for-byte (`provider is required for new agent <repr(name)>; pass --provider one of: claude, codex, gemini`, or the `unknown provider` variant) rather than falling through to the daemon PTY path (Locked Decision 3). `py_repr` (from `claude_ask.rs`) reproduces Python's `{name!r}` quoting.
 
@@ -52,7 +52,7 @@ The one case that previously stayed on Python — an `ask` with no resolvable pr
 | `crates/fno-agents/tests/gemini_ask_unit.rs` | argv builders, `inject_from_name`, `sandbox_flag`, single-blob `parse_response` + every schema-drift guard, exit-code map |
 | `crates/fno-agents/tests/gemini_ask_parity.rs` | cross-language byte parity: Python `harnesses/gemini.py` vs Rust `gemini_ask` against one shared fake gemini (create/resume/null-response/drift/non-zero/stderr-noise/inject) + the cross-language registry round-trip |
 | `crates/fno-agents/tests/gemini_ask_sigint.rs` | Ctrl-C forwards to the gemini pgroup → exit 130; SIG_IGN parent disposition preserved (shared `subprocess_ask` driver) |
-| `cli/tests/agents/test_rust_runtime.py` | empty `PYTHON_AGENT_VERBS`, `AUTO_ROUTE_VERBS == RUST_CLIENT_VERBS` identity, ask auto-routes for every provider / no-flag / no-binary fallback / `=python` force |
+| `cli/tests/agents/test_rust_runtime.py` | empty `PYTHON_AGENT_COMMANDS`, `AUTO_ROUTE_COMMANDS == RUST_CLIENT_COMMANDS` identity, ask auto-routes for every provider / no-flag / no-binary fallback / `=python` force |
 | `cli/tests/agents/test_ask_e2e_dispatch.py` | CLI-level create + followup dispatch differential parametrized across codex AND gemini |
 
 The fake gemini fixture (single JSON blob + stderr noise) is shape-identical across the Rust parity test and the Python e2e test, so one fake serves both differential paths.

@@ -1060,7 +1060,7 @@ pub(crate) fn fold_over_entries(
 }
 
 // ---------------------------------------------------------------------------
-// The verb
+// The command
 // ---------------------------------------------------------------------------
 
 /// The strict authority both spellings serve: the graph rows and the

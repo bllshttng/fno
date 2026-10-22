@@ -1,4 +1,4 @@
-//! Node-reference plumbing shared by the backlog write verbs: the id-shape
+//! Node-reference plumbing shared by the backlog write commands: the id-shape
 //! gate, the lookup tiers (exact id, `ab-` short prefix), and the
 //! archived-versus-absent refusal. Moved here from `rank_cli` (id gates,
 //! PR two) and `get_cli` (resolve tiers) so `update` and `add` reuse one

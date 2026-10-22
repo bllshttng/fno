@@ -44,7 +44,7 @@ make_repo() {
   (cd "$_dir" && git init -q && mkdir -p .fno home/.fno) || fail "repo setup failed in $_dir"
   printf '# isolated\n' > "${_dir}/.fno/config.toml"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
-  # State-path stub pins init's manifest to the scenario space dir; other verbs
+  # State-path stub pins init's manifest to the scenario space dir; other commands
   # delegate to the real fno-agents so the modern claim stays real.
   mkdir -p "${_dir}/bin" "${_dir}/space"
   cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"

@@ -12,7 +12,7 @@ use super::{
 };
 
 /// The preview receipt for one request, in process. The status composer and
-/// the verb share this one arm, so a status read pays no subprocess to its
+/// the command share this one arm, so a status read pays no subprocess to its
 /// own owner, and both surfaces can never render two different ready
 /// verdicts.
 pub(crate) fn preview_receipt(request: &Request) -> Value {
@@ -62,7 +62,7 @@ pub(crate) fn preview_receipt(request: &Request) -> Value {
 }
 
 /// The preview receipt for a raw payload: parse, then the same in-process
-/// receipt the verb answers. An unusable payload reads `unknown` with the
+/// receipt the command answers. An unusable payload reads `unknown` with the
 /// parse error named, never a guessed verdict.
 pub(crate) fn preview_receipt_payload(payload: &Value) -> Value {
     match parse_request(payload) {
@@ -73,7 +73,7 @@ pub(crate) fn preview_receipt_payload(payload: &Value) -> Value {
 
 pub(crate) fn read_payload(args: &[String]) -> Result<Value, String> {
     let text = match args.first() {
-        // An inline JSON payload is the thin-forwarder form: a CLI verb with
+        // An inline JSON payload is the thin-forwarder form: a CLI command with
         // no temp file. A path that names a payload file still works.
         Some(path) if path.trim_start().starts_with('{') => path.clone(),
         Some(path) => std::fs::read_to_string(path)

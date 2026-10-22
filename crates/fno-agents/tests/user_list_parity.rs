@@ -5,7 +5,7 @@
 //!
 //! Characterization tests for `compaction operator-turns --render list`, the
 //! native answer behind `fno inbox user list`. The contract is the Python
-//! verb's stdout, stderr and exit code: one tab-separated row per pending
+//! command's stdout, stderr and exit code: one tab-separated row per pending
 //! turn with the `[stand-down]` marker, the empty-queue line, the stderr skip
 //! report, `--limit`, and the `--json` array (escaped the way `json.dumps`
 //! writes it). The fixture rows carry no timestamp, so every age reads
@@ -66,7 +66,7 @@ fn list(dir: &Path, flags: &[&str]) -> Golden {
 }
 
 #[test]
-fn list_matches_the_python_verb() {
+fn list_matches_the_python_command() {
     let assistant = r#"{"type": "assistant", "message": {"role": "assistant", "content": "hi"}}"#;
     let fixtures: [(&str, Vec<String>); 3] = [
         ("empty", vec![assistant.to_string()]),

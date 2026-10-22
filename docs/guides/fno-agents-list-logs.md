@@ -1,12 +1,12 @@
 # Listing and tailing agents — `fno agents session list` / `fno agents session logs`
 
-Two read verbs in the `fno agents` subsystem. Use them when you want to:
+Two read commands in the `fno agents` subsystem. Use them when you want to:
 
 - see your whole fleet at once (what's running, what's orphaned, what claude is doing right now)
 - attach to an agent's output without dropping into a TUI
 - script a polling loop that watches for stuck or idle agents
 
-These verbs are pure reads — they never modify the registry. Status mutations belong to `fno agents mail ask` and the `stop` / `rm` / `reconcile` verbs.
+These commands are pure reads — they never modify the registry. Status mutations belong to `fno agents mail ask` and the `stop` / `rm` / `reconcile` commands.
 
 ## `fno agents session list` — the fleet roster
 
@@ -38,7 +38,7 @@ Columns:
 | LAST MESSAGE | Flattened text of the worker's last transcript turn (`[tool_use: name]` markers inline), capped for display; `-` when the probe did not answer. |
 | STATUS | The served activity word: `writing`, `quiet`, `parked`, `refused`, `orphaned`, or `unknown`. |
 
-`--json` keeps every field the table drops, such as `cwd`, `pid`, `address` and `last_reconciled_at`. `fno agents session list` needs the `fno-agents` binary. There is no Python list lane, so `FNO_AGENTS_RUNTIME=python` refuses the verb with exit 127.
+`--json` keeps every field the table drops, such as `cwd`, `pid`, `address` and `last_reconciled_at`. `fno agents session list` needs the `fno-agents` binary. There is no Python list lane, so `FNO_AGENTS_RUNTIME=python` refuses the command with exit 127.
 
 The emitter refuses self-contradictory stored fields. If a terminal `status` is behind a fresher transcript event, it becomes `unknown` with `basis: stale-verdict-fresher-event`. If `last_message_at` is newer than `last_event_at`, it becomes `null` with `last_message_at_basis: refused-newer-than-transcript`. When process-start evidence is unavailable, `liveness_origin` is `null` and `liveness_origin_basis` names which of five causes produced it: `pid-absent`, `created-at-absent`, `created-at-unreadable`, `pid-start-absent`, or `pid-start-unreadable`. Otherwise the origin is `resumed` or `survivor` and the basis is `null`, because the value is its own evidence.
 
@@ -205,7 +205,7 @@ Like `list`, it is a pure read (it never mutates the registry, writes state, or 
 | 3 | Not a registered mesh agent — a human shell or top-level session with no injected identity. The JSON shape carries `registered: false`. |
 | 4 | Ambient harness markers disagree and no process-tree proof can choose one. |
 
-If the registry is unreadable but `FNO_AGENT_SELF` is set, the name still comes back (with a `WARN:` line) — the env answer never depends on the registry. This verb reports your *mesh* identity; the top-level `fno whoami` reports operating context (fleet, walker, session, harness) and, when you are a mesh worker, now echoes your name on one extra `agent:` line as a pointer here.
+If the registry is unreadable but `FNO_AGENT_SELF` is set, the name still comes back (with a `WARN:` line) — the env answer never depends on the registry. This command reports your *mesh* identity; the top-level `fno whoami` reports operating context (fleet, walker, session, harness) and, when you are a mesh worker, now echoes your name on one extra `agent:` line as a pointer here.
 
 ## `fno agents session logs <name>` — tail an agent's output
 
@@ -254,7 +254,7 @@ $ fno agents session logs worker-X --tail -3
 
 ### Today's limitations
 
-- `fno agents session logs --json` for **Claude entries** is a future concern (we'd have to parse claude's log format). The verb emits a `WARN:` that JSON output for Claude logs is not implemented and continues with raw passthrough.
+- `fno agents session logs --json` for **Claude entries** is a future concern (we'd have to parse claude's log format). The command emits a `WARN:` that JSON output for Claude logs is not implemented and continues with raw passthrough.
 - `fno agents session logs` for **codex / gemini entries** returns exit 13 when the tee'd JSONL log file does not exist yet.
 
 ## Troubleshooting
@@ -272,5 +272,5 @@ $ fno agents session logs worker-X --tail -3
 ## Related
 
 - [fno-agents-ask-followup.md](fno-agents-ask-followup.md) — the follow-up flow for sending messages.
-- [../architecture/fno-agents-list-logs.md](../architecture/fno-agents-list-logs.md) — internal architecture for these verbs.
-- [../architecture/fno-agents-registry-and-dispatch.md](../architecture/fno-agents-registry-and-dispatch.md) — the registry storage substrate both verbs read.
+- [../architecture/fno-agents-list-logs.md](../architecture/fno-agents-list-logs.md) — internal architecture for these commands.
+- [../architecture/fno-agents-registry-and-dispatch.md](../architecture/fno-agents-registry-and-dispatch.md) — the registry storage substrate both commands read.

@@ -237,7 +237,7 @@ _MODEL_KV_RE = re.compile(
     r"^\s*(?:\d+\.[ \t]+|[-*][ \t]+)?\**model\**[ \t]*:[ \t]*\**[ \t]*(.+)",
     re.IGNORECASE | re.MULTILINE,
 )
-# Same shell-safe single-token charset the update verb enforces.
+# Same shell-safe single-token charset the update command enforces.
 _MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9._:/-]{1,64}")
 # An optional trailing provenance suffix, e.g. ``fable (user-confirmed)`` ->
 # ``fable`` (mirrors the executor lock's provenance tolerance).
@@ -252,7 +252,7 @@ def parse_locked_model(text: str) -> str:
     the value when it is a single shell-safe token of <=64 chars, else '' (a
     multi-token / whitespaced / metacharacter value is REJECTED, not truncated).
     No allowlist: aliases (fable|opus|sonnet) and full provider-model ids pass
-    through verbatim, matching the update verb.
+    through verbatim, matching the update command.
     """
     if not text:
         return ""

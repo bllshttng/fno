@@ -8,7 +8,7 @@
 //! d-fe66560a, allows no new client action): every caller reaches it through
 //! `resolve_binary`, like `sync-canonical`.
 
-use crate::client_verbs::to_python_json;
+use crate::client_commands::to_python_json;
 use crate::harness_capabilities::HarnessContract;
 use crate::provider::{KNOWN_HARNESSES, KNOWN_PROVIDERS};
 use serde_json::json;
@@ -101,7 +101,7 @@ mod tests {
     }
 
     /// The rendered set must match the CONTRACT, row by row: a native row the
-    /// render drops (or an absent row it adds) is exactly the drift this verb
+    /// render drops (or an absent row it adds) is exactly the drift this command
     /// exists to prevent on the Python side. Not a self-comparison: the truth
     /// comes from the contract, never from the render under test.
     #[test]

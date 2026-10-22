@@ -2,12 +2,12 @@
 # fno hook: UserPromptSubmit - notify about pending mail
 # hooks/inject-mail-notify.sh -- durable mail delivery at the turn boundary.
 #
-# The native verb owns rendering, UserPromptSubmit JSON serialization, stdout
+# The native command owns rendering, UserPromptSubmit JSON serialization, stdout
 # flush, and only then cursor acknowledgement: a Rust early-dispatch arm
 # answers in microseconds where the old Python path paid a full interpreter
 # start and was cancelled at its budget on every run. This shell layer is a
 # cheap gate now: it checks the session identity, the bus log, and the
-# binary, then relays the verb's already-valid envelope through fd 3
+# binary, then relays the command's already-valid envelope through fd 3
 # byte-for-byte, so there is no second capture or write boundary between
 # visible delivery and acknowledgement. Silent when there is no harness
 # identity or mail; the one load-aware hook budget bounds a hung binary;
@@ -23,8 +23,8 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/hook-budget.sh
 source "$HOOK_DIR/../scripts/lib/hook-budget.sh" 2>/dev/null || exit 0
 
-# Overload skip before the verb: past the threshold the preamble alone can
-# pass the harness cap, so the verb runs only to be killed mid-ack, which is
+# Overload skip before the command: past the threshold the preamble alone can
+# pass the harness cap, so the command runs only to be killed mid-ack, which is
 # the lost-mail case. Skipped mail stays pending and delivers next turn.
 hook_overloaded && exit 0
 
@@ -56,7 +56,7 @@ case "$SID" in
 esac
 [[ "${#SID}" -ge 16 ]] || exit 0
 
-# Stdout of the atomic verb IS the hook payload: it streams through fd 3
+# Stdout of the atomic command IS the hook payload: it streams through fd 3
 # (saved below) untouched, byte-for-byte. Stderr lands in the variable so a
 # miss can name its cause instead of looking like every other miss. A miss is
 # recorded, never raised: the turn always proceeds (contract above). The

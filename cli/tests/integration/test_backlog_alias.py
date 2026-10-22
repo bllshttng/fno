@@ -1,9 +1,9 @@
-"""Phase 01 + 02a + 03: backlog sub-app + verb aliases + triage nesting.
+"""Phase 01 + 02a + 03: backlog sub-app + command aliases + triage nesting.
 
 `backlog` is the canonical graph sub-app (the deprecated `graph` top-level
-alias was removed as a true duplicate). Verifies the `done` verb
+alias was removed as a true duplicate). Verifies the `done` command
 works and the nested `triage` sub-app surface is present (the `intake`
-verb answers at the native door; its adoption case lives in
+command answers at the native door; its adoption case lives in
 `test_backlog_intake_door.py`).
 """
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _invoke(*args, input=None):
 
 
 # ---------------------------------------------------------------------------
-# Phase 02a - done verb
+# Phase 02a - done command
 # ---------------------------------------------------------------------------
 
 
@@ -118,11 +118,11 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 
 
 # ---------------------------------------------------------------------------
-# In-N-Out tiering: `fno backlog --help` advertises at most 12 verbs; the
+# In-N-Out tiering: `fno backlog --help` advertises at most 12 commands; the
 # rest are hidden but invocable.
 # ---------------------------------------------------------------------------
 
-_ADVERTISED_BACKLOG_VERBS = {
+_ADVERTISED_BACKLOG_COMMANDS = {
     # `update` moved with the update port, `add`/`idea` with the create
     # port, `view` with the projections port, and `defer` with the
     # lifecycle port: the native binary advertises them, the python menu
@@ -133,7 +133,7 @@ _ADVERTISED_BACKLOG_VERBS = {
 
 
 def test_backlog_help_advertises_only_the_menu():
-    """AC1-HP: `fno backlog --help` lists exactly the advertised verbs (<=12)."""
+    """AC1-HP: `fno backlog --help` lists exactly the advertised commands (<=12)."""
     import click
     import typer.main
 
@@ -146,8 +146,8 @@ def test_backlog_help_advertises_only_the_menu():
         for name in group.list_commands(ctx)
         if not (cmd := group.get_command(ctx, name)) or not cmd.hidden
     ]
-    assert set(listed) == _ADVERTISED_BACKLOG_VERBS, (
-        f"advertised backlog verbs drifted: {sorted(listed)}"
+    assert set(listed) == _ADVERTISED_BACKLOG_COMMANDS, (
+        f"advertised backlog commands drifted: {sorted(listed)}"
     )
     assert len(listed) <= 12
 

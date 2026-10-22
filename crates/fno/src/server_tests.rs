@@ -373,7 +373,7 @@ fn pane_label_rows() {
 }
 
 #[test]
-fn unknown_control_verb_gets_typed_wire_refusal() {
+fn unknown_control_command_gets_typed_wire_refusal() {
     let request = serde_json::json!({
         "Control": {
             "proto": crate::proto::PROTO_VERSION + 1,
@@ -391,7 +391,7 @@ fn unknown_control_verb_gets_typed_wire_refusal() {
                 "{msg}"
             );
         }
-        other => panic!("expected typed unknown-verb refusal, got {other:?}"),
+        other => panic!("expected typed unknown-command refusal, got {other:?}"),
     }
 }
 
@@ -1112,7 +1112,7 @@ fn rename_tab_rows() {
     assert_eq!(stored, format!("[31m{}", "a".repeat(MAX_TAB_NAME - 4)));
 }
 
-// -- x-96e8 squad management verbs ----------------------------------
+// -- x-96e8 squad management commands ----------------------------------
 
 pub(super) fn leaf_tab(id: TabId, pane: u64) -> Tab {
     Tab {
@@ -1586,7 +1586,7 @@ fn template_refusal_rows() {
 #[test]
 fn template_lifecycle_rows() {
     // x-cde1 AC1-HP: Command::RenameTab (the interactive overlay path, not
-    // the ControlVerb::TabRename wire API) must re-persist a template tab's
+    // the ControlCommand::TabRename wire API) must re-persist a template tab's
     // spec so restore finds it under the NEW name. persist_squad alone
     // preserves tab_specs byte-for-byte, keeping the stale old key.
     let _s = StoreScratch::new("cde1-rename");
@@ -2588,7 +2588,7 @@ fn reanchor_rows() {
     assert_eq!(tree::leaves(&a.root), vec![2], "sibling 2 stays in tab 10");
 
     // AC1-HP (the "and": the script path does NOT move focus). The CoreMsg
-    // path a scripted ControlVerb::PaneBreak takes is pane_break itself; it
+    // path a scripted ControlCommand::PaneBreak takes is pane_break itself; it
     // never touches a view. A viewer of the (surviving) source tab stays put.
     let mut core = two_tab_core();
     let (c, _rx) = live_client(7, 10); // viewing tab 10 [1,2]
@@ -4613,7 +4613,7 @@ fn mail_rows() {
 #[test]
 fn external_rows() {
     // US4: an external roster row belongs to the claude daemon, not the fno
-    // registry, so BOTH verbs refuse with a notice rather than fire a doomed
+    // registry, so BOTH commands refuse with a notice rather than fire a doomed
     // `fno-agents` call. The external arm is checked before the live/exited
     // arms, so a dead external row still refuses on provenance.
     let ext_live = RegistryAgent {
@@ -4682,7 +4682,7 @@ fn external_rows() {
 
     // codex P2: a non-8-hex attach id from the client is rejected before it
     // is persisted or reaches a `claude` argv (a dash-prefixed id could be
-    // read as a CLI option). Both verbs guard; the refusal precedes any
+    // read as a CLI option). Both commands guard; the refusal precedes any
     // resolve/CAS, so a #[test] with no tokio runtime never panics.
     for cmd in [
         Command::StopExternal {
@@ -4806,7 +4806,7 @@ fn agent_rows_dedup_external_tombstone_against_live_row() {
 fn lifecycle_name_collision_refused_fail_closed() {
     // codex review: `name` is not a unique catalog key (dedup is by
     // attach_id). When an external roster row shares a name with a registry
-    // row, the verb must refuse on provenance and NEVER act on the registry
+    // row, the command must refuse on provenance and NEVER act on the registry
     // agent the external shadows; two same-named registry rows are ambiguous.
     // Both are fail-closed refusals, so no unrelated agent is ever stopped.
     let shared = |external, exited, attach: &str| RegistryAgent {
@@ -8768,7 +8768,7 @@ fn add_second_squad(core: &mut Core) -> (u64, TabId) {
 
 #[test]
 fn pane_focus_moves_the_viewer_across_squads_and_reports_where() {
-    // AC1-HP: the verb is a goto, not a nudge. A client viewing squad 1 ends
+    // AC1-HP: the command is a goto, not a nudge. A client viewing squad 1 ends
     // up on squad 2's tab with the named pane focused, and the receipt names
     // the RESOLVED location rather than echoing the request.
     let (mut core, client_id, _p1, _p2, _rx) = seen_test_core();
@@ -8845,7 +8845,7 @@ fn pane_focus_refuses_when_only_passive_observers_are_attached() {
     // AC1-ERR: no non-passive client is a REFUSAL with its OWN code, never a
     // silent pass and never DEAD_PANE. A passive observer is read-only at the
     // server with no viewport to move, so it must not satisfy the check -
-    // otherwise the verb reports success for a pane nobody can see.
+    // otherwise the command reports success for a pane nobody can see.
     let (mut core, client_id, p1, _p2, _rx) = seen_test_core();
     core.clients.retain(|c| c.id != client_id);
     let (tx, _rx2) = mpsc::channel::<ServerMsg>(32);
@@ -9149,7 +9149,7 @@ mod server_tests_keeper;
 #[test]
 fn keeper_list_reports_zero_as_zero_and_exits_zero() {
     // The empty read is a valid answer, never a failure: the done-probe
-    // greps this verb's --json on machines that may hold no keepers.
+    // greps this command's --json on machines that may hold no keepers.
     let rc = crate::mux_cli::pane_keeper_list(true, Some(std::time::Duration::from_secs(0)));
     assert_eq!(
         rc,

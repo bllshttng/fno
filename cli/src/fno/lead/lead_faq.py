@@ -1,4 +1,4 @@
-"""``fno agents lead faq add`` / ``list`` - the lead FAQ recipe becomes a verb."""
+"""``fno agents lead faq add`` / ``list`` - the lead FAQ recipe becomes a command."""
 from __future__ import annotations
 
 import secrets

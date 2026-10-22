@@ -139,7 +139,7 @@ def test_a_failed_mint_leaves_the_row_in_the_ledger():
 
 def test_two_rows_with_the_same_text_do_not_both_file():
     """One blocker carved out from two sessions. Filing both mints two
-    permanent nodes for one piece of work, and there is no delete verb."""
+    permanent nodes for one piece of work, and there is no delete command."""
     rows = [
         _cv("cv-dup00001", "the same blocker, written twice"),
         _cv("cv-dup00002", "the same blocker, written twice"),
@@ -152,7 +152,7 @@ def test_two_rows_with_the_same_text_do_not_both_file():
     assert "cv-dup00001" in second.match_reason
 
 
-def test_an_unreadable_ledger_reports_failed_so_the_verb_can_exit_nonzero():
+def test_an_unreadable_ledger_reports_failed_so_the_command_can_exit_nonzero():
     """A present-but-unreadable ledger printing '0 unharvested' and exiting 0
     is the silent success read_carveouts raises specifically to prevent."""
 

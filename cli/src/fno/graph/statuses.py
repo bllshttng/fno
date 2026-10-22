@@ -330,7 +330,7 @@ def live_worked_node_ids(
 ) -> dict[str, list[str]]:
     """Return open-phase nodes whose roster workers are live.
     The fleet read and transcript liveness stay here; the join is the Rust
-    `fno-agents worked-nodes` verb. ``reading`` must be an already-paid read.
+    `fno-agents worked-nodes` command. ``reading`` must be an already-paid read.
     """
     try:
         from fno.claims.roster import read_roster

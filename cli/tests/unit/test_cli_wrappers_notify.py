@@ -1,7 +1,7 @@
 """Unit tests for `fno notify` - in-package OS notification helper (US2).
 
 Formerly a wrapper that sourced scripts/lib/notify.sh; the dispatch is now
-internalized in fno.notify._impl, so the verb runs from the installed package
+internalized in fno.notify._impl, so the command runs from the installed package
 with no repo-root path on disk (AC2-HP) and degrades loudly when no OS
 notification tool is present (AC2-FR).
 """

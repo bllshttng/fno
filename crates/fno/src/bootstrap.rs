@@ -182,9 +182,9 @@ pub fn forward(args: &[OsString]) -> ! {
 
 /// The remedy a cargo-only install needs: `reinstall fno` re-runs the same
 /// Rust-only crate, and `fno doctor update --rust` needs the wheel this
-/// machine does not have yet. Any forwarded verb self-provisions uv and the
+/// machine does not have yet. Any forwarded command self-provisions uv and the
 /// wheel, and the wheel bundles fno-agents.
-const BACKLOG_NO_SIBLING_REMEDY: &str = "run any other fno verb once (for \
+const BACKLOG_NO_SIBLING_REMEDY: &str = "run any other fno command once (for \
      example `fno config get`): the forward provisions uv and the wheel that \
      bundles fno-agents. Or set FNO_AGENTS_BIN.";
 
@@ -321,7 +321,7 @@ fn run(args: &[OsString]) -> BootResult<()> {
     // pip/uv venv bin, and the wheel's scripts dir all ship `fno` and `fno-py`
     // side by side, and that adjacent CLI is the complete install. Probing it
     // before the uv tool dir keeps a Homebrew (or pip) user off the uv path -
-    // otherwise `fno <verb>` downloads uv and installs a SECOND copy of the
+    // otherwise `fno <command>` downloads uv and installs a SECOND copy of the
     // wheel, and fails outright offline (review P2). Verified like any
     // other target: the sibling's shebang names the interpreter whose metadata
     // answers the identity probe. An instrument failure falls through to the
@@ -852,7 +852,7 @@ fn verify_ours_within_python(
 /// with the gap closing only ~40ms before uv exited on an idle machine. A
 /// verify firing the instant uv returns therefore races the install it is
 /// verifying and reports the script missing while it is about to appear. That
-/// is the whole bug: `fno` refused every verb, ran a full reinstall each time,
+/// is the whole bug: `fno` refused every command, ran a full reinstall each time,
 /// and told the operator the install did not verify.
 ///
 /// `update.py` was given a bounded wait for exactly this race. This is that
@@ -2828,7 +2828,7 @@ mod tests {
         // The bug this closes: uv exits before its own artifacts settle. The
         // console script is absent for ~490ms across an install, so a verify
         // firing the instant uv returns raced the install it was verifying and
-        // refused every fno verb.
+        // refused every fno command.
         let root = env::temp_dir().join(format!("fno-uvwait1-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let tool_dir = root.join("tools");

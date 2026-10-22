@@ -2,7 +2,7 @@
 
 > **Partly retired.** The `dispatch_ask` orchestrator and the Python ask legs are gone: the ask-adapter port moved them to the Rust runtime (2026-09-02). `ask` now auto-routes to the `fno-agents` binary, and `--to-project` resolves in Python before that exec. The registry, locking, spawn and send material below is current.
 
-Storage and dispatch primitives for the `fno agents` subsystem. The registry remembers which named agent belongs to which provider; the dispatch layer routes `fno agents mail ask` to the right provider adapter under a per-agent lock. Everything else in the subsystem (follow-up, list/logs, lifecycle verbs, the codex and gemini providers, the MCP channel) builds on this layer.
+Storage and dispatch primitives for the `fno agents` subsystem. The registry remembers which named agent belongs to which provider; the dispatch layer routes `fno agents mail ask` to the right provider adapter under a per-agent lock. Everything else in the subsystem (follow-up, list/logs, lifecycle commands, the codex and gemini providers, the MCP channel) builds on this layer.
 
 ## Why this exists
 
@@ -65,7 +65,7 @@ One process running ahead of the deployment took every deployed reader down at o
 The symptom then surfaced far from the cause.
 
 A newer store is now read rather than refused.
-That covers all four readers: Python `load_registry`, Rust `client_verbs::load_registry_entries`, and Rust `state::read_registry_tolerant`.
+That covers all four readers: Python `load_registry`, Rust `client_commands::load_registry_entries`, and Rust `state::read_registry_tolerant`.
 Two things make reading forward safe, and neither is optional.
 
 - **Writes are refused while the on-disk schema is higher** (Python `write_registry`, Rust `update_registry`).
@@ -127,10 +127,10 @@ The lock-path computation rejects path separators and `..` segments in the agent
 
 ## Worker name vocabulary
 
-Every dispatch path mints its worker name through one contract in `cli/src/fno/agents/naming.py` (`dispatch_agent_name`). Shell and Rust callers use `fno agents registry name --source <code> --verb <code>`:
+Every dispatch path mints its worker name through one contract in `cli/src/fno/agents/naming.py` (`dispatch_agent_name`). Shell and Rust callers use `fno agents registry name --source <code> --command <code>`:
 
 ```
-[<source>-]<verb>-<identity>[-<qualifier>][-<slug>][-<discriminator>]
+[<source>-]<command>-<identity>[-<qualifier>][-<slug>][-<discriminator>]
 ```
 
 - **Source** names who launched the worker. The codes:
@@ -138,10 +138,10 @@ Every dispatch path mints its worker name through one contract in `cli/src/fno/a
 - `th` spawn_think, `pm` post-merge judgment, `pw` pr-watch, `rec` recovery.
 - `kg` keep-going, `gr` groom, `ro` restart revive, `ev` evals, `kl` lead loop.
 - `oh` outage handoff, `sh` self-handoff, `ex` foreign wave, `jn` backlog join.
-- An attended operator or lead launch carries no source. The name then starts with the verb. A source the bridge does not know refuses with exit 3 before spawn.
-- **Verb** names what it runs: `t` target, `bp` blueprint, `r` research/review, `th` think, `f` fix. `--verb` also accepts the work-verb word (`/target`, `blueprint`, ...). An unknown word refuses. Nothing defaults to `t`.
+- An attended operator or lead launch carries no source. The name then starts with the command. A source the bridge does not know refuses with exit 3 before spawn.
+- **Command** names what it runs: `t` target, `bp` blueprint, `r` research/review, `th` think, `f` fix. `--command` also accepts the work-command word (`/target`, `blueprint`, ...). An unknown word refuses. Nothing defaults to `t`.
 - **Identity** is the full configured node id (`x-aaaa`, never a bare hex tail, because prefixes are per-project config). A non-node workload uses a typed identity: `backlog` (groom), `evals`, or `session-<handle>` for a nodeless resume. A PR-scoped worker carries `pr-<n>` as a qualifier.
-- **Budget**: source, verb, identity, qualifier, and discriminator are required. Only the human slug gives way to the 64-character runtime limit. An unrepresentable identity refuses before spawn.
+- **Budget**: source, command, identity, qualifier, and discriminator are required. Only the human slug gives way to the 64-character runtime limit. An unrepresentable identity refuses before spawn.
 
 Legacy names (`target-<node>-*`, `think-<node>-*`, `reconcile-*`, `j-*`) still resolve through the read-side fallbacks in `parse_node_id` / `parse_worker_mission` and the reaper's legacy prefix path. This is the legacy-read window. Recovery and restart preserve the predecessor name as a registry alias on the new row.
 
@@ -272,7 +272,7 @@ Every `agent_ask_started` is followed by exactly one `agent_ask_done` OR exactly
 ## Related capabilities
 
 - [fno-agents-followup.md](fno-agents-followup.md) — claude follow-up over the messaging socket.
-- [fno-agents-list-logs.md](fno-agents-list-logs.md) — the `list` and `logs` read verbs.
+- [fno-agents-list-logs.md](fno-agents-list-logs.md) — the `list` and `logs` read commands.
 - [fno-agents-codex-provider.md](fno-agents-codex-provider.md) — the codex provider.
 - [fno-agents-gemini-commands.md](fno-agents-gemini-commands.md) — the gemini provider.
 - [fno-agents-lifecycle.md](fno-agents-lifecycle.md) — `stop` / `rm` / `reconcile` / `attach`.

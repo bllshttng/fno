@@ -54,7 +54,7 @@ fi
 
 committed_rows() {
     # The store commit is the write boundary: the pinned journal keeps no
-    # byte trace, so rows read through the verb and jq -r unwraps the
+    # byte trace, so rows read through the command and jq -r unwraps the
     # escaped envelope strings back to plain JSON lines.
     [[ -n "$ROWS_BIN" ]] || return 0
     "$ROWS_BIN" doctor event rows --events "$EVENTS" 2>/dev/null | jq -r '.[]' 2>/dev/null

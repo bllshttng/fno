@@ -204,7 +204,7 @@ fn release_unproven(scope: &str, id: &str, reason: &str) {
 
 /// The retro step: the intel writer for the predecessor's session, detached,
 /// stdout and stderr into the agents home, writing the default eval dir the
-/// lead used to file by hand. `pub(crate)`: the cross-machine hand-off verb
+/// lead used to file by hand. `pub(crate)`: the cross-machine hand-off command
 /// (org_remote.rs) files the retro where the predecessor's transcript lives,
 /// on the sending machine.
 pub(crate) fn retro(scope: &str, cwd: &Path, cleared: &PendingSuccession, id: &str) {

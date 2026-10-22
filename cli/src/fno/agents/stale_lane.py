@@ -106,7 +106,7 @@ def escalated_holds():
 
 
 def run(*, json_out: bool) -> None:
-    """The hidden stale-escalate verb's whole body, beside the fold it drives."""
+    """The hidden stale-escalate command's whole body, beside the fold it drives."""
     import json
 
     from fno.agents import watchdog as wd

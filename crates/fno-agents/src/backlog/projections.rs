@@ -1,6 +1,6 @@
 //! Native backlog projections: the kanban classifier every board shares,
 //! the post-publish view pass (`render-views`: graph.md plus the configured
-//! local board targets), and the read verbs `view`, `board`, `bases`,
+//! local board targets), and the read commands `view`, `board`, `bases`,
 //! `roadmap` and `album`.
 //!
 //! Every projection reads the authoritative rows from the store. The HTML
@@ -865,8 +865,8 @@ fn wants_help(tail: &[String]) -> bool {
     tail.iter().any(|a| a == "--help" || a == "-h")
 }
 
-fn usage_error(verb: &str, arg: &str) -> i32 {
-    eprintln!("fno backlog {verb}: unexpected argument '{arg}' (see --help)");
+fn usage_error(command: &str, arg: &str) -> i32 {
+    eprintln!("fno backlog {command}: unexpected argument '{arg}' (see --help)");
     2
 }
 
@@ -1757,11 +1757,11 @@ fn album_gift(e: &Value) -> String {
     "no gift".to_string()
 }
 
-fn parse_count(verb: &str, flag: &str, value: Option<&String>) -> Result<i64, i32> {
+fn parse_count(command: &str, flag: &str, value: Option<&String>) -> Result<i64, i32> {
     match value.and_then(|v| v.parse::<i64>().ok()) {
         Some(n) => Ok(n),
         None => {
-            eprintln!("fno backlog {verb}: {flag} needs an integer");
+            eprintln!("fno backlog {command}: {flag} needs an integer");
             Err(2)
         }
     }

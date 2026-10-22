@@ -5,7 +5,7 @@
 //! (the line-by-line live rubric), whose deletion is the point: a second
 //! copy of a reader is how the first one rots.
 //!
-//! Two doors ride this module as transport-only client arms (no verb is
+//! Two doors ride this module as transport-only client arms (no command is
 //! registered; the shrink law allows none):
 //!
 //!   `harness-probe fields <harness> [--live] [--write] [--json|-J]`
@@ -633,8 +633,8 @@ fn probe_fno_bin() -> PathBuf {
 /// One headless line: send `message` through the declared `headless_resume`
 /// argv, then read `marker` in the reply or the logs. A marker the logs held
 /// before the turn is not this turn's answer, and a `prior` marker must
-/// already be in the logs. A `fno-agents <verb>` form runs as
-/// `fno agents <verb>`, so the turn uses the FNO_PROBE_FNO build.
+/// already be in the logs. A `fno-agents <command>` form runs as
+/// `fno agents <command>`, so the turn uses the FNO_PROBE_FNO build.
 #[allow(clippy::too_many_arguments)]
 fn headless_turn(
     root: &IsolatedRoot,

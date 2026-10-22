@@ -1,7 +1,7 @@
 //! One sweep choice, from modal row to prune flags : the
 //! counts the modal offers, and the exact flag expansion each choice
 //! promises - pure, so the promised expansion is unit-testable without
-//! spawning the verb.
+//! spawning the command.
 
 use super::*;
 
@@ -197,7 +197,7 @@ pub(super) fn build_sweep_modal(c: &SweepCounts) -> AuxPopup {
 }
 
 /// The prune flags one sweep scope maps to, pure so the expansion each
-/// choice promises is unit-testable without spawning the verb. `both` means
+/// choice promises is unit-testable without spawning the command. `both` means
 /// all three populations: tabs, spent shells, and dead agents -
 /// with tabs 0 and used shells 21, a both that skipped the shells half
 /// closed nothing while the operator watched.

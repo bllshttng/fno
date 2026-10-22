@@ -80,7 +80,7 @@
     "id": "x-abc",
     "priority": "p2"
   },
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

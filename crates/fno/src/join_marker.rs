@@ -1,4 +1,4 @@
-//! The front-door join: the first `fno` verb a session runs joins it to fno.
+//! The front-door join: the first `fno` command a session runs joins it to fno.
 //!
 //! The joined path costs one stat of the marker that
 //! `crates/fno-agents/src/join_marker.rs` writes at
@@ -50,7 +50,7 @@ pub fn marker_path(harness: &str, sid: &str) -> PathBuf {
     home.join("sessions").join(harness).join(sid).join("joined")
 }
 
-/// Join this session when it has not joined yet. Never fails the verb.
+/// Join this session when it has not joined yet. Never fails the command.
 pub fn join_if_needed() {
     let Some((harness, sid)) = join_candidate(&|k| std::env::var(k).ok()) else {
         return;

@@ -1,4 +1,4 @@
-//! The merge gates that used to live in the Python merge verb, ported so
+//! The merge gates that used to live in the Python merge command, ported so
 //! `authorized_merge::decide` is the one merge decision. Each gate
 //! evaluates one input and answers `Option<Blocker>`: None clears. The pure
 //! halves take their facts as arguments so unit tests need no filesystem or
@@ -771,7 +771,7 @@ fn visual_question_markdown(
     )
 }
 
-/// File the question through the ask verb (journal + index now, the page
+/// File the question through the ask command (journal + index now, the page
 /// itself materialized by the attention arm's next beat). Best-effort: the
 /// returned line appends to the hold detail, never softens the hold. The
 /// intake's dedup (same subject + node already open) refuses before a second

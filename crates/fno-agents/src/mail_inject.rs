@@ -1,12 +1,12 @@
-//! `mail-inject`: the one-shot LIVE-DELIVERY verb `fno agents mail send` calls to inject
+//! `mail-inject`: the one-shot LIVE-DELIVERY command `fno agents mail send` calls to inject
 //! an a2a turn into a LIVE adopted `claude --bg` session over the daemon
 //! `control.sock`. Python's `_deliver_live` runs it as a binary subprocess and
 //! falls back to the durable bus queue ONLY when this reports not-delivered
 //! (live-inject-first, durable fallback -- node, epic).
 //!
-//! Binary-direct (Python subprocess), NOT a routable `fno agents` verb -- it is
+//! Binary-direct (Python subprocess), NOT a routable `fno agents` command -- it is
 //! dispatched via `matches!` in `client.rs`, like `version`/`--emit-schema`, so it
-//! stays out of the verb-parity lists (`RUST_CLIENT_VERBS` / `CLIENT_VERB_USAGE`).
+//! stays out of the command-parity lists (`RUST_CLIENT_COMMANDS` / `CLIENT_COMMAND_USAGE`).
 //!
 //! Reuses the G1 substrate for roster resolution ([`crate::claude_roster`]) ->
 //! `control.sock` + `control.key` and the attach handshake
@@ -17,7 +17,7 @@
 //! NOT an `op:'reply'` JSON frame, which would land (auth key included) as literal
 //! text in the recipient input box, unsent (node x-aaaa). The `<fno_mail>` envelope is
 //! rendered Python-side (the single renderer, shared by the codex/gemini + relay
-//! paths) and injected verbatim here, so this verb is a dumb transport.
+//! paths) and injected verbatim here, so this command is a dumb transport.
 //!
 //! Delivery confirm = the injected turn's `<fno_mail>` open tag appears in the
 //! recipient transcript AFTER the inject (content match, [`confirm_content_after`]).
@@ -47,7 +47,7 @@ use crate::paths::AgentsHome;
 /// Default transcript-growth poll budget: 40 * 250ms = 10s. A live blocked
 /// session echoes the injected turn well within this; a miss demotes to durable.
 /// `pub` so the in-process ask-lane fallback (`claude_ask`) reuses the SAME
-/// budget the shelled `mail-inject` verb uses, keeping the two paths byte-parity.
+/// budget the shelled `mail-inject` command uses, keeping the two paths byte-parity.
 pub const DEFAULT_ATTEMPTS: u32 = 40;
 pub const DEFAULT_INTERVAL_MS: u64 = 250;
 
@@ -206,19 +206,19 @@ pub struct MailInjectArgs {
     /// caller has to ask BEFORE it prescribes an inject to someone.
     pub probe: bool,
     /// `--lane-heal`: run the dead-pane-binding heal for `--session` and print
-    /// one JSON verdict instead of injecting. Carried as a flag on this verb,
-    /// never a top-level verb (law d-fe66560a).
+    /// one JSON verdict instead of injecting. Carried as a flag on this command,
+    /// never a top-level command (law d-fe66560a).
     pub lane_heal: bool,
     /// `--no-rebind`: with `--lane-heal`, report without writing the row.
     pub no_rebind: bool,
     /// The `--harness` value verbatim: on the keeper lane this is the HOSTED
     /// harness's capability row (grok, cursor-agent, ...), which owns the
-    /// verb-risk lookup. Absent when `--harness` was not passed.
+    /// command-risk lookup. Absent when `--harness` was not passed.
     pub harness_row: Option<String>,
-    /// `--ack-verb-risk <verb>`: the raw sender's explicit acknowledgment that
-    /// the payload runs that verb; the only spelling that carries a
-    /// session-ending or context-destroying verb past the risk guard.
-    pub ack_verb_risk: Option<String>,
+    /// `--ack-command-risk <command>`: the raw sender's explicit acknowledgment that
+    /// the payload runs that command; the only spelling that carries a
+    /// session-ending or context-destroying command past the risk guard.
+    pub ack_command_risk: Option<String>,
     /// `--pane <session>:<pane_id>`: the pane-lane address (which mux server
     /// hosts the recipient and which pane id to type into).
     pub pane: Option<String>,
@@ -252,7 +252,7 @@ pub const NOT_INJECTABLE_HELP: &str = concat!(
     "prompt.",
 );
 
-/// Parse `mail-inject` argv (everything after the verb). Pure + total so the flag
+/// Parse `mail-inject` argv (everything after the command). Pure + total so the flag
 /// grammar is unit-tested without a daemon.
 pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
     let mut session: Option<String> = None;
@@ -268,7 +268,7 @@ pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
     let mut sender: Option<String> = None;
     let mut origin: Option<String> = None;
     let mut self_send = false;
-    let mut ack_verb_risk: Option<String> = None;
+    let mut ack_command_risk: Option<String> = None;
     let mut probe = false;
     let mut lane_heal = false;
     let mut no_rebind = false;
@@ -373,10 +373,14 @@ pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
             }
             // stdout is only the outcome JSON; the flag is accepted for parity.
             "--json" | "-J" => {}
-            "--ack-verb-risk" => {
-                ack_verb_risk = Some(
+            // The old flag name stays accepted for one release.
+            "--ack-command-risk" | "--ack-verb-risk" => {
+                ack_command_risk = Some(
                     it.next()
-                        .ok_or((2, "mail-inject: --ack-verb-risk needs a verb".to_string()))?
+                        .ok_or((
+                            2,
+                            "mail-inject: --ack-command-risk needs a command".to_string(),
+                        ))?
                         .to_string(),
                 );
             }
@@ -411,7 +415,7 @@ pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
         lane_heal,
         no_rebind,
         harness_row: harness_flag,
-        ack_verb_risk,
+        ack_command_risk,
         pane,
         seed_cwd,
     })
@@ -521,10 +525,10 @@ pub fn emit_raw_inject_audit_with_origin(
     fields.insert("harness".into(), harness.into());
     fields.insert("lane".into(), lane.into());
     fields.insert("confirmed".into(), confirmed.into());
-    let verb = text
+    let command = text
         .strip_prefix('/')
         .and_then(|_| text.split_whitespace().next());
-    fields.insert("verb".into(), verb.map(str::to_string).into());
+    fields.insert("verb".into(), command.map(str::to_string).into());
     fields.insert("self_send".into(), self_send.into());
     if let Some(s) = sender {
         fields.insert("sender".into(), s.to_string().into());
@@ -912,7 +916,7 @@ pub(crate) fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf)
 /// JSON `reason` token.
 ///
 /// The SINGLE control.sock wire implementation (Locked Decision 1, node
-///): both the `mail-inject` verb (`fno agents mail send`) and the Rust ask-lane
+///): both the `mail-inject` command (`fno agents mail send`) and the Rust ask-lane
 /// fallback (`claude_ask::ask_followup`) deliver through here, so the wire
 /// contract lives in one place and can never drift. `text` is injected verbatim
 /// -- a dumb transport; callers wrap it in the `<fno_mail>` /
@@ -1222,7 +1226,7 @@ pub fn deliver_via_keeper_socket(
 /// Deliver `text` to a keeper-hosted lane-B thread against an explicit
 /// agents home, pi session store, and grok sessions root: the seam the
 /// keeper journey test drives, so the fixtures resolve rows and confirm
-/// targets exactly as the verb does. `pi_store` of `None` resolves the
+/// targets exactly as the command does. `pi_store` of `None` resolves the
 /// store for the row's cwd exactly as production does, honoring
 /// `PI_CODING_AGENT_DIR` and the session-dir settings; a test injects a
 /// scratch store through `Some`.
@@ -1551,21 +1555,21 @@ fn single_line_decision(text: &str) -> Option<i32> {
 }
 
 /// The raw-mail risk guard. An unwrapped payload whose leading token
-/// names a native verb the capability table classes session-ending or
+/// names a native command the capability table classes session-ending or
 /// context-destroying for the recipient's row is refused: the payload would
 /// land as user-role text, so a mailed `/clear` or `/exit` destroys the
 /// worker's context or ends its session exactly as if the operator had typed
-/// it. `--ack-verb-risk <verb>` on the same send is the only way past, and it
-/// must name the verb the payload runs. The lookup reads the packaged table
-/// through the same typed reader the render verb answers from, so the guard
-/// and `fno-agents verbs` cannot disagree. Refuses before delivery and before
+/// it. `--ack-command-risk <command>` on the same send is the only way past, and it
+/// must name the command the payload runs. The lookup reads the packaged table
+/// through the same typed reader the render command answers from, so the guard
+/// and `fno-agents commands` cannot disagree. Refuses before delivery and before
 /// the audit record; framed envelopes skip it (relay traffic, already capped
 /// upstream).
-fn verb_risk_decision(text: &str, harness_row: &str, ack: Option<&str>) -> Option<i32> {
+fn command_risk_decision(text: &str, harness_row: &str, ack: Option<&str>) -> Option<i32> {
     if is_framed_envelope(text) {
         return None;
     }
-    let verb = text.trim().split_whitespace().next()?;
+    let command = text.trim().split_whitespace().next()?;
     // Local bindings, not an and_then chain: the contract is an owned
     // temporary, so a meta reference borrowed through it cannot leave the
     // chain (E0515).
@@ -1575,19 +1579,19 @@ fn verb_risk_decision(text: &str, harness_row: &str, ack: Option<&str>) -> Optio
     let Ok(caps) = contract.capabilities(harness_row) else {
         return None;
     };
-    let Some(meta) = caps.native_verb_meta.get(verb) else {
+    let Some(meta) = caps.native_verb_meta.get(command) else {
         return None;
     };
     if !meta.risk.is_guarded() {
         return None;
     }
-    if ack.map(|a| a.trim() == verb).unwrap_or(false) {
+    if ack.map(|a| a.trim() == command).unwrap_or(false) {
         return None;
     }
     eprintln!(
-        "mail-inject: refusing raw send of {verb}: the {harness_row} table classes it {} \
+        "mail-inject: refusing raw send of {command}: the {harness_row} table classes it {} \
          for this session. It would land as user-role text. If the send really means it, \
-         name the verb on the same send: --ack-verb-risk {verb}",
+         name the command on the same send: --ack-command-risk {command}",
         meta.risk.as_str()
     );
     Some(1)
@@ -2149,7 +2153,7 @@ async fn run_seed_mode(args: &MailInjectArgs, text: &str, cwd: &str) -> i32 {
         eprintln!("mail-inject: --seed is codex-only (a bounded codex pane's first turn)");
         return 2;
     }
-    let text = crate::provider::render_verb_seed(text, "codex");
+    let text = crate::provider::render_command_seed(text, "codex");
     match crate::codex_inject::deliver_seed_via_codex_daemon(&args.session, &text, Path::new(cwd))
         .await
     {
@@ -2208,7 +2212,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
     }
 
     // `--lane-heal`: run the dead-pane-binding heal and print one JSON verdict
-    // (law d-fe66560a: carried as a flag on this verb, never a top-level one).
+    // (law d-fe66560a: carried as a flag on this command, never a top-level one).
     // Exit 0 for every verdict - the verdict is data a caller gates on, never
     // a process error.
     if args.lane_heal {
@@ -2249,7 +2253,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
     // `--lane-heal` set the shape of, law d-fe66560a). The guards below protect
     // a live session from relayed chatter; a spawn seed is the spawner's own
     // task, usually multi-line, and the spawn receipt records it. So this
-    // branch skips the body cap, the single-line guard, the verb-risk guard,
+    // branch skips the body cap, the single-line guard, the command-risk guard,
     // the forged-envelope check and the raw-inject audit. Split into
     // `run_seed_mode` so the guards-skipped property is testable without stdin.
     if let Some(cwd) = args.seed_cwd.as_deref() {
@@ -2288,16 +2292,16 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
         .harness_row
         .clone()
         .unwrap_or_else(|| recipient_capability_row(args.harness).to_string());
-    if let Some(code) = verb_risk_decision(&text, &risk_row, args.ack_verb_risk.as_deref()) {
+    if let Some(code) = command_risk_decision(&text, &risk_row, args.ack_command_risk.as_deref()) {
         return code;
     }
 
-    // The verb seed is bidirectional: render it to the receiving harness's
+    // The command seed is bidirectional: render it to the receiving harness's
     // native form BEFORE the audit, so the record names what was delivered.
-    // Framed envelopes are relayed content and skip the rewrite: the verb
+    // Framed envelopes are relayed content and skip the rewrite: the command
     // inside a wrapped body is the sender's words, not this door's payload.
     if !is_framed_envelope(&text) {
-        text = crate::provider::render_verb_seed(&text, recipient_capability_row(args.harness));
+        text = crate::provider::render_command_seed(&text, recipient_capability_row(args.harness));
     }
 
     // Forged-envelope predicate on UNWRAPPED bodies: a single-line
@@ -2654,66 +2658,72 @@ mod tests {
     }
 
     #[test]
-    fn risk_guard_refuses_context_destroying_and_session_ending_verbs() {
+    fn risk_guard_refuses_context_destroying_and_session_ending_commands() {
         // The claude row classes /clear context-destroying and /exit would be
         // session-ending if it were on the roster; grok's /new is
-        // context-destroying on its own row. Only the ack naming the verb
+        // context-destroying on its own row. Only the ack naming the command
         // carries either through.
-        assert_eq!(verb_risk_decision("/clear", "claude", None), Some(1));
-        assert_eq!(verb_risk_decision("/clear", "claude", Some("/clear")), None);
+        assert_eq!(command_risk_decision("/clear", "claude", None), Some(1));
         assert_eq!(
-            verb_risk_decision("/clear keep the name", "claude", None),
+            command_risk_decision("/clear", "claude", Some("/clear")),
+            None
+        );
+        assert_eq!(
+            command_risk_decision("/clear keep the name", "claude", None),
             Some(1)
         );
-        assert_eq!(verb_risk_decision("/new", "grok", None), Some(1));
-        assert_eq!(verb_risk_decision("/new", "grok", Some("/clear")), Some(1));
+        assert_eq!(command_risk_decision("/new", "grok", None), Some(1));
+        assert_eq!(
+            command_risk_decision("/new", "grok", Some("/clear")),
+            Some(1)
+        );
     }
 
     #[test]
-    fn verb_marker_is_rewritten_to_the_receiving_harness_form() {
-        // Operator, 2026-09-14: the marker is bidirectional. A verb typed in
+    fn command_marker_is_rewritten_to_the_receiving_harness_form() {
+        // Operator, 2026-09-14: the marker is bidirectional. A command typed in
         // either dialect lands in the recipient's native form, through the
         // shared renderer.
         assert_eq!(
-            crate::provider::render_verb_seed("$fno:review medium", "claude"),
+            crate::provider::render_command_seed("$fno:review medium", "claude"),
             "/fno:review medium"
         );
         assert_eq!(
-            crate::provider::render_verb_seed("/fno:review medium", "codex"),
+            crate::provider::render_command_seed("/fno:review medium", "codex"),
             "$fno:review medium"
         );
         // A payload already in the native form passes through byte-identical.
         assert_eq!(
-            crate::provider::render_verb_seed("$fno:lead x-bbbb", "codex"),
+            crate::provider::render_command_seed("$fno:lead x-bbbb", "codex"),
             "$fno:lead x-bbbb"
         );
         assert_eq!(
-            crate::provider::render_verb_seed("/fno:review", "claude"),
+            crate::provider::render_command_seed("/fno:review", "claude"),
             "/fno:review"
         );
         // The keeper lane hosts a claude pane, so it takes the slash form.
         assert_eq!(
-            crate::provider::render_verb_seed(
+            crate::provider::render_command_seed(
                 "$fno:fix x-1",
                 recipient_capability_row(MailInjectHarness::Keeper)
             ),
             "/fno:fix x-1"
         );
-        // Non-verb payloads, mid-line markers, and lookalikes ride verbatim.
+        // Non-command payloads, mid-line markers, and lookalikes ride verbatim.
         assert_eq!(
-            crate::provider::render_verb_seed("hello there", "claude"),
+            crate::provider::render_command_seed("hello there", "claude"),
             "hello there"
         );
         assert_eq!(
-            crate::provider::render_verb_seed("see /fno:docs", "codex"),
+            crate::provider::render_command_seed("see /fno:docs", "codex"),
             "see /fno:docs"
         );
         assert_eq!(
-            crate::provider::render_verb_seed("/compact", "codex"),
+            crate::provider::render_command_seed("/compact", "codex"),
             "/compact"
         );
         assert_eq!(
-            crate::provider::render_verb_seed("//fno:x", "codex"),
+            crate::provider::render_command_seed("//fno:x", "codex"),
             "//fno:x"
         );
     }

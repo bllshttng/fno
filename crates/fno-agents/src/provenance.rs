@@ -15,7 +15,7 @@
 //! never branches on harness name after the source yields a turn.
 
 use crate::mail_inject::contains_fno_mail_tag_anywhere;
-use crate::provider::parse_verb_token;
+use crate::provider::parse_command_token;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -157,7 +157,7 @@ pub(crate) fn turn_ts_epoch(obj: &Value) -> Option<f64> {
     Some(secs(date_only.and_utc().timestamp(), 0))
 }
 
-/// A single-line slash command or `$fno:` verb with flag-shaped args only.
+/// A single-line slash command or `$fno:` command with flag-shaped args only.
 /// A token ending in sentence punctuation means the turn carries prose, and
 /// prose may carry a ruling. A filename dot is fine (over-counting is the
 /// safe direction); `x-1.` is not.
@@ -169,7 +169,7 @@ pub(crate) fn is_bare_command(text: &str) -> bool {
     let Some(first) = parts.next() else {
         return false;
     };
-    if parse_verb_token(first).is_none() {
+    if parse_command_token(first).is_none() {
         return false;
     }
     parts.all(is_arg_token)

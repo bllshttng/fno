@@ -1155,12 +1155,15 @@ fn abandoned_leg(
                 r.reason
             )),
             None => {
-                let verb = if r.verdict == "gone" {
+                let command = if r.verdict == "gone" {
                     "would reap"
                 } else {
                     "held"
                 };
-                lines.push(format!("  {verb} do row {} ({tag}): {}", r.node, r.reason));
+                lines.push(format!(
+                    "  {command} do row {} ({tag}): {}",
+                    r.node, r.reason
+                ));
             }
         }
     }
@@ -1176,7 +1179,7 @@ fn abandoned_leg(
 // The pass
 // ---------------------------------------------------------------------------
 
-/// Every source the pass reads, injected so the whole verb runs hermetic
+/// Every source the pass reads, injected so the whole command runs hermetic
 /// under test; `run_maintain` wires the production readers.
 pub(crate) struct Seams<'a> {
     pub graph: PathBuf,
@@ -1903,23 +1906,23 @@ impl Report<'_> {
             ));
         }
         for rf in self.rescope_fixes {
-            let verb = if self.apply && a.rescope.contains(&rf.node_id) {
+            let command = if self.apply && a.rescope.contains(&rf.node_id) {
                 "re-scoped"
             } else {
                 "would re-scope"
             };
             out.line(format!(
-                "  {verb} {} -> project={} cwd={}",
+                "  {command} {} -> project={} cwd={}",
                 rf.node_id, rf.new_project, rf.new_cwd
             ));
         }
         for nid in self.prune_ids {
-            let verb = if self.apply && a.prune.contains(nid) {
+            let command = if self.apply && a.prune.contains(nid) {
                 "pruned"
             } else {
                 "would prune (temp-cwd leak)"
             };
-            out.line(format!("  {verb} {nid}"));
+            out.line(format!("  {command} {nid}"));
         }
         if self.apply {
             for d in &a.defers {
@@ -2106,7 +2109,7 @@ impl Report<'_> {
     }
 }
 
-/// `fno backlog maintain`: parse the verb's flags, wire the production
+/// `fno backlog maintain`: parse the command's flags, wire the production
 /// readers, run the pass, and return the exit code (4 on a budget overrun,
 /// with the partial receipt already printed).
 pub fn run_maintain(tail: &[String]) -> i32 {

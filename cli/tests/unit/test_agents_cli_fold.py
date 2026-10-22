@@ -21,7 +21,7 @@ def _commands(app) -> set[str]:
 
 
 def test_agents_registers_the_eight_folded_roots() -> None:
-    # x-3873 removed `dispatch`: one launch verb, and it is spawn (d-496680aa).
+    # x-3873 removed `dispatch`: one launch command, and it is spawn (d-496680aa).
     from fno.agents.cli import agents_app
 
     assert {

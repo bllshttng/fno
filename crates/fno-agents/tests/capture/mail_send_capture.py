@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Golden capture driver for the `mail send` wrapped-verb port.
+"""Golden capture driver for the `mail send` wrapped-command port.
 
 Plays the case tables against the live Python leg (`fno agents mail send`,
-the typer verb) and freezes `tests/golden/mail_send/` in the `assert_golden`
+the typer command) and freezes `tests/golden/mail_send/` in the `assert_golden`
 on-disk format: `<key>.exit` ("<code>\\n"), `<key>.out`, `<key>.err`. The
 `mail_send_parity.rs` tables mirror these cases; keep them in lockstep when a
 case is added (the same rule target_capture.py records in its header).
@@ -52,7 +52,7 @@ DROP_PREFIXES = (
     "  obsidian enabled:",
     "  sentinel:",
     # The escalation stderr advisory names whether the OS notifier displayed,
-    # which is a property of the host, not of the verb: a mac capture has a
+    # which is a property of the host, not of the command: a mac capture has a
     # channel, a headless CI runner does not. The receipt is the contract.
     "escalated to human (",
 )
@@ -83,20 +83,20 @@ def installed_agents_bin() -> str:
 
 
 def installed_front() -> str:
-    """The installed `fno` front. The shim routes every non-send verb here, so
+    """The installed `fno` front. The shim routes every non-send command here, so
     the Python leg's internal doors (`fno doctor event emit-envelope`, the
     subject peel) run the production front and stay out of the goldens as
     noise."""
     found = shutil.which("fno")
     if found is None:
-        raise SystemExit("fno not on PATH; the capture routes non-send verbs to it")
+        raise SystemExit("fno not on PATH; the capture routes non-send commands to it")
     return found
 
 
 def make_shim(bindir: Path) -> None:
     """A PATH shim named `fno`: `mail send` reaches the worktree's Python app
     (the leg under capture) with argv[0] naming the production prog; every
-    other spelling execs the installed front, so doors the verb shells out to
+    other spelling execs the installed front, so doors the command shells out to
     (`fno doctor event emit-envelope`, the subject peel) behave as production."""
     bindir.mkdir(parents=True, exist_ok=True)
     shim = bindir / "fno"

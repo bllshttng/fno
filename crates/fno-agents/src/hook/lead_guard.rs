@@ -242,8 +242,8 @@ fn write_targets(command: &str) -> Vec<String> {
     let bound = |t: &str| {
         matches!(t, ";" | ";;" | "|" | "||" | "&&" | "&" | "(" | ")" | "\n") || t.starts_with('<')
     };
-    let flush = |verb: &Option<String>, pool: &[String], targets: &mut Vec<String>| {
-        let Some(verb) = verb else {
+    let flush = |command_name: &Option<String>, pool: &[String], targets: &mut Vec<String>| {
+        let Some(command_name) = command_name else {
             return;
         };
         let files: Vec<&str> = pool
@@ -251,7 +251,7 @@ fn write_targets(command: &str) -> Vec<String> {
             .map(String::as_str)
             .filter(|t| !t.is_empty() && !t.starts_with('-'))
             .collect();
-        match verb.as_str() {
+        match command_name.as_str() {
             "tee" | "sponge" | "truncate" | "ed" | "ex" => {
                 targets.extend(files.into_iter().map(str::to_string));
             }
@@ -282,15 +282,15 @@ fn write_targets(command: &str) -> Vec<String> {
         }
     };
     let mut targets: Vec<String> = Vec::new();
-    let mut verb: Option<String> = None;
+    let mut command_name: Option<String> = None;
     let mut pool: Vec<String> = Vec::new();
     let mut nxt = false;
     let mut val = false;
     let mut at_command = true;
     for tok in &tokens {
         if bound(tok) {
-            flush(&verb, &pool, &mut targets);
-            verb = None;
+            flush(&command_name, &pool, &mut targets);
+            command_name = None;
             pool.clear();
             nxt = false;
             val = false;
@@ -312,7 +312,7 @@ fn write_targets(command: &str) -> Vec<String> {
         } else if val {
             val = false;
         } else if at_command {
-            // The verb table only applies in command position, so `install`
+            // The command table only applies in command position, so `install`
             // in `fno config plugin install claude` stays a positional word.
             // An assignment (`B=/path mv a b`) and a wrapper word (sudo, env,
             // command, nohup, time) hand command position to the next word.
@@ -334,18 +334,18 @@ fn write_targets(command: &str) -> Vec<String> {
                         | "ed"
                         | "ex"
                 ) {
-                    verb = Some(tok.clone());
+                    command_name = Some(tok.clone());
                     pool.clear();
                 }
             }
-        } else if verb.is_some() {
+        } else if command_name.is_some() {
             if matches!(tok.as_str(), "-e" | "-f" | "-i") {
                 val = true;
             }
             pool.push(tok.clone());
         }
     }
-    flush(&verb, &pool, &mut targets);
+    flush(&command_name, &pool, &mut targets);
     targets.retain(|t| !t.is_empty());
     targets
 }
@@ -844,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn verb_operands_bind() {
+    fn command_operands_bind() {
         // `<` now lexes as a read operator, so the stdin file is no
         // longer bound as a tee write (deliberate narrowing of the old
         // over-broad rule; the real writes still bind).
@@ -903,7 +903,7 @@ mod tests {
         );
         // A real `install` in command position binds its destination.
         assert_eq!(targets("install -d /tmp/x"), vec!["/tmp/x"]);
-        // The keep words hand command position to the write verb.
+        // The keep words hand command position to the write command.
         assert_eq!(targets("sudo mv a /tmp/b"), vec!["/tmp/b"]);
         assert_eq!(targets("command mv a /tmp/b"), vec!["/tmp/b"]);
         assert_eq!(targets("env FOO=bar cp /tmp/a /tmp/b"), vec!["/tmp/b"]);

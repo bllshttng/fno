@@ -10,8 +10,8 @@
 //! port; Python keeps the two doors and nothing else). One JSON payload on
 //! stdin, one JSON answer on stdout, same contract as `spawn-axes`. The emit
 //! chokepoint (`fno event emit -t review_attestation`) and the hidden
-//! `fno do pr publish-review` verb are the two doors; the payload is the same
-//! shape for both, with the verb door passing empty `verdict` to have the
+//! `fno do pr publish-review` command are the two doors; the payload is the same
+//! shape for both, with the command door passing empty `verdict` to have the
 //! default resolved from the newest head-pinned attestation for HEAD.
 //!
 //! Fail-closed by construction, in this order: config missing -> skipped;
@@ -23,8 +23,8 @@
 //! trusting the POST receipt - a receipt saying "posted APPROVE" while GitHub
 //! recorded COMMENTED is the exact lie this module exists to remove.
 //!
-//! Each gh call is unbounded here; the Python transport (`verb_call`) bounds
-//! the whole verb, so a hung network stack costs one timeout and a
+//! Each gh call is unbounded here; the Python transport (`command_call`) bounds
+//! the whole command, so a hung network stack costs one timeout and a
 //! `skipped (mirror error ...)` receipt, never a wedged emit.
 //!
 //! `publish_round` is the second, identity-independent leg: it posts a
@@ -120,7 +120,7 @@ impl Answer {
         }
     }
 
-    /// The verb door's process exit: 0 posted or dry-run-skipped, 2 the
+    /// The command door's process exit: 0 posted or dry-run-skipped, 2 the
     /// no-attestation default miss, 1 everything else.
     pub fn exit(&self) -> i32 {
         match self.status {
@@ -695,7 +695,7 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
         .unwrap_or(false);
     let pr_number = payload.get("pr_number").and_then(Value::as_u64);
 
-    // Default resolution (the verb door): verdict/head/reviewer come from the
+    // Default resolution (the command door): verdict/head/reviewer come from the
     // newest head-pinned attestation for HEAD, never from memory.
     let mut verdict = payload
         .get("verdict")
@@ -942,14 +942,14 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
     a
 }
 
-/// The verb entry: one JSON payload on stdin, one JSON answer on stdout,
+/// The command entry: one JSON payload on stdin, one JSON answer on stdout,
 /// always exit 0 (the answer carries the caller-facing exit under "exit";
 /// only a transport failure - unreadable or malformed stdin - exits 2).
 /// Two independent legs ride one answer: the verdict mirror under the bot
 /// identity, and the held-findings post under the caller's own auth (`held`).
 pub fn run_publish_review(args: &[String]) -> i32 {
     // The argv door beside the JSON door (the pr-port-4 wave): the deleted
-    // Python typer command parsed these flags and shelled this verb with
+    // Python typer command parsed these flags and shelled this command with
     // the payload built below, so the port keeps both halves in one place.
     // Flags mean the argv door; the events-cli caller pipes its payload
     // with no args and keeps the stdin door.
@@ -962,7 +962,7 @@ pub fn run_publish_review(args: &[String]) -> i32 {
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() || payload.trim().is_empty() {
         // A bare call with nothing piped is the deleted typer door's
-        // no-flag form (verb_call always writes a payload), so it gets the
+        // no-flag form (command_call always writes a payload), so it gets the
         // typer's missing-option refusal, not a malformed-payload error.
         eprint!("publish-review: missing option --pr-number\n");
         return 2;

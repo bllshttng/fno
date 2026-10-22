@@ -2,7 +2,7 @@
 //!
 //! Ports `fno/agents/harness_map.py` - `resolve_dispatch` and the seams it
 //! owns (`normalize_command`, `dispatch_command`, `substrate_default`,
-//! `thread_seatable`, `spawn_state`, `footnote_verbs`, and the shared
+//! `thread_seatable`, `spawn_state`, `footnote_commands`, and the shared
 //! skill-presence probe, native in `skill_presence` here since the
 //! review-capability port folded the Python twin into it)
 //! over the native capability table (`HarnessContract::packaged`) and the
@@ -13,15 +13,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::backlog::fields::canonical_verb_key;
+use crate::backlog::fields::canonical_command_key;
 use crate::claude_ask::py_repr;
 use crate::harness_capabilities::{HarnessCapabilities, HarnessContract};
 use crate::merge_posture as posture;
-use crate::provider::parse_verb_token;
+use crate::provider::parse_command_token;
 
-/// The shipped dispatch-verb allowlist (config.dispatch.allowed_verbs
+/// The shipped dispatch-command allowlist (config.dispatch.allowed_commands
 /// overrides).
-const DEFAULT_ALLOWED_VERBS: [&str; 3] = ["/target", "/think", "/blueprint"];
+const DEFAULT_ALLOWED_COMMANDS: [&str; 3] = ["/target", "/think", "/blueprint"];
 /// The env budget a brief must fit; 8 KB, measured in UTF-8 bytes.
 /// Oversized -> explicit error, never truncation.
 const BRIEF_MAX_BYTES: usize = 8192;
@@ -35,18 +35,18 @@ pub struct DispatchResolution {
     pub substrate: String,
     pub route: String,
     pub command: String,
-    /// The lifecycle-derived canonical verb, or None when the table
-    /// abstained (bare resolve, explicit command, out-of-family verb).
-    pub verb: Option<String>,
+    /// The lifecycle-derived canonical command, or None when the table
+    /// abstained (bare resolve, explicit command, out-of-family command).
+    pub command_name: Option<String>,
     /// TARGET_NO_MERGE / TARGET_BRIEF: the only env keys the resolver owns.
     pub env: BTreeMap<String, String>,
     pub decision: Vec<String>,
 }
 
-/// A config.dispatch.verb_registry descriptor (the fields
-/// fno.config._dispatch_verbs.DispatchVerbDescriptor carries).
+/// A config.dispatch.command_registry descriptor (the fields
+/// fno.config._dispatch_commands.DispatchCommandDescriptor carries).
 #[derive(Debug, Clone, Default)]
-pub struct VerbDescriptor {
+pub struct CommandDescriptor {
     pub invocation: String,
     pub invocations: BTreeMap<String, String>,
     pub requires: String,
@@ -66,8 +66,8 @@ pub struct DispatchCfg {
     pub substrate: String,
     pub command: String,
     /// None reads the shipped trio; Some carries the list even when empty.
-    pub allowed_verbs: Option<Vec<String>>,
-    pub verb_registry: BTreeMap<String, VerbDescriptor>,
+    pub allowed_commands: Option<Vec<String>>,
+    pub command_registry: BTreeMap<String, CommandDescriptor>,
     pub auto_merge: bool,
 }
 
@@ -78,8 +78,8 @@ pub struct DispatchInput<'a> {
     pub substrate: Option<&'a str>,
     pub node_id: Option<&'a str>,
     pub command: Option<&'a str>,
-    pub verb: Option<&'a str>,
-    /// (derived verb, note) the lifecycle table answered; the note opens
+    pub command_name: Option<&'a str>,
+    /// (derived command, note) the lifecycle table answered; the note opens
     /// the decision log when the command rung consumes the derivation.
     pub lifecycle: Option<(Option<String>, String)>,
     pub brief: Option<&'a str>,
@@ -149,11 +149,11 @@ pub fn substrate_default(contract: &HarnessContract, harness: &str) -> String {
     }
 }
 
-/// The shipped footnote verb roster: every `skills/<name>/SKILL.md` and
+/// The shipped footnote command roster: every `skills/<name>/SKILL.md` and
 /// every `commands/<name>.md` under the plugin surface. Env hints first,
 /// then the repo walk-up; empty on any resolution or read failure -
 /// pass-through is the safe direction (the Python owner's contract).
-pub fn footnote_verbs() -> BTreeSet<String> {
+pub fn footnote_commands() -> BTreeSet<String> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     for key in ["CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"] {
         if let Some(v) = std::env::var_os(key).filter(|v| !v.is_empty()) {
@@ -168,14 +168,14 @@ pub fn footnote_verbs() -> BTreeSet<String> {
         }
         dir = d.parent().map(Path::to_path_buf);
     }
-    let mut verbs = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     for root in &roots {
         if let Ok(entries) = std::fs::read_dir(root.join("skills")) {
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.is_dir() && p.join("SKILL.md").is_file() {
                     if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                        verbs.insert(name.to_string());
+                        commands.insert(name.to_string());
                     }
                 }
             }
@@ -186,13 +186,13 @@ pub fn footnote_verbs() -> BTreeSet<String> {
                 let is_md = p.extension().and_then(|e| e.to_str()) == Some("md");
                 if p.is_file() && is_md {
                     if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                        verbs.insert(stem.to_string());
+                        commands.insert(stem.to_string());
                     }
                 }
             }
         }
     }
-    verbs
+    commands
 }
 
 /// Where Claude resolves a BARE skill name: the user root and the project
@@ -286,7 +286,7 @@ pub(crate) fn skill_presence_in(
     )
 }
 
-/// The dispatch-verb registry's `requires == "skill"` gate: the shared
+/// The dispatch-command registry's `requires == "skill"` gate: the shared
 /// probe's three outcomes, narrowed to the one the resolver refuses on.
 /// `unverifiable` degrades to admitted (the stop gate is the backstop);
 /// only a searched-and-absent answer refuses.
@@ -323,10 +323,10 @@ pub fn normalize_command_with(
     }
     let cmd = command.trim();
     let first_word = cmd.split_whitespace().next().unwrap_or("");
-    let Some((verb, namespaced)) = (if first_word.is_empty() {
+    let Some((command_name, namespaced)) = (if first_word.is_empty() {
         None
     } else {
-        parse_verb_token(first_word)
+        parse_command_token(first_word)
     }) else {
         return Ok(cmd.to_string());
     };
@@ -339,21 +339,21 @@ pub fn normalize_command_with(
         // The namespaced spelling is unambiguous by namespace: it always
         // rewrites, native or not.
         if namespaced {
-            return Ok(format!("$fno:{verb}{tail}"));
+            return Ok(format!("$fno:{command_name}{tail}"));
         }
         let native: BTreeSet<&str> = caps.native_verbs.iter().map(String::as_str).collect();
-        if native.contains(format!("/{verb}").as_str()) {
+        if native.contains(format!("/{command_name}").as_str()) {
             return Ok(cmd.to_string());
         }
-        // The dispatch verb is footnote's own: a STATIC fact. The bypass
+        // The dispatch command is footnote's own: a STATIC fact. The bypass
         // makes an unresolvable roster unable to render `/target` as prose.
         if posture::is_target_family(first_word) {
-            return Ok(format!("$fno:{verb}{tail}"));
+            return Ok(format!("$fno:{command_name}{tail}"));
         }
-        if !footnote_verbs().contains(verb) {
+        if !footnote_commands().contains(command_name) {
             return Ok(cmd.to_string());
         }
-        return Ok(format!("$fno:{verb}{tail}"));
+        return Ok(format!("$fno:{command_name}{tail}"));
     }
     if surface == "slash" {
         // Plugin-namespace prefix swap only (never re-tokenize).
@@ -362,7 +362,7 @@ pub fn normalize_command_with(
         if !namespaced && !slash_sigil {
             return Ok(cmd.to_string());
         }
-        if !namespaced && native.contains(format!("/{verb}").as_str()) {
+        if !namespaced && native.contains(format!("/{command_name}").as_str()) {
             return Ok(cmd.to_string());
         }
         // Idempotent over the builtin rung.
@@ -370,15 +370,15 @@ pub fn normalize_command_with(
             return Ok(cmd.to_string());
         }
         if namespaced && !prefix.is_empty() {
-            return Ok(format!("/{prefix}{verb}{tail}"));
+            return Ok(format!("/{prefix}{command_name}{tail}"));
         }
         if namespaced && harness == "agy" {
-            return Ok(format!("/{verb}{tail}"));
+            return Ok(format!("/{command_name}{tail}"));
         }
         if namespaced {
-            return Ok(format!("/fno:{verb}{tail}"));
+            return Ok(format!("/fno:{command_name}{tail}"));
         }
-        return Ok(format!("/{prefix}{verb}{tail}"));
+        return Ok(format!("/{prefix}{command_name}{tail}"));
     }
     Ok(cmd.to_string())
 }
@@ -410,7 +410,7 @@ pub fn dispatch_command(
 /// Map (config + context) -> the dispatch tuple. Pure; never spawns or
 /// claims. Field precedence: harness explicit > stage table > `claude`;
 /// substrate explicit > config > per-harness default; command explicit >
-/// lifecycle derivation > node verb (allowlist-checked) >
+/// lifecycle derivation > node command (allowlist-checked) >
 /// `config.dispatch.command` > per-harness builtin. `brief` rides
 /// TARGET_BRIEF only, capped at 8 KB, never truncated. `merge_posture`:
 /// no-merge injects, allow overrides the config read, from-config reads
@@ -430,7 +430,7 @@ pub fn resolve_dispatch_with(
     cfg: &DispatchCfg,
 ) -> Result<DispatchResolution, String> {
     let mut decision: Vec<String> = Vec::new();
-    let mut lifecycle_verb: Option<String> = None;
+    let mut lifecycle_command: Option<String> = None;
     let command_raw = input.command.unwrap_or("");
     let command: Option<&str> = {
         let c = command_raw.trim();
@@ -441,8 +441,8 @@ pub fn resolve_dispatch_with(
         }
     };
     if command.is_none() {
-        if let Some((verb, note)) = &input.lifecycle {
-            lifecycle_verb = verb.clone();
+        if let Some((command_name, note)) = &input.lifecycle {
+            lifecycle_command = command_name.clone();
             decision.push(note.clone());
         }
     }
@@ -558,43 +558,43 @@ pub fn resolve_dispatch_with(
 
     // 3. command template.
     let mut skip_normalize = false;
-    let mut verb_declares_no_id = false;
-    let mut verb_opt: Option<&str> = input.verb;
-    let derived_blueprint = lifecycle_verb.as_deref() == Some("/blueprint");
-    if lifecycle_verb.as_deref() == Some("/target") {
-        verb_opt = None;
+    let mut command_declares_no_id = false;
+    let mut command_opt: Option<&str> = input.command_name;
+    let derived_blueprint = lifecycle_command.as_deref() == Some("/blueprint");
+    if lifecycle_command.as_deref() == Some("/target") {
+        command_opt = None;
     }
     let template: String;
     if let Some(c) = command {
         template = c.to_string();
         decision.push("command=explicit".to_string());
     } else if derived_blueprint {
-        template = format!("{} {{id}}", lifecycle_verb.clone().unwrap_or_default());
+        template = format!("{} {{id}}", lifecycle_command.clone().unwrap_or_default());
         decision.push(format!(
             "command=derived({})",
-            lifecycle_verb.clone().unwrap_or_default()
+            lifecycle_command.clone().unwrap_or_default()
         ));
-    } else if let Some(v) = verb_opt {
-        let mut chosen_verb = v.trim().to_string();
-        if chosen_verb.is_empty() {
-            return Err("explicit dispatch verb must not be empty".to_string());
+    } else if let Some(v) = command_opt {
+        let mut chosen_command = v.trim().to_string();
+        if chosen_command.is_empty() {
+            return Err("explicit dispatch command must not be empty".to_string());
         }
-        if parse_verb_token(&chosen_verb).is_some() {
-            chosen_verb = canonical_verb_key(&chosen_verb);
+        if parse_command_token(&chosen_command).is_some() {
+            chosen_command = canonical_command_key(&chosen_command);
         }
-        let allowed: Vec<String> = cfg.allowed_verbs.clone().unwrap_or_else(|| {
-            DEFAULT_ALLOWED_VERBS
+        let allowed: Vec<String> = cfg.allowed_commands.clone().unwrap_or_else(|| {
+            DEFAULT_ALLOWED_COMMANDS
                 .iter()
                 .map(|s| s.to_string())
                 .collect()
         });
-        let descriptor = cfg.verb_registry.get(&chosen_verb);
-        if !allowed.iter().any(|a| a == &chosen_verb) && descriptor.is_none() {
-            let reg_list: Vec<String> = cfg.verb_registry.keys().cloned().collect();
+        let descriptor = cfg.command_registry.get(&chosen_command);
+        if !allowed.iter().any(|a| a == &chosen_command) && descriptor.is_none() {
+            let reg_list: Vec<String> = cfg.command_registry.keys().cloned().collect();
             return Err(format!(
-                "dispatch verb {} is in neither the allowlist ({}) nor \
-                 config.dispatch.verb_registry ({}); extend one of them",
-                py_repr(&chosen_verb),
+                "dispatch command {} is in neither the allowlist ({}) nor \
+                 config.dispatch.command_registry ({}); extend one of them",
+                py_repr(&chosen_command),
                 allowed.join(", "),
                 if reg_list.is_empty() {
                     "empty".to_string()
@@ -605,13 +605,13 @@ pub fn resolve_dispatch_with(
         }
         if let Some(desc) = descriptor {
             if desc.requires == "skill" {
-                // First token only (the verb may carry args); malformed
+                // First token only (the command may carry args); malformed
                 // falls back to the key.
                 let head = desc
                     .invocation
                     .split_whitespace()
                     .next()
-                    .unwrap_or(&chosen_verb);
+                    .unwrap_or(&chosen_command);
                 let skill_name = head
                     .trim_start_matches('/')
                     .rsplit(':')
@@ -620,7 +620,7 @@ pub fn resolve_dispatch_with(
                 if let Some(reason) = skill_presence_refusal(
                     skill_name,
                     &chosen_harness,
-                    "config.dispatch.verb_registry",
+                    "config.dispatch.command_registry",
                 ) {
                     return Err(reason);
                 }
@@ -628,9 +628,9 @@ pub fn resolve_dispatch_with(
             if !desc.invocations.is_empty() && !desc.invocations.contains_key(&chosen_harness) {
                 let declared: Vec<String> = desc.invocations.keys().cloned().collect();
                 return Err(format!(
-                    "dispatch verb {} is not declared on harness {}; \
-                     config.dispatch.verb_registry declares it on: {}",
-                    py_repr(&chosen_verb),
+                    "dispatch command {} is not declared on harness {}; \
+                     config.dispatch.command_registry declares it on: {}",
+                    py_repr(&chosen_command),
                     py_repr(&chosen_harness),
                     declared.join(", ")
                 ));
@@ -643,25 +643,25 @@ pub fn resolve_dispatch_with(
             if desc.takes_node_id {
                 built = format!("{built} {{id}}");
             } else {
-                verb_declares_no_id = true;
+                command_declares_no_id = true;
             }
-            // The descriptor already spells the verb natively; normalizing
+            // The descriptor already spells the command natively; normalizing
             // would mint a phantom `$fno:` skill from it.
             skip_normalize = true;
             decision.push(format!(
-                "command=registry-verb({}, asserts={})",
-                chosen_verb, desc.asserts
+                "command=registry-command({}, asserts={})",
+                chosen_command, desc.asserts
             ));
             template = built;
         } else {
             // Slash-leading; the post-ladder seam normalizes it per-harness.
-            template = format!("{chosen_verb} {{id}}");
-            decision.push(format!("command=verb({chosen_verb})"));
+            template = format!("{chosen_command} {{id}}");
+            decision.push(format!("command=command({chosen_command})"));
         }
     } else {
         // Per-harness builtin; config.dispatch.command overrides. The merge
         // posture applies to the builtin only: an explicit command or a
-        // node dispatch_verb already spells what to run.
+        // node dispatch_command already spells what to run.
         let allow_merge = cfg.auto_merge || posture_value.as_deref() == Some("allow");
         let raw = if !cfg.command.is_empty() {
             cfg.command.clone()
@@ -696,7 +696,7 @@ pub fn resolve_dispatch_with(
         if resolved_command.contains("{id}") {
             resolved_command = resolved_command.replace("{id}", id);
             decision.push(format!("command=substituted({resolved_command})"));
-        } else if !verb_declares_no_id {
+        } else if !command_declares_no_id {
             return Err(format!(
                 "command template {} must contain '{{id}}' at least once for \
                  substitution",
@@ -747,7 +747,7 @@ pub fn resolve_dispatch_with(
         substrate: chosen_substrate,
         route: route_value,
         command: resolved_command,
-        verb: lifecycle_verb,
+        command_name: lifecycle_command,
         env,
         decision,
     })
@@ -755,11 +755,11 @@ pub fn resolve_dispatch_with(
 
 /// The dispatch config rung (the `_load_dispatch_cfg` dict): the stage-table
 /// harness with the deprecated `dispatch.harness` folded beneath it, the
-/// verb's route lane, the config.dispatch substrate/command/verb extension,
+/// command's route lane, the config.dispatch substrate/command/command extension,
 /// and the `config.auto_merge.grant` actor key. A missing or unreadable key
 /// degrades to the default so a resolve never bricks on config; only the
 /// literal "dispatch" grant reads true.
-pub fn dispatch_cfg_for(node_cwd: Option<&str>, verb: &str) -> DispatchCfg {
+pub fn dispatch_cfg_for(node_cwd: Option<&str>, command_name: &str) -> DispatchCfg {
     let cwd = node_cwd
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
@@ -772,10 +772,10 @@ pub fn dispatch_cfg_for(node_cwd: Option<&str>, verb: &str) -> DispatchCfg {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    let profile_verb = canonical_verb_key(verb.trim());
-    let profile_verb = profile_verb.trim_start_matches('/').to_string();
-    let stage = text_key(&["agents", "profiles", &profile_verb, "provider"]);
-    let route = text_key(&["agents", "profiles", &profile_verb, "route"]).unwrap_or_default();
+    let profile_command = canonical_command_key(command_name.trim());
+    let profile_command = profile_command.trim_start_matches('/').to_string();
+    let stage = text_key(&["agents", "profiles", &profile_command, "provider"]);
+    let route = text_key(&["agents", "profiles", &profile_command, "route"]).unwrap_or_default();
     let legacy = text_key(&["dispatch", "harness"]);
     let (harness, harness_note) = match (&stage, &legacy) {
         (Some(s), Some(l)) if l != s => (
@@ -784,7 +784,7 @@ pub fn dispatch_cfg_for(node_cwd: Option<&str>, verb: &str) -> DispatchCfg {
                 "harness=deprecated dispatch.harness={} ignored; \
                  agents.profiles.{}.provider={} is the home",
                 py_repr(l),
-                profile_verb,
+                profile_command,
                 py_repr(s)
             )),
         ),
@@ -792,19 +792,21 @@ pub fn dispatch_cfg_for(node_cwd: Option<&str>, verb: &str) -> DispatchCfg {
         (None, Some(l)) => (l.clone(), None),
         (None, None) => (String::new(), None),
     };
-    let allowed_verbs = lookup(&["dispatch", "allowed_verbs"])
+    let allowed_commands = lookup(&["dispatch", "allowed_commands"])
+        .or_else(|| lookup(&["dispatch", super::settings::LEGACY_ALLOWED_COMMANDS_KEY]))
         .and_then(|v| v.as_array().cloned())
         .map(|rows| {
             rows.iter()
                 .filter_map(|r| r.as_str().map(str::to_string))
                 .collect::<Vec<String>>()
         });
-    let verb_registry = lookup(&["dispatch", "verb_registry"])
+    let command_registry = lookup(&["dispatch", "command_registry"])
+        .or_else(|| lookup(&["dispatch", super::settings::LEGACY_COMMAND_REGISTRY_KEY]))
         .and_then(|v| v.as_table().cloned())
         .map(|table| {
             table
                 .into_iter()
-                .map(|(key, row)| (key, verb_descriptor(&row)))
+                .map(|(key, row)| (key, command_descriptor(&row)))
                 .collect()
         })
         .unwrap_or_default();
@@ -815,15 +817,15 @@ pub fn dispatch_cfg_for(node_cwd: Option<&str>, verb: &str) -> DispatchCfg {
         route,
         substrate: text_key(&["dispatch", "substrate"]).unwrap_or_default(),
         command: text_key(&["dispatch", "command"]).unwrap_or_default(),
-        allowed_verbs,
-        verb_registry,
+        allowed_commands,
+        command_registry,
         auto_merge,
     }
 }
 
 /// One registry descriptor row, tolerating a missing field (the Python
 /// model defaults each).
-fn verb_descriptor(row: &toml::Value) -> VerbDescriptor {
+fn command_descriptor(row: &toml::Value) -> CommandDescriptor {
     let text = |key: &str| -> String {
         row.get(key)
             .and_then(|v| v.as_str())
@@ -840,7 +842,7 @@ fn verb_descriptor(row: &toml::Value) -> VerbDescriptor {
                 .collect()
         })
         .unwrap_or_default();
-    VerbDescriptor {
+    CommandDescriptor {
         invocation: text("invocation"),
         invocations,
         requires: text("requires"),
@@ -871,7 +873,7 @@ pub fn grid_lane_for(
     node: Option<&serde_json::Value>,
     model: Option<&str>,
     provider: Option<&str>,
-    verb: Option<&str>,
+    command: Option<&str>,
 ) -> LanePick {
     if provider.map(str::trim).unwrap_or("").len() > 0 || node.is_none() {
         return LanePick {
@@ -884,8 +886,8 @@ pub fn grid_lane_for(
         };
     }
     let node = node.unwrap_or(&serde_json::Value::Null);
-    let profile_verb = {
-        let v = verb.unwrap_or("target").trim().trim_start_matches('/');
+    let profile_command = {
+        let v = command.unwrap_or("target").trim().trim_start_matches('/');
         if v.is_empty() {
             "target".to_string()
         } else {
@@ -902,7 +904,7 @@ pub fn grid_lane_for(
         "effort": node.get("effort").and_then(|v| v.as_str()).unwrap_or(""),
     });
     let payload = serde_json::json!({
-        "rung_base": format!("agents.profiles.{profile_verb}"),
+        "rung_base": format!("agents.profiles.{profile_command}"),
         "node": node_payload,
         "substrate": serde_json::Value::Null,
         "permission_mode": serde_json::Value::Null,
@@ -912,7 +914,7 @@ pub fn grid_lane_for(
         "role": serde_json::Value::Null,
         "protected_role": serde_json::Value::Null,
         "model_occupied": false,
-        "work_verb": profile_verb,
+        "work_command": profile_command,
         "explicit_model_value": model,
         "explicit_route_value": serde_json::Value::Null,
         "explicit_vendor_value": serde_json::Value::Null,

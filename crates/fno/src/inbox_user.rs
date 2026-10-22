@@ -1,23 +1,23 @@
-//! Native `fno inbox user` verbs, the hidden `fno inbox operator` spelling
+//! Native `fno inbox user` commands, the hidden `fno inbox operator` spelling
 //! of the same group, and `fno inbox peers`.
 //!
 //! The queue reader lives in the runtime crate as `fno-agents compaction
-//! operator-turns`, so the front classifies the verb and execs that action:
+//! operator-turns`, so the front classifies the command and execs that action:
 //! the Stop hook's status read costs one native process and no Python. Any
-//! `--help` and any flag the Python verb would refuse forward to the Python
+//! `--help` and any flag the Python command would refuse forward to the Python
 //! `fno inbox` group.
 
 use std::ffi::OsString;
 
-/// The verbs answered natively: each with its switches and its value flags.
+/// The commands answered natively: each with its switches and its value flags.
 /// A value flag carries a positive count; any other value forwards, so the
-/// Python verb's own refusal answers it.
-const NATIVE_USER_VERBS: &[(&str, &[&str], &[&str])] = &[
+/// Python command's own refusal answers it.
+const NATIVE_USER_COMMANDS: &[(&str, &[&str], &[&str])] = &[
     ("status", &["--json", "-J"], &[]),
     ("list", &["--json", "-J"], &["--limit", "-L"]),
 ];
 
-/// Classify `fno inbox user|operator <verb> ...`: `Some(argv)` is the argv
+/// Classify `fno inbox user|operator <command> ...`: `Some(argv)` is the argv
 /// tail for `fno-agents compaction`, `None` forwards to Python.
 pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 3 || args[0].to_str()? != "inbox" {
@@ -26,11 +26,13 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     if !matches!(args[1].to_str()?, "user" | "operator") {
         return None;
     }
-    let verb = args[2].to_str()?;
-    if verb == "ack" {
+    let command = args[2].to_str()?;
+    if command == "ack" {
         return classify_ack(&args[3..]);
     }
-    let (_, switches, valued) = NATIVE_USER_VERBS.iter().find(|(name, ..)| *name == verb)?;
+    let (_, switches, valued) = NATIVE_USER_COMMANDS
+        .iter()
+        .find(|(name, ..)| *name == command)?;
     let rest = &args[3..];
     let mut i = 0;
     while i < rest.len() {
@@ -47,7 +49,7 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
             return None;
         }
     }
-    let mut argv: Vec<OsString> = ["operator-turns", "--render", verb]
+    let mut argv: Vec<OsString> = ["operator-turns", "--render", command]
         .iter()
         .map(OsString::from)
         .collect();

@@ -45,7 +45,7 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_EXPIRES: &str = "24h";
 const MAX_EXPIRES: Duration = Duration::from_secs(7 * 24 * 3600);
 
-/// Paths this verb reads/writes, resolved once so tests can pin every root
+/// Paths this command reads/writes, resolved once so tests can pin every root
 /// without env mutation.
 pub(crate) struct AnnouncePaths {
     bus_live: PathBuf,
@@ -105,7 +105,7 @@ fn row_session_id(row: &Value) -> Option<String> {
         .filter(|sid| !sid.is_empty())
         .unwrap_or_else(|| {
             let harness = row_str(row, "harness").unwrap_or("");
-            crate::client_verbs::resume_session_id(row, harness)
+            crate::client_commands::resume_session_id(row, harness)
         });
     (!sid.is_empty()).then(|| sid.to_string())
 }
@@ -546,7 +546,7 @@ fn send_announcement(
     paths: &AnnouncePaths,
     projects: Option<&HashMap<String, String>>,
 ) -> Result<SendReceipt, (i32, String)> {
-    let registry = crate::client_verbs::load_registry_entries(&paths.registry)
+    let registry = crate::client_commands::load_registry_entries(&paths.registry)
         .map_err(|e| (12, format!("announce send: {e}")))?;
     let sender_row = if parsed.sender_kind == "operator" {
         None
@@ -917,7 +917,7 @@ fn render_compact_line(m: &Value) -> String {
     format!("announce (still standing): \"{subject}\" from {from}, expires {expires}")
 }
 
-/// Core reader, shared by the CLI verb and `nudge.rs` (the loop boundary reads
+/// Core reader, shared by the CLI command and `nudge.rs` (the loop boundary reads
 /// natively). `Ok(None)` = nothing to inject; the CLI prints that as silence.
 pub(crate) fn read_render(
     paths: &AnnouncePaths,
@@ -930,7 +930,7 @@ pub(crate) fn read_render(
     if standing.is_empty() {
         return Ok(None);
     }
-    let registry = crate::client_verbs::load_registry_entries(&paths.registry)?;
+    let registry = crate::client_commands::load_registry_entries(&paths.registry)?;
     let projects =
         crate::org_board::scope::project_map(&std::env::current_dir().unwrap_or_default()).ok();
     let mut seen = load_cursor(&paths.state_root, "announce-cursors", session_id);
@@ -1293,10 +1293,10 @@ pub(crate) fn run_announce_status(args: &[String], paths: &AnnouncePaths) -> i32
 }
 
 // ---------------------------------------------------------------------------
-// Verb entry
+// Command entry
 // ---------------------------------------------------------------------------
 
-/// Verb entrypoint reached from `bin/client.rs`'s direct dispatch. `pub`, not
+/// Command entrypoint reached from `bin/client.rs`'s direct dispatch. `pub`, not
 /// `pub(crate)`: a package's bin target sees its own lib as an external crate,
 /// so `pub(crate)` here fails the publish tarball build.
 pub fn run_announce(args: &[String]) -> i32 {

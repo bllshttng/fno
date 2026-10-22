@@ -1,5 +1,5 @@
 //! One armed loop per pane session: the schedule store, the
-//! `loops arm|disarm|armed` verbs, and the `pane_loop` daemon arm that types
+//! `loops arm|disarm|armed` commands, and the `pane_loop` daemon arm that types
 //! each due prompt into the row's pane.
 //!
 //! The arm keys on the row's live mux address and the hosted harness's own

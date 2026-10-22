@@ -60,7 +60,7 @@ RC=$?
 [[ "$OUT" == "$RENDER" ]] \
   && pass "first boundary: relays the render" || fail "first boundary: got: $OUT"
 grep -q "announce read" "$ARGS_LOG" 2>/dev/null \
-  && pass "argv: invokes the reader verb" || fail "argv: $(cat "$ARGS_LOG" 2>/dev/null)"
+  && pass "argv: invokes the reader command" || fail "argv: $(cat "$ARGS_LOG" 2>/dev/null)"
 grep -q -- "--session-id sess-abc123" "$ARGS_LOG" 2>/dev/null \
   && pass "argv: session id from hook stdin" || fail "argv: no session id: $(cat "$ARGS_LOG" 2>/dev/null)"
 grep -q -- "--boundary prompt" "$ARGS_LOG" 2>/dev/null \

@@ -1589,7 +1589,7 @@ def evaluate_quota_signal(
     This is the ONE probe site the dispatcher owns: it refreshes the snapshot
     (probe-on-stale) before consulting headroom, so the ~1-minute tick pays at
     most one HTTP call per provider per TTL. Callers gate on autonomy: explicit
-    human dispatch verbs must not call this (Locked Decision 5).
+    human dispatch commands must not call this (Locked Decision 5).
     """
     if now is None:
         now = time.time()

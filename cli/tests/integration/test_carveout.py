@@ -245,7 +245,7 @@ def test_list_pr_number_resolves_both_sessions(_repo: Path, monkeypatch):
 
 
 def test_list_pr_number_unreadable_ledger_is_not_no_match(_repo: Path, monkeypatch):
-    """The bug this verb replaces: a broken read must not read as 'no owning
+    """The bug this command replaces: a broken read must not read as 'no owning
     session'. The reason distinguishes them."""
     lj = _repo / "ledger.json"
     lj.write_text("{not json", encoding="utf-8")

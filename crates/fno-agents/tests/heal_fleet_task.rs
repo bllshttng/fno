@@ -1,4 +1,4 @@
-//! The heal -> fleet-task seam, driven through the public verb: a rebase
+//! The heal -> fleet-task seam, driven through the public command: a rebase
 //! conflict files one deduped fleet task beside the events journal, a clean
 //! rebase closes it with reason `rebased`, and two roots with the same
 //! conflict file two tasks distinguished by cwd (one heal process serves
@@ -207,13 +207,13 @@ fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
 }
 
 /// The merge leg's conflict stderr (a branch holding merge commits): the
-/// verb merged instead of rebasing and aborted, so the door is merge-then-push.
-const MERGE_LEG_PUSH_STDERR: &str = "pr-push: the branch is not safely rebasable onto origin/main (status merge_conflict; files: crates/fno-agents/src/a.rs). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.";
+/// command merged instead of rebasing and aborted, so the door is merge-then-push.
+const MERGE_LEG_PUSH_STDERR: &str = "pr-push: the branch is not safely rebasable onto origin/main (status merge_conflict; files: crates/fno-agents/src/a.rs). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.";
 
 #[test]
 fn a_merge_commit_branch_conflict_tells_the_owner_to_merge_not_rebase() {
     // A rebase flattens a branch that holds merge commits, so the merge
-    // leg's question quotes the verb's merge door and its run is a push.
+    // leg's question quotes the command's merge door and its run is a push.
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     stub_gh_rebase(d, "false");

@@ -12,7 +12,7 @@
 //!
 //! The primary table is not a `SHARED_TABLES` member: those ride graph.db's
 //! outbox and change log, and the event store is a different database. This
-//! carrier writes through its own verbs, so an older build cannot corrupt
+//! carrier writes through its own commands, so an older build cannot corrupt
 //! rows and needs no guard trigger.
 
 use crate::finalize::repo_identity_from_git_remote;
@@ -202,7 +202,7 @@ pub fn run_push(cwd: &Path) -> i32 {
 
 /// `fno-agents attest pull [--repo <slug>]`: this repo's primary rows as
 /// envelope lines on stdout. Exit 3 on an unreachable primary, the same
-/// code a shared claim verb answers with.
+/// code a shared claim command answers with.
 pub fn run_pull(args: &[String], cwd: &Path) -> i32 {
     let debug = std::env::var_os("FNO_ATTEST_DEBUG").is_some();
     let mut slug = repo_slug(cwd);
@@ -435,9 +435,9 @@ fn retract_body(
 }
 
 /// The newest passing attestation matching the (reviewer, attester, head)
-/// triple, over the journal plus the machine-global mirror. A pass the verb
+/// triple, over the journal plus the machine-global mirror. A pass the command
 /// cannot see is one it cannot revoke - the irretractable-forgery shape
-/// the verb exists to close.
+/// the command exists to close.
 fn find_pass(journal: &Path, reviewer: &str, attester: &str, head: &str) -> Option<Value> {
     let key = reviewer.trim_start_matches('/');
     let mut logs = vec![journal.to_path_buf()];

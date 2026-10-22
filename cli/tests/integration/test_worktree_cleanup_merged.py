@@ -676,7 +676,7 @@ def test_archive_refuses_a_detached_head_no_remote_is_proven_to_carry(repo: Path
 
 def test_dead_secondary_remote_degrades_instead_of_aborting(repo: Path):
     """fetch --all fails if ANY remote is dead, and one stale account remote
-    must not brick the reclaim verb. Origin stays the merged-check baseline
+    must not brick the reclaim command. Origin stays the merged-check baseline
     (branched judging continues); the detached tree is kept because its refs
     cannot be verified against the dead remote - with a receipt that says so,
     not a phantom unpushed count."""
@@ -726,7 +726,7 @@ def _wire_real_reapable(canon: Path) -> None:
     if GATE_BIN is None:
         pytest.skip("no fno-agents gate binary; build one (cargo build -p fno-agents)")
     # Named, because without it wt_reapable falls through to whatever
-    # `fno-agents` is on PATH or installed, which may predate the verb and
+    # `fno-agents` is on PATH or installed, which may predate the command and
     # answers nothing. The test would then fail as "kept (dirty)" and read as
     # a code defect.
     os.environ["FNO_AGENTS_BIN"] = str(GATE_BIN)

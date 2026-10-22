@@ -206,7 +206,7 @@ def _barrier_diag(tmp_path) -> str:
 
 
 @pytest.mark.dev_build
-def test_the_bare_guard_verb_never_clears_a_barrier_it_cannot_replace(
+def test_the_bare_guard_command_never_clears_a_barrier_it_cannot_replace(
     monkeypatch, tmp_path
 ):
     """`fno agents spawn-guard` takes no handover holder, so it never takes the

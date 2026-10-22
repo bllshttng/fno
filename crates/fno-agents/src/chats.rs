@@ -1315,7 +1315,7 @@ fn ensure_ready_at(chats_dir: &Path, db: &Path, bus: &Path) -> Result<(), String
 }
 
 // ---------------------------------------------------------------------------
-// Verb doors (the hidden `fno-agents chats` family; never advertised)
+// Command doors (the hidden `fno-agents chats` family; never advertised)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -1453,7 +1453,7 @@ pub(crate) fn show_at(
         // stored row: the registry-resolved name and short_id (a row renamed
         // after the send still answers under its current name), the
         // collision-safe session id, and the fmail id. No command strings: the
-        // receiver answers with its usual send verb. The stored row stays
+        // receiver answers with its usual send command. The stored row stays
         // verbatim underneath.
         let mut view = msg.clone();
         let from_session = msg
@@ -1574,22 +1574,22 @@ fn usage() -> i32 {
     2
 }
 
-/// The read verb for an `fmail-<id>` header, spelled once here so the
+/// The read command for an `fmail-<id>` header, spelled once here so the
 /// teaching line and the dispatch arm cannot drift apart: a rename edits this
 /// const and every carrier that prints the line follows.
-pub const MAIL_READ_VERB: &str = "show";
+pub const MAIL_READ_COMMAND: &str = "show";
 
 /// The one-line lesson carried once per session at session start and again
 /// after each compaction. Every carrier prints THIS string, so no carrier
-/// hardcodes the verb.
+/// hardcodes the command.
 pub fn teach_line() -> String {
     format!(
         "mail: an `fmail-<id>` header in a delivered turn is unread mail on the bus; \
-         read it with `fno agents mail {MAIL_READ_VERB} <id>`"
+         read it with `fno agents mail {MAIL_READ_COMMAND} <id>`"
     )
 }
 
-/// Verb entrypoint reached from bin/client.rs's direct dispatch. `pub`: the
+/// Command entrypoint reached from bin/client.rs's direct dispatch. `pub`: the
 /// bin target sees the lib as an external crate (the announce.rs note).
 pub fn run_chats(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
@@ -1914,7 +1914,7 @@ pub fn run_chats(args: &[String]) -> i32 {
                 }
             }
         }
-        MAIL_READ_VERB => {
+        MAIL_READ_COMMAND => {
             let mut id: Option<String> = None;
             let mut q = ShowQuery {
                 thread: false,

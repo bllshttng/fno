@@ -439,7 +439,7 @@ fn fork(req: &Request, parent: &Value, scope: &str, cwd: &Path) -> Receipt {
         .plan_path
         .clone()
         .filter(|p| !p.is_empty() && Some(p.as_str()) != parent_plan);
-    let verb = if born.reused.is_some() {
+    let command = if born.reused.is_some() {
         "reusing"
     } else {
         "filed"
@@ -459,7 +459,7 @@ fn fork(req: &Request, parent: &Value, scope: &str, cwd: &Path) -> Receipt {
         effective_plan,
         message: format!(
             "target binding: FORKED: {id} already has a PR, so this follow-up binds child {} \
-             ({verb}). {id} stays open with its own PR and plan.",
+             ({command}). {id} stays open with its own PR and plan.",
             born.id
         ),
         next: Some(format!("fno do target start {} --no-merge", born.id)),

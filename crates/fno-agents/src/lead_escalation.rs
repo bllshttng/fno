@@ -1,5 +1,5 @@
 //! The lead-escalation question renderer : one pure function set
-//! behind a hidden JSON verb, reached as `fno-agents lead-escalation-text`.
+//! behind a hidden JSON command, reached as `fno-agents lead-escalation-text`.
 //! The lane's reconcile fold lives in Rust (`fleet_task::reconcile`, reached
 //! from Python through the `fleet-task` transport); this side only renders
 //! text from the reading the producer passed.

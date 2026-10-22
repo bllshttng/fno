@@ -47,9 +47,9 @@ def test_the_short_address_refusal_covers_the_lanes_that_return_early(
     """An address rule that only covers the lanes reached last is not a rule.
 
     The refusal sat below the `--raw`, `--to-project`, `--kind` and job-address
-    returns, so `send <codex-head-8> '/verb' --raw` still fired a verb at
+    returns, so `send <codex-head-8> '/command' --raw` still fired a command at
     whichever colliding session discovery happened to list. `--raw` is the worst
-    of them: it runs a verb rather than leaving a message to be read.
+    of them: it runs a command rather than leaving a message to be read.
     """
     import json
 

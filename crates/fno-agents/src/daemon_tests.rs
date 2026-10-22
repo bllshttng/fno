@@ -4,7 +4,7 @@ mod blocking_bound_tests;
 mod store_socket_sweep_tests;
 use super::blocking_bound::directory_bytes_within;
 use super::*;
-use crate::client_verbs::RowLiveness;
+use crate::client_commands::RowLiveness;
 use crate::codex_thread_entry::build_codex_thread_entry;
 
 use crate::state::AgentState;
@@ -490,7 +490,7 @@ fn stop_refusal_names_a_pane_kill_the_mux_parser_accepts() {
         .next()
         .expect("the printed command is backtick-closed")
         .strip_prefix("fno mux pane kill ")
-        .expect("the printed command is the pane kill verb");
+        .expect("the printed command is the pane kill command");
     let op = fno::cli_args::PaneOp::Kill(fno::cli_args::MuxTail { tail: Vec::new() });
     let parsed = fno::mux_cli::parse_pane_args(&op, &[selector.into()])
         .expect("the refusal's own command must parse");
@@ -501,7 +501,7 @@ fn stop_refusal_names_a_pane_kill_the_mux_parser_accepts() {
 
 #[test]
 fn stale_summary_parses_the_asked_line() {
-    // The verb's ACTUAL --json output, embedded summary text and all -
+    // The command's ACTUAL --json output, embedded summary text and all -
     // not a synthetic standalone Summary line the parser could never see.
     let line = r#"{"outcome": "asked", "question_id": "q-37222570", "stale_count": 12, "oldest_h": 1829, "summary": "Summary: 12 stale, outcome asked, oldest 1829h"}"#;
     let r = parse_stale_sweep(line).expect("parses");
@@ -1335,7 +1335,7 @@ pub(super) fn probe(state: &str) -> Option<crate::truth_probe::TruthProbe> {
 /// readable. Every caller below has no live rows to probe, so this is the
 /// same "the probe said nothing" input the per-handle `None` used to be.
 // -- The shared liveness ladder (x-5d96) ---------------------------------
-use crate::client_verbs::row_liveness;
+use crate::client_commands::row_liveness;
 
 /// A per-row prober mirroring [`fn@live_liveness_prober`] for the staged
 /// answer: same positive-death fold, index built per call.
@@ -1448,7 +1448,7 @@ fn an_advancing_codex_rollout_answers_alive_and_the_sweep_names_it_live() {
     let codex = tempfile::tempdir().unwrap();
     write_rollout(codex.path(), "cdx-alive");
     let e = ladder_codex_row("codex-live", "cdx-alive");
-    let answer = crate::client_verbs::row_liveness_with_codex_root(
+    let answer = crate::client_commands::row_liveness_with_codex_root(
         &e,
         &crate::claude_ask::ClaudeHome::at(home.root()),
         codex.path(),
@@ -1467,14 +1467,14 @@ fn a_codex_row_with_no_readable_rollout_stays_unknown_and_kept() {
     let home = tmp_home("ladder-codex-absent");
     let codex = tempfile::tempdir().unwrap();
     let e = ladder_codex_row("codex-gone", "cdx-gone");
-    let answer = crate::client_verbs::row_liveness_with_codex_root(
+    let answer = crate::client_commands::row_liveness_with_codex_root(
         &e,
         &crate::claude_ask::ClaudeHome::at(home.root()),
         codex.path(),
         codex_truth_none,
     );
     assert_eq!(answer, RowLiveness::Unknown);
-    let answer = crate::client_verbs::row_liveness_with_codex_root(
+    let answer = crate::client_commands::row_liveness_with_codex_root(
         &e,
         &crate::claude_ask::ClaudeHome::at(home.root()),
         &codex.path().join("does-not-exist"),
@@ -1498,7 +1498,7 @@ fn a_claude_row_is_never_judged_by_the_codex_store() {
     e.harness = Some("claude".into());
     e.harness_session_id = Some("shared-sess".into());
     e.claude_session_uuid = None;
-    let answer = crate::client_verbs::row_liveness_with_codex_root(
+    let answer = crate::client_commands::row_liveness_with_codex_root(
         &e,
         &crate::claude_ask::ClaudeHome::at(home.root()),
         codex.path(),
@@ -1510,7 +1510,7 @@ fn a_claude_row_is_never_judged_by_the_codex_store() {
 
 #[test]
 fn a_stamped_codex_row_is_never_resurrected_by_a_fresh_rollout() {
-    // The stop verb writes a POSITIVE exit stamp; the rollout it leaves
+    // The stop command writes a POSITIVE exit stamp; the rollout it leaves
     // behind stays fresh-written for the whole window. Rung 4 must go
     // silent on a stamped row, or the sweep would clear the stamp and
     // resurrect a deliberately stopped row on freshness alone (the codex
@@ -1521,7 +1521,7 @@ fn a_stamped_codex_row_is_never_resurrected_by_a_fresh_rollout() {
     write_rollout(codex.path(), "cdx-stopped");
     let mut e = ladder_codex_row("codex-stopped", "cdx-stopped");
     e.exited_at = Some("2026-09-01T10:30:00Z".into());
-    let answer = crate::client_verbs::row_liveness_with_codex_root(
+    let answer = crate::client_commands::row_liveness_with_codex_root(
         &e,
         &crate::claude_ask::ClaudeHome::at(home.root()),
         codex.path(),
@@ -1559,7 +1559,7 @@ fn the_ladder_never_returns_dead() {
                 e.inside_leg = beat.map(|(at, _)| heartbeat(state::InsideLegState::Working, at));
                 e.claude_session_uuid = Some("3228ccad-c078-4b53-a8c9-7199b831eae4".into());
                 let answer =
-                    crate::client_verbs::row_liveness_with(&e, &ch, |_| truth.map(String::from));
+                    crate::client_commands::row_liveness_with(&e, &ch, |_| truth.map(String::from));
                 assert_ne!(
                     answer,
                     RowLiveness::Dead,
@@ -2282,7 +2282,7 @@ fn acquire_session_claim_maps_native_outcomes() {
 
 /// AC1-ERR / front-door routing: a fresh `host --provider claude` with no
 /// `--from` has nothing to resume; it is rejected (before any claim/spawn)
-/// with a pointer to the adopt verb, proving claude routed to the stream lane
+/// with a pointer to the adopt command, proving claude routed to the stream lane
 /// (not the codex/gemini PTY "only codex or gemini" gate).
 #[tokio::test(flavor = "current_thread")]
 async fn host_claude_without_from_rejected_with_adopt_pointer() {
@@ -2299,7 +2299,7 @@ async fn host_claude_without_from_rejected_with_adopt_pointer() {
             assert_eq!(e.code, ErrorCode::InvalidParams);
             assert!(
                 e.message.contains("promote") && e.message.contains("--from"),
-                "claude host without --from must point at the adopt verb; got: {}",
+                "claude host without --from must point at the adopt command; got: {}",
                 e.message
             );
         }
@@ -2595,7 +2595,7 @@ async fn switchboard_v2_routes_to_identity_guard() {
 // running them on the pre-rewrite daemon) and passes against the actor.
 
 // PATH + ask-wait env serialization across these tests AND every other
-// PATH-mutating test in the lib (provider.rs, client_verbs.rs): one shared
+// PATH-mutating test in the lib (provider.rs, client_commands.rs): one shared
 // mutex, never nested. The fakes install `codex` on PATH and one test
 // retunes FNO_CODEX_ASK_WAIT_MS; a concurrent `set_var` from an unrelated
 // test would make the child inherit a broken PATH (exit 127).

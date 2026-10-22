@@ -121,7 +121,7 @@ fn live_tickets(root: Option<&Path>) -> Vec<(i64, String)> {
         .into_iter()
         .filter(|rec| {
             matches!(
-                crate::claim_verbs::status_verdict(rec).0,
+                crate::claim_commands::status_verdict(rec).0,
                 claims::ClaimState::Live | claims::ClaimState::Suspect
             )
         })
@@ -167,7 +167,7 @@ pub(crate) fn place_note(receipt: Option<&Value>) -> String {
 /// its own tail (`refusing (--no-wait).`, or the queue line's advice). The
 /// rows are named by the probe's `slot_rows` field (`fno agents gate-status`),
 /// never by a second walk. When a reservation is counted, the sentence names
-/// the release verb for the first suspect one; all-live saturation names none.
+/// the release command for the first suspect one; all-live saturation names none.
 pub(crate) fn slot_refusal_line(
     slots: usize,
     learned: &crate::capacity::Effective,

@@ -19,9 +19,9 @@
 //!   own comment records this exact feedback loop, fixed for one process. This
 //!   widens the same rule from the process to the machine.
 //!
-//! **The key is the normalized argv, never the verb.** Three `fno do pr wait`
+//! **The key is the normalized argv, never the command.** Three `fno do pr wait`
 //! children measured live were PRs 1463, 1462 and 1394, from three different
-//! sessions: distinct arguments, distinct work. A latch keyed on the verb would
+//! sessions: distinct arguments, distinct work. A latch keyed on the command would
 //! have wedged three unrelated sessions.
 //!
 //! **A latch that can wedge a caller is worse than the fan-out it prevents.** A

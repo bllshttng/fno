@@ -13,7 +13,7 @@
 //! the `error` field is what an operator reads to fix the file.
 
 use super::models::{self, RoleLayer, RoleRef};
-use crate::client_verbs::py_repr_str;
+use crate::client_commands::py_repr_str;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;

@@ -81,7 +81,7 @@ The finish line is a PR with CI green and review done under your configured poli
 - [Docs home](docs/README.md): every page, grouped by what you are trying to do
 - [Install](docs/install.md): install, verify, and set up a project
 - [Quickstart](docs/quickstart.md): your first PR
-- [Workflows](docs/workflows.md): which verb for which task
+- [Workflows](docs/workflows.md): which command for which task
 - [Target pipeline](docs/guides/target.md): the loop's flags, gates, and resume behavior
 - [Think and plan](docs/guides/think-and-plan.md): design exploration and planning
 - [PR lifecycle](docs/guides/pr-lifecycle.md): review, create, check, merged

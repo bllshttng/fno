@@ -1,6 +1,6 @@
 """The containment release, shared by `fno backlog contain`.
 
-The fold + refusal guards live in the native verb (workflows.rs contain_write,
+The fold + refusal guards live in the native command (workflows.rs contain_write,
 decompose.rs contain_into); only the release still has a wheel consumer
 (strand.py).
 """

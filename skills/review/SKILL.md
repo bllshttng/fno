@@ -139,7 +139,7 @@ fi
 
 ### 2b. Run the lane
 
-Load [single-lane.md](references/single-lane.md) and execute it in full, in this context, with the resolved level, flags, and target. The lane runs inline as ordinary tool calls: mechanical checks, finder angles, dedup, three-state verify, cite-or-drop, carry-forward, then the classified emit. It dispatches ZERO review subagents and fires no native review verb; the panel that used to run here is retired, and the six specialist hunter agents remain individually invocable by their own names.
+Load [single-lane.md](references/single-lane.md) and execute it in full, in this context, with the resolved level, flags, and target. The lane runs inline as ordinary tool calls: mechanical checks, finder angles, dedup, three-state verify, cite-or-drop, carry-forward, then the classified emit. It dispatches ZERO review subagents and fires no native review command; the panel that used to run here is retired, and the six specialist hunter agents remain individually invocable by their own names.
 
 ### 2f. Run the lane fresh (`--fresh`)
 
@@ -211,7 +211,7 @@ Head-pinning is mandatory: the helper stamps `git rev-parse HEAD`, and loop-chec
 
 ## The manual coverage emit (sanctioned, with preconditions)
 
-A PR whose session ended still has a certification path: `fno doctor event emit -t review_coverage -d '{...}'` is a sanctioned surface, not a loophole, and the merge-path reader accepts its row. The emit reaches BOTH the project log and the machine-global log (the type rides `GLOBAL_MIRROR_TYPES`), so a row emitted inside a worktree whose journal is not linked to canonical is still found by a canonical merge. Two preconditions keep it honest: `head_sha` in the payload must equal the PR's live `headRefOid` (a row pinned to a stale head is refused by the gate's staleness conjunct, not honored), and a required `code-review` reviewer still needs its own `local_attestation` verdict entry - the coverage row records the state of the world, it does not substitute for the review a configured reviewer owes. Nobody may read this verb as a way to hand-clear the gate.
+A PR whose session ended still has a certification path: `fno doctor event emit -t review_coverage -d '{...}'` is a sanctioned surface, not a loophole, and the merge-path reader accepts its row. The emit reaches BOTH the project log and the machine-global log (the type rides `GLOBAL_MIRROR_TYPES`), so a row emitted inside a worktree whose journal is not linked to canonical is still found by a canonical merge. Two preconditions keep it honest: `head_sha` in the payload must equal the PR's live `headRefOid` (a row pinned to a stale head is refused by the gate's staleness conjunct, not honored), and a required `code-review` reviewer still needs its own `local_attestation` verdict entry - the coverage row records the state of the world, it does not substitute for the review a configured reviewer owes. Nobody may read this command as a way to hand-clear the gate.
 
 
 Each reviewer also declares what it NEEDS in order to run - `code-review` needs only the plugin itself (the lane runs inline on every harness), `declare` needs nothing - in `_RESOLVABLE_REVIEWERS` (`cli/src/fno/config/__init__.py`). `fno do target init` resolves that against the running session and refuses a gate nothing here can satisfy; `fno config doctor --review` reports the same read-only. A reviewer that cannot run is never quietly swapped for `declare`: that would clear the gate with no review behind it.

@@ -138,7 +138,7 @@ def test_spawn_paths_lint_rejects_spawn_flag_after_other_options(tmp_path: Path)
 # --------------------------------------------------------------------------- #
 def test_flock_pattern_degrades_when_script_absent(tmp_path: Path, monkeypatch) -> None:
     """US1 (AC1-HP/ERR/UI/EDGE/FR): with the lint script absent (a no-script env),
-    the verb exits 2 with an actionable stderr message - never bash's 127 and
+    the command exits 2 with an actionable stderr message - never bash's 127 and
     never a Python traceback."""
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))  # empty dir -> no script
     result = runner.invoke(app, ["flock-pattern"])
@@ -153,7 +153,7 @@ def test_every_check_parameter_is_declared_on_the_dispatcher() -> None:
     """Every option a check accepts must exist on `fno doctor lint`.
 
     The eight subcommands each carried their own options; the collapse turned
-    those into options on one verb, dispatched by signature. A check parameter
+    those into options on one command, dispatched by signature. A check parameter
     with no matching option on the dispatcher is UNREACHABLE - the flag is
     rejected as unknown before any check runs.
 

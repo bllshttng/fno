@@ -184,9 +184,9 @@ const PROJECT_ARM: &str = concat!(
 const LOCK_ARM: &str = concat!(
     "mail: live delivery to ",
     "{TARGET}",
-    " was not attempted (another verb held ",
+    " was not attempted (another command held ",
     "{TARGET}",
-    "'s agent lock past the wait); queued durably. That holder is any verb on this agent - a send, an ask, a spawn, a stop, an rm - so the token proves nothing about the recipient in either direction. Do not resurrect it on this evidence, and do not read it as healthy either: check it.\n  a busy peer may not drain soon, so the rungs that stay open,\n  in this order - a bare re-send DOUBLE-DELIVERS, since the queued\n  copy still lands at the recipient's next drain:\n    fno agents peek ",
+    "'s agent lock past the wait); queued durably. That holder is any command on this agent - a send, an ask, a spawn, a stop, an rm - so the token proves nothing about the recipient in either direction. Do not resurrect it on this evidence, and do not read it as healthy either: check it.\n  a busy peer may not drain soon, so the rungs that stay open,\n  in this order - a bare re-send DOUBLE-DELIVERS, since the queued\n  copy still lands at the recipient's next drain:\n    fno agents peek ",
     "{TARGET}",
     "     # still taking turns, or just stopped?\n    fno agents mail withdraw <id>      # retract the queued copy FIRST\n    fno agents mail send ",
     "{TARGET}",

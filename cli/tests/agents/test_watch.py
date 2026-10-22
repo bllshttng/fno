@@ -40,7 +40,7 @@ def test_watch_loop_unreachable_returns_1(capsys) -> None:
 
 def test_cmd_watch_unknown_name_exits_2(tmp_path: Path, monkeypatch, runner: CliRunner) -> None:
     # No registry.json -> name cannot resolve -> exit 2. Also pins that `watch`
-    # routes to the Python command (it is not a Rust client verb).
+    # routes to the Python command (it is not a Rust client command).
     monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / "agents"))
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     result = runner.invoke(agents_app, ["watch", "nobody"])

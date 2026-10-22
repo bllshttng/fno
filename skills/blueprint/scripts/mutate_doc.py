@@ -819,7 +819,7 @@ def _validate_proposed_frontmatter(new_fm: dict[str, Any]) -> str | None:
     refusing only on present-but-invalid fields (a bad `size`, a malformed
     timestamp, an off-vocabulary status). Best-effort defense-in-depth: if no
     pydantic-capable interpreter is found, skip rather than block the save (the
-    validate verb and finalize's post-stamp check also guard the schema).
+    validate command and finalize's post-stamp check also guard the schema).
     """
     py = _pydantic_python()
     if py is None:
@@ -1076,7 +1076,7 @@ def mutate(
     # timestamp, an off-vocabulary status); MISSING required fields are NOT
     # enforced here - a design doc legitimately carries no `node` until it binds
     # to a backlog node (half of real design docs have none at this point).
-    # Best-effort defense-in-depth (the verb and finalize also validate): if the
+    # Best-effort defense-in-depth (the command and finalize also validate): if the
     # schema deps are unavailable in the ambient interpreter, skip rather than
     # block the save.
     schema_err = _validate_proposed_frontmatter(new_fm)

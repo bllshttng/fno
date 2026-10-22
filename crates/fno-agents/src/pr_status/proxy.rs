@@ -90,7 +90,7 @@ fn delegate(real: &str, args: &[String]) -> ! {
         std::process::exit(quota::REFUSED);
     }
     // The draft guard: an unreachable door admits, the sweep is the second
-    // gate (the Python leg rode the same door through verb_call).
+    // gate (the Python leg rode the same door through command_call).
     let ask = json!({
         "pr_draft_ready": {
             "check": args,

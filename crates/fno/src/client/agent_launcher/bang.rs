@@ -10,7 +10,7 @@ use std::time::Duration;
 use super::{close, write_msg, ClientMsg, Phase, View};
 use crate::mux_cli::{control_roundtrip_with_timeouts, ControlError};
 use crate::pane_send_audit::{append_agents_event, pane_send_audit_events_path};
-use crate::proto::{socket_path, Command, ControlVerb, PanePlacement, ServerMsg};
+use crate::proto::{socket_path, Command, ControlCommand, PanePlacement, ServerMsg};
 
 /// The journal line is data, not a transcript: past this the row truncates.
 const MAX_LINE_CHARS: usize = 512;
@@ -97,8 +97,8 @@ pub(super) async fn run(
     let events = pane_send_audit_events_path();
     let session = view.session.clone();
     let sock = socket_path(&session)?;
-    run_with(view, sock_w, &events, move |verb| {
-        control_roundtrip_with_timeouts(&sock, &session, verb, CONTROL_TIMEOUT, CONTROL_TIMEOUT)
+    run_with(view, sock_w, &events, move |command| {
+        control_roundtrip_with_timeouts(&sock, &session, command, CONTROL_TIMEOUT, CONTROL_TIMEOUT)
     })
     .await
 }
@@ -110,7 +110,7 @@ pub(super) async fn run_with(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
     events: &Path,
-    roundtrip: impl FnOnce(ControlVerb) -> Result<ServerMsg, ControlError> + Send + 'static,
+    roundtrip: impl FnOnce(ControlCommand) -> Result<ServerMsg, ControlError> + Send + 'static,
 ) -> Result<(), String> {
     let Some(l) = view.launcher.as_mut() else {
         return Ok(());
@@ -144,7 +144,7 @@ pub(super) async fn run_with(
     }
     let shell = user_shell();
     let argv = shell_argv(&shell, &line);
-    let verb = ControlVerb::PaneRun {
+    let command = ControlCommand::PaneRun {
         cwd: cwd.clone(),
         argv,
         cols: None,
@@ -154,7 +154,7 @@ pub(super) async fn run_with(
         worker: None,
         fno_id: None,
     };
-    let reply = tokio::task::spawn_blocking(move || roundtrip(verb))
+    let reply = tokio::task::spawn_blocking(move || roundtrip(command))
         .await
         .map_err(|e| format!("control round-trip task failed: {e}"))?;
     let Some(l) = view.launcher.as_mut() else {
@@ -281,13 +281,13 @@ mod tests {
 
         // AC4: the exact PaneRun, one ran row, the composer closed and
         // reset, the focus frame on the socket.
-        let seen: std::sync::Arc<std::sync::Mutex<Option<ControlVerb>>> =
+        let seen: std::sync::Arc<std::sync::Mutex<Option<ControlCommand>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
         let seen2 = seen.clone();
         let mut v = shell_view("bang-run", "printf hi; pwd", Some("/tmp/proj-a"));
         rt.block_on(async {
-            run_with(&mut v, &mut sock, &events, move |verb| {
-                *seen2.lock().unwrap() = Some(verb);
+            run_with(&mut v, &mut sock, &events, move |command| {
+                *seen2.lock().unwrap() = Some(command);
                 Ok(ServerMsg::PaneSpawned {
                     pane_id: 9,
                     placement: None,
@@ -297,7 +297,7 @@ mod tests {
             .unwrap();
         });
         {
-            let ControlVerb::PaneRun {
+            let ControlCommand::PaneRun {
                 cwd, argv, claim, ..
             } = seen.lock().unwrap().take().unwrap()
             else {
@@ -344,11 +344,11 @@ mod tests {
         assert_eq!(row["type"], "composer_shell_refused");
         assert_eq!(row["data"]["outcome"], "refused");
 
-        // The empty project refuses without building a verb.
+        // The empty project refuses without building a command.
         let mut v = shell_view("bang-run", "git status", None);
         rt.block_on(async {
             run_with(&mut v, &mut sock, &events, |_| {
-                panic!("no verb may be sent for an empty project")
+                panic!("no command may be sent for an empty project")
             })
             .await
             .unwrap();

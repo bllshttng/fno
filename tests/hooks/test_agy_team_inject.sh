@@ -88,7 +88,7 @@ RC=$?
 grep -q -- "--session-id conv-1" "$ARGS_LOG" 2>/dev/null \
   && pass "argv: session id from conversationId" || fail "argv: $(cat "$ARGS_LOG" 2>/dev/null)"
 grep -q "announce read" "$ARGS_LOG" 2>/dev/null \
-  && pass "argv: invokes the reader verb" || fail "argv: wrong verb: $(cat "$ARGS_LOG" 2>/dev/null)"
+  && pass "argv: invokes the reader command" || fail "argv: wrong command: $(cat "$ARGS_LOG" 2>/dev/null)"
 grep -q -- "--harness agy" "$ARGS_LOG" 2>/dev/null \
   && pass "argv: harness agy" || fail "argv: no harness: $(cat "$ARGS_LOG" 2>/dev/null)"
 grep -q -- "--boundary prompt" "$ARGS_LOG" 2>/dev/null \

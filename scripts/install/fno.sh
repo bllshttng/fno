@@ -482,12 +482,12 @@ shim_sweep() {
 
 # --- plugin auto-wire (detect-and-wire) -------------------------------------
 # The CLI just verified; hand the plugin wiring to the front door's
-# detect-and-wire verb: every agent CLI on PATH gets the fno plugin without
-# asking, and the verb names every outcome (installed, kept, manual, failed)
+# detect-and-wire command: every agent CLI on PATH gets the fno plugin without
+# asking, and the command names every outcome (installed, kept, manual, failed)
 # so nothing is silent. The wizard stays for anyone who wants to choose.
 # FNO_NO_WIRE skips the step for people who manage their own harness configs.
-# Best-effort: the verb exits 0 and names every outcome, and even a hard
-# refusal (an older front door that still forwards this unknown verb to the
+# Best-effort: the command exits 0 and names every outcome, and even a hard
+# refusal (an older front door that still forwards this unknown command to the
 # Python CLI, which errors) is non-fatal - the CLI is already installed.
 wire_harnesses() {
 	[ -n "${FNO_NO_WIRE:-}" ] && return 0
@@ -501,7 +501,7 @@ wire_harnesses() {
 }
 
 # The one run-once setup (config + wiring), best effort: the CLI install
-# already succeeded, and the verb stops at its own done markers. FNO_YES or
+# already succeeded, and the command stops at its own done markers. FNO_YES or
 # a non-TTY stdin (curl | sh) takes the recommended defaults; the JSON
 # report prints so the run is never silent. FNO_NO_WIRE carries through:
 # the opt-out that skips plugin wiring skips the setup pass too, because

@@ -1,6 +1,6 @@
 """Succession: an stepping_down lead hands its role to the successor it spawns.
 
-This replaces `fno agents role --succeed`. The verb is gone, but the behavior it
+This replaces `fno agents role --succeed`. The command is gone, but the behavior it
 existed for is not optional, and it cannot simply become "exit, then let the next
 lead role itself": a session that has already exited spawns nothing. The handoff
 has to happen while the lead still terms, so it happens at the moment it creates
@@ -197,7 +197,7 @@ def test_a_reclaim_refuses_a_holder_name_rebound_inside_the_lock_window(
 # --- you cannot hand down authority you do not hold --------------------------
 #
 # The strict-subset rule was documented from the start and enforced by the
-# deleted promotion verb. Its replacement (`scope_contains`) shipped with no
+# deleted promotion command. Its replacement (`scope_contains`) shipped with no
 # caller at all, so for one commit any spawned worker could mint portfolio
 # authority for its child. These exercise the seam, not the helper: a test that
 # called `scope_contains` directly passed the whole time the rule was unenforced.

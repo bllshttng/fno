@@ -13,7 +13,7 @@ runner = CliRunner()
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_unmeasured_refusal_names_only_remedies_the_verbs_support():
+def test_unmeasured_refusal_names_only_remedies_the_commands_support():
     evidence = REPO_ROOT / "crates/fno-agents/src/evidence.rs"
     source = evidence.read_text(encoding="utf-8")
     start = source.index('the ruling asserts a code fact')

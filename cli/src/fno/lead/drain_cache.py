@@ -1,6 +1,6 @@
 """Disk caches keyed on the store's own identity. A changed graph misses by
 construction, and every helper fails open - a cache must never add a failure
-mode to a verb whose contract is exit 1 on an unreadable graph.
+mode to a command whose contract is exit 1 on an unreadable graph.
 """
 
 from __future__ import annotations

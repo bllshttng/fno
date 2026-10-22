@@ -1,6 +1,6 @@
 //! The slot-census tests: a dead headless holder frees its max_live slot,
 //! every counted reservation is named, and the refusal names the release
-//! verb. Split from spawn_gate.rs to keep the over-budget file shrinking.
+//! command. Split from spawn_gate.rs to keep the over-budget file shrinking.
 
 use super::*;
 

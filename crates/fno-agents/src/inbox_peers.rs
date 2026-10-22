@@ -31,7 +31,7 @@ pub fn read(start: &Path) -> InboxPeers {
             let Some(block) = block.as_object() else {
                 out.warnings.push(format!(
                     "inbox.settings: peer {} entry is not a mapping; dropping (got {})",
-                    crate::client_verbs::py_repr_str(name),
+                    crate::client_commands::py_repr_str(name),
                     crate::fallback_chain::type_name(block)
                 ));
                 continue;
@@ -43,7 +43,7 @@ pub fn read(start: &Path) -> InboxPeers {
                 None | Some(Value::Null) => {}
                 Some(other) => out.warnings.push(format!(
                     "inbox.settings: peer {} surfaces is not a list; dropping (got {})",
-                    crate::client_verbs::py_repr_str(name),
+                    crate::client_commands::py_repr_str(name),
                     crate::fallback_chain::type_name(other)
                 )),
             }
@@ -63,7 +63,7 @@ pub fn read(start: &Path) -> InboxPeers {
                 }
                 other => out.warnings.push(format!(
                     "inbox.settings: surface_patterns[{}] is not a list; dropping (got {})",
-                    crate::client_verbs::py_repr_str(name),
+                    crate::client_commands::py_repr_str(name),
                     crate::fallback_chain::type_name(other)
                 )),
             }

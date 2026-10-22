@@ -1,6 +1,6 @@
 //! `evals-arm`: the eval bank's scheduled writer, native.
 //!
-//! Two modes behind one verb. **Tick mode** (default) is the pr-watch tick's
+//! Two modes behind one command. **Tick mode** (default) is the pr-watch tick's
 //! evals leg: when the newest regression-tier run is older than
 //! `evals.schedule_days` it launches **run mode** detached (new session,
 //! stdio on /dev/null) and holds the `evals:scheduled-run` claim across

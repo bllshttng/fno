@@ -1,11 +1,11 @@
-"""Removed verbs, and what replaced each one.
+"""Removed commands, and what replaced each one.
 
-A verb that is deleted outright fails its callers with ``No such command
+A command that is deleted outright fails its callers with ``No such command
 'inbox'.`` - true, useless, and identical to the error for a typo. The caller
-learns that the verb is gone and nothing about where the capability went, so
+learns that the command is gone and nothing about where the capability went, so
 every removal costs somebody a bisect or a docs crawl.
 
-A tombstone is cheaper than a broken caller. Removing a verb means moving its
+A tombstone is cheaper than a broken caller. Removing a command means moving its
 name into ``tombstones.toml`` with the replacement, not deleting the name
 outright, and the refusal then teaches:
 
@@ -13,14 +13,14 @@ outright, and the refusal then teaches:
     Error: `fno backlog inbox` was removed. Use `fno backlog capture` - it is
     the same command; `inbox` was a duplicate registration of the same app.
 
-The table is keyed by the FULL verb path, matched on longest prefix, so one
+The table is keyed by the FULL command path, matched on longest prefix, so one
 entry covers a whole removed subtree rather than one line per leaf. Every
 lookup is exact: a group is handed its own user-facing path by
 :func:`tombstone_group_cls` rather than inferring one, because two rounds of
-inference each produced a tombstone that answered confidently for a verb
+inference each produced a tombstone that answered confidently for a command
 nobody typed.
 
-Tombstones are not baselined verbs. They resolve to a refusal, never to a
+Tombstones are not baselined commands. They resolve to a refusal, never to a
 command, so they add nothing to the surface the ratchet counts - which is the
 point: the name stays reachable as a signpost while the capability is gone.
 """
@@ -53,7 +53,7 @@ _TABLE: dict[str, str] | None = None
 
 
 def tombstone_for(path: str) -> tuple[str, str] | None:
-    """``(removed path, replacement)`` for the verb path ``path``.
+    """``(removed path, replacement)`` for the command path ``path``.
 
     Matched on longest PREFIX only, so a removed GROUP needs one entry rather
     than one per leaf, and a deeper tombstone inside a removed subtree wins over
@@ -86,14 +86,14 @@ def tombstone_for(path: str) -> tuple[str, str] | None:
 
 
 def refuse(path: str) -> click.UsageError:
-    """The refusal a removed verb raises, naming its replacement."""
+    """The refusal a removed command raises, naming its replacement."""
     hit = tombstone_for(path)
     if hit is None:  # pragma: no cover - callers check first
         return click.UsageError(f"No such command {path.split()[-1]!r}.")
     removed, replacement = hit
-    # A verb with a successor says "Use X"; one whose capability simply went
+    # A command with a successor says "Use X"; one whose capability simply went
     # away says so directly. "Use nothing - ..." is the kind of sentence that
-    # makes a reader think the tool is broken rather than the verb gone.
+    # makes a reader think the tool is broken rather than the command gone.
     lead = "" if replacement.startswith("nothing") else "Use "
     return click.UsageError(f"`fno {removed}` was removed. {lead}{replacement}.")
 
@@ -103,13 +103,13 @@ class TombstoneGroup(typer.core.TyperGroup):
 
     Subclasses ``TyperGroup``, not ``click.Group``: Typer asserts the ``cls=``
     it is handed is one of its own, and a plain Click group fails at import time
-    rather than at the first unknown verb.
+    rather than at the first unknown command.
 
-    ``verb_prefix`` is the group's USER-FACING path, baked in by
+    ``command_prefix`` is the group's USER-FACING path, baked in by
     :func:`tombstone_group_cls`. It is not read from the context, because the
     context does not reliably know it: a direct ``runner.invoke`` sees only the
     leaf, and ``fno backlog``'s own Typer name is ``graph``. Every attempt to
-    infer it produced a tombstone that answered for a verb nobody typed.
+    infer it produced a tombstone that answered for a command nobody typed.
 
     Hooked at ``get_command`` rather than only at ``resolve_command``: both are
     reachable (``resolve_command`` on a real invocation, ``get_command`` from
@@ -117,20 +117,20 @@ class TombstoneGroup(typer.core.TyperGroup):
     two paths is the shape that lets a removal ship looking guarded.
     """
 
-    verb_prefix: str = ""
+    command_prefix: str = ""
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         cmd = super().get_command(ctx, cmd_name)
         if cmd is not None:
             return cmd
-        full = f"{self.verb_prefix} {cmd_name}".strip()
+        full = f"{self.command_prefix} {cmd_name}".strip()
         if tombstone_for(full) is not None:
             raise refuse(full)
         return None
 
 
-def tombstone_group_cls(verb_prefix: str) -> type[TombstoneGroup]:
-    """A :class:`TombstoneGroup` that knows its own user-facing verb path.
+def tombstone_group_cls(command_prefix: str) -> type[TombstoneGroup]:
+    """A :class:`TombstoneGroup` that knows its own user-facing command path.
 
     Typer instantiates ``cls=`` with its own kwargs only, so the prefix cannot
     be passed at construction. Baking it into a subclass is the same trick
@@ -140,6 +140,6 @@ def tombstone_group_cls(verb_prefix: str) -> type[TombstoneGroup]:
     class _Cls(TombstoneGroup):
         pass
 
-    _Cls.verb_prefix = verb_prefix
-    _Cls.__name__ = f"TombstoneGroup_{verb_prefix or 'root'}"
+    _Cls.command_prefix = command_prefix
+    _Cls.__name__ = f"TombstoneGroup_{command_prefix or 'root'}"
     return _Cls

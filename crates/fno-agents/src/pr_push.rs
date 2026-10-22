@@ -10,12 +10,12 @@
 //! of the re-read-and-push decision; this module is now the shared push
 //! layer, heal calls [`guarded_push`] instead, and heal.rs shrinks under the
 //! file-budget ratchet. Exit codes are heal's, so one table covers both
-//! verbs:
+//! commands:
 //! `--pr <N>` selects the local worktree on that PR's head branch.
 //!
 //! * `0` pushed
 //! * `1` preflight red (heal already uses 1 for escalations; the meanings
-//!   are per-verb, the numbers shared)
+//!   are per-command, the numbers shared)
 //! * `2` a run in flight on a not-yet-red head (nothing pushed)
 //! * `3` a refusal the caller must fix (protected, dirty, conflict,
 //!   remote-only commits)
@@ -24,7 +24,7 @@
 //!
 //! When the remote head's latest rows already carry a failure, a run still
 //! testing it holds a CI slot the fix waits behind. User law 2026-10-09:
-//! the verb cancels that run (the Actions run endpoints, best-effort),
+//! the command cancels that run (the Actions run endpoints, best-effort),
 //! journals the cancellation like a `--force-ci-cancel` bypass, and pushes.
 //! A head with no red row is never cancelled: an all-green or clean run
 //! still refuses with exit 2 and gets to finish.
@@ -36,7 +36,7 @@
 //! remote side counts only when its tree equals the automatic merge of its
 //! parents: a merge carrying hand-resolved content is refused, never
 //! leased over. The git pre-push hook is unaffected: it refuses protected
-//! branches by destination, and this verb refuses them before anything
+//! branches by destination, and this command refuses them before anything
 //! moves.
 
 use serde_json::{json, Value};
@@ -52,7 +52,7 @@ pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// the repo's own doc prices the full rehearsal at 22 to 47 minutes.
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Branches the push verb refuses to move, same set the rebase leg refuses
+/// Branches the push command refuses to move, same set the rebase leg refuses
 /// to rebase.
 const PROTECTED: [&str; 4] = ["main", "master", "develop", "dev"];
 
@@ -536,7 +536,7 @@ pub(crate) enum PushOutcome {
     PushFailed(String),
 }
 
-/// One in-flight read: what the verb would refuse with, whether any latest
+/// One in-flight read: what the command would refuse with, whether any latest
 /// row already failed, and the Actions run ids still testing the head.
 pub(crate) struct Flight {
     pub check: String,
@@ -562,9 +562,9 @@ fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
 }
 
 /// The in-flight decision + one push. heal calls this after its commit; the
-/// verb adds the fetch/rebase/preflight legs around it. `head` is the
+/// command adds the fetch/rebase/preflight legs around it. `head` is the
 /// REMOTE head whose runs a push would cancel (heal knows it from read_pr;
-/// the verb derives it from `@{u}`). Empty `head` skips the read: a branch
+/// the command derives it from `@{u}`). Empty `head` skips the read: a branch
 /// with no upstream has nothing in flight anywhere.
 pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
     let branch = run_labeled(
@@ -707,7 +707,7 @@ fn stamp_age_secs(ctx: &PushCtx, branch: &str) -> Option<u64> {
 /// Read whether a remote head has a run in flight, and whether any latest
 /// row is already red. `None` means the head has no registered pending
 /// check; errors stay distinct so callers can fail open only at the
-/// hand-push hook, never in the guarded verb.
+/// hand-push hook, never in the guarded command.
 pub(crate) fn in_flight(ctx: &PushCtx, branch: &str, head: &str) -> Result<Option<Flight>, String> {
     if head.is_empty() {
         return Ok(None);
@@ -811,10 +811,10 @@ fn current_branch_quoted(ctx: &PushCtx) -> String {
     .unwrap_or_else(|_| "HEAD".to_string())
 }
 
-// ── the verb ────────────────────────────────────────────────────────────────
+// ── the command ────────────────────────────────────────────────────────────────
 
-/// Parsed verb arguments.
-struct VerbArgs {
+/// Parsed command arguments.
+struct CommandArgs {
     force: bool,
     pr: Option<String>,
     in_flight: Option<String>,
@@ -826,8 +826,8 @@ struct VerbArgs {
     stamps_dir: PathBuf,
 }
 
-fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
-    let mut a = VerbArgs {
+fn parse_command_args(argv: &[String]) -> Result<CommandArgs, String> {
+    let mut a = CommandArgs {
         force: false,
         pr: None,
         in_flight: None,
@@ -839,7 +839,7 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
         // The hook's own stamp dir (git_protection_impl.py
         // _push_stamp_path resolves $FNO_HOME/push-stamps through the state
         // door, falling back to that legacy spelling on a door refusal).
-        // Rooting this at AgentsHome would split the clock: the verb writes
+        // Rooting this at AgentsHome would split the clock: the command writes
         // stamps the hook never reads, and the registration-window guard
         // never fires.
         stamps_dir: default_stamps_dir(),
@@ -903,7 +903,7 @@ fn unknown_flag(other: &str) -> String {
 /// The state-root `push-stamps` folder under the hook's own root chain
 /// (git_protection_impl.py: `FNO_HOME = env FNO_HOME or ~/.fno`), answered
 /// by the layout table so a fold retargets this side with the hook's door
-/// call in the same release. The hook reads the stamps this verb writes,
+/// call in the same release. The hook reads the stamps this command writes,
 /// so both sides must resolve the dir the same way or the registration
 /// window never fires.
 pub(crate) fn default_stamps_dir() -> PathBuf {
@@ -1146,7 +1146,7 @@ fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
             Err(err) => {
                 eprintln!(
                     "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_failed). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push. ({err})"
+                     (status merge_failed). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push. ({err})"
                 );
                 return Err(3);
             }
@@ -1157,12 +1157,12 @@ fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
             if files.is_empty() {
                 eprintln!(
                     "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_failed). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push."
+                     (status merge_failed). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push."
                 );
             } else {
                 eprintln!(
                     "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_conflict; files: {}). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.",
+                     (status merge_conflict; files: {}). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.",
                     files.join(", ")
                 );
             }
@@ -1172,7 +1172,7 @@ fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
     }
 }
 
-/// The guarded push, verb entry. Sequence: refuse protected/dirty, fetch,
+/// The guarded push, command entry. Sequence: refuse protected/dirty, fetch,
 /// measure behind-before, integrate origin/main only when GitHub reads the
 /// PR dirty or behind (rebase, or merge when the branch already holds
 /// merges; refuse on conflict, naming the resolver door; otherwise none),
@@ -1182,7 +1182,7 @@ fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
 /// when the branch was rebased), stamp, receipt. Exit codes: 0 pushed, 1
 /// preflight red, 2 in flight, 3 refusal, 4 read error.
 pub fn run_push(argv: &[String]) -> i32 {
-    let mut a = match parse_verb_args(argv) {
+    let mut a = match parse_command_args(argv) {
         Ok(a) => a,
         Err(msg) => {
             eprintln!("pr-push: {msg}");
@@ -1372,7 +1372,7 @@ pub fn run_push(argv: &[String]) -> i32 {
     // preflight: a doomed push must not first spend a rehearsal of up to an
     // hour. This is the head both the lease and the in-flight read pin to;
     // `@{u}` is wrong for both - a branch born off origin/main tracks main
-    // until its first verb push re-points the upstream, and main's checks
+    // until its first command push re-points the upstream, and main's checks
     // would read as this branch's runs. A branch with no same-name remote
     // has an empty head: first push, nothing in flight, no lease.
     let remote_ref = format!("origin/{branch}");
@@ -1786,7 +1786,7 @@ exit 1
         );
         assert_eq!(crate::test_delta::max_net_new(work_path), None);
 
-        // Wiring rows: the verb refuses the +1 head only when the work repo
+        // Wiring rows: the command refuses the +1 head only when the work repo
         // sets the knob, pushes that same head when the knob is absent, and
         // pushes the flat head either way. The flat body keeps the base test
         // and adds a non-test edit, so the delta is genuinely flat.

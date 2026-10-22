@@ -187,9 +187,9 @@ fn retired_squad_spelling_is_removed() {
     );
 }
 
-/// A bare family verb and an unknown verb are both usage (exit 2), and the
-/// message names the operation set or the bad verb: the typed tree refuses a
-/// bare `mux workspace` with the required-subcommand line and an unknown verb
+/// A bare family command and an unknown command are both usage (exit 2), and the
+/// message names the operation set or the bad command: the typed tree refuses a
+/// bare `mux workspace` with the required-subcommand line and an unknown command
 /// with a named unrecognized-subcommand refusal, both qualified by the path.
 #[test]
 fn workspace_family_usage_names_prune() {
@@ -201,7 +201,7 @@ fn workspace_family_usage_names_prune() {
         ),
         (
             vec!["mux", "workspace", "bogus"],
-            "unknown verb",
+            "unknown command",
             "fno mux workspace: unrecognized subcommand 'bogus'",
         ),
     ] {

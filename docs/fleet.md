@@ -64,5 +64,5 @@ To dispatch every ready backlog node as a background worker: `/fno:target bg --a
 
 ## Reference
 
-- [Every agents verb per harness](harness-command-matrix.md).
+- [Every agents command per harness](harness-command-matrix.md).
 - [Status event wire contract](protocol/a2a-status-events.md) and [telemetry schema](reference/otel-schema.md).

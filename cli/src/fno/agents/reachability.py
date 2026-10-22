@@ -486,7 +486,7 @@ def _claude_holder_proven(session_id: str) -> bool:
 # ---------------------------------------------------------------------------
 # The pane-identity cross-check
 #
-# One verb, two mismatch directions, counts always printed. Direction 1 finds
+# One command, two mismatch directions, counts always printed. Direction 1 finds
 # a registry row whose mux ref points at a pane the listing cannot resolve to
 # that row's identity (the stale pane a resume re-homed). Direction 2 finds
 # the pane carrying fno's spawn signature in its argv with no registry row at
@@ -515,7 +515,7 @@ def _process_tree() -> dict[int, str]:
     and direction 2 never fires. And transitive, not one level: a launcher
     script between the shell and the harness must not hide the signature
     either. One snapshot serves every pane in a listing, so the cost is one
-    process-table read per verb run, not per pane.
+    process-table read per command run, not per pane.
     """
     import subprocess
 
@@ -572,7 +572,7 @@ def pane_identity_crosscheck(
     and, since, ``fno_id_state``); ``rows`` is the loaded registry.
     Pure aside from the injectable ``argv_of`` probe, so both directions and
     the counts-compared contract are unit-testable on constructed rows; the
-    live-mux reading is the operator's run of the verb.
+    live-mux reading is the operator's run of the command.
 
     A mismatch is a READING, never a repair: nothing here mutates the
     registry or the mux.

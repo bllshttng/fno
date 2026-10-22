@@ -18,7 +18,7 @@
 #   5. A second run is a clean no-op - no re-provision (US4/AC4-HP).
 #   6. The uv-tool-bin-not-on-PATH hint is surfaced (AC3-UI).
 #
-# Every verb runs from a cwd OUTSIDE any git repo (AC6-EDGE). The whole run is
+# Every command runs from a cwd OUTSIDE any git repo (AC6-EDGE). The whole run is
 # isolated into a temp HOME + UV_TOOL_DIR + UV_TOOL_BIN_DIR, so it never mutates
 # the runner's real tools and leaves no /tmp leak. Per-check pass/fail; exits
 # non-zero on any miss (AC6-ERR/UI) so a broken installer fails the release

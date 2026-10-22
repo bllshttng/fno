@@ -12,7 +12,7 @@
 #      proof that uv tool install surfaces the wheel's shared_scripts on PATH.
 #   4. A second run forwards via the sentinel with no re-provision (AC4-HP).
 #
-# Every verb runs from a cwd OUTSIDE any git repo (AC6-EDGE). The whole run is
+# Every command runs from a cwd OUTSIDE any git repo (AC6-EDGE). The whole run is
 # isolated into a temp HOME + UV_TOOL_DIR + cargo root, so it never mutates the
 # runner's real tools and leaves no /tmp leak. Prints pass/fail per check and
 # exits non-zero on any miss (AC6-ERR/UI), so a broken bootstrap fails the

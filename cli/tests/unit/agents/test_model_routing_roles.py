@@ -46,7 +46,7 @@ def _pin_oai_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _call_resolver(resolver, role, *, settings=None, env=None, notice=None, business_lookup=None):
     """``resolve_codex_route`` no longer takes ``env=`` (the key resolves in
-    the Rust verb's process env); the claude signature keeps it."""
+    the Rust command's process env); the claude signature keeps it."""
     kwargs: dict = {}
     if notice is not None:
         kwargs["notice"] = notice
