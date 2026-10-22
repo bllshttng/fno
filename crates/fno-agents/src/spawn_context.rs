@@ -966,6 +966,21 @@ pub fn live_thread_row_for_cwd(cwd: &str, home: &AgentsHome) -> Option<(String, 
     }
 }
 
+/// Whether the cwd-keyed spawn row may name this process. A claude session
+/// carries its own markers, so a markerless claude process (a hand-launched
+/// `claude --bg`) shares its cwd with a bystander's row and adopting it signs
+/// mail as a neighbour. The row's family must match the walk's, and no other
+/// family's marker may be present.
+fn spawn_row_adoptable(
+    row_harness: &str,
+    owned_harness: Option<&str>,
+    marker_families: &std::collections::BTreeSet<&str>,
+) -> bool {
+    row_harness != "claude"
+        && owned_harness.is_none_or(|h| h == row_harness)
+        && marker_families.iter().all(|h| *h == row_harness)
+}
+
 /// Fill a session id the ancestry walk could not supply from the cwd-keyed
 /// spawn record. Guards, in order: a resolved session id
 /// short-circuits before the read, a fail-closed disposition is never
@@ -983,15 +998,12 @@ fn fill_spawn_record(owned: OwnedIdentity, cwd: &str, home: &AgentsHome) -> Owne
     let Some((harness, session_id)) = live_thread_row_for_cwd(cwd, home) else {
         return owned;
     };
-    if owned.harness.as_deref().is_some_and(|h| h != harness) {
-        return owned;
-    }
     let marker_families: std::collections::BTreeSet<&str> = owned
         .markers_present
         .iter()
         .map(|(_, h, _)| h.as_str())
         .collect();
-    if marker_families.iter().any(|h| h != &harness.as_str()) {
+    if !spawn_row_adoptable(&harness, owned.harness.as_deref(), &marker_families) {
         return owned;
     }
     OwnedIdentity {
@@ -1664,5 +1676,22 @@ mod tests {
             Some("footnote"),
             Some("s")
         ));
+    }
+
+    #[test]
+    fn specimen_d1aec0d9_never_resolves_neighbour_ed2495bd() {
+        use std::collections::BTreeSet;
+        let none = BTreeSet::new();
+        // A markerless claude process shares its cwd with the neighbour's
+        // claude row; the row never names it.
+        assert!(!spawn_row_adoptable("claude", None, &none));
+        assert!(!spawn_row_adoptable("claude", Some("claude"), &none));
+        // A codex worker's walk lands on the shared daemon, so its own row still names it.
+        assert!(spawn_row_adoptable("codex", None, &none));
+        assert!(spawn_row_adoptable("codex", Some("codex"), &none));
+        // A walk or marker from another family still refuses the row.
+        assert!(!spawn_row_adoptable("codex", Some("claude"), &none));
+        let claude_marker = BTreeSet::from(["claude"]);
+        assert!(!spawn_row_adoptable("codex", None, &claude_marker));
     }
 }
