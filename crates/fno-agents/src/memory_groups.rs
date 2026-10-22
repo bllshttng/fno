@@ -110,7 +110,11 @@ pub fn group_reading(
     let (mut daemon, mut spare, mut fleet_sum) = (Sum::default(), Sum::default(), Sum::default());
     let mut daemon_pid = None;
     for row in rows {
-        let group = classify(&row.command);
+        // A pid a live session owns is fleet even while it still wears its
+        // claimed spare's bg-spare argv.
+        let group = classify(&row.command).filter(|group| {
+            !(*group == Group::SparePool && fleet.contains(&row.pid))
+        });
         let sum = match group {
             Some(Group::Server) => &mut server,
             Some(Group::Client) => &mut client,
@@ -252,17 +256,19 @@ mod tests {
             row(21, "fno-agents-worker --pane --sock b"),
             row(30, "fno-agents-daemon --home /h"),
             row(40, "claude bg-spare"),
+            row(41, "claude bg-spare"),
             row(50, "claude --resume s"),
             row(51, "node mcp-server"),
             row(60, "unrelated"),
         ];
-        let fleet: HashSet<u32> = [50, 51].into_iter().collect();
+        let fleet: HashSet<u32> = [41, 50, 51].into_iter().collect();
         let read = |pid: u32| match pid {
             10 => Some((100 * MB, 100 * MB)),
             11 => Some((40 * MB, 40 * MB)),
             20 | 21 => Some((10 * MB, 10 * MB)),
             30 => Some((140 * MB, 1000 * MB)),
             40 => Some((300 * MB, 300 * MB)),
+            41 => Some((200 * MB, 200 * MB)),
             50 => Some((500 * MB, 500 * MB)),
             51 => None,
             _ => Some((999 * MB, 999 * MB)),
@@ -273,8 +279,8 @@ mod tests {
         assert_eq!(out["pane_stack"]["per_pane_mb"], 80.0);
         assert_eq!(out["daemon"]["pid"], 30);
         assert_eq!(out["daemon"]["peak_mb"], 1000.0);
-        assert_eq!(out["fleet"]["mb"], 500.0);
-        assert_eq!(out["fleet"]["procs"], 2);
+        assert_eq!(out["fleet"]["mb"], 700.0);
+        assert_eq!(out["fleet"]["procs"], 3);
         assert_eq!(out["spare_pool"]["mb"], 300.0);
         assert_eq!(out["unread"], 1);
         let line = out["line"].as_str().unwrap();
