@@ -554,6 +554,22 @@ pub fn ledger_json(cwd: &Path) -> PathBuf {
         .unwrap_or_else(|| crate::decision_index::default_state_path("").join("ledger.json"))
 }
 
+/// Python `paths.worktrees_base()`: the `paths.worktrees_base` override, else
+/// `<state_dir>/worktrees`. A relative state dir falls back to the default
+/// state root, as `ledger_json` does.
+pub fn worktrees_base(cwd: &Path) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "worktrees_base"]) {
+        if let Ok(p) = resolve_override_path(&raw) {
+            return p;
+        }
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
+        .join("worktrees")
+}
+
 /// One `paths.<key>` override value, the shape Python's emitter shares for
 /// every override: a `{template}` resolves at codegen time, a `~` value
 /// goes `$HOME`-relative, anything else passes through verbatim.
