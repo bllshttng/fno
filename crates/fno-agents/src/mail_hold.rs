@@ -1228,9 +1228,10 @@ const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
 /// bus-only` is the one door that stamps with no clock on purpose, and it
 /// writes `operator` over an adopted or unmarked origin. Spawned, adopted
 /// and unmarked rows are stamped only by a clocked arm, so a missing clock
-/// there is the lapsed-tidy orphan. A row with no readable `created_at` has
-/// no proof of age and stays. Pure so the pick is testable without a
-/// registry write.
+/// there is the lapsed-tidy orphan. A row with no readable `created_at` counts
+/// as old: the hold verb's register writes `created_at` before it stamps, so
+/// only a row stamped by the old join path lacks one, and that stamp never
+/// had a clock. Pure so the pick is testable without a registry write.
 pub(crate) fn orphan_stamp_rows(
     registry: &crate::state::Registry,
     now: chrono::DateTime<chrono::Utc>,
@@ -1242,9 +1243,10 @@ pub(crate) fn orphan_stamp_rows(
         .filter(|e| e.origin.as_deref() != Some("operator"))
         .filter_map(|e| {
             let sid = e.harness_session_id.as_deref()?;
-            let born = chrono::DateTime::parse_from_rfc3339(&e.created_at).ok()?;
-            let old = now - born.with_timezone(&chrono::Utc)
-                > chrono::Duration::seconds(ORPHAN_STAMP_AGE_S);
+            let old = chrono::DateTime::parse_from_rfc3339(&e.created_at).map_or(true, |born| {
+                now - born.with_timezone(&chrono::Utc)
+                    > chrono::Duration::seconds(ORPHAN_STAMP_AGE_S)
+            });
             let clockless = gate_clock_addresses(sid, sid)
                 .iter()
                 .all(|h| read_clock(h).is_none());
@@ -1298,6 +1300,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     let mut describe_handles: Vec<&String> = Vec::new();
     let mut status_line_handle: Option<&String> = None;
     let mut policy_value: Option<&String> = None;
+    let mut record_stamp_session: Option<&String> = None;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--session" => session = iter.next(),
@@ -1318,11 +1321,18 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
             "--describe" => describe_handles = iter.by_ref().collect(),
             "--status-line" => status_line_handle = iter.next(),
             "--policy" => policy_value = iter.next(),
+            "--record-stamp" => record_stamp_session = iter.next(),
             other => {
                 eprintln!("mail-hold: unknown argument {other:?}");
                 return 2;
             }
         }
+    }
+    if let Some(session_id) = record_stamp_session {
+        // The Python register door's stamp: `fno agents register
+        // --delivery-policy bus-only` writes the row, then journals here.
+        record_stamp("register_verb", session_id);
+        return 0;
     }
     if let Some(handle) = arm_handle {
         // The Python arm/arm_wall bodies, ported: idle re-arms on activity
@@ -2287,6 +2297,7 @@ pub(crate) mod tests {
                     row("clocked", 5, Some("spawn"), &old),
                     row("adopted", 6, Some("adopted"), &old),
                     row("young-adopted", 7, Some("adopted"), &young),
+                    row("unborn", 8, None, ""),
                 ]),
             );
             write_clock(
@@ -2305,8 +2316,9 @@ pub(crate) mod tests {
                     ("orphan".to_string(), sid(1)),
                     ("unmarked".to_string(), sid(4)),
                     ("adopted".to_string(), sid(6)),
+                    ("unborn".to_string(), sid(8)),
                 ],
-                "an old clock-less stamp is an orphan unless an operator set it"
+                "an old or undated clock-less stamp is an orphan unless an operator set it"
             );
         });
     }

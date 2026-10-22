@@ -154,11 +154,10 @@ pub fn run_hold(args: &[String]) -> i32 {
         );
         return 2;
     }
-    if let Err(exc) = register_existing_session(&harness, &session_id) {
+    if let Err(exc) = register_existing_session(&harness, &session_id, true) {
         eprintln!("hold: {exc}");
         return 1;
     }
-    crate::mail_hold::record_stamp("hold_verb", &session_id);
 
     let mut arm = vec![
         "--arm".to_string(),
@@ -411,10 +410,20 @@ fn entry_for(session_id: &str) -> Option<crate::state::RegistryEntry> {
         .find(|e| row_matches_token(e, session_id))
 }
 
-/// Stamp bus-only on this session's row, minting one when absent. Port of
-/// the Python register_existing_session: refusal inside a self-spawn, a
-/// known-harness check, idempotent refresh on (harness, harness_session_id).
-pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Result<(), String> {
+/// Register this session's row, minting one when absent. Port of the Python
+/// register_existing_session: refusal inside a self-spawn, a known-harness
+/// check, idempotent refresh on (harness, harness_session_id).
+///
+/// `stamp` is the hold verb's bus-only stamp, journaled here so no caller
+/// can stamp without a `mail_hold_stamped` row. A join registers with
+/// `stamp = false`: joining fno is not a do-not-disturb. A minted row, or
+/// a refreshed one with no birth date, gets `created_at` now, so the orphan
+/// sweep can age a stamp whose clock is gone.
+pub(crate) fn register_existing_session(
+    harness: &str,
+    session_id: &str,
+    stamp: bool,
+) -> Result<(), String> {
     if std::env::var_os("FNO_AGENT_SELF").is_some_and(|v| !v.is_empty()) {
         return Err(
             "refusing to register from inside a session that has FNO_AGENT_SELF set".to_string(),
@@ -429,6 +438,8 @@ pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Resu
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let policy = stamp.then(|| "bus-only".to_string());
     let path = AgentsHome::shared_registry_json();
     crate::state::update_registry(&path, |registry| {
         let existing = registry.entries.iter_mut().find(|e| {
@@ -436,9 +447,14 @@ pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Resu
                 && e.harness_session_id.as_deref() == Some(session_id)
         });
         if let Some(row) = existing {
-            row.delivery_policy = Some("bus-only".to_string());
+            if stamp {
+                row.delivery_policy = policy.clone();
+            }
             if row.cwd.is_empty() {
                 row.cwd = cwd.clone();
+            }
+            if row.created_at.is_empty() {
+                row.created_at = now.clone();
             }
             return;
         }
@@ -453,8 +469,9 @@ pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Resu
             name,
             harness: Some(harness.to_string()),
             cwd,
-            delivery_policy: Some("bus-only".to_string()),
+            delivery_policy: policy,
             status: crate::AgentStatus::Idle,
+            created_at: now,
             ..crate::state::RegistryEntry::new(
                 Some(session_id.to_string()),
                 crate::state::Lineage::unproven(
@@ -464,6 +481,9 @@ pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Resu
         });
     })
     .map_err(|e| format!("registry write failed: {e}"))?;
+    if stamp {
+        crate::mail_hold::record_stamp("hold_verb", session_id);
+    }
     Ok(())
 }
 

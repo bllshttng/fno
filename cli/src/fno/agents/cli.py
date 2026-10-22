@@ -2769,6 +2769,13 @@ def cmd_register(
         _hold_transport(["--clear", clock_key])
         if delivery_policy != "bus-only":
             _hold_transport(["--clear", entry.name])
+        else:
+            # Best effort: the row is already stamped, and an older
+            # fno-agents without --record-stamp must not fail the register.
+            try:
+                _hold_transport(["--record-stamp", session_id])
+            except Exception:  # noqa: BLE001 - the journal never fails the register
+                pass
 
     events.emit(
         "session_registered",
