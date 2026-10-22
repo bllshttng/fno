@@ -13786,7 +13786,7 @@ fn every_rim_drop_zone_actually_lights_something() {
     let mut view = two_pane_view();
     let panel_w = view.panel_w();
     let (term_rows, term_cols) = (view.term.0, view.term.1);
-    let (a_rows, a_cols) = view.layout.area;
+    let (a_rows, a_cols) = view.visible_area();
     let mid_col = panel_w + a_cols / 2;
     let mid_row = TAB_BAR_ROWS + a_rows / 2;
 
@@ -14348,7 +14348,7 @@ fn probe_bottom_rim_band() {
     let mut view = two_pane_view();
     view.begin_pane_drag(10, Instant::now());
     let rect = view.pane_rect(11).unwrap();
-    let r = TAB_BAR_ROWS + rect.y + rect.rows - 1;
+    let r = TAB_BAR_ROWS + view.visible_area().0 - 1;
     let c = view.panel_w() + rect.x + 5;
     let z = view.edge_zone_at(r, c).expect("rim zone");
     eprintln!("zone={:?}", z);
