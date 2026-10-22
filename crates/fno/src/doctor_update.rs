@@ -308,9 +308,14 @@ fn deploy_prebuilt(crates_rev: &str, bin_dir: &Path, dry_run: bool) -> Result<()
 /// yet: install the newest tarball CI DID publish, never compile. The bins
 /// then trail the source honestly: the update's rev marker is left
 /// unwritten, so the staleness stays visible and the next update retries
-/// once CI publishes. Only a real deploy defect pushes to `failed`.
+/// once CI publishes. A build git proves older than the installed one never
+/// installs: on 2026-10-22 the arm moved bins at e1fb4bc5ca back to
+/// 688197448d (the newest published build had fallen behind the installed
+/// one) and the restart chain seated the daemon on the older build. Only a
+/// real deploy defect pushes to `failed`.
 fn install_newest_published_arm(
     subtree: Option<&str>,
+    repo: &Path,
     install_root: &Path,
     installed_rev: &str,
     dry_run: bool,
@@ -347,10 +352,31 @@ fn install_newest_published_arm(
         }
     };
     let got12: String = newest_rev.chars().take(12).collect();
-    if !installed_rev.is_empty() && installed_rev == newest_rev {
-        return wait(format!(
-            "the newest published build ({got12}) is already installed; waiting for CI to publish {want12}"
-        ));
+    if !installed_rev.is_empty() {
+        if installed_rev == newest_rev {
+            return wait(format!(
+                "the newest published build ({got12}) is already installed; waiting for CI to publish {want12}"
+            ));
+        }
+        // A downgrade refused beats a downgrade explained: only a build git
+        // proves NOT older installs, and an unreadable ordering refuses to
+        // guess. The next update retries, and CI publishing the source rev
+        // ends the wait through the normal arm.
+        match published_is_older(repo, &newest_rev, installed_rev) {
+            Some(true) => {
+                let inst12: String = installed_rev.chars().take(12).collect();
+                return wait(format!(
+                    "the installed build ({inst12}) is newer than the newest published ({got12}); refusing to downgrade; waiting for CI to publish {want12}"
+                ));
+            }
+            Some(false) => {}
+            None => {
+                return wait(
+                    "cannot prove the newest published build is not older than the installed one; refusing to guess"
+                        .to_string(),
+                );
+            }
+        }
     }
     println!(
         "fno doctor update: the source rev {want12} has no published tarball yet; installing the newest published build {got12}; never compiles"
@@ -562,6 +588,65 @@ fn rust_subtree_rev(source: &Path) -> Option<String> {
         source.parent()?,
         &["log", "-1", "--format=%H", "--", "crates/"],
     )
+}
+
+/// Some(true) when `newest` is an ancestor of `installed`: deploying it
+/// would move the bins backwards. Some(false) when git proves it would not
+/// (installed is the ancestor, or the two diverge). None when git cannot
+/// answer, so the caller refuses to guess.
+pub(crate) fn published_is_older(repo: &Path, newest: &str, installed: &str) -> Option<bool> {
+    let out = crate::process_admission::std_command("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-base", "--is-ancestor", newest, installed])
+        .output()
+        .ok()?;
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
+/// The bin names the fno-agents crate defines, read from its Cargo.toml
+/// `[[bin]]` entries. None when the file is unreadable or the scan finds no
+/// entries: the caller then degrades to the triad-only freshness gate rather
+/// than wedge an update on a parse it cannot trust.
+pub(crate) fn crate_bin_names(crate_dir: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(crate_dir.join("Cargo.toml")).ok()?;
+    let mut in_bin = false;
+    let mut names = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("[[bin]]") {
+            in_bin = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_bin = false;
+            continue;
+        }
+        if in_bin {
+            if let Some(rest) = trimmed.strip_prefix("name") {
+                if let Some(value) = rest.trim_start().strip_prefix('=') {
+                    let name = value.trim().trim_matches('"');
+                    if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+/// The names from `names` whose binary is absent from `bin_dir`.
+pub(crate) fn missing_inventory_bins(names: &[String], bin_dir: &Path) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| !bin_dir.join(format!("{n}{}", exe_suffix())).is_file())
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn read_marker(path: &Path) -> Option<String> {
@@ -1362,7 +1447,18 @@ fn refresh_rust_bins(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let all_fresh = installed_bin.is_some()
+    // Freshness is per-binary; the inventory is per-install. A bin the
+    // source crate defines but this install lacks (a machine whose last
+    // deploy predates the bin, or whose swap list dropped it) is a missing
+    // component, not a fresh install: the deploy path fills it from the
+    // tarball.
+    let mut inventory_missing: Vec<String> = Vec::new();
+    if let (Some(bin), Some(names)) = (installed_bin.as_deref(), crate_bin_names(&crate_dir)) {
+        if let Some(dir) = bin.parent() {
+            inventory_missing = missing_inventory_bins(&names, dir);
+        }
+    }
+    let triad_fresh = installed_bin.is_some()
         && subtree.is_some()
         && triad_names().iter().all(|n| {
             pre_rows
@@ -1375,6 +1471,13 @@ fn refresh_rust_bins(
                 })
                 .unwrap_or(false)
         });
+    if triad_fresh && !inventory_missing.is_empty() {
+        println!(
+            "fno doctor update: the triad is fresh, but the install lacks {} (the source crate defines them); deploying the CI build to fill the inventory",
+            inventory_missing.join(", ")
+        );
+    }
+    let all_fresh = triad_fresh && inventory_missing.is_empty();
     if all_fresh {
         let mux_fresh = pre_rows
             .get("fno")
@@ -1426,6 +1529,7 @@ fn refresh_rust_bins(
         if on_main == Some(true) {
             return install_newest_published_arm(
                 subtree.as_deref(),
+                src_parent,
                 &install_root,
                 &installed_rev,
                 dry_run,
