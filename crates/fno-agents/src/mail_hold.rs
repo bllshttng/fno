@@ -1229,9 +1229,10 @@ const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
 /// writes `operator` over an adopted or unmarked origin. Spawned, adopted
 /// and unmarked rows are stamped only by a clocked arm, so a missing clock
 /// there is the lapsed-tidy orphan. A row with no readable `created_at` counts
-/// as old: the hold verb's register writes `created_at` before it stamps, so
-/// only a row stamped by the old join path lacks one, and that stamp never
-/// had a clock. Pure so the pick is testable without a registry write.
+/// as old: every clocked arm writes its clock before its stamp, and a minted
+/// row gets a `created_at`, so an undated clockless stamp is one the old join
+/// path wrote with no clock at all. Pure so the pick is testable without a
+/// registry write.
 pub(crate) fn orphan_stamp_rows(
     registry: &crate::state::Registry,
     now: chrono::DateTime<chrono::Utc>,

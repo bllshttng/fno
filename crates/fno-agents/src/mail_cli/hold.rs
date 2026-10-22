@@ -154,11 +154,14 @@ pub fn run_hold(args: &[String]) -> i32 {
         );
         return 2;
     }
-    if let Err(exc) = register_existing_session(&harness, &session_id, true) {
+    if let Err(exc) = registrable(&harness, &session_id) {
         eprintln!("hold: {exc}");
         return 1;
     }
 
+    // Clock before stamp, as the conversation arm does: the orphan sweep
+    // clears a stamped row with no clock, so a stamp written first could be
+    // swept before its clock lands.
     let mut arm = vec![
         "--arm".to_string(),
         clock_key.clone(),
@@ -172,6 +175,10 @@ pub fn run_hold(args: &[String]) -> i32 {
     let code = crate::mail_hold::run_mail_hold(&arm);
     if code != 0 {
         return code;
+    }
+    if let Err(exc) = register_existing_session(&harness, &session_id, true) {
+        eprintln!("hold: {exc}");
+        return 1;
     }
     let clock = read_clock(&clock_key);
     let clock_text = match &clock {
@@ -410,20 +417,9 @@ fn entry_for(session_id: &str) -> Option<crate::state::RegistryEntry> {
         .find(|e| row_matches_token(e, session_id))
 }
 
-/// Register this session's row, minting one when absent. Port of the Python
-/// register_existing_session: refusal inside a self-spawn, a known-harness
-/// check, idempotent refresh on (harness, harness_session_id).
-///
-/// `stamp` is the hold verb's bus-only stamp, journaled here so no caller
-/// can stamp without a `mail_hold_stamped` row. A join registers with
-/// `stamp = false`: joining fno is not a do-not-disturb. A minted row, or
-/// a refreshed one with no birth date, gets `created_at` now, so the orphan
-/// sweep can age a stamp whose clock is gone.
-pub(crate) fn register_existing_session(
-    harness: &str,
-    session_id: &str,
-    stamp: bool,
-) -> Result<(), String> {
+/// The register refusals, checked alone so the hold verb can refuse before
+/// it arms a clock.
+fn registrable(harness: &str, session_id: &str) -> Result<(), String> {
     if std::env::var_os("FNO_AGENT_SELF").is_some_and(|v| !v.is_empty()) {
         return Err(
             "refusing to register from inside a session that has FNO_AGENT_SELF set".to_string(),
@@ -435,6 +431,23 @@ pub(crate) fn register_existing_session(
     if session_id.is_empty() {
         return Err("no session id to register".to_string());
     }
+    Ok(())
+}
+
+/// Register this session's row, minting one when absent. Port of the Python
+/// register_existing_session: refusal inside a self-spawn, a known-harness
+/// check, idempotent refresh on (harness, harness_session_id).
+///
+/// `stamp` is the hold verb's bus-only stamp, journaled here so no caller
+/// can stamp without a `mail_hold_stamped` row. A join registers with
+/// `stamp = false`: joining fno is not a do-not-disturb. A minted row gets
+/// `created_at` now, so the orphan sweep can age a stamp whose clock is gone.
+pub(crate) fn register_existing_session(
+    harness: &str,
+    session_id: &str,
+    stamp: bool,
+) -> Result<(), String> {
+    registrable(harness, session_id)?;
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -452,9 +465,6 @@ pub(crate) fn register_existing_session(
             }
             if row.cwd.is_empty() {
                 row.cwd = cwd.clone();
-            }
-            if row.created_at.is_empty() {
-                row.created_at = now.clone();
             }
             return;
         }
