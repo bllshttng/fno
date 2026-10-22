@@ -728,8 +728,12 @@ fn prune_salvage_refs(
     let repos: std::collections::BTreeSet<&str> =
         registry.entries.iter().map(|e| e.cwd.as_str()).collect();
     for repo in repos {
-        let Ok(pruned) = super::salvage_prune::prune(Path::new(repo), "origin/main", now) else {
-            continue;
+        let pruned = match super::salvage_prune::prune(Path::new(repo), "origin/main", now) {
+            Ok(pruned) => pruned,
+            Err(error) => {
+                eprintln!("salvage prune skipped {repo}: {error}");
+                continue;
+            }
         };
         for p in pruned {
             emitter
