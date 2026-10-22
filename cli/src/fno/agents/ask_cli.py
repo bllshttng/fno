@@ -10,7 +10,7 @@ from fno.agents.cli import _resolve_dispatch_workdir, agents_app
 
 @agents_app.command("ask", hidden=True)
 def cmd_ask(
-    name: str | None = typer.Argument(None, help="Agent name. Omit when using --to-project."),
+    name: str | None = typer.Argument(None, help="Agent name."),
     message: str | None = typer.Argument(None, help="Message to send."),
     harness: str | None = typer.Option(
         None,
@@ -48,19 +48,6 @@ def cmd_ask(
             "sandbox; claude no-ops with a stderr note. You own the blast radius."
         ),
     ),
-    to_project: str | None = typer.Option(
-        None,
-        "--to-project",
-        help=(
-            "Anycast to whoever works on this project; exactly one live peer "
-            "is required (ask is synchronous)."
-        ),
-    ),
-    any_live: bool = typer.Option(
-        False,
-        "--any",
-        help="With --to-project, break a multi-live-peer tie (most recent activity wins).",
-    ),
     fresh: bool = typer.Option(
         False,
         "--fresh",
@@ -81,17 +68,11 @@ def cmd_ask(
     """Send a follow-up message to a registered agent.
 
     The agent must exist; unknown names exit 16 pointing at ``spawn``.
-    The reply prints verbatim on stdout. Runs on the Rust runtime; this
-    body keeps only the ``--to-project`` resolution.
+    The reply prints verbatim on stdout. Runs on the Rust runtime, which
+    also owns the ``--to-project`` anycast; this body only forwards.
     """
     from fno import rust_binary
     from fno._flag_aliases import refuse_retired_provider
-    from fno.agents.dispatch import (
-        AMBIGUOUS_PROJECT_EXIT_CODE,
-        UNKNOWN_AGENT_EXIT_CODE,
-        DispatchAskError,
-        resolve_to_project,
-    )
     from fno.agents.rust_runtime import refuse_without_binary, route_to_rust, runtime_mode
 
     refuse_retired_provider(_provider_tombstone)
@@ -106,41 +87,9 @@ def cmd_ask(
     # diagnostic for a non-consuming op (review).
     workdir = _resolve_dispatch_workdir(cwd, fresh, here=True)
 
-    # Project mode: the message is the sole positional, so it may park in
-    # the `name` slot.
-    if to_project:
-        content = message if message is not None else name
-        if not content:
-            print(
-                "usage: fno agents ask --to-project <project> <message>",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-        try:
-            res = resolve_to_project(to_project, any_=any_live)
-        except DispatchAskError as exc:
-            print(str(exc), file=sys.stderr)
-            raise typer.Exit(code=exc.exit_code) from exc
-        if res.ambiguous:
-            listing = ", ".join(res.live_candidates)
-            print(
-                f"--to-project {to_project!r} is ambiguous: {len(res.live_candidates)} "
-                f"live peers ({listing}); pass --any or address one by name.",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=AMBIGUOUS_PROJECT_EXIT_CODE)
-        if res.recipient is None:
-            print(
-                f"no live peer working on project {to_project!r} to ask; "
-                f"use `fno agents mail send --to-project {to_project} ...` to queue durable.",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=UNKNOWN_AGENT_EXIT_CODE)
-        name, message = res.recipient, content
-
     if not name or message is None:
         print(
-            "usage: fno agents ask <name> <message>  (or --to-project <project> <message>)",
+            "usage: fno agents ask <name> <message>",
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
