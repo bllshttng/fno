@@ -1599,7 +1599,7 @@ fn checkout_refused(output: &str) -> bool {
 /// found`) when it never admits - those never contain "admitting" and must
 /// never be skipped, because they are the entire story, not noise ahead of
 /// one.
-fn is_proxy_noise_line(line: &str) -> bool {
+pub(crate) fn is_proxy_noise_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("fno config:") {
         return true;

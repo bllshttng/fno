@@ -392,6 +392,20 @@ fn composer_replays_the_refusal() {
     assert_eq!(stderr, expected_lines, "error stderr");
 }
 
+/// A broken proxy helper dies in Python. The reason names the traceback's
+/// cause line, never its header and never the admit banner ahead of it.
+#[test]
+fn a_traceback_refusal_names_its_cause_line() {
+    let stderr = "gh proxy: draft guard unavailable; admitting\n\
+                  Traceback (most recent call last):\n  \
+                  File \"/x/fno-gh-proxy\", line 4, in <module>\n    \
+                  from fno.pr.gh_proxy import main\n\
+                  ModuleNotFoundError: No module named 'fno.pr'\n";
+    let probe = FakeGh::from_fixture("rest_refusal_rate_limit");
+    let reason = crate::pr_status::rest_reason(&probe, Path::new("/tmp"), stderr);
+    assert_eq!(reason.text, "ModuleNotFoundError: No module named 'fno.pr'");
+}
+
 /// The optional-reviews read walks REST pages through the probe and composes
 /// from the REST author key; a failed page is the unknown sentinel, never an
 /// empty list.
