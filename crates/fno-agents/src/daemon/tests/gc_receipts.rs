@@ -588,7 +588,16 @@ fn ac4_err_graph_unreadable_and_stop_refusal_keep_every_row() {
         &|_| (Some(true), Some(true)),
         &|_| None,
     );
-    assert!(summary.retired.is_empty());
+    // row-b names no node and sits idle past the hour, so it retires under
+    // the origin ruling; row-a's refused stop keeps it.
+    assert_eq!(
+        summary
+            .retired
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["row-b"]
+    );
     assert_eq!(
         summary
             .stop_refused

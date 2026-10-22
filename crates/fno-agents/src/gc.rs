@@ -2053,7 +2053,9 @@ mod tests {
             e.origin = Some("spawn".into());
             e.harness = Some("codex".into());
             e.harness_session_id = Some("s-h1".into());
-            e.created_at = "2026-09-01T00:00:00Z".into();
+            // Inside the idle hour, so the unfinished-plan hold still holds.
+            e.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             e.status = crate::AgentStatus::Exited;
             r.entries.push(e);
         })
