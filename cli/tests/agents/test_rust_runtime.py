@@ -867,12 +867,12 @@ def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "w", "--substrate", "pane", "-H", "claude", "do x"],
+        ["agents", "spawn", "--name", "w", "--as", "pane", "-H", "claude", "do x"],
     )
     assert result.exit_code == 99
     assert captured, "a pane spawn must route to the binary"
     assert captured[0][0] == "spawn"
-    assert "--substrate" in captured[0]
+    assert "--as" in captured[0]
 
 
 def test_default_substrate_spawn_stays_python() -> None:
