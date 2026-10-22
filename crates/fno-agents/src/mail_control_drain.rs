@@ -426,15 +426,7 @@ pub fn drain(bus_dir: &Path, session: &str) -> Option<Landed> {
         return None;
     }
     // One read of the whole bus log; the filters mirror scan_unread.
-    let log_path = bus_dir.join("messages.jsonl");
-    let mut msgs: Vec<Value> = Vec::new();
-    if let Ok(text) = std::fs::read_to_string(&log_path) {
-        for line in text.lines() {
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
-                msgs.push(v);
-            }
-        }
-    }
+    let msgs = crate::mail_notify_self::read_bus(bus_dir);
     let retracted = withdrawn_ids(&msgs);
     let present = present_mail_ids(&crate::claude_drive::claude_projects_dir(), session);
 
