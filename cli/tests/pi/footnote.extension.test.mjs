@@ -9,7 +9,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import footnote from "../../src/fno/setup/assets/pi/footnote.ts"
@@ -22,6 +22,9 @@ echo "$@" >> "\$STUB_LOG"
 case "\$1" in
   state)
     if [ -n "\$STUB_STATE_PATH" ]; then echo "\$STUB_STATE_PATH"; fi
+    ;;
+  hook)
+    if [ -n "\$STUB_STDIN_DIR" ]; then cat > "\$STUB_STDIN_DIR/\$\$.json"; fi
     ;;
   loop-check)
     if [ -n "\$STUB_LOOPCHECK_SLEEP" ]; then sleep "\$STUB_LOOPCHECK_SLEEP"; fi
@@ -265,6 +268,47 @@ test("AC11-ERR: discovery with no plugin-root pointer returns empty, prints one 
     if (saved === undefined) delete process.env.FNO_HOME
     else process.env.FNO_HOME = saved
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("per-turn state: turn start, tool call and settle each push through the session-state entry", async () => {
+  // One file per fire: concurrent stub processes never interleave a payload.
+  const stdinDir = mkdtempSync(join(tmpdir(), "fno-pi-stdin-"))
+  const world = makeWorld({ env: { STUB_STDIN_DIR: stdinDir } })
+  try {
+    const ctx = {
+      sessionManager: { getSessionId: () => "s-1", buildContextEntries: () => [] },
+      model: { id: "glm-5.3", provider: "zai" },
+      isIdle: () => true,
+    }
+    await world.handlers["before_agent_start"]({}, ctx)
+    await world.handlers["tool_call"]({ toolName: "read", input: {} }, ctx)
+    await world.settle(ctx)
+    // The push is fire-and-forget, so wait for all three payloads to land.
+    const end = Date.now() + 3000
+    const payloads = () =>
+      readdirSync(stdinDir).map((f) => readFileSync(join(stdinDir, f), "utf8")).filter((t) => t.endsWith("}"))
+    while (Date.now() < end && payloads().filter((t) => t.includes("hook_event_name")).length < 3) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    const events = world
+      .log()
+      .split("\n")
+      .filter((l) => l.startsWith("hook session-state --harness pi "))
+      .map((l) => l.split(" ").pop())
+      .sort()
+    assert.deepEqual(events, ["PreToolUse", "Stop", "UserPromptSubmit"])
+    // The settle also feeds the rules entry on the same stdin log; keep the
+    // session-state payloads, which alone carry hook_event_name.
+    const parsed = payloads()
+      .map((l) => JSON.parse(l))
+      .filter((p) => p.hook_event_name)
+    assert.equal(parsed.length, 3)
+    assert.ok(parsed.every((p) => p.session_id === "s-1" && p.model === "zai/glm-5.3"))
+    assert.equal(parsed.find((p) => p.hook_event_name === "PreToolUse").tool_name, "read")
+  } finally {
+    world.cleanup()
+    rmSync(stdinDir, { recursive: true, force: true })
   }
 })
 
