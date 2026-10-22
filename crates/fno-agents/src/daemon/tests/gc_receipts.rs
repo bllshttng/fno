@@ -1330,9 +1330,9 @@ fn a_refused_retirement_write_names_every_staged_row() {
     .unwrap();
     // A newer writer floor: reads still serve, every write refuses.
     let mut doc: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(home.registry_json()).unwrap()).unwrap();
+        serde_json::from_str(&crate::registry_store::read_raw(&home.registry_json())).unwrap();
     doc["min_writer_version"] = serde_json::json!(state::REGISTRY_SCHEMA_VERSION + 1);
-    std::fs::write(home.registry_json(), serde_json::to_vec(&doc).unwrap()).unwrap();
+    crate::registry_store::seed_raw(home.registry_json(), doc.to_string());
 
     let summary = staged_sweep(
         &home,
