@@ -1,0 +1,10 @@
+{
+  "op": "record_harness",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"beta\"\nname = \"BETA\"\nharness = \"codex\"\nauth = \"managed\"\n"
+  },
+  "id": "beta",
+  "expect": {
+    "ok": "codex"
+  }
+}

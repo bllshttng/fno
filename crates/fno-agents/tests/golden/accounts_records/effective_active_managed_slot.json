@@ -1,0 +1,12 @@
+{
+  "op": "effective_active",
+  "files": {
+    "global": "[accounts]\nactive = \"alpha\"\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"gamma\"\nname = \"GAMMA\"\nharness = \"claude\"\nauth = \"managed\"\n"
+  },
+  "stamps": {
+    "claude": "gamma\n"
+  },
+  "expect": {
+    "ok": "gamma"
+  }
+}

@@ -43,54 +43,52 @@ impl Default for QuotaConfig {
 
 impl QuotaConfig {
     /// One invalid leaf degrades only that leaf; valid leaves survive, so a
-    /// bad global key never discards a healthy local setting.
-    pub fn from_block(block: &toml::Value) -> QuotaConfig {
+    /// bad global key never discards a healthy local setting. Each leaf takes
+    /// pydantic's lax coercion (`QuotaConfig.model_validate`).
+    pub fn from_block(block: &toml::Table) -> QuotaConfig {
+        use crate::accounts::records::{lax_bool, lax_float, lax_int};
         let mut cfg = QuotaConfig::default();
-        if let Some(v) = block.get("observe").and_then(|v| v.as_bool()) {
+        let leaf = |key: &str| block.get(key);
+        if let Some(v) = leaf("observe").and_then(lax_bool) {
             cfg.observe = v;
         }
-        if let Some(v) = block.get("defer_dispatch").and_then(|v| v.as_bool()) {
+        if let Some(v) = leaf("defer_dispatch").and_then(lax_bool) {
             cfg.defer_dispatch = v;
         }
-        if let Some(v) = block
-            .get("defer_threshold_pct")
-            .and_then(|v| v.as_float())
+        if let Some(v) = leaf("defer_threshold_pct")
+            .and_then(lax_float)
             .filter(|v| (0.0..=100.0).contains(v))
         {
             cfg.defer_threshold_pct = v;
         }
-        if let Some(v) = block
-            .get("probe_ttl_seconds")
-            .and_then(|v| v.as_integer())
+        if let Some(v) = leaf("probe_ttl_seconds")
+            .and_then(lax_int)
             .filter(|v| *v >= 1)
         {
             cfg.probe_ttl_seconds = v as f64;
         }
-        if let Some(v) = block
-            .get("defer_horizon_minutes")
-            .and_then(|v| v.as_integer())
+        if let Some(v) = leaf("defer_horizon_minutes")
+            .and_then(lax_int)
             .filter(|v| *v >= 0)
         {
             cfg.defer_horizon_minutes = v as f64;
         }
-        if let Some(v) = block.get("pick_on_launch").and_then(|v| v.as_bool()) {
+        if let Some(v) = leaf("pick_on_launch").and_then(lax_bool) {
             cfg.pick_on_launch = v;
         }
         cfg
     }
 }
 
-/// The quota config: `accounts.quota` merged across the config layers.
+/// The quota config: `accounts.quota` merged across the account layers
+/// (`loader.load_quota_config`).
 pub fn load_quota_config(node_cwd: Option<&str>) -> QuotaConfig {
     let cwd = node_cwd
         .map(Path::new)
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    match crate::agents_config::config_lookup(&cwd, &["accounts", "quota"]) {
-        Some(block) if block.is_table() => QuotaConfig::from_block(&block),
-        _ => QuotaConfig::default(),
-    }
+    QuotaConfig::from_block(&crate::accounts::records::quota_block(None, &cwd))
 }
 
 /// The headroom verdict: how much room the provider's account has.

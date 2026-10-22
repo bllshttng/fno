@@ -1,0 +1,9 @@
+{
+  "op": "combos",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = []\n"
+  },
+  "expect": {
+    "error": "Combo 'main' has empty providers list (combos must name at least one provider)"
+  }
+}

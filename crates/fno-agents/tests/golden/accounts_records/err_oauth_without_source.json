@@ -1,0 +1,9 @@
+{
+  "op": "load",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"oauth_dir\"\n"
+  },
+  "expect": {
+    "error": "invalid provider record 'a': auth_strategy_mismatch"
+  }
+}

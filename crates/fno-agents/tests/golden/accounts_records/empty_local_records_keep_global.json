@@ -1,0 +1,37 @@
+{
+  "op": "load",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n",
+    "project": "[accounts]\nrecords = []\n"
+  },
+  "expect": {
+    "ok": {
+      "records": [
+        {
+          "id": "alpha",
+          "name": "ALPHA",
+          "harness": "claude",
+          "auth": "managed",
+          "priority": 100,
+          "route_provider_id": null,
+          "model_name": null,
+          "credentials_source": null,
+          "env": null,
+          "route": null,
+          "reset_timezone": null,
+          "window_minutes": null,
+          "account_id": "alpha",
+          "tags": [],
+          "description": null,
+          "config_dir": null,
+          "pricing": null,
+          "cost_cap_usd_per_session": null
+        }
+      ],
+      "active": null,
+      "failover": null,
+      "auto_switch": false,
+      "agents": {}
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "op": "load",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\nmodel_name = \"  \"\n"
+  },
+  "expect": {
+    "error": "invalid provider record 'a'"
+  }
+}

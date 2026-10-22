@@ -1,0 +1,37 @@
+{
+  "op": "scope_project",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n",
+    "project": "[accounts]\nactive = \"alpha\"\n[[accounts.records]]\nid = \"beta\"\nname = \"BETA\"\nharness = \"codex\"\nauth = \"managed\"\n"
+  },
+  "expect": {
+    "ok": {
+      "records": [
+        {
+          "id": "beta",
+          "name": "BETA",
+          "harness": "codex",
+          "auth": "managed",
+          "priority": 100,
+          "route_provider_id": null,
+          "model_name": null,
+          "credentials_source": null,
+          "env": null,
+          "route": null,
+          "reset_timezone": null,
+          "window_minutes": null,
+          "account_id": "beta",
+          "tags": [],
+          "description": null,
+          "config_dir": null,
+          "pricing": null,
+          "cost_cap_usd_per_session": null
+        }
+      ],
+      "active": "alpha",
+      "failover": null,
+      "auto_switch": false,
+      "agents": {}
+    }
+  }
+}

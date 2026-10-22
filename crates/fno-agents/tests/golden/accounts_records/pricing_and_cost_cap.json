@@ -1,0 +1,41 @@
+{
+  "op": "load",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\ncost_cap_usd_per_session = 5\n[accounts.records.pricing]\ninput_per_million_usd = 3\noutput_per_million_usd = 15.5\n"
+  },
+  "expect": {
+    "ok": {
+      "records": [
+        {
+          "id": "a",
+          "name": "A",
+          "harness": "claude",
+          "auth": "managed",
+          "priority": 100,
+          "route_provider_id": null,
+          "model_name": null,
+          "credentials_source": null,
+          "env": null,
+          "route": null,
+          "reset_timezone": null,
+          "window_minutes": null,
+          "account_id": "a",
+          "tags": [],
+          "description": null,
+          "config_dir": null,
+          "pricing": {
+            "input_per_million_usd": 3.0,
+            "output_per_million_usd": 15.5,
+            "cache_read_per_million_usd": null,
+            "cache_write_per_million_usd": null
+          },
+          "cost_cap_usd_per_session": 5.0
+        }
+      ],
+      "active": null,
+      "failover": null,
+      "auto_switch": false,
+      "agents": {}
+    }
+  }
+}

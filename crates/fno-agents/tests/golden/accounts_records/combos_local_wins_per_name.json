@@ -1,0 +1,28 @@
+{
+  "op": "combos",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"beta\"\nname = \"BETA\"\nharness = \"codex\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"alpha\"]\n[accounts.combos.both]\nproviders = [\"alpha\", \"beta\"]\nstrategy = \"round_robin\"\n",
+    "project": "[accounts.combos.main]\nproviders = [\"beta\"]\nsticky_limit = 3\n"
+  },
+  "expect": {
+    "ok": {
+      "main": {
+        "name": "main",
+        "strategy": "fallback",
+        "sticky_limit": 3,
+        "providers": [
+          "beta"
+        ]
+      },
+      "both": {
+        "name": "both",
+        "strategy": "round_robin",
+        "sticky_limit": 1,
+        "providers": [
+          "alpha",
+          "beta"
+        ]
+      }
+    }
+  }
+}

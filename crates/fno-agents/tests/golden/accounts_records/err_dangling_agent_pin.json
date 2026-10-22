@@ -1,0 +1,9 @@
+{
+  "op": "load",
+  "files": {
+    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[agents.reviewer]\nprovider = \"ghost\"\n"
+  },
+  "expect": {
+    "error": "agent 'reviewer' references unknown provider id 'ghost'"
+  }
+}

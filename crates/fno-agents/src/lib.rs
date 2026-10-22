@@ -45,6 +45,7 @@
 // the macro expansion since `spawned_by_session` joined the contract.
 
 pub mod acceptance_evidence;
+pub mod accounts;
 pub mod acp_stdio;
 pub mod active_backlog;
 pub mod additional_prs;

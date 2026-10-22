@@ -1,0 +1,9 @@
+{
+  "op": "load",
+  "files": {
+    "global": "[accounts]\nactive = \"ghost\"\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"
+  },
+  "expect": {
+    "error": "active_record_not_found: 'ghost' is not in records"
+  }
+}
