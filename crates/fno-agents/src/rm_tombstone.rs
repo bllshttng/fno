@@ -19,10 +19,11 @@ use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// How long a removal keeps blocking store re-adoption. Long enough to cover
-/// the re-adoption window the incident showed (62s) with room for a working
-/// day; short enough that a deliberate later adoption is one wait away.
-pub(crate) const GRACE_SECS: i64 = 86_400;
+/// How long a removal keeps blocking re-adoption and the session-report
+/// mint: as long as a reap receipt is kept by default, so an rm-removed
+/// session and a reaped one stay out for the same span.
+pub(crate) const GRACE_SECS: i64 =
+    crate::agents_config::DEFAULT_REAP_RECEIPT_RETAIN_DAYS as i64 * 86_400;
 
 const FILENAME: &str = "rm_tombstones.json";
 

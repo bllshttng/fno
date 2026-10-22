@@ -547,6 +547,20 @@ pub(crate) fn handle_session_report(
             )
         }
         Outcome::Unknown => {
+            // Ruling d-1538e896: a reaped worker whose mint was refused still
+            // reports, so its harness session goes too. Other rowless
+            // sessions are left alone.
+            if harness == "claude"
+                && (launch_record.is_some() || agent_self.is_some())
+                && crate::native_adopt::retired_session(
+                    home,
+                    &harness,
+                    &session_id,
+                    launch_record.as_ref(),
+                )
+            {
+                remove_retired_claude_session(&session_id);
+            }
             let _ = emitter.emit(
                 "session_report_dropped",
                 &json!({"harness": harness, "session_id": session_id, "reason": "unknown_session"}),
@@ -1100,6 +1114,22 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
         spool_request(home, &req);
     }
     0
+}
+
+/// `claude rm` for a reaped session that reported after its retirement,
+/// off the report path: the removal shells out and must not hold the RPC.
+fn remove_retired_claude_session(session_id: &str) {
+    if cfg!(test) {
+        return;
+    }
+    let mut entry = RegistryEntry::default();
+    entry.harness = Some("claude".to_string());
+    entry.harness_session_id = Some(session_id.to_string());
+    entry.claude_session_uuid = Some(session_id.to_string());
+    entry.short_id = crate::client_verbs::derived_short_id(session_id);
+    let _ = std::thread::spawn(move || {
+        let _ = crate::gc_native::apply_active_surface_removal(&entry);
+    });
 }
 
 #[cfg(test)]

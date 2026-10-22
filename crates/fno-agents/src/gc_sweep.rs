@@ -1864,8 +1864,10 @@ pub(crate) fn run_with_release(
         // as a non-spawn", or the adopted carve-out would read as a corpse
         // and skip the very gate that judges it.
         let mut corpse = false;
-        if !is_spawn && !adopted_finished(e) {
-            let quiet = matches!(staged_row, Some((_, Some(a))) if *a > grace_secs);
+        let quiet = matches!(staged_row, Some((_, Some(a))) if *a > grace_secs);
+        let adopted_terminal =
+            quiet && crate::gc_adopt::adopted_claude_terminal(e, &agents_memo, agents_read);
+        if !is_spawn && !adopted_finished(e) && !adopted_terminal {
             if !crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read) {
                 summary
                     .kept_not_spawn
@@ -1925,7 +1927,7 @@ pub(crate) fn run_with_release(
         // OPEN do row for this session -> the row stays and the node is
         // named. The retirement never settles graph rows itself. Past the
         // origin ruling's idle hour a spawn row no longer holds on it.
-        let idle_hour_past = e.origin.as_deref() == Some("spawn")
+        let idle_hour_past = (is_spawn || adopted_terminal)
             && (*age)
                 .or_else(|| report_age(e, now))
                 .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS);

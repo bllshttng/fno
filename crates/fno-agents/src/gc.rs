@@ -383,6 +383,11 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     // readable as the PR's remedy - so an open-PR row keeps. A live adopted
     // row keeps exactly as before.
     if row.origin.as_deref() != Some("spawn") && !row.origin_corpse {
+        // Ruling d-1538e896: an adopted row Claude reports finished takes
+        // the idle-hour rule ahead of every keep, like a spawn row.
+        if past_idle_hour(row) {
+            return spawn_idle_gate(row);
+        }
         let adopted_finished = row.origin.as_deref() == Some("adopted")
             && row.registry_terminal
             && row.open_pr.is_none();
@@ -568,10 +573,16 @@ fn idle_age_s(row: &GcRow) -> Option<i64> {
     row.transcript_age_s.or(row.report_age_s)
 }
 
-/// An fno-started row idle past the origin ruling's hour with no live claim:
-/// it retires whatever its work state says.
+/// An fno-started row, or an adopted row whose harness reads it terminal
+/// (ruling d-1538e896), idle past the origin ruling's hour with no live
+/// claim: it retires whatever its work state says. Operator rows never do.
 pub fn past_idle_hour(row: &GcRow) -> bool {
-    row.origin.as_deref() == Some("spawn")
+    let fleet = match row.origin.as_deref() {
+        Some("spawn") => true,
+        Some("adopted") => row.session_terminal.is_some(),
+        _ => false,
+    };
+    fleet
         && row.live_claim.is_none()
         && idle_age_s(row).is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
 }
@@ -3202,5 +3213,26 @@ mod tests {
             };
             assert_eq!(gc_decide(&claimed, GRACE).0, GcAction::Keep);
         }
+        // Ruling d-1538e896: an adopted row Claude reports finished takes the
+        // same hour; one Claude still runs keeps as not fno's.
+        let adopted = GcRow {
+            origin: Some("adopted".into()),
+            session_terminal: Some("done".into()),
+            ..open_pr_row("x-node", "in_review", 1943)
+        };
+        assert_eq!(gc_decide(&adopted, GRACE), (GcAction::Retire, None));
+        let running = GcRow {
+            session_terminal: None,
+            ..adopted
+        };
+        assert_eq!(
+            gc_decide(&running, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::NotSpawn {
+                    origin: "adopted".into()
+                })
+            )
+        );
     }
 }
