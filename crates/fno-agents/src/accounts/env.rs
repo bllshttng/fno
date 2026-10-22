@@ -332,7 +332,7 @@ pub fn overlay(
         if let Some(receipt) = identity_mismatch(record, &root, &accounts.records, src) {
             return Err(receipt);
         }
-        return Ok(made(dir_env(cfg), "config-dir"));
+        return Ok(made(dir_env(cfg.as_path()), "config-dir"));
     }
 
     match record.auth.as_str() {
@@ -368,7 +368,7 @@ pub fn overlay(
                 }
                 // Pinned rather than empty, so a stale parent CLAUDE_CONFIG_DIR
                 // cannot leak through and bill another account.
-                return Ok(made(dir_env(&home_slot()), "managed-active"));
+                return Ok(made(dir_env(home_slot().as_path()), "managed-active"));
             }
             Err(format!(
                 "account '{account_id}' is managed and not the active ~/.claude \

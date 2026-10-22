@@ -160,12 +160,12 @@ fn run_case(case: &Value, tmp: &Path) -> Value {
 
     let id = case["id"].as_str().unwrap();
     if case["op"] == "launch_env" {
-        return match env::launch_env(id, None, Some(&store), tmp, &src) {
+        return match env::launch_env(id, None, Some(store.as_path()), tmp, &src) {
             Ok(env) => json!({ "env": env }),
             Err(e) => json!({ "error": kind_name(e.kind), "message": e.message }),
         };
     }
-    match env::overlay(id, None, Some(&store), tmp, &src) {
+    match env::overlay(id, None, Some(store.as_path()), tmp, &src) {
         Ok(got) => json!({
             "overlay": { "account_id": got.account_id, "env": got.env, "lane": got.lane }
         }),

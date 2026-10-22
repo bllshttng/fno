@@ -1857,7 +1857,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // seam's own `--resume` skip holds the same reasoning). The value is still
     // validated when it NAMES SOMETHING ELSE: an account that does not resolve
     // in the store is a typo reading as applied. The recorded account itself
-    // is never re-validated here - the reentry resolver below shells the same
+    // is never re-validated here - the reentry resolver below reads the same
     // store for it, and a second spawn per wake buys nothing. Non-claude rows
     // carry no account axis; the row's own lane bills itself.
     if let Some(acct) = account.as_deref() {

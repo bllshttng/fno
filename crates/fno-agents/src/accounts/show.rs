@@ -5,33 +5,8 @@
 
 use crate::accounts::env::{self, Sources};
 use crate::accounts::records::{self, Accounts, Record};
+use crate::claude_ask::py_repr;
 use std::path::{Path, PathBuf};
-
-/// Python's `repr` of a str: single quotes unless the text holds a single
-/// quote and no double quote.
-fn py_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::from(quote);
-    for ch in text.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
 
 /// The text view, one aligned `field: value` line per set field.
 pub fn render(record: &Record, accounts: &Accounts) -> String {
@@ -139,7 +114,7 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     };
     let cwd = pwd();
-    let accounts = match records::load(Some(&cwd), &cwd) {
+    let accounts = match records::load(Some(cwd.as_path()), &cwd) {
         Ok(accounts) => accounts,
         Err(e) => {
             eprintln!("error: {e}");
