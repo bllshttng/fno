@@ -404,8 +404,9 @@ stored '.reason' | grep -qx "empty_diff" && pass "terminal row names reason=empt
   || fail "terminal reason: want empty_diff, got '$(stored '.reason')'"
 [[ "$(stored '.reviewed_file_count')" == "0" ]] && pass "terminal row records files=0" \
   || fail "terminal files: want 0, got '$(stored '.reviewed_file_count')'"
-[[ "$(stored '.command')" == "/code-review" ]] && pass "terminal row names the command" \
-  || fail "terminal command: got '$(stored '.command')'"
+stored_command="$(stored '.verb')"  # verb-wording: allow (review_invocation wire key)
+[[ "$stored_command" == "/code-review" ]] && pass "terminal row names the command" \
+  || fail "terminal command: got '$stored_command'"
 [[ -n "$(stored '.invocation_id')" && "$(stored '.invocation_id')" != "<missing>" ]] \
   && pass "terminal row carries an invocation_id" \
   || fail "terminal row lost invocation_id"

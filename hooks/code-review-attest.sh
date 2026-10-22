@@ -367,11 +367,12 @@ if [[ -n "$held_branch" ]]; then
     refusal_data="$(jq -cn \
       --arg invocation_id "$held_invocation" \
       --arg stage refused \
-      --arg command "/code-review" \
+      --arg cmd "/code-review" \
       --arg reason "$reason" \
       --arg branch "$held_branch" \
       --arg head_sha "$held_head" \
-      '{invocation_id:$invocation_id,stage:$stage,command:$command,reason:$reason,branch:$branch,head_sha:$head_sha}' \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,branch:$branch,head_sha:$head_sha}' \
       2>/dev/null || true)"
     if [[ -n "$refusal_data" ]]; then
       "${FNO:-fno}" doctor event emit -t review_invocation -s daemon -d "$refusal_data" \

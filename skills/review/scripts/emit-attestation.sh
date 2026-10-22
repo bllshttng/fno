@@ -252,7 +252,7 @@ fi
 if [[ -z "$invocation_id" ]]; then
   invocation_id="UNJOINED"
 fi
-review_command="$(printf '%s' "$hold_json" | jq -r '.metadata.command // "/code-review"' 2>/dev/null || echo /code-review)"
+review_command="$(printf '%s' "$hold_json" | jq -r '.metadata.verb // "/code-review"' 2>/dev/null || echo /code-review)"  # verb-wording: allow (hold metadata key)
 # jq reads EMPTY stdin as zero inputs: no output, exit 0, so the || default
 # above never fires and an empty hold reads as an empty command. The explicit
 # defaults below are what cover that (same for the metadata fields that
@@ -272,11 +272,12 @@ if [[ -n "$refuse_reason" ]]; then
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
-      --arg command "$review_command" \
+      --arg cmd "$review_command" \
       --arg reason "$refuse_reason" \
       --arg head_sha "$head_sha" \
       --arg branch "$branch" \
-      '{invocation_id:$invocation_id,stage:$stage,command:$command,reason:$reason,head_sha:$head_sha,branch:$branch}')" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,head_sha:$head_sha,branch:$branch}')" \
     >/dev/null 2>&1; then
     refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id} (reason ${refuse_reason})"
   fi
@@ -308,11 +309,12 @@ if [[ -z "$reviewed_base_sha" ]]; then
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
-      --arg command "$review_command" \
+      --arg cmd "$review_command" \
       --arg reason unresolvable_base \
       --arg head_sha "$head_sha" \
       --arg branch "$branch" \
-      '{invocation_id:$invocation_id,stage:$stage,command:$command,reason:$reason,head_sha:$head_sha,branch:$branch}')" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,head_sha:$head_sha,branch:$branch}')" \
     >/dev/null 2>&1; then
     refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id}"
   fi
@@ -340,14 +342,15 @@ if (( reviewed_file_count == 0 )); then
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
-      --arg command "$review_command" \
+      --arg cmd "$review_command" \
       --arg reason empty_diff \
       --arg head_sha "$head_sha" \
       --arg branch "$branch" \
       --arg reviewed_base_sha "$reviewed_base_sha" \
       --arg reviewed_head_sha "$reviewed_head_sha" \
       --argjson reviewed_file_count "$reviewed_file_count" \
-      '{invocation_id:$invocation_id,stage:$stage,command:$command,reason:$reason,head_sha:$head_sha,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_file_count:$reviewed_file_count}')" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,head_sha:$head_sha,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_file_count:$reviewed_file_count}')" \
     >/dev/null 2>&1; then
     refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id}"
   fi
@@ -423,7 +426,7 @@ fi
 review_event_data="$(jq -cn \
   --arg invocation_id "$invocation_id" \
   --arg stage started \
-  --arg command "$review_command" \
+  --arg cmd "$review_command" \
   --arg args_raw "$review_args_raw" \
   --arg level "$review_level" \
   --arg level_source "$review_level_source" \
@@ -437,7 +440,8 @@ review_event_data="$(jq -cn \
   --arg execution_context "$execution_context" \
   --arg output_contract "$output_contract" \
   --argjson subagent_count "$subagent_count" \
-  '{invocation_id:$invocation_id,stage:$stage,command:$command,args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch,execution_context:$execution_context,output_contract:$output_contract,subagent_count:$subagent_count} | if $model_family == "" then . else .model_family=$model_family end' \
+  '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+     args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch,execution_context:$execution_context,output_contract:$output_contract,subagent_count:$subagent_count} | if $model_family == "" then . else .model_family=$model_family end' \
   2>/dev/null || true)"
 # The started row emits ONLY past every refusal point (the findings-file
 # checks below are the last of them): a refused run writes zero events, and

@@ -185,7 +185,7 @@ model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev
 data="$(jq -cn \
   --arg invocation_id "$invocation_id" \
   --arg stage started \
-  --arg command "/$skill" \
+  --arg cmd "/$skill" \
   --arg args_raw "$args_raw" \
   --arg level "$level" \
   --arg level_source "$level_source" \
@@ -196,7 +196,8 @@ data="$(jq -cn \
   --arg head_sha "$head" \
   --arg branch "$branch" \
   --arg model_family "$model_family" \
-  '{invocation_id:$invocation_id,stage:$stage,command:$command,args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch}
+  '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+     args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch}
    | if $head_sha == "" then del(.head_sha) else . end
    | if $branch == "" then del(.branch) else . end
    | if $model_family == "" then . else .model_family=$model_family end' \
@@ -225,14 +226,14 @@ if [[ -n "$pr_number" ]]; then
   # The PR's head ref and head resolve inside the command, from GitHub. No
   # resolution here, no guessed --branch: an unresolvable PR takes no hold.
   cap_out="$("$FNO_BIN" do pr review-hold acquire "$pr_number" \
-    --holder "$holder" --command "/$skill" \
+    --holder "$holder" --verb "/$skill" \
     --invocation-id "$invocation_id" \
     --args-raw "$args_raw" --level "$level" --level-source "$level_source" \
     --flags-json "$flags" \
     --repo "$cwd" 2>/dev/null || true)"
 else
   cap_out="$("$FNO_BIN" do pr review-hold acquire \
-    --branch "$branch" --head "$head" --holder "$holder" --command "/$skill" \
+    --branch "$branch" --head "$head" --holder "$holder" --verb "/$skill" \
     --invocation-id "$invocation_id" \
     --args-raw "$args_raw" --level "$level" --level-source "$level_source" \
     --flags-json "$flags" \
