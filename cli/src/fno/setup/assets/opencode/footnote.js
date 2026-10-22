@@ -207,8 +207,8 @@ function pushPrompt(runProc, dir, sid, model) {
   pushState(runProc, dir, "UserPromptSubmit", sid)
 }
 
-// A permission prompt blocks the turn until the operator answers; the next
-// tool call or the idle event clears it.
+// A permission prompt blocks the turn until the operator answers; the reply
+// event (or the next tool call, or idle) clears it.
 function pushPermission(runProc, dir, sid, prompt) {
   pushState(runProc, dir, "Notification", sid, { message: prompt?.title ?? "permission requested" })
 }
@@ -822,6 +822,9 @@ async function server({ directory, worktree, client, $ }) {
       if (event?.type === "permission.updated" || event?.type === "permission.asked") {
         return pushPermission(runProcSh, dir, event.properties?.sessionID, event.properties)
       }
+      if (event?.type === "permission.replied") {
+        return pushState(runProcSh, dir, "PreToolUse", event.properties?.sessionID)
+      }
       if (event?.type !== "session.idle") return
       pushState(runProcSh, dir, "Stop", event.properties?.sessionID)
       return handle("idle", event.properties?.sessionID)
@@ -1023,6 +1026,8 @@ async function setup(ctx) {
           idleArmed.delete(event.data?.sessionID)
         } else if (event?.type === "permission.asked" || event?.type === "permission.updated") {
           pushPermission(runProc, dir, event.data?.sessionID, event.data)
+        } else if (event?.type === "permission.replied") {
+          pushState(runProc, dir, "PreToolUse", event.data?.sessionID)
         } else if (event?.type === "session.idle") {
           eventLog("idle via session.idle", event.data?.sessionID)
           runIdleOnce(event.data?.sessionID)

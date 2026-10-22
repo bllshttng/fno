@@ -947,14 +947,15 @@ describe("opencode per-turn session-state push", () => {
         await hooks.event({
           event: { type: "permission.updated", properties: { sessionID: "ses_P", title: "Run rm -rf build" } },
         })
+        await hooks.event({ event: { type: "permission.replied", properties: { sessionID: "ses_P" } } })
         await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_P" } } })
         // The stub echoes argv before it reads stdin, so wait on the payloads.
-        await until(() => (readFileSync(log, "utf8").match(/"hook_event_name"/g) || []).length >= 4)
+        await until(() => (readFileSync(log, "utf8").match(/"hook_event_name"/g) || []).length >= 5)
       },
     )
     const text = readFileSync(log, "utf8")
     const events = fires(log).map((l) => l.split(" ").pop()).sort()
-    expect(events).toEqual(["Notification", "PreToolUse", "Stop", "UserPromptSubmit"])
+    expect(events).toEqual(["Notification", "PreToolUse", "PreToolUse", "Stop", "UserPromptSubmit"])
     expect(text).toContain('"model":"zai/glm-5.3"')
     expect(text).toContain('"message":"Run rm -rf build"')
     expect(text).toContain('"tool_name":"Bash"')
