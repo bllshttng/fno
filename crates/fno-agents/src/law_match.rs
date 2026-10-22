@@ -3368,13 +3368,13 @@ pub(crate) mod tests {
     /// scope resolves from the fixture and never from the live machine graph
     /// (`default_graph_path` is `$FNO_HOME/graph.json`, or `$HOME/.fno`).
     fn node_graph(dir: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        // Seeded into the store, never a raw graph.json: the legacy-json
+        // fold can refuse to retire an unimported file, which reads as an
+        // unread graph and fails the epic lookup.
         let graph = dir.as_ref().join("graph.json");
-        std::fs::write(
+        crate::graph_store::seed_rows(
             &graph,
-            serde_json::json!({
-                "entries": [{"id": "x-aaaa", "parent": "x-bbbb", "project": "fno"}]
-            })
-            .to_string(),
+            &[serde_json::json!({"id": "x-aaaa", "parent": "x-bbbb", "project": "fno"})],
         )
         .expect("writes");
         graph
