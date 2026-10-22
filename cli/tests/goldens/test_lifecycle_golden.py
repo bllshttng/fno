@@ -122,16 +122,26 @@ def test_supersede_a_shipped_target_refuses(tmp_path):
     ), err
 
 
-def test_supersede_stamps_the_edge_and_superseded_status(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-aaa11010"), seed_node("x-bbb22000")])
+def test_a_narrower_successor_refuses_until_the_leftover_is_filed(tmp_path):
+    narrow = seed_node("x-bbb22000", details="Pass 1: docs. Pass 2 (not this node): code identifiers.")
+    root = make_sandbox(tmp_path, [seed_node("x-aaa11010"), narrow, seed_node("x-ccc33000", "idea")])
     warm(root, "x-aaa11010")
-    code, out, err = door(
-        root,
-        ["supersede", "x-bbb22000", "--replaces", "x-aaa11010", "--cause", "old approach", "--surface", "a.py"],
-    )
+    base = ["supersede", "x-bbb22000", "--replaces", "x-aaa11010", "--cause", "old approach", "--surface", "a.py"]
+    code, out, err = door(root, [*base, "--covers", "renames everything"])
+    assert code == 1, err
+    assert out == "", out
+    assert "--reason is required and cannot be blank." in err
+    code, out, err = door(root, [*base, "--reason", "folded in", "--covers", "renames everything"])
+    assert code == 1, err
+    assert 'its own text says "not this node"' in err
+    assert "fno backlog idea" in err
+    assert {r["id"]: r for r in graph_rows(root)}["x-aaa11010"].get("superseded_by") is None
+
+    code, out, err = door(root, [*base, "--reason", "folded in", "--leftover", "x-ccc33000"])
     assert code == 0, err
     assert out == "superseded x-aaa11010 with x-bbb22000\n", out
     rows = {r["id"]: r for r in graph_rows(root)}
     assert rows["x-aaa11010"]["status"] == "superseded"
     assert rows["x-aaa11010"]["superseded_by"] == "x-bbb22000"
+    assert rows["x-aaa11010"]["supersession"]["reason"] == "folded in; leftover: x-ccc33000"
     assert rows["x-bbb22000"]["supersedes"] == ["x-aaa11010"]

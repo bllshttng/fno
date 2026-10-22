@@ -810,7 +810,9 @@ pub(crate) fn render_command(
     match (classification, target) {
         ("promote", _) => Some(format!("fno backlog update {node_id} priority=p3")),
         ("supersede", Some(t)) => Some(format!(
-            "fno backlog supersede {t} --replaces {node_id} --reason 'validity sweep: superseded by {t}'"
+            "fno backlog supersede {t} --replaces {node_id} --reason 'validity sweep: superseded by {t}' \
+             --covers 'validity sweep: {t} carries the whole of {node_id}' \
+             --cause '<what {node_id} was for>' --surface <path>"
         )),
         _ => None,
     }
@@ -1547,7 +1549,11 @@ mod tests {
         assert_eq!(ok.classification, "supersede");
         assert_eq!(
             ok.command.as_deref(),
-            Some("fno backlog supersede ab-new --replaces ab-x --reason 'validity sweep: superseded by ab-new'")
+            Some(
+                "fno backlog supersede ab-new --replaces ab-x --reason 'validity sweep: superseded \
+                 by ab-new' --covers 'validity sweep: ab-new carries the whole of ab-x' \
+                 --cause '<what ab-x was for>' --surface <path>"
+            )
         );
         for bad in [
             json!({"classification": "supersede", "confidence": 0.9, "rationale": "r",

@@ -102,6 +102,162 @@ pub(crate) fn verify_pending_supersessions(
     receipts
 }
 
+/// Phrases a successor's own text uses to scope work out of itself. A
+/// successor that says one of these covers only part of what it replaces,
+/// whatever its `--covers` text claims.
+const SCOPE_OUT_MARKERS: [&str; 6] = [
+    "not this node",
+    "not in this node",
+    "outside this node",
+    "out of scope",
+    "scoped out",
+    "left for a follow-up",
+];
+
+fn scope_out_marker(successor: &Value) -> Option<&'static str> {
+    let text = ["title", "details"]
+        .iter()
+        .filter_map(|key| successor.get(*key).and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    SCOPE_OUT_MARKERS.into_iter().find(|m| text.contains(m))
+}
+
+fn is_set(row: &Value, key: &str) -> bool {
+    row.get(key).is_some_and(|v| match v {
+        Value::Null | Value::Bool(false) => false,
+        Value::String(s) => !s.is_empty(),
+        _ => true,
+    })
+}
+
+/// The coverage clause a supersede owes, appended to its stored reason: how
+/// the successor's done condition covers the old node's (`covers`), or the
+/// filed live node holding the scope the successor leaves out (`leftover`).
+/// A successor whose own text scopes work out of itself owes a leftover.
+pub(crate) fn coverage_clause(
+    successor: &Value,
+    new_id: &str,
+    old_id: &str,
+    covers: Option<&str>,
+    leftover: Option<&Value>,
+) -> Result<String, String> {
+    let covers = covers.map(str::trim).filter(|c| !c.is_empty());
+    let file_it = format!(
+        "File the scope first, then re-run with --leftover <its id>:\n  \
+         fno backlog idea \"<the part of {old_id} that {new_id} leaves out>\""
+    );
+    let Some(leftover) = leftover else {
+        if let Some(marker) = scope_out_marker(successor) {
+            return Err(format!(
+                "Error: {new_id} covers only part of {old_id}: its own text says \
+                 \"{marker}\". That is a split, not a supersede.\n{file_it}"
+            ));
+        }
+        let Some(covers) = covers else {
+            return Err(format!(
+                "Error: name how {new_id} covers the done condition of {old_id} \
+                 (--covers \"...\"), or name the filed node that holds what {new_id} \
+                 leaves out (--leftover <id>). A successor that covers only part of \
+                 the work is a split, not a supersede.\n{file_it}"
+            ));
+        };
+        return Ok(format!("covers: {covers}"));
+    };
+    let id = leftover.get("id").and_then(Value::as_str).unwrap_or("");
+    if id == new_id || id == old_id {
+        return Err(format!(
+            "Error: --leftover must name a third node, not {id}. {file_it}"
+        ));
+    }
+    let dead = [
+        ("completed_at", "done"),
+        ("superseded_by", "superseded"),
+        ("deferred_at", "deferred"),
+    ]
+    .into_iter()
+    .find(|(key, _)| is_set(leftover, key));
+    if let Some((_, state)) = dead {
+        return Err(format!(
+            "Error: --leftover {id} is {state}; the scope {new_id} leaves out must \
+             stay live work. {file_it}"
+        ));
+    }
+    Ok(match covers {
+        Some(covers) => format!("covers: {covers}; leftover: {id}"),
+        None => format!("leftover: {id}"),
+    })
+}
+
+/// One line per superseded node whose successor shipped while its coverage
+/// stays unproven: no record at all (nothing was written about why), or a
+/// record whose surfaces the successor's PR never touched.
+pub(crate) fn shipped_successor_unproven(entries: &[Value]) -> Vec<String> {
+    let by_id: BTreeMap<&str, &Value> = entries
+        .iter()
+        .filter_map(|e| e.get("id").and_then(Value::as_str).map(|id| (id, e)))
+        .collect();
+    let mut lines = Vec::new();
+    for entry in entries {
+        let Some(successor_id) = entry
+            .get("superseded_by")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if is_set(entry, "completed_at") {
+            continue;
+        }
+        let Some(successor) = by_id.get(successor_id) else {
+            continue;
+        };
+        if !is_set(successor, "completed_at") {
+            continue;
+        }
+        let record = entry.get("supersession").filter(|r| r.is_object());
+        if record.is_some_and(|r| is_set(r, "verified_at")) {
+            continue;
+        }
+        let id = entry.get("id").and_then(Value::as_str).unwrap_or("?");
+        let why = match record {
+            None => "no reason or coverage was ever recorded".to_string(),
+            Some(r) => {
+                let list = |key: &str| -> Vec<String> {
+                    r.get(key)
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .map(String::from)
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let matched = list("matched_surfaces");
+                let uncovered: Vec<String> = list("surfaces")
+                    .into_iter()
+                    .filter(|s| !matched.contains(s))
+                    .collect();
+                let reason = r
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no reason recorded");
+                format!(
+                    "surfaces its PR never touched: {}; reason: {reason}",
+                    uncovered.join(", ")
+                )
+            }
+        };
+        lines.push(format!("{id} (successor {successor_id} shipped; {why})"));
+    }
+    lines
+}
+
 /// Successor id -> successor node (cloned), for pending predecessors
 /// already owed proof. Only a CLOSED successor is owed here: an open one
 /// still has its ordinary close ahead of it, and that path verifies.
@@ -237,6 +393,67 @@ mod tests {
             assert_eq!(receipts[0]["uncovered_surfaces"], json!(["src/gone.rs"]));
             assert!(entries[0]["supersession"].get("verified_at").is_none());
         }
+    }
+
+    #[test]
+    fn a_narrower_successor_is_refused_until_the_leftover_is_filed() {
+        let narrow = json!({
+            "id": "x-253e",
+            "title": "Rename user-facing verb to command",
+            "details": "Pass 1: docs and help.\nPass 2 (not this\nnode): code identifiers.",
+        });
+        let claim = Some("renames every verb");
+        let refused = coverage_clause(&narrow, "x-253e", "x-c612", claim, None).unwrap_err();
+        assert!(refused.contains("\"not this node\""), "{refused}");
+        assert!(refused.contains("fno backlog idea"), "{refused}");
+        for (row, state) in [
+            (
+                json!({"id": "x-1eft", "completed_at": "2026-10-01T00:00:00Z"}),
+                "done",
+            ),
+            (
+                json!({"id": "x-1eft", "deferred_at": "2026-10-01T00:00:00Z"}),
+                "deferred",
+            ),
+            (json!({"id": "x-c612"}), "third node"),
+        ] {
+            let err = coverage_clause(&narrow, "x-253e", "x-c612", None, Some(&row)).unwrap_err();
+            assert!(err.contains(state), "{err}");
+        }
+        let filed = json!({"id": "x-1eft", "status": "idea"});
+        assert_eq!(
+            coverage_clause(&narrow, "x-253e", "x-c612", None, Some(&filed)).unwrap(),
+            "leftover: x-1eft"
+        );
+        let whole = json!({"id": "x-beef", "title": "Rename verb everywhere"});
+        assert!(coverage_clause(&whole, "x-beef", "x-c612", Some("  "), None).is_err());
+        assert_eq!(
+            coverage_clause(&whole, "x-beef", "x-c612", claim, None).unwrap(),
+            "covers: renames every verb"
+        );
+    }
+
+    #[test]
+    fn groom_flags_a_shipped_successor_whose_coverage_is_unproven() {
+        let mut entries = vec![
+            json!({"id": "x-succ", "completed_at": "2026-10-02T00:00:00Z", "pr_number": 9}),
+            json!({"id": "x-open", "superseded_by": "x-live"}),
+            json!({"id": "x-live"}),
+            json!({"id": "x-bare", "superseded_by": "x-succ"}),
+            pred("x-pre", &["src/a.rs", "src/b.rs"], false),
+            pred("x-ok", &["src/a.rs"], true),
+        ];
+        entries[4]["supersession"]["matched_surfaces"] = json!(["src/a.rs"]);
+        assert_eq!(
+            shipped_successor_unproven(&entries),
+            vec![
+                "x-bare (successor x-succ shipped; no reason or coverage was ever recorded)"
+                    .to_string(),
+                "x-pre (successor x-succ shipped; surfaces its PR never touched: src/b.rs; \
+                 reason: no reason recorded)"
+                    .to_string(),
+            ]
+        );
     }
 
     #[test]
