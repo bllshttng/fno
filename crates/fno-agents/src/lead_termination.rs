@@ -181,6 +181,7 @@ fn unplanned_routes_to_target(row: &Value, floor: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn parse_org_board_value(value: &Value) -> Option<OrgBoard> {
     parse_org_board_value_with_floor(value, crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR)
 }
