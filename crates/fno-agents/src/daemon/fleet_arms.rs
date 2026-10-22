@@ -46,6 +46,7 @@ pub(super) struct FleetArms {
     help_router: crate::help_router::Arm,
     first_check: crate::first_check::Arm,
     spawn_watch: crate::first_check::Arm,
+    prompt_wait: crate::first_check::Arm,
     lease_heartbeat: crate::lease_heartbeat::Arm,
     backlog_share: crate::backlog_share::Arm,
     mail: crate::mail_arm::Arm,
@@ -124,6 +125,7 @@ impl FleetArms {
             help_router: crate::help_router::Arm::new(opts.agents_config_cwd.clone()),
             first_check: crate::first_check::Arm::default(),
             spawn_watch: crate::first_check::Arm::new("spawn-watch", crate::spawn_watch::run_pass),
+            prompt_wait: crate::first_check::Arm::new("prompt-wait", crate::prompt_wait::run_pass),
             lease_heartbeat: crate::lease_heartbeat::Arm::default(),
             backlog_share: crate::backlog_share::Arm::default(),
             mail: crate::mail_arm::Arm::default(),
@@ -339,6 +341,9 @@ impl FleetArms {
         // Every launch record reaches its first turn or tells its caller
         // where it is stuck, by 5 minutes after the call.
         self.spawn_watch.tick(ctx.home.clone());
+        // A thread worker parked on a permission prompt past 5 minutes mails
+        // its spawner and lead; it has no pane for the check-in to scrape.
+        self.prompt_wait.tick(ctx.home.clone());
         // With a shared primary set, renew this machine's dispatch leases.
         crate::lease_heartbeat::maybe_tick(&self.lease_heartbeat);
         // With the backlog shared, keep this machine's replica fresh.

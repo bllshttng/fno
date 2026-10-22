@@ -65,6 +65,19 @@ fn watch_dir(home: &AgentsHome) -> PathBuf {
     home.root().join("spawn-watch")
 }
 
+/// The caller of the launch whose child is `sid`, from the watch files.
+/// A watch outlives the launch record, so this finds a spawner the registry
+/// never recorded.
+pub(crate) fn caller_of(home: &AgentsHome, sid: &str) -> Option<String> {
+    std::fs::read_dir(watch_dir(home))
+        .ok()?
+        .flatten()
+        .filter_map(|e| read(&e.path()).ok().flatten())
+        .filter(|w| w.child_session.as_deref() == Some(sid) && !w.caller.is_empty())
+        .max_by_key(|w| w.called_at_ms)
+        .map(|w| w.caller)
+}
+
 /// The pending and the claimed copy of one launch share this key.
 fn record_key(r: &Record) -> String {
     use sha2::{Digest, Sha256};

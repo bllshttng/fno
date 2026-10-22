@@ -931,6 +931,7 @@ mod tests {
             cwd: Some("/work".into()),
             account: None,
             pid: None,
+            waiting_for: None,
         }
     }
 

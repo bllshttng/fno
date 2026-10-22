@@ -145,8 +145,9 @@ A `WAITING ON APPROVAL` line is an action item, not a status line. Answer it the
 
 1. Judge whether answering is inside the worker's task. The check-in line names the prompt head, and the worker's claim or its mail thread names its node and brief. A worktree tool call from the worker's own plan is inside the task. So is a model switch, or a trust prompt for the worker's own cwd. Answer those. A prompt outside the task (a deploy, a protected-surface push) is not. Escalate that one to the user instead of answering.
 2. Answerable line (a numbered menu): run `fno mux pane send <pane> --raw <key>` with exactly the key the line prints. Then verify with one `fno mux pane read <pane> --json`. A pane that still shows the prompt after the send names the failure and the `fno agents session attach <worker>` fallback.
-3. Focus-only line (no numbered menu): `fno agents session attach <worker>`, answer the menu with its arrow keys and Enter, then detach. Run one `fno mux pane read` to verify. A picker with a supported command takes the command first: `fno agents mail ask` retasks a model switch.
-4. Record it: `fno backlog note <node> "answered <tool> prompt on pane <id> (<prompt head>)"`. A second WAITING ON APPROVAL line for the same worker across beats means the answer did not land. Escalate instead of re-sending.
+3. Thread line (`claude thread <short id>`, no pane): run `claude attach <short id>` on its host. Pick the option, then press the left arrow to leave. A thread worker has no pane to send keys to. The daemon mails its spawner and lead 5 minutes into the wait.
+4. Focus-only line (no numbered menu): run `fno agents session attach <worker>`. Answer the menu with its arrow keys and Enter, then detach. Run one `fno mux pane read` to verify. A picker with a supported command takes that command first: `fno agents mail ask` retasks a model switch.
+5. Record it: `fno backlog note <node> "answered <tool> prompt on pane <id> (<prompt head>)"`. A second WAITING ON APPROVAL line for the same worker across beats means the answer did not land. Escalate instead of re-sending.
 
 Never answer blind: the check-in line is evidence a prompt is up, never proof of what it asks. If the pane read shows text the line did not capture (a question you cannot judge from the head), read the pane before sending keys.
 
