@@ -61,6 +61,9 @@ impl SinkIo for JourneyIo {
         }
         std::fs::rename(from, to)
     }
+    fn remove(&mut self, path: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(path)
+    }
     fn list_md(&mut self, dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         if let Ok(entries) = std::fs::read_dir(dir) {

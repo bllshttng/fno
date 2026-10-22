@@ -970,21 +970,6 @@ def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     return out
 
 
-def _is_anycast_ask(verb: str, args: Sequence[str]) -> bool:
-    """True for an ``ask`` carrying ``--to-project``.
-
-    The Rust client has no ``--to-project`` flag, so a verbatim route exits
-    ``unknown flag``. Anycast resolves to one live peer in Python (a
-    registry read, ``resolve_to_project``) and then execs the binary with a
-    resolved name; detecting the flag here is what sends that invocation to
-    ``cmd_ask`` first. ``--any`` rides along: it only means something
-    together with ``--to-project``.
-    """
-    if verb != "ask":
-        return False
-    return _has_flag(args, longs=("--to-project", "--any"))
-
-
 def _is_role_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--role``.
 
@@ -1304,15 +1289,9 @@ def _scrub_ambient_identity_at_exec(verb: str) -> None:
 #: seed naming a flag is prompt text, never a routed spawn.
 _RETIRED_AXIS_LONGS = (
     "--provider",
-    "--model",
     "--substrate",
     "--yolo",
-    "--permission-mode",
-    "--effort",
     "--resume",
-    "--add-dir",
-    "--agent",
-    "--tools",
     "--deny-tools",
 )
 
@@ -1345,28 +1324,6 @@ def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
             if a == "--as=headless" or (a == "--as" and head[i + 1 : i + 2] == ["headless"]):
                 head[i : i + (1 if "=" in a else 2)] = ["--once"]
     return head + list(args[len(_args_before_argv(args)) :])
-
-
-def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying ``--node``/``--slug``/``--plan``.
-
-    Provenance flags are parsed only by the Python spawn verb (``cmd_spawn``
-    resolves them into the pane env). The Rust client does not know them, so a
-    ``spawn ... --node <id>`` auto-routed to the binary would exit ``unknown
-    flag: --node``. Keeping it Python covers every caller (direct CLI and the
-    /agent spawn.sh forward) in one place, not just the pane substrate. The
-    flags are unused on the Python bg/headless path (provenance rides the pane
-    wrapper only), so forcing Python is harmless there."""
-    if verb != "spawn":
-        return False
-    # footnote's lanes live only in the Rust client, which parses --node.
-    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() == "footnote":
-        return False
-    prov = ("--node", "--slug", "--plan")
-    return any(
-        a in prov or a.startswith(tuple(f"{p}=" for p in prov))
-        for a in _args_before_argv(args)
-    )
 
 
 #: d-fe66560a keeps the binary's action list shrink-only, so these read
@@ -1624,9 +1581,7 @@ def make_agents_group_cls() -> type:
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_default_substrate_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
-                    or _is_provenance_bearing_spawn(verb, args)
                     or _is_dispatch_account_bearing_spawn(verb, args)
-                    or _is_anycast_ask(verb, args)
                 )
                 if mode == "rust" and not py_spawn:
                     _pin = _worktree_policy_pin_at_seam(args)

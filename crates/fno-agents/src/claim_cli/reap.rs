@@ -246,6 +246,12 @@ fn judge(rec: &ClaimRecord, row: &Value, ctx: &mut ProbeCtx) -> Result<(bool, St
     }
 }
 
+/// [`judge`] for one key outside the sweep loop (the spawn guard's
+/// recovery), with a fresh probe context.
+pub(crate) fn judge_key(rec: &ClaimRecord, row: &Value) -> Result<(bool, String), String> {
+    judge(rec, row, &mut ProbeCtx::default())
+}
+
 /// Record a tokened probe arm (reasons are last-wins per key) and report it.
 fn note_token(
     ctx: &mut ProbeCtx,
@@ -463,7 +469,7 @@ fn run_with_timeout(bin: &str, args: &[&str], timeout_secs: u64) -> Option<(i32,
 /// rows come from the same in-process records, a vanished requested key
 /// mints the synthetic free row, an impossible omission lands in
 /// reap_failed.
-fn keyed_fresh_row(directory: &Path, key: &str) -> Result<Value, String> {
+pub(crate) fn keyed_fresh_row(directory: &Path, key: &str) -> Result<Value, String> {
     let records =
         crate::claims::list_in(std::slice::from_ref(&PathBuf::from(directory)), None, true)
             .map_err(|err| format!("reap fresh sweep failed: {err}"))?;

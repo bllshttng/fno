@@ -165,11 +165,13 @@ def test_supersede_keeps_the_human_reason(tmp_path, monkeypatch):
     code, out = _native_supersede(graph,
         "x-1a2b", "--replaces", "x-9f0c",
         "--cause", "owned the parser", "--surface", "cli/p.py",
-        "--reason", "folded into the rewrite",
+        "--reason", "folded into the rewrite", "--covers", "the rewrite owns the parser",
     )
     assert code == 0, out
     rows = {e["id"]: e for e in read_graph_strict(graph)}
-    assert rows["x-9f0c"]["supersession"]["reason"] == "folded into the rewrite"
+    assert rows["x-9f0c"]["supersession"]["reason"] == (
+        "folded into the rewrite; covers: the rewrite owns the parser"
+    )
 
 
 def test_supersede_without_surface_names_a_runnable_example():

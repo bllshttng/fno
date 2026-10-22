@@ -652,27 +652,27 @@ def test_python_mode_refuses_ask(monkeypatch, tmp_path) -> None:
     assert rr.RUNTIME_ENV in result.stderr
 
 
-def test_anycast_ask_resolves_in_python_before_routing(monkeypatch, tmp_path) -> None:
-    """`ask --to-project` falls through to cmd_ask even with a binary (the
-    client has no --to-project flag), resolves the recipient from the
-    registry, and THEN routes the plain ask to the binary. With no live
-    peer the resolution is the refusal: exit 16, never a binary exec."""
+def test_anycast_ask_routes_verbatim_to_the_binary(monkeypatch, tmp_path) -> None:
+    """`ask --to-project` takes the plain ask route: the client resolves the
+    one live peer itself, so the seam never detours it through Python."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
     called: list = []
 
+    def fake_route(args, **kw):
+        called.append(list(args))
+        raise SystemExit(0)
+
     monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
     monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
-    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
-    result = CliRunner().invoke(
-        app, ["agents", "ask", "--to-project", "no-such-project", "hi"]
-    )
-    assert called == [], "anycast with no live peer must refuse before any exec"
-    from fno.agents.dispatch import UNKNOWN_AGENT_EXIT_CODE
-
-    assert result.exit_code == UNKNOWN_AGENT_EXIT_CODE
-    assert "no live peer" in result.stderr
+    monkeypatch.setattr(rr, "route_to_rust", fake_route)
+    CliRunner().invoke(app, ["agents", "ask", "--to-project", "proj", "--any", "hi"])
+    assert len(called) == 1
+    routed = called[0]
+    assert routed[0] == "ask"
+    assert routed[routed.index("--to-project") + 1] == "proj"
+    assert "--any" in routed and "hi" in routed
 
 
 # --------------------------------------------------------------------------- #
@@ -919,9 +919,6 @@ def test_routing_predicates_stop_at_argv_boundary() -> None:
     )
     assert not rr._is_role_bearing_spawn(
         "spawn", ["spawn", "w", "--argv", "--", "tool", "--role", "x"]
-    )
-    assert not rr._is_provenance_bearing_spawn(
-        "spawn", ["spawn", "w", "--argv", "--", "tool", "--node", "x"]
     )
     assert not rr._is_route_bearing_spawn(
         "spawn", ["spawn", "w", "--argv", "--", "tool", "--route", "x"]

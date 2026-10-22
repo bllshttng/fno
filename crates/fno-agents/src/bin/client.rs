@@ -1337,6 +1337,15 @@ async fn run(args: Vec<String>) -> i32 {
         }
     };
 
+    // An anycast ask swaps its project for the one live peer before any
+    // lane reads the name.
+    if method == "agent.ask" {
+        if let Err((msg, code)) = fno_agents::ask_project::resolve(&mut params) {
+            eprintln!("{msg}");
+            return code;
+        }
+    }
+
     // Resolve the agent name from the PARSED params, not args.get(1): build_request
     // strips leading flags (and their values) when collecting positionals, so
     // `fno agents stop --force worker-A` yields name="worker-A". Reading args.get(1)
@@ -1350,36 +1359,16 @@ async fn run(args: Vec<String>) -> i32 {
         .unwrap_or_default();
 
     let home = AgentsHome::from_env();
-    // (AC20): the codex-thread-target lookup moved INTO the agent.ask
-    // block below, derived from the registry read already performed there. The
-    // old spot loaded the registry for EVERY client verb and swallowed read
-    // failures at `.ok()`.
 
-    // Claude `ask` is handled entirely client-side: claude is a
-    // `claude --bg` shellout, not a daemon-PTY agent, so it bypasses the daemon
-    // RPC. Only claude targets take this path; codex/gemini ask still routes to
-    // the daemon below. Resolution: an existing registry row's provider, else
-    // the `--provider` flag on first contact.
+    // `ask` runs client-side for every harness: each lane below takes the
+    // rows it owns, and only a codex thread target reaches the daemon.
     if method == "agent.ask" {
-        // Task 1.3a: ask never creates. Pre-check the registry before provider
-        // resolution: if no row exists for the name, surface the unknown-agent
-        // error (exit 16) regardless of --provider. This mirrors Python's
-        // dispatch_ask after Task 1.1 (unknown-name check precedes provider
-        // selection). Provider-mismatch logic (inside maybe_run_claude_ask) still
-        // applies for existing rows.
-        // (AC20): ONE registry read for the whole ask path. The
-        // codex-thread-target lookup below derives from THIS read - the old
-        // second load ran for EVERY client verb and swallowed failures at
-        // `.ok()`.
+        // Ask never creates: an unknown name exits 16 whatever --harness
+        // says. One registry read serves the whole ask path.
         use fno_agents::claude_ask::{emit_event, py_repr};
         use fno_agents::state::load_registry;
-        // A corrupt/unreadable registry must surface as exit 12 ("registry
-        // read failed"), NOT degrade to an empty registry where every name
-        // looks unknown (exit 16 + a forensically wrong unknown-name
-        // event). Python parity: dispatch_ask raises exit 12 on
-        // (OSError, ValueError, RegistryVersionError); the lib dispatch
-        // fns do the same. A MISSING file is not an error (load_registry
-        // returns the default). Sigma-review finding, this PR.
+        // An unreadable registry exits 12, never an empty registry where every
+        // name looks unknown. A MISSING file is not an error.
         let registry = match load_registry(&home.registry_json()) {
             Ok(r) => r,
             Err(e) => {
@@ -1479,6 +1468,7 @@ async fn run(args: Vec<String>) -> i32 {
     // agent.spawn) to route claude -> dispatch_claude_spawn, and
     // codex/gemini + --once -> dispatch_codex_once / dispatch_gemini_once.
     // `host` and `promote` must fall through to the daemon RPC unchanged.
+    let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
     if method == "agent.spawn" && verb_owned == "spawn" {
         // The seam gate comes FIRST. A spawn that skipped
         // the Python seam carries no configured route/model/effort/account,
@@ -1530,11 +1520,14 @@ async fn run(args: Vec<String>) -> i32 {
             // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
             // the pane spine answers every harness arm itself - the Python
             // bounce this branch kept for unseated shapes is deleted.
-            return fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+            return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
+                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
+            });
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; anything else re-execs Python.
-        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args) {
+        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args, &mut spawn_hold) {
+            fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
             if code == 0 {
                 // A placement failure never recolors the spawn verdict: the
                 // receipt is the truth, the worker is live, and a nonzero here
@@ -1696,6 +1689,9 @@ async fn run(args: Vec<String>) -> i32 {
         call(&home, &daemon_bin, &req).await
     };
     drop(daemon_spawn_gate);
+    if matches!(&call_result, Ok(resp) if matches!(resp.payload, ResponsePayload::Ok(_))) {
+        fno_agents::spawn_guard::settle(&mut spawn_hold, 0, &agent_name);
+    }
     match call_result {
         Ok(resp) => match resp.payload {
             ResponsePayload::Err(err) => {
@@ -2177,7 +2173,13 @@ fn bounce_to_python(args: &[String], why: &str, remedy: &str) -> i32 {
     127
 }
 
-fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String]) -> Option<i32> {
+fn maybe_run_spawn(
+    home: &AgentsHome,
+    params: &Value,
+    name: &str,
+    args: &[String],
+    hold: &mut Option<fno_agents::spawn_guard::SpawnHold>,
+) -> Option<i32> {
     use fno_agents::agy_ask::dispatch_agy_once_with_effort;
     use fno_agents::claude_ask::{
         dispatch_claude_headless, dispatch_claude_spawn, py_repr, ClaudeHome,
@@ -2417,9 +2419,11 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         })
         .unwrap_or_default();
     // The claude-only bundle, resolved once for both claude lanes.
-    // The retired tier-3 bundle (add-dir/agent/tools/deny-tools) can no
-    // longer arrive: the parser refuses the spellings at the door. The
-    // builders keep their parameters; the call sites pass neutrals.
+    // The old tier-3 bundle (add-dir/agent/tools/deny-tools) no longer
+    // arrives as typed fields: --add-dir/--agent/--tools ride the fenced
+    // passthrough with every other harness flag, and --deny-tools refuses at
+    // the door. The builders keep their parameters; the call sites pass
+    // neutrals.
     let claude_flags = fno_agents::claude_ask::HarnessFlags {
         add_dir: None,
         state_dirs: &state_dirs,
@@ -2449,6 +2453,13 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
     // guard held here drops before any row exists and two rapid thread spawns
     // both pass the cap. The gate moves to run(), wrapped around that RPC.
     let codex_thread_fallthrough = provider == "codex" && substrate == "bg";
+    // The family-2 node guard runs after the cwd it judges and before the
+    // gate. The caller owns the hold, so a codex thread keeps its keys across
+    // the daemon RPC, and every exit before a proven launch releases them.
+    *hold = match fno_agents::spawn_guard::guard_client_spawn(params, name, &cwd) {
+        Ok(hold) => hold,
+        Err(code) => return Some(code),
+    };
     let mut gate_guard = if substrate == "pane" || codex_thread_fallthrough {
         None
     } else {
@@ -2465,6 +2476,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
                 route_provider: fno_agents::claude_adopt::gate_route_provider(&params),
                 account: params
                     .get("account")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                session_phase: params
+                    .get("session_phase")
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 ..Default::default()
@@ -3708,10 +3723,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--message",
         "--name",
         "--node",
+        "--slug",
+        "--plan",
+        "--session-phase",
         "--session-id",
         "--status",
         "--progress",
         "--from-name",
+        "--to-project",
         "--answer",
         "--timeout",
         "--model",
@@ -3883,8 +3902,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--name" => {
                 params.insert("name".into(), str_arg(&mut it, "--name")?);
             }
-            "--node" => {
-                params.insert("node".into(), str_arg(&mut it, "--node")?);
+            "--node" | "--slug" | "--plan" | "--session-phase" => {
+                params.insert(a[2..].replace('-', "_"), str_arg(&mut it, &a)?);
             }
             // The seam's node-reason receipt, set only when the seed
             // named a node the seam could not resolve. Forwarded so the mint
@@ -3940,10 +3959,23 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // instead of queueing for a free slot. Client-side only.
                 params.insert("no_wait".into(), Value::Bool(true));
             }
-            "--model" | "-m" => {
-                // Spawn refuses this axis at scan; the arm dies here so a
-                // direct call on another verb cannot revive the spelling.
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--model"));
+            // The harness's own flags, typed before the fence, are shorthand
+            // for the same flag behind it. They join the fenced tail in
+            // harness_args, so every lane that carries a fenced flag carries
+            // these, and a lane that cannot refuses by name.
+            "--model" | "-m" | "--effort" | "--permission-mode" | "--add-dir" | "--agent"
+            | "--tools"
+                if verb == "spawn" =>
+            {
+                let flag = if a == "-m" { "--model" } else { a.as_str() };
+                let value = str_arg(&mut it, flag)?;
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String(flag.to_string()));
+                    list.push(value);
+                }
             }
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
@@ -3978,26 +4010,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 }
                 params.insert("defaults_applied".into(), Value::String(v.into()));
             }
-            "--permission-mode" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
-                    "--permission-mode",
-                ));
-            }
-            "--effort" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--effort"));
-            }
-            // Tier-3 harness-native passthrough died with the axes: the
-            // harness's own flags ride --argv/--harness-arg now, and these
-            // spellings refuse by name instead of feeding the spawn bundle.
-            "--add-dir" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--add-dir"));
-            }
-            "--agent" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--agent"));
-            }
-            "--tools" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--tools"));
-            }
+            // fno's own spelling of claude's --disallowedTools: it refuses by
+            // name, since forwarding it would hand claude a flag it lacks.
             "--deny-tools" => {
                 return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
                     "--deny-tools",
@@ -4109,6 +4123,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // Explicit opt-in to the caller's cwd instead of the canonical
                 // default: extend WIP right here.
                 params.insert("here".into(), Value::Bool(true));
+            }
+            "--to-project" | "--any" if verb == "ask" => {
+                fno_agents::ask_project::take_flag(&a, &mut it, &mut params)?;
             }
             "--timeout" | "-t" => {
                 let val = str_arg(&mut it, "--timeout")?;
@@ -4273,11 +4290,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "agent.spawn"
         }
         "ask" => {
-            let name = positional.first().ok_or("ask needs a <name>")?;
-            params.insert("name".into(), Value::String(name.clone()));
-            if !params.contains_key("message") && positional.len() > 1 {
-                params.insert("message".into(), Value::String(positional[1..].join(" ")));
-            }
+            fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
         // `host`/`promote` (interactive daemon PTY hosting) were retired at G4

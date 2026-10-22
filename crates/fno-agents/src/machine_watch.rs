@@ -831,6 +831,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
                         .unwrap_or_else(|| serde_json::json!([])),
                 );
                 sample.top_rss = value.get("top_rss").cloned();
+                sample.memory = value.get("memory").cloned();
             }
             Err(error) => sample.sessions_error = Some(error),
         }

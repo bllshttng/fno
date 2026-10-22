@@ -66,219 +66,6 @@ class AgentProgressFilter(str, enum.Enum):
     unknown = "unknown"
 
 
-def _worker_token(worker: str) -> str:
-    """Bare worker names, comma-joined, no spaces.
-
-    Both shell consumers read the ``worker=`` token with ``sed -n 's/.*
-    worker=\\([^ ;]*\\).*/\\1/p;q'``, which stops at the first space, so the
-    worked overlay's ``<name> (unmeasurable: ...)`` label would truncate a
-    name mid-token. The full labelled string stays on the JSON field.
-    """
-    names = [part.strip().split(" ")[0] for part in worker.split(",")]
-    return ",".join(n for n in names if n)
-
-
-def _remedy_for(key: str) -> str:
-    """The two commands that clear KEY, safest first.
-
-    A refusal that names only its blocker leaves the operator doing archaeology:
-    read the lockfile for a pid, run ps, force-release. That was three manual
-    steps to undo one crash. After the self-clearing recovery above,
-    this text is for the case the probe could NOT run - which is exactly when
-    nobody is coming to help.
-    """
-    if key.startswith("dispatch:"):
-        # A reservation is NOT reapable inside its TTL, by design: that window
-        # is the boot window and `classify_for_sweep` deliberately has no
-        # one-shot arm for this key family. Naming reap here sent an operator to
-        # a command that provably cannot clear what they are looking at.
-        return f"  Clear it:  fno agents claim release {key} --force --reason '<why>'"
-    return (
-        f"  Clear it:  fno agents claim reap --apply      "
-        f"(takes it only if no live worker is on the node)\n"
-        f"  Override:  fno agents claim release {key} --force --reason '<why>'"
-    )
-
-
-#: Holder prefix of a reservation THIS verb writes. The targeted clear below is
-#: scoped to it: every other producer of a `dispatch:` key has its own launch
-#: contract, and `fno backlog advance` in particular relies on that reservation
-#: outliving its own exit because it takes no node claim to replace it.
-_SPAWN_CLI_HOLDER_PREFIX = "spawn-cli:"
-
-#: Buckets where force-release advice is HONEST: recovery ran, nobody was found
-#: on the node, and the claim is still there. Every other bucket is either a
-#: measured live holder or an unmeasured one, and telling an operator to clear
-#: something nobody checked is worse advice than none.
-_REMEDIABLE_BUCKETS = frozenset({"release-failed", "suspect", "suspect_unprobed"})
-
-#: `_reclaim_if_provably_dead` bucket meaning "a holder we PROVED is alive".
-#: The discriminator between benign dedup and a wedge: somebody is genuinely
-#: working, so the refusal is the system behaving correctly and there is nothing
-#: for an operator to clear. Every other unrecovered bucket is a wedge.
-_HOLDER_ALIVE = "live"
-
-
-def _reclaim_if_provably_dead(
-    key: str, *, probe=None, settlement=None
-) -> tuple[str | None, str]:
-    """Force-release KEY when its holder is PROVABLY dead.
-
-    Returns ``(prior_holder, bucket)``. ``prior_holder`` is None whenever the
-    claim was not cleared, and ``bucket`` says why, so the caller can tell a
-    live holder (benign dedup) from one it merely could not measure (a wedge).
-    Those deserve opposite refusals: pointing an operator at a force-release for
-    a reservation whose spawner is mid-launch is worse advice than none.
-
-    Nothing is cleared on a read failure or a probe failure. An instrument that
-    could not run is not a finding, and clearing a claim on one hands a live
-    worker's node to a second worker.
-
-    The proof itself is :func:`fno.claims.core.sweep_verdict`, the same single
-    authority the reaper uses, called on exactly the one key we were asked
-    about. This never sweeps: a dispatch deciding to prune the whole store as a
-    side effect is a blast radius nobody asked for.
-    """
-    from fno.claims.core import (
-        force_release_claim,
-        sweep_verdict,
-    )
-    from fno.agents.lock import _pid_is_alive
-    from fno.claims.core import native_claims_root
-    from fno.claims.io import claim_path, read_claim_file
-    from fno.claims.verdict import claim_verdicts
-
-    try:
-        path = claim_path(key, root=native_claims_root(key))
-    except Exception:  # noqa: BLE001 - an unmeasurable store clears nothing
-        return None, "unreadable"
-    try:
-        claim = read_claim_file(path)
-    except Exception:  # noqa: BLE001 - unreadable is unproven
-        return None, "unreadable"
-    native = claim_verdicts([key]).get(key)
-    if native is None:
-        return None, "unreadable"
-    if key.startswith("dispatch:"):
-        # The reservation's own predicate, deliberately NOT in the shared
-        # sweep classifier. `spawn-cli:<pid>` launches a worker and exits, so
-        # a dead pid means no launch is in flight from that process (the TTL
-        # is the boot window; see the native classify_for_sweep decision),
-        # but THIS caller is the next dispatcher, standing at the moment of
-        # launch: the node claim it takes covers the window the reservation
-        # protected. ONLY this dispatcher's own holder shape. `fno backlog
-        # advance` reserves the same key as `advance:<pid>` and spawns
-        # WITHOUT --node, so that reservation is the only barrier its
-        # booting worker has; its pid is dead by design too, so a predicate
-        # reading dead-pid-and-same-host alone cleared it and launched a
-        # second worker onto the node advance had just staffed. LIVENESS
-        # FIRST. A live holder is benign dedup whoever wrote it: answering
-        # `foreign-reservation` there would print force-release advice
-        # against a reservation somebody is actively launching under.
-        if native.get("state") == "live":
-            if (
-                native.get("session_basis") != "registry-served-live"
-                or _pid_is_alive(claim.pid)
-            ):
-                return None, _HOLDER_ALIVE
-            # A registry-served live verdict names the DISPATCHER's session
-            # (the subprocess stamps its caller's session id), which
-            # outlives the holder by design. Only the spawn-cli shape may
-            # clear on the holder pid: an advance:<pid> reservation stays
-            # the only barrier its booting worker has, and its pid is dead
-            # by design too.
-            if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
-                return None, "foreign-reservation"
-        elif native.get("bucket") == "offhost":
-            return None, "offhost"
-        if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
-            return None, "foreign-reservation"
-        provably_dead, bucket = True, ""
-    else:
-        try:
-            provably_dead, bucket = sweep_verdict(
-                claim,
-                abandonment_probe=probe,
-                node_settlement=settlement,
-                native_verdict=native,
-            )
-        except Exception:  # noqa: BLE001 - a probe blowing up clears nothing
-            return None, "unprobed"
-    if not provably_dead:
-        return None, bucket
-    try:
-        outcome = force_release_claim(
-            key=key,
-            reason=f"holder {claim.holder} (pid {claim.pid}) proven dead at dispatch",
-            expected_claim=claim,
-        )
-    except Exception:  # noqa: BLE001 - a failed release just leaves the refusal
-        return None, "release-failed"
-    return (claim.holder, "") if outcome.archived else (None, "contended")
-
-
-
-def _init_reached(node_id: str, holder: str | None, cwd: str | None) -> bool:
-    """True when a `fno target init` PROVABLY took this node claim.
-
-    A live `node:<id>` claim proves a HOLDER exists. It does not prove a WORKER
-    exists: a `spawn-handover:` claim covers a launch window whose worker can
-    die before it boots, and a hand `fno agents claim acquire` from a live process
-    takes the key with nothing launched at all. Reporting either as a live
-    worker tells a lead the opposite of the truth at the moment the lead
-    decides whether to staff the node.
-
-    Two markers, both POSITIVE. This never reads an absence as a yes:
-
-    1. The holder shape. Init acquires under `target-session:<id>`
-       (``hooks/helpers/init-target-state.sh``). This is a CONVENTION, not
-       proof: `fno agents claim acquire --holder target-session:anything` writes the
-       same prefix, and a hand acquire is one of the cases this function exists
-       to exclude. It is kept because it is the only marker that reaches a
-       worker running in its own worktree, whose manifest this process cannot
-       see. Marker 2 is the non-forgeable one.
-    2. A manifest under CWD binding `target_claim_key: node:<id>` AND naming
-       the OBSERVED holder in `target_claim_holder`. The stronger fact, and
-       never the only one: a worktree worker's manifest lives under its own
-       root, not the dispatcher's, so requiring it alone reports every real
-       worktree worker as unproven.
-
-    The holder match on marker 2 is what makes it a measurement rather than a
-    snapshot. Manifest claim fields are written once at init and are never
-    ownership truth, and a dispatcher is handed the NODE's project root as
-    `--cwd`, which is exactly where a finished session leaves its manifest. A
-    key-only test therefore reads a dead session's file and calls an unrelated
-    holder a live worker, which is the lie this function exists to delete.
-
-    Any read fault answers False. An unreadable manifest must never manufacture
-    a worker.
-    """
-    from fno.agents.truth_status import _HOLDER_PREFIX
-
-    holder = str(holder or "")
-    if holder.startswith(_HOLDER_PREFIX):
-        return True
-    if not cwd or not holder:
-        return False
-    try:
-        from pathlib import Path
-
-        from fno.target.manifest import read_target_manifest
-
-        raw = read_target_manifest(Path(cwd)) or {}
-        return (
-            str(raw.get("target_claim_key") or "") == f"node:{node_id}"
-            and str(raw.get("target_claim_holder") or "") == holder
-        )
-    except Exception:  # noqa: BLE001 - an unreadable manifest proves nothing
-        return False
-
-
-def _claim_refused(action: str, common: dict[str, object]) -> dict[str, object]:
-    """The shared refusal verdict shape for an auto-deferred node."""
-    return {"verdict": "refused", "reason": action, **common}
-
-
 def _spawn_guard_decision(
     node_id: str,
     holder: str,
@@ -288,432 +75,33 @@ def _spawn_guard_decision(
     cwd: str | None = None,
     handover_holder: str | None = None,
 ) -> tuple[dict[str, object], int]:
-    """Return the shared family-2 pre-birth verdict without rendering it.
+    """The family-2 pre-birth verdict, decided by the Rust guard (spawn_guard.rs).
 
-    ``handover_holder``, when given, also takes the ``node:<id>`` claim under
-    that holder for the launch window, so the node reads as worked from the
-    moment it is dispatched rather than from whenever the worker reaches its
-    own ``fno do target init``.
-
-    ``no_reserve`` makes this a pure PROBE: it takes no reservation, no node
-    claim, and performs no recovery. Every mutation in this function is gated on
-    it, so a batch sweep that probes each node one at a time changes nothing
-    until it actually launches.
+    ``handover_holder`` also takes ``node:<id>`` for the launch window, and
+    ``no_reserve`` makes the call a pure probe. This process's pid rides the
+    payload, so the keys name the spawner and not the short-lived verb
+    process. A refusal carries the rendered stderr line as ``refusal_line``.
     """
-    from fno.claims.cli import _parse_ttl
-    from fno.claims.core import CLAIM_UNAVAILABLE, acquire_claim, claim_status
-
-    node_key = f"node:{node_id}"
-    res_key = f"dispatch:{node_id}"
+    from fno.rust_binary import VerbUnavailable, verb_call
 
     try:
-        info = claim_status(node_key)
-    except Exception as exc:  # pragma: no cover - claim_status never raises today
-        return {
-            "verdict": "error",
-            "detail": f"claim probe failed ({exc}); not dispatching to avoid a double-launch",
-        }, 3
-    state = info.get("state")
-    if not state:
-        return {
-            "verdict": "error",
-            "detail": "claim status returned no parseable state; not dispatching",
-        }, 3
-    if state == "corrupted":
-        return {
-            "verdict": "corrupted",
-            "detail": (
-                f"node:{node_id} claim is corrupted; force-release or repair before dispatching"
-            ),
-        }, 0
-
-    from fno.rust_binary import verb_call
-    from types import SimpleNamespace
-
-    observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
-        "op": "claim", "node_id": node_id, "cwd": cwd,
-        "enforce_failure_limit": not no_reserve, "emit_events": not no_reserve,
-    }))
-    if getattr(observation, "warning", None):
-        print(f"advance: WARNING: {observation.warning}", file=sys.stderr)
-    common = {
-        "holder": observation.holder,
-        "truth_status": observation.truth_status,
-        # Whether a `fno target init` provably took this claim. It travels in
-        # `common` so every consumer branch can tell a worker that is starting
-        # from one that never started, instead of every holder reading as a
-        # live worker.
-        "init_reached": _init_reached(node_id, observation.holder, cwd),
-    }
-    if observation.worker:
-        # The overlay's answer, named beside `holder`: when the block came
-        # from the worked overlay rather than the claim, `holder` reads the
-        # literal "unknown" and the worker name is the only actionable field
-        # on the payload.
-        common["worker"] = observation.worker
-    if observation.action in ("auto-deferred", "defer-failed"):
-        return _claim_refused(observation.action, common), 0
-    if observation.blocks_dispatch:
-        # A LIVE claim is benign dedup: somebody is genuinely building this and
-        # a batch sweep must keep going. A SUSPECT one is a wedge - dead pid,
-        # unexpired TTL - and nobody will build the node until it clears. Only
-        # the wedge is worth trying to recover, and only on a positive finding.
-        if state == "suspect" and not no_reserve:
-            # A --no-reserve call is a PROBE. It takes no reservation, so it
-            # must take no recovery either: dispatch-node.sh probes once per
-            # node across a whole batch, and a probe that archives claims and
-            # emits events is a side effect nobody reading "probe" expects.
-            #
-            # Nothing is lost by waiting. Both shell callers probe and then
-            # invoke the real `fno agents spawn`, which runs this guard again
-            # WITH a reservation, and the recovery happens there - at the moment
-            # of launch, by the caller that is about to launch.
-            from fno.claims.cli import (
-                RosterReading,
-                _abandonment_probe,
-                _node_settlement,
-                read_roster,
-            )
-
-            # The roster is READ HERE, outside the recovery mutex. Reading it
-            # under the lock shells out to the harness while holding a mutex
-            # `compare_and_rebind` waits only five seconds for, so a peer's
-            # probe could make the worker's own `fno do target init` handover fail
-            # as claim-held-by-other. Handing the reading in leaves nothing
-            # under the lock but a dictionary lookup. A FAILED read is handed
-            # down as an honestly unconsulted reading for the same reason:
-            # both instruments would otherwise lazily re-read inside the
-            # mutex, and unknown keeps is the safe answer anyway.
-            try:
-                reading = read_roster()
-            except Exception:  # noqa: BLE001 - an unread roster proves nothing
-                reading = RosterReading(False, 0, {}, "roster read failed before the guard")
-            prior, _bucket = _reclaim_if_provably_dead(
-                node_key,
-                probe=_abandonment_probe(reading),
-                # Same reading, same reason: the settlement's roster lookups
-                # must stay outside the recovery mutex too.
-                settlement=_node_settlement(reading),
-            )
-            if prior is not None:
-                _emit_reaped_abandoned(node_id, prior, observation.truth_status)
-                observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
-                    "op": "claim", "node_id": node_id, "cwd": cwd,
-                    "enforce_failure_limit": not no_reserve, "emit_events": False,
-                }))
-                common = {
-                    "holder": observation.holder,
-                    "truth_status": observation.truth_status,
-                    "init_reached": _init_reached(
-                        node_id, observation.holder, cwd
-                    ),
-                }
-                if observation.worker:
-                    common["worker"] = observation.worker
-                # The cleared claim makes this the first reading with the node
-                # free, so the failure-limit arm can fire here for the first
-                # time. Report what it decided. Falling through would label an
-                # auto-deferred node `already-running` and hand back a
-                # force-release remedy that does nothing for it.
-                if observation.action in ("auto-deferred", "defer-failed"):
-                    return _claim_refused(observation.action, common), 0
-        if observation.blocks_dispatch:
-            # A launch-window holder is NOT a wedge. Its claim carries the pid of
-            # the `fno agents spawn` process, which exits the moment it has
-            # forked the worker, so the claim reads SUSPECT for its whole TTL by
-            # construction. The abandonment probe already exempts this holder;
-            # rendering it as a wedge here would put the exemption on one of two
-            # paths and hand an operator force-release advice for a launch that
-            # is proceeding normally.
-            from fno.claims.cli import HANDOVER_HOLDER_PREFIX
-
-            in_launch_window = str(observation.holder or "").startswith(
-                HANDOVER_HOLDER_PREFIX
-            )
-            # The remedy is force-release advice, and it is only honest once
-            # recovery has been TRIED and failed. A probe takes no recovery, so
-            # it says the wedge is recoverable-untried instead and the caller
-            # goes on to the real spawn, which recovers or refuses for real.
-            # `state` is the PRE-recovery reading, so re-read it here: a node
-            # re-claimed by a live worker while the reclaim ran would otherwise
-            # render as a wedge with force-release advice against a claim that
-            # is now genuinely held.
-            try:
-                current = claim_status(node_key).get("state")
-            except Exception:  # noqa: BLE001 - an unreadable probe keeps the first reading
-                current = state
-            wedged = current == "suspect" and not in_launch_window
-            recovery = "not-attempted" if wedged and no_reserve else None
-            # THREE reasons, not two. `live-claim` now asserts only what was
-            # measured: a holder AND a target init behind it. A held claim
-            # nobody has booted a worker for reads `unproven-claim`, so a
-            # reader can tell a worker that is starting from one that never
-            # started. `live-claim` and `suspect-claim` stay byte-identical
-            # wherever init was reached, so no existing consumer branch moves.
-            # block_reason wins only for the authority outage; an occupied
-            # node keeps the stable machine token, evidence rides the refusal.
-            block = observation.block_reason
-            # ONE reading of "the block_reason itself is the answer", used by
-            # both arms below. Spelling it twice is how they drift.
-            block_wins = bool(block) and not str(block).startswith("held:")
-            # The worker ROW is the occupant whenever the claim is not. A
-            # stale claim plus a worker the overlay named read `unproven-claim`
-            # and named the claim's prior holder, which sent the reader after
-            # a release that frees nothing: the operator followed that text to
-            # a claim `fno agents claim status` read as UNCLAIMED. The row is
-            # what blocked, so the receipt names it and the remedy peeks it.
-            # block_reason stays first: an authority outage is not a worker.
-            if (
-                not block_wins
-                and observation.worker
-                and observation.verdict not in ("ours", "foreign_live")
-            ):
-                from fno.graph.statuses import UNMEASURABLE_LABEL_MARK
-
-                first = _worker_token(observation.worker).split(",")[0]
-                # The overlay admits a row whose liveness it could NOT measure,
-                # marked. That mark is the only thing saying so, and the bare
-                # machine token drops it, so it rides its own field: a receipt
-                # that reads the same for a measured and an unmeasured row
-                # asserts more than anything observed, and peek can come back
-                # showing nothing at all for the unmeasured one.
-                unmeasured = UNMEASURABLE_LABEL_MARK in observation.worker
-                return {
-                    "verdict": "already-running",
-                    "reason": "worker-row",
-                    "worker": observation.worker,
-                    "truth_status": observation.truth_status,
-                    **({"worker_unmeasured": True} if unmeasured else {}),
-                    "remedy": (
-                        f"fno agents peek {first}; if its run is finished, "
-                        f"fno agents stop {first}"
-                        + (
-                            f"; liveness was never measured for this row, so read "
-                            f"fno agents claim status node:{node_id} too"
-                            if unmeasured else ""
-                        )
-                    ),
-                }, 0
-            # An authority outage is NOT occupancy: rendering it
-            # already-running sent free nodes' leads to a costlier lane.
-            if block_wins:
-                return {
-                    "verdict": "unknown",
-                    "reason": block,
-                    "detail": f"could not check node:{node_id} is running: "
-                              f"{observation.worked_error or block}; retry",
-                    **common,
-                }, 0
-            reason = (
-                "suspect-claim" if wedged
-                else "live-claim" if common["init_reached"]
-                else "unproven-claim"
-            )
-            return {
-                "verdict": "already-running",
-                "reason": reason,
-                **({"recovery": recovery} if recovery else {}),
-                **({"remedy": _remedy_for(node_key)}
-                   if wedged and not no_reserve else {}),
-                **common,
-            }, 0
-    if no_reserve:
-        return {"verdict": "dispatchable"}, 0
-
-    #: True once this call has cleared a dead spawner's reservation. The node
-    #: claim below is the barrier that replaced it, so a failure to take it
-    #: means something different on this path than on the ordinary one.
-    reservation_recovered = False
-
-    def _reserve_dispatch_slot() -> None:
-        acquire_claim(
-            res_key,
-            holder,
-            reason=f"bg-dispatch reservation for {node_id}",
-            ttl_ms=_parse_ttl(ttl),
+        answer = verb_call(["backlog", "advance", "--stdin"], {
+            "op": "spawn-guard", "node_id": node_id, "holder": holder, "ttl": ttl,
+            "no_reserve": no_reserve, "cwd": cwd, "handover_holder": handover_holder,
+            "pid": os.getpid(),
+        })
+    except VerbUnavailable as exc:
+        # Fail closed: an unanswered guard must never read as dispatchable.
+        detail = f"spawn guard unavailable: {exc}; not dispatching"
+        line = (
+            f"node dispatch refused: node={node_id} verdict=error reason=error; "
+            f"no worker launched detail={detail!r}"
         )
-
-    try:
-        _reserve_dispatch_slot()
-    except CLAIM_UNAVAILABLE as held_exc:
-        # A dead spawner's reservation blocks nothing. `spawn-cli:<pid>` is one
-        # process that launches and exits, so it cannot come back under a new
-        # pid and its TTL protects an empty slot. A queued spawn that never got
-        # a slot wedged its node this way for the full three minutes.
-        #
-        # Exactly ONE retry, never a loop: a genuine racing dispatcher still
-        # wins the second acquire, and losing twice means the contention is real.
-        # The recovery touches the filesystem (a mkdir mutex, an archive move),
-        # so it can raise for reasons that have nothing to do with the claim -
-        # an unwritable claims dir, for one. Raised inside this handler, that
-        # escapes past the sibling `except Exception` below as a traceback where
-        # the honest answer is the refusal we already have.
-        # ONLY when this caller will replace the barrier it removes. Clearing a
-        # dead spawner's reservation is justified by the node claim covering the
-        # window instead, and that claim is taken further down only when a
-        # `handover_holder` was passed. `fno agents spawn-guard` never passes
-        # one, so in its reserving mode this cleared a booting worker's
-        # boot-window reservation and held nothing but a reservation of its own.
-        if handover_holder:
-            try:
-                cleared, bucket = _reclaim_if_provably_dead(res_key)
-            except Exception:  # noqa: BLE001 - a failed recovery clears nothing
-                cleared, bucket = None, "unrecoverable"
-        else:
-            cleared, bucket = None, "no-replacement-barrier"
-        reservation_recovered = cleared is not None
-        if cleared is None:
-            # A live spawner is mid-launch: benign dedup, and naming a
-            # force-release here would be worse advice than none.
-            held_by = getattr(held_exc, "holder", "")
-            if not held_by:
-                # No holder on the exception: a store error, not a held slot.
-                _release_dispatch_claims((res_key, holder))
-                return {
-                    "verdict": "error",
-                    "detail": f"could not acquire {res_key} ({held_exc}); retry",
-                }, 3
-            return {
-                "verdict": "already-running",
-                "reason": "reservation-held",
-                "holder": held_by,
-                # A remedy is EARNED, and this names the buckets that earn it
-                # rather than the ones that do not. The exclusion polarity gave
-                # force-release advice to every bucket nobody had thought about
-                # yet, `foreign-reservation` among them - and that one is `fno
-                # backlog advance`'s boot barrier, the single reservation this
-                # file says must never be cleared. An operator following the
-                # printed advice double-dispatches onto a node advance just
-                # staffed.
-                **({"remedy": _remedy_for(res_key)} if bucket in _REMEDIABLE_BUCKETS
-                   else {}),
-            }, 0
-        try:
-            _reserve_dispatch_slot()
-        except CLAIM_UNAVAILABLE as retry_exc:
-            return {
-                "verdict": "already-running",
-                "reason": "reservation-held",
-                "holder": getattr(retry_exc, "holder", "") or "unknown",
-                "remedy": _remedy_for(res_key),
-            }, 0
-        except Exception as exc:
-            _release_dispatch_claims((res_key, holder))
-            return {
-                "verdict": "error",
-                "detail": f"could not acquire dispatch reservation {res_key} ({exc})",
-            }, 3
-    except Exception as exc:
-        _release_dispatch_claims((res_key, holder))
-        return {
-            "verdict": "error",
-            "detail": f"could not acquire dispatch reservation {res_key} ({exc})",
-        }, 3
-    # visibility barrier: the acquisition is not authoritative until the
-    # exact holder is observable on disk. A peer that won a visibility-lagged
-    # race launches; this caller returns the durable duplicate receipt.
-    try:
-        post = claim_status(res_key)
-    except Exception:  # pragma: no cover - claim_status never raises today
-        post = {}
-    if post.get("holder") != holder:
-        return {
-            "verdict": "already-running",
-            "reason": "duplicate-claim",
-            "holder": post.get("holder") or "unknown",
-        }, 0
-    out: dict[str, object] = {
-        "verdict": "dispatchable",
-        "reservation_key": res_key,
-        "reservation_holder": holder,
-    }
-    if handover_holder:
-        # THE node claim, not another reservation. dispatch:<id> is a launch-
-        # window mutex on a key nobody reads: five workers were spawned with an
-        # explicit --node tonight and not one of them was visible to `fno agents claim
-        # status node:<id>`, so four leads read those nodes as free.
-        #
-        # --node is the only dispatch path holding the node id as a TYPED
-        # argument rather than as prose to be re-derived, which is why the claim
-        # belongs here and why there are exactly two producers of this key, not
-        # more. The other is `fno do target init`, and the worker inherits this
-        # claim from it rather than taking a second one.
-        #
-        # A failure to claim is NOT a refusal to launch. The reservation above
-        # already prevents the double dispatch this would also prevent, so
-        # turning a claim hiccup into a dead launch would trade a visibility bug
-        # for an availability one.
-        try:
-            acquire_claim(
-                node_key,
-                handover_holder,
-                reason=f"spawn handover window for {node_id}",
-                ttl_ms=_parse_ttl(HANDOVER_TTL),
-            )
-        except CLAIM_UNAVAILABLE as exc:
-            # SOMEBODY ELSE HOLDS THE NODE, and that is not a hiccup. The
-            # reservation above only dedups other DISPATCHERS, so a session that
-            # already claimed this node through its own `fno do target init` is
-            # invisible to it. Swallowing this as best-effort put a second
-            # worker on a node a live session was building, which is the whole
-            # failure this PR exists to close.
-            # Hand back the reservation THIS call took. `cmd_spawn` records it
-            # only after a dispatchable verdict, so nothing downstream releases
-            # it, and `classify_for_sweep` refuses to reap a `dispatch:` key
-            # inside its TTL. Leaving it blocked every dispatcher for 3m over a
-            # node somebody else legitimately holds.
-            _release_dispatch_claims((res_key, holder))
-            # Same split as the verdict above, for the same reason. A guard
-            # placed on one of two paths producing one lie is decorative: this
-            # arm fires when the read said free and the acquire lost the race,
-            # and the winner is no more proven to be a worker than any other
-            # holder.
-            race_holder = getattr(exc, "holder", "") or "unknown"
-            return {
-                "verdict": "already-running",
-                "reason": (
-                    "live-claim"
-                    if _init_reached(node_id, race_holder, cwd)
-                    else "unproven-claim"
-                ),
-                "holder": race_holder,
-                "detail": f"node:{node_id} is held ({exc}); no worker launched",
-            }, 0
-        except Exception as exc:  # noqa: BLE001 - visibility is best-effort here
-            if reservation_recovered:
-                # The ONE combination where nothing is protecting the launch
-                # window. Clearing a dead spawner's reservation is safe because
-                # this claim covers the window instead - and on this path it
-                # did not land. A spawner that forked a worker and exited
-                # normally is indistinguishable from one that died, so
-                # proceeding here re-opens the double dispatch both barriers
-                # exist to close. The reservation carries a 3m TTL and an
-                # expired claim is provably dead, so the node self-heals.
-                # Same release as the branch above: this refusal must not keep
-                # the reservation it took.
-                _release_dispatch_claims((res_key, holder))
-                return {
-                    "verdict": "error",
-                    "detail": (
-                        f"recovered a dead spawner's {res_key} but could not take "
-                        f"node:{node_id} ({exc}); refusing rather than launching "
-                        "with neither barrier held"
-                    ),
-                }, 3
-            out["node_claim_error"] = str(exc)
-        else:
-            out["node_claim_key"] = node_key
-            out["node_claim_holder"] = handover_holder
-    return out, 0
-
-
-#: Lease on the spawn-side node claim. It has to outlive the launch-to-init gap
-#: or the node reads free again mid-launch, which is the exact hole this closes;
-#: the reservation's 3m is the window for ONE process to fork, not for a harness
-#: to boot and reach its first `fno do target init`. It stays short because a spawn
-#: that dies inside it strands the node until expiry, and an expired claim is
-#: provably dead on its own so the wedge self-clears.
-HANDOVER_TTL = "15m"
+        return {"verdict": "error", "detail": detail, "refusal_line": line}, 3
+    verdict = dict(answer.get("verdict") or {})
+    if verdict.get("verdict") != "dispatchable":
+        verdict["refusal_line"] = answer.get("line") or ""
+    return verdict, int(answer.get("exit") or 0)
 
 
 def _release_dispatch_claims(*claims) -> None:
@@ -745,29 +133,6 @@ def _release_dispatch_claims(*claims) -> None:
                 f"fno agents claim release {key} --holder {holder}",
                 file=sys.stderr,
             )
-
-
-def _emit_reaped_abandoned(node_id: str, prior_holder: str, truth_status: str) -> None:
-    """Record a self-clearing recovery on the claim-observed stream.
-
-    Without it the event log shows a gap where a refusal used to be, and the
-    next operator reading back through a wedge cannot tell "it recovered itself"
-    from "nothing ever tried".
-    """
-    try:
-        from fno.agents import events as agent_events
-
-        agent_events.emit(
-            "dispatch_claim_observed",
-            node_id=node_id,
-            claim_verdict="dead_predecessor",
-            claim_state="suspect",
-            holder=prior_holder,
-            truth_status=truth_status,
-            action="reaped-abandoned",
-        )
-    except Exception:  # noqa: BLE001 - telemetry must never block a dispatch
-        pass
 
 
 def _resolve_dispatch_workdir(cwd: str | None, fresh: bool, here: bool) -> Path:
@@ -1077,8 +442,11 @@ def _retired_axis(flag: str, admit: str = ""):
     "spawn",
     epilog=(
         "--as picks the lane: thread (the default), pane, headless, or cloud. "
-        "Placement flags need --as pane; --once means headless. Declared "
-        "harnesses: claude, codex, opencode, pi, agy, cursor-agent, grok "
+        "Placement flags need --as pane; --once means headless. --model/-m, "
+        "--effort, --permission-mode, --add-dir, --agent and --tools are the "
+        "harness's own flags: typed before the fence they ride it, and a lane "
+        "that cannot carry one refuses and names it. Declared harnesses: "
+        "claude, codex, opencode, pi, agy, cursor-agent, grok "
         "(docs/HARNESSES.md)."
     ),
 )
@@ -1226,49 +594,12 @@ def cmd_spawn(
             "rides for ANY harness, credentials never travel. Fail-closed."
         ),
     ),
-    model: str | None = typer.Option(
-        None,
-        "--model",
-        "-m",
-        hidden=True,
-        callback=_retired_axis("--model"),
-    ),
-    permission_mode: str | None = typer.Option(
-        None,
-        "--permission-mode",
-        hidden=True,
-        callback=_retired_axis("--permission-mode"),
-    ),
-    effort: str | None = typer.Option(
-        None,
-        "--effort",
-        hidden=True,
-        callback=_retired_axis("--effort"),
-    ),
     resume: str | None = typer.Option(
         None,
         "--resume",
         "-r",
         hidden=True,
         callback=_retired_axis("--resume"),
-    ),
-    add_dir: str | None = typer.Option(
-        None,
-        "--add-dir",
-        hidden=True,
-        callback=_retired_axis("--add-dir"),
-    ),
-    agent: str | None = typer.Option(
-        None,
-        "--agent",
-        hidden=True,
-        callback=_retired_axis("--agent"),
-    ),
-    tools: str | None = typer.Option(
-        None,
-        "--tools",
-        hidden=True,
-        callback=_retired_axis("--tools"),
     ),
     deny_tools: str | None = typer.Option(
         None,
@@ -1441,7 +772,9 @@ def cmd_spawn(
     # stays for the refusals below; the harness resolves from the default
     # rung; vendor and recorded-provider retired with the flags.
     route_spelling = f"--route {route}" if route is not None else None
-    model = None
+    # --model, --effort and --permission-mode are the harness's own flags: the
+    # pre-pass moves them behind the fence, so this leg never reads them.
+    model = effort = permission_mode = None
     try:
         harness, harness_source = resolve_dispatch_harness(harness)
     except DispatchFlagError as exc:
@@ -2062,34 +1395,9 @@ def cmd_spawn(
             handover_holder=handover_holder,
         )
         if guard.get("verdict") != "dispatchable":
-            # `reason` FIRST, and detail as its own field. Both shell consumers
-            # read this line with `sed -n 's/.* reason=\([^ ;]*\).*/\1/p;q'`,
-            # so whatever lands in `reason=` is the machine token they switch
-            # on. `detail` is a prose sentence, and the acquire-race return sets
-            # BOTH - so leading with detail put `node:<id>` in the slot, matched
-            # no case arm in either consumer, and dropped a benign refusal into
-            # the generic failure handler. Detail is still printed, just not in
-            # the slot something parses.
-            guard_reason = (
-                guard.get("reason") or guard.get("verdict") or "unknown"
-            )
-            prior = f" prior_holder={guard['holder']}" if guard.get("holder") else ""
-            worker = (
-                f" worker={_worker_token(str(guard['worker']))}"
-                if guard.get("worker") else ""
-            )
-            # The post-spawn consumers read tokens, not the JSON, so the
-            # unmeasured qualifier has to travel as one or the two receipts
-            # disagree about the same row.
-            if guard.get("worker_unmeasured"):
-                worker += " worker_unmeasured=true"
-            detail = f" detail={guard['detail']!r}" if guard.get("detail") else ""
-            print(
-                f"node dispatch refused: node={guarded_node} "
-                f"verdict={guard.get('verdict')} reason={guard_reason}{prior}"
-                f"{worker}; no worker launched{detail}",
-                file=sys.stderr,
-            )
+            # The Rust guard renders the line; the shell callers parse its
+            # `reason=` token, so it is printed byte for byte.
+            print(guard.get("refusal_line"), file=sys.stderr)
             # This is the launch path, so a remedy here HAS earned itself:
             # recovery ran and could not prove the holder dead. Printing it is
             # what makes the way out reach an operator; the shell callers read
@@ -2862,6 +2170,7 @@ def cmd_spawn_guard(
         no_reserve=no_reserve,
         cwd=cwd,
     )
+    obj.pop("refusal_line", None)
     if json_output:
         line = json.dumps(obj)
     else:

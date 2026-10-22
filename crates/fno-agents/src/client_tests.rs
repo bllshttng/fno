@@ -492,6 +492,31 @@ fn ask_rows() {
     )
     .unwrap();
     assert_eq!(p2["cwd"], "/a=b");
+    // The anycast ask names a project, so every positional is the message and
+    // the peer name resolves later in main. --any alone breaks no tie.
+    let (method, p3) = build_request(
+        "ask",
+        &[
+            "--to-project=fno".to_string(),
+            "hi".to_string(),
+            "there".to_string(),
+            "--any".to_string(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(method, "agent.ask");
+    assert_eq!(p3["to_project"], "fno");
+    assert_eq!(p3["message"], "hi there");
+    assert_eq!(p3["any"], Value::Bool(true));
+    assert!(p3.get("name").is_none());
+    let err = build_request(
+        "ask",
+        &["a".to_string(), "m".to_string(), "--any".to_string()],
+    )
+    .unwrap_err();
+    assert!(err.contains("--to-project"), "{err}");
+    let err = build_request("ask", &["--to-project=".to_string(), "hi".to_string()]).unwrap_err();
+    assert!(err.contains("needs a project"), "{err}");
     // AC3 (Rust path, equals form): the retired --provider spelling is a
     // tombstone in both syntaxes - it must NOT silently route.
     let err = build_request(
@@ -591,18 +616,29 @@ fn spawn_flag_rows() {
             "{args:?}: {err}"
         );
     };
-    refused(
-        &[
-            "wk",
-            "--harness",
-            "agy",
-            "--once",
-            "--model",
-            "Gemini 3.5 Flash (High)",
-        ],
-        "--model",
+    // The harness's own flags typed before the fence are shorthand for the
+    // same flag behind it: they join the fenced tail in harness_args.
+    let harness_args = |args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let (_m, params) = build_request("spawn", &args).expect("harness shorthand parses");
+        params["harness_args"].clone()
+    };
+    assert_eq!(
+        harness_args(&["wk", "--model", "Gemini 3.5 Flash (High)"]),
+        serde_json::json!(["--model", "Gemini 3.5 Flash (High)"])
     );
-    refused(&["wk", "--model=pro"], "--model");
+    assert_eq!(
+        harness_args(&["wk", "-m", "pro"]),
+        serde_json::json!(["--model", "pro"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--model=pro", "--effort", "high"]),
+        serde_json::json!(["--model", "pro", "--effort", "high"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--permission-mode=bypassPermissions"]),
+        serde_json::json!(["--permission-mode", "bypassPermissions"])
+    );
 
     let (_method, short) = build_request(
         "spawn",
@@ -658,17 +694,6 @@ fn spawn_flag_rows() {
     );
 
     refused(
-        &[
-            "wk",
-            "--harness",
-            "claude",
-            "--permission-mode",
-            "acceptEdits",
-        ],
-        "--permission-mode",
-    );
-    refused(&["wk", "--permission-mode=plan"], "--permission-mode");
-    refused(
         &["wk", "--harness", "claude", "--substrate", "thread"],
         "--substrate",
     );
@@ -687,15 +712,26 @@ fn spawn_flag_rows() {
         .expect("--account= must parse");
     assert_eq!(eq["account"], "makers");
 
-    // The tier-3 passthrough spellings died with the axes; the harness's own
-    // flags ride --argv/--harness-arg.
-    for flag in ["--add-dir", "--agent", "--tools", "--deny-tools"] {
-        refused(&["wk", flag, "x"], flag);
-    }
-    refused(&["wk", "--add-dir=/extra"], "--add-dir");
-    refused(
-        &["wk", "--harness", "codex", "--once", "--effort", "high"],
-        "--effort",
+    // --deny-tools is fno's own spelling, not a harness flag, so it still
+    // refuses by name; the real claude flags forward.
+    refused(&["wk", "--deny-tools", "x"], "--deny-tools");
+    assert_eq!(
+        harness_args(&[
+            "wk",
+            "--add-dir=/extra",
+            "--agent",
+            "reviewer",
+            "--tools",
+            "Read"
+        ]),
+        serde_json::json!([
+            "--add-dir",
+            "/extra",
+            "--agent",
+            "reviewer",
+            "--tools",
+            "Read"
+        ])
     );
 }
 
@@ -927,19 +963,6 @@ fn harness_flag_rows() {
     let err = build_request("ask", &ask).unwrap_err();
     assert!(err.contains("split at the axis rename"), "got: {err}");
     assert!(err.contains("--harness/-H"), "got: {err}");
-
-    // -m, the mobile short for --model, refuses with its long form.
-    for flag in ["--model", "-m"] {
-        let args = vec![
-            "wk".to_string(),
-            "--harness".to_string(),
-            "claude".to_string(),
-            flag.to_string(),
-            "opus".to_string(),
-        ];
-        let err = build_request("spawn", &args).unwrap_err();
-        assert!(err.contains("--model is retired"), "{flag}: {err}");
-    }
 
     // x-c5db: the role halves the Python seam passes for a promoted codex
     // thread spawn parse into params in both spellings, and a level outside
@@ -1591,6 +1614,9 @@ fn seam_rows() {
             "/tmp".into(),
             "--node".into(),
             "x-90a9".into(),
+            "--slug".into(),
+            "probe-slug".into(),
+            "--plan=/plans/p.md".into(),
             "--".into(),
             "/target x-90a9".into(),
         ],
@@ -1599,6 +1625,8 @@ fn seam_rows() {
     assert!(!spawn_needs_python_seam(&params));
     assert_eq!(params["message"], "/target x-90a9");
     assert_eq!(params["node"], "x-90a9");
+    assert_eq!(params["slug"], "probe-slug");
+    assert_eq!(params["plan"], "/plans/p.md");
 
     // A typo'd marker must refuse loudly, not degrade to unenforced: the
     // value is the binary's only record of the seam's policy decision.

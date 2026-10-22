@@ -44,7 +44,7 @@ agents loop-check
 agents needs
 agents resume
 agents rm !--audit-actor !--audit-reason !--audit-reclaimed-bytes !--audit-request-id !--audit-worktree-touched
-agents spawn !--add-dir !--agent !--bounded-placement !--deny-tools !--effort !--model !--mux-session !--output-format !--permission-mode !--provider !--recorded-provider !--resume !--tools !--yolo
+agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format !--provider !--recorded-provider !--resume !--yolo
 annotate
 annotate list
 approvals

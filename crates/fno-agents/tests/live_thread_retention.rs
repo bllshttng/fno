@@ -91,6 +91,7 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
             nodes: vec!["N1".into()],
         },
         transcript_age_s: Some(4),
+        report_age_s: None,
         owns_worktree: false,
         worktree_clean: None,
         branch_merged: None,

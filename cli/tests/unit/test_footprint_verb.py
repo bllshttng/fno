@@ -79,7 +79,8 @@ def _fake_runner(
 
     def door(verb, args=(), **kwargs):
         calls.append([verb, *args])
-        return (None, {"ps": ps_output, "unreadable": 0})
+        memory = {"fleet": {"mb": 512.0, "procs": 2}, "line": "memory (physical footprint): pane stack 32 MB"}
+        return (None, {"ps": ps_output, "unreadable": 0, "memory": memory})
 
     monkeypatch.setattr(doctor_footprint, "call_binary_json", door)
 
@@ -661,6 +662,10 @@ def test_ac5_hp_json_reports_fleet_totals_and_cpu_shares(
     assert payload["cpu_capacity_cores"] == capacity
     assert payload["fleet_percent_capacity"] == pytest.approx(100 / capacity)
     assert payload["fleet_percent_measured_cpu"] == pytest.approx(50.0)
+    # Memory is the Rust census door's physical reading, passed through whole.
+    assert payload["memory"]["fleet"]["mb"] == 512.0 and "rss_gb" not in payload
+    human = runner.invoke(app, ["doctor", "footprint"])
+    assert "memory (physical footprint): pane stack 32 MB" in human.stdout
 
 
 def test_ac6_edge_cause_only_excludes_observer_subtree_and_skips_roster(
@@ -939,7 +944,7 @@ def test_ac3_hp_reports_both_thresholds_and_exits_zero(
     # The census door is the only exec left: the roster count reads the
     # registry in process, so there is no second shell-out to budget.
     assert [call for call in calls] == [
-        ["census", "--ps"],
+        ["census", "--ps", "--memory"],
     ]
 
 
@@ -1107,7 +1112,7 @@ def test_gap_reading_prints_the_measurement_and_admits_on_the_upper_bound(monkey
         measured_cpu_cores=0.02,
     )
     monkeypatch.setattr(
-        doctor_footprint, "cause_reading", lambda: (reading, None)
+        doctor_footprint, "cause_reading", lambda **_kw: (reading, None)
     )
     _pin_load(monkeypatch, status="within", load_15m=2.0)
     _pin_admission(monkeypatch)
@@ -1136,7 +1141,6 @@ def test_cpu_admission_hot_machine_with_gap_is_undecidable():
         direct_process_count=0,
         transient_call_count=0,
         process_count=0,
-        rss_gb=0.0,
         measured_cpu_cores=11.4,
         top=[],
         unparsed_lines=0,

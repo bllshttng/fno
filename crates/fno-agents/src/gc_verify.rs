@@ -137,13 +137,18 @@ impl VerifyReport {
 /// still works.
 pub fn current_build() -> String {
     let version = env!("CARGO_PKG_VERSION");
+    format!("fno-agents {version} rev {}", current_rev())
+}
+
+/// The crates rev this binary was built from, `-dirty` when the tree was.
+pub fn current_rev() -> String {
     let rev = env!("FNO_AGENTS_CRATES_REV");
     let dirty = if env!("FNO_AGENTS_GIT_DIRTY") == "1" {
         "-dirty"
     } else {
         ""
     };
-    format!("fno-agents {version} rev {rev}{dirty}")
+    format!("{rev}{dirty}")
 }
 
 /// The ops every verified retirement must carry: a pass means the promised
