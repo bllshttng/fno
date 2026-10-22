@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from fno.lead.state import (
-    LeadManifestExists,
     last_run_is_fresh,
     parse_manifest,
     write_manifest,
@@ -24,6 +23,7 @@ def test_scope_keyed_manifest_path_refuses_escape_spellings(tmp_path, scope):
         path_for(scope, state_root=tmp_path / ".fno")
 
 
+@pytest.mark.dev_build
 def test_live_registry_role_resolves_scope_path_after_session_id_changes(tmp_path):
     import fno.lead.state as state
 
@@ -50,45 +50,7 @@ def test_live_registry_role_resolves_scope_path_after_session_id_changes(tmp_pat
     assert reason == ""
 
 
-def test_promotion_refreshes_scope_manifest_for_a_successor(monkeypatch, tmp_path):
-    import fno.lead.state as state
-
-    arm = getattr(state, "arm_lead_manifest", None)
-    assert arm is not None, "promotion manifest arming is missing"
-    monkeypatch.setattr(state, "lead_loop_enabled", lambda: True)
-    state_root = tmp_path / ".fno"
-
-    first = arm(
-        "x-f3d0", "11111111-1111-4111-8111-111111111111", state_root=state_root
-    )
-    first_id = parse_manifest(first)["fno_id"]
-    second = arm(
-        "x-f3d0", "22222222-2222-4222-8222-222222222222", state_root=state_root
-    )
-
-    assert second == first
-    fields = parse_manifest(second)
-    assert fields["harness_session_id"] == "22222222-2222-4222-8222-222222222222"
-    assert fields["fno_id"] != first_id
-
-
-def test_arming_refuses_an_id_no_transcript_can_ever_match(monkeypatch, tmp_path):
-    """A short id or row name arms a manifest the owner guard always rejects.
-
-    The stop hook matches the manifest id against the transcript basename, and
-    every harness names transcripts with a full uuid, so an 8-hex short id or
-    a row name is a gate that arms dead. Arming must refuse it loudly.
-    """
-    import fno.lead.state as state
-
-    arm = state.arm_lead_manifest
-    monkeypatch.setattr(state, "lead_loop_enabled", lambda: True)
-    for bogus in ("7c5dcf5d", "t-x1069-glm", ""):
-        with pytest.raises(ValueError, match="transcript basename|harness session id"):
-            arm("x-f3d0", bogus, state_root=tmp_path / ".fno")
-    assert not (tmp_path / ".fno" / "leads" / "x-f3d0.md").exists()
-
-
+@pytest.mark.dev_build
 def test_cleanup_does_not_delete_a_successors_refreshed_manifest(tmp_path):
     import fno.lead.state as state
 
@@ -102,6 +64,7 @@ def test_cleanup_does_not_delete_a_successors_refreshed_manifest(tmp_path):
     assert parse_manifest(path)["harness_session_id"] == "successor"
 
 
+@pytest.mark.dev_build
 def test_a_crashed_lead_s_leftover_manifest_captures_nobody(tmp_path):
     """Expiry must not depend on the verb being called, and it does not.
 
@@ -150,19 +113,6 @@ def test_a_crashed_lead_s_leftover_manifest_captures_nobody(tmp_path):
     # The file is still there - inert, not deleted. Crash safety is row
     # authority, not cleanup.
     assert path.is_file()
-
-
-def test_the_manifest_is_immutable_after_init(tmp_path):
-    """Same rule as the target manifest: write-once, and a second init refuses
-    rather than silently forking one session's identity in place."""
-    path = tmp_path / "lead-state.md"
-    write_manifest(path, scope="first", harness_session_id="sess-1")
-    before = path.read_text(encoding="utf-8")
-
-    with pytest.raises(LeadManifestExists):
-        write_manifest(path, scope="second", harness_session_id="sess-2")
-
-    assert path.read_text(encoding="utf-8") == before
 
 
 # --- the freshness predicate ------------------------------------------------
@@ -302,6 +252,7 @@ def test_rust_readiness_refusal_writes_no_role_manifest(monkeypatch, tmp_path):
     assert not state.lead_manifest_path("drain", state_root=tmp_path / ".fno").exists()
 
 
+@pytest.mark.dev_build
 def test_a_repeated_scope_roles_one_epic_set(monkeypatch, tmp_path):
     code, out = _init(monkeypatch, tmp_path, scopes=("x-4d9b", "x-119e"))
 

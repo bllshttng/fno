@@ -9,6 +9,7 @@ use crate::mail_header::{render_held_release, HeldMessage, HeldRelease};
 use crate::mail_hold::{
     clock_description, hold_sidecar_path, identity_key, read_clock, row_matches_token,
 };
+use crate::mail_notify_self::read_bus;
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{json, Value};
@@ -524,15 +525,6 @@ fn bus_dir(home: &AgentsHome) -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
     crate::intel::bus_dir_of(&root)
-}
-
-fn read_bus(bus: &PathBuf) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(bus.join("messages.jsonl")) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .collect()
 }
 
 fn str_field(m: &Value, key: &str, blank: &str) -> String {

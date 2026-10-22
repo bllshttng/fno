@@ -12,19 +12,12 @@ from __future__ import annotations
 
 import fcntl
 import json
-import os
 import re
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-
-from fno import rust_binary
-
-#: Iteration ceiling before a walk terminates on Budget.
-DEFAULT_MAX_ITERATIONS = 40
 
 #: Respawns allowed before the walk refuses another lead session.
 DEFAULT_RESPAWN_CEILING = 4
@@ -120,16 +113,6 @@ def resolve_lead_manifest_path(
     return path, ""
 
 
-def _transcript_matchable_session_id(value: str) -> bool:
-    """Whether the stop hook's owner guard can match this id against a
-    transcript basename: full 36-char uuids only (uuid.UUID() alone also
-    accepts 8-hex short forms, which match no transcript)."""
-    try:
-        return len(value) == 36 and str(uuid.UUID(value)) == value.lower()
-    except (ValueError, AttributeError):
-        return False
-
-
 def arm_lead_manifest(
     scope: str,
     harness_session_id: str,
@@ -143,7 +126,8 @@ def arm_lead_manifest(
     harness: Optional[str] = None,
     row: Any = None,
 ) -> Optional[Path]:
-    """Refresh loop state at the moment a role becomes authoritative."""
+    """Refresh loop state at the moment a role becomes authoritative. The
+    Rust creator (team_spawn.rs op ``arm``) checks the id and writes."""
     if row is not None:
         owner_cwd = owner_cwd or getattr(row, "cwd", None)
         role_level = role_level if role_level is not None else getattr(row, "role_level", None)
@@ -163,32 +147,27 @@ def arm_lead_manifest(
     if not lead_loop_enabled():
         remove_lead_manifest(scope, state_root=state_root)
         return None
-    if not harness_session_id.strip():
-        raise ValueError("a promoted lead manifest needs a harness session id")
-    if not _transcript_matchable_session_id(harness_session_id):
-        raise ValueError(
-            f"a promoted lead manifest needs a full session uuid, got "
-            f"{harness_session_id!r}: the stop hook matches the manifest id "
-            "against the transcript basename, and a short id or row name "
-            "matches no transcript, so the gate would arm dead. Re-arm with "
-            "fno agents role once the session has self-identified."
-        )
-    path = lead_manifest_path(scope, state_root=state_root)
-    with _manifest_lock(path):
-        write_manifest(
-            path,
-            scope=scope,
-            harness_session_id=harness_session_id,
-            force=True,
-            owner_cwd=owner_cwd,
-            role_level=role_level,
-            role_scope=role_scope,
-            role_grantor=role_grantor,
-            model=model,
-            harness=harness,
-        )
-        path.with_suffix(".cancelled").unlink(missing_ok=True)
-    return path
+    answer = _manifest_call({
+        "op": "arm", "scope": scope, "harness_session_id": harness_session_id,
+        "state_root": str(state_root), "lead_enabled": True, "owner_cwd": owner_cwd,
+        "role_level": role_level, "role_scope": role_scope, "role_grantor": role_grantor,
+        "model": model, "harness": harness,
+    })
+    return Path(answer["path"])
+
+
+def _manifest_call(payload: dict[str, Any]) -> dict[str, Any]:
+    """One round-trip to the Rust manifest creator. Every refusal, a missing
+    binary included, raises ValueError, which the arming callers degrade on."""
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
+    try:
+        answer = spawn_overlay_call({"kind": "spawn-team", **payload})
+    except SpawnOverlayUnavailable as exc:
+        raise ValueError(f"lead manifest: {exc}") from exc
+    if answer.get("error"):
+        raise ValueError(answer["error"])
+    return answer
 
 
 def _owner_state_root(owner_cwd: Optional[str]) -> Path:
@@ -230,16 +209,12 @@ def remove_lead_manifest(
         return False
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def write_manifest(
     path: Path,
     *,
     scope: str,
     harness_session_id: str = "",
-    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_iterations: int = 40,
     respawn_ceiling: int = DEFAULT_RESPAWN_CEILING,
     force: bool = False,
     owner_cwd: Optional[str] = None,
@@ -250,49 +225,18 @@ def write_manifest(
     model: Optional[str] = None,
     harness: Optional[str] = None,
 ) -> dict[str, str]:
-    """Write the manifest once; raises LeadManifestExists if it is there.
-
-    ``respawn_count`` and ``wake_times`` start at 0 (a successor promotion
-    is a new term generation). ``shape`` rides from birth. ``harness`` names
-    the holder's own harness; only its absence falls back to the arming
-    session's ambient harness.
-    """
-    path = Path(path)
-    if path.exists() and not force:
-        raise LeadManifestExists(
-            f"{path} already exists; the lead manifest is write-once. "
-            "Pass --force to re-init deliberately."
-        )
-    fields = {
-        "fno_id": rust_binary.mint_fno_id(),
-        "created_at": _utc_now(),
-        "scope": scope,
-        "shape": shape if shape in ("pass", "team") else "pass",
-        "harness": harness or os.environ.get("FNO_HARNESS", "claude"),
-        "harness_session_id": harness_session_id,
-        "model": (model or "").strip(),
-        "owner_cwd": owner_cwd or str(Path.cwd()),
-        "budget_max_iterations": str(max_iterations),
-        "respawn_count": "0",
-        "respawn_ceiling": str(respawn_ceiling),
-        "wake_times": "",
-    }
-    if role_scope:
-        fields.update(
-            role_level=str(role_level),
-            role_scope=role_scope,
-            role_grantor=role_grantor or "human",
-        )
-    body = "---\n" + "".join(f"{k}: {_dump(v)}\n" for k, v in fields.items()) + "---\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(body, encoding="utf-8")
-    os.replace(str(tmp), str(path))
-    return fields
-
-
-def _dump(value: str) -> str:
-    return json.dumps(value) if value != value.strip() or '"' in value else value
+    """Write the manifest once through the Rust creator (team_spawn.rs op
+    ``manifest``); raises LeadManifestExists if it is there."""
+    answer = _manifest_call({
+        "op": "manifest", "path": str(path), "scope": scope, "force": force,
+        "harness_session_id": harness_session_id, "max_iterations": max_iterations,
+        "respawn_ceiling": respawn_ceiling, "owner_cwd": owner_cwd, "shape": shape,
+        "role_level": role_level, "role_scope": role_scope, "role_grantor": role_grantor,
+        "model": model, "harness": harness,
+    })
+    if answer.get("exists"):
+        raise LeadManifestExists(answer["exists"])
+    return dict(answer["fields"])
 
 
 def parse_manifest(path: Path) -> dict[str, str]:

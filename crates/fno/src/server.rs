@@ -110,6 +110,8 @@ mod thread_pin;
 mod thread_workspace;
 mod truth_probe;
 mod visible_panes;
+mod window_size;
+use window_size::TabSizing;
 mod workspace_origin;
 mod workspace_restore;
 use self::session_guard::{ConnAlive, SocketGuard};
@@ -998,11 +1000,11 @@ struct Client {
     /// on every layout push. Grids of unviewed panes are still fed; their
     /// frames never cross this client's wire (AC2-FR).
     visible: HashSet<u64>,
-    /// This client's own content-area (rows, cols) - one input to the
-    /// view-scoped smallest-client clamp (Locked 1).
+    /// This client's own content-area (rows, cols) - one input to the tab's
+    /// window-size pick (Locked 1; see `window_size.rs`).
     dims: (u16, u16),
     /// An observer client (attached with rows==0 && cols==0, e.g. the web
-    /// bridge): excluded from the smallest-client clamp so it never shrinks a
+    /// bridge): excluded from the window-size pick so it never resizes a
     /// PTY, and its `visible` set is EVERY live pane so the browser can pick
     /// any pane without an upstream message (read-only attach). Its
     /// `Resize` is ignored and it never spawns a squad.
@@ -1458,11 +1460,8 @@ pub(crate) struct Core {
     /// Monotonic, never reused (Locked Decision 6).
     next_pane_id: u64,
     next_squad_id: u64,
-    /// Each tab's last-applied content area (Locked 1's "no viewers -> keep
-    /// last size"). Written by the geometry pass for every viewed tab; read
-    /// as the fallback when a tab loses its last viewer. Purged when a tab
-    /// dies (ids are never reused, so stale entries would only accumulate).
-    tab_areas: HashMap<TabId, (u16, u16)>,
+    /// Tab content areas and the window-size policy that picks them.
+    sizing: TabSizing,
     /// This server's session name (the socket's file stem): the `Info`
     /// answer, and `FNO_SESSION` in every pane it spawns.
     session_name: String,
@@ -2292,35 +2291,6 @@ enum ResumeOutcome {
 }
 
 impl Core {
-    /// The view-scoped smallest-client clamp (Locked 1): a tab's content
-    /// area is the elementwise min over the dims of every client currently
-    /// viewing it; with no viewers it keeps its last-applied size, and a tab
-    /// that has never been sized falls back to the VT defaults.
-    fn tab_area(&self, tid: TabId) -> (u16, u16) {
-        let clamp = self
-            .clients
-            .iter()
-            // An observer (passive) client never enters the clamp reduce, so
-            // a phone-sized viewer can never shrink a real client's PTY
-            // (Locked Decision 4 / AC1-EDGE).
-            .filter(|c| c.view.1 == tid && !c.passive)
-            .map(|c| c.dims)
-            .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1)));
-        clamp
-            .or_else(|| self.tab_areas.get(&tid).copied())
-            .unwrap_or((crate::vt::DEFAULT_ROWS, crate::vt::DEFAULT_COLS))
-    }
-
-    fn tab_rect(&self, tid: TabId) -> Rect {
-        let (rows, cols) = self.tab_area(tid);
-        Rect {
-            x: 0,
-            y: 0,
-            rows,
-            cols,
-        }
-    }
-
     /// Spawn a pane's shell in `cwd` (codex P2: a long-lived server serves
     /// squads from MANY repos; inheriting the server process cwd would start
     /// every later squad's shell in the first client's directory). Empty /
@@ -3176,7 +3146,7 @@ impl Core {
             // surviving topology here.
             self.persist_squad(sid);
         }
-        self.tab_areas.remove(&tid);
+        self.sizing.areas.remove(&tid);
         if matches!(outcome, RemoveOutcome::SessionEmpty) {
             self.template_specs.remove(&tid);
             return Some((tid, pids, outcome));
@@ -3410,7 +3380,7 @@ impl Core {
             // The source tab is gone: clear its cached area and re-anchor any
             // client that was viewing it, exactly as the CloseTab path does -
             // otherwise push_layout would skip that client with a blank view.
-            self.tab_areas.remove(&tid);
+            self.sizing.areas.remove(&tid);
             self.reanchor_views();
         } else {
             self.maybe_reflow(sid, tid);
@@ -3470,7 +3440,7 @@ impl Core {
         // re-anchor any client viewing it (the CloseTab contract) so push_layout
         // never leaves that viewer on a dangling tab.
         self.session.remove_tab(sid, src_ti);
-        self.tab_areas.remove(&src_tid);
+        self.sizing.areas.remove(&src_tid);
         self.reanchor_views();
         // The joined tab's members now live in the anchor's tab (their
         // hosting tab changed and the source tab is gone), so refresh the
@@ -3546,7 +3516,7 @@ impl Core {
         };
         if matches!(outcome, tree::DetachOutcome::TabEmptied) {
             self.session.remove_tab(src_sid, src_ti);
-            self.tab_areas.remove(&src_tid);
+            self.sizing.areas.remove(&src_tid);
             self.reanchor_views();
         } else {
             self.maybe_reflow(src_sid, src_tid);
@@ -4672,7 +4642,7 @@ impl Core {
             self.reap_pane(p);
         }
         self.session.remove_tab(sid, ti);
-        self.tab_areas.remove(&tid);
+        self.sizing.areas.remove(&tid);
         self.reanchor_views();
     }
 
@@ -7782,7 +7752,7 @@ impl Core {
                 continue;
             };
             let area = self.tab_area(tid);
-            self.tab_areas.insert(tid, area);
+            self.sizing.areas.insert(tid, area);
             let tab = &self.session.squad(sid).expect("find_tab hit").tabs[idx];
             let rects = tree::layout(
                 &tab.root,
@@ -10091,7 +10061,7 @@ impl Core {
                 }
                 self.session.squads.remove(pos);
                 for tid in tids {
-                    self.tab_areas.remove(&tid);
+                    self.sizing.areas.remove(&tid);
                 }
                 // The last squad ends the session (Locked Decision 8), exactly
                 // like closing its tabs one at a time.
@@ -10696,6 +10666,25 @@ impl Core {
                 return Flow::Continue;
             }
         }
+        // The window-size policy follows the client that last acted. The peek
+        // refresh timer sends a Command with no human behind it, and a
+        // control-plane id is no client, so neither counts.
+        let acting = match &msg {
+            CoreMsg::Command {
+                cmd: Command::PeekAgent { .. },
+                ..
+            } => None,
+            _ => mutating_sender.filter(|id| self.clients.iter().any(|c| c.id == *id)),
+        };
+        if let Some(id) = acting {
+            // Re-tile only when the new owner changes the sender's tab size:
+            // an owner swap between equal-size windows pushes no Layout.
+            let tab = self.clients.iter().find(|c| c.id == id).map(|c| c.view.1);
+            let before = tab.map(|t| self.tab_area(t));
+            if self.sizing.note_activity(id) && tab.map(|t| self.tab_area(t)) != before {
+                self.push_layout(true);
+            }
+        }
         match msg {
             CoreMsg::Attach {
                 id,
@@ -10707,6 +10696,9 @@ impl Core {
                 dirty,
                 notify,
             } => {
+                if rows != 0 || cols != 0 {
+                    self.sizing.note_activity(id);
+                }
                 self.attach_or_hold(id, rows, cols, cwd, squad_key, reliable_tx, dirty, notify);
                 Flow::Continue
             }
@@ -10727,12 +10719,17 @@ impl Core {
                 // One client's terminal changed size: update ITS dims; the
                 // push recomputes every viewed tab's clamp (Locked 5's
                 // Resize event).
+                let mut resized = false;
                 if let Some(c) = self.clients.iter_mut().find(|c| c.id == id) {
                     // An observer never drives geometry: ignore its (never-sent)
                     // Resize so it cannot enter the clamp (Invariant).
                     if !c.passive {
+                        resized = c.dims != (rows, cols);
                         c.dims = (rows, cols);
                     }
+                }
+                if resized {
+                    self.sizing.note_activity(id);
                 }
                 self.resize_held_attach(id, rows, cols);
                 e2e_log(format_args!("resize client {id} -> {rows}x{cols}"));
@@ -11045,6 +11042,7 @@ impl Core {
                 // socket death take the identical path.
                 e2e_log(format_args!("client {id} gone"));
                 self.drop_held_attach(id);
+                self.sizing.forget(id);
                 self.clients.retain(|c| c.id != id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below

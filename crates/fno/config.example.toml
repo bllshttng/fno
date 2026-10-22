@@ -91,6 +91,8 @@ enabled = false
 unclaimed_ttl = 1800
 # Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again.
 landed_abandon_ttl = 21600
+# true lands ordinary mail at the next tool call (Claude PreToolUse), so a worker busy in one long turn reads it without waiting for its next prompt. Default false: ordinary mail waits for the prompt boundary; control mail lands at the tool call either way.
+tool_boundary_ordinary = false
 
 [user]
 # What fno calls you. Empty falls back to `git config user.name`.

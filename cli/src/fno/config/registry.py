@@ -75,6 +75,7 @@ FIELD_META: dict[str, Meta] = {
         "Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again.",
         default_source="default",
     ),
+    "inbox.tool_boundary_ordinary": Meta("advanced", "true lands ordinary mail at the next tool call (Claude PreToolUse), so a worker busy in one long turn reads it without waiting for its next prompt. Default false: ordinary mail waits for the prompt boundary; control mail lands at the tool call either way."),
     # --- config.user.* ---
     "user.name": Meta(
         "always",

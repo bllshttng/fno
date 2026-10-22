@@ -896,7 +896,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::law_cli::classify_inbox_decide(args) {
         return Role::InboxDecide(rest);
     }
-    if let Some(argv) = fno::inbox_user::classify_inbox_user(args) {
+    if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
+        .or_else(|| fno::inbox_user::classify_inbox_peers(args))
+    {
         return Role::InboxUser(argv);
     }
     if let Some(rest) = fno::setup_run::classify(args) {
@@ -1375,7 +1377,7 @@ fn main() {
         Role::InboxDecisions(rest) => std::process::exit(fno::law_cli::run_decisions(&rest)),
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
         Role::InboxUser(argv) => {
-            std::process::exit(fno_agents_exec("fno inbox user", &["compaction"], &argv))
+            std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
         }
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),

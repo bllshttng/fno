@@ -90,6 +90,7 @@ def _row(name: str) -> AgentEntry:
 # --- the role lands on bg ---------------------------------------------------
 
 
+@pytest.mark.dev_build
 def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
     import fno.lead.state as lead_state
 
@@ -203,6 +204,7 @@ def test_headless_role_is_refused(bg_home) -> None:
 
 
 @pytest.mark.parametrize("harness", ["codex", "opencode", "pi"])
+@pytest.mark.dev_build
 def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> None:
     """All persistent carriers promote their row and arm the lead loop.
     Codex carries the stamp at mint; keeper promotion precedes seed submission.

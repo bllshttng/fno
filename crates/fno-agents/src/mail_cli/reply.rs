@@ -51,6 +51,14 @@ fn is_legacy_handle(token: &str) -> bool {
         && rest.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// A `<project>/<arm>` sender name (`fno/quiet-recovery`): a system arm, never
+/// a session alias or a legacy `<harness>-<hex>` token.
+fn is_system_sender(token: &str) -> bool {
+    token
+        .split_once('/')
+        .is_some_and(|(project, arm)| !project.is_empty() && !arm.is_empty())
+}
+
 /// typer's usage block for this verb; every parameter refusal rides it.
 fn usage_error(detail: &str) -> i32 {
     eprintln!("Usage: fno agents mail reply [OPTIONS] [BODY_ARG]");
@@ -339,6 +347,16 @@ fn directed_lane_reply(
         } else if to_kind == "session" {
             require_resolution = true;
         }
+    } else if is_system_sender(&target) {
+        // A scheduler arm (`fno/quiet-recovery`) has no session behind it, so
+        // discovery can only mis-match it. The durable floor keeps the reply.
+        return floor_to(
+            &target,
+            body_text,
+            parsed.from_project.as_deref(),
+            to_msg,
+            origin,
+        );
     } else if to_kind == "session" {
         // A session-addressed record without full sender provenance may use
         // its stored sender only when current discovery proves that token
@@ -1096,6 +1114,14 @@ mod tests {
             None,
         );
         assert_ne!(code, 0);
+    }
+
+    #[test]
+    fn system_sender_names_are_recognized() {
+        assert!(is_system_sender("fno/quiet-recovery"));
+        assert!(!is_system_sender("deadbeef"));
+        assert!(!is_system_sender("claude-deadbeef"));
+        assert!(!is_system_sender("/arm"));
     }
 
     /// An unreadable candidate store is skipped, never fatal: the next

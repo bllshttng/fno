@@ -3106,11 +3106,11 @@ impl View {
     /// relative; the content origin is `(TAB_BAR_ROWS, left_chrome_w)`.
     fn hit_test(&self, row: u16, col: u16) -> Option<(u64, u16, u16)> {
         let left_w = self.left_chrome_w();
-        if row < TAB_BAR_ROWS || col < left_w {
+        let (cr, cc) = (row.checked_sub(TAB_BAR_ROWS)?, col.checked_sub(left_w)?);
+        // A pane cropped by a smaller window answers only inside it.
+        if !self.in_visible(cr, cc) {
             return None;
         }
-        let cr = row - TAB_BAR_ROWS;
-        let cc = col - left_w;
         for (pid, rect) in &self.layout.panes {
             // A framed pane answers for its CONTENT: the border ring is the
             // frame's own surface (it focuses, it never forwards), and the
@@ -3487,7 +3487,7 @@ impl View {
             return None;
         }
         let (cr, cc) = (row - TAB_BAR_ROWS, col - left_w);
-        let (a_rows, a_cols) = self.layout.area;
+        let (a_rows, a_cols) = self.visible_area();
         if a_rows == 0 || a_cols == 0 || cr >= a_rows || cc >= a_cols {
             return None;
         }

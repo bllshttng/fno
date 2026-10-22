@@ -10,6 +10,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from fno.lead.state import write_manifest
 from fno.lead.wake import bill_wake
 from fno.pr_watch._lead_wake import (
@@ -21,6 +23,9 @@ from fno.pr_watch._lead_wake import (
     _store_board_hash,
     run_lead_wake,
 )
+
+# The manifest fixtures write through the Rust creator.
+pytestmark = pytest.mark.dev_build
 
 NOW = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
 

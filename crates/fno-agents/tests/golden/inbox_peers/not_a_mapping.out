@@ -1,0 +1,11 @@
+{
+  "peers": {
+    "alpha": [
+      "api"
+    ]
+  },
+  "projects": {
+    "alpha": "backend"
+  },
+  "surface_patterns": {}
+}
