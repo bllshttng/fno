@@ -1,0 +1,17 @@
+{
+  "peers": {
+    "beta": [
+      "cli",
+      "7",
+      "True"
+    ]
+  },
+  "projects": {
+    "alpha": "backend"
+  },
+  "surface_patterns": {
+    "cli": [
+      "cli/**"
+    ]
+  }
+}

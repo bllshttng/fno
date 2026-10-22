@@ -40,12 +40,7 @@ be owned by more than one peer (the backend that implements it AND the
 docs project that references it), without forcing a peer's surface list to
 explode into raw glob soup.
 
-`fno.inbox.settings.read_peer_surfaces()` and
-`read_surface_patterns()` return these maps as plain `dict[str, list[str]]`
-values. Both walk up to the nearest `.fno/config.toml` (project-
-local override → global), and both return `{}` silently when the block is
-absent. The opt-in default is "no peer messaging", so a workspace without
-this configuration sees no extra prompts and sends no messages.
+`fno inbox peers --json` prints these maps as `peers`, `surface_patterns` and `projects` (the `--to-project` hint). The read walks up to the nearest `.fno/config.toml` (or legacy `settings.yaml`) and prints empty maps when the block is absent. A peer that is not a mapping, or a `surfaces` or glob value that is not a list, drops with one stderr warning. The opt-in default is "no peer messaging", so a workspace without this configuration sees no extra prompts and sends no messages.
 
 Skills consume the maps via the same algorithm:
 

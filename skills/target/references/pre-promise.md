@@ -27,10 +27,12 @@ Skip the entire step silently when:
 Mechanic:
 
 ```python
-from fno.inbox.settings import read_peer_surfaces, read_surface_patterns
+import json, subprocess
 
-peers = read_peer_surfaces()
-patterns = read_surface_patterns()
+maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
+                                 capture_output=True, text=True, check=True).stdout)
+peers = maps["peers"]
+patterns = maps["surface_patterns"]
 if not peers:
     raise SystemExit(0)  # opt-in by design
 

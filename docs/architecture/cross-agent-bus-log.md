@@ -207,6 +207,6 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` verbs | `cli/src/fno/agents/cli.py` |
 | `mail migrate-bus` and `mail drain` verbs | `cli/src/fno/mail/cli.py` |
-| peer-project hint reader | `cli/src/fno/inbox/settings.py` |
+| peer-project hint reader | `crates/fno-agents/src/inbox_peers.rs` |
 
 See also [cross-project-inbox.md](cross-project-inbox.md) (the inbox this converges) and [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).

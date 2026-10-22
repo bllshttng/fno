@@ -238,6 +238,7 @@ pub mod hold_label;
 pub mod honesty_sweep;
 pub mod hook;
 pub mod identity;
+pub mod inbox_peers;
 pub mod incident_claim;
 pub mod install_verify;
 pub mod intel;

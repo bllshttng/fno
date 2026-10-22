@@ -334,7 +334,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.38x | 11 | 8 | `cli/src/fno/retro/cli.py:178` | `_current_repo_slug` |
 | 1.36x | 34 | 25 | `cli/src/fno/agents/harnesses/codex.py:907` | `remove_session_index_entry` |
 | 1.36x | 19 | 14 | `cli/src/fno/graph/types.py:52` | `_derive_status` |
-| 1.36x | 15 | 11 | `cli/src/fno/inbox/settings.py:31` | `_load_inbox_config` |
 | 1.36x | 15 | 11 | `cli/src/fno/inbox/store.py:224` | `inbox_dir_for` |
 | 1.36x | 19 | 14 | `cli/src/fno/plan/cli.py:410` | `rung` |
 | 1.35x | 23 | 17 | `cli/src/fno/backlog/advance.py:1339` | `_seed_lane_local_settings` |
