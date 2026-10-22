@@ -1865,8 +1865,15 @@ pub(crate) fn run_with_release(
         // and skip the very gate that judges it.
         let mut corpse = false;
         let quiet = matches!(staged_row, Some((_, Some(a))) if *a > grace_secs);
-        let adopted_terminal =
-            quiet && crate::gc_adopt::adopted_claude_terminal(e, &agents_memo, agents_read);
+        // The idle clock, not the transcript alone: a finished adopted row
+        // whose transcript never resolved ages on its report clock.
+        let idle_past_grace = staged_row
+            .as_ref()
+            .and_then(|(_, a)| *a)
+            .or_else(|| report_age(e, now))
+            .is_some_and(|a| a > grace_secs);
+        let adopted_terminal = idle_past_grace
+            && crate::gc_adopt::adopted_claude_terminal(e, &agents_memo, agents_read);
         if !is_spawn && !adopted_finished(e) && !adopted_terminal {
             if !crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read) {
                 summary
