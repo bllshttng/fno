@@ -137,11 +137,11 @@ pub fn resolve(path: &Path, line: Option<u32>) -> Target {
 /// Run an outside target. Blocking: call it off the UI loop. `Err` carries
 /// one human line for the status notice. A viewer target launches nothing
 /// here: the client shows it.
-pub fn launch(target: &Target) -> Result<(), String> {
+pub fn launch(target: &Target) -> Result<crate::link::OpenOutcome, String> {
     match target {
         Target::Obsidian { uri } => crate::link::open_fno_uri(uri),
         Target::System(path) => crate::link::open_fno_path(path),
-        Target::Viewer { .. } => Ok(()),
+        Target::Viewer { .. } => Ok(crate::link::OpenOutcome::Opened),
     }
 }
 

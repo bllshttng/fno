@@ -26,7 +26,12 @@ pub(super) async fn open(view: &mut View, id: String) {
         .await
         .unwrap_or_else(|_| Some(Err("opener task failed".to_string())));
         match outcome {
-            Some(Ok(())) => return view.set_notice(format!("opened the plan for {id}")),
+            Some(Ok(crate::link::OpenOutcome::Opened)) => {
+                return view.set_notice(format!("opened the plan for {id}"))
+            }
+            Some(Ok(crate::link::OpenOutcome::CopiedToTerminal)) => {
+                return view.set_notice(format!("copied the plan link for {id} - paste to open"))
+            }
             Some(Err(e)) => return view.set_notice(format!("open failed: {e}")),
             None => {}
         }
