@@ -120,6 +120,8 @@ def scan(root: Path) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
 
     # Pass 2: literal reads, then const reads resolved to their value.
     def record_const(side: str, rel: Path, lineno: int, const: str) -> None:
+        # A definition in the same file wins: module-scoped consts legitimately
+        # shadow a same-named const in another file (advance.rs vs birth.rs).
         values = file_defs[side].get(rel, {}).get(const) or tree_defs[side].get(const)
         if values and len(values) == 1:
             sites[next(iter(values))][side].append(f"{rel}:{lineno}")
