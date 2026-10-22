@@ -304,6 +304,11 @@ fn arm_missions(scope: &str, events: &Path) -> (Option<Vec<String>>, Vec<String>
 }
 
 fn arm_open_epics(scope: &str, events: &Path) -> Result<Vec<String>, String> {
+    // An external tracker owns the node types; the local graph cannot say
+    // which member is an epic.
+    if crate::graph_get::external_backend_selected() {
+        return Ok(Vec::new());
+    }
     let entries = crate::backlog::read_entries(&crate::backlog::settings::graph_path())?;
     let mut armed = Vec::new();
     for member in scope.split(',').map(str::trim).filter(|m| !m.is_empty()) {
