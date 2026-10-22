@@ -852,8 +852,8 @@ const STYLE_SURFACES: [&str; 5] = ["mail", "encounter", "pr-body", "markdown", "
 
 /// Repo root, Python `resolve_repo_root` order: FNO_REPO_ROOT pin, then
 /// `git rev-parse --show-toplevel` from cwd, then cwd.
-fn repo_root() -> PathBuf {
-    if let Some(pin) = std::env::var_os("FNO_REPO_ROOT") {
+pub(crate) fn repo_root() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_REPO_ROOT").filter(|v| !v.is_empty()) {
         let path = std::path::PathBuf::from(&pin);
         if let Ok(resolved) = path.canonicalize() {
             return resolved;

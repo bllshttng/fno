@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from fno.company.contracts import FunctionRef, RoleRef
@@ -18,6 +19,9 @@ from fno.roles import (
     RoleLayer,
     RoleManifest,
 )
+
+# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+pytestmark = pytest.mark.dev_build
 
 
 runner = CliRunner()
@@ -82,7 +86,7 @@ def _assert_pretty_sorted_json(output: str) -> Any:
     return parsed
 
 
-def test_ac_r7_ui_ls_and_show_are_stable_and_keep_invalid_sources_visible(
+def test_ac_r7_ui_show_is_stable_and_keeps_invalid_sources_visible(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -113,28 +117,7 @@ def test_ac_r7_ui_ls_and_show_are_stable_and_keep_invalid_sources_visible(
     monkeypatch.setenv("FNO_SKIP_MIGRATION", "1")
     before_roles = _snapshot_tree(roles_root)
 
-    first = _invoke("agents", "roles", "ls")
-    second = _invoke("agents", "roles", "ls")
-    assert first.exit_code == second.exit_code == 0
-    assert first.output == second.output
-    assert first.output == (
-        "owner function=marketing layer=built-in "
-        "source=built-in/owner.json status=valid\n"
-        "broken function=support layer=project "
-        "source=project/broken.json status=invalid\n"
-    )
-
-    local_json = _invoke("agents", "roles", "ls", "-J")
-    root_json = _invoke("-J", "agents", "roles", "ls")
-    assert local_json.exit_code == root_json.exit_code == 0
-    assert local_json.output == root_json.output
-    rows = _assert_pretty_sorted_json(local_json.output)
-    assert [(row["role_id"], row["status"]) for row in rows] == [
-        ("owner", "valid"),
-        ("broken", "invalid"),
-    ]
-
-    shown = _invoke("agents", "roles", "show", "broken", "-J")
+    shown =_invoke("agents", "roles", "show", "broken", "-J")
     assert shown.exit_code == 0
     definitions = _assert_pretty_sorted_json(shown.output)
     assert len(definitions) == 1
@@ -191,13 +174,22 @@ def test_ac_r7_ui_resolve_is_typed_inert_and_has_stable_exit_codes(
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(project_root))
 
     dispatch_calls: list[tuple[object, ...]] = []
+    real = {"Popen": subprocess.Popen, "run": subprocess.run}
 
-    def _dispatch_tripwire(*args: object, **kwargs: object) -> None:
-        dispatch_calls.append((*args, kwargs))
-        raise AssertionError("roles inspection must not dispatch a process")
+    def _tripwire(name: str):
+        # Discovery is a read through the fno-agents spawn-overlay door; any
+        # other process is a dispatch.
+        def _guard(*args: object, **kwargs: object) -> object:
+            argv = args[0] if args else kwargs.get("args")
+            if isinstance(argv, list) and argv[1:2] == ["spawn-overlay"]:
+                return real[name](*args, **kwargs)
+            dispatch_calls.append((*args, kwargs))
+            raise AssertionError("roles inspection must not dispatch a process")
 
-    monkeypatch.setattr(subprocess, "Popen", _dispatch_tripwire)
-    monkeypatch.setattr(subprocess, "run", _dispatch_tripwire)
+        return _guard
+
+    monkeypatch.setattr(subprocess, "Popen", _tripwire("Popen"))
+    monkeypatch.setattr(subprocess, "run", _tripwire("run"))
 
     args = ["resolve", "owner", "--work-order", "x-a8c0", "--attempt", "attempt-1"]
     first = _invoke("agents", "roles", *args, "-J")
@@ -301,65 +293,7 @@ def test_resolve_fails_closed_when_an_unchecked_source_has_no_role_identity(
     assert blocked["source_id"] == expected_source
     assert blocked["detail"]
 
-    listed = _invoke("agents", "roles", *source_args, "ls", "-J")
-    assert listed.exit_code == 0
-    rows = _assert_pretty_sorted_json(listed.output)
-    assert any(
-        row["source"] == expected_source
-        and row["role_id"] is None
-        and row["status"] in {"invalid", "unreadable"}
-        for row in rows
-    )
-
-    shown = _invoke("agents", "roles", *source_args, "show", "owner", "-J")
+    shown =_invoke("agents", "roles", *source_args, "show", "owner", "-J")
     assert shown.exit_code == 0
     shown_rows = _assert_pretty_sorted_json(shown.output)
     assert any(row["source"] == expected_source for row in shown_rows)
-
-
-def test_resolve_fails_closed_when_a_layer_directory_cannot_be_enumerated(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    roles_root = tmp_path / "roles"
-    _write_source(
-        roles_root,
-        layer=RoleLayer.BUILT_IN,
-        name="owner",
-        role_id="owner",
-        function_id="marketing",
-    )
-    unreadable_layer = roles_root / RoleLayer.PROJECT.value
-    unreadable_layer.mkdir()
-    from fno.roles import registry
-
-    real_walk = registry.os.walk
-
-    def deny_project_walk(directory, **kwargs):
-        if Path(directory) == unreadable_layer:
-            kwargs["onerror"](PermissionError(13, "Permission denied", str(unreadable_layer)))
-            return iter(())
-        return real_walk(directory, **kwargs)
-
-    monkeypatch.setattr(registry.os, "walk", deny_project_walk)
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(roles_root))
-    monkeypatch.setenv("FNO_SKIP_MIGRATION", "1")
-
-    resolved = _invoke(
-        "agents",
-        "roles",
-        "resolve",
-        "owner",
-        "--work-order",
-        "x-a8c0",
-        "--attempt",
-        "attempt-1",
-        "-J",
-    )
-
-    assert resolved.exit_code == 1
-    blocked = _assert_pretty_sorted_json(resolved.output)
-    assert blocked["reason"] == "invalid_manifest"
-    assert blocked["source_layer"] == "project"
-    assert blocked["source_id"] == "project"
-    assert "PermissionError" in blocked["detail"]

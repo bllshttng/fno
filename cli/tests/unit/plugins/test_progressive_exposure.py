@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import yaml
 
 from fno.company.contracts import FunctionRef, RoleRef, WorkOrderRef
@@ -86,6 +87,7 @@ def _fact(capability: str, revision: str, *, role_id: str, node_id="wo-1", attem
     )
 
 
+@pytest.mark.dev_build
 def test_installing_two_packs_does_not_expose_capabilities_globally(tmp_path):
     root = tmp_path / "roles"
     root.mkdir()
