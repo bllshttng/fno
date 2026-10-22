@@ -1471,6 +1471,7 @@ async fn run(args: Vec<String>) -> i32 {
     // agent.spawn) to route claude -> dispatch_claude_spawn, and
     // codex/gemini + --once -> dispatch_codex_once / dispatch_gemini_once.
     // `host` and `promote` must fall through to the daemon RPC unchanged.
+    let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
     if method == "agent.spawn" && verb_owned == "spawn" {
         // The seam gate comes FIRST. A spawn that skipped
         // the Python seam carries no configured route/model/effort/account,
@@ -1522,11 +1523,14 @@ async fn run(args: Vec<String>) -> i32 {
             // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
             // the pane spine answers every harness arm itself - the Python
             // bounce this branch kept for unseated shapes is deleted.
-            return fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+            return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
+                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
+            });
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; anything else re-execs Python.
-        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args) {
+        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args, &mut spawn_hold) {
+            fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
             if code == 0 {
                 // A placement failure never recolors the spawn verdict: the
                 // receipt is the truth, the worker is live, and a nonzero here
@@ -1688,6 +1692,9 @@ async fn run(args: Vec<String>) -> i32 {
         call(&home, &daemon_bin, &req).await
     };
     drop(daemon_spawn_gate);
+    if matches!(&call_result, Ok(resp) if matches!(resp.payload, ResponsePayload::Ok(_))) {
+        fno_agents::spawn_guard::settle(&mut spawn_hold, 0, &agent_name);
+    }
     match call_result {
         Ok(resp) => match resp.payload {
             ResponsePayload::Err(err) => {
@@ -2169,7 +2176,13 @@ fn bounce_to_python(args: &[String], why: &str, remedy: &str) -> i32 {
     127
 }
 
-fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String]) -> Option<i32> {
+fn maybe_run_spawn(
+    home: &AgentsHome,
+    params: &Value,
+    name: &str,
+    args: &[String],
+    hold: &mut Option<fno_agents::spawn_guard::SpawnHold>,
+) -> Option<i32> {
     use fno_agents::agy_ask::dispatch_agy_once_with_effort;
     use fno_agents::claude_ask::{
         dispatch_claude_headless, dispatch_claude_spawn, py_repr, ClaudeHome,
@@ -2441,6 +2454,13 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
     // guard held here drops before any row exists and two rapid thread spawns
     // both pass the cap. The gate moves to run(), wrapped around that RPC.
     let codex_thread_fallthrough = provider == "codex" && substrate == "bg";
+    // The family-2 node guard runs after the cwd it judges and before the
+    // gate. The caller owns the hold, so a codex thread keeps its keys across
+    // the daemon RPC, and every exit before a proven launch releases them.
+    *hold = match fno_agents::spawn_guard::guard_client_spawn(params, name, &cwd) {
+        Ok(hold) => hold,
+        Err(code) => return Some(code),
+    };
     let mut gate_guard = if substrate == "pane" || codex_thread_fallthrough {
         None
     } else {
@@ -2457,6 +2477,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
                 route_provider: fno_agents::claude_adopt::gate_route_provider(&params),
                 account: params
                     .get("account")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                session_phase: params
+                    .get("session_phase")
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 ..Default::default()
@@ -3700,6 +3724,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--message",
         "--name",
         "--node",
+        "--slug",
+        "--plan",
+        "--session-phase",
         "--session-id",
         "--status",
         "--progress",
@@ -3875,8 +3902,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--name" => {
                 params.insert("name".into(), str_arg(&mut it, "--name")?);
             }
-            "--node" => {
-                params.insert("node".into(), str_arg(&mut it, "--node")?);
+            "--node" | "--slug" | "--plan" | "--session-phase" => {
+                params.insert(a[2..].replace('-', "_"), str_arg(&mut it, &a)?);
             }
             // The seam's node-reason receipt, set only when the seed
             // named a node the seam could not resolve. Forwarded so the mint

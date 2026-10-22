@@ -1347,28 +1347,6 @@ def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
     return head + list(args[len(_args_before_argv(args)) :])
 
 
-def _is_provenance_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying ``--node``/``--slug``/``--plan``.
-
-    Provenance flags are parsed only by the Python spawn verb (``cmd_spawn``
-    resolves them into the pane env). The Rust client does not know them, so a
-    ``spawn ... --node <id>`` auto-routed to the binary would exit ``unknown
-    flag: --node``. Keeping it Python covers every caller (direct CLI and the
-    /agent spawn.sh forward) in one place, not just the pane substrate. The
-    flags are unused on the Python bg/headless path (provenance rides the pane
-    wrapper only), so forcing Python is harmless there."""
-    if verb != "spawn":
-        return False
-    # footnote's lanes live only in the Rust client, which parses --node.
-    if (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() == "footnote":
-        return False
-    prov = ("--node", "--slug", "--plan")
-    return any(
-        a in prov or a.startswith(tuple(f"{p}=" for p in prov))
-        for a in _args_before_argv(args)
-    )
-
-
 #: d-fe66560a keeps the binary's action list shrink-only, so these read
 #: leaves have no action of their own: the router rewrites each into an
 #: argument of the `status` action before the exec.
@@ -1624,7 +1602,6 @@ def make_agents_group_cls() -> type:
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_default_substrate_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
-                    or _is_provenance_bearing_spawn(verb, args)
                     or _is_dispatch_account_bearing_spawn(verb, args)
                     or _is_anycast_ask(verb, args)
                 )
