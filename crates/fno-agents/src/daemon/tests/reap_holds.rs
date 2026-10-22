@@ -1034,7 +1034,7 @@ fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
         stopped.origin = Some("adopted".into());
         stopped.status = crate::AgentStatus::Exited;
         stopped.stop = Some(state::StopRecord {
-            by: "stop-verb".into(),
+            by: "stop-command".into(),
             at: crate::daemon::now_rfc3339_like(),
             reason: None,
         });
