@@ -247,6 +247,16 @@ pub fn anchor_path(graph: &Path) -> PathBuf {
     crate::state_layout::place(root, anchor)
 }
 
+/// Whether `graph` is a spelling of a graph or archive store, the names
+/// `anchor_path` converges. Any other path is a sibling file with its own
+/// identity.
+pub fn is_store_spelling(graph: &Path) -> bool {
+    matches!(
+        graph.file_name().and_then(|n| n.to_str()),
+        Some("graph.json" | "graph.db" | "graph-archive.json" | "graph-archive.db")
+    )
+}
+
 /// The state root an anchor belongs to: the same walk `database_path` does
 /// behind its db/ parent check, so the migration fence resolves from the
 /// same place the move wrote it.

@@ -327,9 +327,12 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     let entries = crate::target_init::graph_rows(&cwd);
     if entries.is_none() && crate::target_init::input_may_name_a_node(&node) {
         return Err(fail_code(
-            "fno do target start: dispatch-hold-invalid: backlog graph is \
-             unreadable; refusing to assume unheld. Nothing was claimed. Fix or \
-             restore graph.json and retry.",
+            &format!(
+                "fno do target start: dispatch-hold-invalid: backlog graph is \
+                 unreadable; refusing to assume unheld. Nothing was claimed. Fix or \
+                 restore {} and retry.",
+                crate::target_init::graph_store_label(&cwd)
+            ),
             2,
         ));
     }
