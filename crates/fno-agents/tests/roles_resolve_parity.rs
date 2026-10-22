@@ -224,111 +224,91 @@ fn roles_resolve_matches_the_python_goldens() {
         &["--capabilities", caps.as_str(), "--context", ctx.as_str()][..],
     ]
     .concat();
-    let with = |head: &[&'static str], parts: &[&[&str]]| -> Vec<String> {
-        head.iter()
-            .copied()
-            .chain(parts.iter().flat_map(|p| p.iter().copied()))
-            .map(String::from)
-            .collect()
+    let cat = |parts: &[Vec<&str>]| -> Vec<String> {
+        parts.concat().into_iter().map(String::from).collect()
     };
+    let resolve =
+        |args: &[&'static str]| -> Vec<&'static str> { [&["resolve"][..], args].concat() };
+    let caps_only = vec!["--capabilities", caps.as_str()];
+    let stale_ctx = vec!["--capabilities", caps.as_str(), "--context", stale.as_str()];
+    let bad_caps = vec!["--capabilities", bad.as_str()];
     let cases: Vec<(&str, Vec<String>)> = vec![
         (
             "resolve text names the contributing source",
-            with(&[], &[&group, &["resolve", "owner"], &full]),
+            cat(&[group.clone(), resolve(&["owner"]), full.clone()]),
         ),
         (
             "resolve json pins the manifest and bundle digests",
-            with(&[], &[&group, &["resolve", "owner", "--json"], &full]),
+            cat(&[group.clone(), resolve(&["owner", "--json"]), full.clone()]),
         ),
         (
             "resolve without the capability blocks",
-            with(&[], &[&group, &["resolve", "owner"], &order]),
+            cat(&[group.clone(), resolve(&["owner"]), order.clone()]),
         ),
         (
             "resolve without context blocks",
-            with(
-                &[],
-                &[
-                    &group,
-                    &["resolve", "owner", "--json"],
-                    &order,
-                    &["--capabilities", caps.as_str()],
-                ],
-            ),
+            cat(&[
+                group.clone(),
+                resolve(&["owner", "--json"]),
+                order.clone(),
+                caps_only,
+            ]),
         ),
         (
             "resolve with stale context blocks",
-            with(
-                &[],
-                &[
-                    &group,
-                    &["resolve", "owner", "--json"],
-                    &order,
-                    &["--capabilities", caps.as_str(), "--context", stale.as_str()],
-                ],
-            ),
+            cat(&[
+                group.clone(),
+                resolve(&["owner", "--json"]),
+                order.clone(),
+                stale_ctx,
+            ]),
         ),
         (
             "resolve on another snapshot blocks",
-            with(
-                &["-J"],
-                &[
-                    &group,
-                    &["resolve", "marketing/owner", "--snapshot", "snapshot-2"],
-                    &full,
-                ],
-            ),
+            cat(&[
+                vec!["-J"],
+                group.clone(),
+                resolve(&["marketing/owner", "--snapshot", "snapshot-2"]),
+                full.clone(),
+            ]),
         ),
         (
             "resolve refuses an authority expansion",
-            with(&[], &[&group, &["resolve", "wide"], &order]),
+            cat(&[group.clone(), resolve(&["wide"]), order.clone()]),
         ),
         (
             "resolve refuses a mixed revision",
-            with(&[], &[&group, &["resolve", "drift", "--json"], &order]),
+            cat(&[group.clone(), resolve(&["drift", "--json"]), order.clone()]),
         ),
         (
             "resolve refuses an ambiguous layer",
-            with(&[], &[&group, &["resolve", "twin", "--json"], &order]),
+            cat(&[group.clone(), resolve(&["twin", "--json"]), order.clone()]),
         ),
         (
             "resolve of an unknown role is not found",
-            with(&[], &[&group, &["resolve", "ghost", "--json"], &order]),
+            cat(&[group.clone(), resolve(&["ghost", "--json"]), order.clone()]),
         ),
         (
             "resolve refuses a role in two functions",
-            with(&[], &[&group, &["resolve", "dup"], &order]),
+            cat(&[group.clone(), resolve(&["dup"]), order.clone()]),
         ),
         (
             "resolve blocks on an unchecked source",
-            with(
-                &[],
-                &[
-                    &["--root", broken_arg.as_str(), "resolve", "owner", "--json"],
-                    &full,
-                ],
-            ),
+            cat(&[
+                vec!["--root", broken_arg.as_str()],
+                resolve(&["owner", "--json"]),
+                full.clone(),
+            ]),
         ),
         (
             "resolve refuses an invalid capabilities file",
-            with(
-                &[],
-                &[
-                    &group,
-                    &["resolve", "owner"],
-                    &order,
-                    &["--capabilities", bad.as_str()],
-                ],
-            ),
+            cat(&[group.clone(), resolve(&["owner"]), order.clone(), bad_caps]),
         ),
         (
             "resolve without a work order refuses",
-            with(
-                &[],
-                &[&group, &["resolve", "owner", "--attempt", "attempt-1"]],
-            ),
+            cat(&[group.clone(), resolve(&["owner", "--attempt", "attempt-1"])]),
         ),
-        ("resolve help", with(&["resolve", "--help"], &[])),
+        ("resolve help", cat(&[resolve(&["--help"])])),
     ];
     for (label, argv) in cases {
         let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
