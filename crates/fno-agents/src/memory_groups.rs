@@ -112,9 +112,8 @@ pub fn group_reading(
     for row in rows {
         // A pid a live session owns is fleet even while it still wears its
         // claimed spare's bg-spare argv.
-        let group = classify(&row.command).filter(|group| {
-            !(*group == Group::SparePool && fleet.contains(&row.pid))
-        });
+        let group = classify(&row.command)
+            .filter(|group| !(*group == Group::SparePool && fleet.contains(&row.pid)));
         let sum = match group {
             Some(Group::Server) => &mut server,
             Some(Group::Client) => &mut client,
