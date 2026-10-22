@@ -31,9 +31,25 @@ class NodeSeed:
         return ensure_launch_workdir(self.recorded_cwd, self.node_id, harness)
 
 
+def _with_dispatch_command(row: dict) -> dict:
+    """The row with a legacy stored ``dispatch_verb`` surfaced as ``dispatch_command``.
+
+    A row the store has not migrated yet (or one a defer/undefer rewrote) can
+    carry only the old key; every reader below looks up the new one."""
+    legacy = row.get("dispatch_verb")  # verb-wording: allow (stored key)
+    if legacy and not row.get("dispatch_command"):
+        return dict(row, dispatch_command=legacy)
+    return row
+
+
 def find_node_row(node: str) -> Optional[dict]:
     """The graph row for a node id or slug, or None on an unreadable graph.
     One lookup so the door, the seam and retask read the SAME row."""
+    row = _find_node_row(node)
+    return _with_dispatch_command(row) if row is not None else None
+
+
+def _find_node_row(node: str) -> Optional[dict]:
     try:
         from fno.graph.load import load_graph
         from fno.graph.store import GRAPH_JSON, read_nodes_by_ids
