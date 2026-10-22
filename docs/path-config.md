@@ -156,7 +156,7 @@ For each configurable accessor call:
 
 `paths.graph_json()` is the stable store anchor at `<state_dir>/graph.json`; the live SQLite store is its `.db` sibling. It has no path override.
 
-The anchor is the key for every path derived from the store: the lock (`graph.json.lock`), its queue, the keeper socket and the note journal. Every spelling of the store (the anchor, its `db/` twin, the legacy root spelling) converges through `anchor_path` before `graph_lock_path` appends `.lock`, so all of them flock one file. The lockfile keeps the `graph.json.lock` name on purpose: an older binary that only knows the anchor spelling must share the same lock. Text a person reads names the `.db` store instead.
+The anchor is the key for every path derived from the store: the lock (`graph.json.lock`), its queue, the keeper socket and the note journal. Every spelling of the store converges through `anchor_path` before `graph_lock_path` appends `.lock`. The spellings are the anchor, its `db/` twin and the legacy root name. All of them flock one file. The lockfile keeps the `graph.json.lock` name on purpose: an older binary that only knows the anchor spelling must share the same lock. Text a person reads names the `.db` store instead.
 
 Under `FNO_TEST_HERMETIC=1`, state accessors reject a resolved path outside the test sandbox. The fence reuses the events `HermeticEscapeError` and allowed-root calculation. `locks_dir()` is the deliberate config-free exception.
 
