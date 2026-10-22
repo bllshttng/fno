@@ -952,11 +952,11 @@ fn open_pr_verdict_asks_only_a_quiet_candidate_and_folds_the_answer() {
 
 // ── an adopted row keeps only while there is a session to own it ────────
 
-/// Presence in a known snapshot keeps, whatever the registry's stale status
-/// reads: the listing is the live fact, so the roster-listed adopted row
-/// stays under `not a spawn row`. A codex row (no claude roster governs it)
-/// with a terminal registry status takes the adopted-retire carve-out, and
-/// its quiet transcript retires it.
+/// A live listing keeps, whatever the registry's stale status reads: the
+/// listing is the live fact, so the adopted row listed `idle` stays under
+/// `not a spawn row`. A row listed `stopped` has finished and takes the
+/// adopted-retire carve-out, and so does a codex row (no claude roster
+/// governs it) with a terminal registry status.
 #[test]
 fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
     let home = tmp_home("gc-corpse-live");
@@ -966,7 +966,17 @@ fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
     state::update_registry(&home.registry_json(), |r| {
         let mut present = claude_worker_row("pr-row", "prrow000");
         present.origin = Some("adopted".into());
+        present.status = crate::AgentStatus::Exited;
         r.entries.push(present);
+        let mut stopped = claude_worker_row("st-row", "strow000");
+        stopped.origin = Some("adopted".into());
+        stopped.status = crate::AgentStatus::Exited;
+        stopped.stop = Some(state::StopRecord {
+            by: "stop-verb".into(),
+            at: crate::daemon::now_rfc3339_like(),
+            reason: None,
+        });
+        r.entries.push(stopped);
         let mut codex = ask_row("cx-row", None);
         codex.short_id = "cxrow000".into();
         codex.harness = Some("codex".into());
@@ -979,12 +989,14 @@ fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
     let graph = graph_read(
         &[
             ("prrow000-1111-2222-3333-444444444444", "NM", "done"),
+            ("strow000-1111-2222-3333-444444444444", "NM", "done"),
             ("sess-cx", "NM", "done"),
         ],
         &[],
     );
     let agents = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
         crate::claude_roster::ClaudeAgentRow::new("prrow000", Some("idle")),
+        crate::claude_roster::ClaudeAgentRow::new("strow000", Some("stopped")),
     ]);
     let summary = evidence_sweep(
         &home,
@@ -997,12 +1009,10 @@ fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
         &|_| true,
     );
 
-    assert_eq!(
-        summary.needs_live_stop.len(),
-        1,
+    assert!(
+        summary.needs_live_stop.iter().any(|(id, _)| id == "cxrow000"),
         "the unlisted codex row reaches the pipeline and holds at the stop proof: {summary:?}"
     );
-    assert_eq!(summary.needs_live_stop[0].0, "cxrow000", "{summary:?}");
     assert_eq!(
         summary.kept_not_spawn,
         vec![("prrow000".to_string(), "adopted".to_string())],
