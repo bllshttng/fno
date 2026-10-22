@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn inputs(target: &Path, before: usize, after: usize) -> GuardInputs<'_> {
+    fn inputs(target: &Path, loss: LiveLoss) -> GuardInputs<'_> {
         GuardInputs {
             target,
             home: Some(OsStr::new("/home/operator")),
@@ -172,27 +172,8 @@ mod tests {
             pytest_current_test: false,
             hermetic_claim: false,
             row_loss_override: false,
-            loss: LiveLoss {
-                before_live: before,
-                after_live: after,
-                lost: before - after,
-            },
+            loss,
         }
-    }
-
-    fn row(sid: &str, status: AgentStatus) -> RegistryEntry {
-        RegistryEntry {
-            name: format!("t-{sid}"),
-            harness_session_id: Some(sid.to_string()),
-            status,
-            ..Default::default()
-        }
-    }
-
-    fn fleet(n: usize) -> Vec<RegistryEntry> {
-        (0..n)
-            .map(|i| row(&format!("s{i}"), AgentStatus::Live))
-            .collect()
     }
 
     fn shared_target() -> PathBuf {
@@ -202,12 +183,38 @@ mod tests {
             .join("registry.json")
     }
 
+    /// The guard over a real before/after pair on the shared root.
+    fn guard(
+        before: &[RegistryEntry],
+        after: &[RegistryEntry],
+        declared: &BTreeSet<String>,
+    ) -> Result<(), String> {
+        check(inputs(&shared_target(), live_loss(before, after, declared)))
+    }
+
+    fn fleet(n: usize) -> Vec<RegistryEntry> {
+        (0..n)
+            .map(|i| RegistryEntry {
+                name: format!("t-s{i}"),
+                harness_session_id: Some(format!("s{i}")),
+                status: AgentStatus::Live,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    const MASS_DROP: LiveLoss = LiveLoss {
+        before_live: 33,
+        after_live: 1,
+        lost: 32,
+    };
+
     #[test]
     fn a_cargo_test_process_refuses_the_shared_root() {
         let target = shared_target();
         let err = check(GuardInputs {
             cfg_test: true,
-            ..inputs(&target, 33, 1)
+            ..inputs(&target, MASS_DROP)
         })
         .unwrap_err();
         assert!(err.contains("test or probe marker"), "{err}");
@@ -219,7 +226,7 @@ mod tests {
         let target = shared_target();
         assert!(check(GuardInputs {
             row_loss_override: true,
-            ..inputs(&target, 33, 1)
+            ..inputs(&target, MASS_DROP)
         })
         .is_ok());
     }
@@ -231,27 +238,14 @@ mod tests {
         for e in after.iter_mut().take(74) {
             e.status = AgentStatus::Exited;
         }
-        let loss = live_loss(&before, &after, &BTreeSet::new());
-        assert_eq!((loss.before_live, loss.after_live, loss.lost), (96, 22, 0));
-        let target = shared_target();
-        assert!(check(GuardInputs {
-            loss,
-            ..inputs(&target, 0, 0)
-        })
-        .is_ok());
+        assert!(guard(&before, &after, &BTreeSet::new()).is_ok());
     }
 
     #[test]
     fn a_fixture_replacing_the_fleet_refuses() {
-        let before = fleet(5);
-        let after = vec![row("fixture", AgentStatus::Live)];
-        let loss = live_loss(&before, &after, &BTreeSet::new());
-        let target = shared_target();
-        let err = check(GuardInputs {
-            loss,
-            ..inputs(&target, 0, 0)
-        })
-        .unwrap_err();
+        let mut fixture = fleet(1);
+        fixture[0].harness_session_id = Some("fixture".into());
+        let err = guard(&fleet(5), &fixture, &BTreeSet::new()).unwrap_err();
         assert!(err.contains("drops live rows from 5 to 1"), "{err}");
         assert!(err.contains(ROW_LOSS_OVERRIDE_ENV), "{err}");
     }
@@ -259,21 +253,9 @@ mod tests {
     #[test]
     fn declared_retirements_are_not_loss() {
         let before = fleet(96);
-        let after = before[54..].to_vec();
-        let target = shared_target();
-        let undeclared = live_loss(&before, &after, &BTreeSet::new());
-        assert!(check(GuardInputs {
-            loss: undeclared,
-            ..inputs(&target, 0, 0)
-        })
-        .is_err());
+        let after = &before[54..];
+        assert!(guard(&before, after, &BTreeSet::new()).is_err());
         let declared = before[..54].iter().map(|e| e.name.clone()).collect();
-        let loss = live_loss(&before, &after, &declared);
-        assert_eq!(loss.lost, 0);
-        assert!(check(GuardInputs {
-            loss,
-            ..inputs(&target, 0, 0)
-        })
-        .is_ok());
+        assert!(guard(&before, after, &declared).is_ok());
     }
 }
