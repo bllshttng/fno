@@ -65,10 +65,12 @@ pub(crate) fn prepare_mint(
     if crate::session_report::find_row(&entries, harness, session_id, agent_self).is_some() {
         return None;
     }
-    if retired_session(home, harness, session_id, record) {
+    let native = mint_flavor(record.is_some(), agent_self.is_some());
+    // Only the fleet mint answers to a retirement. A person who resumes a
+    // reaped session by hand gets the operator row, which no sweep reaps.
+    if native && retired_session(home, harness, session_id, record) {
         return None;
     }
-    let native = mint_flavor(record.is_some(), agent_self.is_some());
     // A hand session gets a row only once it joined fno (its first fno skill
     // or verb), unless `agents.auto_register_sessions` opts every session in.
     if !native
@@ -144,7 +146,7 @@ pub(crate) fn prepare_mint(
 
 /// A retired session stays retired. A reap receipt, or an rm tombstone
 /// still inside its grace window, names the session and no launch record
-/// newer than that retirement relaunched it. The report then mints no row:
+/// newer than that retirement relaunched it. The report then mints no fleet row:
 /// a reaped worker's own Stop hook reports after the sweep, and minting
 /// there put every reaped row straight back. `fno agents adopt` is the door
 /// back for a reaped session; it reads the receipt on purpose.

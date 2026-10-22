@@ -286,12 +286,13 @@ pub(crate) fn handle_session_report(
             match &pending_mint {
                 // A retirement that landed after the pre-read still wins.
                 Some(mint)
-                    if !crate::native_adopt::retired_session(
-                        home,
-                        &harness,
-                        &session_id,
-                        launch_record.as_ref(),
-                    ) =>
+                    if !mint.native
+                        || !crate::native_adopt::retired_session(
+                            home,
+                            &harness,
+                            &session_id,
+                            launch_record.as_ref(),
+                        ) =>
                 {
                     let mut entry = mint.entry.clone();
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
@@ -1495,6 +1496,13 @@ mod tests {
             }
             assert!(read_rows(&home).is_empty(), "a retired session re-minted");
         }
+        // A hand resume carries no agent_self: the user's own row mints.
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("codex", removed, json!({}))),
+        );
+        assert_eq!(response_json(&resp)["result"]["minted"], "operator");
         let mut record = crate::launch_record::Record {
             launch: crate::launch_record::Launch {
                 harness: "claude".into(),
