@@ -44,6 +44,11 @@ def _wrapper(binary: Path) -> str:
     return f'#!/bin/sh\nexec {shlex.quote(str(binary))} gh "$@"\n'
 
 
+def _in_temp(path: Path) -> bool:
+    temp = os.path.realpath(tempfile.gettempdir())
+    return os.path.realpath(path).startswith(temp + os.sep)
+
+
 def _read_text(path: Path) -> Optional[str]:
     # A stock CI runner's gh is a compiled binary, not utf-8 text.
     try:
@@ -81,8 +86,12 @@ def ensure_proxy(
         # Degrade: leave the real gh unswrapped and let the quota policy
         # stand down for this process tree.
         return InstallResult(proxy=resolved, delegate=resolved, changed=False)
-    wrapper = _wrapper(Path(os.path.abspath(binary)))
     root = directory or github_cli_proxy_dir()
+    if _in_temp(binary) and not _in_temp(root):
+        # A durable shim must not pin a binary a temp sweep deletes: links
+        # into a reaped mktemp dir once broke every gh read on the machine.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    wrapper = _wrapper(Path(os.path.abspath(binary)))
     root.mkdir(parents=True, exist_ok=True)
     # Retired: the old shim exec'd this link by PATH name.
     (root / "fno-gh-proxy").unlink(missing_ok=True)

@@ -30,3 +30,7 @@ def test_an_old_helper_shim_is_rewritten_to_exec_fno_agents(tmp_path, monkeypatc
     assert github_cli._is_wrapper(root / "gh")
     assert not (root / "fno-gh-proxy").is_symlink()
     assert not github_cli.ensure_proxy(directory=root, real_gh=real_gh).changed
+    # A durable shim never pins a temp-dir binary; it degrades instead.
+    monkeypatch.setattr(github_cli, "_in_temp", lambda path: path == agents)
+    durable = github_cli.ensure_proxy(directory=tmp_path / "durable", real_gh=real_gh)
+    assert durable.proxy == real_gh and not (tmp_path / "durable" / "gh").exists()
