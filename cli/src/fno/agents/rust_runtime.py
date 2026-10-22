@@ -1307,9 +1307,6 @@ _RETIRED_AXIS_LONGS = (
     "--substrate",
     "--yolo",
     "--resume",
-    "--add-dir",
-    "--agent",
-    "--tools",
     "--deny-tools",
 )
 

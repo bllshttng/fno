@@ -687,12 +687,27 @@ fn spawn_flag_rows() {
         .expect("--account= must parse");
     assert_eq!(eq["account"], "makers");
 
-    // The tier-3 passthrough spellings died with the axes; the harness's own
-    // flags ride --argv/--harness-arg.
-    for flag in ["--add-dir", "--agent", "--tools", "--deny-tools"] {
-        refused(&["wk", flag, "x"], flag);
-    }
-    refused(&["wk", "--add-dir=/extra"], "--add-dir");
+    // --deny-tools is fno's own spelling, not a harness flag, so it still
+    // refuses by name; the real claude flags forward.
+    refused(&["wk", "--deny-tools", "x"], "--deny-tools");
+    assert_eq!(
+        harness_args(&[
+            "wk",
+            "--add-dir=/extra",
+            "--agent",
+            "reviewer",
+            "--tools",
+            "Read"
+        ]),
+        serde_json::json!([
+            "--add-dir",
+            "/extra",
+            "--agent",
+            "reviewer",
+            "--tools",
+            "Read"
+        ])
+    );
 }
 
 // x-d012: --account parses into params (space + equals form) so the spawn

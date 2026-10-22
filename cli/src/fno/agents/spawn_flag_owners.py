@@ -68,9 +68,6 @@ RETIRED_SPAWN_FLAGS: tuple[str, ...] = (
     "--recorded-provider",
     "--yolo",
     "--resume",
-    "--add-dir",
-    "--agent",
-    "--tools",
     "--deny-tools",
 )
 

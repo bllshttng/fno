@@ -15,9 +15,6 @@ RETIRED_VALUES = [
     ("--provider", "zai"),
     ("--yolo", None),
     ("--resume", "12345678-1234-1234-1234-123456789012"),
-    ("--add-dir", "/w"),
-    ("--agent", "reviewer"),
-    ("--tools", "Read"),
     ("--deny-tools", "Bash"),
 ]
 

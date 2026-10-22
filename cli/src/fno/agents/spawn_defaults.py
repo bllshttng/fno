@@ -309,12 +309,15 @@ _FENCE_SHORTHAND = {
     "-m": "--model",
     "--effort": "--effort",
     "--permission-mode": "--permission-mode",
+    "--add-dir": "--add-dir",
+    "--agent": "--agent",
+    "--tools": "--tools",
 }
 
 
 def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
-    """Move ``--model``/``-m``, ``--effort`` and ``--permission-mode`` from the
-    head behind the ``--`` fence.
+    """Move ``--model``/``-m``, ``--effort``, ``--permission-mode``, ``--add-dir``,
+    ``--agent`` and ``--tools`` from the head behind the ``--`` fence.
 
     Spawn allows every harness flag, and these are the ones an operator types
     most, so the head spelling is shorthand for the harness's own flag.

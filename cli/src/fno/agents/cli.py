@@ -1078,10 +1078,10 @@ def _retired_axis(flag: str, admit: str = ""):
     epilog=(
         "--as picks the lane: thread (the default), pane, headless, or cloud. "
         "Placement flags need --as pane; --once means headless. --model/-m, "
-        "--effort and --permission-mode are the harness's own flags: typed before "
-        "the fence they ride it, and a lane that cannot carry one refuses and "
-        "names it. Declared "
-        "harnesses: claude, codex, opencode, pi, agy, cursor-agent, grok "
+        "--effort, --permission-mode, --add-dir, --agent and --tools are the "
+        "harness's own flags: typed before the fence they ride it, and a lane "
+        "that cannot carry one refuses and names it. Declared harnesses: "
+        "claude, codex, opencode, pi, agy, cursor-agent, grok "
         "(docs/HARNESSES.md)."
     ),
 )
@@ -1235,24 +1235,6 @@ def cmd_spawn(
         "-r",
         hidden=True,
         callback=_retired_axis("--resume"),
-    ),
-    add_dir: str | None = typer.Option(
-        None,
-        "--add-dir",
-        hidden=True,
-        callback=_retired_axis("--add-dir"),
-    ),
-    agent: str | None = typer.Option(
-        None,
-        "--agent",
-        hidden=True,
-        callback=_retired_axis("--agent"),
-    ),
-    tools: str | None = typer.Option(
-        None,
-        "--tools",
-        hidden=True,
-        callback=_retired_axis("--tools"),
     ),
     deny_tools: str | None = typer.Option(
         None,
