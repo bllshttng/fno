@@ -113,7 +113,7 @@ These five move or remove state around sessions. None stops or removes a session
 14. the dry-run unverified gate: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`
 15. the tree verdict, then the commit: `kept tree {id} (...)` lines, then the retire lines
 
-The origin rule cuts across steps 6 to 10. Take a spawn row idle past the hour with no live work-claim. It skips the open-do-row gate at step 6. It retires at step 7, ahead of every keep below it (`gc.rs` `past_idle_hour`). Its stage and commit skip the open-do-row re-check too. Inside the hour every step reads as listed.
+The origin rule cuts across steps 6 to 10. Take a spawn row idle past the hour with no live work-claim. It skips the open-do-row gate at step 6. It retires at step 7, ahead of every keep below it (`gc.rs` `past_idle_hour`). At stage and commit, an open do row on a done node no longer holds it. An open do row on a node still open is fresh work, and it still holds (`gc_sweep.rs` `obligation`). Inside the hour every step reads as listed.
 
 ## A dry run and a real run answer different questions
 
