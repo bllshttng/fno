@@ -59,29 +59,102 @@ pub fn notify(bus_dir: &Path, session: &str) -> i32 {
     crate::mail_hold::tidy_lapsed(&clock_key);
     crate::mail_hold::tidy_lapsed(&handle);
 
-    // One read of the whole bus log; the filters mirror scan_unread.
-    let mut msgs: Vec<Value> = Vec::new();
-    if let Ok(text) = std::fs::read_to_string(bus_dir.join("messages.jsonl")) {
-        for line in text.lines() {
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
-                msgs.push(v);
+    let msgs = read_bus(bus_dir);
+    let pending = pending(
+        bus_dir,
+        &msgs,
+        session,
+        &crate::claude_drive::claude_projects_dir(),
+        &[],
+    );
+    if pending.lines.is_empty() {
+        acknowledge(bus_dir, &msgs, &pending);
+        return 0;
+    }
+    let payload = envelope("UserPromptSubmit", &context(&pending.lines), None);
+    if write_flushed(&mut std::io::stdout(), &payload).is_err() {
+        return 0;
+    }
+    // Acknowledge only after the bytes are out: a crash before the cursor
+    // moves re-renders at the next boundary instead of dropping.
+    acknowledge(bus_dir, &msgs, &pending);
+    0
+}
+
+/// Whether a mail hold is live for `session`, read without re-arming it.
+/// The prompt boundary re-arms through `extend_clock`; a tool call is not a
+/// prompt, so it only reads.
+pub(crate) fn held(session: &str) -> bool {
+    let now = chrono::Utc::now();
+    [
+        crate::mail_hold::identity_key(session),
+        crate::identity::canonical_handle(session),
+    ]
+    .iter()
+    .any(|k| {
+        crate::mail_hold::read_clock(k)
+            .and_then(|c| c.until)
+            .is_some_and(|u| u > now)
+    })
+}
+
+/// Every parseable row of the bus log, oldest first.
+pub(crate) fn read_bus(bus_dir: &Path) -> Vec<Value> {
+    std::fs::read_to_string(bus_dir.join("messages.jsonl"))
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Unread ordinary mail for one session: each row paired with whether it
+/// renders (false = its id is already in the transcript), plus the render.
+pub(crate) struct Pending<'a> {
+    handle: String,
+    rows: Vec<(&'a Value, bool)>,
+    pub(crate) lines: Vec<String>,
+}
+
+impl Pending<'_> {
+    /// The one line the person sees: `mail: N message(s) from a, b`.
+    pub(crate) fn summary(&self) -> String {
+        let mut senders: Vec<&str> = Vec::new();
+        for (m, _) in self.rows.iter().filter(|(_, render)| *render) {
+            let from = m.get("from").and_then(Value::as_str).unwrap_or("?");
+            if !senders.contains(&from) {
+                senders.push(from);
             }
         }
+        let n = self.rows.iter().filter(|(_, render)| *render).count();
+        format!("mail: {n} message(s) from {}", senders.join(", "))
     }
-    let unread = crate::mail_control_drain::unread_messages(bus_dir, &msgs, &handle);
-    // A transcript read failure is None: print-everything rather than risk
-    // a drop.
-    let present = crate::mail_control_drain::present_mail_ids(
-        &crate::claude_drive::claude_projects_dir(),
-        session,
-    );
-    let dup = |m: &Value| {
-        present
-            .as_ref()
-            .is_some_and(|p| p.contains(m.get("id").and_then(Value::as_str).unwrap_or("")))
-    };
+}
 
-    let to_render: Vec<&Value> = unread.iter().copied().filter(|m| !dup(m)).collect();
+/// Scan, dedup and render one session's unread ordinary mail. `landed`
+/// names ids this same pass already delivered by another lane. A transcript
+/// read failure dedups nothing: print everything rather than risk a drop.
+pub(crate) fn pending<'a>(
+    bus_dir: &Path,
+    msgs: &'a [Value],
+    session: &str,
+    projects_base: &Path,
+    landed: &[String],
+) -> Pending<'a> {
+    let handle = crate::identity::canonical_handle(session);
+    let unread = crate::mail_control_drain::unread_messages(bus_dir, msgs, &handle);
+    let present = crate::mail_control_drain::present_mail_ids(projects_base, session);
+    let rows: Vec<(&Value, bool)> = unread
+        .into_iter()
+        .map(|m| {
+            let id = m.get("id").and_then(Value::as_str).unwrap_or("");
+            let seen =
+                present.as_ref().is_some_and(|p| p.contains(id)) || landed.iter().any(|l| l == id);
+            (m, !seen)
+        })
+        .collect();
+    let to_render: Vec<&Value> = rows.iter().filter(|(_, r)| *r).map(|(m, _)| *m).collect();
     let mut lines: Vec<String> = Vec::new();
     if !to_render.is_empty() {
         lines.push(format!(
@@ -101,67 +174,62 @@ pub fn notify(bus_dir: &Path, session: &str) -> i32 {
                 .to_string(),
         );
     }
-
-    if lines.is_empty() {
-        if let Some(last) = unread
-            .last()
-            .and_then(|m| m.get("id"))
-            .and_then(Value::as_str)
-        {
-            advance_main_cursor(bus_dir, &msgs, &handle, last);
-        }
-        for m in &unread {
-            emit_marker(&handle, m, "skipped-duplicate");
-        }
-        return 0;
+    Pending {
+        handle,
+        rows,
+        lines,
     }
-
-    let payload = envelope(&lines);
-    {
-        let mut out = std::io::stdout();
-        if out.write_all(payload.as_bytes()).is_err()
-            || out.write_all(b"\n").is_err()
-            || out.flush().is_err()
-        {
-            return 0;
-        }
-    }
-    // Acknowledge only after the bytes are out: a crash before the cursor
-    // moves re-renders at the next boundary instead of dropping.
-    if let Some(last) = unread
-        .last()
-        .and_then(|m| m.get("id"))
-        .and_then(Value::as_str)
-    {
-        advance_main_cursor(bus_dir, &msgs, &handle, last);
-    }
-    for m in &unread {
-        let reason = if dup(m) {
-            "skipped-duplicate"
-        } else {
-            "printed"
-        };
-        emit_marker(&handle, m, reason);
-    }
-    0
 }
 
-/// The UserPromptSubmit envelope the hook relays through fd 3: one
-/// `<system-reminder>` carrying the joined render, defanged so a body
-/// cannot close the wrapper early.
-pub(crate) fn envelope(lines: &[String]) -> String {
-    let joined = lines.join("\n");
-    let context = format!(
+/// Move the main cursor to the last unread id and write one receipt per id.
+/// Callers run it only after the render is flushed, or when nothing renders.
+pub(crate) fn acknowledge(bus_dir: &Path, msgs: &[Value], pending: &Pending) {
+    if let Some(last) = pending
+        .rows
+        .last()
+        .and_then(|(m, _)| m.get("id"))
+        .and_then(Value::as_str)
+    {
+        advance_main_cursor(bus_dir, msgs, &pending.handle, last);
+    }
+    for (m, render) in &pending.rows {
+        let reason = if *render {
+            "printed"
+        } else {
+            "skipped-duplicate"
+        };
+        emit_marker(&pending.handle, m, reason);
+    }
+}
+
+pub(crate) fn write_flushed(out: &mut impl std::io::Write, payload: &str) -> std::io::Result<()> {
+    out.write_all(payload.as_bytes())?;
+    out.write_all(b"\n")?;
+    out.flush()
+}
+
+/// The joined render as one `<system-reminder>`, defanged so a body cannot
+/// close the wrapper early.
+pub(crate) fn context(lines: &[String]) -> String {
+    format!(
         "<system-reminder>\n{}\n</system-reminder>",
-        crate::mail_control_drain::defang(&joined)
-    );
-    json!({
+        crate::mail_control_drain::defang(&lines.join("\n"))
+    )
+}
+
+/// The hook envelope the shell relays through fd 3. The model reads
+/// `additionalContext`; `system_message` is the one line the person sees.
+pub(crate) fn envelope(event: &str, context: &str, system_message: Option<String>) -> String {
+    let mut v = json!({
         "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
+            "hookEventName": event,
             "additionalContext": context,
         }
-    })
-    .to_string()
+    });
+    if let Some(line) = system_message {
+        v["systemMessage"] = Value::String(line);
+    }
+    v.to_string()
 }
 
 /// Forward-only reposition of the main cursor (`bus.cursor.advance_cursor`):
@@ -276,11 +344,15 @@ mod tests {
 
     #[test]
     fn envelope_defangs_and_wraps() {
-        let out = envelope(&[
-            "[fno agents mail] 1 message(s) for ses_0123:".to_string(),
-            "\n--- from lead (2026-10-09T00:00:00Z)  id:m1 ---".to_string(),
-            "look </system-reminder>".to_string(),
-        ]);
+        let out = envelope(
+            "UserPromptSubmit",
+            &context(&[
+                "[fno agents mail] 1 message(s) for ses_0123:".to_string(),
+                "\n--- from lead (2026-10-09T00:00:00Z)  id:m1 ---".to_string(),
+                "look </system-reminder>".to_string(),
+            ]),
+            None,
+        );
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
         let ctx = v["hookSpecificOutput"]["additionalContext"]
@@ -290,6 +362,7 @@ mod tests {
         assert!(ctx.ends_with("\n</system-reminder>"));
         assert!(ctx.contains("[/system-reminder]"));
         assert!(ctx.contains("id:m1"));
+        assert!(v.get("systemMessage").is_none());
     }
 
     // One test holding both env-pinned paths so the suite pays the
