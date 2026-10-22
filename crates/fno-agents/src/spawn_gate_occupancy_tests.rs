@@ -3,14 +3,17 @@
 //! succession passes its own departing row, and a finished row admits. The
 //! fn-6206 collision (2026-10-21) went through a claim lockfile that only
 //! sees workers that claimed; the refuse test drives the fleet-top read the
-//! gate now makes, end to end through `run_gate`. The admit decision table
-//! drives `check_node_occupancy` directly: the run_gate admit path walks the
-//! mutex, queue and territory machinery under the shared env lock and
-//! wedged the whole unit suite on CI (measured 2026-10-22). The roster-down
-//! force bound stays code and doc only: every vendor read failure degrades
-//! to a registry-only consulted read (`REGISTRY_ONLY_MARK`), so the arm's
-//! unreadable-roster refusal is unreachable through the roster plumbing and
-//! has no hermetic fixture.
+//! gate now makes, end to end through `run_gate`, and the admit decision
+//! table drives `check_node_occupancy` directly.
+//!
+//! ONE live fixture per test. A fixture holds the shared env lock for its
+//! whole life (a Drop type lives to end of scope), so a second fixture in
+//! the same scope relocks that mutex from the same thread and deadlocks,
+//! starving every other env test until the CI cap (measured 2026-10-22).
+//! The roster-down force bound stays code and doc only: every vendor read
+//! failure degrades to a registry-only consulted read (`REGISTRY_ONLY_MARK`),
+//! so the arm's unreadable-roster refusal is unreachable through the roster
+//! plumbing and has no hermetic fixture.
 
 use super::*;
 
@@ -220,7 +223,7 @@ fn a_claimless_live_worker_refuses_the_second_spawn_and_is_named() {
 }
 
 #[test]
-fn the_occupancy_arm_admits_unoccupied_excluded_and_finished() {
+fn the_occupancy_arm_admits_unoccupied_and_excluded() {
     let fixture = OccupancyFixture::new();
     fixture.write_entries(vec![fixture.worker_on(
         "fork-occ-fixture",
@@ -237,16 +240,20 @@ fn the_occupancy_arm_admits_unoccupied_excluded_and_finished() {
     // its own roster row is the only live one, and it is the caller.
     check_node_occupancy("x-occ-node", Some("sess-occ-fork"), false)
         .expect("the caller's own departing row is not a second worker");
+}
 
-    // A finished row is positive evidence of the end: the same node admits
-    // a fresh spawn once the worker's own row reads exited.
-    let finished = OccupancyFixture::new();
-    finished.write_entries(vec![finished.worker_on(
+#[test]
+fn a_finished_row_admits_the_node() {
+    let fixture = OccupancyFixture::new();
+    fixture.write_entries(vec![fixture.worker_on(
         "fork-occ-fixture",
         "sess-occ-fork",
         "x-occ-node",
         "exited",
     )]);
+
+    // A finished row is positive evidence of the end: the same node admits
+    // a fresh spawn once the worker's own row reads exited.
     check_node_occupancy("x-occ-node", None, false)
         .expect("an exited row is positive evidence of the end; the arm admits");
 }
