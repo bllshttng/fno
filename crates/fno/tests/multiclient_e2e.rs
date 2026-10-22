@@ -307,14 +307,11 @@ fn multiclient_mail_delivery_resizes_no_pane() {
     std::fs::write(
         cwd.join("winchpaint.sh"),
         "#!/bin/sh\n\
+tag=$1\n\
 n=0\n\
 paint() {\n\
   n=$((n+1))\n\
-  set -- $(stty size)\n\
-  printf '\\033[2J\\033[H'\n\
-  echo TOPMARK\n\
-  printf '\\033[%s;1H' \"$1\"\n\
-  printf 'INPUTBOX n=%s' \"$n\"\n\
+  printf '%s' \"$n\" > \"cnt.$tag\"\n\
 }\n\
 trap 'paint' WINCH\n\
 paint\n\
@@ -329,24 +326,31 @@ while :; do sleep 0.2; done\n",
     a.cmd(Command::SplitDir(Dir::Right));
     let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
     let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
-    for pane in [receiver, neighbour] {
-        control_pane_send(&scratch.sock(), pane, b"sh ./winchpaint.sh\r");
+    // Each painter counts its WINCHes in a file: the pasted body scrolls the
+    // screen, so a count painted on screen would not survive the delivery.
+    for (pane, tag) in [(receiver, "r"), (neighbour, "n")] {
+        let cmd = format!("sh ./winchpaint.sh {tag}\r");
+        control_pane_send(&scratch.sock(), pane, cmd.as_bytes());
     }
-    let count = |t: &str| -> i32 {
-        t.split("INPUTBOX n=")
-            .nth(1)
-            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
-            .and_then(|s| s.parse().ok())
+    let count = |tag: &str| -> i32 {
+        std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
             .unwrap_or(-1)
     };
-    for pane in [receiver, neighbour] {
-        a.wait_pane_text(15, pane, |t| count(t) >= 1);
+    let started = std::time::Instant::now();
+    while count("r") < 1 || count("n") < 1 {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "painters never ran"
+        );
+        a.pump(Duration::from_millis(200));
     }
     // Let the split's own nudges drain before the baseline: the delivery is
     // the only event inside the measured window.
     a.pump(Duration::from_millis(2500));
     let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
-    let baseline = [receiver, neighbour].map(|p| count(&a.pane_text(p)));
+    let baseline = [count("r"), count("n")];
 
     let mut paste = b"\x1b[200~".to_vec();
     for line in 0..60 {
@@ -361,9 +365,12 @@ while :; do sleep 0.2; done\n",
     a.pump(Duration::from_millis(2500));
     b.pump(Duration::from_millis(100));
 
-    for (pane, before) in [receiver, neighbour].into_iter().zip(baseline) {
+    for ((pane, tag), before) in [(receiver, "r"), (neighbour, "n")]
+        .into_iter()
+        .zip(baseline)
+    {
         assert_eq!(
-            count(&a.pane_text(pane)),
+            count(tag),
             before,
             "mail delivery sent a SIGWINCH to pane {pane}"
         );

@@ -10677,7 +10677,11 @@ impl Core {
             _ => mutating_sender.filter(|id| self.clients.iter().any(|c| c.id == *id)),
         };
         if let Some(id) = acting {
-            if self.sizing.note_activity(id) {
+            // Re-tile only when the new owner changes the sender's tab size:
+            // an owner swap between equal-size windows pushes no Layout.
+            let tab = self.clients.iter().find(|c| c.id == id).map(|c| c.view.1);
+            let before = tab.map(|t| self.tab_area(t));
+            if self.sizing.note_activity(id) && tab.map(|t| self.tab_area(t)) != before {
                 self.push_layout(true);
             }
         }
