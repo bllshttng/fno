@@ -66,6 +66,7 @@ OUT=$(cd "$REPO" && \
   env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u CLAUDE_CODE_SESSION_ID \
       -u CLAUDECODE_SESSION_ID -u GEMINI_SESSION_ID -u OPENCODE_SESSION_ID \
       HOME="$HOME_DIR" FNO_AGENTS_BIN="$BIN" FNO_EVENTS_PATH="$EVENTS" \
+      FNO_LOOPCHECK_GH_BIN="${BIN%/fno-agents}/fno-gh-loopcheck" \
       FNO_SPACES_DIR="$SPACE/spaces" CLAUDECODE=0 \
       bash "$HOOK" \
       <<< "{\"transcript_path\":\"$TRANSCRIPT\",\"cwd\":\"$REPO\"}" 2>&1)
@@ -77,9 +78,12 @@ set -e
 [[ "$RC" -eq 2 ]] || { echo "FAIL: expected Codex block rc=2, got $RC: $OUT" >&2; exit 1; }
 echo "$OUT" | grep -q "continue working" || {
   echo "FAIL: expected the decision's continue block, got: $OUT" >&2
-  # The probe's own verdict (absent vs spawn trouble, and what it probed)
-  # lands in the events file; show it so the next failure names its layer.
-  grep -h "gh_probe" "$EVENTS" 2>/dev/null | tail -3 >&2
+  # Name the resolution inputs: the binary the hook answered with, whether
+  # the quota helper family sits beside it, and any probe rows the gate
+  # managed to journal.
+  echo "BIN=$BIN" >&2
+  ls "$(dirname "$BIN")" | grep "^fno-gh" >&2
+  grep -rh "gh_probe" "$EVENTS" "$HOME_DIR" 2>/dev/null | tail -3 >&2
   exit 1
 }
 
