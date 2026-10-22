@@ -99,7 +99,7 @@ elif _front_bin is None:
 
 _JOURNEY_NAME = "wk-x43bd"
 SEED = "Reply with just: OK"
-PROBE = "/target x-43bd (the footnote target verb): report what you can do, then stop."
+PROBE = "/target x-43bd (the footnote target command): report what you can do, then stop."
 LOOPCHECK_MARKER = ".pi-loopcheck-"
 
 
@@ -432,7 +432,7 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_pi_thread(
         child_pid = row.keeper_child_pid
         # A stop refusal under load is not a strand: pi's own exit can outlast
         # the stop grace window while the Kill contract still completes. The
-        # gate is the child's DEATH, verified, never the verb's receipt.
+        # gate is the child's DEATH, verified, never the command's receipt.
         stopped = subprocess.run(
             [str(_client_bin), "stop", _JOURNEY_NAME],
             capture_output=True,

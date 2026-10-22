@@ -1,4 +1,4 @@
-//! The keeper-thread arm of the stop verb: `stop_keeper_row`, moved out of
+//! The keeper-thread arm of the stop command: `stop_keeper_row`, moved out of
 //! `daemon.rs` for the file budget, beside `claude_stop`. A lane-B keeper
 //! row's lifecycle lives on its own socket (see `keeper_thread_sock`), and a
 //! cursor-agent row adds one more leg: Cursor's detached worker-server is the
@@ -70,7 +70,7 @@ pub(super) async fn stop_keeper_row(
         if let Some(entry) = registry.find_mut(&stop_name) {
             entry.status = AgentStatus::Exited;
             entry.exited_at = Some(now_rfc3339_like());
-            crate::state::record_stop(entry, "stop-verb", Some("keeper-thread".into()));
+            crate::state::record_stop(entry, "stop-command", Some("keeper-thread".into()));
             // best-effort: a failed stamp costs a later wake its name,
             // never the stop.
             crate::wake_name::stamp_from_row(&wake_home, entry);

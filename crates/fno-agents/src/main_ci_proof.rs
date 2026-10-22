@@ -3,7 +3,7 @@
 //!
 //! A node that repairs a red main used to close on its merge while main
 //! stayed red (PR 2086's repair closed while main stayed red). The close
-//! verbs already refuse a close
+//! commands already refuse a close
 //! while a declared `close_probes` command fails; this module is the
 //! trustworthy probe they were missing. It proves that the newest completed
 //! verdict of ONE named workflow on main is `success` on a head that

@@ -3,7 +3,7 @@
 //! transcript. `--server` / `FNO_SERVER` name the axis, and the retired
 //! `--session` / `FNO_SESSION` spellings stay as aliases that work and warn,
 //! because live worker payloads and long-running servers still send them.
-//! The shared `--server <s>` / `--json` flag prefix every small verb parses
+//! The shared `--server <s>` / `--json` flag prefix every small command parses
 //! rides here too, beside the resolver it feeds.
 
 use crate::proto::DEFAULT_SESSION;

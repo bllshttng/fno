@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$REPO_ROOT/skills/target/scripts/context-probe.sh"
 
 # Pin the probe's CLI door to the source under test. The probe prefers `fno-py`;
-# an ambient deployed `fno` predating the verb fold does not know
+# an ambient deployed `fno` predating the command fold does not know
 # `fno whoami context` and would empty every reading without failing a single
 # setup assert. Reuse the worktree venv when present, else shim python3.
 if [ -x "$REPO_ROOT/cli/.venv/bin/fno-py" ]; then

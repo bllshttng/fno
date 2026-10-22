@@ -12,7 +12,7 @@ Both are designed for easy testing: discovery accepts an ``entries`` list
 rather than reading the graph directly, and ``read_pr_state`` accepts an
 injectable ``runner`` so tests can stub the merge-state leg without a live
 network call; the reviews leg answers through the ``status-pr-activity``
-op on the authorized-merge door (tests stub ``fno.rust_binary.verb_call``).
+op on the authorized-merge door (tests stub ``fno.rust_binary.command_call``).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from fno.graph._reconcile import (
     query_pr_merge_state,
     repo_slug_from_url,
 )
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 log = logging.getLogger(__name__)
 
@@ -313,7 +313,7 @@ def read_pr_state(
         "pr": candidate.pr_number,
         "reviewers": list(reviewers),
     }
-    answer = verb_call("authorized-merge", payload, ReconcileError, timeout=remaining)
+    answer = command_call("authorized-merge", payload, ReconcileError, timeout=remaining)
     if answer.get("error"):
         raise ReconcileError(
             f"read_pr_state #{candidate.pr_number} (reviews) failed: {answer['error']}"
@@ -354,7 +354,7 @@ def read_tracked_pr_states(
     Returns ``(states, sweep_failures)``.
     """
     from fno.pr_watch._state import make_watermark_key, parse_watermark_key
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     grouped: dict[str, set[int]] = defaultdict(set)
     states: dict[str, str] = {}
@@ -370,7 +370,7 @@ def read_tracked_pr_states(
     sweep_failures = 0
     for repo, requested in sorted(grouped.items()):
         try:
-            answer = verb_call(
+            answer = command_call(
                 "authorized-merge",
                 {
                     "op": "status-pr-list",
@@ -382,7 +382,7 @@ def read_tracked_pr_states(
                 timeout=timeout_s + 30,
             )
             rows, reason = answer.get("rows"), answer.get("error")
-        except (VerbUnavailable, OSError, subprocess.TimeoutExpired) as exc:
+        except (CommandUnavailable, OSError, subprocess.TimeoutExpired) as exc:
             rows, reason = None, str(exc)
         if rows is None:
             log.warning("pr-watch: tracked-state sweep failed for %s: %s", repo, reason)

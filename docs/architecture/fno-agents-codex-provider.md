@@ -82,7 +82,7 @@ Parser code references these by key only. Drift in codex's vocabulary surfaces a
 
 ### Headless followup vs interactive resume
 
-There are two distinct ways back into a codex agent's conversation, and they map to different verbs:
+There are two distinct ways back into a codex agent's conversation, and they map to different commands:
 
 - **Headless followup** — `fno agents mail ask <existing-name> "..."` runs `codex exec resume <uuid> --json "..."`, captures the reply, and returns. This is the path the "Resume semantics" rules above describe.
 - **Interactive resume** — `fno agents session resume <name>` runs `codex resume <uuid>` (no `exec`, no `--json`), which `os.execvp`-replaces the process and drops you into codex's full interactive TUI on the agent's transcript.

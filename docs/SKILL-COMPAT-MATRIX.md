@@ -1,18 +1,18 @@
 # footnote skill compatibility by harness
 
-Which footnote skills run on each harness. The table itself is generated: [docs/harnesses/verb-matrix.md](harnesses/verb-matrix.md), one row per `skills/*/SKILL.md`, one column per harness in `KNOWN_HARNESSES`. This page explains how to read it and what a wrapper-driven harness still needs.
+Which footnote skills run on each harness. The table itself is generated: [docs/harnesses/command-matrix.md](harnesses/command-matrix.md), one row per `skills/*/SKILL.md`, one column per harness in `KNOWN_HARNESSES`. This page explains how to read it and what a wrapper-driven harness still needs.
 
 ## Where a cell comes from
 
 A cell is a projection of two sources, never a hand-filled claim. The harness side is the capability table, `crates/fno-agents/src/harness_capabilities.toml`, rendered as [capability-matrix.md](harnesses/capability-matrix.md). The skill side is the `metadata.requires.harness` list in each skill's frontmatter. Its vocabulary is `loop`, every feature key the table declares a probe for, and every harness name. It rides `metadata` because that is the one field the skill frontmatter contract reserves for custom data. `fno doctor harness-matrix --write` joins the two. The guards workflow fails on a stale copy.
 
-The states are the features vocabulary. `native` means fno drives it through a wired lane. `capable` means real on the harness with no wired arm. `absent` is measured not to exist. `unmeasured` means nobody has looked. A harness with no capability row reads `unmeasured` on every verb, which is the honest default: hermes and openclaw read that way today. A harness whose dispatch surface is refused reads `absent` on every verb. Gemini is that harness.
+The states are the features vocabulary. `native` means fno drives it through a wired lane. `capable` means real on the harness with no wired arm. `absent` is measured not to exist. `unmeasured` means nobody has looked. A harness with no capability row reads `unmeasured` on every command, which is the honest default: hermes and openclaw read that way today. A harness whose dispatch surface is refused reads `absent` on every command. Gemini is that harness.
 
 A row covers the skill's default lane. `execute` runs flat, `review` runs inline, `think` researches inline, so those rows declare no needs. Their sub-modes (`execute waves`, `review peer`, `think subagent`) need subagent dispatch and are not rows. A skill tied to one harness names it. `cache-keepalive` declares `claude` and reads `absent` everywhere else.
 
 ## Loop participation: which harnesses can close the loop
 
-A verb that declares `loop` (target, lead) runs only where the stop-hook loop can STOP. That answer lives in one machine-readable field, `loop_participation` in `harness_capabilities.toml`, and `docs/harness-command-matrix.md` carries the per-harness evidence. `hooks/target-stop-hook.sh` shims `fno-agents loop-check`, which decides stop or allow from external truth. No lifecycle boundary means no `loop-check` invocation and no loop, however well the harness spawns, resumes, and receives mail.
+A command that declares `loop` (target, lead) runs only where the stop-hook loop can STOP. That answer lives in one machine-readable field, `loop_participation` in `harness_capabilities.toml`, and `docs/harness-command-matrix.md` carries the per-harness evidence. `hooks/target-stop-hook.sh` shims `fno-agents loop-check`, which decides stop or allow from external truth. No lifecycle boundary means no `loop-check` invocation and no loop, however well the harness spawns, resumes, and receives mail.
 
 | Value | What a caller gets | Cell |
 |---|---|---|

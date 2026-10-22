@@ -1,4 +1,4 @@
-//! The `team` front verb: broadcast one message to a scope of the fleet.
+//! The `team` front command: broadcast one message to a scope of the fleet.
 //!
 //! Port of the Python `cmd_team` leaf: vet the body (forged envelope, brevity
 //! cap, style), stamp the sender from the owned identity, then re-exec this

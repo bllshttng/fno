@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Test double for `fno-agents state path <name>`, the verb
+# Test double for `fno-agents state path <name>`, the command
 # hooks/helpers/init-target-state.sh uses to resolve its manifest location.
-# Every other verb delegates to the next real fno-agents on PATH (skipping this
+# Every other command delegates to the next real fno-agents on PATH (skipping this
 # stub's own dir), so harnesses that exercise the real claim path get real
 # claim behavior; with no real binary on PATH the call exits 1, the same as a
 # CI runner with no binary.

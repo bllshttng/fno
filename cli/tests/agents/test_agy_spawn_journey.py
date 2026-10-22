@@ -117,7 +117,7 @@ SEED = f"Reply with exactly: {SEED_TOKEN}"
 # carries would confirm delivery and be read as a turn.
 PROBE_TOKEN = "YTIVARGITNA"
 PROBE = (
-    "/target (the footnote target verb): say in one line what you can do, and "
+    "/target (the footnote target command): say in one line what you can do, and "
     "end your reply with the word ANTIGRAVITY spelled backwards, in capitals."
 )
 # The `--transcript` path agy's Stop adapter synthesizes. Nothing else in the
@@ -456,7 +456,7 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_agy_thread(
         child_pid = row.keeper_child_pid
         # A stop refusal under load is not a strand: agy's own exit can outlast
         # the stop grace window while the Kill contract still completes. The
-        # gate is the child's DEATH, verified, never the verb's receipt.
+        # gate is the child's DEATH, verified, never the command's receipt.
         stopped = subprocess.run(
             [str(_client_bin), "stop", _JOURNEY_NAME],
             capture_output=True,

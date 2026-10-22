@@ -15,7 +15,7 @@ HOOK="hooks/law-stage-inject.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-# The overload skip must never fire in a suite: the stub verb must run on
+# The overload skip must never fire in a suite: the stub command must run on
 # every boundary. Pin past any runner load (hook-budget.sh's skip contract).
 export FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
 STUB="$TMP/bin"
@@ -76,7 +76,7 @@ check "a prompt payload carries the block through" \
     "$out"
 
 # AC7-HP: an Edit payload rides the file it is about to change as `paths`,
-# so the verb answers the edit read (path laws) instead of the classifier.
+# so the command answers the edit read (path laws) instead of the classifier.
 EDIT_PAYLOAD='{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"crates/x.rs","old_string":"a","new_string":"b"}}'
 out="$(run_with_stub \
     'read -r req
@@ -97,12 +97,12 @@ check "a prompt payload carries no paths key" \
     "$out"
 
 # AC3-ERR: every degraded path renders NOTHING. An absent binary, a crashed
-# verb, and an answer with no block are all the same silence.
+# command, and an answer with no block are all the same silence.
 out="$(run_with_stub 'exit 0' "$SKILL_PAYLOAD")"
 check "a stub that prints nothing renders nothing" "" "$out"
 
 out="$(run_with_stub 'exit 2' "$SKILL_PAYLOAD")"
-check "a failing verb renders nothing" "" "$out"
+check "a failing command renders nothing" "" "$out"
 
 out="$(run_with_stub 'echo "{\"ok\":true,\"stage\":null,\"hook_output\":null}"' \
     "$SKILL_PAYLOAD")"

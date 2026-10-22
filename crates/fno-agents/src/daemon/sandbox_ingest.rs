@@ -25,7 +25,7 @@ use std::path::Path;
 pub(crate) const SANDBOX_INGEST_INTERVAL_SECS: i64 = 3_600;
 
 /// Newest transcripts only: a rollout whose mtime leaves this window is
-/// older than the report windows the stalls verb reads by default, and its
+/// older than the report windows the stalls command reads by default, and its
 /// denials (if any) were already ingested when it was fresh.
 const SCAN_WINDOW_DAYS: u64 = 8;
 

@@ -601,7 +601,7 @@ pub fn admit_fleet() -> Result<AdmissionPermit, AdmissionFailure> {
 /// asking for a new agent or harness launch (`fno agents spawn` and the
 /// dispatch paths). The brake, the census and the ceiling are this entry's
 /// opt-in, and only a caller carrying `FNO_AGENT_SELF` is held; the same
-/// verb typed at a human's shell admits through the default.
+/// command typed at a human's shell admits through the default.
 pub fn admit_agent_spawn() -> Result<AdmissionPermit, AdmissionFailure> {
     if !agent_origin() {
         return admit_fleet();
@@ -1995,7 +1995,7 @@ mod tests {
         let text = admit_agent_spawn().err().expect("brake holds").to_string();
         assert!(text.contains("fleet 6.0 of 8.0 machine cores"), "{text}");
         // The inversion: an armed brake holds nothing else. The default door,
-        // the tab cap, and the same verb typed without a worker identity all
+        // the tab cap, and the same command typed without a worker identity all
         // admit while the brake is armed.
         assert!(
             admit_fleet().is_ok(),

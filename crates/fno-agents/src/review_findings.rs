@@ -13,7 +13,7 @@
 //! `str.strip()` (a Unicode superset of Rust `trim`).
 //!
 //! The door nests under `review-level` (`findings record|categories|post`)
-//! so fno-agents gains no root verb. `disposition_gate` reads the shipped
+//! so fno-agents gains no root command. `disposition_gate` reads the shipped
 //! category list from here: one copy of the blocking rule's allowlist, the
 //! producer and the gate both.
 

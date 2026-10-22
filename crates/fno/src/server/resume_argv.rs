@@ -179,7 +179,7 @@ pub(super) fn resume_target_from_argv(argv: &[String]) -> Option<String> {
 /// For codex this renders the BARE declared form, no grant and no `--cd`.
 /// The gesture does not run it for codex except as the fail-open fallback:
 /// routes the gesture's argv through `fno-agents resume-argv` (the
-/// builder the CLI verb lane uses) via [`Core::resolve_resume_argv`], and
+/// builder the CLI command lane uses) via [`Core::resolve_resume_argv`], and
 /// this render is what survives when that shell-out fails - flagged so a
 /// pane notice names the grant loss. `--cd` itself is refused on this lane
 /// even in the fallback, and the reason is narrower than it first looks.
@@ -274,7 +274,7 @@ impl super::Core {
     /// (`fno-agents resume-argv`), mirroring `resolve_reentry`: the codex
     /// grant decision needs a Python-booting shell-out, so the gesture yields
     /// `PlanPending` and replays through [`super::CoreMsg::ResumeArgvReady`].
-    /// Fail-open by construction: when the verb fails the task renders the
+    /// Fail-open by construction: when the command fails the task renders the
     /// declared form itself and flags `degraded`, so the handler notices the
     /// operator - a silent fallback is refused (AC3-FALLBACK).
     #[allow(clippy::too_many_arguments)]

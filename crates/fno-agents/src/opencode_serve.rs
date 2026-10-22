@@ -648,7 +648,7 @@ fn dispatch_opencode_serve_inner(
     // The row binds at the worker's session report, the same posture the
     // claude native lane holds, so the launch record goes first and the
     // spawn-side registry write and birth emit stay gone.
-    let effective_message = crate::provider::render_verb_seed(
+    let effective_message = crate::provider::render_command_seed(
         if message.is_empty() { "hello" } else { message },
         "opencode",
     );
@@ -1055,7 +1055,7 @@ pub fn ask_registered_session(
             13,
         );
     }
-    let rendered = crate::provider::render_verb_seed(message, "opencode");
+    let rendered = crate::provider::render_command_seed(message, "opencode");
     let full_prompt = crate::opencode_ask::opencode_envelope(&rendered, from_name);
     let serve = match ensure_serve(home) {
         Ok(serve) => serve,

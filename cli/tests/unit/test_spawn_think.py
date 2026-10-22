@@ -348,14 +348,14 @@ def test_presence_foreign_manifest_ignored(tmp_path):
 
 
 # The mint is a real pre-spawn subprocess (x-84b2); fakes serve the spawn and
-# route the naming verbs to the real binary.
+# route the naming commands to the real binary.
 _REAL_SUBPROCESS_RUN = st.subprocess.run
 
-_NAMING_VERBS = {"name-mint", "name-codes", "name-parse"}
+_NAMING_COMMANDS = {"name-mint", "name-codes", "name-parse"}
 
 
-def _is_naming_verb(cmd) -> bool:
-    return bool(_NAMING_VERBS & {str(part) for part in cmd})
+def _is_naming_command(cmd) -> bool:
+    return bool(_NAMING_COMMANDS & {str(part) for part in cmd})
 
 
 def _capture_spawn_cmd(monkeypatch) -> list:
@@ -368,7 +368,7 @@ def _capture_spawn_cmd(monkeypatch) -> list:
         stderr = ""
 
     def fake_run(cmd, **kw):
-        if _is_naming_verb(cmd):
+        if _is_naming_command(cmd):
             return _REAL_SUBPROCESS_RUN(cmd, **kw)
         captured["cmd"] = cmd
         return _Proc()
@@ -391,7 +391,7 @@ def test_spawn_worker_tags_the_spawn_subprocess_with_its_cause(monkeypatch):
         stderr = ""
 
     def fake_run(cmd, **kw):
-        if _is_naming_verb(cmd):
+        if _is_naming_command(cmd):
             return _REAL_SUBPROCESS_RUN(cmd, **kw)
         captured["cmd"] = cmd
         captured["env"] = kw.get("env")
@@ -426,7 +426,7 @@ def test_codex_ambient_pointer_keeps_default_worker_provider_claude(
         stderr = ""
 
     def fake_run(cmd, **kw):
-        if _is_naming_verb(cmd):
+        if _is_naming_command(cmd):
             return _REAL_SUBPROCESS_RUN(cmd, **kw)
         if {"doctor", "event"} <= {str(part) for part in cmd}:
             # Event emission rides the same seam; it is not the spawn argv.
@@ -517,8 +517,8 @@ def test_on_node_born_execs_the_native_door(iso, tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_THINK_SPAWN", "1")
     seen = {}
 
-    def fake_door(verb, args, **k):
-        seen["argv"] = (verb, args)
+    def fake_door(command, args, **k):
+        seen["argv"] = (command, args)
         return None, {"kind": "offered", "event": st.EVENT_OFFERED, "node_id": "x-2222aaaa",
                       "presence": "away", "resolved": False,
                       "offer_line": "/think x-2222aaaa", "reason": None}
@@ -600,7 +600,7 @@ def test_worker_agent_name_reason_scoped():
     lifecycle trigger for a node collides on name and is wrongly skipped.
     """
     # x-84b2: the spawn_think source stamped only by this path, the think
-    # verb as a code; the reason stays the reason-scoped qualifier. x-57fe:
+    # command as a code; the reason stays the reason-scoped qualifier. x-57fe:
     # the node carries its bare hex.
     assert st._worker_agent_name("x-1", "slug") == "th-th-1-slug"  # default birth
     assert st._worker_agent_name("x-1", "slug", st.REASON_BIRTH) == "th-th-1-slug"
@@ -611,7 +611,7 @@ def test_worker_agent_name_reason_scoped():
 
 
 # ---------------------------------------------------------------------------
-# US5 (C, x-0a9c) - explicit conversational dispatch verb
+# US5 (C, x-0a9c) - explicit conversational dispatch command
 # ---------------------------------------------------------------------------
 
 
@@ -657,7 +657,7 @@ def test_dispatch_conversational_carries_live_pointer(iso, monkeypatch, patch_sp
 
 
 def test_dispatch_forces_spawn_when_gate_off_and_attended(monkeypatch, tmp_path, patch_spawn):
-    """AC5-HP: the explicit verb spawns even when the config gate is OFF and the
+    """AC5-HP: the explicit command spawns even when the config gate is OFF and the
     session is attended - the invocation IS the opt-in, and it is a real spawn
     (not the default stderr offer line)."""
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
@@ -721,7 +721,7 @@ def _capture_with_stdout(monkeypatch, stdout: str) -> dict:
         stderr = ""
 
     def fake_run(cmd, **kw):
-        if _is_naming_verb(cmd):
+        if _is_naming_command(cmd):
             return _REAL_SUBPROCESS_RUN(cmd, **kw)
         captured["cmd"] = cmd
         p = _Proc()
@@ -773,7 +773,7 @@ def test_a_nonzero_exit_still_raises_on_every_substrate(monkeypatch, tmp_path):
         st.subprocess,
         "run",
         lambda cmd, **kw: _REAL_SUBPROCESS_RUN(cmd, **kw)
-        if _is_naming_verb(cmd)
+        if _is_naming_command(cmd)
         else _Proc(),
     )
     with pytest.raises(st.SpawnError, match="substrate unavailable.*gate detail unavailable"):

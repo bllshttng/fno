@@ -1,7 +1,7 @@
 //! The tier a session token resolves a registry row at. Owns the token-shape
-//! gate and the per-row tier walk so `client_verbs` stays under its file
+//! gate and the per-row tier walk so `client_commands` stays under its file
 //! budget; the resolver (`find_agent_entry`) and every caller read them
-//! through the `client_verbs` re-export.
+//! through the `client_commands` re-export.
 
 use serde_json::Value;
 

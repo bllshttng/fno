@@ -409,7 +409,7 @@ pub fn attach_form(harness: &str) -> Option<AttachForm> {
 /// The interactive-resume form `harness` declares, or `None` when it declares
 /// none. Same reader, same sources and precedence as [`attach_form`], keyed
 /// by the resume lane: the bundled `interactive_resume` row, overridable by
-/// the shallower `[harness.<name>.resume]`. The workspace-restore verb
+/// the shallower `[harness.<name>.resume]`. The workspace-restore command
 /// resumes every member through the form this returns, so "none" is the
 /// honest dead row - refused by name, never a spawn that fails.
 pub fn resume_form(harness: &str) -> Option<AttachForm> {
@@ -1347,7 +1347,7 @@ fn is_well_formed_node_id(candidate: &str) -> bool {
 ///
 /// Three live spellings, measured against a registry dump on 2026-08-20:
 /// `t-xaaaa-tally-claude-sonnet` -> `x-aaaa` (hyphen dropped),
-/// `lead-cliverbs-x-bbbb-g2` -> `x-bbbb` (hyphenated), and
+/// `lead-clicommands-x-bbbb-g2` -> `x-bbbb` (hyphenated), and
 /// `t-eeee-finish` -> `fd2a` (bare hex, prefix-less).
 pub(crate) fn node_id_candidates(name: &str) -> Vec<String> {
     let tokens: Vec<&str> = name.split('-').collect();
@@ -1696,7 +1696,7 @@ pub fn overlay_truth_badges(rows: &mut [RegistryAgent], truth: &TruthBadges) {
 /// The attach id a claude row carries: an 8-hex jobId. A legacy row whose
 /// `short_id` holds the FULL uuid (the register path wrote it that way)
 /// still attaches: the jobId is the uuid's own leading segment, so derive
-/// it rather than hand the attach a uuid the verb refuses. Any other shape
+/// it rather than hand the attach a uuid the command refuses. Any other shape
 /// passes through untouched - the 8-hex gesture gate stays the judge.
 fn attach_job_id(raw: &str) -> String {
     if raw.len() > 8 {
@@ -1816,7 +1816,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         // into a (session, pane_id) pair. `mux` above is the parsed form,
         // and a half-written `{"session": "s"}` parses to None there; a
         // row is not promoted to a drivable thread by a malformed field.
-        // The CLI verb's `is_codex_thread_row` reads the raw key the same
+        // The CLI command's `is_codex_thread_row` reads the raw key the same
         // way, so both doors answer alike.
         let is_thread_shape = row
             .get("host_mode")
@@ -1845,7 +1845,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         // above for the reason its comment gives: a PRESENT key means
         // pane-hosted whether or not it parses into a (session, pane_id) pair,
         // and a half-written field must not make the viewport drive a row the
-        // CLI verb treats as pane-hosted.
+        // CLI command treats as pane-hosted.
         let is_pi_thread = harness_name == Some("pi")
             && row
                 .get("host_mode")
@@ -4323,7 +4323,7 @@ config_dir = "~/.claude-alt"
         ]);
         for (name, expected) in [
             ("t-xaaaa-tally-claude-sonnet", "x-aaaa"),
-            ("lead-cliverbs-x-bbbb-g2", "x-bbbb"),
+            ("lead-clicommands-x-bbbb-g2", "x-bbbb"),
             ("build-xcccc", "x-cccc"),
             ("target-x-dddd-fleet-status", "x-dddd"),
             ("target-ab-1a2b3c4d-slug", "ab-1a2b3c4d"),
@@ -4347,7 +4347,7 @@ config_dir = "~/.claude-alt"
     const LIVE_NAMES: &[(&str, Option<&str>)] = &[
         ("t-xaaaa-tally-claude-sonnet", Some("x-aaaa")),
         ("bp-xffff-toml", Some("x-ffff")),
-        ("lead-cliverbs-x-bbbb-g2", Some("x-bbbb")),
+        ("lead-clicommands-x-bbbb-g2", Some("x-bbbb")),
         ("bp-sccache-x0000", Some("x-0000")),
         ("build-xcccc", Some("x-cccc")),
         ("bp-slotleak-x1111", Some("x-1111")),
@@ -4744,7 +4744,7 @@ config_dir = "~/.claude-alt"
 
     /// The Follow set mirrors the reader arms in peek.py's `recent_records`.
     /// Rust checked against Rust proves nothing: parse the Python seam the
-    /// verb actually dispatches on, so adding a reader arm there without
+    /// command actually dispatches on, so adding a reader arm there without
     /// moving the tier here fails this test.
     #[test]
     fn thread_reach_mirrors_the_peek_reader_seam() {

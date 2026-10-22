@@ -91,14 +91,14 @@ def _resolve_pr_session_ids(
     shared with ``fno backlog carveout list --pr-number``); this wrapper keeps
     retro's flatten-to-empty contract.
     """
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        out = verb_call(
+        out = command_call(
             ["pr-watch", "pr-sessions"],
             {"ledger": str(ledger_path), "pr": pr, "repo_slug": repo_slug},
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         # A missing native op is the same broken environment an unreadable
         # ledger is: name it, keep the read-only contract.
         sessions, reason, infra = [], f"ledger unreadable: {exc}", True
@@ -518,7 +518,7 @@ def _run_postmortem_pass(repo_root: Path, node_root: Path) -> tuple[bool, int]:
 @retro_app.command("drain-postmortems")
 def drain_postmortems() -> None:
     """Drain unconsumed postmortems ONLY - no sentinel triage, no carve-out
-    harvest. The narrow verb (US3) co-fired in the SessionStart reconcile
+    harvest. The narrow command (US3) co-fired in the SessionStart reconcile
     throttle so a stuck session's postmortem is harvested within one throttle
     window, not "whenever some other PR happens to merge." Idempotent: date+
     session-keyed filenames and consumed_at stamps mean a re-drain is a no-op."""
@@ -598,7 +598,7 @@ def sweep_carveouts_cmd(
     if kind is not None and kind not in sweepable:
         # backfill is a VALID carve-out kind but never a sweepable one. Letting
         # it through validation reported "0 unharvested" for rows that exist and
-        # are simply owned by another verb, which reads as "nothing to do".
+        # are simply owned by another command, which reads as "nothing to do".
         detail = (
             " (backfill belongs to /fno:ship pr merged's backfill slot and is never swept)"
             if kind == BACKFILL_KIND
@@ -814,7 +814,7 @@ def run(
         carve-out with no session, or one whose PR never dropped a sentinel, is
         invisible to it - so "no sentinels" read as "nothing to do" while the
         ledger filled up, and the close gate then refused every node with no
-        verb that could clear it.
+        command that could clear it.
 
         Counted at the END, on every run including --pr-number (how /fno:ship pr
         merged calls this). Counting up front announced the rows this very run

@@ -522,7 +522,7 @@ fn expand_eq(rest: &[String]) -> Vec<String> {
     out
 }
 
-/// The `fno-agents digest` verb. Read-only; exits 0 on empty/corrupt input
+/// The `fno-agents digest` command. Read-only; exits 0 on empty/corrupt input
 /// (only a usage error exits 2), so an attach-time caller never sees a failure.
 pub async fn run_digest(rest: &[String], home: &AgentsHome) -> i32 {
     let args = match parse_args(rest) {

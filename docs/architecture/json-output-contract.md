@@ -1,29 +1,29 @@
 # JSON output contract
 
-One machine-output contract for every verb in this repo: `--json` and `-J` mean JSON.
+One machine-output contract for every command in this repo: `--json` and `-J` mean JSON.
 
 ## The rule
 
-`--json` and `-J` are the one request for machine output. Every verb that can print JSON accepts both spellings. A verb whose only output is JSON accepts the flag and prints the same bytes. With the flag, stdout carries JSON only. One JSON value prints, or one JSON object per line for a streaming verb (`subscribe`). Diagnostics go to stderr. The exit code carries the verdict. The bytes do not depend on whether stdout is a terminal. Without the flag, stdout is for people. Even JSON-looking text there is never a parse surface.
+`--json` and `-J` are the one request for machine output. Every command that can print JSON accepts both spellings. A command whose only output is JSON accepts the flag and prints the same bytes. With the flag, stdout carries JSON only. One JSON value prints, or one JSON object per line for a streaming command (`subscribe`). Diagnostics go to stderr. The exit code carries the verdict. The bytes do not depend on whether stdout is a terminal. Without the flag, stdout is for people. Even JSON-looking text there is never a parse surface.
 
 The caller rule: pass `-J`, parse one JSON value from stdout, and never parse output you did not ask for with `-J`. Tokens after an `--argv` or `--` boundary are a spawned process's payload and never trip JSON rendering.
 
-Python is out of scope by the standing no-new-Python ruling, and `scripts/ci/check_flag_registry.py` refuses any new `typer.Option`. When a verb in `cli/src/fno` ports to `crates/`, it adopts this contract.
+Python is out of scope by the standing no-new-Python ruling, and `scripts/ci/check_flag_registry.py` refuses any new `typer.Option`. When a command in `cli/src/fno` ports to `crates/`, it adopts this contract.
 
 ## The four shapes found
 
-1. Opt-in. Text by default, `--json`/`-J` switches to JSON: `crates/fno-agents/src/needs.rs:551`, and most Python verbs.
+1. Opt-in. Text by default, `--json`/`-J` switches to JSON: `crates/fno-agents/src/needs.rs:551`, and most Python commands.
 2. Always JSON. The flag is a no-op parity flag (`cli/src/fno/graph/cli.py:4493`). Or there is no flag at all, and `-J` is refused (`fno backlog next`, `fno backlog get`).
 3. TTY-auto. When stdout is not a terminal, JSON prints. When it is a terminal, text prints (`cli/src/fno/agents/cli.py`, `cli/src/fno/mail/cli.py`). The same command prints different bytes in a pane and in a pipe. The bytes must not depend on the terminal. With `-J` they never do.
-4. Format selector. `--format markdown|json` (`cli/src/fno/decide/cli.py:550`, `cli/src/fno/plan/cli.py`, `crates/fno-agents/src/team_fold.rs`). On verbs that print JSON, `-J` selects the JSON format the same way.
+4. Format selector. `--format markdown|json` (`cli/src/fno/decide/cli.py:550`, `cli/src/fno/plan/cli.py`, `crates/fno-agents/src/team_fold.rs`). On commands that print JSON, `-J` selects the JSON format the same way.
 
 ## Where it lives
 
-`json_output::is_flag` and `json_output::requested` in `crates/fno-agents/src/json_output.rs` serve the hand parsers in `fno-agents`. `requested` stops at an `--argv` or `--` boundary. The clap JSON output group in each crate's `cli_args.rs` serves the ported verbs. The guard test `crates/fno-agents/tests/json_output_contract.rs` fails any parse line under `crates/` that names `--json` without also naming `-J` or `json_output::`. A new verb cannot reintroduce the split.
+`json_output::is_flag` and `json_output::requested` in `crates/fno-agents/src/json_output.rs` serve the hand parsers in `fno-agents`. `requested` stops at an `--argv` or `--` boundary. The clap JSON output group in each crate's `cli_args.rs` serves the ported commands. The guard test `crates/fno-agents/tests/json_output_contract.rs` fails any parse line under `crates/` that names `--json` without also naming `-J` or `json_output::`. A new command cannot reintroduce the split.
 
 ## Port queue
 
-These Python verbs still refuse `-J`. The list was regenerated 2026-09-15 with the AST census from the plan that created this doc. The census counts 65 no-flag rows and 2 registered `--format` commands. The third `--format` site is `decide/cli.py:559 backlog_decisions`. It carries no command decorator, so the census skips it. When a verb ports to `crates/`, it adopts this contract.
+These Python commands still refuse `-J`. The list was regenerated 2026-09-15 with the AST census from the plan that created this doc. The census counts 65 no-flag rows and 2 registered `--format` commands. The third `--format` site is `decide/cli.py:559 backlog_decisions`. It carries no command decorator, so the census skips it. When a command ports to `crates/`, it adopts this contract.
 
 no-flag: cli/src/fno/agents/cli.py cmd_role
 no-flag: cli/src/fno/agents/cli.py cmd_spawn

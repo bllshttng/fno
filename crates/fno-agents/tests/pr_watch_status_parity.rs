@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/pr_watch/_install.py:liveness_report
 //!
-//! Characterization for the pr-watch status port: the Rust verb
+//! Characterization for the pr-watch status port: the Rust command
 //! (`fno-agents pr-watch status`, reached through `pr_watch::status`) is
 //! pinned by the frozen goldens under tests/golden/pr-watch-status/. While
 //! the Python leg lived, this file ran as a LIVE differential under

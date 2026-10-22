@@ -1,5 +1,5 @@
 //! `spawn-overlay`: the spawn-defaults resolver Python delegates to, ported
-//! from Python. Payload kinds, one verb, direct dispatch (no
+//! from Python. Payload kinds, one command, direct dispatch (no
 //! daemon RPC), the route-slot transport shape: one JSON payload in on stdin,
 //! one JSON answer out on stdout.
 //!
@@ -27,7 +27,7 @@
 //!   recorded name across an `org promote` scope move.
 //! - kind `roles-discover`: layered business-role discovery
 //!   (`roles::registry::discover_kind`), the records the Python roles
-//!   package reads back. The roles verbs ride the same verb as argv ops,
+//!   package reads back. The roles commands ride the same command as argv ops,
 //!   `spawn-overlay roles <op>`.
 //! - kind `role-resolve`: the org ladder (`territory::resolve_role`), a
 //!   scope's rung and canonical form, the one resolver the board and the
@@ -77,8 +77,8 @@ const MODEL_WORD_VENDORS: [(&str, &str); 3] = [
 ];
 
 pub fn run_spawn_overlay(args: &[String]) -> i32 {
-    // The roles verbs nest here as argv ops (crate::roles::cli), so they
-    // add no fno-agents root verb.
+    // The roles commands nest here as argv ops (crate::roles::cli), so they
+    // add no fno-agents root command.
     if args.first().map(String::as_str) == Some("roles") {
         return crate::roles::cli::run(&args[1..]);
     }
@@ -192,7 +192,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
 /// parent over this one stdout pipe. `unrouted` marks the deliberate no-op
 /// (an anthropic-protocol provider belongs to the claude lane, silent in
 /// Python exactly as before); `refusal` names a misconfiguration the spawn
-/// surfaces as a notice. Key-free, like every answer this verb prints.
+/// surfaces as a notice. Key-free, like every answer this command prints.
 fn resolve_codex_route_kind(payload: &Value) -> Result<Value, String> {
     let provider = payload
         .get("provider")
@@ -356,7 +356,7 @@ fn overlay_args(block: &Value) -> Option<Vec<String>> {
 fn effective_field(
     defaults: &Value,
     profile: Option<&Value>,
-    verb: &str,
+    command: &str,
     name: &str,
     harness: Option<&str>,
 ) -> Option<(String, String)> {
@@ -365,7 +365,7 @@ fn effective_field(
             if let Some(block) = table.get(h) {
                 let v = overlay_scalar(block, name);
                 if !v.is_empty() {
-                    return Some((v, format!("agents.profiles.{verb}.harness.{h}")));
+                    return Some((v, format!("agents.profiles.{command}.harness.{h}")));
                 }
             }
         }
@@ -373,7 +373,7 @@ fn effective_field(
     if let Some(p) = profile {
         let v = overlay_scalar(p, name);
         if !v.is_empty() {
-            return Some((v, format!("agents.profiles.{verb}")));
+            return Some((v, format!("agents.profiles.{command}")));
         }
     }
     if let Some(h) = harness {
@@ -484,7 +484,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
 }
 
 fn resolve_overlay(payload: &Value) -> Result<Value, String> {
-    let verb = payload.get("verb").and_then(Value::as_str).unwrap_or("");
+    let command = payload.get("verb").and_then(Value::as_str).unwrap_or("");
     let defaults = payload.get("defaults").cloned().unwrap_or(json!({}));
     let profile = payload.get("profile").filter(|v| v.is_object()).cloned();
     let harness = payload
@@ -515,7 +515,7 @@ fn resolve_overlay(payload: &Value) -> Result<Value, String> {
     let owners: Vec<(String, &Value)> = vec![
         ("agents.defaults".to_string(), &defaults),
         (
-            format!("agents.profiles.{verb}"),
+            format!("agents.profiles.{command}"),
             profile.as_ref().unwrap_or(&Value::Null),
         ),
     ];
@@ -555,7 +555,7 @@ fn resolve_overlay(payload: &Value) -> Result<Value, String> {
     let effective_for = |h: Option<&str>| {
         let mut effective = Map::new();
         for name in ["effort", "substrate", "permission_mode"] {
-            let entry = effective_field(&defaults, profile.as_ref(), verb, name, h);
+            let entry = effective_field(&defaults, profile.as_ref(), command, name, h);
             if let Some((v, rung)) = entry {
                 effective.insert(name.to_string(), json!({"value": v, "rung": rung}));
             }
@@ -586,14 +586,14 @@ fn resolve_overlay(payload: &Value) -> Result<Value, String> {
     if let Some(h) = harness {
         if let (Some(l), Some(idx)) = (lane, lane_index) {
             if let Some(args) = overlay_args(l) {
-                bundle = Some((args, format!("agents.profiles.{verb}.lanes[{idx}].args")));
+                bundle = Some((args, format!("agents.profiles.{command}.lanes[{idx}].args")));
             }
         }
         if bundle.is_none() {
             for (obj, rung) in [
                 (
                     profile.as_ref(),
-                    format!("agents.profiles.{verb}.harness.{h}.args"),
+                    format!("agents.profiles.{command}.harness.{h}.args"),
                 ),
                 (Some(&defaults), format!("agents.defaults.harness.{h}.args")),
             ] {
@@ -743,7 +743,7 @@ fn resolve_lane_vendor(
 /// spawn flags. Two links differing only in effort are the SAME destination
 /// for walk memory; `account` participates because it names a different bill
 /// and meter. Flags carry only the live spawn spellings (harness, route,
-/// account); the lane itself is named the way the spawn verb derives it.
+/// account); the lane itself is named the way the spawn command derives it.
 fn resolve_link_meta(payload: &Value) -> Result<Value, String> {
     let links = payload
         .get("links")

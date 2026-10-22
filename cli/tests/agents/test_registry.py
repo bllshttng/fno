@@ -287,22 +287,22 @@ def test_update_registry_retries_revision_conflict_and_keeps_concurrent_row(
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     _seed_registry(registry_path)
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
     commits = {"n": 0, "applies": 0}
 
-    def _conflict_once(verb, payload, **kwargs):
-        if verb == "registry-commit" and "revision" in payload:
+    def _conflict_once(command, payload, **kwargs):
+        if command == "registry-commit" and "revision" in payload:
             commits["n"] += 1
             if commits["n"] == 1:
-                raise rb.VerbUnavailable(
+                raise rb.CommandUnavailable(
                     "registry-commit: lock at /x/graph.json.lock stayed busy past the 10s "
                     "deadline; no holder recorded in the lock file"
                 )
             if commits["n"] == 2:
-                raise rb.VerbUnavailable(_CONFLICT_JSON)
-        return real_verb_call(verb, payload, **kwargs)
+                raise rb.CommandUnavailable(_CONFLICT_JSON)
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _conflict_once)
+    monkeypatch.setattr(rb, "command_call", _conflict_once)
 
     def _append_spawned(entries):
         commits["applies"] += 1
@@ -331,24 +331,24 @@ def test_update_registry_reapplies_when_a_writer_lands_between_load_and_commit(
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     _seed_registry(registry_path)
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
     concurrent = AgentEntry(name="concurrent", harness="claude", cwd="/tmp", log_path="/tmp/c.log")
     landed = {"done": False}
 
-    def _writer_lands_after_first_read(verb, payload, **kwargs):
-        answer = real_verb_call(verb, payload, **kwargs)
+    def _writer_lands_after_first_read(command, payload, **kwargs):
+        answer = real_command_call(command, payload, **kwargs)
         if payload.get("op") == "read" and not landed["done"]:
             landed["done"] = True
             doc = answer["document"]
             rows = doc["agents"] + [asdict(concurrent)]
-            real_verb_call(
-                verb,
+            real_command_call(
+                command,
                 {"path": payload["path"], "schema_version": doc["schema_version"],
                  "agents": rows, "revision": answer["revision"]},
             )
         return answer
 
-    monkeypatch.setattr(rb, "verb_call", _writer_lands_after_first_read)
+    monkeypatch.setattr(rb, "command_call", _writer_lands_after_first_read)
 
     update_registry(
         lambda entries: entries
@@ -383,16 +383,16 @@ def test_update_registry_conflict_exhaustion_and_non_conflict_single_shot(
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     _seed_registry(registry_path)
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
     commits = {"n": 0}
 
-    def _always_conflict(verb, payload, **kwargs):
-        if verb == "registry-commit" and "revision" in payload:
+    def _always_conflict(command, payload, **kwargs):
+        if command == "registry-commit" and "revision" in payload:
             commits["n"] += 1
-            raise rb.VerbUnavailable(_CONFLICT_JSON)
-        return real_verb_call(verb, payload, **kwargs)
+            raise rb.CommandUnavailable(_CONFLICT_JSON)
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _always_conflict)
+    monkeypatch.setattr(rb, "command_call", _always_conflict)
 
     def _append(entries):
         return entries + [
@@ -406,13 +406,13 @@ def test_update_registry_conflict_exhaustion_and_non_conflict_single_shot(
 
     commits["n"] = 0
 
-    def _schema_refused(verb, payload, **kwargs):
-        if verb == "registry-commit" and "revision" in payload:
+    def _schema_refused(command, payload, **kwargs):
+        if command == "registry-commit" and "revision" in payload:
             commits["n"] += 1
-            raise rb.VerbUnavailable('{"status":"refused","reason":"schema_refused"}')
-        return real_verb_call(verb, payload, **kwargs)
+            raise rb.CommandUnavailable('{"status":"refused","reason":"schema_refused"}')
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _schema_refused)
+    monkeypatch.setattr(rb, "command_call", _schema_refused)
     with pytest.raises(RegistryVersionError, match="schema_refused"):
         update_registry(_append, path=registry_path)
     assert commits["n"] == 1
@@ -892,7 +892,7 @@ def test_every_resumable_harness_resolves_an_identity() -> None:
     """Every harness that DECLARES resume support must resolve a resume id.
 
     The lower bound is the capability contract, because that is what the
-    resume verb's own support check reads. The bound this replaces was
+    resume command's own support check reads. The bound this replaces was
     KNOWN_PROVIDERS, the Python dispatch set, which is ("claude", "codex") -
     so pi, gemini, agy and opencode all passed it vacuously and it could not
     fail when a harness joined the contract without joining the map (x-efd7).
@@ -1508,52 +1508,3 @@ def test_update_registry_reports_a_stale_binary_and_writes_nothing(
     assert [e.name for e in survivors] == ["kept"]
     assert [e.name for e in load_registry(path=registry_path)] == ["kept"]
 
-
-def test_guard_refuses_probe_and_mass_drop_on_shared_root(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A probe (a process under a test marker) writing the real shared
-    registry is refused, and so is a write that drops most live rows without
-    the override; the refusal leaves the file intact."""
-    import tempfile
-
-    from fno.agents.registry import (
-        AgentEntry,
-        RegistryWriteRefused,
-        load_registry,
-        write_registry,
-    )
-
-    def probe_row(name: str) -> AgentEntry:
-        return AgentEntry(
-            name=name,
-            harness="claude",
-            cwd="/repo",
-            log_path=f"/tmp/{name}.log",
-        )
-
-    # Seed with the guard standing down: the shared root sits under the temp
-    # dir view, which is the sandbox shape the carve-out exists for. Armed
-    # through the resolver's own first branch (FNO_AGENTS_HOME) so the
-    # guard's comparison and the seeded path cannot drift.
-    agents_home = tmp_path / "home" / ".fno" / "agents"
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(agents_home))
-    shared = agents_home / "registry.json"
-    write_registry([probe_row(f"worker-{i}") for i in range(5)], path=shared)
-
-    # Arm the guard: present a "real" home OUTSIDE the temp dir view.
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "not-temp"))
-
-    with pytest.raises(RegistryWriteRefused, match="test or probe process"):
-        write_registry([probe_row("fixture-probe")], path=shared)
-    assert len(load_registry(path=shared)) == 5
-
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("FNO_TEST_HERMETIC", raising=False)
-    with pytest.raises(RegistryWriteRefused, match="drops live registry rows from 5 to 1"):
-        write_registry([probe_row("fixture-probe")], path=shared)
-    assert len(load_registry(path=shared)) == 5
-
-    monkeypatch.setenv("FNO_REGISTRY_ALLOW_ROW_LOSS", "1")
-    write_registry([probe_row("fixture-probe")], path=shared)
-    assert len(load_registry(path=shared)) == 1

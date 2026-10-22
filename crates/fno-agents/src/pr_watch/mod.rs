@@ -1,7 +1,7 @@
-//! The `pr-watch` verb family's Rust home. `status`, `install`, `refresh`,
+//! The `pr-watch` command family's Rust home. `status`, `install`, `refresh`,
 //! `uninstall` and `heal` live here; tick follows, each one replacing a
 //! Python leaf with a working forward until the Python package is gone.
-//! One verb per PR, every spelling kept.
+//! One command per PR, every spelling kept.
 
 mod heal;
 mod install;
@@ -35,7 +35,7 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Test seam for the refresh parity fixture: the fixture pre-renders the
 /// plist with the renderer itself, so the "unchanged" case exercises the
-/// no-change branch against the exact bytes the verb writes.
+/// no-change branch against the exact bytes the command writes.
 #[doc(hidden)]
 pub fn render_plist_for_test(
     launch_agents_dir: &Path,

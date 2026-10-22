@@ -86,7 +86,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 12 | Overdue escalation: take the recommendation or wait (lead:100) | stays prose (check-in reader; timer, not a turn boundary) |
 | 13 | Control-plane attention: tell the user (lead:101) | stays prose |
 | 14 | `pr status` ready: merge it yourself (lead:106) | guard: lead_decide blocks Stop while actionable rows exist |
-| 15 | Run merge verbs from the row's project cwd (lead:106) | stays prose |
+| 15 | Run merge commands from the row's project cwd (lead:106) | stays prose |
 | 16 | Lever order 1-5 (lead:108-113) | stays prose (judgment) |
 | 17 | Start only nodes the check-in lists (lead:115) | guard: blueprint ceiling + spawn gate |
 | 18 | A lever that needs the user goes through `outstanding ask`, never chat (lead:115) | row: chat_ask_unfiled |
@@ -99,10 +99,10 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 25 | Silence past the deadline takes the default (lead:139) | stays prose (check-in reader) |
 | 26 | User answers in chat: record it (lead:140) | row (later): port of hooks/operator-capture-nudge.sh |
 | 27 | `operator` authority refused on an agent (lead:142) | guard: decide door |
-| 28 | `backlog note` with no holder exits 3 (lead:144) | guard: note verb |
+| 28 | `backlog note` with no holder exits 3 (lead:144) | guard: note command |
 | 29 | A merge-conditioning ruling needs a hold, not a note (lead:144) | stays prose |
 | 30 | `law set` cannot supersede the user's law (lead:145) | guard: law door |
-| 31 | `faq add` needs `--exit` (lead:146) | guard: faq verb |
+| 31 | `faq add` needs `--exit` (lead:146) | guard: faq command |
 | 32 | Dispatch exception journaled BEFORE the spawn (lead:152) | row (later): PreToolUse spawn, titled, no `lead_dispatch_exception` row |
 | 33 | Dispatch brief on the node before a blueprint (lead:154) | row (later): PreToolUse Agent/spawn with blueprint, node without dispatch_brief |
 | 34 | Exit blocked while actionable rows exist (lead:163) | guard: lead_decide |
@@ -121,7 +121,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 47 | Codex: full session id, never head-8 (using-fno:60) | guard: mail send refuses the shape |
 | 48 | Spawn another project's work with `--cwd` (using-fno:66) | stays prose |
 | 49 | Fix what you find; carve out only big work (using-fno:72) | stays prose (judgment) |
-| 50 | One encounter per node per session (using-fno:74) | guard: encounter verb cap |
+| 50 | One encounter per node per session (using-fno:74) | guard: encounter command cap |
 | 51 | Worktree Bash refuses heredoc and substitution (using-fno:113) | guard: worktree Bash guard |
 | 52 | Review lane before `pr create` (target:62) | guard: review coverage merge gate |
 | 53 | Manifest is write-once (target:89) | guard: exit 5 |

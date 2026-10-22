@@ -45,10 +45,10 @@ const SENDER_LINE: &str = "Automatic notice from the fno daemon burn-watch arm, 
 /// The bounded subprocess budget for a status read or an ask.
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The resume argv's own bound. The parked revive waits inside the verb
+/// The resume argv's own bound. The parked revive waits inside the command
 /// (roster polls plus content confirms) before the respawn returns, so the
 /// 30 s budget would cut it short by construction; 180 s is the bound
-/// `fno agents watchdog` gives the same verb.
+/// `fno agents watchdog` gives the same command.
 const RESUME_RUN_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// A mail send's bound. A send can try two live rungs (the socket inject,
@@ -58,7 +58,7 @@ const RESUME_RUN_TIMEOUT: Duration = Duration::from_secs(180);
 const MAIL_SEND_RUN_TIMEOUT: Duration =
     Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S + 30);
 
-/// The bound for one daemon subprocess, by verb.
+/// The bound for one daemon subprocess, by command.
 pub(crate) fn run_timeout(argv: &[String]) -> Duration {
     match (
         argv.get(2).map(String::as_str),

@@ -10,7 +10,7 @@
 //! The decision is pure; every effect (the PR-state read, the mail, the
 //! resume, the operator ask, the state file) rides an injected runner or a
 //! file seam, so tests stage the world. The ladder fires on the daemon's
-//! retire arm only. A manual `reap` verb never nudges; its dry run prints
+//! retire arm only. A manual `reap` command never nudges; its dry run prints
 //! the plan (`would nudge <id> (<action>)`) and takes no effect.
 //!
 //! An owner's per-PR hold (`pr-hold:<slug>#<pr>`, the same subject the
@@ -203,12 +203,12 @@ pub struct NudgeInput {
 pub type Runner<'a> = &'a mut dyn FnMut(&[String], &str) -> (i32, String, String);
 
 /// The production runner every arm shares, so the dry run and the daemon
-/// cannot disagree about how a verb runs.
+/// cannot disagree about how a command runs.
 fn production_run(argv: &[String], cwd: &str) -> (i32, String, String) {
     let bin = argv[0].clone();
     let rest: Vec<String> = argv[1..].to_vec();
     let refs: Vec<&str> = rest.iter().map(String::as_str).collect();
-    // A global verb (mail, resume, ask) needs no row cwd; the empty
+    // A global command (mail, resume, ask) needs no row cwd; the empty
     // string means "stay here", because chdir("") fails the spawn.
     let dir: std::path::PathBuf = if cwd.is_empty() {
         std::path::PathBuf::from(".")
@@ -447,7 +447,7 @@ pub fn apply(
                 let mut landed = crate::mail_inject::mail_send_accepted(code, &stdout);
                 let mut fallback = false;
                 // Exit 0 is only a queue acceptance. When the receipt says
-                // the lane cannot reach the session (the verb prints both
+                // the lane cannot reach the session (the command prints both
                 // `queued (durable)` and `appended (durable)`), remember it;
                 // either way the attempt must still have had a chance to
                 // land, so the same pass falls back to the
@@ -544,7 +544,7 @@ pub fn apply(
 }
 
 /// The last non-empty stderr line, cut to 200 chars: the reason a failed
-/// resume names, read from the verb's own words.
+/// resume names, read from the command's own words.
 fn stderr_reason(stderr: &str) -> String {
     stderr
         .lines()
@@ -601,7 +601,7 @@ fn escalation_text(marker: &str, sid: &str, undelivered: u32) -> String {
     )
 }
 
-/// The PR-status read: exit-blind. The verb writes its JSON payload to
+/// The PR-status read: exit-blind. The command writes its JSON payload to
 /// stdout whatever the exit (exit 1 IS the red verdict), so the reader
 /// keeps the last non-empty stdout line that parses as a JSON object and
 /// reports the exit code only when no line parses.
@@ -715,7 +715,7 @@ fn nudge_text(row: &OpenPrRow, status: &Result<Value, i32>) -> String {
 }
 
 /// The failing checks as one ` | `-joined string. A settled red with no
-/// failure detail points at the verb; any other shape renders empty so the
+/// failure detail points at the command; any other shape renders empty so the
 /// caller skips the suffix.
 fn render_failures(payload: &Value, pr: u64) -> String {
     let Some(items) = payload.get("failures").and_then(Value::as_array) else {
@@ -1164,7 +1164,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&esc_root);
     }
 
-    /// The status payload the real verb writes to stdout whatever the exit
+    /// The status payload the real command writes to stdout whatever the exit
     /// (`_status.py` writes the human line to stderr, the JSON to stdout).
     fn status_payload(verdict: &str, settled: bool, head: &str) -> String {
         format!(
@@ -1867,7 +1867,7 @@ mod tests {
         assert_eq!(ev["data"]["fallback"], "resume");
         let _ = std::fs::remove_dir_all(home.root().to_path_buf());
 
-        // The verb has two durable wordings; both mean the lane cannot
+        // The command has two durable wordings; both mean the lane cannot
         // confirm the landing, so both take the sticky rung.
         let mut runner = |argv: &[String], _cwd: &str| -> (i32, String, String) {
             if argv.contains(&"do".to_string()) {

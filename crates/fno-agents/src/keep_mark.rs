@@ -14,7 +14,7 @@
 //! Shape copied from `terminal_stop.rs` (session-keyed marker folder,
 //! validated ids, pure decision plus thin I/O). No lock, by ruling: every
 //! reaper read is one stat and the set is a temp-plus-rename write, so no
-//! sweep can block a foreground verb.
+//! sweep can block a foreground command.
 
 use crate::paths::AgentsHome;
 use serde::{Deserialize, Serialize};

@@ -189,7 +189,7 @@ fn ready_frontier(
                         "model",
                         "provider",
                         "effort",
-                        "dispatch_verb",
+                        "dispatch_command",
                         "dispatch_brief",
                         "mission_id",
                         "mission_wave",

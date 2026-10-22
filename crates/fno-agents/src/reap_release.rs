@@ -1,5 +1,5 @@
 //! `fno agents reap --release <row>` : apply an operator ruling to
-//! one escalated hold. The verb classifies with the dry run the report came
+//! one escalated hold. The command classifies with the dry run the report came
 //! from, refuses a fresh hold or open work by name, and applies through the
 //! sweep's own door: `run_with_release` runs the full real sweep with the
 //! ruling, so other retire-eligible rows retire on it too and the receipt
@@ -20,8 +20,9 @@ use crate::paths::AgentsHome;
 use crate::state;
 use std::path::Path;
 
-/// Apply one release. Exits 2 on a named refusal, 0 on an applied ruling
-/// (the receipt prints the whole sweep, other rows included).
+/// Apply one release. Exits 2 on a named refusal or when the released row
+/// did not retire, 0 when it did (the receipt prints the whole sweep, other
+/// rows included).
 pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
     let grace_secs = agents_config::retire_grace_secs(cwd) as i64;
     let escalate_after = agents_config::hold_escalate_after(cwd);
@@ -85,7 +86,14 @@ pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
         "{}",
         crate::reap_render::render_reap(&summary, false, false)
     );
-    0
+    if summary.release_refused.is_empty() && summary.retired.iter().any(|(id, _)| *id == hold.id) {
+        return 0;
+    }
+    eprintln!(
+        "{}: the release retired nothing; the receipt above names the hold",
+        hold.id
+    );
+    2
 }
 
 /// The `--release <row>` arm, parsed beside the sweep. Moved out of

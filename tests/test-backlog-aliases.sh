@@ -53,7 +53,7 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # Resolve the `fno` command: prefer the in-repo venv (the TREE's surface,
 # which the menu assertions below pin), fall back to an installed binary,
-# then to a bare python3. An installed fno can lag the tree by whole verb
+# then to a bare python3. An installed fno can lag the tree by whole command
 # generations, and a menu test against it would pin a surface this checkout
 # no longer ships.
 resolve_fno() {
@@ -80,42 +80,42 @@ echo "Using fno: $ABI"
 echo "Graph: $GRAPH_JSON"
 echo
 
-# Typer renders command rows as `│ <verb>  <help text>  │` inside a box.
-# Match a verb row by requiring the verb is at the start of the text cell
+# Typer renders command rows as `│ <command>  <help text>  │` inside a box.
+# Match a command row by requiring the command is at the start of the text cell
 # (after any whitespace / box drawing), followed by either whitespace or
 # end-of-cell.
-verb_in_help() {
-    local verb="$1" help="$2"
+command_in_help() {
+    local command="$1" help="$2"
     # Strip ANSI first: rich colorizes the top-level menu on a TTY, and an
     # escape like \033[1;36m contains letters, so the [^A-Za-z]* prefix cannot
     # span it. Without this the test passes only where colour happens to be off.
     help=$(sed -E $'s/\033\\[[0-9;]*m//g' <<<"$help")
-    grep -E "^[^A-Za-z]*${verb}([[:space:]]|$)" <<<"$help" >/dev/null
+    grep -E "^[^A-Za-z]*${command}([[:space:]]|$)" <<<"$help" >/dev/null
 }
 
-# --- Scenario 1: fno backlog --help lists advertised verbs ------------------
+# --- Scenario 1: fno backlog --help lists advertised commands ------------------
 # x-71b6 In-N-Out tiering: intake/ready are hidden now (still invocable); probe
 # the advertised menu instead. `find` retired from the python surface; the
 # store serves it natively. `add` went native the same way (the create door
 # moved to the store), so the python help no longer lists it.
 out=$(run_fno backlog --help 2>&1)
-for verb in done next get triage; do
-    if verb_in_help "$verb" "$out"; then
-        pass "backlog --help lists '$verb'"
+for command in done next get triage; do
+    if command_in_help "$command" "$out"; then
+        pass "backlog --help lists '$command'"
     else
-        fail "backlog --help missing verb '$verb'"
+        fail "backlog --help missing command '$command'"
     fi
 done
 
 # --- Scenario 2: fno --help shows backlog, no graph alias ------------------
 # The `graph` top-level alias was removed as a true duplicate of `backlog`.
 top_out=$(run_fno --help 2>&1)
-if verb_in_help "backlog" "$top_out"; then
+if command_in_help "backlog" "$top_out"; then
     pass "top-level help shows 'backlog'"
 else
     fail "top-level help missing 'backlog'"
 fi
-if verb_in_help "graph" "$top_out"; then
+if command_in_help "graph" "$top_out"; then
     fail "top-level help lists removed 'graph' alias"
 else
     pass "top-level help has no 'graph' alias"
@@ -138,7 +138,7 @@ created: 2026-05-05
 EOF
 
 # The receipt reads `intake <id> -> backlog: "<title>"`. It said "adopted <id>"
-# before the adopt->intake rename, and this assertion outlived the verb.
+# before the adopt->intake rename, and this assertion outlived the command.
 intake_out=$(run_fno backlog intake "$plan_a" 2>&1)
 if [[ "$intake_out" == *"intake ab-"* ]]; then
     pass "intake creates a node"

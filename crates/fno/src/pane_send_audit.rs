@@ -76,7 +76,7 @@ impl PaneSendAudit {
         // never from the payload; a pane with no row simply carries no name.
         let registry = pane_send_registry_identity(session, self.pane);
         let (outcome, confirmed) = pane_send_outcome(exit_code, self.submit);
-        let verb: Option<String> = self
+        let command: Option<String> = self
             .preview
             .strip_prefix('/')
             .and_then(|p| p.split_whitespace().next())
@@ -123,7 +123,7 @@ impl PaneSendAudit {
         data.insert("confirmed".into(), confirmed.into());
         data.insert("outcome".into(), outcome.into());
         data.insert("exit_code".into(), exit_code.into());
-        data.insert("verb".into(), verb.into());
+        data.insert("verb".into(), command.into());
         let event = serde_json::json!({
             "ts": crate::review_invocation::review_invocation_timestamp(),
             "type": "agent_raw_inject",
@@ -251,7 +251,7 @@ pub(crate) fn flush_agents_journal(timeout: Duration) -> bool {
 }
 
 /// A submit key is a control byte, not a dispatch: the CRs, Tabs and ESC
-/// sequences the mail lane issues one per submit key ride this same verb but
+/// sequences the mail lane issues one per submit key ride this same command but
 /// write no row. A prompt write is never made only of these. The ESC family
 /// is bounded to terminal-sequence shape (short, ESC + `[` + alphanumerics),
 /// so a payload with any other printable byte is a prompt write and is
@@ -399,7 +399,7 @@ mod tests {
                 hold_pass: false,
             }
         );
-        // A valueless flag and a non-send verb are usage errors, mirroring
+        // A valueless flag and a non-send command are usage errors, mirroring
         // --style-exception: a silently ignored flag would read as "the row
         // carried the declared source".
         assert!(parse_pane_args(&op_of("send"), &os(&["2", "--text", "hi", "--source"])).is_err());
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn pane_send_audit_skips_submit_key_control_bytes() {
         // (AC5) A carriage return is a control byte, not a dispatch: the mail
-        // lane's per-key CR/Tab/arrow sends ride this verb and must not each
+        // lane's per-key CR/Tab/arrow sends ride this command and must not each
         // produce a row. The delivered leg proves the send itself still ran.
         let agents_guard = FNO_AGENTS_HOME_GUARD
             .lock()

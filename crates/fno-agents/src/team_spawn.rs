@@ -15,7 +15,7 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
                 && scope.is_some()
                 && payload["revive"].as_bool() != Some(true);
             let message = if typed {
-                let lead = crate::provider::render_verb_seed(
+                let lead = crate::provider::render_command_seed(
                     &format!("/fno:lead {}", scope.unwrap()),
                     payload["harness"].as_str().unwrap_or("claude"),
                 );
@@ -59,7 +59,7 @@ fn home_path(payload: &Value, key: &str, default: impl FnOnce(&AgentsHome) -> Pa
 }
 
 fn events_path(payload: &Value) -> PathBuf {
-    home_path(payload, "events", crate::client_verbs::trace_events_path)
+    home_path(payload, "events", crate::client_commands::trace_events_path)
 }
 
 fn cwd() -> PathBuf {
@@ -286,7 +286,7 @@ fn record(payload: &Value, events: &Path) -> Vec<String> {
 
 /// Set mission_active on every open epic container in a granted scope: an
 /// epic with an owner is a mission, or no drain loop sees its children. A
-/// childless epic is skipped, because the mission verb refuses it as not a
+/// childless epic is skipped, because the mission command refuses it as not a
 /// container and the flag would stand forever. Answers the ids newly armed,
 /// or None and the warning when the graph write failed.
 fn arm_missions(scope: &str, events: &Path) -> (Option<Vec<String>>, Vec<String>) {

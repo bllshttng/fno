@@ -1,5 +1,5 @@
 //! Keep the server's member list equal to the store after an external write
-//! to `squads.json` (the CLI prune, the `SquadReload` control verb).
+//! to `squads.json` (the CLI prune, the `SquadReload` control command).
 
 use super::*;
 

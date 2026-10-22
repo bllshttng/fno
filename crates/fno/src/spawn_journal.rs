@@ -1065,8 +1065,8 @@ mod tests {
             // The live marker shape (t-a0cd-identity-residue-gpt):
             r#"{"type":"registry_row_removed","data":{"name":"residue","harness":"codex","harness_session_id":"","reason":"row 'residue' carries no resumable identity (harness='codex', session=False)"}}"#,
             "\n",
-            // The daemon shape (t-b783-verb-prefix-agy):
-            r#"{"type":"registry_row_removed","data":{"name":"verb-prefix","harness":"agy","harness_session_id":"","reason":"missing harness session identity"}}"#,
+            // The daemon shape (t-b783-command-prefix-agy):
+            r#"{"type":"registry_row_removed","data":{"name":"command-prefix","harness":"agy","harness_session_id":"","reason":"missing harness session identity"}}"#,
             "\n",
             // A row WITH a session id is a normal removal, never a name marker:
             r#"{"type":"registry_row_removed","data":{"name":"normal","harness":"claude","harness_session_id":"has-session","reason":"missing harness session identity"}}"#,
@@ -1085,7 +1085,7 @@ mod tests {
             Some("row 'residue' carries no resumable identity (harness='codex', session=False)")
         );
         assert_eq!(
-            markers.get("verb-prefix").map(String::as_str),
+            markers.get("command-prefix").map(String::as_str),
             Some("missing harness session identity")
         );
         assert!(!markers.contains_key("normal"));

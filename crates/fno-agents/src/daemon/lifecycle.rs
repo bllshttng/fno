@@ -1,9 +1,9 @@
-//! Identity resolution behind the lifecycle verbs (stop/rm). Split from
+//! Identity resolution behind the lifecycle commands (stop/rm). Split from
 //! daemon.rs for the file budget.
 
 use serde_json::{json, Value};
 
-/// Resolve the lifecycle target the way the session-connecting verbs do:
+/// Resolve the lifecycle target the way the session-connecting commands do:
 /// registry first, then a best-effort harness-store heal for session-shaped
 /// tokens. `cross_project` lifts the store heal's project confinement, which
 /// is the grant `fno agents rm --cross-project` forwards. `for_stop` tries the
@@ -53,7 +53,7 @@ pub(crate) async fn entry_for_lifecycle(
                 })));
             }
         }
-        crate::client_verbs::resolve_entry_with_heal_scoped(
+        crate::client_commands::resolve_entry_with_heal_scoped(
             &rows,
             &worker_token,
             &path,

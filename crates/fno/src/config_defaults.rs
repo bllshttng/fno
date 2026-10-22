@@ -286,7 +286,7 @@ fn project_config_path() -> PathBuf {
     }
 }
 
-/// The verb: print the inventory as aligned text, or a JSON array with
+/// The command: print the inventory as aligned text, or a JSON array with
 /// `--json`. A config file that cannot be parsed exits 2 naming the file.
 pub fn run(tail: &[OsString]) -> i32 {
     let mut json = false;

@@ -33,7 +33,7 @@ skip() { printf '[foreign-manifest] SKIP: %s\n' "$*" >&2; exit 77; }
 command -v git &>/dev/null || skip "git not on PATH"
 [[ -f "$INIT" ]] || fail "init script not found at $INIT"
 
-# The state CLI for the one verb the suite runs (T5's archive repair). The
+# The state CLI for the one command the suite runs (T5's archive repair). The
 # binary's name differs by environment: a developer PATH has `fno`; the smoke
 # env pins cli/.venv/bin, which ships `fno-py`. Same command tree either way.
 if command -v fno &>/dev/null; then

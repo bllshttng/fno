@@ -11,7 +11,7 @@ leg could not be read positively is UNKNOWN, reported, never acted on.
 
 ``classify()`` is a pure function over already-resolved inputs so it is
 testable with a fixture table with no filesystem or subprocess involved.
-``sweep()`` is the IO-doing driver a CLI verb or tick leg calls.
+``sweep()`` is the IO-doing driver a CLI command or tick leg calls.
 """
 
 from __future__ import annotations
@@ -309,7 +309,7 @@ def sweep(repo: Path) -> list[Row]:
 
 # --- recovery acts (STRANDED only) + UNKNOWN recording --------------------
 #
-# One producer for both call sites (the `stranded --apply` verb and the
+# One producer for both call sites (the `stranded --apply` command and the
 # pr-watch tick leg): a guard or an act living on only one of two reachable
 # paths is decorative on the path it skips, so both route through the same
 # functions here rather than each re-implementing "push, file, emit".
@@ -407,7 +407,7 @@ def apply_sweep(rows: list[Row], *, wake: bool = True) -> list[dict]:
     every UNKNOWN row - recording is reporting, not acting, per this
     module's own fail-open contract - but skips the STRANDED push+file, the
     one genuinely mutating act here. The explicit ``fno agents workspace worktree stranded
-    --apply`` verb is a direct user request, not a watchdog-mode read, so
+    --apply`` command is a direct user request, not a watchdog-mode read, so
     it keeps the wake=True default and always acts."""
     outcomes: list[dict] = []
     for row in rows:

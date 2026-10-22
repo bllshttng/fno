@@ -32,7 +32,7 @@ pub struct Ticket {
 
 impl Ticket {
     /// The zero-padded directory name, which is also the wire form the
-    /// `claim queue` verbs pass as `--ticket`.
+    /// `claim queue` commands pass as `--ticket`.
     pub fn id(&self) -> String {
         format!("{:06}", self.seq)
     }
@@ -102,8 +102,8 @@ pub fn enter(queue_dir: &Path) -> Result<Ticket, String> {
     enter_as(queue_dir, std::process::id())
 }
 
-/// [`enter`] for a ticket naming ANOTHER live process: the verb seam stamps
-/// the caller's pid, because a one-shot verb process is dead by its own next
+/// [`enter`] for a ticket naming ANOTHER live process: the command seam stamps
+/// the caller's pid, because a one-shot command process is dead by its own next
 /// scan and every ticket it stamped would reap itself.
 pub fn enter_as(queue_dir: &Path, pid: u32) -> Result<Ticket, String> {
     std::fs::create_dir_all(queue_dir)
@@ -185,7 +185,7 @@ pub fn leave(t: Ticket) {
 }
 
 /// `fno-agents claim queue {enter,front,leave}` - the seam `preflight.sh`
-/// calls instead of its old bash queue. Exit codes follow the claim-verb
+/// calls instead of its old bash queue. Exit codes follow the claim-command
 /// convention: 0 success (or at the front), 1 not at the front, 2 usage or
 /// error. `front` prints `position=N queued=M` (or `position=none` without a
 /// ticket) so a caller can read the queue depth, and reaps as it scans.
@@ -610,7 +610,7 @@ mod tests {
 
     /// A scan that condemns our own ticket reports GONE, never "front of an
     /// empty queue": found_self is decided by the survivor walk, not by name
-    /// match before the reaper. The one-shot-pid verb hazard this regression
+    /// match before the reaper. The one-shot-pid command hazard this regression
     /// pins: a ticket stamped with a now-dead pid must read as gone (exit 2),
     /// so the caller re-enqueues instead of claiming an unearned front.
     #[test]

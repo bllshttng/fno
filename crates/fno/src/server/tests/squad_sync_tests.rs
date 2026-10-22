@@ -371,7 +371,7 @@ fn name_holder_says_whether_the_row_is_open_or_stored_and_where() {
     assert_eq!(core.name_holder("free"), None);
 }
 
-/// The origin verb edits the open workspace and its stored row together, is
+/// The origin command edits the open workspace and its stored row together, is
 /// idempotent both ways, and refuses an unknown name or a relative path.
 #[test]
 fn workspace_origin_edits_the_open_workspace_and_its_stored_row() {

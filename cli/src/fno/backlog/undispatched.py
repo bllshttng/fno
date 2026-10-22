@@ -152,7 +152,7 @@ def classify_planned_unclaimed(
                         # read absent as null (the false zero this queue was
                         # bitten by): set means encoded, absent means get is
                         # authoritative and it carries none either.
-                        "dispatch_verb",
+                        "dispatch_command",
                         "dispatch_brief",
                     )
                     if entry.get(key) is not None

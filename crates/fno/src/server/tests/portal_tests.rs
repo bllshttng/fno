@@ -805,7 +805,7 @@ fn thread_pane_ctl_rows() {
 
     // A row pane-hosted in ANOTHER session is that server's to view: the
     // reply names where it lives. "no such agent" would lie about a row
-    // the registry knows (and the inline attach this verb replaced
+    // the registry knows (and the inline attach this command replaced
     // attached it regardless of hosting session).
     let (mut core, _client_id, _p1, _rx) = thread_core();
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
@@ -824,7 +824,7 @@ fn thread_pane_ctl_rows() {
     }
     assert!(core.portals.is_empty(), "no thread pane minted");
 
-    // AC8-HP (server half): the control verb drives the SAME reach a TUI
+    // AC8-HP (server half): the control command drives the SAME reach a TUI
     // gesture drives, records the slot, persists nothing, and replies
     // with the landing.
     set_attach_program(&["/bin/cat"]);
@@ -870,7 +870,7 @@ fn thread_pane_ctl_rows() {
     assert!(core.panes.len() == 1, "nothing spawned");
 
     // A row already pane-hosted in this session has its viewport: the
-    // verb answers with the pane instead of opening a second one.
+    // command answers with the pane instead of opening a second one.
     let (mut core, _client_id, p1, _rx) = thread_core();
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
     let mut hosted = bg_row("hosted-row", "/tmp/seen", None);
@@ -900,7 +900,7 @@ fn thread_pane_tier_rows() {
     // The peek program is overridden to a stand-in so the spawn path runs
     // without booting the deployed CLI (whose load-time boot can outlive
     // any sane test budget under the full suite); the real argv shape is
-    // asserted in `peek_argv_is_the_peek_verb_with_follow`.
+    // asserted in `peek_argv_is_the_peek_command_with_follow`.
     set_peek_program(&["/bin/cat"]);
     let (mut core, client_id, _p1, _rx) = thread_core();
     let mut codex = bg_row("codex-row", "/tmp/seen", None);

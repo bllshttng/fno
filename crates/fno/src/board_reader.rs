@@ -39,7 +39,7 @@ pub(crate) const BOARD_FIELDS: &[&str] = &[
 ///
 /// External tracker backend: the graph store is not the authoritative
 /// backend there, so there is no counter to gate on. The reader instead
-/// executes the backend-neutral snapshot verb (`fno backlog status
+/// executes the backend-neutral snapshot command (`fno backlog status
 /// --snapshot`) on a bounded refresh clock and caches its payload; both
 /// modes feed the SAME ReaderState, so the last-good retention, the
 /// stale-after-3-failures marker, and the pure derivations (cards, lanes,
@@ -127,7 +127,7 @@ pub(crate) fn spawn(
             // the counter is the signal that still moves (Risk 5). The
             // board document read rides the same keeper. Snapshot mode:
             // mint a fresh stamp on the refresh clock, exec the snapshot
-            // verb when the stamp differs from the cached one.
+            // command when the stamp differs from the cached one.
             // `stamp != cached` is the single changed-signal both modes
             // share.
             let (stamp, raw) = if external {

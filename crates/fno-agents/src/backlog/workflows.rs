@@ -579,7 +579,7 @@ fn canonical_post_close(
 }
 
 // ---------------------------------------------------------------------------
-// the close verb
+// the close command
 // ---------------------------------------------------------------------------
 
 /// `fno backlog done` — the close-flag surface. Rich completion shapes ride
@@ -943,12 +943,12 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// the reopen verb
+// the reopen command
 // ---------------------------------------------------------------------------
 
 /// `fno backlog reopen` — clears a node's completion. Fully native: the
 /// Python twin and its registry row are gone.
-/// The reopen verb's done fact: a completion stamp, or a children-rollup
+/// The reopen command's done fact: a completion stamp, or a children-rollup
 /// derived done (status done with every child closed and the row's own
 /// completion cleared). A bare status-done row nothing derives is stale
 /// data, and the golden contract keeps it out of reopen's reach: the
@@ -972,7 +972,7 @@ fn reopenable_done(rows: &[Value], node: &Value, task_id: &str) -> bool {
 pub fn run_reopen(tail: &[String]) -> i32 {
     let (id, reason, force, help, unknown) = parse_reopen_args(tail);
     if help {
-        // The verb's own help is the Python surface's rendering, retired with
+        // The command's own help is the Python surface's rendering, retired with
         // the twin; a bare usage line keeps the shape discoverable.
         println!("fno backlog reopen <id> --reason TEXT [--force]");
         return 0;
@@ -984,7 +984,7 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     let backend = active_backend_name();
     if backend != "graph" {
         eprintln!(
-            "fno backlog reopen: this verb owns graph state; under the {backend} \
+            "fno backlog reopen: this command owns graph state; under the {backend} \
              tracker backend it is refused. Track the item in the tracker by its id."
         );
         return 1;
@@ -1630,7 +1630,7 @@ fn normalize_plan_path(path: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// the queue verbs
+// the queue commands
 // ---------------------------------------------------------------------------
 
 /// Flatten one-or-many id args (the _expand_id_args twin): comma bundles and
@@ -1650,7 +1650,7 @@ fn expand_id_args(raw: &[String]) -> Vec<String> {
     out
 }
 
-/// The shared prologue of the batch verbs: expand, refuse an empty set and
+/// The shared prologue of the batch commands: expand, refuse an empty set and
 /// non-node ids (the _expand_valid_ids twin, message for message).
 fn expand_valid_ids(raw: &[String]) -> Result<Vec<String>, i32> {
     let ids = expand_id_args(raw);
@@ -1667,7 +1667,7 @@ fn expand_valid_ids(raw: &[String]) -> Result<Vec<String>, i32> {
     Ok(ids)
 }
 
-/// The missing-node gate for the multi-id verbs (the _require_nodes twin).
+/// The missing-node gate for the multi-id commands (the _require_nodes twin).
 fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
     let missing: Vec<&String> = ids
         .iter()
@@ -1680,15 +1680,15 @@ fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
     Err(format!("feature(s) not found: {}", names.join(", ")))
 }
 
-/// The shared non-graph backend guard (the update door's guard, per verb):
-/// these verbs own graph state; under an external backend they refuse.
-pub(crate) fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
+/// The shared non-graph backend guard (the update door's guard, per command):
+/// these commands own graph state; under an external backend they refuse.
+pub(crate) fn refuse_non_graph_backend(command: &str) -> Option<i32> {
     let backend = active_backend_name();
     if backend == "graph" {
         return None;
     }
     eprintln!(
-        "fno backlog {verb}: this verb owns graph state; under the \
+        "fno backlog {command}: this command owns graph state; under the \
          {backend} tracker backend it is refused. Track the item in the \
          tracker by its id."
     );
@@ -1980,7 +1980,7 @@ pub fn run_queued(tail: &[String]) -> i32 {
 const _: () = ();
 
 // ---------------------------------------------------------------------------
-// the contain verb
+// the contain command
 // ---------------------------------------------------------------------------
 
 /// The holder of a live/suspect `node:<id>` claim, else None (the
@@ -2061,7 +2061,7 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<String> {
     Some(format!(
         "{context} resolves to {id}, which {how}; {containment}, \
          so stamping containment here would leave every adoptee \
-         undispatchable with the no verb to free it. {remedy}"
+         undispatchable with the no command to free it. {remedy}"
     ))
 }
 
@@ -2464,7 +2464,7 @@ fn drop_owner_pr_refs(
     }
 }
 // ---------------------------------------------------------------------------
-// the supersede verb
+// the supersede command
 // ---------------------------------------------------------------------------
 
 /// Split `--flag=value` spellings into two tokens so the parsers accept the

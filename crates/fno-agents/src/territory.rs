@@ -1047,7 +1047,7 @@ pub(crate) fn live_held_in(node_ids: &HashSet<String>, held: &HashSet<String>) -
 /// One readout row per territory: scope, membership state, rung, leadless
 /// state, team holder, mission, and live count against the cap. The
 /// projection the status payload, the hidden config
-/// verb, the lead check-in, and the operational probe share, so none of them
+/// command, the lead check-in, and the operational probe share, so none of them
 /// can disagree. Fail-safe per row: an unreadable source shrinks that row's
 /// answer (membership "unknown", live null), never the whole
 /// projection.

@@ -268,7 +268,7 @@ fn list_files(roots: &Roots, now: DateTime<Utc>, window_days: u64) -> Vec<Listed
 }
 
 /// One incremental pass over every transcript inside the window, bounded by
-/// `budget` read bytes (`None` reads everything, the verb's `--backfill`).
+/// `budget` read bytes (`None` reads everything, the command's `--backfill`).
 /// Persists cursors to `cache` (mode 600) so the next run reads only new
 /// bytes. Holds the fleet cache lock for the whole read-modify-write, so a
 /// caller and the daemon arm never fold at once.

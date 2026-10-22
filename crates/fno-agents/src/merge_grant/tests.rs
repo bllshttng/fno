@@ -565,7 +565,7 @@ fn queue_rows() {
 
     // Queue parity: with config enabled in the scratch repo, a granted row
     // whose node's bound manifest refuses drops, moving the count, and the
-    // queue never widens the merge verb's gates.
+    // queue never widens the merge command's gates.
     let (base, repo, wt) = bound_fixture();
     let _home2 = HomeGuard::at(base.path());
     write_manifest(

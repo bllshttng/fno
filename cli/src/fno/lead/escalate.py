@@ -35,9 +35,9 @@ def _render(
     ``verdict`` (first word = verdict name) and ``scope`` ride along.
     Naming ``session_id`` scopes the answer's ``marker`` to that lead.
     """
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    return verb_call(
+    return command_call(
         "lead-escalation-text",
         {
             "stalled": ids,

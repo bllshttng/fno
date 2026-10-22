@@ -3,7 +3,7 @@
 Node x-3a64. ``skills/agent/scripts/normalize.sh:710`` classifies a payload by a
 LEADING slash, and the harness REPL is a second reader nobody controls. Probe 1
 measured what that second reader does with a trailing block sharing the payload:
-the verb still ROUTES, and the whole trailer is swallowed into the verb's
+the command still ROUTES, and the whole trailer is swallowed into the command's
 ARGUMENTS (`<command-args>PROBE1SENTINEL\\n\\n<fno_relay_compression>...`). For
 ``/fno:target <node>`` those arguments are load-bearing, so an envelope in the
 payload is a real failure, not a cosmetic one.

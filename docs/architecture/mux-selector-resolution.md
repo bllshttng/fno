@@ -48,7 +48,7 @@ Selector focus ignores `FNO_SERVER` (and the deprecated `FNO_SESSION`). That var
 
 ## Placement and worker start
 
-Pane placement belongs to the mux pane verbs. Worker start belongs to `fno agents spawn`. The four spawn creation flags remain convenience paths. `--workspace` selects a workspace. `--split` and `--at` place relative to an anchor. `--tab` selects a tab or pane group.
+Pane placement belongs to the mux pane commands. Worker start belongs to `fno agents spawn`. The four spawn creation flags remain convenience paths. `--workspace` selects a workspace. `--split` and `--at` place relative to an anchor. `--tab` selects a tab or pane group.
 
 Scripts that already placed a pane must use `fno agents spawn --pane <id>`. Spawn resolves that pane, requires the mux's positive `pristine_idle_shell` marker, refuses an occupied or unresolvable target, and starts the worker in place. The receipt keeps the pane id supplied by the script. This keeps future placement features in `fno mux pane` instead of duplicating them as more spawn flags.
 

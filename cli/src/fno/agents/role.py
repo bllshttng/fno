@@ -863,7 +863,7 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     ):
         raise RolePromotionError(
             f"refusing to role {handle!r}: {scope!r} is your OWN scope, and "
-            "this verb only stamps the target, so it cannot hand a role over. "
+            "this command only stamps the target, so it cannot hand a role over. "
             "Succession runs through `fno agents spawn --promote <scope> "
             "--hand-off` instead, which vacates you and stamps the new holder "
             "in a single registry write, so the scope is never doubly ruled "
@@ -1047,7 +1047,7 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     except Exception:
         # Advisory receipt data must never crash a role that committed.
         receipt["stranded_subordinates"] = None
-    # The role TYPES the verb: the holder learns it terms through raw mail
+    # The role TYPES the command: the holder learns it terms through raw mail
     # typed as the operator would. Rendered per harness through the one
     # normalizer; an unknown harness keeps the `/fno:` spelling.
     target_row = next((r for r in rows_after if r.name == target_name), None)
@@ -1063,13 +1063,13 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     from fno.agents.harness_map import DispatchResolveError, normalize_command
 
     try:
-        verb = normalize_command(f"/fno:lead {scope}", target_harness or "")
+        command = normalize_command(f"/fno:lead {scope}", target_harness or "")
     except DispatchResolveError:
-        verb = f"/fno:lead {scope}"
+        command = f"/fno:lead {scope}"
     if caller is not None and target_name == caller.name:
         receipt["term_delivery"] = "skipped: self-edit, this session already terms"
     else:
-        receipt["term_delivery"] = _send_term_verb(address, verb)
+        receipt["term_delivery"] = _send_term_command(address, command)
     return receipt
 
 
@@ -1098,11 +1098,11 @@ def _carry_team_name(vacated_scope: Optional[str], scope: str, row_after, level:
     return "carried" if answer.get("carried") else str(answer.get("reason") or "unchanged")
 
 
-def _send_term_verb(address: str, verb: str) -> str:
-    """Mail the term verb to a freshly promoted holder; never raises.
+def _send_term_command(address: str, command: str) -> str:
+    """Mail the term command to a freshly promoted holder; never raises.
 
     Advisory receipt data: a failure is named on the receipt, because a promoted
-    session that never receives the verb improvises the ritual. `--raw` types
+    session that never receives the command improvises the ritual. `--raw` types
     the payload as the operator would, so a slash arrives as a command.
     """
     import subprocess
@@ -1111,7 +1111,7 @@ def _send_term_verb(address: str, verb: str) -> str:
     try:
         proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
             [sys.executable, "-m", "fno.cli", "agents", "mail",
-             "send", address, verb, "--raw"],
+             "send", address, command, "--raw"],
             capture_output=True,
             text=True,
             timeout=30,

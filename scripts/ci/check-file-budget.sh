@@ -29,7 +29,7 @@
 # Python edit is a port or a deletion; plans meet that rule at blueprint time
 # in validate-plan.sh. This tally counts added lines per change against
 # blueprint.python_repair_added_lines; deletions do not offset new lines. The
-# remedy is to port the verb to crates/,
+# remedy is to port the command to crates/,
 # land the feature in Rust, or refactor the growth away: per-harness DATA
 # belongs in the capability contract, long prose belongs in docs/, and
 # duplicate blocks belong behind one loop. An operator can grant a one-PR
@@ -37,7 +37,7 @@
 # it waives the tree tally alone, never a per-file grow. Two cases need no
 # label: a change whose Python tree net is negative (a port that deletes more
 # than it adds forward passes the tally), and a lead-approved blocking-bug
-# repair to existing Python, no new verb, flag or feature, within the
+# repair to existing Python, no new command, flag or feature, within the
 # thirty-added-line budget.
 #
 # Run: bash scripts/ci/check-file-budget.sh [--quiet]
@@ -313,7 +313,7 @@ if [[ "$py_net" -ge 0 && "$py_added" -gt "$PY_ADDED_BUDGET" ]]; then
         EXC_LABEL="${EXC_LABEL:-file-budget-exception}"
         exc_waived=1
     else
-        echo "check-file-budget: cli/src/fno added +$py_added lines (added-line budget $PY_ADDED_BUDGET, config blueprint.python_repair_added_lines). The tree did not shrink (net $(printf '%+d' "$py_net")), so the ceiling is on ADDED lines and deletions do not offset it: a rewrite cannot buy growth. A net-negative port passes without a label. Port the verb you touched to crates/ or cut the added growth away in THIS PR. The one escape is an operator-applied file-budget-exception label on the PR; agents never apply it. The label is read from the PR when the check runs, so re-run the check after labeling." >> "$findings"
+        echo "check-file-budget: cli/src/fno added +$py_added lines (added-line budget $PY_ADDED_BUDGET, config blueprint.python_repair_added_lines). The tree did not shrink (net $(printf '%+d' "$py_net")), so the ceiling is on ADDED lines and deletions do not offset it: a rewrite cannot buy growth. A net-negative port passes without a label. Port the command you touched to crates/ or cut the added growth away in THIS PR. The one escape is an operator-applied file-budget-exception label on the PR; agents never apply it. The label is read from the PR when the check runs, so re-run the check after labeling." >> "$findings"
         fails=1
     fi
 fi

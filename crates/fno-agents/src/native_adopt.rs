@@ -47,6 +47,15 @@ pub(crate) struct NativeMint {
     pub(crate) native: bool,
 }
 
+/// The parent edge a claimed launch record proves: its launcher's triple.
+pub(crate) fn launcher_lineage(r: &crate::launch_record::Record) -> Lineage {
+    Lineage::captured((
+        Some(r.launcher_session.clone()),
+        r.launcher_harness.clone(),
+        r.launcher_cwd.clone(),
+    ))
+}
+
 pub(crate) fn prepare_mint(
     home: &crate::paths::AgentsHome,
     harness: &str,
@@ -72,14 +81,14 @@ pub(crate) fn prepare_mint(
         return None;
     }
     // A hand session gets a row only once it joined fno (its first fno skill
-    // or verb), unless `agents.auto_register_sessions` opts every session in.
+    // or command), unless `agents.auto_register_sessions` opts every session in.
     if !native
         && !crate::join_marker::is_joined(home.root(), harness, session_id)
         && !auto_register_sessions(report_cwd)
     {
         return None;
     }
-    let short = crate::client_verbs::derived_short_id(session_id);
+    let short = crate::client_commands::derived_short_id(session_id);
     let origin = if native { "spawn" } else { "operator" };
     // Name precedence: the record's name, then the row the worker lost, then
     // the child's own name, then the draw (transcript title, else t-short).
@@ -116,11 +125,7 @@ pub(crate) fn prepare_mint(
             Some(session_id.to_string()),
             if native {
                 match record {
-                    Some(r) => Lineage::captured((
-                        Some(r.launcher_session.clone()),
-                        r.launcher_harness.clone(),
-                        r.launcher_cwd.clone(),
-                    )),
+                    Some(r) => launcher_lineage(r),
                     None => Lineage::unproven(
                         "spawned row absent at first report; minted at the session report",
                     ),

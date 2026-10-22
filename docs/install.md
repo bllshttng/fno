@@ -193,7 +193,7 @@ fno uninstall              # ask once, then remove them all
 fno uninstall --yes        # no question; needed when stdin is not a terminal
 ```
 
-It removes each item through its own uninstall verb, in this order:
+It removes each item through its own uninstall command, in this order:
 
 1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist` and the autocorrect agents).
 2. The Claude Code and Codex plugins and their `footnote` marketplaces, and the OpenCode plugin files.

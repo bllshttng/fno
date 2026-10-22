@@ -176,8 +176,8 @@ fn row_identity(queue: &str, row: &Value) -> String {
 /// pointed at it: a row this read cannot classify is never counted as held.
 fn unplanned_routes_to_target(row: &Value, floor: &str) -> bool {
     matches!(
-        crate::backlog_ready::effective_verb_with_floor(row, floor),
-        Ok((Some(verb), _)) if verb == "/target"
+        crate::backlog_ready::effective_command_with_floor(row, floor),
+        Ok((Some(command), _)) if command == "/target"
     )
 }
 

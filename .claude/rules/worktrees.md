@@ -2,7 +2,7 @@
 
 The single place saying where git worktrees go and what to do after creating one. Skill defaults that place them elsewhere lose to this rule.
 
-Read [worktree-mechanics](../../docs/architecture/worktree-mechanics.md) for hook internals, removal, cargo storage, and Bash isolation map. Before editing the `WorktreeCreate` hook: a non-zero exit on the wrong payload shape CREATES the worktree you meant to block. In a worktree, Bash refuses `$` expansion, `$(...)`, and loops. Use `printenv`, fno verbs, or `bash <file>`.
+Read [worktree-mechanics](../../docs/architecture/worktree-mechanics.md) for hook internals, removal, cargo storage, and Bash isolation map. Before editing the `WorktreeCreate` hook: a non-zero exit on the wrong payload shape CREATES the worktree you meant to block. In a worktree, Bash refuses `$` expansion, `$(...)`, and loops. Use `printenv`, fno commands, or `bash <file>`.
 
 ## The rule
 
@@ -47,7 +47,7 @@ The removal contract, missing until 174 trees piled up (74 GB). Four buckets, on
 
 Both keep the branch and still block on conflicts, unborn trees, unreadable probes, live claims, a live cwd, and the grace window. A malformed value degrades to `balanced`.
 
-Verb: `fno agents workspace worktree cleanup --merged` (dry-run default, `--apply` executes, from canonical). Detail: [worktree-mechanics](../../docs/architecture/worktree-mechanics.md).
+Command: `fno agents workspace worktree cleanup --merged` (dry-run default, `--apply` executes, from canonical). Detail: [worktree-mechanics](../../docs/architecture/worktree-mechanics.md).
 
 ## Per-project worktree policy
 

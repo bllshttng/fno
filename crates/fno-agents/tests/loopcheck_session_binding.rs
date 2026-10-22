@@ -460,7 +460,7 @@ fn a_space_manifest_binds_through_its_recorded_owner_cwd() {
     let cwd_dir = TempDir::new().unwrap();
     let cwd = cwd_dir.path();
     // The manifest lives under a DIFFERENT tree (the state space), the way
-    // the state verb resolves it in production; it records its checkout.
+    // the state command resolves it in production; it records its checkout.
     let space = TempDir::new().unwrap();
     home.seed_registry(&[]);
     let manifest_path = space.path().join("target-state.md");

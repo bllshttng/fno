@@ -253,7 +253,7 @@ fn normalize(raw: &str, root: &Path) -> String {
     // Ages move between runs; the FACT of an age is the contract, the
     // wall-clock digits are not.
     let raw = scrub_ages(&raw);
-    // The python events layer's store-client verb is skewed against the
+    // The python events layer's store-client command is skewed against the
     // rust front (a pre-existing break, filed separately); its best-effort
     // refusal banner is oracle-infra noise, not leaf contract, so the whole
     // embedded block is dropped before comparison.

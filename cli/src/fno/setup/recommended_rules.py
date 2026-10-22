@@ -114,11 +114,11 @@ def summarize(results: List[RuleResult]) -> str:
         return "no recommended rules to install."
     lines = []
     for r in results:
-        verb = {
+        command = {
             "linked": "linked",
             "copied": "copied",
             "already": "already installed",
             "skipped-real": "SKIPPED (your edited file kept)",
         }.get(r.action, r.action)
-        lines.append(f"  {r.name}: {verb} -> {r.target}")
+        lines.append(f"  {r.name}: {command} -> {r.target}")
     return "\n".join(lines)

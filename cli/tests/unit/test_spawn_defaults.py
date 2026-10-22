@@ -28,16 +28,16 @@ def test_claim_store_writable_is_tri_state(provider, computed_dirs, expected, mo
     assert mux_spawn._claim_store_writable(provider, computed_dirs) is expected
 
 
-def test_is_verb_seed_is_the_first_token_fire_test_over_both_sigils():
+def test_is_command_seed_is_the_first_token_fire_test_over_both_sigils():
     """The fire test accepts both sigils at index 0 and still reads a
-    verb inside prose as a conversation."""
-    from fno.config._dispatch_verbs import is_verb_seed
+    command inside prose as a conversation."""
+    from fno.config._dispatch_commands import is_command_seed
 
-    assert is_verb_seed("$fno:target x-caf8") is True
-    assert is_verb_seed("/fno:target x-caf8") is True
-    assert is_verb_seed("do a /fno:blueprint") is False
-    assert is_verb_seed("/absolute/path/to/thing") is False
-    assert is_verb_seed("review /fno:target x-1") is False
+    assert is_command_seed("$fno:target x-caf8") is True
+    assert is_command_seed("/fno:target x-caf8") is True
+    assert is_command_seed("do a /fno:blueprint") is False
+    assert is_command_seed("/absolute/path/to/thing") is False
+    assert is_command_seed("review /fno:target x-1") is False
 
 
 @pytest.fixture
@@ -74,7 +74,7 @@ def test_transport_sends_the_scan_projection(overlay_answer):
     assert calls[0]["kind"] == "compose"
 
 
-def test_transport_applies_stderr_and_raises_the_verb_exit(overlay_answer):
+def test_transport_applies_stderr_and_raises_the_command_exit(overlay_answer):
     overlay_answer({
         "argv": ["spawn"], "exit": 2,
         "stderr": ["fno agents spawn: refusing"],

@@ -19,7 +19,7 @@ use std::time::Duration;
 const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Gate and envelope `bytes` for `session:pane` by shelling to the pane-send
-/// renderer, the native `fno-agents mail pane-prepare` verb.
+/// renderer, the native `fno-agents mail pane-prepare` command.
 ///
 /// Fails closed on every arm: a missing renderer, a non-zero exit (the pane is
 /// showing an option prompt, hosts no registered agent, or the body cannot be
@@ -57,7 +57,7 @@ pub(super) fn prepare_pane_bytes(
         &pane.to_string(),
     ]);
     if let Some(reason) = style_exception.filter(|r| !r.trim().is_empty()) {
-        // The mail verbs' reasoned one-send exception, same flag on this lane.
+        // The mail commands' reasoned one-send exception, same flag on this lane.
         command.arg("--style-exception").arg(reason);
     }
     let child = command

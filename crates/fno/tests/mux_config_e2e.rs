@@ -192,7 +192,7 @@ fn squad_store_reads_the_legacy_file_under_a_global_state_dir() {
 fn a_global_yaml_state_dir_warns_only_when_it_diverges() {
     // The yaml hint compares VALUES, not substrings: a yaml naming the
     // default root is agreement (the explicit pre-migration spelling), and
-    // warning there would fire on every verb forever. A yaml naming a
+    // warning there would fire on every command forever. A yaml naming a
     // different root IS the divergence the warning exists for - the
     // positive marker that keeps this test from passing vacuously.
     let agree = Scratch::new("muxymla");

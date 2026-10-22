@@ -1,6 +1,6 @@
 """One seam for "long text from an argument or a file".
 
-Every verb that takes prose positionally gains the same ``--*-file`` twin
+Every command that takes prose positionally gains the same ``--*-file`` twin
 through :func:`read_text_arg` (the ``gate_reads.py`` precedent for the
 file-budget gate).
 """

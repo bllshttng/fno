@@ -1518,7 +1518,7 @@ fn disp_for(action_id: &str, bindings: &[KeyBinding]) -> Option<String> {
 /// uses. A SEPARATE scope, not a rebind: prefix chords read a byte only after
 /// the prefix, menu keys read it bare inside a popup, so the two layers never
 /// consult each other's tables (ruling d-a5e7569d - `x` stays kill-pane after
-/// a prefix and becomes the destructive verb inside a menu).
+/// a prefix and becomes the destructive command inside a menu).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuKeyBinding {
     pub action: &'static str,
@@ -1526,8 +1526,8 @@ pub struct MenuKeyBinding {
 }
 
 /// The shipped in-menu accelerator table: app vocabulary inside the open menu
-/// (`r` renames, `x` is the destructive verb, `n` and the angle brackets drive
-/// the tab verbs). One byte MAY serve two action ids here (`close-tab` and
+/// (`r` renames, `x` is the destructive command, `n` and the angle brackets drive
+/// the tab commands). One byte MAY serve two action ids here (`close-tab` and
 /// `remove-row` never share a popup), so collision rules live with the caller,
 /// which knows which menu is open. A static slice: lookups run per popup row
 /// at build time and per offered action on every in-menu keypress.
@@ -1570,7 +1570,7 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "move-tab-to",
         key: b'#',
     },
-    // The row-menu verbs, teachable by keyboard now. Letters reuse
+    // The row-menu commands, teachable by keyboard now. Letters reuse
     // the sideline's own vocabulary so the two scopes teach one keyboard:
     // `s` stop (the sideline spends `x` on stop-then-remove and `X` on bulk
     // reap, so the menu's own free mnemonic takes Stop), `p` peek (the
@@ -1607,7 +1607,7 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         key: b'l',
     },
     // `c` closes the portal seat only - the viewer, never the row it
-    // shows; `x` stays the destructive row verb.
+    // shows; `x` stays the destructive row command.
     MenuKeyBinding {
         action: "close-portal",
         key: b'c',
@@ -2792,7 +2792,7 @@ mod tests {
             );
             assert_eq!(menu_byte_for(mb.action), Some(mb.key), "{}", mb.action);
         }
-        // The tab verbs read as this app in both scopes (menu n and angle
+        // The tab commands read as this app in both scopes (menu n and angle
         // brackets beside the prefix chords); Diff stays prefix-only - a
         // row-menu action with no settled menu meaning renders no key.
         assert!(

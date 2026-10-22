@@ -220,7 +220,7 @@ class EffectStore:
         effect-submit op owns the insert, the outbox row, and the DENY
         refusal. The db path rides the payload so a test's tmp store stays tmp.
         """
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         payload: dict[str, Any] = {
             "op": "effect-submit",
@@ -235,8 +235,8 @@ class EffectStore:
         if self._events_path is not None:
             payload["events_path"] = str(self._events_path)
         try:
-            out = verb_call("authorized-merge", payload)
-        except VerbUnavailable as exc:
+            out = command_call("authorized-merge", payload)
+        except CommandUnavailable as exc:
             _unavailable_refusal(f"the effect store door is unavailable ({exc})")
         if out.get("result") == "refused":
             if out.get("reason") == "denied_effect_class":

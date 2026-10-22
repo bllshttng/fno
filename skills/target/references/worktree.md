@@ -96,9 +96,9 @@ Pipelines that need PR cross-linking (cross-project) rely on the
 `feature/{slug}` convention being identical across repos. Don't override
 unless you know what you're doing.
 
-## Verbs reference
+## Commands reference
 
-| Verb | Purpose |
+| Command | Purpose |
 |------|---------|
 | `create <project> <slug> [--mode] [--branch]` | Create or attach to a worktree. JSON output includes `path`, `branch`, `existing`. |
 | `setup <worktree-path> [--force]` | Install deps + copy env files. Cached on lockfile hash. |
@@ -115,7 +115,7 @@ no longer treats as canonical:
 - `~/conductor/workspaces/<project>/` (used inconsistently when settings
   declared it but most pipelines ignored the declaration)
 
-After this module lands, run the migration verb once per machine to
+After this module lands, run the migration command once per machine to
 classify and remove orphaned worktrees. It never runs automatically.
 
 ```bash

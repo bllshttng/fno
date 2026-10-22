@@ -126,7 +126,7 @@ else
     bad "missing fno-agents: rc=$gate_rc out=${#out} rows=$(read_miss_events)"
 fi
 
-# --- relay case: the verb's stdout IS the payload, byte-for-byte -----------
+# --- relay case: the command's stdout IS the payload, byte-for-byte -----------
 
 fresh_env
 seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
@@ -135,7 +135,7 @@ out="$(run_hook "$STDIN_OK")" && relay_rc=0 || relay_rc=$?
 unset FNO_STUB_OUT
 expected_args="mail-notify-self --bus-dir $STATE/bus --session $SID"
 if [[ "$relay_rc" -eq 0 && "$out" == "$ENVELOPE" && "$(cat "$ARGS_LOG")" == "$expected_args" ]]; then
-    ok "relay: envelope byte-for-byte through fd 3, argv names the native verb"
+    ok "relay: envelope byte-for-byte through fd 3, argv names the native command"
 else
     bad "relay: rc=$relay_rc args=$(cat "$ARGS_LOG" 2>/dev/null)"
 fi
@@ -149,9 +149,9 @@ out="$(run_hook "$STDIN_OK")" && fail_rc=0 || fail_rc=$?
 unset FNO_STUB_FAIL FNO_STUB_ERR FNO_STUB_RC
 if [[ "$fail_rc" -eq 0 && -z "$out" ]] \
     && miss_row_holding '.rc == 1 and .stderr_tail == "identity refused"' >/dev/null; then
-    ok "verb failure: turn proceeds, miss row names rc and stderr"
+    ok "command failure: turn proceeds, miss row names rc and stderr"
 else
-    bad "verb failure: rc=$fail_rc out=${#out} rows=$(read_miss_events)"
+    bad "command failure: rc=$fail_rc out=${#out} rows=$(read_miss_events)"
 fi
 export FNO_STUB_OUT="$ENVELOPE"
 out="$(run_hook "$STDIN_OK")" && retry_rc=0 || retry_rc=$?

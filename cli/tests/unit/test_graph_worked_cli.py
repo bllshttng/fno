@@ -1,4 +1,4 @@
-"""Door tests: the hidden ``fno backlog worked`` authority verb.
+"""Door tests: the hidden ``fno backlog worked`` authority command.
 
 The wheel spelling tombstones; these pin the native door's shapes through
 the binary, with a PATH stub for the roster listing so the fleet read is

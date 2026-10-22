@@ -9,7 +9,7 @@
 # name (the impeccable pin precedent; AC6-FR).
 #
 # Usage:
-#   scripts/pin-skill.sh pin   <name> --to "<verb> [mode]" [--desc "text"] [--replace]
+#   scripts/pin-skill.sh pin   <name> --to "<command> [mode]" [--desc "text"] [--replace]
 #   scripts/pin-skill.sh unpin <name>
 #   scripts/pin-skill.sh list
 #
@@ -34,11 +34,11 @@ pin-skill.sh - create / remove top-level shortcut "pin" skills that redirect
 to a cluster router mode (epic, group 5).
 
 Usage:
-  scripts/pin-skill.sh pin   <name> --to "<verb> [mode]" [--desc "text"] [--replace]
+  scripts/pin-skill.sh pin   <name> --to "<command> [mode]" [--desc "text"] [--replace]
   scripts/pin-skill.sh unpin <name>
   scripts/pin-skill.sh list
 
-A pin writes skills/<name>/SKILL.md as a prose redirect to /<verb> [mode]
+A pin writes skills/<name>/SKILL.md as a prose redirect to /<command> [mode]
 (never a Skill() call), carrying the marker <!-- fno-pinned-skill -->
 so unpin only ever removes generated shims, never a user-authored skill of
 the same name. --replace overwrites an existing non-pin skill's SKILL.md
@@ -88,7 +88,7 @@ cmd_pin() {
       *)         die "pin: unknown flag '$1'" ;;
     esac
   done
-  [[ -n "$target" ]] || die "pin: --to \"<verb> [mode]\" required"
+  [[ -n "$target" ]] || die "pin: --to \"<command> [mode]\" required"
   [[ "$name" =~ ^[a-z][a-z0-9_-]*$ ]] || die "pin: name must match [a-z][a-z0-9_-]*"
   [[ "$desc" != *'"'* ]] || die "pin: --desc must not contain a double-quote"
   [[ -n "$desc" ]] || desc="Shortcut for /${target}."

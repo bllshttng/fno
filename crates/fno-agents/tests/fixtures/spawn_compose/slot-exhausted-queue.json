@@ -21,7 +21,7 @@
     "stderr": [
       "fno agents spawn: slot skip agents.profiles.target.lanes[0] capacity=exhausted window=7d age=3h source=usage"
     ],
-    "stdout": "{\"status\": \"refused\", \"reason\": \"slot_exhausted\", \"verb\": \"target\", \"lanes\": [{\"name\": \"agents.profiles.target.lanes[0]\", \"reason\": \"capacity=exhausted window=7d age=3h source=usage\"}], \"retry_at\": 1893456000.0}\n"
+    "stdout": "{\"status\": \"refused\", \"reason\": \"slot_exhausted\", \"command\": \"target\", \"lanes\": [{\"name\": \"agents.profiles.target.lanes[0]\", \"reason\": \"capacity=exhausted window=7d age=3h source=usage\"}], \"retry_at\": 1893456000.0}\n"
   },
   "facts": {
     "role_protected": null,
@@ -29,7 +29,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

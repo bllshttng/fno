@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fno.rust_binary import VerbUnavailable, call_binary_json, find_dev_binary, resolve_binary
+from fno.rust_binary import CommandUnavailable, call_binary_json, find_dev_binary, resolve_binary
 
 if TYPE_CHECKING:  # served by __getattr__ below; type checkers only
     KNOWN_HARNESSES: tuple[str, ...]
@@ -28,7 +28,7 @@ def _read_roster() -> dict[str, tuple[str, ...]]:
         "harness-roster", timeout=15, binary=find_dev_binary() or resolve_binary()
     )
     if error is not None:
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             "the harness roster lives in the fno-agents binary (provider.rs"
             " KNOWN_HARNESSES) and the read failed: {error}; run `fno doctor"
             " update --rust` or set FNO_AGENTS_BIN".format(error=error)
@@ -38,7 +38,7 @@ def _read_roster() -> dict[str, tuple[str, ...]]:
         # A binary older than the providers key answers known alone.
         names = payload.get(key, out.get("known")) if isinstance(payload, dict) else None
         if not names or not all(isinstance(n, str) and n for n in names):
-            raise VerbUnavailable(
+            raise CommandUnavailable(
                 f"fno-agents harness-roster answered no usable {key!r}: {payload!r}"[:200]
             )
         out[key] = tuple(names)
@@ -47,7 +47,7 @@ def _read_roster() -> dict[str, tuple[str, ...]]:
     # every non-seam harness would pass the thread-seam gate.
     spawn = payload.get("spawn") if isinstance(payload, dict) else None
     if not spawn or not all(isinstance(n, str) and n for n in spawn):
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             f"fno-agents harness-roster answered no usable 'spawn': {payload!r}"[:200]
         )
     out["spawn"] = tuple(spawn)

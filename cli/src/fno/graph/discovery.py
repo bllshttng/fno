@@ -120,7 +120,7 @@ def candidates(
     floor is the threshold, and a cap is a second one that re-hides exactly
     the low-score family the fts lane exists to recover.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     if limit is not None and limit < 1:
         return CandidateResults()
@@ -277,7 +277,7 @@ def assess(
 ) -> Assessment:
     """Assess one node without changing it or making an external mutation.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     candidates_list = list(cands)
     pr_number = node.get("pr_number")

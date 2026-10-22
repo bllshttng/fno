@@ -1,6 +1,6 @@
 //! `fno-agents pane-rebind`: the mux workspace restore's registry rebind
 //! door. Transport-only (the shrink law allows no new client action): the
-//! mux server's restore walk is the only caller, and it shells this verb
+//! mux server's restore walk is the only caller, and it shells this command
 //! OFF its core loop after a resume spawn so the row it just re-seated
 //! names the new pane, carries the new pid, and reads live in the same
 //! step its pane starts. Before this door a restored codex lead came back
@@ -8,7 +8,7 @@
 //! mail, pane send, and `fno agents resume` all refused it.
 //!
 //! The caller owns the second-writer decision (its resume walk refuses a
-//! live pane before spawning); this verb only joins the row.
+//! live pane before spawning); this command only joins the row.
 
 use crate::paths::AgentsHome;
 use crate::state::{self, MuxRef, RegistryEntry};
@@ -103,7 +103,7 @@ fn parse_args(args: &[String]) -> Result<RebindArgs<'_>, (i32, String)> {
     })
 }
 
-/// The pure half, on an injected home. The receipt line is the verb's own
+/// The pure half, on an injected home. The receipt line is the command's own
 /// report; the caller quotes it into the restore row's notice.
 fn rebind(args: &[String], home: &AgentsHome) -> Result<String, (i32, String)> {
     let parsed = parse_args(args)?;

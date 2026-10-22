@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Cross-CLI Tool Mapping
 
 When this skill references Claude Code tools, use the equivalent on your platform:

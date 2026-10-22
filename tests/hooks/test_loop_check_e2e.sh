@@ -6,7 +6,7 @@
 # Gap 1: the REAL binary wired through the REAL shim produces the right exit
 #         codes and emits real events into the project events.jsonl.
 # Gap 2: the spellings that init-target-state.sh writes for budget fields are
-#         the spellings that fno-agents loop-check reads (init->verb coherence).
+#         the spellings that fno-agents loop-check reads (init->command coherence).
 #
 # Tests:
 #   Case A (green path): real shim + real binary + green gh stub -> exit 0 +
@@ -14,7 +14,7 @@
 #   Case B (block path): real shim + real binary + no-PR gh stub + no promise ->
 #           exit 2 + stderr mentions continue message.
 #   Case C (budget coherence): init writes unattended settings.yaml format that
-#           verb reads; session cost > cap -> Budget termination.
+#           command reads; session cost > cap -> Budget termination.
 #   Cases D/E: real approval store -> production fno mux -> evaluator -> real
 #           loop-check + each stop hook -> real finalize + durable receipt.
 #   Case F: malformed active delivery stays blocked across the production mux.
@@ -62,7 +62,7 @@ if [[ ! -x "$REAL_BIN" ]]; then
     exit 77
 fi
 
-# The event store's rows verb lives in the fno CLI binary, not fno-agents.
+# The event store's rows command lives in the fno CLI binary, not fno-agents.
 CLI_BIN="${REPO_ROOT}/crates/fno/target/debug/fno"
 if [[ ! -x "$CLI_BIN" ]]; then
     CLI_BIN="$(command -v fno || true)"
@@ -87,7 +87,7 @@ make_stub() {
 
 # ── helper: green gh stub (from MockBins::green() in loop_check.rs) ──────────
 # $2 = headRefOid the stub reports; must equal the test repo's real HEAD or
-# the verb's unpushed-head guard (codex P1 on #447) blocks DonePRGreen.
+# the command's unpushed-head guard (codex P1 on #447) blocks DonePRGreen.
 make_green_gh() {
     local path="$1"
     local head_oid="${2:-}"
@@ -327,7 +327,7 @@ assert_delivery_artifacts() {
     local dir="$1" session_id="$2" events rows
     events="$(cd "$dir" && HOME="$dir/home" env -u FNO_EVENTS_PATH "$REAL_BIN" state path events)"
     # The store commit is the write boundary: grep the committed rows, never
-    # the raw file (the same contract Case A reads through). The verb returns
+    # the raw file (the same contract Case A reads through). The command returns
     # envelope lines as escaped JSON strings; jq -r unwraps them so the
     # needles below match the rows the way every other reader sees them.
     rows="$("$CLI_BIN" doctor event rows --events "$events" 2>/dev/null | jq -r '.[]' 2>/dev/null || true)"
@@ -553,7 +553,7 @@ STATE
         cb_ok=false
     fi
 
-    # Shim echoes the block message from the verb to stderr
+    # Shim echoes the block message from the command to stderr
     if [[ -z "$HOOK_STDERR" ]]; then
         fail "Case B: expected a message on stderr from the shim, got nothing"
         cb_ok=false
@@ -564,13 +564,13 @@ STATE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Case C: init->verb budget coherence (Gap 2)
+# Case C: init->command budget coherence (Gap 2)
 # Writes config.toml in the flat budget.unattended.cost_cap_usd format that
 # init-target-state.sh resolves from config.sh and that loopcheck.rs
 # parse_settings() reads as a TOML table.
 # Session cost 0.05 > cap 0.01 -> Budget termination.
 # ─────────────────────────────────────────────────────────────────────────────
-log "Case C: budget coherence (init format -> verb reads -> Budget trip)"
+log "Case C: budget coherence (init format -> command reads -> Budget trip)"
 {
     TMP_DIR="$(mktemp -d)"
     HOME_DIR="${TMP_DIR}/home"
@@ -603,7 +603,7 @@ TOML
 {"entries":[{"session_id":"${SESSION_ID}","cost_usd":0.05,"tokens":1000}]}
 LEDGER
 
-    # Write a manifest with attended: false (so verb picks unattended cap 0.01)
+    # Write a manifest with attended: false (so command picks unattended cap 0.01)
     STATE_FILE="${TMP_DIR}/.fno/target-state.md"
     cat > "$STATE_FILE" <<STATE
 ---

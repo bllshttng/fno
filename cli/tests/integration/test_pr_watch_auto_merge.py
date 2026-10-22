@@ -1,7 +1,7 @@
 """Integration: a parked granted worker's PR merges through the watcher.
 
 The journey this file proves (end to end through the REAL drain; the
-authorized-merge door is faked at ``verb_call``):
+authorized-merge door is faked at ``command_call``):
 
 1. CI pending                              -> the door answers held and the
                                               drain emits the held phase; no
@@ -48,8 +48,8 @@ def _arm_world(
 ) -> None:
     """The real drain over a stubbed authorized-merge door: pending checks
     hold, green authorizes and merges."""
-    def _door(verb, payload, timeout=None):
-        if verb == "authorized-merge" and payload.get("op") == "merge":
+    def _door(command, payload, timeout=None):
+        if command == "authorized-merge" and payload.get("op") == "merge":
             if checks_pending:
                 return {
                     "exit": 2,
@@ -61,9 +61,9 @@ def _arm_world(
                 }
             return {"exit": 0, "outcome": "merged", "detail": "cafe" * 6,
                     "reason": ""}
-        raise AssertionError(f"journey stub: unexpected verb_call {verb} {payload!r}")
+        raise AssertionError(f"journey stub: unexpected command_call {command} {payload!r}")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _door)
+    monkeypatch.setattr("fno.rust_binary.command_call", _door)
 
 
 def _candidate(tmp_path: Path) -> PrCandidate:

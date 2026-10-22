@@ -1,7 +1,7 @@
 //! Transcript reads, the manifest line reader, and the adopted-row registry
 //! write for claude workers.
 //!
-//! The live heal path in `client_verbs` mints its rows directly; this module
+//! The live heal path in `client_commands` mints its rows directly; this module
 //! carries what stays shared: the transcript readers (`transcript_stamp`,
 //! `transcript_model`, `provider_from_route_settings`), the manifest line
 //! reader (`manifest_field`), and `upsert_adopted_row`. The claim helpers

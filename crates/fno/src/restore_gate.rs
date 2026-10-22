@@ -5,8 +5,8 @@
 
 use crate::agents_view::{self, RegistryAgent};
 
-// The registry rows the restore verb classifies against, read fresh from
-// the registry file at verb time. In tests, `RESTORE_REGISTRY_ROWS`
+// The registry rows the restore command classifies against, read fresh from
+// the registry file at command time. In tests, `RESTORE_REGISTRY_ROWS`
 // overrides the file (a unit test cannot populate the real registry, and
 // reading it would clobber the fake rows the test installed).
 #[cfg(test)]

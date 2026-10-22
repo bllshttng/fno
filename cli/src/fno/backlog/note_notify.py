@@ -1,7 +1,7 @@
 """Deliver a `fno backlog note` to the people bound to the node.
 
 Resolution runs BEFORE the append: nobody bound, or a fault, refuses and writes
-nothing. Contract: docs/architecture/backlog-graph-verb-contracts.md.
+nothing. Contract: docs/architecture/backlog-graph-command-contracts.md.
 """
 from __future__ import annotations
 

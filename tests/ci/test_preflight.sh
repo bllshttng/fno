@@ -47,7 +47,7 @@ GLOBAL_EVENTS="$TMP/global-events.jsonl"
 : > "$GLOBAL_EVENTS"
 rm -f "$TMP/global-events.db"
 # The store commit is the write boundary: a receipt lands in events.db beside
-# the journal, so every read here goes through the rows verb and a reset
+# the journal, so every read here goes through the rows command and a reset
 # removes the sibling store too.
 ROWS_BIN="${FNO_BIN:-}"
 if [[ -z "$ROWS_BIN" ]]; then
@@ -206,7 +206,7 @@ EOF
 cat > "$FIX/scripts/ci/check-tracker-consumers.sh" <<'EOF'
 #!/usr/bin/env bash
 [[ -f POISON ]] && { echo "check-tracker-consumers: POISON step failed"; exit 1; }
-echo "check-tracker-consumers: OK - verbs classified, reads attributed, self-test green (stub)"
+echo "check-tracker-consumers: OK - commands classified, reads attributed, self-test green (stub)"
 EOF
 # File-budget gate stub: the leg runs the CANONICAL tree's copy, and this
 # fixture repo IS its own canonical root - without a stub the leg exits 127
@@ -261,8 +261,8 @@ QUEUE_BIN="$(command -v fno-agents 2>/dev/null || true)"
 QUEUE_OK=0
 if [[ -n "$QUEUE_BIN" ]]; then
     "$QUEUE_BIN" claim queue front --dir "$TMP/qcap-probe.d" >/dev/null 2>&1
-    # 0/1 = the verb exists (1 is "not at the front"); 2 = an old binary
-    # without the queue verbs. A capable probe read never creates the dir.
+    # 0/1 = the command exists (1 is "not at the front"); 2 = an old binary
+    # without the queue commands. A capable probe read never creates the dir.
     [[ $? -le 1 ]] && QUEUE_OK=1
 fi
 need_queue() {

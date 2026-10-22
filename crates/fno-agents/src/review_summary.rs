@@ -1,7 +1,7 @@
 //! `fno-agents review-summary`: the one human display line for a reviewed head.
 //!
 //! The merge gate reads the attestation journals and never the PR
-//! body, so the body may carry a claim only THIS verb authors: it reads the
+//! body, so the body may carry a claim only THIS command authors: it reads the
 //! same journal and prints the reviewed-at line for a branch whose latest
 //! attestation is a `pass` pinned to `--head`. Any other state - a fail, a
 //! stale head, a missing or unreadable events file - prints nothing and
@@ -39,7 +39,7 @@ fn sha_matches(a: &str, b: &str) -> bool {
     }
     let n = a.len().min(b.len());
     // get() (not slice indexing): a non-hex ledger field must degrade to a
-    // non-match, never panic the display verb.
+    // non-match, never panic the display command.
     n >= 7 && a.get(..n) == b.get(..n)
 }
 
@@ -218,7 +218,7 @@ pub fn evidence(events_text: &str, items: &[Value]) -> Value {
 /// The evidence mode's one round-trip: stdin text in (None = stdin read
 /// failed), one JSON object out, `(output, exit_code)`. Unlike the display
 /// line, a failure here is NOT deliberate silence - a silent evidence read is
-/// the zero-coverage readout this verb exists to fix - so a non-array stdin or
+/// the zero-coverage readout this command exists to fix - so a non-array stdin or
 /// an unreadable ledger prints `{"error": ...}` and exits 2.
 fn evidence_response(events_path: &Path, stdin_text: Option<&str>) -> (String, i32) {
     let Some(text) = stdin_text else {

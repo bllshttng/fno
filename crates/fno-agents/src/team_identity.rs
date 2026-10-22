@@ -1,14 +1,14 @@
-//! `team-identity`: the lock-time identity match for the team verbs,
+//! `team-identity`: the lock-time identity match for the team commands,
 //! reached as payload kind `team-identity` on the existing `spawn-overlay`
-//! verb (law d-fe66560a bars new top-level verbs, hidden ones included).
+//! command (law d-fe66560a bars new top-level commands, hidden ones included).
 //!
-//! Three team verbs resolve a target row before the registry lock and used
+//! Three team commands resolve a target row before the registry lock and used
 //! to find that row again by NAME alone under the lock:
 //! `promote_existing_session` stamps its target, `reclaim_team` finds its
 //! holder, and `lead done` vacates the caller's own row. Registry names are
 //! reclaimable (an exited row is dropped and a new one appended under the
 //! old name), so a name rebound inside that window was teamed, reclaimed
-//! or vacated in place of the session the caller resolved. The verbs now
+//! or vacated in place of the session the caller resolved. The commands now
 //! carry the row's session id from the pre-lock read and this kind matches
 //! name and session as a pair under the lock, the way the lead manifest
 //! removal compares `expected_harness_session_id`. Rows whose session

@@ -33,7 +33,7 @@ MOCKBIN="$TMP/bin"; mkdir -p "$MOCKBIN"
 MOCKSTATE="$TMP/mock"; mkdir -p "$MOCKSTATE"
 cat > "$MOCKBIN/fno" <<'MOCK'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -44,8 +44,8 @@ case "$1 $2" in
 esac
 set -uo pipefail
 S="${MOCK_STATE:?}"
-sub="${1:-}"; verb="${2:-}"
-case "$sub $verb" in
+sub="${1:-}"; command="${2:-}"
+case "$sub $command" in
   "backlog get")
     id="${3:-}"
     [[ -f "$S/get_err" ]] && exit 1            # simulate a transient read failure
@@ -83,7 +83,7 @@ case "$sub $verb" in
     printf 'rm %s\n' "${3:-}" >> "$S/rm.log"; echo "removed ${3:-}" ;;
   "agents name")
     id="${3:-}"
-    # x-57fe: the dispatch carries --verb t (the bridge refuses a verb-less
+    # x-57fe: the dispatch carries --command t (the bridge refuses a command-less
     # mint), and the minted name is the canonical hex shape.
     printf 't-%s\n' "${id##*-}" ;;
   "agents spawn")

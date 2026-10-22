@@ -493,7 +493,7 @@ pub fn run_hook(_args: &[String]) -> i32 {
 
 /// Dispatch one `effect-` op from an `authorized-merge` payload, the same
 /// transport the hold, freeze, grant and status ops ride. Always answers with
-/// a JSON receipt; the verb's exit status answers only whether the op RAN.
+/// a JSON receipt; the command's exit status answers only whether the op RAN.
 pub fn run_op(op: &str, payload: &Value) -> String {
     match op {
         "effect-classify" => {

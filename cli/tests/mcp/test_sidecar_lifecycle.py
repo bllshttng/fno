@@ -320,7 +320,7 @@ class TestSidecarChannelDelivery:
 
 
 class TestMcpSendCli:
-    """`fno agents mcp send` verb: stdin envelope -> send_to_channel, exit codes,
+    """`fno agents mcp send` command: stdin envelope -> send_to_channel, exit codes,
     and the Typer single-command collapse guard."""
 
     def test_malformed_envelope_exits_2_without_calling_sidecar(self, monkeypatch) -> None:
@@ -340,7 +340,7 @@ class TestMcpSendCli:
         assert result.exit_code == 2, result.output
         assert called["n"] == 0
 
-    def test_send_verb_delivers_to_registered_channel(
+    def test_send_command_delivers_to_registered_channel(
         self, short_home: Path, monkeypatch
     ) -> None:
         """End-to-end: `fno agents mcp send` hands a stdin envelope across the
@@ -349,7 +349,7 @@ class TestMcpSendCli:
 
         from fno.mcp.cli import mcp_app
 
-        # Point the verb's default socket resolution at the spawned sidecar.
+        # Point the command's default socket resolution at the spawned sidecar.
         home = short_home.resolve()
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setenv("FNO_TEST_HERMETIC", "0")

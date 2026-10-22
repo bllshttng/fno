@@ -85,7 +85,7 @@ Liveness is the daemon's job (the watchdog evicts stale drivers; recovery clears
 
 - Rust unit: ring cursor, drive mode/authority, control-frame parse, status eligibility (LD28), sentinel detector (incl. split / double-lead / not-followed), step buffer (per-line / multi-line / per-byte).
 - Rust real-subprocess e2e (`tests/drive_e2e.rs`): full WS keystroke -> PTY -> output roundtrip with window + event lifecycle; second-driver Busy + non-PTY/ghost rejection; heartbeat watchdog eviction; watch input rejection + no-window + multi-watcher.
-- Python: `drive_authority` detection across modes + corrupt-state skip + the CLI verb's exit codes.
+- Python: `drive_authority` detection across modes + corrupt-state skip + the CLI command's exit codes.
 - Bash (W8): `tests/hooks/test_drive_authority_enforcement.sh` - the superuser-authority matrix integration test. Wired into `cli-ci`.
   - Real-CLI detection across interactive/step/paranoid (active) and watch/none/corrupt (inactive).
   - The `drive_authority_active` seam: exit-code passthrough. It fails open with no `fno` binary.

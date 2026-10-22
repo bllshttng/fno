@@ -165,7 +165,7 @@ fn build_bench() -> Bench {
         spaces
     );
     write(&config, &config_body);
-    // The decision verb resolves its settings from the ambient global slot
+    // The decision command resolves its settings from the ambient global slot
     // (stop.rs spawns it outside FNO_AGENTS_BIN, so no explicit --settings
     // arrives): mirror the bench config to <HOME>/.fno/config.toml.
     write(&base.join(".fno").join("config.toml"), &config_body);
@@ -231,7 +231,7 @@ fn build_bench() -> Bench {
         ),
     );
 
-    // The pinning shim: the decision verb gets explicit output paths so
+    // The pinning shim: the decision command gets explicit output paths so
     // samples never read ambient state; ownership resolution is pinned to the
     // fixture manifest via FNO_FIXTURE_STATE (per-fixture env); everything
     // else execs real.

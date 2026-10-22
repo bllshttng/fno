@@ -17,7 +17,7 @@ prompt: |
   disappears from `fno agents list` while the pane keeps running."
 
   Two files could plausibly own this fix:
-  - `cli/src/fno/agents/cli.py` - the registry-removal verb itself.
+  - `cli/src/fno/agents/cli.py` - the registry-removal command itself.
   - `cli/src/fno/agents/keeper_lane.py` - the pane's pty-master keeper,
     which outlives the registry row by design (a different, unrelated
     invariant: the keeper is SUPPOSED to survive a server restart).

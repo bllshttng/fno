@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Phase Invocations
 
 **Load when:** dispatching a phase. Covers the phase routing table, invocation logic, scratchpad writes, confirmation check, Linear status sync, and the validate-phase artifact write.
@@ -23,7 +23,7 @@ For each phase, read the resolved skill/command from `domain_phases` in target-s
 - If value is a skill name (contains `:`): invoke via the Skill tool
 - If value is a bash command (contains spaces or starts with a command): run via Bash
 - If value is `"none"`: skip phase (the corresponding skip flag in the manifest controls this)
-- The plan phase is NOT domain-resolved (always uses `fno:blueprint`). `/think` is not a pipeline phase (operator ruling). It is a research verb outside the delivery path. It never runs automatically here. Run it only as a deliberate choice before `/blueprint`.
+- The plan phase is NOT domain-resolved (always uses `fno:blueprint`). `/think` is not a pipeline phase (operator ruling). It is a research command outside the delivery path. It never runs automatically here. Run it only as a deliberate choice before `/blueprint`.
 
 ## Phase Details Table
 
@@ -36,7 +36,7 @@ For each phase, read the resolved skill/command from `domain_phases` in target-s
 | 2. Execute | `cross_project: true` (legacy only) | Migration shim — the cross-project pipeline was removed. WARN + route to spawn-into-project (see SKILL.md "CROSS-PROJECT IS RETIRED"); then run `domain_phases.execute` for this session's own project. Do NOT invoke a cross-project pipeline skill. |
 | 2.5 Clean | Only with `clean` modifier | `/simplify` on changed files |
 | 3. Review | Before `/fno:ship pr create`, on the final local HEAD | `/fno:review <size> --comment` (Codex `$fno:review`) runs in this session; see [phase-bodies.md](phase-bodies.md). Size: medium under 300 changed lines, high above, xhigh for risky surfaces. Findings hold on branch and HEAD and post when the PR opens |
-| 4. Validate | Always (BEFORE PUSH) | `domain_phases.validate` (default: project-detected); CI green on the PR is verified by the loop-check verb at promise time |
+| 4. Validate | Always (BEFORE PUSH) | `domain_phases.validate` (default: project-detected); CI green on the PR is verified by the loop-check command at promise time |
 | 4.5 Docs | **Default: YES** (skip only with `--no-docs` or config) | `domain_phases.docs` (default: `fno:ship-docs`); docs MUST land BEFORE ship so they ride in the same PR |
 | 5. Browser | If `has_ui` (skip with `--no-browser`) | `fno:tdd` (browser-testing reference); advisory run-and-log, never gates completion and is not a loop-check input; run BEFORE ship so any findings ride in the same PR |
 | 6. Ship | Default YES (skip with `--no-ship`) | `domain_phases.ship` (default: `fno:ship pr create`); run AFTER docs + browser |
@@ -77,4 +77,4 @@ If the linear plugin is not installed, skip all Linear sync steps.
 
 The `output_validated` GATE, however, reads external truth (control-plane collapse step 1): the stop hook checks `gh pr checks` on the recorded PR at promise time. There is no validate artifact, no provenance requirement, and no verifier to satisfy - CI green on the PR is the gate; CI red or pending blocks the promise regardless of any state boolean. Do not write `.fno/artifacts/validate-*.md`; nothing reads it.
 
-After the validate command exits 0 the local run is done. The loop-check verb verifies CI on the PR at promise time; there is no state boolean to write.
+After the validate command exits 0 the local run is done. The loop-check command verifies CI on the PR at promise time; there is no state boolean to write.

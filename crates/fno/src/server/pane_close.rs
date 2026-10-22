@@ -496,7 +496,7 @@ impl Core {
         // The tab (and possibly its squad) died: every client whose view named
         // it re-anchors in this same mutation, then the push delivers
         // ModeSync -> Layout -> frames in order (AC2-ERR).
-        self.tab_areas.remove(&tid);
+        self.sizing.areas.remove(&tid);
         // Closing the last pane removes the tab too, so it must
         // honor the same de-persist contract as Command::CloseTab: a
         // template tab drops its stored spec or restore resurrects the

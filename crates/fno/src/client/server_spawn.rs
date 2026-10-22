@@ -34,6 +34,16 @@ pub(super) fn spawn_server(path: &Path) -> Result<(), String> {
             crate::backlog_view::board_scope_wire(&scope),
         );
     }
+    if std::env::var_os("FNO_MUX_WINDOW_SIZE").is_none() {
+        // Same latch as the scope above: `mux.window_size` rides the env, an
+        // unset or unknown value leaves the server on its `latest` default.
+        if let Some(word) = crate::config_defaults::lookup_key("mux.window_size")
+            .as_deref()
+            .and_then(window_size_word)
+        {
+            cmd.env("FNO_MUX_WINDOW_SIZE", word);
+        }
+    }
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
@@ -110,6 +120,13 @@ fn shell_integration_off() -> bool {
         .unwrap_or(false)
 }
 
+/// A `mux.window_size` value the server understands, else `None`.
+pub(crate) fn window_size_word(raw: &str) -> Option<&'static str> {
+    ["smallest", "latest", "largest"]
+        .into_iter()
+        .find(|word| *word == raw.trim())
+}
+
 /// The one off-switch, matched exactly like the Rust pane-spawn side
 /// (`pty::integration_disabled`): only a trimmed `off` disables injection.
 pub(crate) fn config_says_off(stdout: &str) -> bool {
@@ -118,7 +135,7 @@ pub(crate) fn config_says_off(stdout: &str) -> bool {
 
 #[cfg(test)]
 mod spawn_config_tests {
-    use super::config_says_off;
+    use super::{config_says_off, window_size_word};
 
     /// The env bridge from config.toml to the interactive server's
     /// latched env: must mirror `pty::integration_disabled` - exactly
@@ -131,5 +148,10 @@ mod spawn_config_tests {
         assert!(!config_says_off("mux-panes\n"));
         assert!(!config_says_off("OFF"));
         assert!(!config_says_off(""));
+        // The window-size latch passes only the three policy words.
+        assert_eq!(window_size_word(" smallest\n"), Some("smallest"));
+        assert_eq!(window_size_word("largest"), Some("largest"));
+        assert_eq!(window_size_word("Latest"), None);
+        assert_eq!(window_size_word(""), None);
     }
 }

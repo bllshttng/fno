@@ -222,7 +222,7 @@ fn peek_last_report(handle: &str) -> Result<String, String> {
 fn peek_texts(handle: &str) -> Result<Vec<String>, String> {
     let n = PEEK_RECORDS.to_string();
     let (code, out, err) =
-        crate::lead_checkin::fno_verb(&["agents", "peek", handle, "--json", "-n", &n])?;
+        crate::lead_checkin::fno_command(&["agents", "peek", handle, "--json", "-n", &n])?;
     if code != 0 {
         let cause = crate::lead_checkin::stderr_cause(&err);
         return Err(if cause == "no stderr" {
@@ -328,7 +328,7 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
 
 /// The pure fold: open pages whose question_id the stem names and whose
 /// team equals this check-in's canonical scope, oldest first. Rows carry
-/// what the render needs to name the decide verb.
+/// what the render needs to name the decide command.
 pub(crate) fn held_from_pages(pages: &[(String, String)], scope: &str) -> Vec<Value> {
     let canon = crate::territory::canonical_scope(scope);
     let mut rows: Vec<(u64, Value)> = Vec::new();
@@ -542,7 +542,7 @@ fn reading_rows(
     }
 }
 
-/// The held render block: the decide and clear verbs one line per question.
+/// The held render block: the decide and clear commands one line per question.
 pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
     let (error, _value, rows) = reading_rows(readings, "held");
     let mut lines = Vec::new();
@@ -551,8 +551,8 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
         return lines;
     }
     // This team's questions: the rows carry node, question id and ask
-    // time; a row with a node names the decide verb, a row with none names
-    // the clear verb.
+    // time; a row with a node names the decide command, a row with none names
+    // the clear command.
     if rows.is_empty() {
         lines.push("held: none".into());
         return lines;
@@ -814,7 +814,7 @@ mod tests {
             rows[1].get("question_id").and_then(|v| v.as_str()),
             Some("q-new")
         );
-        // The node-less row reads as null so the render names the clear verb.
+        // The node-less row reads as null so the render names the clear command.
         assert_eq!(rows[0].get("node"), Some(&Value::Null));
     }
 

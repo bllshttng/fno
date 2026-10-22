@@ -1,6 +1,6 @@
 //! Replay the committed backlog write goldens (`backlog_update`,
 //! `backlog_rank`, `backlog_add`, `backlog_idea`). Each golden line was
-//! captured from the surface that owned the verb before its port (Python for
+//! captured from the surface that owned the command before its port (Python for
 //! update at the port's base sha; the native binary for rank; Python's
 //! `_create_node_impl` for add/idea) and carries argv, exit code, stdout,
 //! stderr and the post-case row projection. The replay seeds a fresh store,
@@ -281,7 +281,7 @@ const UPDATE_FIELDS: &[&str] = &[
     "additional_prs",
     "collisions_acknowledged",
     "completion_note",
-    "dispatch_verb",
+    "dispatch_command",
     "dispatch_brief",
     "rank",
     "created_at",
@@ -329,7 +329,7 @@ const ADD_FIELDS: &[&str] = &[
     "additional_prs",
     "collisions_acknowledged",
     "completion_note",
-    "dispatch_verb",
+    "dispatch_command",
     "dispatch_brief",
     "rank",
     "created_at",

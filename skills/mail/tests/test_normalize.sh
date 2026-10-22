@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test_normalize.sh - bash harness for the /mail skill write-verb normalizer (ab-7479fdb2).
+# test_normalize.sh - bash harness for the /mail skill write-command normalizer (ab-7479fdb2).
 #
 # Verifies the deterministic recipient/body parse, smart-quote stripping, and
 # the empty-recipient/empty-body refusal in skills/mail/scripts/normalize.sh.
@@ -29,8 +29,8 @@ field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
 # verbatim - mirrors how the model reads "everything after the first body=".
 body_all() { printf '%s' "$1" | awk '/^body=/ && !flag {flag=1; sub(/^body=/,""); print; next} flag'; }
 
-# run <verb> <input> -> echoes normalize.sh stdout
-run() { bash "$NORM" --verb "$1" --input "$2"; }
+# run <command> <input> -> echoes normalize.sh stdout
+run() { bash "$NORM" --command "$1" --input "$2"; }
 
 # A timeout binary if one is available (CI/ubuntu has `timeout`; macOS may have
 # `gtimeout` from coreutils). Used to prove the missing-flag guard cannot hang.
@@ -51,7 +51,7 @@ check_eq() {
 # --- AC4-HP: a normal quoted send --------------------------------------------
 out="$(run send 'target "Hello world"')"
 check_eq 'AC4-HP status'    "$(field "$out" status)"    'ok'
-check_eq 'AC4-HP verb'      "$(field "$out" verb)"      'send'
+check_eq 'AC4-HP command'      "$(field "$out" command)"      'send'
 check_eq 'AC4-HP recipient' "$(field "$out" recipient)" 'target'
 check_eq 'AC4-HP body'      "$(field "$out" body)"      'Hello world'
 check_eq 'AC4-HP to_project (empty)' "$(field "$out" to_project)" ''
@@ -110,7 +110,7 @@ check_eq 'broadcast no-body status' "$(field "$out" status)" 'error'
 # --- reply HP ----------------------------------------------------------------
 out="$(run reply 'msg-abc123 "thanks for the fix"')"
 check_eq 'reply status' "$(field "$out" status)" 'ok'
-check_eq 'reply verb'   "$(field "$out" verb)"   'reply'
+check_eq 'reply command'   "$(field "$out" command)"   'reply'
 check_eq 'reply msg_id' "$(field "$out" msg_id)" 'msg-abc123'
 check_eq 'reply body'   "$(field "$out" body)"   'thanks for the fix'
 
@@ -154,34 +154,34 @@ check_eq 'padded body kept'   "$(body_all "$out")" '  hi  '
 out="$(run send "$(printf 'target "line1\nbody=keptverbatim"')")"
 check_eq 'body= interior line kept' "$(body_all "$out")" "$(printf 'line1\nbody=keptverbatim')"
 
-# --- verb is case-insensitive (phone auto-capitalization) --------------------
+# --- command is case-insensitive (phone auto-capitalization) --------------------
 out="$(run Send 'target hi')"
-check_eq 'capitalized verb status' "$(field "$out" status)" 'ok'
-check_eq 'capitalized verb body'   "$(field "$out" body)"   'hi'
+check_eq 'capitalized command status' "$(field "$out" status)" 'ok'
+check_eq 'capitalized command body'   "$(field "$out" body)"   'hi'
 out="$(run REPLY 'msg-x "yo"')"
 check_eq 'caps reply status' "$(field "$out" status)" 'ok'
-check_eq 'caps reply verb'   "$(field "$out" verb)"   'reply'
+check_eq 'caps reply command'   "$(field "$out" command)"   'reply'
 
 # --- missing flag value refused, never hangs (codex P2) ----------------------
-# A bare `--verb` / `--input` with no following value must emit status=error and
+# A bare `--command` / `--input` with no following value must emit status=error and
 # return immediately - not spin the arg loop forever.
 if [[ -n "$TIMEOUT_BIN" ]]; then
-  out="$("$TIMEOUT_BIN" 5 bash "$NORM" --verb 2>&1)"; rc=$?
-  check_eq 'bare --verb did not hang' "$([[ $rc -eq 124 ]] && echo HANG || echo ok)" 'ok'
-  check_eq 'bare --verb status'       "$(field "$out" status)" 'error'
-  out="$("$TIMEOUT_BIN" 5 bash "$NORM" --verb send --input 2>&1)"; rc=$?
+  out="$("$TIMEOUT_BIN" 5 bash "$NORM" --command 2>&1)"; rc=$?
+  check_eq 'bare --command did not hang' "$([[ $rc -eq 124 ]] && echo HANG || echo ok)" 'ok'
+  check_eq 'bare --command status'       "$(field "$out" status)" 'error'
+  out="$("$TIMEOUT_BIN" 5 bash "$NORM" --command send --input 2>&1)"; rc=$?
   check_eq 'bare --input did not hang' "$([[ $rc -eq 124 ]] && echo HANG || echo ok)" 'ok'
   check_eq 'bare --input status'       "$(field "$out" status)" 'error'
 else
   # No timeout binary: still assert the status field (the fix makes it fast), but
   # skip the no-hang guard rather than risk hanging a local run on a regression.
-  out="$(bash "$NORM" --verb 2>&1)"
-  check_eq 'bare --verb status (no timeout bin)' "$(field "$out" status)" 'error'
+  out="$(bash "$NORM" --command 2>&1)"
+  check_eq 'bare --command status (no timeout bin)' "$(field "$out" status)" 'error'
 fi
 
-# --- unknown verb refused ----------------------------------------------------
+# --- unknown command refused ----------------------------------------------------
 out="$(run frobnicate 'target hi')"
-check_eq 'unknown verb status' "$(field "$out" status)" 'error'
+check_eq 'unknown command status' "$(field "$out" status)" 'error'
 
 # -----------------------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

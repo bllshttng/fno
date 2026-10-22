@@ -1,4 +1,4 @@
-"""The macro verb delegates to the native fno-agents binary (the fold lives in Rust)."""
+"""The macro command delegates to the native fno-agents binary (the fold lives in Rust)."""
 from __future__ import annotations
 
 

@@ -18,7 +18,7 @@ impl Core {
     /// `panes_closed` the panes this call closed; both are zero on a repeat
     /// call - retirement is idempotent, never an error. A failed store write
     /// replies `Err`: the durable half did not land, so the caller retries
-    /// the whole verb (the already-closed panes close zero on the retry).
+    /// the whole command (the already-closed panes close zero on the retry).
     pub(super) fn handle_retire_session(
         &mut self,
         harness: String,

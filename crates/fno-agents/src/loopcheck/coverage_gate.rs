@@ -23,7 +23,7 @@ use crate::pr_status::reviews::{read_review_coverage, review_lane};
 use serde_json::{json, Value};
 use std::io::Read;
 
-/// Exit polarity of the three-state answer, kept from the verb's own
+/// Exit polarity of the three-state answer, kept from the command's own
 /// contract: 0 covered, 3 refused, 4 unanswered. Pub because the verdict
 /// rides the pub `Probes::coverage_verdict` surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,7 +415,7 @@ fn coverage_refused_reason(
     if !head.is_empty() && !ev_head.is_empty() && head != ev_head {
         return sized(&format!(
             "coverage was computed at {} but HEAD is {}; attestations are \
-head-pinned by design - re-run the review verb at HEAD",
+head-pinned by design - re-run the review command at HEAD",
             &ev_head[..ev_head.len().min(8)],
             &head[..head.len().min(8)],
         ));
@@ -444,7 +444,7 @@ head-pinned by design - re-run the review verb at HEAD",
         };
         return sized(&format!(
             "{prefix}reviewer-refused: {who} declined to review; run the \
-review verb at HEAD"
+review command at HEAD"
         ));
     }
     let absent = names_with("absent");
@@ -484,7 +484,7 @@ config.review)",
     };
     format!(
         "{prefix}{reviewed} reviewed (no head-pinned pass attestation - run \
-the review verb at HEAD{hint_segment} - close every finding, commit and push \
+the review command at HEAD{hint_segment} - close every finding, commit and push \
 first, then attest at the final head with `bash \
 skills/review/scripts/emit-attestation.sh <reviewer>`)"
     )
@@ -835,7 +835,7 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
         (
             format!(
                 "required code-review has no head-pinned local pass \
-attestation; run the harness review verb at HEAD{sized}, then emit the \
+attestation; run the harness review command at HEAD{sized}, then emit the \
 code-review attestation"
             ),
             failed != "reviewer_refused" && has_stale_verdict(&row_value, Some("code-review")),
@@ -967,7 +967,7 @@ pub(crate) fn verdict<P: Probes>(probes: &P, cwd: &Path, pr: u64, recompute: boo
 }
 
 /// The attestation-chain answer over one repo: shared by the `review-coverage
-/// op chain` server below and the review-hold verb, so the two read ONE
+/// op chain` server below and the review-hold command, so the two read ONE
 /// chain implementation (d-e11b2b3e: twins retire first).
 pub(crate) fn chain_answer(cwd: &Path, branch: &str, head: &str) -> Value {
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
@@ -1005,7 +1005,7 @@ fn flat_row(row: &Value) -> Value {
 }
 
 /// The chain answer over an already-resolved events text, shared by the
-/// `op` door above and the review-hold verb (`review_hold::chain_answer`
+/// `op` door above and the review-hold command (`review_hold::chain_answer`
 /// delegates here): one chain read, no second copy (d-e11b2b3e).
 pub(crate) fn chain_answer_from(
     events_text: &str,
@@ -1043,10 +1043,10 @@ pub(crate) fn chain_first_blocking(cwd: &Path, branch: &str, head: &str) -> Opti
     })
 }
 
-/// The verb bodies behind `fno-agents review-coverage check|publish|waive|op`.
-/// `check`, `publish` and `waive` are the human verbs; `op` reads one JSON
+/// The command bodies behind `fno-agents review-coverage check|publish|waive|op`.
+/// `check`, `publish` and `waive` are the human commands; `op` reads one JSON
 /// payload on stdin and answers one JSON line on stdout with exit 0, the
-/// shape `verb_call(["review-coverage", "op"], payload)` expects.
+/// shape `command_call(["review-coverage", "op"], payload)` expects.
 pub(crate) fn run_operand(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("check") => run_check_operand(&args[1..]),

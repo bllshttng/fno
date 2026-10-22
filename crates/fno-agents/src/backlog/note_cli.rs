@@ -1072,7 +1072,7 @@ fn import_record(graph: &Path, record: &Value) -> Result<Value, String> {
     }))
 }
 
-/// Map a state-write error to the verb's exit code.
+/// Map a state-write error to the command's exit code.
 fn map_state_err(e: &StateError) -> i32 {
     match e {
         StateError::NoNode(_) => 1,
