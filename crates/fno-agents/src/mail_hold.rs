@@ -1187,17 +1187,20 @@ pub(crate) fn tidy_lapsed_holds(home: &AgentsHome, now: chrono::DateTime<chrono:
     }
 }
 
-/// How old a spawned worker's row must be before a clock-less `bus-only`
-/// stamp on it counts as an orphan: the conversation backstop, so no live
-/// answering window can still own it.
+/// How old a row must be before a clock-less `bus-only` stamp on it counts
+/// as an orphan: the conversation backstop, so no live answering window can
+/// still own it.
 const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
 
-/// The (name, session id) of every spawned worker row stamped `bus-only`
-/// with no clock file, older than [`ORPHAN_STAMP_AGE_S`]. Only `origin ==
-/// "spawn"` rows qualify: `fno agents register --delivery-policy bus-only`
-/// stamps an operator row with no clock on purpose, and a row with no
-/// `origin` or no readable `created_at` has no proof of age or source. Pure
-/// so the pick is testable without a registry write.
+/// The (name, session id) of every non-operator row stamped `bus-only` with
+/// no clock file, older than [`ORPHAN_STAMP_AGE_S`]. An `origin ==
+/// "operator"` row never qualifies: `fno agents register --delivery-policy
+/// bus-only` is the one door that stamps with no clock on purpose, and it
+/// writes `operator` over an adopted or unmarked origin. Spawned, adopted
+/// and unmarked rows are stamped only by a clocked arm, so a missing clock
+/// there is the lapsed-tidy orphan. A row with no readable `created_at` has
+/// no proof of age and stays. Pure so the pick is testable without a
+/// registry write.
 pub(crate) fn orphan_stamp_rows(
     registry: &crate::state::Registry,
     now: chrono::DateTime<chrono::Utc>,
@@ -1206,7 +1209,7 @@ pub(crate) fn orphan_stamp_rows(
         .entries
         .iter()
         .filter(|e| e.delivery_policy.as_deref() == Some("bus-only"))
-        .filter(|e| e.origin.as_deref() == Some("spawn"))
+        .filter(|e| e.origin.as_deref() != Some("operator"))
         .filter_map(|e| {
             let sid = e.harness_session_id.as_deref()?;
             let born = chrono::DateTime::parse_from_rfc3339(&e.created_at).ok()?;
@@ -2213,7 +2216,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn orphan_sweep_picks_only_old_clockless_spawn_stamps() {
+    fn orphan_sweep_picks_old_clockless_non_operator_stamps() {
         with_hold_env(|dir| {
             let now = chrono::Utc::now();
             let old = (now - chrono::Duration::seconds(ORPHAN_STAMP_AGE_S + 60))
@@ -2239,6 +2242,8 @@ pub(crate) mod tests {
                     row("registered", 3, Some("operator"), &old),
                     row("unmarked", 4, None, &old),
                     row("clocked", 5, Some("spawn"), &old),
+                    row("adopted", 6, Some("adopted"), &old),
+                    row("young-adopted", 7, Some("adopted"), &young),
                 ]),
             );
             write_clock(
@@ -2253,8 +2258,12 @@ pub(crate) mod tests {
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
             assert_eq!(
                 orphan_stamp_rows(&registry, now),
-                vec![("orphan".to_string(), sid(1))],
-                "only the old clock-less spawn stamp is an orphan"
+                vec![
+                    ("orphan".to_string(), sid(1)),
+                    ("unmarked".to_string(), sid(4)),
+                    ("adopted".to_string(), sid(6)),
+                ],
+                "an old clock-less stamp is an orphan unless an operator set it"
             );
         });
     }
