@@ -171,7 +171,24 @@ fn row_identity(queue: &str, row: &Value) -> String {
     format!("{queue}:{}", id.trim_matches('"'))
 }
 
+/// Whether the lifecycle table sends one planless unplanned row to
+/// `/target`. An unanswerable row returns false, so it keeps the block
+/// pointed at it: a row this read cannot classify is never counted as held.
+fn unplanned_routes_to_target(row: &Value, floor: &str) -> bool {
+    matches!(
+        crate::backlog_ready::effective_verb_with_floor(row, floor),
+        Ok((Some(verb), _)) if verb == "/target"
+    )
+}
+
 pub(crate) fn parse_org_board_value(value: &Value) -> Option<OrgBoard> {
+    parse_org_board_value_with_floor(value, crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR)
+}
+
+/// [`parse_org_board_value`] under the operator's `dispatch.blueprint_floor`.
+/// The floor decides which unplanned rows the lifecycle table sends to
+/// `/target`, and a `/target` row waits on spawn capacity like any other.
+pub(crate) fn parse_org_board_value_with_floor(value: &Value, floor: &str) -> Option<OrgBoard> {
     let actionable = value.get("actionable")?.as_i64()?;
     let mut top_row = None;
     let mut actionable_ids: Vec<String> = Vec::new();
@@ -229,7 +246,12 @@ pub(crate) fn parse_org_board_value(value: &Value) -> Option<OrgBoard> {
                 if top_row.is_none() {
                     top_row = Some(identity.clone());
                 }
-                if spawn_held {
+                // The unplanned queue is labelled /fno:blueprint as a whole, but
+                // the lifecycle table sends each planless row by its own
+                // difficulty. A row it sends to /target waits on spawn capacity.
+                let routes_to_target =
+                    name == "unplanned" && unplanned_routes_to_target(row, floor);
+                if spawn_held || routes_to_target {
                     spawn_held_ids.push(identity.clone());
                 }
                 actionable_ids.push(identity);
@@ -346,7 +368,10 @@ pub(crate) fn read_org_board(
         cwd: Some(cwd.to_path_buf()),
     };
     let payload = crate::org_board::read_board(&opts);
-    parse_org_board_value(&payload).ok_or_else(|| {
+    let floor = crate::agents_config::config_lookup(cwd, &["dispatch", "blueprint_floor"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+    parse_org_board_value_with_floor(&payload, &floor).ok_or_else(|| {
         "unparseable board payload: the collector returned a shape parse_org_board_value cannot read"
             .to_string()
     })
@@ -747,6 +772,62 @@ mod tests {
                 assert!(message.contains("live workers exiting"), "{message}");
             }
             _ => panic!("expected all spawn-held rows to be saturated"),
+        }
+    }
+
+    #[test]
+    fn a_refused_probe_with_only_unplanned_low_rows_ends_the_lead_saturated() {
+        // The lifecycle table sends a planless low or medium node to /target,
+        // so a refused gate holds it exactly like undispatched work.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [
+                        {"id": "x-1", "difficulty": "low"},
+                        {"id": "x-2", "difficulty": "medium"},
+                    ]},
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let fno = gate_status_stub(tmp.path());
+        let emit = |_: &str, _: Value| {};
+
+        let gate = capacity_gate(&board, fno.to_str().unwrap(), tmp.path(), "lead", 0, &emit)
+            .expect("a refused probe must hold unplanned low rows");
+        match gate {
+            CapacityGate::Saturated { blocked, .. } => assert_eq!(blocked, 2),
+            _ => panic!("expected unplanned low rows to saturate, not block on a blueprint"),
+        }
+    }
+
+    #[test]
+    fn an_unplanned_high_row_stays_a_non_dispatch_next_row() {
+        // High difficulty routes to /blueprint, which needs no spawn slot, so
+        // the block points at it rather than ending the lead.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "undispatched", "status": "ok", "actionable": true,
+                     "verb": "/fno:target", "rows": [{"id": "x-1"}]},
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [{"id": "x-2", "difficulty": "high"}]},
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        match saturation_verdict(&board, Some(&refused_probe())).expect("blocked with next") {
+            SaturationOutcome::BlockedWithNext { next, blocked } => {
+                assert_eq!(next, "unplanned:x-2");
+                assert_eq!(blocked, 1);
+            }
+            other => panic!("expected BlockedWithNext, got {other:?}"),
         }
     }
 
