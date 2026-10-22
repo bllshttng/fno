@@ -33,7 +33,6 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "drive-authority [--json]",
     "trace [options]",
     "registry-json",
-    "accounts show <id> [--print-binding] | accounts fallback-chain   -- the `fno config accounts` commands; fallback-chain walks the failover chain over a stdin payload",
     // The `--substrate thread` arm is a LIFECYCLE move, not a re-entry: it
     // converts a live pane into a persistent thread under the same session
     // id. The three flags that belong to it are spelled out here because

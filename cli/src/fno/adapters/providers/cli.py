@@ -736,7 +736,7 @@ def show_forward(
     ),
 ) -> None:
     """Show all fields of a single account record."""
-    # Transport only: `fno-agents accounts show` owns the verb.
+    # Transport only: `fno-agents spawn-overlay accounts show` owns the verb.
     import subprocess
 
     from fno.rust_binary import resolve_binary
@@ -745,7 +745,7 @@ def show_forward(
     if binary is None:
         typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
         raise typer.Exit(127)
-    argv = [str(binary), "accounts", "show", provider_id]
+    argv = [str(binary), "spawn-overlay", "accounts", "show", provider_id]
     if print_binding:
         argv.append("--print-binding")
     raise typer.Exit(subprocess.run(argv).returncode)

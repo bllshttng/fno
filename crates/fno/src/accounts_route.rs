@@ -1,14 +1,14 @@
-//! `fno config accounts <verb>`: the account verbs `fno-agents accounts`
+//! `fno config accounts <verb>`: the account verbs `fno-agents spawn-overlay accounts`
 //! answers natively. A verb not listed here still forwards to the Python
 //! group until its own port lands.
 
 use std::ffi::OsString;
 
-/// The account verbs served by `fno-agents accounts`.
+/// The account verbs served by `fno-agents spawn-overlay accounts`.
 pub const NATIVE_ACCOUNTS_VERBS: &[&str] = &["show"];
 
 /// `fno config accounts <verb> ...` for a native verb: the args from the
-/// verb on, ready for `fno-agents accounts`.
+/// verb on, ready for `fno-agents spawn-overlay accounts`.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     let word = |i: usize| args.get(i).and_then(|a| a.to_str());
     if word(0) != Some("config") || word(1) != Some("accounts") {

@@ -25,6 +25,9 @@
 //! - kind `team-rescope`: the role re-scope's team-name effect
 //!   (`team_rescope::resolve`), the promote-side carry that keeps a lead's
 //!   recorded name across an `org promote` scope move.
+//!
+//! The `fno config accounts` commands ride the same action as argv ops,
+//! `spawn-overlay accounts <command>` (see `accounts::run`).
 
 use crate::provider::{known_providers_csv, KNOWN_PROVIDERS};
 use serde_json::{json, Map, Value};
@@ -67,6 +70,11 @@ const MODEL_WORD_VENDORS: [(&str, &str); 3] = [
 ];
 
 pub fn run_spawn_overlay(args: &[String]) -> i32 {
+    // The `fno config accounts` commands nest here as argv ops
+    // (crate::accounts::run), so they add no fno-agents root action.
+    if args.first().map(String::as_str) == Some("accounts") {
+        return crate::accounts::run(&args[1..]);
+    }
     let mut payload = String::new();
     let read = if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--payload-file=")) {
         std::fs::read_to_string(path)

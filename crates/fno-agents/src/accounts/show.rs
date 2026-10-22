@@ -87,7 +87,7 @@ pub fn binding(account_id: &str, cwd: &Path, src: &Sources<'_>) -> Result<Option
         .cloned())
 }
 
-/// `fno-agents accounts show <id> [--print-binding]`.
+/// `fno-agents spawn-overlay accounts show <id> [--print-binding]`.
 pub fn run(args: &[String]) -> i32 {
     let mut id = None;
     let mut print_binding = false;

@@ -110,7 +110,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "spawn-gate",
     "spawn-overlay",
     "spawn-axes",
-    "accounts",
+    "fallback-chain",
     "state",
     "status",
     "stop",
@@ -839,9 +839,13 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::release_notes::run_release_notes(&args[1..]);
     }
 
-    // `accounts`: the `fno config accounts` verbs and `accounts fallback-chain`.
-    if verb == "accounts" {
-        return fno_agents::accounts::run(&args[1..]);
+    // `fallback-chain`: the failover chain walk (see fallback_chain.rs doc).
+    // Python resolves config and paths and serializes the candidate links;
+    // this verb reads the provider runtime-state file, derives headroom
+    // verdicts, and answers the eligible links with their walk-memory ids
+    // and spawn flags.
+    if verb == "fallback-chain" {
+        return fno_agents::fallback_chain::run_fallback_chain(&args[1..]);
     }
 
     // `verbs`: hidden claim-style (matches!); the action list is

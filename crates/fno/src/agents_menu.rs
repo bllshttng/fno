@@ -86,7 +86,7 @@ const ADMIT: &[Node] = &[
     verb("axes", &["spawn-axes"], "Spawn billing axes (route, account, model) over a stdin payload."),
     verb("status", &["gate-status"], "The spawn gate's read-only capacity verdict as JSON."),
     verb("revival", &["revival-check"], "Whether a spawn --resume revives an existing row."),
-    moved("fallback", &["accounts", "fallback-chain"], &[&["fallback-chain"]], "Failover chain walk over a stdin payload."),
+    verb("fallback", &["fallback-chain"], "Failover chain walk over a stdin payload."),
     verb("slot", &["route-slot"], "Delivery-slot resolver over a stdin payload."),
     verb("provider-cap", &["provider-cap"], "The provider-cap actor."),
     verb("capabilities", &["capabilities"], "One harness's config-independent capability contract."),

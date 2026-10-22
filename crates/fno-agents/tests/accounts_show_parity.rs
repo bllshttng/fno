@@ -44,11 +44,11 @@ fn run_case(case: &Value, tmp: &Path) -> Value {
         .map(|a| a.as_str().unwrap())
         .collect();
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
-        .arg("accounts")
-        .arg("show")
+        .args(["spawn-overlay", "accounts", "show"])
         .args(&args)
         .current_dir(&repo)
         .env_clear()
+        .envs(fno_agents::test_run::self_owner_env())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", &home)
         .env("PWD", &repo)

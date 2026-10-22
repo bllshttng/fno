@@ -281,9 +281,9 @@ RUST_CLIENT_VERBS = frozenset(
         # Python calls it via fno.agents.spawn_axes_client. A `node_seed`
         # field routes the payload to the node-seed decision instead.
         "spawn-axes",
-        # The `fno config accounts` verbs, and `accounts fallback-chain`,
-        # the failover chain walk (payload JSON in, {eligible} out).
-        "accounts",
+        # The failover chain walk: payload JSON in, the
+        # {eligible} answer out; Python calls it via fno.rust_binary.verb_call.
+        "fallback-chain",
         # The one authorized merge operation: payload JSON in, one receipt out.
         # `fno do pr merge`, `fno do pr verify --kind merged` and the finalize
         # queue arm all ask it, so no two merge paths can answer "may this head
@@ -541,7 +541,7 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "spawn-gate": "The ONE spawn gate: reads one stdin JSON payload, writes one {status: admitted, gate/worker keys} or {status: refused, exit_code, receipt, event} answer; gate and probe modes; invoked by the fno.agents.spawn_gate transport.",
     "spawn-overlay": "Harness-keyed spawn-defaults resolver: JSON payload on stdin, the {refusal, effective, bundle} answer on stdout; invoked by fno.agents.spawn_overlay_client, not `fno agents` routing.",
     "spawn-axes": "Spawn-seam billing axes (route/account/model): JSON payload on stdin, the {inject, applied, suppressed, messages} plan on stdout; a `node_seed` field instead answers the node-verb check. Invoked by fno.agents.spawn_axes_client and the spawn seam, not `fno agents` routing.",
-    "accounts": "The `fno config accounts` commands (show) and `accounts fallback-chain`, the failover chain walk over a stdin payload.",
+    "fallback-chain": "Failover chain walk: JSON payload on stdin, the {eligible} answer on stdout; invoked by fno.recovery, not `fno agents` routing.",
     "authorized-merge": "The one authorized merge operation: JSON payload on stdin, one receipt (merged|armed|authorized|held|refused|head_changed|unknown|failed) on stdout; invoked by fno.rust_binary.verb_call from the merge and verify verbs, not `fno agents` routing.",
     "census": "One JSON row per long-lived process (daemon, keepers, mux servers) with its build-drift verdict; invoked by the native updater (crates/fno/src/doctor_update.rs), not `fno agents` routing. --workers [--json] [--subagents] [--pane-stats] answers `fno agents top`.",
     "fleet-incident": "Durable fleet incident breaker: stop --reason T / clear --reason T write the machine-wide record; status [--json] reads it with its typed holds/admits reach (exit 0 clear, 1 stopped or unavailable); check [--scope spawns|tests|merges] is one scope's admission verdict (exit 0 clear, 90 stopped, 91 unavailable). The public surface is `fno agents incident`; the spawn/test/daemon gates read the file before their bypass branches, and the merge primitive refuses while merges are held. The fleet GitHub request budget rides this action as its gh-budget argument (one JSON payload on stdin, {op: admit|refused|status}; ledger in the machine locks folder; called via fno.rust_binary.verb_call from pr/_quota.py).",
