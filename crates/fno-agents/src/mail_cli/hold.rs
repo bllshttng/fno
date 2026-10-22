@@ -54,12 +54,6 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("{HOLD_USAGE}");
         return 2;
     }
-    let Some((session_id, harness)) = self_identity_or_exit() else {
-        return 3;
-    };
-    let handle = crate::identity::canonical_handle(&session_id);
-    let clock_key = identity_key(&session_id);
-
     let mut minutes: Option<i64> = None;
     let mut for_minutes: Option<i64> = None;
     let mut status = false;
@@ -97,6 +91,11 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("error: --minutes and --for are mutually exclusive");
         return 2;
     }
+    let Some((session_id, harness)) = self_identity_or_exit() else {
+        return 3;
+    };
+    let handle = crate::identity::canonical_handle(&session_id);
+    let clock_key = identity_key(&session_id);
 
     if status {
         let policy = entry_for(&session_id)
