@@ -116,7 +116,44 @@ pub(super) fn reading() -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let reg = crate::state::load_registry(&home.registry_json())
         .map_err(|e| format!("registry unreadable: {e}"))?;
-    reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))
+    let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
+    let now = crate::claims::now_ms();
+    let snapshot = crate::claude_roster::read_all_agents_union();
+    // A failed thread read never hides the pane rows already read.
+    match crate::prompt_wait::observe(&home, now, &snapshot) {
+        Ok(waiting) => add_thread_rows(&mut value, &waiting, now),
+        Err(e) => eprintln!("prompt_parked: thread prompt read failed: {e}"),
+    }
+    Ok(value)
+}
+
+/// Fold in the native thread workers past the prompt-wait bound. They have
+/// no pane, so the mux scrape never sees them. A worker the scrape already
+/// named keeps its pane row, which carries the answering key.
+fn add_thread_rows(value: &mut Value, waiting: &[crate::prompt_wait::Waiting], now: i64) {
+    let Some(rows) = value.get_mut("rows").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let named: HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r.get("holder").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    for w in waiting
+        .iter()
+        .filter(|w| w.overdue(now) && !named.contains(&w.name))
+    {
+        rows.push(json!({
+            "holder": w.name,
+            "harness": "claude",
+            "pane_id": null,
+            "short_id": w.short_id,
+            "rule_id": "waiting_for",
+            "prompt_head": w.waiting_for,
+            "answer_key": null,
+            "line": w.line(now),
+        }));
+    }
 }
 
 /// The injected core of [`reading`], so the composition is testable without

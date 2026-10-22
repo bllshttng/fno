@@ -43,6 +43,10 @@ pub struct ClaudeAgentRow {
     /// never by `parse_all_agents` (the parse stays dir-blind).
     pub account: Option<String>,
     pub pid: Option<u32>,
+    /// What the session waits on (`waitingFor`, e.g. "permission prompt").
+    /// A native thread worker has no pane to scrape, so this field is the
+    /// only witness that a prompt is up.
+    pub waiting_for: Option<String>,
 }
 
 impl ClaudeAgentRow {
@@ -55,6 +59,7 @@ impl ClaudeAgentRow {
             cwd: None,
             account: None,
             pid: None,
+            waiting_for: None,
         }
     }
 
@@ -257,6 +262,11 @@ fn parse_all_agents(stdout: &[u8]) -> ClaudeAgentsSnapshot {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         row.cwd = ["cwd"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        row.waiting_for = ["waitingFor", "waiting_for"]
             .into_iter()
             .find_map(|key| object.get(key).and_then(|value| value.as_str()))
             .filter(|value| !value.is_empty())
