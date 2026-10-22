@@ -186,7 +186,7 @@ def test_sidecar_external_mode_never_reads_the_graph(
 
 
 @pytest.mark.parametrize(
-    ("verb", "args"),
+    ("command", "args"),
     [
         ("add", ["add", "t"]),
         ("decompose", ["decompose", "ab-deadbeef", "--groups", "x"]),
