@@ -126,6 +126,18 @@ pub(crate) fn helper_bin(name: &str) -> String {
     name.to_string()
 }
 
+/// `helper_bin`, degrading to the plain `gh` spelling when neither the
+/// cargo-install family nor a sibling answers: the quota policy stands down
+/// and the reads run unaccounted, never stranded.
+pub(crate) fn helper_bin_or_gh(name: &str) -> String {
+    let helper = helper_bin(name);
+    if helper == name {
+        "gh".to_string()
+    } else {
+        helper
+    }
+}
+
 /// The state-root's `bin/github-cli` dir (the `fno.paths.github_cli_proxy_dir`
 /// port): `$HOME/.fno` or `$FNO_STATE_DIR`, never a settings load.
 fn machine_state_bin_github_cli() -> Option<PathBuf> {
