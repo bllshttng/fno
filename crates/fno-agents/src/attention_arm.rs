@@ -74,6 +74,14 @@ pub trait SinkIo {
     /// clear's posture line (the last stderr line, e.g. `... delivered
     /// (hosted) ...` / `... queued (durable)`), the ladder's mail-rung read.
     fn clear(&mut self, id: &str, answer_text: &str) -> Result<String, String>;
+    /// Remove one file: the bounded drain of duplicate lost copies.
+    fn remove(&mut self, path: &Path) -> std::io::Result<()>;
+    /// The identity stamped into pages this arm delivers: 16 hex over the
+    /// machine id and the agents home. `None` leaves pages unstamped, and
+    /// an unstamped page closes as lost only once.
+    fn arm_id(&mut self) -> Option<String> {
+        None
+    }
     fn notify(&mut self, title: &str, body: &str);
 }
 
@@ -198,7 +206,7 @@ pub fn tick_pages(
         }
     }
     // Closed pages live in done/ under their id (or <id>-2 when taken).
-    let (done_ids, _) = list_done(dir, io);
+    let (done_ids, done_pages) = list_done(dir, io);
 
     // Prune state for ids no longer open (keeps the file bounded).
     state.retain(|id, _| all_open.contains(id.as_str()));
@@ -219,7 +227,10 @@ pub fn tick_pages(
         }
         match io.route(item) {
             Ok(routing) => {
-                let rendered = render_page(item, &routing);
+                let mut rendered = render_page(item, &routing);
+                if let Some(arm) = io.arm_id() {
+                    rendered = attention_file::stamp_arm(&rendered, &arm);
+                }
                 let name = page_file_name(item);
                 let path = dir.join(&name);
                 match io.create_new(&path, &rendered) {
@@ -255,11 +266,11 @@ pub fn tick_pages(
         let id = page.front.question_id.clone();
         if page.front.status != "open" {
             // Heals a failed move: write nothing, just finish the rename.
-            move_to_done(dir, &page.path, &id, io, &mut tick, false);
+            move_to_done(dir, &page.path, &id, io, &mut tick, false, None);
             continue;
         }
         if !all_open.contains(id.as_str()) {
-            close_elsewhere(closes, asked, page, dir, io, &mut tick);
+            close_elsewhere(closes, asked, page, dir, &done_pages, io, &mut tick);
             continue;
         }
         let Some(item) = open_by_id.get(id.as_str()) else {
@@ -312,6 +323,7 @@ pub fn tick_pages(
     // 7. The index and the done listing are rebuilt after the settle pass:
     // a page this beat closed must not linger under Open (AC5-HP).
     let (done_ids_now, done_pages) = list_done(dir, io);
+    let done_pages = drain_duplicate_lost(done_pages, io, &mut tick);
     let mut open_entries: Vec<IndexEntry> = Vec::new();
     for page in &pages {
         if page.front.status == "open"
@@ -429,6 +441,7 @@ fn settle_page(
                         io,
                         tick,
                         true,
+                        None,
                     );
                     state.remove(&id);
                 }
@@ -494,6 +507,7 @@ fn settle_page(
                                 io,
                                 tick,
                                 true,
+                                None,
                             );
                             state.remove(&id);
                         }
@@ -527,12 +541,16 @@ fn settle_page(
 }
 
 /// Close a page whose question closed away from the folder (step 5): the
-/// fold's answer, else the reason, is the answer text.
+/// fold's answer, else the reason, is the answer text. A close row names
+/// the close for every page. The lost branch is owner-scoped: only a page
+/// this arm delivered may read as lost.
+#[allow(clippy::too_many_arguments)]
 fn close_elsewhere(
     closes: &HashMap<String, crate::attention::Closed>,
     asked: &HashSet<String>,
     page: &FoundPage,
     dir: &Path,
+    done_pages: &[(PathBuf, PageFront)],
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
 ) {
@@ -547,7 +565,31 @@ fn close_elsewhere(
         // The stores read clean and hold no row for this id, open or
         // closed: no beat can ever name its close. Without this the page
         // reads open forever in the Base. Close it as lost, answering
-        // nothing for the user.
+        // nothing for the user - but only a page this arm delivered. Two
+        // machines on one synced vault each ran an arm whose stores read
+        // clean for the other's pages, and the flap lost-closed live
+        // questions once a minute. A page stamped by another arm stays
+        // open; the arm that owns the stamp names its close. A page with
+        // no stamp (delivered before the stamp existed) closes as lost
+        // once: done/ already holding its lost copy stays the arm's hand.
+        let mine = io.arm_id();
+        if let Some(other) = page.front.arm.as_deref() {
+            if mine.as_deref() != Some(other) {
+                tick.detail
+                    .push(format!("foreign page {} (arm {other})", page.stem));
+                return;
+            }
+        } else if done_pages.iter().any(|(_, front)| {
+            front.question_id == id && front.recorded_by.as_deref() == Some(LOST_BY)
+        }) {
+            return;
+        }
+        // Reuse the one lost copy the id already has, so a re-lost never
+        // mints `<id>-N`.
+        let onto = done_pages.iter().find_map(|(path, front)| {
+            (front.question_id == id && front.recorded_by.as_deref() == Some(LOST_BY))
+                .then(|| path.clone())
+        });
         close_and_move(
             page,
             dir,
@@ -559,6 +601,7 @@ fn close_elsewhere(
             io,
             tick,
             true,
+            onto.as_deref(),
         );
         return;
     };
@@ -595,11 +638,14 @@ fn close_elsewhere(
         io,
         tick,
         true,
+        None,
     );
 }
 
 /// The close write (step 6): re-read and compare, write the closed text
 /// atomically, then rename into `done/` (or `done/<id>-2.md` when taken).
+/// `onto` renames onto an exact existing copy instead (the lost close
+/// reuses its one copy).
 #[allow(clippy::too_many_arguments)]
 fn close_and_move(
     page: &FoundPage,
@@ -612,6 +658,7 @@ fn close_and_move(
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
     count: bool,
+    onto: Option<&Path>,
 ) {
     let stamp = if answered_at.is_empty() {
         chrono::Utc::now().to_rfc3339()
@@ -635,7 +682,15 @@ fn close_and_move(
             .push(format!("{}: close write failed: {e}", page.path.display()));
         return;
     }
-    move_to_done(dir, &page.path, &page.front.question_id, io, tick, count);
+    move_to_done(
+        dir,
+        &page.path,
+        &page.front.question_id,
+        io,
+        tick,
+        count,
+        onto,
+    );
 }
 
 /// Read `done/`: the closed ids and their parsed pages, so the delivery
@@ -664,7 +719,8 @@ fn list_done(
 }
 
 /// Rename a closed page into `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when
-/// taken).
+/// taken). `onto` renames onto that exact existing copy instead, replacing
+/// it in one rename: the lost close reuses its one copy per id.
 fn move_to_done(
     dir: &Path,
     path: &Path,
@@ -672,14 +728,21 @@ fn move_to_done(
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
     count: bool,
+    onto: Option<&Path>,
 ) {
     let done_dir = dir.join("done");
-    let mut target = done_dir.join(format!("{id}.md"));
-    let mut n = 2;
-    while io.path_exists(&target) {
-        target = done_dir.join(format!("{id}-{n}.md"));
-        n += 1;
-    }
+    let target = match onto {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let mut target = done_dir.join(format!("{id}.md"));
+            let mut n = 2;
+            while io.path_exists(&target) {
+                target = done_dir.join(format!("{id}-{n}.md"));
+                n += 1;
+            }
+            target
+        }
+    };
     if let Err(e) = io.rename(path, &target) {
         eprintln!("fno-agents attention: move to done failed: {e}");
         tick.skip = Some("error".to_string());
@@ -690,6 +753,66 @@ fn move_to_done(
     if count {
         tick.closed += 1;
     }
+}
+
+/// One beat removes at most this many duplicate lost copies. `done/` held
+/// 2354 numbered copies after the 2026-10-22 flap; the cap keeps each beat
+/// short.
+pub const DRAIN_DUPLICATE_LOST_CAP: usize = 200;
+
+/// Step 7's drain: one lost copy per question id stays, the newest by
+/// `answered_at` (ties keep one deterministically); an answered or
+/// closed-elsewhere copy is never touched. Returns the surviving pages so
+/// the index lists what is actually on disk.
+fn drain_duplicate_lost(
+    pages: Vec<(PathBuf, PageFront)>,
+    io: &mut dyn SinkIo,
+    tick: &mut SinkTick,
+) -> Vec<(PathBuf, PageFront)> {
+    let victims: Vec<usize> = {
+        let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, (_, front)) in pages.iter().enumerate() {
+            if front.recorded_by.as_deref() == Some(LOST_BY) {
+                by_id.entry(front.question_id.as_str()).or_default().push(i);
+            }
+        }
+        let mut victims: Vec<usize> = Vec::new();
+        for idxs in by_id.values() {
+            if idxs.len() < 2 {
+                continue;
+            }
+            // Newest answered_at stays; ties fall to the path order.
+            let mut order = idxs.clone();
+            order.sort_by(|a, b| {
+                pages[*a]
+                    .1
+                    .answered_at
+                    .cmp(&pages[*b].1.answered_at)
+                    .then(pages[*a].0.cmp(&pages[*b].0))
+            });
+            victims.extend_from_slice(&order[..order.len() - 1]);
+        }
+        victims.sort_unstable();
+        victims
+    };
+    if victims.is_empty() {
+        return pages;
+    }
+    let total = victims.len();
+    let doomed: std::collections::HashSet<usize> =
+        victims.into_iter().take(DRAIN_DUPLICATE_LOST_CAP).collect();
+    let mut kept = Vec::with_capacity(pages.len() - doomed.len());
+    let mut removed = 0usize;
+    for (i, entry) in pages.into_iter().enumerate() {
+        if doomed.contains(&i) && io.remove(&entry.0).is_ok() {
+            removed += 1;
+        } else {
+            kept.push(entry);
+        }
+    }
+    tick.detail
+        .push(format!("done: removed {removed} duplicate lost copies"));
+    kept
 }
 
 fn short_answer(answer: &str) -> String {
@@ -1485,6 +1608,23 @@ impl SinkIo for RealIo {
         std::fs::rename(from, to)
     }
 
+    fn remove(&mut self, path: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(path)
+    }
+
+    fn arm_id(&mut self) -> Option<String> {
+        let machine = crate::claims::machine_id();
+        if machine.is_empty() {
+            return None;
+        }
+        let root = crate::paths::AgentsHome::from_env().root().to_path_buf();
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        Some(format!(
+            "{:016x}",
+            fnv1a(&format!("{machine}\0{}", root.display()))
+        ))
+    }
+
     fn list_md(&mut self, dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1824,6 +1964,7 @@ mod tests {
     struct MemIo {
         files: std::collections::BTreeMap<PathBuf, String>,
         broken_routing: bool,
+        arm: Option<String>,
     }
 
     impl Default for MemIo {
@@ -1831,6 +1972,7 @@ mod tests {
             MemIo {
                 files: std::collections::BTreeMap::new(),
                 broken_routing: false,
+                arm: None,
             }
         }
     }
@@ -1870,6 +2012,15 @@ mod tests {
             self.files.insert(to.to_path_buf(), content);
             Ok(())
         }
+
+        fn remove(&mut self, path: &Path) -> std::io::Result<()> {
+            self.files.remove(path);
+            Ok(())
+        }
+
+        fn arm_id(&mut self) -> Option<String> {
+            self.arm.clone()
+        }
         fn list_md(&mut self, dir: &Path) -> Vec<PathBuf> {
             self.files
                 .keys()
@@ -1904,9 +2055,10 @@ mod tests {
     }
 
     #[test]
-    fn a_page_no_store_holds_closes_as_lost_and_an_asked_one_waits() {
+    fn a_lost_close_is_owner_scoped_and_keeps_one_copy() {
         let dir = tempfile::tempdir().unwrap();
         let mut io = MemIo::default();
+        io.arm = Some("aaaa1111aaaa1111".to_string());
         let items = vec![
             ready_item("q-lost", "question"),
             ready_item("q-kept", "question"),
@@ -1926,6 +2078,13 @@ mod tests {
             )
         };
         beat(&items, &[], 1000, &mut io);
+        let stamped = io.files[&io.path_of("q-lost").unwrap()].clone();
+        let (front, _) = parse_page(&stamped).unwrap();
+        assert_eq!(
+            front.arm.as_deref(),
+            Some("aaaa1111aaaa1111"),
+            "delivery stamps the owner"
+        );
         // A read with no ask row at all proves no loss: nothing closes.
         assert_eq!(beat(&[], &[], 1030, &mut io).closed, 0);
         // Only q-kept still has an ask row: q-lost closes, q-kept waits.
@@ -1936,6 +2095,11 @@ mod tests {
         assert_eq!(front.status, "closed");
         assert_eq!(front.answer, None, "a lost close answers nothing");
         assert_eq!(front.recorded_by.as_deref(), Some(LOST_BY));
+        assert_eq!(
+            front.arm.as_deref(),
+            Some("aaaa1111aaaa1111"),
+            "the stamp survives the close"
+        );
         assert!(text.contains(LOST_REASON), "{text}");
         assert!(!text.contains("Recorded: Recorded:"), "{text}");
         let kept = io.path_of("q-kept").expect("the asked page stays");
@@ -1943,6 +2107,135 @@ mod tests {
         // The question reads open again: its page comes back.
         let back = beat(&items[..1], &["q-lost", "q-kept"], 1090, &mut io);
         assert_eq!(back.delivered, 1, "a lost close never blocks redelivery");
+        // It reads lost again: the close reuses the one lost copy in done/
+        // instead of minting <id>-2 (AC2-HP).
+        assert_eq!(beat(&[], &["q-kept"], 1120, &mut io).closed, 1);
+        let lost_copies = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-lost"))
+            .count();
+        assert_eq!(lost_copies, 1, "one lost copy per id");
+
+        // Two arms, one folder. Arm B delivers its own page and sees arm
+        // A's open page as foreign: it closes neither (AC1-ERR, AC4-HP).
+        io.arm = Some("bbbb2222bbbb2222".to_string());
+        let own_b = vec![ready_item("q-own", "question")];
+        let kept_a = vec![ready_item("q-kept", "question")];
+        let t = beat(&own_b, &["q-own"], 1150, &mut io);
+        assert_eq!(t.closed, 0, "arm B closes nothing of arm A's");
+        assert!(io.path_of("q-own").is_some(), "B delivers its own page");
+        for (items, asked, now) in [
+            (kept_a.as_slice(), &["q-kept"][..], 1180),
+            (own_b.as_slice(), &["q-own"][..], 1210),
+            (kept_a.as_slice(), &["q-kept"][..], 1240),
+            (own_b.as_slice(), &["q-own"][..], 1270),
+            (kept_a.as_slice(), &["q-kept"][..], 1300),
+        ] {
+            let t = beat(items, asked, now, &mut io);
+            assert_eq!(t.closed, 0, "no arm closes the other's pages: {t:?}");
+            assert!(
+                t.detail.iter().any(|d| d.starts_with("foreign page ")),
+                "the beat names the foreign page: {t:?}"
+            );
+        }
+        assert!(io.path_of("q-kept").is_some(), "arm A's page stays open");
+        assert!(io.path_of("q-own").is_some(), "arm B's page stays open");
+        let lost_copies = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-lost"))
+            .count();
+        assert_eq!(lost_copies, 1, "still one lost copy per id");
+    }
+
+    #[test]
+    fn ac3_drain_removes_duplicate_lost_copies_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let done = dir.path().join("done");
+        // 250 lost copies of one id plus an answered neighbour: the shape
+        // done/ held after the 2026-10-22 flap.
+        let lost_item = ready_item("q-x", "question");
+        let kept_item = ready_item("q-y", "question");
+        for n in 1..=250u32 {
+            let name = if n == 1 {
+                "q-x.md".to_string()
+            } else {
+                format!("q-x-{n}.md")
+            };
+            let ts = format!("2026-10-22T{:02}:{:02}:00Z", 5 + n / 60, n % 60);
+            let page = close_page(
+                &render_page(&lost_item, &Routing::default()),
+                "closed",
+                "",
+                &ts,
+                LOST_BY,
+                "Recorded: lost, no question row in the stores (attention_lost)",
+            );
+            io.files.insert(done.join(name), page);
+        }
+        let answered = close_page(
+            &render_page(&kept_item, &Routing::default()),
+            "answered",
+            "narrow",
+            "2026-10-22T06:00:00Z",
+            "file_edit",
+            "Recorded: option 1 (file)",
+        );
+        io.files.insert(done.join("q-y.md"), answered);
+
+        let mut state = HashMap::new();
+        let t = tick_pages(
+            &[],
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1000,
+            120,
+            &mut io,
+        );
+        assert_eq!(t.closed, 0, "the drain never counts as a close");
+        assert!(
+            t.detail
+                .iter()
+                .any(|d| d.contains("removed 200 duplicate lost copies")),
+            "the cap names the removal: {t:?}"
+        );
+        let left = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-x"))
+            .count();
+        assert_eq!(left, 50, "250 copies lose 200 (AC3-ERR)");
+        assert!(
+            io.files.contains_key(&done.join("q-y.md")),
+            "the answered neighbour is untouched (AC3-HP)"
+        );
+        // The next beat removes the rest.
+        let t2 = tick_pages(
+            &[],
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1030,
+            120,
+            &mut io,
+        );
+        assert!(
+            t2.detail
+                .iter()
+                .any(|d| d.contains("removed 49 duplicate lost copies")),
+            "the tail removes next beat: {t2:?}"
+        );
+        let left2 = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-x"))
+            .count();
+        assert_eq!(left2, 1, "one lost copy per id");
     }
 
     fn ready_item(id: &str, kind: &str) -> AttentionItem {

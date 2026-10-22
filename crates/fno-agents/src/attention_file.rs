@@ -95,6 +95,12 @@ pub struct PageFront {
     pub team: String,
     #[serde(default)]
     pub lead: String,
+    /// The arm identity that delivered this page (16 hex over the machine id
+    /// and the agents home). Only the stamping arm lost-closes the page: two
+    /// machines on one synced vault each read clean stores for the other's
+    /// pages, and an unstamped page closes as lost only once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm: Option<String>,
     /// The user's typed answer cell: a letter (a, b, c), a number, or words.
     /// An empty value is present from render so the Base shows the cell, and
     /// is never an answer (rule 8).
@@ -484,6 +490,16 @@ pub fn read_page_answer(text: &str) -> FileAnswer {
     }
 }
 
+/// Serialize the front back under `---` fences around `body`.
+fn page_with_front(front: &PageFront, body: &str) -> Option<String> {
+    let yaml = serde_yaml_ng::to_string(front).ok()?;
+    let mut out = String::from("---\n");
+    out.push_str(yaml.trim_end());
+    out.push_str("\n---\n");
+    out.push_str(body);
+    Some(out)
+}
+
 /// Set the four close keys in the frontmatter, keep every other key, and
 /// append the receipt (`Recorded: ...`, built by the caller) as the last
 /// line under `## Answer`.
@@ -502,19 +518,25 @@ pub fn close_page(
     front.answer = (!answer.is_empty()).then(|| answer.to_string());
     front.answered_at = (!answered_at.is_empty()).then(|| answered_at.to_string());
     front.recorded_by = (!recorded_by.is_empty()).then(|| recorded_by.to_string());
-    if let Ok(yaml) = serde_yaml_ng::to_string(&front) {
-        let mut out = String::from("---\n");
-        out.push_str(yaml.trim_end());
-        out.push_str("\n---\n");
-        out.push_str(&body);
-        let out = out.trim_end().to_string();
-        let mut out = out;
-        out.push_str("\n\n");
-        out.push_str(receipt);
-        out.push('\n');
-        return out;
-    }
-    text.to_string()
+    let Some(out) = page_with_front(&front, &body) else {
+        return text.to_string();
+    };
+    let mut out = out.trim_end().to_string();
+    out.push_str("\n\n");
+    out.push_str(receipt);
+    out.push('\n');
+    out
+}
+
+/// Stamp the delivering arm's identity into an open page's frontmatter.
+/// Delivery is the only writer of the stamp, and the stamp later decides
+/// who may lost-close the page: only the arm that wrote it.
+pub fn stamp_arm(text: &str, arm: &str) -> String {
+    let Some((mut front, body)) = parse_page(text) else {
+        return text.to_string();
+    };
+    front.arm = Some(arm.to_string());
+    page_with_front(&front, &body).unwrap_or_else(|| text.to_string())
 }
 
 /// One open row for the index.
@@ -872,6 +894,23 @@ mod tests {
         );
         assert!(closed.trim_end().ends_with("\n\nRecorded: option 2 (file)"));
         assert!(!closed.contains("Recorded: Recorded:"), "{closed}");
+        // The delivery stamp is a typed key now, but it rides the same
+        // close rewrite: only the stamping arm may lost-close the page.
+        let stamped = stamp_arm(&page, "a1b2c3d4e5f60708");
+        let lost = close_page(
+            &stamped,
+            "closed",
+            "",
+            "2026-09-23T01:00:00Z",
+            "attention_lost",
+            "Recorded: lost, no question row in the stores (attention_lost)",
+        );
+        let (front, _) = parse_page(&lost).unwrap();
+        assert_eq!(
+            front.arm.as_deref(),
+            Some("a1b2c3d4e5f60708"),
+            "the arm stamp survives a close: {lost}"
+        );
     }
 
     #[test]
