@@ -388,6 +388,60 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
     );
 }
 
+/// A release matched to a no-provenance hold lifts it, and the row retires
+/// on its quiet clock like a released planner.
+#[test]
+fn a_release_lifts_a_no_provenance_hold() {
+    let home = tmp_home("gc-release-noprov");
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let transcripts = tempfile::tempdir().unwrap();
+    let quiet = quiet_transcript(transcripts.path(), "np.jsonl", 1800);
+    state::update_registry(&home.registry_json(), |r| {
+        let mut row = ask_row("np-row", None);
+        row.short_id = "nprow".into();
+        row.harness_session_id = Some("sess-np".into());
+        row.origin = Some("spawn".into());
+        row.status = crate::AgentStatus::Idle;
+        r.entries.push(row);
+    })
+    .unwrap();
+
+    let graph = graph_read(&[], &[]);
+    let release = gc_sweep::Release {
+        handle: "nprow".to_string(),
+        reason: crate::gc::KeepReason::NoProvenance.as_str().to_string(),
+        detail: "no source resolved a node: sessions, registry, name, transcript".to_string(),
+    };
+    let summary = gc_sweep::run_with_release(
+        &home,
+        &emitter,
+        900,
+        false,
+        7,
+        &move |_| graph.clone(),
+        &|_| None,
+        &staged_ages_at(crate::daemon::now_epoch_secs(), &|_| {
+            Some(vec![quiet.clone()])
+        }),
+        &|_| true,
+        &|_| crate::daemon::CascadeOutcome::NotApplicable,
+        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
+        &no_agents,
+        &|_| (None, None),
+        &|_| None,
+        false,
+        Some(&release),
+    );
+
+    assert!(
+        summary
+            .retired
+            .iter()
+            .any(|(id, basis)| id == "nprow" && basis.starts_with("released no provenance")),
+        "{summary:?}"
+    );
+}
+
 /// AC3-ERR, the fresh hold: the verb refuses with exit 2 and the named
 /// line, built by the pure refusal builders the tests assert on.
 #[test]
@@ -475,9 +529,6 @@ fn ac3_err_the_verb_refuses_a_not_done_witness() {
     // And the refusal names the open node through the pure builder.
     let mut dry = gc_sweep_dry_run(&home, 900);
     dry.mark_escalated(std::time::Duration::from_secs(5400));
-    eprintln!("HOLDS: {:?}", dry.holds);
-    eprintln!("CONFLICTS: {:?}", dry.kept_node_conflict);
-    eprintln!("OPENWORK: {:?}", dry.kept_open_work);
     let hold = dry.holds.iter().find(|h| h.id == "witrow").unwrap();
     assert_eq!(hold.reason, "sources disagree");
     let refusal = crate::reap_release::witness_refusal(&home, hold).unwrap();

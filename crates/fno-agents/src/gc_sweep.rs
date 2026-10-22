@@ -1485,6 +1485,10 @@ fn hold_clock(age: Option<i64>, created_at: &str, now: i64) -> (Option<i64>, &'s
     }
 }
 
+/// The no-provenance hold's detail; a release must quote it to match.
+const NO_PROVENANCE_DETAIL: &str =
+    "no source resolved a node: sessions, registry, name, transcript";
+
 /// The settle blocker an open-do-row hold names: the same pr_state
 /// read the confirm step makes, so the hold line carries the why the settle
 /// refused, not only the node.
@@ -2197,7 +2201,7 @@ pub(crate) fn run_with_release(
             planning,
             planning_closed,
             planning_plan_written,
-            planning_released: false,
+            hold_released: false,
             // The halted-planner fact: the latest inside-leg report reads
             // `done` AND fno never stopped the row. A planner fno stopped
             // holds as unfinished (its node still needs its plan), never as
@@ -2239,22 +2243,25 @@ pub(crate) fn run_with_release(
         };
         let (mut action, mut reason) = gc_decide(&row, grace_secs);
         // d-81c6da7e: a release matched to the planning hold answers the
-        // marker question by ruling. Flip the row's released flag and
+        // marker question by ruling, and one matched to the no-provenance
+        // hold answers the node question. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,
-        // so only the planner's quiet clock stands between the row and its
+        // so only the quiet clock stands between the row and its
         // retirement.
         if action == GcAction::Keep {
-            if let Some(KeepReason::PlanningUnclosed { node, status }) = &reason {
+            let held = match &reason {
+                Some(KeepReason::PlanningUnclosed { node, status }) => {
+                    Some(planning_hold_detail(node, status))
+                }
+                Some(KeepReason::NoProvenance) => Some(NO_PROVENANCE_DETAIL.to_string()),
+                _ => None,
+            };
+            let hold_reason = reason.as_ref().map_or("", KeepReason::as_str);
+            if let Some(detail) = held {
                 if release_note.is_none() {
-                    let hold_reason = KeepReason::PlanningUnclosed {
-                        node: node.clone(),
-                        status: status.clone(),
-                    }
-                    .as_str();
-                    let detail = planning_hold_detail(node, status);
                     if let Some(r) = release_for_row {
                         if r.matches(hold_reason, &detail) {
-                            row.planning_released = true;
+                            row.hold_released = true;
                             release_note =
                                 Some(release_basis_prefix(hold_reason, hold_age_s, &detail));
                             let (next_action, next_reason) = gc_decide(&row, grace_secs);
@@ -2269,8 +2276,10 @@ pub(crate) fn run_with_release(
             if let Some(r) = release_for_row {
                 if release_note.is_none() {
                     summary.release_refused.push(format!(
-                        "{id}: release refused: hold changed from {} ({}) to {:?}",
-                        r.reason, r.detail, reason
+                        "{id}: release refused: hold changed from {} ({}) to {}",
+                        r.reason,
+                        r.detail,
+                        reason.as_ref().map_or("no hold", KeepReason::as_str)
                     ));
                 }
             }
@@ -2291,8 +2300,7 @@ pub(crate) fn run_with_release(
                     summary.holds.push(Hold {
                         id,
                         reason: KeepReason::NoProvenance.as_str(),
-                        detail: "no source resolved a node: sessions, registry, name, transcript"
-                            .into(),
+                        detail: NO_PROVENANCE_DETAIL.into(),
                         age_s: hold_age_s,
                         age_basis: hold_age_basis,
                         escalated: false,
@@ -2793,10 +2801,16 @@ pub(crate) fn run_with_release(
                     RetireRefusal::NoReceipt(reason) => summary.kept_no_receipt.push((id, reason)),
                     RetireRefusal::GraphObligation(node) => {
                         summary.kept_open_do_row.push((id.clone(), node.clone()));
+                        let detail = match graph.statuses.get(&node).map(String::as_str) {
+                            Some("done") | None => settle_blocker_detail(graph, &node),
+                            Some(status) => format!(
+                                "node status {status}: a session on unmerged work never retires"
+                            ),
+                        };
                         summary.holds.push(Hold {
                             id,
                             reason: KeepReason::OpenDoRow { node: node.clone() }.as_str(),
-                            detail: settle_blocker_detail(graph, &node),
+                            detail,
                             age_s: hold_age_s,
                             age_basis: hold_age_basis,
                             escalated: false,
@@ -2885,7 +2899,7 @@ pub(crate) fn run_with_release(
                         .find(|(_, s)| crate::gc::PLANNING_MOVED_ON_STATUSES.contains(&s.as_str()))
                     {
                         format!("planning finished on {node}: node {moved_status}")
-                    } else if probed.planning_released {
+                    } else if probed.hold_released {
                         format!("planning finished on {node}: released")
                     } else if probed.turn_ended {
                         format!("planning halted on {node}: turn ended with no plan")
