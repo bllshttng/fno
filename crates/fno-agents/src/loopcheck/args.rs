@@ -70,7 +70,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
     let mut gh_budget_ledger: Option<PathBuf> = None;
     let mut now_override: Option<String> = None;
     let mut gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
-        .unwrap_or_else(|_| crate::pr_status::quota::helper_bin_or_gh("fno-gh-loopcheck"));
+        .unwrap_or_else(|_| crate::pr_status::quota::helper_bin("fno-gh-loopcheck"));
     let mut git_bin = std::env::var("FNO_LOOPCHECK_GIT_BIN").unwrap_or_else(|_| "git".to_string());
     let mut author_harness_override: Option<String> = None;
     let mut hook_input_stdin = false;
