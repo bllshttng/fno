@@ -2,9 +2,9 @@
 //! parity-oracle: fno.adapters.providers.cli.show_provider
 //!
 //! Characterization for `fno-agents accounts show`, the port of the Python
-//! `fno config accounts show` verb, which is gone. Each
+//! `fno config accounts show` command, which is gone. Each
 //! `tests/golden/accounts_show/*.json` case holds an accounts config, the
-//! verb's args, and the exit code, stdout and stderr the Python verb printed
+//! command's args, and the exit code, stdout and stderr the Python command printed
 //! before deletion. This test runs the binary over the same layout and
 //! asserts the same three.
 
@@ -66,7 +66,7 @@ fn run_case(case: &Value, tmp: &Path) -> Value {
 }
 
 #[test]
-fn accounts_show_matches_the_python_verb() {
+fn accounts_show_matches_the_python_command() {
     let mut cases: Vec<PathBuf> = std::fs::read_dir(golden_dir())
         .unwrap()
         .filter_map(|entry| entry.ok().map(|e| e.path()))

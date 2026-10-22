@@ -63,7 +63,7 @@ pub fn binding_lines(overlay: &env::Overlay) -> String {
     lines.join("\n")
 }
 
-/// The working dir the Python verb read: `$PWD`, else the process cwd.
+/// The working dir the Python command read: `$PWD`, else the process cwd.
 pub(crate) fn pwd() -> PathBuf {
     std::env::var_os("PWD")
         .map(PathBuf::from)

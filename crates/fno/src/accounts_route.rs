@@ -1,20 +1,20 @@
-//! `fno config accounts <verb>`: the account verbs `fno-agents spawn-overlay accounts`
-//! answers natively. A verb not listed here still forwards to the Python
+//! `fno config accounts <command>`: the account commands `fno-agents spawn-overlay accounts`
+//! answers natively. A command not listed here still forwards to the Python
 //! group until its own port lands.
 
 use std::ffi::OsString;
 
-/// The account verbs served by `fno-agents spawn-overlay accounts`.
-pub const NATIVE_ACCOUNTS_VERBS: &[&str] = &["show"];
+/// The account commands served by `fno-agents spawn-overlay accounts`.
+pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &["show"];
 
-/// `fno config accounts <verb> ...` for a native verb: the args from the
-/// verb on, ready for `fno-agents spawn-overlay accounts`.
+/// `fno config accounts <command> ...` for a native command: the args from the
+/// command on, ready for `fno-agents spawn-overlay accounts`.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     let word = |i: usize| args.get(i).and_then(|a| a.to_str());
     if word(0) != Some("config") || word(1) != Some("accounts") {
         return None;
     }
-    NATIVE_ACCOUNTS_VERBS
+    NATIVE_ACCOUNTS_COMMANDS
         .contains(&word(2)?)
         .then(|| args[2..].to_vec())
 }
@@ -28,7 +28,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_native_account_verbs_only() {
+    fn classifies_native_account_commands_only() {
         let rest = classify(&oss(&[
             "config",
             "accounts",

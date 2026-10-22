@@ -736,7 +736,7 @@ def show_forward(
     ),
 ) -> None:
     """Show all fields of a single account record."""
-    # Transport only: `fno-agents spawn-overlay accounts show` owns the verb.
+    # Transport only: `fno-agents spawn-overlay accounts show` owns the command.
     import subprocess
 
     from fno.rust_binary import resolve_binary
