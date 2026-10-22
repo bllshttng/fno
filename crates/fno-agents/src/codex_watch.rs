@@ -35,6 +35,7 @@ use serde_json::Value;
 use crate::paths::AgentsHome;
 use crate::watch_expiry::{self, Evidence, Watch};
 mod quiet;
+mod salvage_prune;
 
 /// Poll cadence. One coalesced status read per ci watch per tick: the cache
 /// serves one live gh read per TTL across the whole fleet, so N watchers on
