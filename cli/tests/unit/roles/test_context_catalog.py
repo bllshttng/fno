@@ -4,6 +4,7 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 
 from fno.company.contracts import FunctionRef, RoleRef, WorkOrderRef
 from fno.roles import (
@@ -23,6 +24,9 @@ from fno.roles import (
     resolve_role,
 )
 from fno.roles.context import build_artifact_catalog
+
+# Role resolution runs in fno-agents (spawn-overlay kind roles-resolve).
+pytestmark = pytest.mark.dev_build
 
 NOW = datetime(2026, 8, 4, 12, tzinfo=UTC)
 REVISION = "snapshot-edf5"

@@ -8,24 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from pydantic import TypeAdapter, ValidationError
 
-from fno.company.contracts import RoleRef, WorkOrderRef
 from fno.config import load_settings
 from fno.handoff.output import json_mode, merge_json_flag
 from fno.roles.context import build_artifact_catalog, catalog_revision
-from fno.roles.models import (
-    CapabilityFact,
-    ContextBundleBounds,
-    ContextReference,
-    RoleResolutionBlocked,
-)
-from fno.roles.registry import (
-    DiscoveredRoleDefinition,
-    DiscoveryInputError,
-    discover_role_definitions,
-)
-from fno.roles.resolver import resolve_role
 
 
 roles_app = typer.Typer(
@@ -70,153 +56,6 @@ def _json_requested(ctx: typer.Context, local: bool) -> bool:
 
 def _emit_json(value: Any) -> None:
     typer.echo(json.dumps(value, indent=2, sort_keys=True))
-
-
-def _discover(ctx: typer.Context) -> tuple[DiscoveredRoleDefinition, ...]:
-    obj = ctx.obj if isinstance(ctx.obj, dict) else {}
-    try:
-        return discover_role_definitions(
-            root=obj.get("roles_root"),
-            source_specs=obj.get("role_sources", ()),
-        )
-    except DiscoveryInputError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--source") from exc
-
-
-def _token_parts(token: str) -> tuple[str | None, str]:
-    function_id, separator, role_id = token.partition("/")
-    if not separator:
-        return None, token
-    if not function_id or not role_id or "/" in role_id:
-        raise typer.BadParameter(
-            "role must be ROLE or FUNCTION/ROLE",
-            param_hint="role",
-        )
-    return function_id, role_id
-
-
-def _role_ref(
-    token: str,
-    records: tuple[DiscoveredRoleDefinition, ...],
-) -> RoleRef:
-    requested_function, role_id = _token_parts(token)
-    functions = sorted(
-        {
-            record.role.function_id
-            for record in records
-            if record.role is not None and record.role.id == role_id
-        }
-    )
-    if requested_function is not None:
-        return RoleRef(id=role_id, function_id=requested_function)
-    if len(functions) > 1:
-        raise typer.BadParameter(
-            f"role {role_id!r} exists in multiple functions; use FUNCTION/ROLE",
-            param_hint="role",
-        )
-    return RoleRef(
-        id=role_id,
-        function_id=functions[0] if functions else "unavailable",
-    )
-
-
-def _read_models(path: Path | None, adapter: TypeAdapter[Any]) -> tuple[Any, ...]:
-    if path is None:
-        return ()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return tuple(adapter.validate_python(raw))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
-        raise typer.BadParameter(
-            f"cannot validate {path}: {exc}",
-            param_hint=str(path),
-        ) from exc
-
-
-@roles_app.command("resolve")
-def resolve_role_command(
-    ctx: typer.Context,
-    role: str = typer.Argument(..., help="ROLE or FUNCTION/ROLE."),
-    work_order: str = typer.Option(..., "--work-order", help="Authorized graph node identity."),
-    attempt: str = typer.Option(..., "--attempt", help="Immutable attempt identity."),
-    capabilities: Path | None = typer.Option(
-        None,
-        "--capabilities",
-        help="Read-only JSON array of CapabilityFact observations.",
-    ),
-    context: Path | None = typer.Option(
-        None,
-        "--context",
-        help="Read-only JSON array of ContextReference observations.",
-    ),
-    snapshot: str | None = typer.Option(
-        None,
-        "--snapshot",
-        help="Expected input snapshot revision.",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        "-J",
-        help="Emit stable structured JSON.",
-    ),
-) -> None:
-    """Resolve exactly one immutable role or one typed blocked result."""
-    records = _discover(ctx)
-    role_ref = _role_ref(role, records)
-    definitions = tuple(
-        definition
-        for record in records
-        if record.role == role_ref and (definition := record.definition) is not None
-    )
-    revision = snapshot or (definitions[0].snapshot_revision if definitions else "unavailable")
-    result = resolve_role(
-        role=role_ref,
-        definitions=definitions,
-        capability_facts=_read_models(
-            capabilities,
-            TypeAdapter(tuple[CapabilityFact, ...]),
-        ),
-        context_catalog=_read_models(
-            context,
-            TypeAdapter(tuple[ContextReference, ...]),
-        ),
-        work_order=WorkOrderRef(
-            node_id=work_order,
-            attempt_id=attempt,
-            role_id=role_ref.id,
-        ),
-        clock=datetime.now(UTC),
-        snapshot_revision=revision,
-        bundle_bounds=ContextBundleBounds(
-            max_references=32,
-            max_bytes=10_000_000,
-        ),
-        unchecked_definitions=records,
-    )
-    payload = result.model_dump(mode="json")
-    if _json_requested(ctx, json_output):
-        _emit_json(payload)
-    elif isinstance(result, RoleResolutionBlocked):
-        blocked_source = result.source_id or "<unavailable>"
-        typer.echo(
-            f"blocked role={role_ref.function_id}/{role_ref.id} "
-            f"reason={result.reason.value} source={blocked_source}"
-        )
-        if result.detail:
-            typer.echo(f"  detail: {result.detail}")
-    else:
-        typer.echo(
-            f"resolved role={role_ref.function_id}/{role_ref.id} "
-            f"manifest={result.manifest_digest} context={result.context_bundle.digest}"
-        )
-        for resolved_source in result.source_chain:
-            typer.echo(
-                f"  {resolved_source.layer.value} {resolved_source.source_id} "
-                f"{resolved_source.disposition} status={resolved_source.status.value}"
-            )
-    if isinstance(result, RoleResolutionBlocked):
-        raise typer.Exit(code=1)
 
 
 @roles_app.command("context")

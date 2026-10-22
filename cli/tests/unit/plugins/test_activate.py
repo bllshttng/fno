@@ -28,6 +28,9 @@ from fno.roles.registry import discover_role_definitions
 from fno.roles.resolver import resolve_role
 from tests.unit.plugins.test_manifest import _full_pack, _materialize_declared_sources
 
+# Role resolution runs in fno-agents (spawn-overlay kind roles-resolve).
+pytestmark = pytest.mark.dev_build
+
 
 def _store_and_root(tmp_path):
     root = tmp_path / "roles"
@@ -66,7 +69,6 @@ def _resolve_role(root: Path, role_id: str, function_id: str):
 # AC3-HP: activation makes roles resolvable through the existing resolver.
 
 
-@pytest.mark.dev_build
 def test_activation_makes_role_resolvable_from_plugin_layer(tmp_path):
     store, root = _store_and_root(tmp_path)
     pack_dir = _write_pack(tmp_path, _full_pack())
@@ -82,7 +84,6 @@ def test_activation_makes_role_resolvable_from_plugin_layer(tmp_path):
 # AC2-SEC: activation grants no effect.
 
 
-@pytest.mark.dev_build
 def test_activation_leaves_authority_byte_identical_and_effect_still_blocked(tmp_path):
     store, root = _store_and_root(tmp_path)
     pack_dir = _write_pack(tmp_path, _full_pack())
@@ -147,7 +148,6 @@ def test_activation_refuses_an_unreceipted_existing_target(tmp_path):
 # AC7-HP: deactivation removes only what the receipt recorded.
 
 
-@pytest.mark.dev_build
 def test_deactivation_removes_only_receipted_paths_and_leaves_hand_written(tmp_path):
     store, root = _store_and_root(tmp_path)
     pack_dir = _write_pack(tmp_path, _full_pack())

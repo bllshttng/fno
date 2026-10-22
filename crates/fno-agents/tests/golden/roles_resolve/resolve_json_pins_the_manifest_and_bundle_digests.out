@@ -1,0 +1,133 @@
+{
+  "approval_floor": "none",
+  "authority_ceiling": "internal",
+  "context_bundle": {
+    "digest": "cacd3b877ee6cbc40247dd0ed8e371a1933238baa63d6028d0d76d7bc173e610",
+    "references": [
+      {
+        "byte_size": 120,
+        "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_revision": "v1",
+        "fresh_until": "2099-01-01T00:00:00.500000+05:30",
+        "identifier": "company-brief",
+        "kind": "brief",
+        "provenance": "briefs/company-brief.md",
+        "readable": true,
+        "sensitivity": "internal",
+        "snapshot_revision": "snapshot-1",
+        "unavailable_reason": null,
+        "work_order_scope": {
+          "attempt_id": "attempt-1",
+          "node_id": "x-a8c0",
+          "principal_id": null,
+          "role_id": "owner"
+        }
+      }
+    ],
+    "snapshot_revision": "snapshot-1",
+    "total_bytes": 120,
+    "work_order": {
+      "attempt_id": "attempt-1",
+      "node_id": "x-a8c0",
+      "principal_id": null,
+      "role_id": "owner"
+    }
+  },
+  "delivery_policy": {
+    "require_all_deliverables": true,
+    "required_evidence": [
+      "artifact-exists"
+    ]
+  },
+  "manifest": {
+    "approval_floor": "none",
+    "authority_ceiling": "internal",
+    "context_selectors": [
+      {
+        "identifier": "company-brief",
+        "kind": "brief",
+        "max_sensitivity": "internal",
+        "requires_freshness": true
+      }
+    ],
+    "default_topology": "solo",
+    "delegation_targets": [],
+    "deliverable_kinds": [
+      "brief"
+    ],
+    "delivery_policy": {
+      "require_all_deliverables": true,
+      "required_evidence": [
+        "artifact-exists"
+      ]
+    },
+    "function": {
+      "id": "marketing"
+    },
+    "mission": "Grow the caf\u00e9",
+    "required_capabilities": [
+      "growth.draft"
+    ],
+    "review_policy": {
+      "minimum_reviewers": 2,
+      "required": true,
+      "required_review_kinds": [
+        "brand"
+      ]
+    },
+    "role": {
+      "function_id": "marketing",
+      "id": "owner"
+    },
+    "routing_hint": {
+      "model": "opus",
+      "provider": "anthropic"
+    }
+  },
+  "manifest_digest": "1d005afe225170472537168f22a2b5f69237da19288abf0b812fd4bec8b723cf",
+  "required_capabilities": [
+    "growth.draft"
+  ],
+  "review_policy": {
+    "minimum_reviewers": 2,
+    "required": true,
+    "required_review_kinds": [
+      "brand"
+    ]
+  },
+  "role": {
+    "function_id": "marketing",
+    "id": "owner"
+  },
+  "routing_projection": {
+    "model": "opus",
+    "provider": "anthropic"
+  },
+  "snapshot_revision": "snapshot-1",
+  "source_chain": [
+    {
+      "disposition": "shadowed",
+      "error": null,
+      "layer": "built-in",
+      "manifest_digest": "51a45d51c20fa144c72bea839728468cb59848a611950464d08f2abfdc097ff3",
+      "snapshot_revision": "snapshot-1",
+      "source_id": "built-in/owner.json",
+      "status": "valid"
+    },
+    {
+      "disposition": "contributing",
+      "error": null,
+      "layer": "company",
+      "manifest_digest": "81bdb85fd893389ed6159fedee52736603778408a51434c0134fb07459d22207",
+      "snapshot_revision": "snapshot-1",
+      "source_id": "company/owner.json",
+      "status": "valid"
+    }
+  ],
+  "work_order": {
+    "attempt_id": "attempt-1",
+    "node_id": "x-a8c0",
+    "principal_id": null,
+    "role_id": "owner"
+  }
+}
