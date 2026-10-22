@@ -122,6 +122,7 @@ pub(crate) struct RemovedSession {
     pub name: String,
     pub cwd: String,
     pub host_mode: String,
+    pub removed_at: i64,
 }
 
 /// The in-window removal `token` names, matched against the row's own
@@ -137,13 +138,10 @@ pub(crate) fn lookup_removed_beside(registry_path: &Path, token: &str) -> Option
     let entries: Vec<Value> = serde_json::from_str(&raw).ok()?;
     let now = now_epoch_secs();
     entries.into_iter().rev().find_map(|row| {
-        let in_window = row
+        let removed_at = row
             .get("removed_at")
             .and_then(Value::as_i64)
-            .is_some_and(|at| now.saturating_sub(at) <= GRACE_SECS);
-        if !in_window {
-            return None;
-        }
+            .filter(|at| now.saturating_sub(*at) <= GRACE_SECS)?;
         let session_id = row
             .get("session_id")
             .and_then(Value::as_str)
@@ -175,6 +173,7 @@ pub(crate) fn lookup_removed_beside(registry_path: &Path, token: &str) -> Option
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            removed_at,
         })
     })
 }

@@ -65,6 +65,9 @@ pub(crate) fn prepare_mint(
     if crate::session_report::find_row(&entries, harness, session_id, agent_self).is_some() {
         return None;
     }
+    if retired_session(home, harness, session_id, record) {
+        return None;
+    }
     let native = mint_flavor(record.is_some(), agent_self.is_some());
     // A hand session gets a row only once it joined fno (its first fno skill
     // or verb), unless `agents.auto_register_sessions` opts every session in.
@@ -137,6 +140,37 @@ pub(crate) fn prepare_mint(
         }
     }
     Some(NativeMint { entry, native })
+}
+
+/// A retired session stays retired. A reap receipt, or an rm tombstone
+/// still inside its grace window, names the session and no launch record
+/// newer than that retirement relaunched it. The report then mints no row:
+/// a reaped worker's own Stop hook reports after the sweep, and minting
+/// there put every reaped row straight back. `fno agents adopt` is the door
+/// back for a reaped session; it reads the receipt on purpose.
+pub(crate) fn retired_session(
+    home: &crate::paths::AgentsHome,
+    harness: &str,
+    session_id: &str,
+    record: Option<&crate::launch_record::Record>,
+) -> bool {
+    let receipt_path = crate::receipt::reap_receipt_path_for(home, harness, session_id);
+    // An unreadable receipt still marks the session reaped; with no time to
+    // compare, no launch record counts as newer.
+    let reaped_at_ms = receipt_path.exists().then(|| {
+        crate::receipt::read_reap_receipt(&receipt_path)
+            .ok()
+            .and_then(|r| crate::event_store::parse_rfc3339_ms(&r.reaped_at))
+            .unwrap_or(i64::MAX)
+    });
+    let removed_at_ms =
+        crate::rm_tombstone::lookup_removed_beside(&home.registry_json(), session_id)
+            .filter(|stone| stone.session_id == session_id)
+            .map(|stone| stone.removed_at.saturating_mul(1000));
+    let Some(retired_at_ms) = reaped_at_ms.into_iter().chain(removed_at_ms).max() else {
+        return false;
+    };
+    record.is_none_or(|r| r.launched_at_ms <= retired_at_ms)
 }
 
 fn auto_register_sessions(report_cwd: Option<&str>) -> bool {

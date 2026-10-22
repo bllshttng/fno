@@ -284,7 +284,15 @@ pub(crate) fn handle_session_report(
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
             match &pending_mint {
-                Some(mint) => {
+                // A retirement that landed after the pre-read still wins.
+                Some(mint)
+                    if !crate::native_adopt::retired_session(
+                        home,
+                        &harness,
+                        &session_id,
+                        launch_record.as_ref(),
+                    ) =>
+                {
                     let mut entry = mint.entry.clone();
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
@@ -299,7 +307,7 @@ pub(crate) fn handle_session_report(
                         native: mint.native,
                     };
                 }
-                None => {
+                _ => {
                     outcome = Outcome::Unknown;
                 }
             }
@@ -1457,6 +1465,65 @@ mod tests {
         assert_eq!(response_json(&resp)["result"]["stored"], true);
         assert!(response_json(&resp)["result"]["minted"].is_null());
         assert_eq!(read_rows(&home).len(), 1);
+    }
+
+    /// A retired session stays retired: a reap receipt or an rm tombstone
+    /// naming the session refuses the report's mint, across repeat reports.
+    /// A launch record newer than the retirement is a relaunch and mints.
+    #[test]
+    fn a_reaped_or_removed_session_mints_no_row_until_relaunched() {
+        let (_d, home) = temp_home("reaped");
+        let reaped = "13ff289d-0000-4000-8000-000000000001";
+        std::fs::create_dir_all(home.root().join("reap-receipts")).unwrap();
+        std::fs::write(
+            crate::receipt::reap_receipt_path_for(&home, "claude", reaped),
+            json!({"row_name": "ev-th-evals-1", "short_id": "13ff289d", "harness": "claude",
+                   "harness_session_id": reaped, "cwd": "/repo", "log_path": null,
+                   "created_at": "2026-10-22T04:00:00Z", "reaped_at": "2026-10-22T04:44:46Z",
+                   "resume": "claude --resume x", "removed_by": "gc-sweep"})
+            .to_string(),
+        )
+        .unwrap();
+        let removed = "0197cccc-1234-7abc-9def-0123456789ab";
+        crate::rm_tombstone::record(&home, "codex", removed, "0197cccc", "w2", "/repo", "thread")
+            .unwrap();
+        for _sweep in 0..2 {
+            for (harness, sid) in [("claude", reaped), ("codex", removed)] {
+                let params = report_params(harness, sid, json!({"agent_self": "ev-th-evals-1"}));
+                let resp = handle_session_report(&home, &emitter(&home), &req(params));
+                assert!(response_json(&resp)["result"]["minted"].is_null(), "{sid}");
+            }
+            assert!(read_rows(&home).is_empty(), "a retired session re-minted");
+        }
+        let mut record = crate::launch_record::Record {
+            launch: crate::launch_record::Launch {
+                harness: "claude".into(),
+                name: Some("w1".into()),
+                node: None,
+                slot: None,
+                provider: None,
+                cwd: "/repo".into(),
+            },
+            launcher_session: "lead-7".into(),
+            launcher_harness: Some("claude".into()),
+            launcher_cwd: Some("/repo".into()),
+            launched_at_ms: 1_000,
+            command: String::new(),
+            child_session: Some(reaped.into()),
+            claimed_at_ms: None,
+        };
+        let report = |record: &crate::launch_record::Record| {
+            let params = json!({"harness": "claude", "session_id": reaped,
+                                "launch_record": serde_json::to_value(record).unwrap()});
+            response_json(&handle_session_report(&home, &emitter(&home), &req(params)))
+        };
+        assert!(
+            report(&record)["result"]["minted"].is_null(),
+            "an old record is no relaunch"
+        );
+        record.launched_at_ms =
+            crate::event_store::parse_rfc3339_ms("2026-10-22T05:00:00Z").unwrap();
+        assert_eq!(report(&record)["result"]["minted"], "native");
     }
 
     /// The native adopt: a report whose launch record rides the request mints
