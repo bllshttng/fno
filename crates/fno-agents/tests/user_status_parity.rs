@@ -43,6 +43,7 @@ fn status(dir: &Path, pins: &[(&str, String)], json: bool) -> Golden {
         .env("HOME", dir)
         .env("FNO_AGENTS_HOME", dir.join("agents-home"))
         .env("FNO_TEST_HERMETIC", "1")
+        .envs(fno_agents::test_run::self_owner_env())
         .current_dir(dir)
         .args(["compaction", "operator-turns", "--render", "status"]);
     if json {
