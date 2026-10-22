@@ -741,7 +741,7 @@ def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
         substrate,
         _seed_of(toks),
         resume=_spawn_flag_value(toks, "--resume"),
-        role=_has_flag(toks, "-k", ("--promote", "--promote")),
+        role=_has_flag(toks, longs=("--promote",)),
         name=_spawn_flag_value(toks, "--name"),
         node=_spawn_flag_value(toks, "--node"),
     )
@@ -766,7 +766,6 @@ def _node_seed_at_seam(args: "Sequence[str]") -> "tuple[list[str], Optional[str]
         try:
             answer = verb_call("spawn-axes", {"node_seed": {
                 "family": list(_TARGET_FAMILY_VERBS),
-                "role": _is_promotion_bearing_spawn("spawn", args),
                 "resume": _is_resume_bearing_spawn("spawn", args),
                 "argv": list(args),
             }}, VerbUnavailable)
@@ -810,7 +809,6 @@ def _node_seed_at_seam(args: "Sequence[str]") -> "tuple[list[str], Optional[str]
         "derive_error": derive_error,
         "node_source": node_source,
         "family": list(_TARGET_FAMILY_VERBS),
-        "role": _is_promotion_bearing_spawn("spawn", args),
         "resume": _is_resume_bearing_spawn("spawn", args),
         "argv": list(args),
         "seed_index": (slot[0] + 1) if slot else None,
@@ -1057,11 +1055,6 @@ def _gate_rm_at_seam(args: Sequence[str]) -> bool:
         return True
 
 
-def _is_promotion_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
-    """Keep grant-at-spawn on the Python path that owns promotion."""
-    return verb == "spawn" and _has_flag(args, longs=("--promote",))
-
-
 def _is_dispatch_account_bearing_spawn(verb: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--dispatch-account`` (the cutover carrier).
 
@@ -1110,13 +1103,15 @@ def _with_seam_marker(args: "list[str]", verb: str) -> "list[str]":
     ``--defaults-applied=<state>`` straight after the verb is the only record
     the config-blind binary sees of the seam's decision. The token is
     inserted, never appended: everything after ``--`` is the worker's seed.
-    Spawn-only: no other verb crosses this fork.
+    The take-over reason compose consumed rides the same way, so the
+    binary's promote door reads it. Spawn-only: no other verb crosses this fork.
     """
     if verb != "spawn" or not args or args[0] != "spawn":
         return args
-    from fno.agents.spawn_defaults import spawn_seam_marker
+    from fno.agents.spawn_defaults import PENDING_TAKE_OVER, spawn_seam_marker
 
-    return [args[0], spawn_seam_marker(), *args[1:]]
+    take_over = [f"--take-over={reason}" for reason in PENDING_TAKE_OVER]
+    return [args[0], spawn_seam_marker(), *take_over, *args[1:]]
 
 
 def _spawn_flag_value(args: Sequence[str], *names: str) -> Optional[str]:
@@ -1577,7 +1572,6 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 py_spawn = (
                     _is_role_bearing_spawn(verb, args)
-                    or _is_promotion_bearing_spawn(verb, args)
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_default_substrate_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)

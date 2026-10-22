@@ -716,7 +716,7 @@ def test_rust_only_verb_no_binary_emits_install_hint(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Spawns carrying a Python-only flag (--role, --promote,
+# Spawns carrying a Python-only flag (--role,
 # --dispatch-account) never route to the binary: the Rust client cannot
 # parse them. A --resume spawn DOES route: the binary's grammar knows the
 # flag and refuses it with the retired-axis line. --monitor and
