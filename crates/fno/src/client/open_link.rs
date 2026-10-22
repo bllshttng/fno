@@ -113,8 +113,7 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
                         Target::Viewer { path, line, shape } => Ok(LinkDone::View(Box::new(
                             super::file_viewer::load(path, line, shape),
                         ))),
-                        outside => crate::open_router::launch(&outside)
-                            .map(|()| LinkDone::Opened(crate::link::OpenOutcome::Opened)),
+                        outside => crate::open_router::launch(&outside).map(LinkDone::Opened),
                     },
                     Route::Web => crate::link::open_url_for_session(&url).map(LinkDone::Opened),
                     _ => unreachable!("message, handle and sender routes return early"),
