@@ -2307,13 +2307,9 @@ pub(crate) fn curation_key(entry: &Value) -> Value {
 /// `graph.json.lock` so an older binary that only knows the anchor spelling
 /// shares the same lock.
 pub fn graph_lock_path(path: &Path) -> PathBuf {
-    let is_graph_spelling = matches!(
-        path.file_name().and_then(|n| n.to_str()),
-        Some("graph.json" | "graph.db" | "graph-archive.json" | "graph-archive.db")
-    );
     // Other callers lock their own sibling files (`graph.share`, a chats db):
     // those keep their raw name, so each stays its own lock.
-    let anchor = if is_graph_spelling {
+    let anchor = if crate::backlog::is_store_spelling(path) {
         crate::backlog::anchor_path(path)
     } else {
         path.to_path_buf()
