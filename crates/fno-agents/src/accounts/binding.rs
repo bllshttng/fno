@@ -42,7 +42,7 @@ pub struct SystemProbe;
 
 impl SlotProbe for SystemProbe {
     fn keychain(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
-        crate::claude_vault::SystemExternal.keychain(service)
+        crate::claude_vault::SystemExternal.keychain_raw(service)
     }
     fn profile(&self, bearer: &str) -> Result<Principal, ExternalFailure> {
         crate::claude_vault::SystemExternal.profile(bearer)

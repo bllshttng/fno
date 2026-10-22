@@ -34,9 +34,6 @@ impl TestDelta {
                 ext = path.rsplit('.').next().unwrap_or("");
                 continue;
             }
-            if line == "+++ /dev/null" || line == "--- /dev/null" {
-                continue;
-            }
             let (added, source) = match line.as_bytes().first() {
                 Some(b'+') if !line.starts_with("+++") => (true, &line[1..]),
                 Some(b'-') if !line.starts_with("---") => (false, &line[1..]),

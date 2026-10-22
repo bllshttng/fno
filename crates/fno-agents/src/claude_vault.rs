@@ -57,8 +57,10 @@ pub(crate) trait External {
 
 pub(crate) struct SystemExternal;
 
-impl External for SystemExternal {
-    fn keychain(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
+impl SystemExternal {
+    /// One Keychain item as stored, trimmed, with no credential-shape filter:
+    /// the binding counts an opaque blob as a candidate, so it must see it.
+    pub(crate) fn keychain_raw(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
         if !cfg!(target_os = "macos") {
             return Ok(None);
         }
@@ -98,7 +100,15 @@ impl External for SystemExternal {
             return Err(ExternalFailure::Unavailable);
         }
         let blob = stdout.trim().to_string();
-        Ok(has_credential(&blob).then_some(blob))
+        Ok((!blob.is_empty()).then_some(blob))
+    }
+}
+
+impl External for SystemExternal {
+    fn keychain(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
+        Ok(self
+            .keychain_raw(service)?
+            .filter(|blob| has_credential(blob)))
     }
 
     fn profile(&self, bearer: &str) -> Result<Principal, ExternalFailure> {
