@@ -1066,6 +1066,10 @@ pub async fn run_verb(args: &[String]) -> i32 {
                 "sccache_restarts_1h": crate::machine_watch::sccache_restarts_1h(),
                 "daemon_cpu": cpu,
                 "daemon_cpu_reason": cpu_reason,
+                "memory": crate::memory_groups::reading(
+                    &crate::paths::AgentsHome::from_env(),
+                    &rows,
+                ),
             })
         );
         return 0;
