@@ -269,6 +269,8 @@ mod tests {
         let row = |sid: &str, parent: Option<&str>, level: Option<u32>| {
             let mut e = RegistryEntry::new(Some(sid.into()), Lineage::unproven("test"));
             e.harness_session_id = Some(sid.into());
+            e.name = format!("w-{sid}");
+            e.harness = Some("claude".into());
             e.spawned_by_session = parent.map(str::to_string);
             e.role_level = level;
             e
