@@ -38,7 +38,8 @@ const VALID_STRATEGIES: [&str; 2] = ["fallback", "round_robin"];
 
 /// `loader._AGENTS_RESERVED_KEYS`: settings blocks that share the
 /// `config.agents` namespace with per-agent pins and are never read as one.
-const AGENTS_RESERVED_KEYS: &[&str] = &[
+/// The `reserved_agent_keys` golden holds this list to the Python set.
+pub const AGENTS_RESERVED_KEYS: &[&str] = &[
     "a2a",
     "auto_register_sessions",
     "claude",
@@ -1296,4 +1297,3 @@ pub fn load_scope(scope: Scope, cwd: &Path) -> Result<Accounts, LoadError> {
     }
     parse_block(block, None)
 }
-

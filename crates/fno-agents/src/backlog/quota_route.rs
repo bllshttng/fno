@@ -463,20 +463,17 @@ pub fn select_destination(
     if on_exhaustion != "failover" {
         return None;
     }
-    // The active combo by name; a bare active PROVIDER is not a combo (the
-    // walk has nothing to do, and defer is the floor).
-    let combo_name = crate::agents_config::config_lookup(cwd, &["providers", "active"])
-        .and_then(|v| v.as_str().map(str::to_string))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())?;
-    let combos = crate::agents_config::config_lookup(cwd, &["providers", "combos"])?;
-    let combo = combos.get(combo_name.as_str())?.as_table()?;
-    let members = combo.get("providers")?.as_array()?;
-    let records = crate::agents_config::config_lookup(cwd, &["providers", "records"])?;
-    for member in members {
-        let Some(pid) = member.as_str() else {
-            continue;
-        };
+    // The active combo by name (`accounts.active_combo`, the settings_combo
+    // rung); a bare active account is not a combo, and defer is the floor.
+    use crate::accounts::records;
+    let root = node_cwd.map(Path::new);
+    let combo_name = records::load_active_combo(root, cwd)?;
+    let combo = records::load_combos(root, cwd)
+        .ok()?
+        .into_iter()
+        .find(|c| c.name == combo_name)?;
+    let accounts = records::load(root, cwd).ok()?;
+    for pid in &combo.providers {
         if pid == exhausted_provider {
             continue;
         }
@@ -486,27 +483,14 @@ pub fn select_destination(
         if sig.state == HeadroomState::Exhausted {
             continue;
         }
-        let record = record_by_id(&records, pid)?;
-        let harness = record
-            .get("cli")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())?;
+        let harness = accounts.by_id(pid)?.harness.trim();
         // A record with no harness cannot pick a --provider.
-        return Some((pid.to_string(), harness.to_string()));
+        if harness.is_empty() {
+            return None;
+        }
+        return Some((pid.clone(), harness.to_string()));
     }
     None
-}
-
-/// One provider record by id, from a records list (array of rows) or a map.
-fn record_by_id<'a>(records: &'a toml::Value, pid: &str) -> Option<&'a toml::Table> {
-    if let Some(rows) = records.as_array() {
-        return rows
-            .iter()
-            .find(|r| r.get("id").and_then(|v| v.as_str()) == Some(pid))
-            .and_then(toml::Value::as_table);
-    }
-    records.get(pid).and_then(toml::Value::as_table)
 }
 
 /// Whether launch-time account picking is armed AND has a live account.
@@ -528,18 +512,12 @@ fn healthy_alternate_exists(node_cwd: Option<&str>) -> bool {
         return false;
     }
     let cwd = node_cwd.map(Path::new).unwrap_or(Path::new("."));
-    let Some(raw) = crate::agents_config::config_lookup(cwd, &["accounts", "records"]) else {
-        return false;
-    };
-    let Some(records) = raw.as_array() else {
+    let Ok(accounts) = crate::accounts::records::load(None, cwd) else {
         return false;
     };
     let now = now_secs();
-    records.iter().any(|rec| {
-        let Some(id) = rec.get("id").and_then(|v| v.as_str()) else {
-            return false;
-        };
-        let sig = evaluate_quota_signal(id, None, 0.0, node_cwd, now);
+    accounts.records.iter().any(|rec| {
+        let sig = evaluate_quota_signal(&rec.id, None, 0.0, node_cwd, now);
         sig.state != HeadroomState::Exhausted
     })
 }
@@ -560,14 +538,15 @@ pub fn select_autonomous_route(
     _node_id: Option<&str>,
     now: f64,
 ) -> AutonomousRoute {
-    let cfg = load_quota_config(node_cwd);
+    // `dispatch.cutover_low_after_minutes`; a non-integer or negative value
+    // degrades to 0 (off).
     let cutover_low = {
         let cwd = node_cwd.map(Path::new).unwrap_or(Path::new("."));
-        crate::agents_config::config_lookup(cwd, &["accounts", "cutover_low_after_minutes"])
+        crate::agents_config::config_lookup(cwd, &["dispatch", "cutover_low_after_minutes"])
             .and_then(|v| v.as_integer())
+            .filter(|v| *v >= 0)
             .unwrap_or(0) as f64
     };
-    let _ = cfg;
     let sig = evaluate_quota_signal(provider_id, priority, cutover_low, node_cwd, now);
     let window = sig.state.as_str().to_string();
     if sig.cutover && !pinned {

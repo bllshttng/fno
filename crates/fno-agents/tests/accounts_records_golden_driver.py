@@ -386,6 +386,7 @@ CASES = {
         {"global": A + rec("Bad")},
         {"id": "alpha"},
     ),
+    "reserved_agent_keys": ("reserved_agent_keys", {}, {}),
 }
 
 LAYER_PATHS = {
@@ -447,6 +448,8 @@ def run_case(op, files, extra, tmp: Path):
             return {"ok": loader.load_scope_config("global").model_dump(mode="json")}
         if op == "record_harness":
             return {"ok": loader.record_harness(extra["id"])}
+        if op == "reserved_agent_keys":
+            return {"ok": sorted(loader._AGENTS_RESERVED_KEYS)}
     except loader.ProviderConfigError as exc:
         return {"error": headline(str(exc))}
     raise SystemExit(f"unknown op {op}")

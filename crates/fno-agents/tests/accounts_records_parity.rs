@@ -103,6 +103,11 @@ fn run_op(case: &Value, repo: &Path) -> Value {
             let id = case["id"].as_str().unwrap();
             json!({ "ok": records::record_harness(id, None, repo) })
         }
+        "reserved_agent_keys" => {
+            let mut keys = records::AGENTS_RESERVED_KEYS.to_vec();
+            keys.sort_unstable();
+            json!({ "ok": keys })
+        }
         other => panic!("unknown op {other}"),
     }
 }
