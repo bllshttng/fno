@@ -363,6 +363,43 @@ pub fn wake_name_decide(ask: &Value) -> Value {
     answer
 }
 
+/// The permission mode a fleet pane spec carries. An explicit ask wins. A
+/// non-empty `fno_id` is the fleet-spawn proof: the spawner assigns it and
+/// bare `footnote` in the user's own terminal never sends one, so only a
+/// fleet pane gets the operator's spawn default, else fno's builtin
+/// unattended answer (the fleet cannot answer a footnote ask). Without an
+/// `fno_id` the spec carries no mode and the user's own settings decide.
+fn fleet_pane_mode(ask: &Value, cwd: &std::path::Path) -> Option<String> {
+    fleet_pane_mode_decided(
+        ask.get("permission_mode").and_then(Value::as_str),
+        ask.get("fno_id").and_then(Value::as_str),
+        || {
+            crate::agents_config::config_lookup(cwd, &["agents", "defaults", "permission_mode"])
+                .and_then(|v| v.as_str().map(str::to_string))
+        },
+    )
+}
+
+/// The decision core, with the config read injected so the test needs no disk.
+fn fleet_pane_mode_decided(
+    explicit: Option<&str>,
+    fno_id: Option<&str>,
+    config: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Some(mode) = explicit.map(str::trim).filter(|m| !m.is_empty()) {
+        return Some(mode.to_string());
+    }
+    fno_id.filter(|id| !id.is_empty())?;
+    Some(
+        config()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                crate::backlog::advance_dispatch::SPAWN_PERMISSION_BUILTIN.to_string()
+            }),
+    )
+}
+
 /// The verb entry: JSON payload on stdin, decision JSON on stdout (the
 /// spawn-overlay shape). Exit 0 even for a "no axes" answer; exit 2 only for
 /// transport-level faults (unreadable payload), which the caller reports as
@@ -546,11 +583,12 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     // session id it names.
     if let Some(ask) = parsed.get("footnote_pane_spec") {
         let s = |k: &str| ask.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+        let cwd = std::path::Path::new(s("cwd").unwrap_or("."));
         let answer = match crate::footnote_harness::write_pane_spec(
-            std::path::Path::new(s("cwd").unwrap_or(".")),
+            cwd,
             s("model").unwrap_or(""),
             s("node"),
-            s("permission_mode"),
+            fleet_pane_mode(ask, cwd).as_deref(),
             s("fno_id"),
         ) {
             Ok((path, fno_id)) => serde_json::json!({"path": path, "fno_id": fno_id}),
@@ -774,6 +812,29 @@ mod tests {
             .as_object()
             .cloned()
             .expect("decision is an object")
+    }
+
+    #[test]
+    fn fleet_pane_mode_answers_explicit_config_builtin_or_none() {
+        let cfg = || Some("default".to_string());
+        // An explicit ask wins; the config read never fires.
+        assert_eq!(
+            fleet_pane_mode_decided(Some(" plan "), Some("u"), cfg),
+            Some("plan".to_string())
+        );
+        // A fleet spawn (fno_id present) rides the operator default...
+        assert_eq!(
+            fleet_pane_mode_decided(None, Some("u"), cfg),
+            Some("default".to_string())
+        );
+        // ...else fno's builtin unattended answer.
+        assert_eq!(
+            fleet_pane_mode_decided(None, Some("u"), || None),
+            Some(crate::backlog::advance_dispatch::SPAWN_PERMISSION_BUILTIN.to_string())
+        );
+        // Bare footnote sends no fno_id: no mode, the user's settings decide.
+        assert_eq!(fleet_pane_mode_decided(None, None, cfg), None);
+        assert_eq!(fleet_pane_mode_decided(None, Some(""), cfg), None);
     }
 
     #[test]
