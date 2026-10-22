@@ -2489,12 +2489,13 @@ fn split_flag_values(tail: &[String]) -> Vec<String> {
 /// transport (the defer pattern), so the receipt names what the store
 /// committed and the wheel only repaints plans.
 pub fn run_supersede(tail: &[String]) -> i32 {
+    if tail.is_empty() {
+        eprintln!("{SUPERSEDE_HELP}");
+        return 2;
+    }
     if tail.iter().any(|a| a == "--help" || a == "-h") {
         println!("{SUPERSEDE_HELP}");
         return 0;
-    }
-    if tail.is_empty() {
-        return forward_to_python("supersede", tail);
     }
     let parsed = match parse_supersede_args(&split_flag_values(tail)) {
         Some(p) => p,
@@ -2513,6 +2514,7 @@ struct SupersedeArgs {
     surfaces: Vec<String>,
     reason: Option<String>,
     covers: Option<String>,
+    marker_ok: Option<String>,
     leftover: Option<String>,
     force: bool,
 }
@@ -2540,6 +2542,8 @@ Options:
   --covers TEXT      How NEW_ID's done condition covers the old node's.
   --leftover TEXT    A filed, live node that holds the scope NEW_ID leaves
                      out. One of --covers or --leftover is required.
+  --marker-ok TEXT   Why NEW_ID's scope-out text does not touch the old
+                     node's work. Lets --covers stand without --leftover.
   -F, --force        Supersede even if the old node has live children (their
                      parent is cleared).
   -h, --help         Show this message and exit.";
@@ -2551,6 +2555,7 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
     let mut surfaces: Vec<String> = Vec::new();
     let mut reason: Option<String> = None;
     let mut covers: Option<String> = None;
+    let mut marker_ok: Option<String> = None;
     let mut leftover: Option<String> = None;
     let mut force = false;
     let mut iter = tail.iter().peekable();
@@ -2564,6 +2569,7 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
             },
             "--reason" | "-R" => reason = iter.next().cloned(),
             "--covers" => covers = iter.next().cloned(),
+            "--marker-ok" => marker_ok = iter.next().cloned(),
             "--leftover" => leftover = iter.next().cloned(),
             "--force" | "-F" => force = true,
             other => {
@@ -2588,6 +2594,7 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
         surfaces,
         reason,
         covers,
+        marker_ok,
         leftover,
         force,
     })
@@ -2750,6 +2757,7 @@ fn supersede_write(graph: &Path, args: &SupersedeArgs) -> i32 {
                 &new_canon,
                 &old_canon,
                 args.covers.as_deref(),
+                args.marker_ok.as_deref(),
                 leftover,
             ) {
                 Ok(clause) => clause,

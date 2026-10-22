@@ -810,7 +810,7 @@ pub(crate) fn evaluate_thresholds(report: &Value, config: &Value) -> Vec<Value> 
         .map(Vec::len)
         .unwrap_or(0) as f64;
     if su_n > 0.0 {
-        breaches.push(breach("supersession_unverified", su_n, 0.0, "presence", "successor merged but coverage is unproven: no supersession record, or declared surfaces were not in its PR. Reopen with fno backlog unsupersede <id>, or accept with fno backlog done <id>; the sweep will never settle it alone."));
+        breaches.push(breach("supersession_unverified", su_n, 0.0, "presence", "successor merged but declared surfaces were not in its PR. Reopen with fno backlog unsupersede <id>, or accept with fno backlog done <id>; the sweep will never settle it alone."));
     }
     let bh_n = report["blocked_by_held"]
         .as_array()
@@ -1461,8 +1461,13 @@ pub(crate) fn health_report(
                 .map(|id| (id.to_string(), e))
         })
         .collect();
-    let supersession_unverified =
-        super::supersession::shipped_successor_unproven(&entries, &all_entries);
+    // A record-less row predates the supersession record, so it goes to the
+    // groom brief only: breaching on it would turn every older store red.
+    let supersession_unverified: Vec<Value> =
+        super::supersession::shipped_successor_unproven(&entries, &all_entries)
+            .into_iter()
+            .filter(|row| row["recorded"] == Value::Bool(true))
+            .collect();
     let mut blocked_by_held = Vec::new();
     for e in &entries {
         let raw = e

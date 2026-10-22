@@ -209,7 +209,8 @@ fn brief(day: &str, mechanical: Option<&[(String, String)]>, unproven: &[String]
         String::new()
     } else {
         format!(
-            "\n\nSuperseded nodes whose successor shipped but whose coverage is unproven. \
+            "\n\nSuperseded nodes whose scope may have left the board: the successor shipped \
+             with coverage unproven, or the leftover that held the rest was parked. \
              List each in the report. Where the old node's done condition still fails, file \
              the scope left out with `fno backlog idea`:\n- {}",
             unproven.join("\n- ")
@@ -228,14 +229,14 @@ fn brief(day: &str, mechanical: Option<&[(String, String)]>, unproven: &[String]
 /// brief still dispatches and the worker reads the graph itself.
 fn unproven_supersessions() -> Vec<String> {
     let rows = crate::graph_store::read_rows(&settings::graph_path()).unwrap_or_default();
-    let text = |row: &Value, key: &str| row[key].as_str().unwrap_or("?").to_string();
-    super::supersession::shipped_successor_unproven(&rows, &rows)
+    let text = |row: &Value, key: &str, none: &str| row[key].as_str().unwrap_or(none).to_string();
+    let mut lines: Vec<String> = super::supersession::shipped_successor_unproven(&rows, &rows)
         .iter()
         .map(|row| {
             let why = if row["recorded"] == json!(true) {
                 format!(
                     "reason: {}; uncovered: {}",
-                    text(row, "reason"),
+                    text(row, "reason", "no reason recorded"),
                     row["uncovered_surfaces"]
                 )
             } else {
@@ -243,11 +244,13 @@ fn unproven_supersessions() -> Vec<String> {
             };
             format!(
                 "{} (successor {} shipped; {why})",
-                text(row, "predecessor"),
-                text(row, "successor")
+                text(row, "predecessor", "?"),
+                text(row, "successor", "?")
             )
         })
-        .collect()
+        .collect();
+    lines.extend(super::supersession::dead_leftovers(&rows));
+    lines
 }
 
 /// The mechanical pass, in dependency order. `relatedness build` runs LAST

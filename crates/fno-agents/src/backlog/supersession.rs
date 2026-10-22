@@ -133,15 +133,56 @@ fn is_set(row: &Value, key: &str) -> bool {
     })
 }
 
+/// Why a node holds no live scope while unfinished, if it does not.
+fn off_board(row: &Value) -> Option<&'static str> {
+    [("superseded_by", "superseded"), ("deferred_at", "deferred")]
+        .into_iter()
+        .find(|(key, _)| is_set(row, key))
+        .map(|(_, state)| state)
+}
+
+/// One line per supersession whose recorded leftover later left the board
+/// unfinished (deferred or superseded), so the scope it held is dropped again.
+pub(crate) fn dead_leftovers(all: &[Value]) -> Vec<String> {
+    let by_id: BTreeMap<&str, &Value> = all
+        .iter()
+        .filter_map(|e| e.get("id").and_then(Value::as_str).map(|id| (id, e)))
+        .collect();
+    let mut lines = Vec::new();
+    for entry in all {
+        let reason = entry
+            .pointer("/supersession/reason")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let Some((_, rest)) = reason.rsplit_once("leftover: ") else {
+            continue;
+        };
+        let leftover_id = rest.split([';', ' ']).next().unwrap_or("");
+        let Some(leftover) = by_id.get(leftover_id) else {
+            continue;
+        };
+        if is_set(leftover, "completed_at") {
+            continue;
+        }
+        if let Some(state) = off_board(leftover) {
+            let id = entry.get("id").and_then(Value::as_str).unwrap_or("?");
+            lines.push(format!("{id} (its leftover {leftover_id} is {state})"));
+        }
+    }
+    lines
+}
+
 /// The coverage clause a supersede owes, appended to its stored reason: how
 /// the successor's done condition covers the old node's (`covers`), or the
 /// filed live node holding the scope the successor leaves out (`leftover`).
-/// A successor whose own text scopes work out of itself owes a leftover.
+/// A successor whose own text scopes work out of itself owes a leftover,
+/// unless `marker_ok` says why that text does not touch the old node's work.
 pub(crate) fn coverage_clause(
     successor: &Value,
     new_id: &str,
     old_id: &str,
     covers: Option<&str>,
+    marker_ok: Option<&str>,
     leftover: Option<&Value>,
 ) -> Result<String, String> {
     let covers = covers.map(str::trim).filter(|c| !c.is_empty());
@@ -149,11 +190,20 @@ pub(crate) fn coverage_clause(
         "File the scope first, then re-run with --leftover <its id>:\n  \
          fno backlog idea \"<the part of {old_id} that {new_id} leaves out>\""
     );
+    let marker_ok = marker_ok.map(str::trim).filter(|m| !m.is_empty());
     let Some(leftover) = leftover else {
-        if let Some(marker) = scope_out_marker(successor) {
+        let marker = scope_out_marker(successor);
+        if let (Some(marker), Some(why), Some(covers)) = (marker, marker_ok, covers) {
+            return Ok(format!(
+                "covers: {covers}; \"{marker}\" does not apply: {why}"
+            ));
+        }
+        if let Some(marker) = marker {
             return Err(format!(
                 "Error: {new_id} covers only part of {old_id}: its own text says \
-                 \"{marker}\". That is a split, not a supersede.\n{file_it}"
+                 \"{marker}\". That is a split, not a supersede.\n{file_it}\n\
+                 If that text scopes out something {old_id} never owned, keep \
+                 --covers and add --marker-ok \"<why it does not apply>\"."
             ));
         }
         let Some(covers) = covers else {
@@ -172,14 +222,8 @@ pub(crate) fn coverage_clause(
             "Error: --leftover must name a third node, not {id}. {file_it}"
         ));
     }
-    let dead = [
-        ("completed_at", "done"),
-        ("superseded_by", "superseded"),
-        ("deferred_at", "deferred"),
-    ]
-    .into_iter()
-    .find(|(key, _)| is_set(leftover, key));
-    if let Some((_, state)) = dead {
+    if let Some(state) = off_board(leftover).or(is_set(leftover, "completed_at").then_some("done"))
+    {
         return Err(format!(
             "Error: --leftover {id} is {state}; the scope {new_id} leaves out must \
              stay live work. {file_it}"
@@ -382,27 +426,36 @@ mod tests {
 
     #[test]
     fn a_narrower_successor_is_refused_until_the_leftover_is_filed() {
-        fn check(covers: Option<&str>, leftover: Option<&Value>) -> Result<String, String> {
+        fn check(
+            covers: Option<&str>,
+            marker_ok: Option<&str>,
+            leftover: Option<&Value>,
+        ) -> Result<String, String> {
             let narrow = json!({"id": "x-new", "details": "Pass 2 (not this\nnode): identifiers."});
-            coverage_clause(&narrow, "x-new", "x-old", covers, leftover)
+            coverage_clause(&narrow, "x-new", "x-old", covers, marker_ok, leftover)
         }
-        let refused = check(Some("renames all"), None).unwrap_err();
+        let refused = check(Some("renames all"), None, None).unwrap_err();
         assert!(refused.contains("\"not this node\""), "{refused}");
+        assert!(refused.contains("--marker-ok"), "{refused}");
+        assert_eq!(
+            check(Some("renames all"), Some("pass 2 is a perf pass"), None).unwrap(),
+            "covers: renames all; \"not this node\" does not apply: pass 2 is a perf pass"
+        );
         let stamp = "2026-10-01T00:00:00Z";
         for (row, state) in [
             (json!({"id": "x-rest", "completed_at": stamp}), "done"),
             (json!({"id": "x-rest", "deferred_at": stamp}), "deferred"),
             (json!({"id": "x-old"}), "third node"),
         ] {
-            let err = check(None, Some(&row)).unwrap_err();
+            let err = check(None, None, Some(&row)).unwrap_err();
             assert!(err.contains(state), "{err}");
         }
         let filed = json!({"id": "x-rest"});
-        assert_eq!(check(None, Some(&filed)).unwrap(), "leftover: x-rest");
+        assert_eq!(check(None, None, Some(&filed)).unwrap(), "leftover: x-rest");
         let whole = json!({"id": "x-new"});
-        assert!(coverage_clause(&whole, "x-new", "x-old", Some("  "), None).is_err());
+        assert!(coverage_clause(&whole, "x-new", "x-old", Some("  "), None, None).is_err());
         assert_eq!(
-            coverage_clause(&whole, "x-new", "x-old", Some("renames all"), None).unwrap(),
+            coverage_clause(&whole, "x-new", "x-old", Some("renames all"), None, None).unwrap(),
             "covers: renames all"
         );
     }
@@ -416,8 +469,10 @@ mod tests {
             json!({"id": "x-bare", "superseded_by": "x-succ"}),
             pred("x-pre", &["src/a.rs", "src/b.rs"], false),
             pred("x-ok", &["src/a.rs"], true),
+            json!({"id": "x-rest", "deferred_at": "2026-10-03T00:00:00Z"}),
         ];
         entries[4]["supersession"]["matched_surfaces"] = json!(["src/a.rs"]);
+        entries[5]["supersession"]["reason"] = json!("split; leftover: x-rest");
         let row = |id: &str, uncovered: Value, recorded: bool| {
             json!({"predecessor": id, "successor": "x-succ", "evidence_pr": 9,
                    "uncovered_surfaces": uncovered, "reason": null, "recorded": recorded})
@@ -428,6 +483,11 @@ mod tests {
                 row("x-bare", json!([]), false),
                 row("x-pre", json!(["src/b.rs"]), true)
             ]
+        );
+        // A verified supersession still drops scope when its leftover parks.
+        assert_eq!(
+            dead_leftovers(&entries),
+            vec!["x-ok (its leftover x-rest is deferred)".to_string()]
         );
     }
 
