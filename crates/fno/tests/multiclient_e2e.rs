@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{spawn_server, Absorbed, ClientHarness, FakeClient};
-use fno::proto::Command;
+use fno::proto::{
+    read_msg_sync, write_msg_sync, ClientMsg, Command, ControlVerb, ServerMsg, BUILD_VERSION,
+    PROTO_VERSION,
+};
 use fno::tree::Dir;
 
 struct Scratch(PathBuf);
@@ -252,6 +255,118 @@ while :; do sleep 0.2; done\n",
         Some(c.notices.iter().any(|n| n.contains("repaint requested")))
     });
     b.wait_pane_text(15, pane, |t| count(t) > before.max(0));
+}
+
+/// Deliver bytes to one pane through a control connection, the way the mail
+/// pane lane does (`fno mux pane send --stdin --raw`): a `Control` first
+/// message never registers a client, so it can neither resize nor count as
+/// activity.
+fn control_pane_send(sock: &Path, pane: u64, bytes: &[u8]) {
+    let mut stream = common::connect_with_retry(sock);
+    write_msg_sync(
+        &mut stream,
+        &ClientMsg::Control {
+            proto: PROTO_VERSION,
+            build: BUILD_VERSION.to_string(),
+            verb: ControlVerb::PaneSend {
+                pane,
+                bytes: bytes.to_vec(),
+                guarded: false,
+                expected_identity: None,
+                hold_pass: false,
+            },
+        },
+    )
+    .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    match read_msg_sync::<_, ServerMsg>(&mut stream) {
+        Ok(ServerMsg::Ok) => {}
+        other => panic!("pane send failed: {other:?}"),
+    }
+}
+
+/// (x-27c7) One mail delivery - a bracketed paste, then a separate Enter -
+/// must resize no pane and change no client's area, with two clients of
+/// different sizes attached. Both panes run the WINCH-counting painter, so
+/// a stray winsize write on the receiver or its tab neighbour moves a count.
+#[test]
+fn multiclient_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailresize");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    std::fs::write(
+        cwd.join("winchpaint.sh"),
+        "#!/bin/sh\n\
+n=0\n\
+paint() {\n\
+  n=$((n+1))\n\
+  set -- $(stty size)\n\
+  printf '\\033[2J\\033[H'\n\
+  echo TOPMARK\n\
+  printf '\\033[%s;1H' \"$1\"\n\
+  printf 'INPUTBOX n=%s' \"$n\"\n\
+}\n\
+trap 'paint' WINCH\n\
+paint\n\
+while :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 30, 100, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| l.area == (30, 100));
+    a.cmd(Command::SplitDir(Dir::Right));
+    let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
+    for pane in [receiver, neighbour] {
+        control_pane_send(&scratch.sock(), pane, b"sh ./winchpaint.sh\r");
+    }
+    let count = |t: &str| -> i32 {
+        t.split("INPUTBOX n=")
+            .nth(1)
+            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-1)
+    };
+    for pane in [receiver, neighbour] {
+        a.wait_pane_text(15, pane, |t| count(t) >= 1);
+    }
+    // Let the split's own nudges drain before the baseline: the delivery is
+    // the only event inside the measured window.
+    a.pump(Duration::from_millis(2500));
+    let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    let baseline = [receiver, neighbour].map(|p| count(&a.pane_text(p)));
+
+    let mut paste = b"\x1b[200~".to_vec();
+    for line in 0..60 {
+        paste.extend_from_slice(
+            format!("line {line:02} of a long mail body {}\n", "x".repeat(40)).as_bytes(),
+        );
+    }
+    paste.extend_from_slice(b"\x1b[201~");
+    control_pane_send(&scratch.sock(), receiver, &paste);
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // Past NUDGE_DELAY (300 ms) plus the 1 s nudge tick.
+    a.pump(Duration::from_millis(2500));
+    b.pump(Duration::from_millis(100));
+
+    for (pane, before) in [receiver, neighbour].into_iter().zip(baseline) {
+        assert_eq!(
+            count(&a.pane_text(pane)),
+            before,
+            "mail delivery sent a SIGWINCH to pane {pane}"
+        );
+    }
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
+            Some((settled.area, settled.panes.clone())),
+            "mail delivery changed client {who}'s layout"
+        );
+    }
 }
 
 // -- AC2: two clients, different views --------------------------------------
