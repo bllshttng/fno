@@ -25,6 +25,9 @@
 //! - kind `team-rescope`: the role re-scope's team-name effect
 //!   (`team_rescope::resolve`), the promote-side carry that keeps a lead's
 //!   recorded name across an `org promote` scope move.
+//! - kind `role-resolve`: the org ladder (`territory::resolve_role`), a
+//!   scope's rung and canonical form, the one resolver the board and the
+//!   promote path share.
 
 use crate::provider::{known_providers_csv, KNOWN_PROVIDERS};
 use serde_json::{json, Map, Value};
@@ -156,6 +159,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("print") => resolve_print(&payload),
         Some("write-settings") => crate::route_settings::write_settings_kind(&payload),
         Some("launch") => crate::launch_exec::launch_kind(&payload),
+        Some("role-resolve") => crate::territory::resolve_role_kind(&payload),
         Some("role-settle") => crate::team_settle::resolve(&payload),
         Some("role-identity") => crate::team_identity::resolve(&payload),
         Some("role-widen") => crate::team_widen::resolve(&payload),
@@ -163,7 +167,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
         )),
     }
 }
