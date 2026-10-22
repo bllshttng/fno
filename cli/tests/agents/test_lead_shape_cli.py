@@ -1,4 +1,4 @@
-"""`fno agents lead shape`: declaring a term's shape is a verb, not prose.
+"""`fno agents lead shape`: declaring a term's shape is a command, not prose.
 
 The Stop nudge reads the manifest's shape field to learn whether live spawned
 workers are an answered team or an unshaped pass. These tests pin the CLI
@@ -43,7 +43,7 @@ def team(tmp_path, monkeypatch):
     install_fake_claude(bin_dir)
     monkeypatch.setenv("PATH", str(bin_dir))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER_SESSION)
-    # The verb keys the manifest root on the caller row's cwd; the seated row
+    # The command keys the manifest root on the caller row's cwd; the seated row
     # carries that cwd (see _seat's cwd argument).
     monkeypatch.chdir(tmp_path)
     built = Path(__file__).parents[3] / (
@@ -89,7 +89,7 @@ def _seat(
 
 
 def _manifest(team, scope: str = SCOPE, session: str = CALLER_SESSION):
-    # The verb keys the manifest root on the caller row's cwd, so the fixture
+    # The command keys the manifest root on the caller row's cwd, so the fixture
     # writes through the same call the resolver makes.
     path = lead_manifest_path(scope, state_root=lead_state_root(Path(team)))
     write_manifest(path, scope=scope, harness_session_id=session)
@@ -103,6 +103,7 @@ def _shape(*args: str):
 
 
 @pytest.mark.skipif(not _binary_available(), reason="fno-agents binary not built")
+@pytest.mark.dev_build
 def test_shape_team_lands_on_the_manifest_and_echoes(team) -> None:
     _seat("serving-lead", CALLER_SESSION, cwd=str(team))
     manifest = _manifest(team)

@@ -5,7 +5,7 @@
 //!
 //! The arm order is the contract: who was OWED and is absent is a wait; who
 //! read an older commit needs a re-read; a spent round budget names the
-//! terminal act; anything else names the review verb. Absences nobody owed
+//! terminal act; anything else names the review command. Absences nobody owed
 //! never own the next action - an optional App that never responds sits
 //! absent on every PR forever, and letting it drive the line made the stale
 //! arm (the rebase case) unreachable.
@@ -37,12 +37,12 @@ fn blind_to_reviewed_commits(rep: &CoverageReport) -> bool {
     !staleness.is_empty() && staleness.iter().all(|v| v.reviewed_sha.is_empty())
 }
 
-/// The terminal act a spent round budget names, replacing the review-verb
-/// instruction in the uncovered arm. The verb is what restarted the loop;
+/// The terminal act a spent round budget names, replacing the review-command
+/// instruction in the uncovered arm. The command is what restarted the loop;
 /// past the cap the receipt must not teach another round. The configured
 /// rounds are the whole review gate: at the cap the review phase is
 /// complete, open findings stay in the PR conversation, and the PR merges
-/// on green CI. Contains no slash-verb and never the words "review verb" -
+/// on green CI. Contains no slash-command and never the words "review command" -
 /// the corpus asserts both absences with a positive marker for this very
 /// string.
 const CAP_SPENT_TERMINAL_ACT: &str = "the configured rounds are spent: the review phase is complete; open findings stay in the PR conversation; merge on green CI; the operator lever is config.review.max_rounds";
@@ -58,7 +58,7 @@ const CAP_SPENT_TERMINAL_ACT: &str = "the configured rounds are spent: the revie
 ///
 /// `round_cap` is `Some((rounds_used, max_rounds))` ONLY when the round
 /// budget is already spent. The uncovered arm then names the terminal act
-/// instead of the review verb - the instruction that restarts the loop this
+/// instead of the review command - the instruction that restarts the loop this
 /// cap exists to bound. None (the default at every under-cap call site)
 /// renders exactly the pre-cap line.
 pub fn coverage_receipt_line(
@@ -169,7 +169,7 @@ pub fn coverage_receipt_line(
                 .filter(|v| v.verdict == CoverageVerdict::Stale)
                 .map(|v| v.name.as_str())
                 .collect();
-            // Never prescribe the local verb while an OWED reviewer is absent,
+            // Never prescribe the local command while an OWED reviewer is absent,
             // and never suppress the next action entirely either. Both were
             // tried here and both were wrong: the offer walks a worker into
             // self-attesting past a reviewer the merge gate actually waits on,
@@ -200,18 +200,18 @@ pub fn coverage_receipt_line(
                 )
             } else if !stale.is_empty() {
                 // A re-read by the reviewer that already responded, not a local
-                // self-attest: "run the review verb" would walk a worker past a
+                // self-attest: "run the review command" would walk a worker past a
                 // reviewer that may be REQUIRED and has simply gone stale.
                 format!(
                     "{} reviewed an older commit whose code no longer matches HEAD - ask for a re-read",
                     stale.join(", ")
                 )
             } else if let Some((used, max)) = round_cap {
-                // The round budget is spent. Naming the review verb here is
+                // The round budget is spent. Naming the review command here is
                 // the instruction that restarts the loop this cap exists to
                 // bound: every fix moves HEAD, voids the attestation, and
                 // returns the worker to this exact line. So this arm names
-                // no verb at all - it names the terminal act (decline, file,
+                // no command at all - it names the terminal act (decline, file,
                 // merge) and the operator lever. The absent/stale arms above
                 // are untouched: they answer reviewer configuration, which
                 // the round budget neither causes nor cures.
@@ -219,16 +219,16 @@ pub fn coverage_receipt_line(
                     "the review round budget is spent ({used}/{max}) - {CAP_SPENT_TERMINAL_ACT}"
                 )
             } else {
-                // Both arms carry the ordering, because the verb alone does not
+                // Both arms carry the ordering, because the command alone does not
                 // teach it: close findings, commit, push, review at the final
                 // head, attest last. The None arm is the one a CI runner prints
                 // (no `fno` on PATH there), so it must still name a producer -
-                // a bare "run the review verb" names none.
+                // a bare "run the review command" names none.
                 match self_review_hint {
                     Some(hint) => {
-                        format!("run the review verb at HEAD - `{hint}` - {REVIEW_ORDER}")
+                        format!("run the review command at HEAD - `{hint}` - {REVIEW_ORDER}")
                     }
-                    None => format!("run the review verb at HEAD - {REVIEW_ORDER}"),
+                    None => format!("run the review command at HEAD - {REVIEW_ORDER}"),
                 }
             };
             // An unowed absence is named on every arm, not only the one it no
@@ -398,9 +398,9 @@ mod tests {
     }
 
     #[test]
-    fn coverage_receipt_past_the_cap_names_the_terminal_act_and_no_verb() {
+    fn coverage_receipt_past_the_cap_names_the_terminal_act_and_no_command() {
         // The spent-budget arm. The uncovered receipt used to answer a worker
-        // past the round cap with "run the review verb at HEAD" - the exact
+        // past the round cap with "run the review command at HEAD" - the exact
         // instruction that restarts the loop the cap exists to bound. Past the
         // cap the line must name the terminal act instead. Absences alone
         // pass on a line that never rendered, so the render itself is
@@ -414,7 +414,7 @@ mod tests {
         // levels live in the sized-invocation builder alone (single-source
         // guard), and this test only needs SOME hint string to prove the
         // past-cap arm ignores it.
-        let hint = "/verb-from-the-builder --flags";
+        let hint = "/command-from-the-builder --flags";
         let line = coverage_receipt_line(&rep, Some(hint), Some((3, 2)));
         assert!(line.starts_with("review coverage:"), "{line}");
         assert!(
@@ -427,7 +427,7 @@ mod tests {
             ),
             "{line}"
         );
-        for needle in ["/code-review", "/review", "/fno:review", "review verb"] {
+        for needle in ["/code-review", "/review", "/fno:review", "review command"] {
             assert!(
                 !line.contains(needle),
                 "past-cap line names {needle}: {line}"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the skill-file leg in scripts/autocorrect-pack.sh: the
-# SOURCE field names the verb (target-postmortem -> target), and that verb's
+# SOURCE field names the command (target-postmortem -> target), and that command's
 # SKILL.md lands in implicated_rules with its full text, deduped across rows.
-# A source that is not *-postmortem, or naming a verb with no skill
+# A source that is not *-postmortem, or naming a command with no skill
 # directory, adds nothing. Isolates via FNO_HOME + CLAUDE_DIR_OVERRIDE +
 # FNO_GRAPH_PATH so the real ~/.fno and ~/.claude are never touched.
 
@@ -54,7 +54,7 @@ run_pack() {
         bash "$PACK" --dry-run --window 30d
 }
 
-# ---- T01: exactly one entry for the verb's SKILL.md, with full text ----
+# ---- T01: exactly one entry for the command's SKILL.md, with full text ----
 echo "T01: skills/target/SKILL.md resolved once with full text"
 PACKET="$(run_pack)"
 if [[ $? -ne 0 ]]; then

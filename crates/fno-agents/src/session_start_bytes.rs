@@ -3,8 +3,8 @@
 //! is a number, not a feeling.
 //!
 //! `--gate-bytes` is required rather than re-derived: `check-preamble-budget.sh`
-//! already computes the fno gate figure (A) and this verb must not carry a
-//! second implementation of that parse. This verb owns the other two pieces:
+//! already computes the fno gate figure (A) and this command must not carry a
+//! second implementation of that parse. This command owns the other two pieces:
 //! the user's global `~/.claude/CLAUDE.md` plus every file its top-level `@`
 //! lines import (B), and the current project's memory index (C,
 //! `~/.claude/projects/<slug>/memory/MEMORY.md`, the same slug

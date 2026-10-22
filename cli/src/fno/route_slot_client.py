@@ -1,4 +1,4 @@
-"""Transport for the ``fno-agents route-slot`` verb: a ready JSON payload in,
+"""Transport for the ``fno-agents route-slot`` command: a ready JSON payload in,
 the parsed JSON answer out. The payload is assembled by the data owners
 (``fno.route_resolve``); chain strings come back verbatim and are never
 reworded here. A missing, failing or malformed answer raises
@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import Any
 
 from fno import rust_binary
-from fno.rust_binary import VerbUnavailable
+from fno.rust_binary import CommandUnavailable
 
 
-class RouteSlotUnavailable(VerbUnavailable):
+class RouteSlotUnavailable(CommandUnavailable):
     """The fno-agents binary is missing, failed, or answered malformed JSON."""
 
 
@@ -27,4 +27,4 @@ def route_slot_call(payload: dict[str, Any], timeout: float = 30) -> dict[str, A
     # Late-bound through the module: a from-import frozen at first import
     # would keep a monkeypatched probe alive past its test, and the spawn
     # chain imports this module lazily inside exactly such a test.
-    return rust_binary.verb_call("route-slot", payload, RouteSlotUnavailable, timeout=timeout)
+    return rust_binary.command_call("route-slot", payload, RouteSlotUnavailable, timeout=timeout)

@@ -61,9 +61,9 @@ def _starvation_receipts(
 ) -> list[tuple[str, str]]:
     """Classify why each ready-ish in-scope node was NOT selected (G1 receipts).
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
     from fno.graph._intake import filter_by_project
     # Lazy: cli imports this module, so a module-level import would cycle.
     from fno.graph.cli import (
@@ -97,7 +97,7 @@ def _starvation_receipts(
     ready_ish = filter_by_project(ready_ish_rows, project_filter, all_)
     if scope_ids is not None:
         ready_ish = [e for e in ready_ish if e.get("id") in scope_ids]
-    guards = verb_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": entries, "staleness_days": staleness_days})["guards"]
+    guards = command_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": entries, "staleness_days": staleness_days})["guards"]
     out: list[tuple[str, str]] = []
     for e in ready_ish:
         nid = e.get("id")

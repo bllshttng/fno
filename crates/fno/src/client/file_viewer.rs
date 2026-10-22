@@ -840,7 +840,7 @@ async fn open_outside(view: &mut View) {
         .await
         .unwrap_or_else(|_| Err("opener task failed".to_string()));
     match outcome {
-        Ok(()) => view.set_notice(format!("opened {shown}")),
+        Ok(done) => view.set_notice(done.notice(&shown)),
         Err(e) => view.set_notice(format!("open failed: {e}")),
     }
 }

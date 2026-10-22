@@ -116,7 +116,7 @@ fn emit_plan_event(events_path: Option<&Path>, event_type: &str, data: Value) {
     }
 }
 
-/// Stamp a plan with shipping metadata (the `stamp` verb's body, lock included).
+/// Stamp a plan with shipping metadata (the `stamp` command's body, lock included).
 pub fn cmd_stamp(
     plan_path: &Path,
     session_id: &str,

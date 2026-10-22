@@ -2,7 +2,7 @@
 
 One emit path for the autonomy-debt counter: reconcile's auto ``dead-bot``
 emit, the ``spawn-cap`` auto emit from both spawn gates, and the manual
-``fno doctor event gate-escape <reason>`` verb all land here. Fails OPEN (an emit
+``fno doctor event gate-escape <reason>`` command all land here. Fails OPEN (an emit
 never aborts the host op), dedups on ``(dedup_key, reason)``, and writes to the
 CANONICAL events log so a closed node's telemetry outlives its worktree and
 retro aggregates one coherent log.
@@ -194,7 +194,7 @@ def emit_gate_escape(
     a successful append, or None on a dedup-skip / swallowed failure.
 
     A bad-reason :class:`ValidationError` PROPAGATES (fail-closed enum): the
-    manual verb turns it into a loud non-zero exit and emits nothing (AC1-ERR).
+    manual command turns it into a loud non-zero exit and emits nothing (AC1-ERR).
     Auto callers pass a hardcoded-valid reason and wrap their own try/except, so
     a spawn is never blocked by telemetry (AC1-FR). Every OTHER runtime failure
     (an unwritable log, a resolve error) fails OPEN here and is recorded to a

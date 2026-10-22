@@ -1,7 +1,7 @@
 //! `fno uninstall`: find everything an fno install put on this machine, list
-//! it, and remove each item through its own uninstall verb.
+//! it, and remove each item through its own uninstall command.
 //!
-//! Native on purpose: the verb removes the Python wheel half way through, so
+//! Native on purpose: the command removes the Python wheel half way through, so
 //! it must never depend on that wheel. `~/.fno` stays unless `--purge` is
 //! passed and the user types the confirmation word on a terminal.
 

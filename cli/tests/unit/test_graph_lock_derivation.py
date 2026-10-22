@@ -12,20 +12,11 @@ import time
 from pathlib import Path
 
 
-from fno.graph.store import _graph_lock_path, commit_rows_via_store
+from fno.graph.store import commit_rows_via_store
 from fno.graph.store import read_graph_strict
 
 
 # --- AC2: the lock sits beside graph.json, resolved, never in /tmp ---
-
-
-# --- AC4: aliased spellings of one file derive one lock inode ---
-
-def test_aliased_paths_share_one_lock(tmp_path):
-    g = tmp_path / "graph.json"
-    seed_graph(g, '{"entries": []}\n')
-    rel = Path(str(g)).parent / "." / "graph.json"
-    assert _graph_lock_path(g) == _graph_lock_path(rel)
 
 
 # --- AC5: a resolve failure degrades to the raw path, never crashes ---

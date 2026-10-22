@@ -1,6 +1,6 @@
 """fno.agents.watchdog - the external fleet watchdog.
 
-Runs OUTSIDE every session (a manual verb, or a leg on the pr_watch tick) and
+Runs OUTSIDE every session (a manual command, or a leg on the pr_watch tick) and
 decides, per fleet row: wake it, reroute it, or leave it. The decision reads
 TRANSCRIPT truth keyed by session id; the fno registry and
 ``claude agents --json`` are hints (measured 2026-08-15: 8 roster rows claimed

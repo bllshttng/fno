@@ -608,7 +608,7 @@ pub(super) async fn recruit_keys(
 /// Rename-tab name-input keys. The create overlay's shape (split-arrow
 /// folding, printable append, Backspace pops, Esc cancels locally) with one
 /// deliberate divergence: Enter ALWAYS sends [`Command::RenameTab`] - an empty
-/// buffer is the "reset to auto" verb (blank clears server-side), not a kept-open
+/// buffer is the "reset to auto" command (blank clears server-side), not a kept-open
 /// input. The buffer caps at [`MAX_TAB_NAME`] so the operator sees exactly what
 /// the server will store (the server-side cap stays authoritative for the wire).
 pub(super) async fn rename_keys(

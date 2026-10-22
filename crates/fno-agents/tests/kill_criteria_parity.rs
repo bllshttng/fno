@@ -5,7 +5,7 @@
 //! bash oracle `scripts/lib/kill-criteria.sh` (packaging EPIC ab-8bdb4642).
 //!
 //! These were originally DIFFERENTIAL parity tests that ran BOTH the bash
-//! oracle and the Rust verb on identical fixtures and asserted byte-equality.
+//! oracle and the Rust command on identical fixtures and asserted byte-equality.
 //! The bash oracle has since been deleted (the Rust port is the sole
 //! implementation), so each case now asserts the Rust output against a GOLDEN
 //! `(exit, stdout)` captured from the proven-correct bash BEFORE deletion.

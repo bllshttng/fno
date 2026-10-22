@@ -1,4 +1,4 @@
-//! The logs verb (`fno do pr logs`): why CI failed, in a bounded tail.
+//! The logs command (`fno do pr logs`): why CI failed, in a bounded tail.
 //! Ported from `fno.pr._logs` on top of `read_pr` and the shared job-log
 //! cache, so logs, heal and status spend one read per job.
 
@@ -57,9 +57,9 @@ fn spool(root: &Path, text: &str) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
-/// The verb body: (exit, stdout, stderr). The rollup rides `read_pr`, the
+/// The command body: (exit, stdout, stderr). The rollup rides `read_pr`, the
 /// failing job's log rides the shared job cache (`job_log`), so a status
-/// read that already fetched it costs this verb zero log reads.
+/// read that already fetched it costs this command zero log reads.
 pub(crate) fn run_logs_with<P: GhProbe>(
     probe: &P,
     cwd: &Path,
@@ -331,7 +331,7 @@ mod tests {
     }
 
     /// A fake that answers read_pr's calls off a fixture's raw responses
-    /// (the rollup source of the logs verb).
+    /// (the rollup source of the logs command).
     struct RollupFake(Value);
 
     impl GhProbe for RollupFake {

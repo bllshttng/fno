@@ -765,7 +765,7 @@ acquire_lock() {
     # on a missing directory. Ensure the parent before queueing.
     mkdir -p "$INVOKING_ROOT/.fno" 2>/dev/null || true
     QUEUE_DIR="$LOCKDIR.queue.d"
-    # --pid stamps THIS shell, not the one-shot verb process: a verb-stamped
+    # --pid stamps THIS shell, not the one-shot command process: a command-stamped
     # ticket carries a pid that is dead by the waiter's own next scan, and
     # the queue would reap it out from under us.
     TICKET="$("$QBIN" claim queue enter --dir "$QUEUE_DIR" --pid "$$")" || {
@@ -1173,7 +1173,7 @@ fi
 # tracker gates (zero-overlap partition + consumer census) -------------------
 # Static, seconds-fast, the same instruments CI runs
 # (.github/workflows/tracker-partition.yml): the sidecar/tracker partition
-# with its self-test, and the graph-consumer census (verbs + reads) with its
+# with its self-test, and the graph-consumer census (commands + reads) with its
 # self-test, on the hermetic candidate tree.
 if retry_run_leg tracker-gates:fno; then
     echo "preflight: === tracker gates (partition + consumer census) ==="

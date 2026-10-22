@@ -44,7 +44,7 @@ If the packet contains zero events in a window, output exactly: `No corrections 
 ## What NOT to recommend
 
 - Do not propose changes to files whose full text is not provided in `implicated_rules`. You don't have the current state of those files, so any patch would be guesswork.
-- When a correction class traces to one verb's postmortems, the verb's SKILL.md in `implicated_rules` is a legal patch target. Every proposed skill diff MUST quote the evidence rows that justify it. Quote the rows themselves, not a count of them. A reviewer then checks the warrant without rebuilding the packet.
+- When a correction class traces to one command's postmortems, the command's SKILL.md in `implicated_rules` is a legal patch target. Every proposed skill diff MUST quote the evidence rows that justify it. Quote the rows themselves, not a count of them. A reviewer then checks the warrant without rebuilding the packet.
 - Do not propose patches that touch the corrections.log itself, the watermark files, or the capture scripts. Those are infrastructure, not rules.
 - Do not propose general "improvements" beyond what the events justify. The events are the evidence; without an event you have no warrant.
 

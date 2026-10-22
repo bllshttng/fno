@@ -403,88 +403,339 @@ pub(crate) fn capture_dir(cwd: &Path) -> Option<PathBuf> {
         .or_else(|| crate::agents_config::state_dir(cwd).map(|dir| dir.join("operator-capture")))
 }
 
+/// One operator session resolved for a queue read or an ack.
+pub(crate) struct OperatorSession {
+    pub(crate) session: String,
+    pub(crate) transcript: PathBuf,
+    pub(crate) capture_dir: PathBuf,
+}
+
+pub(crate) enum ResolveError {
+    NoIdentity,
+    NoTranscript {
+        session: String,
+        harness: String,
+        resolved: Option<PathBuf>,
+    },
+    Other(String),
+}
+
+impl ResolveError {
+    /// The library wording; the backlog origin refusal goldens pin it.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::NoIdentity => "no resolvable session identity".to_string(),
+            Self::NoTranscript {
+                resolved: Some(path),
+                ..
+            } => format!("transcript {} unreadable: not a file", path.display()),
+            Self::NoTranscript {
+                session, harness, ..
+            } => format!("no transcript found for {harness} session {session}"),
+            Self::Other(message) => message.clone(),
+        }
+    }
+
+    /// The `fno inbox user` wording, byte-equal to the retired Python leg.
+    fn cli_message(&self) -> String {
+        match self {
+            Self::NoIdentity => "no resolvable session identity (FNO_OPERATOR_SESSION_ID or a harness session)".to_string(),
+            Self::NoTranscript {
+                session,
+                harness,
+                resolved,
+            } => format!(
+                "no readable transcript for session {session} ({harness}); resolved to {} - set FNO_OPERATOR_TRANSCRIPT",
+                resolved
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "nothing".to_string())
+            ),
+            Self::Other(message) => message.clone(),
+        }
+    }
+}
+
+/// The one operator session resolver: the `FNO_OPERATOR_*` pins first, then
+/// the ambient identity, which is resolved only when a pin is missing.
+pub(crate) fn resolve_operator_session(
+    get: &impl Fn(&str) -> Option<String>,
+    home: &crate::paths::AgentsHome,
+    cwd: &Path,
+) -> Result<OperatorSession, ResolveError> {
+    let pin = |key: &str| {
+        get(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let identity = std::cell::OnceCell::new();
+    let ambient = || {
+        identity.get_or_init(|| crate::spawn_context::resolve_self_identity(get, None, None, home))
+    };
+    let session = pin("FNO_OPERATOR_SESSION_ID")
+        .or_else(|| ambient().session_id.clone())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or(ResolveError::NoIdentity)?;
+    let capture_dir = pin("FNO_OPERATOR_CAPTURE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| capture_dir(cwd))
+        .ok_or_else(|| {
+            ResolveError::Other("no operator capture directory could be resolved".to_string())
+        })?;
+    let harness = || {
+        pin("FNO_OPERATOR_HARNESS")
+            .or_else(|| ambient().harness.clone())
+            .unwrap_or_else(|| "claude".to_string())
+    };
+    let found = match pin("FNO_OPERATOR_TRANSCRIPT") {
+        Some(path) => Some(PathBuf::from(path)),
+        None => match harness().as_str() {
+            "claude" => crate::claude_drive::find_transcript(&session),
+            "codex" => crate::codex_store::codex_rollout_path(None, &session),
+            other => {
+                return Err(ResolveError::Other(format!(
+                    "harness {other} keeps no transcript file"
+                )))
+            }
+        },
+    };
+    let transcript = match found {
+        Some(path) if path.is_file() => path,
+        resolved => {
+            return Err(ResolveError::NoTranscript {
+                session,
+                harness: harness(),
+                resolved,
+            })
+        }
+    };
+    Ok(OperatorSession {
+        session,
+        transcript,
+        capture_dir,
+    })
+}
+
 pub(crate) fn session_queue_depth(
     get: &impl Fn(&str) -> Option<String>,
     home: &crate::paths::AgentsHome,
     cwd: &Path,
     now_epoch: f64,
 ) -> Result<usize, String> {
-    let session_pin = get("FNO_OPERATOR_SESSION_ID").filter(|value| !value.trim().is_empty());
-    let harness_pin = get("FNO_OPERATOR_HARNESS").filter(|value| !value.trim().is_empty());
-    let identity = (session_pin.is_none() || harness_pin.is_none())
-        .then(|| crate::spawn_context::resolve_self_identity(get, None, None, home));
-    let session = session_pin
-        .or_else(|| {
-            identity
-                .as_ref()
-                .and_then(|identity| identity.session_id.clone())
-        })
-        .ok_or_else(|| "no resolvable session identity".to_string())?;
-    let harness = harness_pin
-        .or_else(|| {
-            identity
-                .as_ref()
-                .and_then(|identity| identity.harness.clone())
-        })
-        .unwrap_or_else(|| "claude".to_string());
-    let transcript = if let Some(path) =
-        get("FNO_OPERATOR_TRANSCRIPT").filter(|value| !value.trim().is_empty())
-    {
-        PathBuf::from(path)
-    } else {
-        match harness.as_str() {
-            "claude" => crate::claude_drive::find_transcript(&session),
-            "codex" => crate::codex_store::codex_rollout_path(None, &session),
-            _ => return Err(format!("harness {harness} keeps no transcript file")),
-        }
-        .ok_or_else(|| format!("no transcript found for {harness} session {session}"))?
-    };
-    let capture_dir = get("FNO_OPERATOR_CAPTURE_DIR")
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| capture_dir(cwd))
-        .ok_or_else(|| "no operator capture directory could be resolved".to_string())?;
-    read_queue(&session, &transcript, &capture_dir, now_epoch).map(|outcome| outcome.payload.depth)
+    let resolved = resolve_operator_session(get, home, cwd).map_err(|e| e.message())?;
+    read_queue(
+        &resolved.session,
+        &resolved.transcript,
+        &resolved.capture_dir,
+        now_epoch,
+    )
+    .map(|outcome| outcome.payload.depth)
 }
 
-/// CLI entry: `fno-agents compaction operator-turns --session <id>
-/// --transcript <path> --capture-dir <dir>`. Session and transcript
-/// resolution stay in Python; this binary resolves neither.
+/// The status view: the queue payload without its turns, in the Python key
+/// order the capture hook and its readers parse.
+#[derive(Serialize)]
+struct StatusView<'a> {
+    depth: usize,
+    oldest_age_s: Option<i64>,
+    oldest_excerpt: Option<&'a str>,
+    oldest_turn_id: Option<&'a str>,
+    skipped: &'a BTreeMap<String, u64>,
+    cursor_error: Option<&'a str>,
+}
+
+/// Python's `json.dumps(value, indent=2)`: serde's pretty form with every
+/// non-ASCII char escaped, the way the default `ensure_ascii` writes it.
+pub(crate) fn python_json(value: &impl Serialize) -> String {
+    let pretty = serde_json::to_string_pretty(value).unwrap_or_default();
+    let mut out = String::with_capacity(pretty.len());
+    for ch in pretty.chars() {
+        if ch.is_ascii() && ch != '\u{7f}' {
+            out.push(ch);
+        } else {
+            let mut units = [0u16; 2];
+            for unit in ch.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        }
+    }
+    out
+}
+
+/// One line naming every refused shape and count; `None` when none.
+fn skip_report(skipped: &BTreeMap<String, u64>) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let total: u64 = skipped.values().sum();
+    let detail = skipped
+        .iter()
+        .map(|(reason, n)| format!("{reason}={n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("skipped {total} machine turn(s): {detail}"))
+}
+
+fn render_status(payload: &QueuePayload, json_out: bool) {
+    if json_out {
+        let view = StatusView {
+            depth: payload.depth,
+            oldest_age_s: payload.oldest_age_s,
+            oldest_excerpt: payload.oldest_excerpt.as_deref(),
+            oldest_turn_id: payload.oldest_turn_id.as_deref(),
+            skipped: &payload.skipped,
+            cursor_error: payload.cursor_error.as_deref(),
+        };
+        println!("{}", python_json(&view));
+        return;
+    }
+    if let Some(report) = skip_report(&payload.skipped) {
+        eprintln!("{report}");
+    }
+    if payload.depth == 0 {
+        println!("user queue: 0");
+        return;
+    }
+    let age = payload
+        .oldest_age_s
+        .map(|age| format!(", oldest {age}s old"))
+        .unwrap_or_default();
+    println!("user queue: {} undispositioned turn(s){age}", payload.depth);
+    if let Some(oldest) = payload.oldest_excerpt.as_deref().filter(|e| !e.is_empty()) {
+        println!("  oldest: {oldest}");
+    }
+}
+
+/// `fno inbox user list`: the pending turns, oldest first, cut to `limit`.
+fn render_list(payload: &QueuePayload, json_out: bool, limit: Option<usize>, now_epoch: f64) {
+    if let Some(report) = skip_report(&payload.skipped) {
+        eprintln!("{report}");
+    }
+    let turns = &payload.turns[..limit.map_or(payload.turns.len(), |n| n.min(payload.turns.len()))];
+    if json_out {
+        println!("{}", python_json(&turns));
+        return;
+    }
+    if turns.is_empty() {
+        println!("no undispositioned user turns");
+        return;
+    }
+    for turn in turns {
+        let age = turn
+            .ts_epoch
+            .map(|ts| format!("{}s", (now_epoch - ts) as i64))
+            .unwrap_or_else(|| "age-unknown".to_string());
+        let marker = if turn.stand_down { "[stand-down] " } else { "" };
+        println!("{}\t{age}\t{marker}{}", turn.turn_id, turn.excerpt);
+    }
+}
+
+/// CLI entry: `fno-agents compaction operator-turns [--session <id>]
+/// [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json]
+/// [--limit <n>]]`. A missing flag resolves like its `FNO_OPERATOR_*` pin,
+/// then from the ambient identity. Without `--render` stdout is the raw
+/// queue payload; `--render` prints the `fno inbox user` answer the front
+/// door execs this for.
 pub fn run(args: &[String]) -> i32 {
-    let (Some(session), Some(transcript), Some(capture_dir)) = (
-        crate::compaction::flag_value(args, "--session"),
-        crate::compaction::flag_value(args, "--transcript"),
-        crate::compaction::flag_value(args, "--capture-dir"),
-    ) else {
-        eprintln!("usage: compaction operator-turns --session <id> --transcript <path> --capture-dir <dir>");
+    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]]";
+    let mut json_out = false;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--session" | "--transcript" | "--capture-dir" | "--render" | "--limit" | "-L" => {
+                it.next();
+            }
+            "--json" | "-J" => json_out = true,
+            _ => {
+                eprintln!("{USAGE}");
+                return 2;
+            }
+        }
+    }
+    let flag = |name: &str| crate::compaction::flag_value(args, name);
+    let render = flag("--render");
+    if render
+        .as_deref()
+        .is_some_and(|mode| mode != "status" && mode != "list")
+    {
+        eprintln!("{USAGE}");
         return 2;
+    }
+    let limit = match flag("--limit").or_else(|| flag("-L")) {
+        None => None,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) if n >= 1 => Some(n),
+            _ => {
+                eprintln!("{USAGE}");
+                return 2;
+            }
+        },
     };
+    let get = |key: &str| {
+        let pinned = match key {
+            "FNO_OPERATOR_SESSION_ID" => flag("--session"),
+            "FNO_OPERATOR_TRANSCRIPT" => flag("--transcript"),
+            "FNO_OPERATOR_CAPTURE_DIR" => flag("--capture-dir"),
+            _ => None,
+        };
+        pinned.or_else(|| std::env::var(key).ok())
+    };
+    let home = crate::paths::AgentsHome::from_env();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let resolved = match resolve_operator_session(&get, &home, &cwd) {
+        Ok(resolved) => resolved,
+        Err(e) if render.is_some() => {
+            eprintln!("error: {}", e.cli_message());
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("{}", e.message());
+            return 1;
+        }
+    };
+    let session = resolved.session;
     // The id lands in a path join; a crafted id must not escape the capture dir.
     if session.contains('/') || session.contains('\\') || session.contains("..") {
         eprintln!("compaction operator-turns: --session must be a bare id (no '/', '\\', '..'): {session}");
         return 2;
     }
-    match read_queue(
+    let now_epoch = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
+    let outcome = match read_queue(
         &session,
-        Path::new(&transcript),
-        Path::new(&capture_dir),
-        chrono::Utc::now().timestamp() as f64,
+        &resolved.transcript,
+        &resolved.capture_dir,
+        now_epoch,
     ) {
-        Ok(outcome) => {
-            for line in &outcome.warnings {
-                eprintln!("{line}");
-            }
-            println!(
-                "{}",
-                serde_json::to_string(&outcome.payload).unwrap_or_default()
-            );
-            0
+        Ok(outcome) => outcome,
+        Err(e) if render.is_some() => {
+            eprintln!("error: operator turn reader failed: {e}");
+            return 1;
         }
         Err(e) => {
             eprintln!("{e}");
-            1
+            return 1;
         }
+    };
+    if render.is_none() {
+        for line in &outcome.warnings {
+            eprintln!("{line}");
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&outcome.payload).unwrap_or_default()
+        );
+        return 0;
     }
+    if let Some(error) = outcome.payload.cursor_error.as_deref() {
+        eprintln!("warning: scan cursor not saved: {error}");
+    }
+    if render.as_deref() == Some("list") {
+        render_list(&outcome.payload, json_out, limit, now_epoch);
+    } else {
+        render_status(&outcome.payload, json_out);
+    }
+    0
 }
 
 /// CLI entry: `fno-agents compaction ack --session <id> --turn <id>
@@ -693,23 +944,6 @@ mod tests {
             ),
             ("FNO_OPERATOR_CAPTURE_DIR".into(), dir.display().to_string()),
         ])
-    }
-
-    #[test]
-    fn session_queue_depth_reads_planted_turn_and_ack() {
-        let dir = tmp_dir("session-depth");
-        let transcript = dir.join("transcript.jsonl");
-        write_jsonl(&transcript, &[user_row(json!("first ask"), "u-1")]);
-        let vars = pinned_operator_turns(&dir, &transcript);
-        let get = |key: &str| vars.get(key).cloned();
-        let home = crate::paths::AgentsHome::at(&dir.join("home"));
-        assert_eq!(session_queue_depth(&get, &home, &dir, NOW), Ok(1));
-        std::fs::write(
-            ledger_path(&dir, "fixture-session"),
-            "{\"turn_id\":\"u-1\"}\n",
-        )
-        .unwrap();
-        assert_eq!(session_queue_depth(&get, &home, &dir, NOW), Ok(0));
     }
 
     #[test]

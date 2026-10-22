@@ -146,7 +146,7 @@ fn lanes(
                 model,
                 None,
                 harness,
-                node["dispatch_verb"].as_str(),
+                node["dispatch_command"].as_str(),
                 None,
                 source,
             )

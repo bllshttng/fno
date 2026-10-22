@@ -1,10 +1,10 @@
-//! Native storage-level verbs under `fno doctor event`.
+//! Native storage-level commands under `fno doctor event`.
 //!
 //! The Python `fno doctor event emit` keeps its rich surface (validation,
 //! attestation stamping, mirrors, parent push) and delegates storage to
 //! `emit-envelope` here. `find`/`audit`/`gc` routing follows in the reader
 //! cutover wave, intercepted by the same predicate; until then the Python
-//! implementations stay authoritative for those names. No top-level verb
+//! implementations stay authoritative for those names. No top-level command
 //! exists (law d-fe66560a); the group stays nested under `doctor`.
 
 use std::ffi::OsString;
@@ -17,7 +17,7 @@ mod recovery;
 #[path = "event_store_recovery.rs"]
 mod copy_recovery;
 
-/// The verbs the native surface serves. `find` joins natively only when the
+/// The commands the native surface serves. `find` joins natively only when the
 /// caller names stores explicitly (`--events`); a bare `find` keeps
 /// forwarding to Python, whose front door resolves the journals and calls
 /// back in with one `--events` per store. `audit`/`gc` join when their

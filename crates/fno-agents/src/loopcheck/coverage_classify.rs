@@ -499,7 +499,7 @@ pub fn classify_coverage_tiled(
     // The discharge lives at the coverage decision rather than at any one
     // consumer: this
     // value feeds the published fno/review-coverage status, the stop-hook
-    // receipt, and the emitted row alike. Fixing only the merge verb left the
+    // receipt, and the emitted row alike. Fixing only the merge command left the
     // status red and the hook still asking for another round, which is what
     // kept spending rounds past the cap.
     //

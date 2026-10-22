@@ -8,8 +8,8 @@ def test_probe_returns_the_native_context_receipt(monkeypatch, tmp_path):
     transcript = tmp_path / "t.jsonl"
     calls = []
 
-    def native(verb, args, *, timeout):
-        calls.append((verb, args, timeout))
+    def native(command, args, *, timeout):
+        calls.append((command, args, timeout))
         return None, {
             "used_tokens": 23,
             "window_tokens": 100,

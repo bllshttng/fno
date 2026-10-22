@@ -165,7 +165,7 @@ def pr_url_for_repo(
 ) -> Optional[str]:
     """The canonical PR url for the checkout at ``cwd``, or None.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     if cwd:
         cwd = os.path.expanduser(cwd)
@@ -366,7 +366,7 @@ def verify_pending_supersessions(
 ) -> list[dict]:
     """Verify predecessor cause surfaces against one merged PR's file set.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     changed = {
         _normalize_surface(path)
@@ -419,7 +419,7 @@ def verify_pending_supersessions(
 def successors_owing_verification(entries: list[dict]) -> dict[str, dict]:
     """Successor id -> successor node, for pending predecessors already owed proof.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     by_id = {
         entry.get("id"): entry
@@ -487,14 +487,14 @@ def node_pr_refs(node: dict) -> list[tuple[int, Optional[str]]]:
     return refs
 
 
-# The exit-code contract, owned here so no verb can fork it. The loop runtime
+# The exit-code contract, owned here so no command can fork it. The loop runtime
 # keys on 5 for AwaitingMerge, so these numbers are load-bearing: do not renumber.
 REFUSAL_EXIT_CODES = {"awaiting_merge": 5, "outage": 4, "refused": 3}
 
 
 @dataclass
 class MergeEvidence:
-    """The close decision for a node's PR refs, shared by every done verb."""
+    """The close decision for a node's PR refs, shared by every done command."""
 
     outcome: Literal["merged", "awaiting_merge", "outage", "refused"]
     pr_url: Optional[str] = None
@@ -635,7 +635,7 @@ PROBE_RUN_TIMEOUT_S = 240.0
 
 @dataclass
 class PromiseVerdict:
-    """The plan-closure promise decision for a node, shared by every close verb.
+    """The plan-closure promise decision for a node, shared by every close command.
 
     Sibling to :class:`MergeEvidence`: the merge gate asks "is a PR merged" (a
     fact about an artifact); this asks "did the plan's declared work all ship".
@@ -650,7 +650,7 @@ class PromiseVerdict:
     outcome: Literal["ok", "promise_unmet", "promise_unknown"]
     reason: Optional[str] = None  # multi-line refusal text; None when ok
     # Why a degraded read passed anyway (today only the prove-it verdict
-    # reader). Returned, not printed: the close verbs emit it on stderr, but
+    # reader). Returned, not printed: the close commands emit it on stderr, but
     # a raw stderr write here would pollute the `reconcile --json` stream
     # (JSON on stdout) and break the JSON-only contract of that path.
     warning: Optional[str] = None
@@ -680,7 +680,7 @@ def _close_probe_runner_shellout(
     """Default ``probe_runner``: shell out to ``fno-agents probe-run``.
 
     Returns ``(passed, detail)``. ``detail`` is empty on pass and a single-line
-    reason on fail. Fail-closed: a binary absent or a verb too old to know
+    reason on fail. Fail-closed: a binary absent or a command too old to know
     ``probe-run`` refuses rather than reading a declared gate as no gate.
     """
     # resolve_binary, not shutil.which: the wheel ships fno-agents inside the
@@ -724,7 +724,7 @@ def _close_probe_runner_shellout(
     if proc.returncode == 0:
         return (True, "")
     # Non-zero: prefer the structured reason; fall back to fail-closed when the
-    # verb itself errored (clap writes an unrecognized-subcommand notice to
+    # command itself errored (clap writes an unrecognized-subcommand notice to
     # stderr and emits no JSON).
     try:
         payload = json.loads(proc.stdout or "{}")
@@ -740,11 +740,11 @@ def _close_probe_runner_shellout(
 
 def _verdict_reader_shellout(plan_path: str) -> "dict[str, Any]":
     """Default ``verdict_reader``: one round-trip with ``fno-agents
-    prove-it-verdicts``; a ``VerbUnavailable`` degrades to a warning, the
+    prove-it-verdicts``; a ``CommandUnavailable`` degrades to a warning, the
     same posture a plan read failure takes."""
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    return verb_call("prove-it-verdicts", {})
+    return command_call("prove-it-verdicts", {})
 
 
 def resolve_promise_evidence(
@@ -759,7 +759,7 @@ def resolve_promise_evidence(
 ) -> PromiseVerdict:
     """Decide whether a node's plan promised work that has not all shipped.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     # Condition D (checked first; independent of the plan): an unharvested
     # `deferred` carve-out is declared scope that did not ship, and it blocks
@@ -895,7 +895,7 @@ def resolve_promise_evidence(
     # multi-ship plan pays for gh I/O here; a 1-wave / 1-PR plan never reaches it.
     if isinstance(expected, int) and expected >= 2:
         refs = node_pr_refs(node)
-        # `extra_refs` carries an explicit ship the close verb is recording but
+        # `extra_refs` carries an explicit ship the close command is recording but
         # has not yet persisted (e.g. `done --pr <new-final-pr>`): without it
         # the second merged PR is counted as missing and exit 6 deadlocks the
         # command out of ever writing it.
@@ -918,9 +918,9 @@ def resolve_promise_evidence(
                 # unconfirmed in BOTH directions. Closing here stamped a
                 # declared multi-ship node done on the strength of an outage.
                 # The node stays open and the sweep retries when gh answers.
-                # The remedy names the verb that can actually recover, which is
+                # The remedy names the command that can actually recover, which is
                 # NOT always reconcile. When `extra_refs` carried an explicit
-                # ship the close verb had not yet persisted, the refusal exits
+                # ship the close command had not yet persisted, the refusal exits
                 # before the write, so reconcile cannot see that ref at all: it
                 # would re-count the STORED refs, find no failure, and answer
                 # the permanent policy refusal (exit 6, "promised N; only M
@@ -1040,7 +1040,7 @@ def summarize_promise_held(
     refusal the operator resolves, an unknown is a read outage that resolves
     itself on the next sweep.
     """
-    verb = "Holding" if dry_run else "Held"
+    command = "Holding" if dry_run else "Held"
     headlines = {
         "promise_unmet": "merged PR, unmet plan promise",
         "promise_unknown": "ship count unconfirmed, retryable read failure",
@@ -1057,7 +1057,7 @@ def summarize_promise_held(
         if not rows:
             continue
         headline = headlines.get(outcome, outcome)
-        lines.append(f"{verb} {len(rows)} node(s) open ({headline}):")
+        lines.append(f"{command} {len(rows)} node(s) open ({headline}):")
         lines.extend(f"  {nid}: {reason}" for nid, reason in rows)
     return "\n".join(lines)
 
@@ -1065,7 +1065,7 @@ def summarize_promise_held(
 def _unharvested_deferred_carveouts(cwd: Optional[str]) -> list[dict]:
     """Unharvested ``deferred`` carve-outs on the node's project ledger.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     root = _carveout_ledger_root(cwd)
     try:
@@ -1137,56 +1137,50 @@ def query_pr_merge_state(
 ) -> PrMergeState:
     """Read merge state and complete changed-file evidence through REST.
 
-    ``info_reader`` and ``files_reader`` are the production seams. ``runner``
-    remains a compatibility seam for callers that inject ``subprocess.run``;
-    it is adapted to the same in-process REST readers and never emits
-    the old GraphQL PR-state argv.
+    ``info_reader`` and ``files_reader`` are the production seams: they
+    default to the native op-door readers (the deleted `fno.pr._rest` legs'
+    owner). ``runner`` and ``timeout_s`` stay accepted for callers that
+    inject them and no longer change the transport: the read is native.
     """
-    from fno.pr import _rest
-    from fno.pr._proc import Result
+    def _op_reader(op: str, number: int, *, repo: str | None = None, cwd: str | None = None):
+        """One op-door REST read, the default readers' native home (the
+        deleted `fno.pr._rest` legs): `(payload, "")` or `(None, reason)`."""
+        from fno.rust_binary import CommandUnavailable, command_call
 
-    def rest_runner(cmd, *, cwd=None, timeout=None):
-        effective_timeout = timeout if timeout is not None else timeout_s
+        ask: dict = {"op": op, "cwd": cwd or os.getcwd()}
+        if op == "status-pr-files" and repo:
+            ask["slug"] = repo
+        elif repo:
+            ask["repo"] = repo
+        ask["pr"] = int(number)
         try:
-            if runner is None:
-                return _rest.run(cmd, cwd=cwd, timeout=effective_timeout)
-            result = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=effective_timeout,
-                cwd=cwd,
-            )
-        except subprocess.TimeoutExpired:
-            return Result(124, "", f"gh REST request timed out after {timeout_s}s")
-        except OSError as exc:
-            return Result(127, "", f"gh subprocess failed to launch: {exc}")
-        return Result(
-            int(getattr(result, "returncode", 1)),
-            getattr(result, "stdout", "") or "",
-            getattr(result, "stderr", "") or "",
-        )
+            out = command_call("authorized-merge", ask, timeout=120)
+        except CommandUnavailable as exc:
+            return None, str(exc)
+        if out.get("error"):
+            return None, out["error"]
+        return out, ""
 
-    info_reader = info_reader or (
-        lambda number, *, repo=None, cwd=None: _rest.fetch_pr_info_rest(
-            str(number), cwd=cwd, runner=rest_runner, repo=repo
-        )
-    )
-    files_reader = files_reader or (
-        lambda number, *, repo=None, cwd=None: _rest.fetch_pr_file_paths_rest(
-            str(number), cwd=cwd, runner=rest_runner, repo=repo
-        )
-    )
+    def _op_pr_info(number, *, repo=None, cwd=None):
+        return _op_reader("status-pr-info", number, repo=repo, cwd=cwd)
+
+    def _op_pr_files(number, *, repo=None, cwd=None):
+        payload, reason = _op_reader("status-pr-files", number, repo=repo, cwd=cwd)
+        if payload is None:
+            return None, reason
+        return payload.get("paths"), ""
+
+    info_reader = info_reader or _op_pr_info
+    files_reader = files_reader or _op_pr_files
 
     # Merged-PR facts never change: serve the permanent gh-cache row; injected readers bypass.
     cached = None
     if info_reader is None:
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
         try:
             ask = {"op": "read", "kind": "merged", "slug": repo, "pr": pr_number}
-            cached = verb_call("gh-cache", ask).get("row")
-        except VerbUnavailable:
+            cached = command_call("gh-cache", ask).get("row")
+        except CommandUnavailable:
             pass
     row: dict = cached if isinstance(cached, dict) else {}
     info = row.get("info") if isinstance(row.get("info"), dict) else None
@@ -1264,12 +1258,12 @@ def query_pr_merge_state(
         ) from exc
 
     if info_reader is None and state == "MERGED":
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
         try:
             row = {"info": info, **({"files": changed_files} if include_files else {})}
             ask = {"op": "write", "kind": "merged", "slug": repo, "pr": pr_number, "row": row}
-            verb_call("gh-cache", ask)
-        except VerbUnavailable:
+            command_call("gh-cache", ask)
+        except CommandUnavailable:
             pass
     return PrMergeState(
         number=number,
@@ -1355,7 +1349,7 @@ def _reopen_outranks_child_closes(parent: dict, kids: list[dict]) -> bool:
 def _reopen_outranks_merge(node: dict, merged_at: object) -> bool:
     """True when a deliberate reopen postdates the merge being closed on.
     Merge-keyed twin of :func:`_reopen_outranks_child_closes`; full contract:
-    docs/architecture/backlog-graph-verb-contracts.md
+    docs/architecture/backlog-graph-command-contracts.md
     """
 
     reopened_raw = node.get("reopened_at")
@@ -1454,7 +1448,7 @@ def emit_session_satisfied_for_record(
 ) -> Optional[Path]:
     """Emit a ``session_satisfied{source:"pr_merge"}`` event for the target
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     state_path = _owning_state_path(record)
     if state_path is None or not state_path.exists():

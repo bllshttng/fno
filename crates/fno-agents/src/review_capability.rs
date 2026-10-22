@@ -288,19 +288,19 @@ fn resolve_one(
         );
     }
     if requires == "none" {
-        // A self-serve verb whose `invocations` map scopes it to specific
+        // A self-serve command whose `invocations` map scopes it to specific
         // harnesses draws the same line the subagent-dispatch branch draws
-        // below: a known harness outside the map has no verb, so resolving
+        // below: a known harness outside the map has no command, so resolving
         // it satisfiable would floor the stop gate onto a reviewer whose
         // attestation nothing there produces. The invocations map IS the
         // allowlist; the scalar `invocation` is the unknown-harness default.
         if let Some(per_harness) = &d.invocations {
-            if let Some(verb) = per_harness.get(&session.harness).and_then(Value::as_str) {
-                let mut reason = format!("run `{verb}`");
-                // Capability resolution runs before a diff exists, so a verb
+            if let Some(command) = per_harness.get(&session.harness).and_then(Value::as_str) {
+                let mut reason = format!("run `{command}`");
+                // Capability resolution runs before a diff exists, so a command
                 // carrying a <level> placeholder teaches the sizing rule
                 // rather than baking one concrete level into the receipt.
-                if verb.contains("<level>") {
+                if command.contains("<level>") {
                     reason += " (size <level> from the diff)";
                 }
                 return verdict("satisfiable", reason);
@@ -309,7 +309,7 @@ fn resolve_one(
                 return verdict(
                     "unverifiable",
                     format!(
-                        "needs a {name} verb; no harness marker in this \
+                        "needs a {name} command; no harness marker in this \
                          environment, so capability cannot be verified. \
                          Proceeding - if the gate does go unmet, run \
                          `{invocation}`"
@@ -320,7 +320,7 @@ fn resolve_one(
             return verdict(
                 "unavailable",
                 format!(
-                    "no {name} verb for {}; scoped to {}",
+                    "no {name} command for {}; scoped to {}",
                     session.describe(),
                     py_string_list(keys)
                 ),
@@ -1221,7 +1221,7 @@ mod tests {
         let (status, reason) = crate::backlog::dispatch_resolve::skill_presence_in(
             "no-such-skill-anywhere",
             "claude",
-            "config.dispatch.verb_registry",
+            "config.dispatch.command_registry",
             vec![root],
         );
         assert_eq!(status, "unavailable");

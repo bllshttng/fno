@@ -4,13 +4,13 @@ opencode is a pane-hosted provider (``READABLE_PROVIDERS``): fno never
 drives it through a Python ask adapter, so this module carries only what
 ``fno agents rm`` needs to reason about opencode's session store.
 
-**No CLI verb deletes an opencode session record on its own, so ``rm``
+**No CLI command deletes an opencode session record on its own, so ``rm``
 attempts no deletion.** Verified against opencode v1.14.50:
 
 - ``opencode db`` opens the store READ-ONLY -- a ``delete`` is rejected
   with "attempt to write a readonly database" (exit 1). It is a query
   surface, not a mutation one.
-- ``opencode session delete <id>`` is the only supported deletion verb,
+- ``opencode session delete <id>`` is the only supported deletion command,
   and it is not record-only: deleting a session also deletes its CHILD
   sessions and every message row. The store enforces part of this in
   schema (``message.session_id`` is ``ON DELETE CASCADE``), so no
@@ -40,7 +40,7 @@ history, which is a different act from the index-record cleanup ``rm``
 performs for codex. ``rm`` therefore drops the registry row only and
 says so, leaving the deletion to a deliberate operator command.
 
-There IS a history-preserving op, and it is not a CLI verb. ``PATCH
+There IS a history-preserving op, and it is not a CLI command. ``PATCH
 /session/{id}`` on a running ``opencode serve``, with body
 ``{"time":{"archived":<epoch_ms>}}``, stamps the session archived: the
 record and every message row survive, and only the active listing drops

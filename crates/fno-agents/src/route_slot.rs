@@ -1,7 +1,7 @@
 //! `route-slot`: the delivery-slot resolver, ported from Python
 //! (law d-450caaeb: Rust is the product; Python is the compatibility shell).
 //!
-//! The verb answers ONE question: which configured lane does this dispatch
+//! The command answers ONE question: which configured lane does this dispatch
 //! ride right now? Input is a JSON payload (profile fields, raw lanes,
 //! declared routing rows, the capacity snapshot, posture flags, vendor
 //! counts/caps); output is JSON `{status, candidate, chain}` where `chain`
@@ -21,7 +21,7 @@ const SLOT_LANES_TABLE: &str = include_str!("slot_lanes.toml");
 /// The inline slot-lane vocabulary, read once from the canonical table
 /// (`slot_lanes.toml`, this crate's owner).
 /// Lane fields are closed: every field has resolver code behind it. Slot
-/// VERBS are the open surface instead (`SLOT_VERBS` plus profiles keys).
+/// COMMANDS are the open surface instead (`SLOT_COMMANDS` plus profiles keys).
 pub(crate) struct LaneVocabulary {
     pub(crate) fields: Vec<String>,
     pub(crate) passthrough: Vec<String>,
@@ -1182,7 +1182,7 @@ fn payload_fingerprint(payload: &Value) -> String {
     let facts = json!({
         "rows": payload.get("declared_rows").cloned().unwrap_or(json!({})),
         "policy": payload.get("policy").cloned().unwrap_or(json!({})),
-        "slots": payload.get("slot_by_verb").cloned().unwrap_or(json!({})),
+        "slots": payload.get("slot_by_command").cloned().unwrap_or(json!({})),
     });
     let mut h = Sha256::new();
     h.update(serde_json::to_string(&crate::route_gather::canonical(&facts)).unwrap_or_default());
@@ -1219,7 +1219,7 @@ pub fn resolve_slot_payload(payload: &Value) -> Value {
     out
 }
 
-/// The cwd the verb's own capacity read resolves config against: the process
+/// The cwd the command's own capacity read resolves config against: the process
 /// cwd Python invoked the binary with.
 fn slot_cwd() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -1322,7 +1322,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         .get("enforce_inventory")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let mut strict_ctx: Option<(String, String)> = None; // (operator_access, slot verb)
+    let mut strict_ctx: Option<(String, String)> = None; // (operator_access, slot command)
     let mut rung_base = rung_base;
     let mut profile = profile;
     let mut lanes_raw_value = payload.get("lanes_raw").cloned().unwrap_or(json!([]));
@@ -1343,39 +1343,39 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                 "routing.operator_access is not local|remote|unknown",
             );
         }
-        let work_verb = payload
-            .get("work_verb")
+        let work_command = payload
+            .get("work_command")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| rung_base.trim_start_matches("agents.profiles.").to_string());
-        let (slot_verb, note) = effective_work_kind(&work_verb);
+        let (slot_command, note) = effective_work_kind(&work_command);
         if let Some(note) = note {
             chain.push(json!(note));
         }
         let slot = payload
-            .get("slot_by_verb")
+            .get("slot_by_command")
             .and_then(Value::as_object)
-            .and_then(|s| s.get(slot_verb.as_str()));
+            .and_then(|s| s.get(slot_command.as_str()));
         match slot {
             Some(s) => {
                 rung_base = s
                     .get("rung_base")
                     .and_then(Value::as_str)
                     .filter(|v| !v.is_empty())
-                    .unwrap_or(&format!("agents.profiles.{slot_verb}"))
+                    .unwrap_or(&format!("agents.profiles.{slot_command}"))
                     .to_string();
                 profile = s.get("profile").cloned().unwrap_or(json!({}));
                 lanes_raw_value = s.get("lanes_raw").cloned().unwrap_or(json!([]));
             }
             None => {
-                rung_base = format!("agents.profiles.{slot_verb}");
+                rung_base = format!("agents.profiles.{slot_command}");
                 profile = json!({});
                 lanes_raw_value = json!([]);
             }
         }
-        strict_ctx = Some((operator_access, slot_verb));
+        strict_ctx = Some((operator_access, slot_command));
     }
     let by_difficulty = profile.get("by_difficulty").cloned().unwrap_or(json!({}));
     let by_difficulty_obj = by_difficulty.as_object();
@@ -1448,7 +1448,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     // A typed model/vendor/route flag is an operator pin (superuser authority)
     // and outranks the lanes under both grid and strict routing: it never
     // borrows a lane's harness or capacity. The check sits before the
-    // empty-slot refusal so a pin on a laneless verb lands instead of
+    // empty-slot refusal so a pin on a laneless command lands instead of
     // refusing - the refusal's "harness default" text would be false when a
     // typed flag already occupies the axis. Config defaults do NOT outrank
     // lanes; only a typed flag does, because these value fields are argv-only
@@ -1494,7 +1494,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     }
 
     if lanes_arr.is_empty() {
-        // A lane-less verb grids instead. An explicit pin never reaches this
+        // A lane-less command grids instead. An explicit pin never reaches this
         // branch (the operator-pin check above returns first), so the grid's
         // own model-axis occupied flag governs. Strict routing has no grid:
         // an empty effective slot is the named refusal, and the text names
@@ -2003,7 +2003,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     }
     // Every lane was skipped ONLY for unknown capacity: naming this
     // "exhausted" would send the operator to wait for a quota reset that is
-    // not coming. The terminal names the real cause; the refresh verb is the
+    // not coming. The terminal names the real cause; the refresh command is the
     // fix.
     if capacity_unknown_skips > 0
         && capacity_unknown_skips == plan.len()
@@ -2171,7 +2171,7 @@ fn refusal_terminal(chain: &[Value]) -> Option<(String, String)> {
     if terminal == "slot=unknown refuse" {
         // None of the lanes was exhausted, so the text must not send the
         // operator to wait for a quota reset: the cause is unknown capacity
-        // and the refresh verb is the fix.
+        // and the refresh command is the fix.
         let text = match oldest_evidence(chain) {
             Some((label, src)) => format!(
                 "every configured lane reads capacity unknown (on_unknown=skip); none is exhausted; oldest evidence {label} old (source={src}). Run `fno config accounts usage --refresh` to re-measure."
@@ -2183,7 +2183,7 @@ fn refusal_terminal(chain: &[Value]) -> Option<(String, String)> {
     }
     if terminal == "slot=exhausted refuse" {
         // The refusal is the one verdict a caller has to argue with, so it
-        // names the oldest evidence it decided on and the verb that refreshes
+        // names the oldest evidence it decided on and the command that refreshes
         // it, instead of a bare word.
         let text = match oldest_evidence(chain) {
             Some((label, src)) => format!(
@@ -2306,11 +2306,11 @@ fn native_view_for(harness: &str) -> Option<&'static str> {
     }
 }
 
-/// the derived verb is the phase authority. The old planless-target ->
+/// the derived command is the phase authority. The old planless-target ->
 /// blueprint rewrite lived here and is retired: the Python layer derives the
-/// workflow verb before this call, so the work verb IS the slot verb.
-fn effective_work_kind(work_verb: &str) -> (String, Option<String>) {
-    (work_verb.trim().to_lowercase(), None)
+/// workflow command before this call, so the work command IS the slot command.
+fn effective_work_kind(work_command: &str) -> (String, Option<String>) {
+    (work_command.trim().to_lowercase(), None)
 }
 
 /// Print stdout/stderr and return the exit code. Used by `bin/client.rs`.
@@ -2334,7 +2334,7 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
         Ok(v) => v,
         Err(fail) => return fail,
     };
-    // The Python transport sends the verb only as argv[1] with the payload on
+    // The Python transport sends the command only as argv[1] with the payload on
     // stdin, so the journal op rides inside the payload, not in argv.
     if payload.get("op").and_then(Value::as_str) == Some("journal") {
         return run_route_slot_journal(&payload);
@@ -2356,7 +2356,7 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
 }
 
 /// Payload reader shared by every subcommand: one payload file argument, else
-/// stdin. The failure strings are part of the verb's contract.
+/// stdin. The failure strings are part of the command's contract.
 fn read_route_slot_payload(args: &[String]) -> Result<Value, (i32, String, String)> {
     if let Some(path) = args.first() {
         let text = std::fs::read_to_string(path).map_err(|e| {
@@ -2387,7 +2387,7 @@ fn read_route_slot_payload(args: &[String]) -> Result<Value, (i32, String, Strin
 }
 
 /// `route-slot journal`: commit one spawn_defaults_applied receipt to the
-/// event store behind the journal address. The WRITE belongs to the verb;
+/// event store behind the journal address. The WRITE belongs to the command;
 /// the payload's fields ride nested in `data`, typed per the event schema.
 /// No file is created: the store is the only surface the receipt lands on.
 /// The caller passes the resolved journal path: the binary reads no config.
@@ -2972,7 +2972,7 @@ pub(crate) fn audit_load_snapshot(
                                                                             // store owns the index, so this consumer never reads a file. Rows are
                                                                             // flattened: data fields at the top level plus ts and _event_type.
     let decision_rows: Vec<Value> = crate::backlog::api::decisions(
-        &crate::backlog::api::Store::new(&state_root.join("graph.json")),
+        &crate::backlog::api::Store::new(&crate::state_layout::graph_anchor(&state_root)),
         None,
         None,
     )
@@ -3214,7 +3214,7 @@ mod tests {
         let (code, _, _) = capture_file(dir.path(), &payload(exhausted_capacity()));
         assert_eq!(
             code, 0,
-            "the verb still exits 0; the transport owns the refusal exit"
+            "the command still exits 0; the transport owns the refusal exit"
         );
 
         let rows = journal_rows(&journal);
@@ -3672,9 +3672,9 @@ mod tests {
     fn strict_payload(overrides: Value) -> Value {
         let mut base = payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-            "work_verb": "target",
+            "work_command": "target",
             "node": {"difficulty": "high", "priority": "p1", "plan_path": ""},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3697,11 +3697,11 @@ mod tests {
 
     #[test]
     fn strict_pin_rows() {
-        // the derived verb is the phase authority; a planless target
+        // the derived command is the phase authority; a planless target
         // no longer rewrites to the blueprint slot - the walk reads the target
         // slot's own lane and picks it.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3732,12 +3732,12 @@ mod tests {
 
         // Acceptance specimen: a lawful planless low target used to refuse
         // twice - rewritten to the blueprint slot, then refused because the
-        // blueprint lanes carried no zai route. The derived verb is the slot
-        // verb now, so the zai lane on the TARGET slot is simply picked.
+        // blueprint lanes carried no zai route. The derived command is the slot
+        // command now, so the zai lane on the TARGET slot is simply picked.
         let out = resolve_slot_payload(&strict_payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "local"},
             "node": {"difficulty": "low", "priority": "p1", "plan_path": ""},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3771,7 +3771,7 @@ mod tests {
         // says a typed flag is the operator's own statement of intent, and
         // strict exists to bound the MACHINE's autonomous choice, not this.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "opus-x": {"name": "opus-x", "harness": "claude", "model": "claude-opus-5",
                            "operator_view": "claude-native"},
@@ -3788,7 +3788,7 @@ mod tests {
         // The row IS the model's own declaration, so the pin takes
         // the row's harness instead of a config-scalar default.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "codex-astra": {"name": "codex-astra", "harness": "codex",
                                 "model": "gpt-6-astra"},
@@ -3804,7 +3804,7 @@ mod tests {
             .any(|l| l.contains("slot=operator-pin-override row=codex-astra harness=codex")));
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "zai-flash": {"name": "zai-flash", "harness": "claude",
                               "model": "glm-5.3-flash[1m]",
@@ -3826,7 +3826,7 @@ mod tests {
         // the slot refuses instead of guessing. The text names both rows
         // and both -H values.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "row-a": {"name": "row-a", "harness": "claude", "model": "m"},
                 "row-b": {"name": "row-b", "harness": "codex", "model": "m"},
@@ -3848,7 +3848,7 @@ mod tests {
         let rows = r#"{"zai-flash": {"name": "zai-flash", "harness": "claude", "model": "glm"}}"#;
         let row_val: serde_json::Value = serde_json::from_str(rows).unwrap();
         let mut p1 = strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
         }));
         p1["declared_rows"] = row_val.clone();
         p1["explicit_vendor_value"] = json!("zai");
@@ -3862,7 +3862,7 @@ mod tests {
         )));
         assert!(!c1.iter().any(|l| l.contains("row=")));
         let mut p2 = strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
         }));
         p2["declared_rows"] = row_val;
         p2["explicit_lane"] = json!(true);
@@ -3948,7 +3948,7 @@ mod tests {
         let out = resolve_slot_payload(&strict_payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "remote"},
             "node": {"difficulty": "high", "priority": "p1", "plan_path": "/plans/p.md"},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "target": {
                     "rung_base": "agents.profiles.target",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3973,7 +3973,7 @@ mod tests {
         let out = resolve_slot_payload(&strict_payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "local"},
             "node": {"difficulty": "high", "priority": "p1", "plan_path": "/plans/p.md"},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "target": {
                     "rung_base": "agents.profiles.target",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3991,8 +3991,8 @@ mod tests {
         assert_eq!(out["candidate"]["model"], "glm");
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
-            "slot_by_verb": {
+            "work_command": "blueprint",
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -4011,7 +4011,7 @@ mod tests {
             .any(|l| l.contains("operator_view=\"claude-native\"")));
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "slot_by_verb": {},
+            "slot_by_command": {},
         })));
         assert_eq!(out["status"], "none");
         assert_eq!(out["refusal"], "policy-no-declared-slot");
@@ -4021,10 +4021,10 @@ mod tests {
             .any(|l| l.contains("strict routing refuses the harness default")));
         assert!(chain.iter().any(|l| l.contains("type --model")));
 
-        // A typed model on a verb no slot row declares is the operator's own
+        // A typed model on a command no slot row declares is the operator's own
         // pin: it lands instead of refusing, and the refusal text never fires.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "lead",
+            "work_command": "lead",
             "explicit_model_value": "gpt-6-astra",
         })));
         assert_eq!(out["status"], "none");
@@ -4036,7 +4036,7 @@ mod tests {
         assert!(!chain.iter().any(|l| l.contains("declares no lanes")));
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "opus-x": {"name": "opus-x", "harness": "claude", "model": "claude-opus-5",
                            "operator_view": "claude-native"},
@@ -4044,7 +4044,7 @@ mod tests {
             "capacity": {"claude": {"state": "exhausted", "window": "lock",
                                     "accounts": {}, "evidence": {},
                                     "resets": {"opus": 1900000000.0}}},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "queue", "on_low": "prefer_healthy", "on_unknown": "allow"},

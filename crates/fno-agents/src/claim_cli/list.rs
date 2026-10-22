@@ -108,7 +108,7 @@ pub fn run(args: &[String]) -> i32 {
             }
         };
         for rec in &rows {
-            let row = crate::claim_verbs::claim_status_value(rec);
+            let row = crate::claim_commands::claim_status_value(rec);
             let state = row.get("state").and_then(Value::as_str).unwrap_or("");
             let visible = include_stale || matches!(state, "live" | "suspect");
             let owned_root = cdir.display().to_string();

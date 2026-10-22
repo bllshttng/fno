@@ -60,7 +60,6 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -235,7 +234,7 @@ impl LeadQueue {
     }
 
     /// The walk refuses to respawn another lead past the manifest ceiling.
-    /// `run_loop_verb_inner` is the ceiling authority: it terminates the walk
+    /// `run_loop_command_inner` is the ceiling authority: it terminates the walk
     /// on Budget before dispatching. The queue re-checks so a ceiling crossed
     /// by a concurrent walk between preflight and dequeue also stops here
     /// rather than spawning past it. What the ceiling bounds is
@@ -443,12 +442,12 @@ fn mint_walk_discriminator() -> String {
 
 /// `kl-th-<scope>-<walk-discriminator>`, minted through the canonical
 /// `fno agents name` bridge: the kl source names the lead loop as the
-/// spawner, th the think-class walk verb, and the scope the team it belongs
+/// spawner, th the think-class walk command, and the scope the team it belongs
 /// to so a journal read by a human says which lead spawned the unit. A failed
 /// mint REFUSES the walk (Err) rather than falling back to an uncoded key.
 pub(crate) fn mint_walk_key(fno_bin: &str, cwd: &Path, scope: &str) -> Result<String, LoopError> {
     let discriminator = mint_walk_discriminator();
-    // `agents name` is a Python-only verb: an ambient FNO_AGENTS_RUNTIME=rust
+    // `agents name` is a Python-only command: an ambient FNO_AGENTS_RUNTIME=rust
     // routes the whole group to this binary, which has no name port.
     let out = retry_etxtbsy(|| {
         std::process::Command::new(fno_bin)
@@ -457,7 +456,7 @@ pub(crate) fn mint_walk_key(fno_bin: &str, cwd: &Path, scope: &str) -> Result<St
                 "name",
                 "--source",
                 "kl",
-                "--verb",
+                "--command",
                 "th",
                 scope,
                 "--discriminator",
@@ -784,22 +783,11 @@ fn frontmatter_field(line: &str, key: &str) -> Option<u64> {
 
 /// +1 the manifest's `respawn_count`, returning the new count.
 ///
-/// Takes the same `<scope>.md.lock` file the Python arming path flocks, so a
+/// Takes the same `<scope>.md.lock` file the arming path flocks, so a
 /// concurrent re-team (which rewrites the whole manifest) and a bump cannot
 /// interleave. All other lines pass through untouched.
 pub(crate) fn bump_respawn_count(path: &Path) -> Result<u64, String> {
-    let lock_path = path.with_extension("md.lock");
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
-    let result = (|| {
+    crate::lead_state::with_manifest_lock(path, || {
         let content =
             fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let count = content
@@ -848,9 +836,7 @@ pub(crate) fn bump_respawn_count(path: &Path) -> Result<u64, String> {
         }
         fs::rename(&tmp, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
         Ok(count)
-    })();
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
-    result
+    })
 }
 
 impl LeadQueue {

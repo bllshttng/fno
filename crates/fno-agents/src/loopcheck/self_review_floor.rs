@@ -3,7 +3,7 @@
 use super::*;
 
 /// The ordering every "you are not reviewed yet" remedy must teach, and the
-/// producer it ends at. A verb name alone leaves two ways to waste the round:
+/// producer it ends at. A command name alone leaves two ways to waste the round:
 /// attesting over an open finding (the gate then lies to the whole board), and
 /// reviewing before the last commit is pushed (a later code commit voids the
 /// attestation). The emitter is named because the fallback arms of these
@@ -25,11 +25,11 @@ pub(super) const REVIEW_ORDER: &str = "close every finding, commit and push firs
 /// Two languages, one table: kept honest by
 /// `scripts/ci/check-reviewer-descriptor-parity.sh`, not by a comment asking a
 /// human to remember.
-/// The fourth element encodes per-harness verb overrides as
-/// `"harness=verb;harness=verb"`, empty when the scalar invocation is the only
+/// The fourth element encodes per-harness command overrides as
+/// `"harness=command;harness=command"`, empty when the scalar invocation is the only
 /// rendering - which is now every row: the machinery recommendation is the
 /// fno-owned review lane, which runs as ordinary tool calls on every harness,
-/// so no native per-harness verb is recommended anymore. The native verbs
+/// so no native per-harness command is recommended anymore. The native commands
 /// (`/code-review` on claude, `/review` on codex) remain the operator's
 /// explicit choice, documented in docs/architecture/review-lanes.md.
 /// `sigma` is RETIRED: its invocation names the replacement (the default
@@ -57,7 +57,7 @@ pub(crate) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static
         .map(|(_, inv, self_cert, per)| (*inv, *self_cert, *per))
 }
 
-/// The harness-correct verb. Falls back to the scalar default when the harness
+/// The harness-correct command. Falls back to the scalar default when the harness
 /// is unknown or the reviewer declares no override. `harness` is the author
 /// harness from `claims::resolve_harness`, threaded rather than re-read so a
 /// unit test can pin a harness without touching the environment.
@@ -98,7 +98,7 @@ pub(crate) fn is_documentation_path(path: &str) -> bool {
 }
 
 /// The self-review FLOOR policy on the author harness. `None` answers
-/// "unattributable", not "verbless": an UNRESOLVED harness (absent or
+/// "unattributable", not "commandless": an UNRESOLVED harness (absent or
 /// ambiguous ambient markers - a claude session started from a codex shell)
 /// floors, because ambiguity about who authored the run is not permission to
 /// skip its review. Every attributed harness floors too - the owned review
@@ -194,7 +194,7 @@ pub(super) fn classify_payload(git_bin: &str, cwd: &Path) -> (bool, bool) {
 /// exists but cannot be read fails closed to code, matching
 /// `classify_payload`'s degraded shape. A branch with no PR keeps the cwd
 /// answer (the pre-PR fallback the merge gate has no counterpart for) - but a
-/// NAMED PR (`pr_selector`, the review-coverage verb's --pr) that resolves to
+/// NAMED PR (`pr_selector`, the review-coverage command's --pr) that resolves to
 /// nothing is a degraded read of the PR under evaluation, never a no-PR
 /// branch, so it fails closed instead of falling back.
 pub(super) fn classify_payload_for_floor(

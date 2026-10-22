@@ -6,7 +6,7 @@ This guide explains how to re-run the fno-overhead measurement harness when cond
 
 Re-run if any of the following changed since the last measurement landed:
 
-- The `fno` CLI added many new verbs, or one or more verbs got materially slower.
+- The `fno` CLI added many new commands, or one or more commands got materially slower.
 - Target's call mix per phase shifted toward more `fno` invocations.
 - Python subprocess startup cost shifted (e.g., the lazy-imports refactor landed, or a new heavy import was added to `cli/src/fno/cli.py`).
 - The wall-time denominator shifted because target phases got faster overall (ratio scales with phase work, not absolute call time).
@@ -29,7 +29,7 @@ Output goes to `cli/benchmarks/fno_in_target_results.json`. The script also prin
 
 ### What gets measured
 
-The harness times `fno --help` 20 times and uses the median. It then multiplies the per-call median by the per-verb expected count per target phase (tallied by grepping the skill bodies for `fno <verb>` invocations) and divides by representative `phase_wall_seconds` from the ledger.
+The harness times `fno --help` 20 times and uses the median. It then multiplies the per-call median by the per-command expected count per target phase (tallied by grepping the skill bodies for `fno <command>` invocations) and divides by representative `phase_wall_seconds` from the ledger.
 
 Subprocess probes that time out (10s default), return non-zero, or signal-kill are dropped. If more than 25% of probes fail the harness aborts with a `RuntimeError` so you do not get a confidently-wrong ratio.
 

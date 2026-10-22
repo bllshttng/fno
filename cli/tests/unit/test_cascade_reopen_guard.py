@@ -1,6 +1,6 @@
 """A deliberate reopen outranks the automatic close that would undo it.
 
-Four close paths read a reopen, and one deliberate verb (``cmd_done``, with
+Four close paths read a reopen, and one deliberate command (``cmd_done``, with
 its own --force plus --reason ladder) does not. The sweeps:
 
 - `_cascade_close_parents` on a child close - guarded by

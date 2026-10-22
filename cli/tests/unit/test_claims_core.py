@@ -1,10 +1,10 @@
-"""Unit tests for fno.claims.core: the six verbs.
+"""Unit tests for fno.claims.core: the six commands.
 
-Tests are organized by verb. Each verb exercises the design-doc ACs:
+Tests are organized by command. Each command exercises the design-doc ACs:
 HP (happy path), ERR (error path), EDGE (edge case), FR (functional req).
 
 Filesystem isolation: every test uses a tmp_path root via the ``root``
-argument supported by every verb. Events emission goes to .fno/events.jsonl
+argument supported by every command. Events emission goes to .fno/events.jsonl
 which the typed-builders write best-effort; tests focus on lock-file state
 and exceptions, not on event log content (the event types are covered by
 the parity corpus and test_validator_parity.py).
@@ -336,7 +336,7 @@ class TestSessionWitnessVerdicts:
 
 
 # ---------------------------------------------------------------------------
-# Contracts ported from the lockfile era: each seeds through the public verbs
+# Contracts ported from the lockfile era: each seeds through the public commands
 # and ages the row in the claims table instead of hand-writing a lockfile.
 # ---------------------------------------------------------------------------
 

@@ -522,6 +522,11 @@ fn defuse_nonfinite(text: &str) -> String {
 }
 
 /// Parse an archived graph file without applying store defaults.
+/// The store a person can open for a graph spelling, for error text.
+fn store_label(path: &Path) -> String {
+    crate::backlog::database_path(path).display().to_string()
+}
+
 pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
     if !path.exists() {
         return Ok(RawRead::Empty);
@@ -533,17 +538,16 @@ pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
         }
         Err(error) => {
             return Err(StoreError::Unreadable(
-                path.display().to_string(),
+                store_label(path),
                 format!("{error}"),
             ));
         }
     };
-    let text = String::from_utf8(raw).map_err(|e| {
-        StoreError::Unreadable(path.display().to_string(), format!("not UTF-8: {e}"))
-    })?;
+    let text = String::from_utf8(raw)
+        .map_err(|e| StoreError::Unreadable(store_label(path), format!("not UTF-8: {e}")))?;
     if text.trim().is_empty() {
         return Err(StoreError::Unreadable(
-            path.display().to_string(),
+            store_label(path),
             "empty (zero bytes)".to_string(),
         ));
     }
@@ -584,7 +588,7 @@ pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
 
 /// The shared archive read both archive consumers ask for: the
 /// reaper's graph read (`gc_sweep::read_graph_rows`) and the backlog get
-/// verb's archived tier (`backlog::get_cli`). The migrated `db/` spelling
+/// command's archived tier (`backlog::get_cli`). The migrated `db/` spelling
 /// of the SQLite archive first, then the legacy top-level JSON; every read
 /// is advisory - a missing or unparsable file contributes nothing, so a
 /// broken archive can never blind a consumer to the working graph.
@@ -2297,10 +2301,20 @@ pub(crate) fn curation_key(entry: &Value) -> Value {
 // Bounded lock
 // ---------------------------------------------------------------------------
 
-/// The sibling lockfile for a graph file (store._graph_lock_path), resolved so
-/// two spellings of the same graph share one inode.
+/// The sibling lockfile for a graph file. Every spelling of one store (the
+/// anchor, its `db/` twin, the legacy root spelling) converges through
+/// `anchor_path` first, so they flock one inode. The name stays
+/// `graph.json.lock` so an older binary that only knows the anchor spelling
+/// shares the same lock.
 pub fn graph_lock_path(path: &Path) -> PathBuf {
-    let base = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // Other callers lock their own sibling files (`graph.share`, a chats db):
+    // those keep their raw name, so each stays its own lock.
+    let anchor = if crate::backlog::is_store_spelling(path) {
+        crate::backlog::anchor_path(path)
+    } else {
+        path.to_path_buf()
+    };
+    let base = anchor.canonicalize().unwrap_or(anchor);
     PathBuf::from(format!("{}.lock", base.display()))
 }
 
@@ -3068,7 +3082,7 @@ pub fn mutate_rows(
 pub fn read_archive(path: &Path, keep_malformed: bool) -> Result<Vec<Value>, StoreError> {
     match read_archive_raw(path) {
         Ok(RawRead::Empty) => Ok(vec![]),
-        Ok(RawRead::MalformedRoot) => Err(StoreError::MalformedRoot(path.display().to_string())),
+        Ok(RawRead::MalformedRoot) => Err(StoreError::MalformedRoot(store_label(path))),
         Ok(RawRead::Corrupt(reason)) => Err(StoreError::Corrupt(reason)),
         Ok(RawRead::Entries(mut v)) => {
             apply_defaults(&mut v, keep_malformed);
@@ -3485,6 +3499,36 @@ mod tests {
         .unwrap();
     }
 
+    /// Every spelling of one store derives the one lockfile an older binary
+    /// holding the anchor spelling also takes.
+    #[test]
+    fn every_spelling_of_a_store_shares_one_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        std::fs::write(root.join("db/graph.db"), b"").unwrap();
+        let want = root.join("db/graph.json.lock");
+        for spelling in ["db/graph.db", "db/graph.json", "graph.json"] {
+            assert_eq!(
+                graph_lock_path(&root.join(spelling)).file_name(),
+                want.file_name(),
+                "{spelling}"
+            );
+            assert_eq!(
+                graph_lock_path(&root.join(spelling))
+                    .parent()
+                    .map(|p| p.ends_with("db")),
+                Some(true),
+                "{spelling}"
+            );
+        }
+        // A sibling lock that is not a graph spelling stays its own file.
+        assert_eq!(
+            graph_lock_path(&root.join("db/graph.share")).file_name(),
+            Some(std::ffi::OsStr::new("graph.share.lock"))
+        );
+    }
+
     /// The timeout refusal names the recorded holder: pid and hold age land
     /// in the third field, so the operator can tell a live holder from a
     /// crashed one without lsof.
@@ -3506,7 +3550,7 @@ mod tests {
         // A dead pid reads as dead, not as a live holder: the record below
         // names a pid past the i32 range, so pid_is_alive answers false
         // without a syscall.
-        let lock_path = PathBuf::from(format!("{}.lock", graph.display()));
+        let lock_path = graph_lock_path(&graph);
         std::fs::write(
             &lock_path,
             format!(

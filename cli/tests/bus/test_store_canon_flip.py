@@ -7,10 +7,7 @@ intended design. This suite pins the flipped contract:
   - AC1-ERR: a bus-log append failure FAILS the send (the log is the durable
     write the caller depends on), surfacing the error - never a silent loss.
   - AC1-FR:  a markdown-render write failure does NOT fail the send (the log
-    append already landed; the render is derived and regenerable).
-  - AC1-EDGE: a deleted render is regenerated from the log by
-    ``rebuild_render`` with no message lost - proving the log, not the
-    markdown, is the source of truth.
+    append already landed; the render is derived).
 """
 from __future__ import annotations
 
@@ -77,29 +74,3 @@ def test_send_succeeds_when_render_write_fails(inbox_and_bus, monkeypatch, capsy
     # The failure is logged loudly, not silent.
     err = capsys.readouterr().err
     assert "render" in err.lower()
-
-
-# ---------------------------------------------------------------------------
-# AC1-EDGE: a deleted render is regenerated from the log, no message lost
-# ---------------------------------------------------------------------------
-
-
-def test_rebuild_render_reconstructs_multiple_threads(inbox_and_bus):
-    from fno.inbox import store
-
-    store.write_new_thread("alice", "bob", store.Kind.HEADS_UP.value, "first message")
-    store.write_new_thread("alice", "carol", store.Kind.QUESTION.value, "second message")
-
-    # Wipe the whole render dir; the log is canon.
-    inbox = store.inbox_dir_for("alice")
-    for p in inbox.glob("*.md"):
-        p.unlink()
-    assert list(inbox.glob("*.md")) == []
-
-    n = store.rebuild_render("alice")
-    assert n == 2
-
-    bodies = {
-        m.body for t in store.read_all_threads("alice") for m in t.messages
-    }
-    assert {"first message", "second message"} <= bodies

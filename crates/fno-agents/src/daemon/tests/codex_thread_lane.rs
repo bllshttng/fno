@@ -253,10 +253,10 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
 }
 
 /// AC16: a codex PANE row (mux ref set) must refuse from the ask lane
-/// naming the pane verb, never reach ensure_codex_thread_handle and die
+/// naming the pane command, never reach ensure_codex_thread_handle and die
 /// with the confusing "is not a Codex thread".
 #[tokio::test(flavor = "current_thread")]
-async fn ask_a_codex_pane_row_refuses_naming_the_pane_verb() {
+async fn ask_a_codex_pane_row_refuses_naming_the_pane_command() {
     let home = tmp_home("codex-pane-ask");
     state::update_registry(&home.registry_json(), |registry| {
         let mut entry = thread_entry("t-pane", AgentStatus::Live, None);
@@ -279,7 +279,7 @@ async fn ask_a_codex_pane_row_refuses_naming_the_pane_verb() {
             assert_eq!(e.code, ErrorCode::InvalidStatus);
             assert!(
                 e.message.contains("pane worker") && e.message.contains("mux pane send"),
-                "refusal must name the pane verb: {}",
+                "refusal must name the pane command: {}",
                 e.message
             );
             assert!(

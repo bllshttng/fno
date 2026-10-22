@@ -49,12 +49,14 @@ pub(super) fn compose_cursor(view: &View, launcher_cursor: Option<(u16, u16)>) -
         super::TAB_BAR_ROWS + content.y + f.cursor_row.min(content.rows.saturating_sub(1));
     let mut cur_c =
         view.left_chrome_w() + content.x + f.cursor_col.min(content.cols.saturating_sub(1));
-    if !view.sideline_full && view.layout.area != (0, 0) {
-        // Never in the filler (AC1-UI), even mid-race when a stale rect
-        // exceeds the just-shrunk area. Skipped in full-screen sideline: the
-        // cursor belongs to the composer, not a pane that is not painted.
-        cur_r = cur_r.min(super::TAB_BAR_ROWS + view.layout.area.0.saturating_sub(1));
-        cur_c = cur_c.min(view.left_chrome_w() + view.layout.area.1.saturating_sub(1));
+    let area = view.visible_area();
+    if !view.sideline_full && area != (0, 0) {
+        // Never in the filler (AC1-UI) or under chrome, even mid-race when a
+        // stale rect exceeds the just-shrunk area. Skipped in full-screen
+        // sideline: the cursor belongs to the composer, not a pane that is
+        // not painted.
+        cur_r = cur_r.min(super::TAB_BAR_ROWS + area.0.saturating_sub(1));
+        cur_c = cur_c.min(view.left_chrome_w() + area.1.saturating_sub(1));
     }
     (cur_r, cur_c, f.cursor_visible)
 }

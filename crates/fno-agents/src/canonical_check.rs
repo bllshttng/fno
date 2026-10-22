@@ -3,8 +3,8 @@
 //! `files`, `pr`, `sha`, `fetch`), one JSON answer on stdout naming the
 //! dirty-overlap refusal and the ahead-of-origin refusal - the two shapes a
 //! raw `git pull` failure used to hide behind "divergent branches". The
-//! Python sync keeps its orchestration and calls this verb through
-//! `rust_binary.verb_call`; a refusal is reported, never auto-recovered.
+//! Python sync keeps its orchestration and calls this command through
+//! `rust_binary.command_call`; a refusal is reported, never auto-recovered.
 
 use serde_json::{json, Value};
 use std::path::Path;
@@ -250,7 +250,7 @@ fn blocking_paths(files: &[String], p: &Probe) -> Vec<String> {
     blocking
 }
 
-/// Display cap shared by every path list the verb prints; the stash
+/// Display cap shared by every path list the command prints; the stash
 /// pathspec keeps every path.
 fn show_cap(paths: &[String]) -> String {
     match paths.len() {
@@ -377,7 +377,7 @@ pub(crate) fn build_answer(payload: &Value) -> Value {
     })
 }
 
-/// The verb entry: one JSON payload on stdin, one JSON answer on stdout,
+/// The command entry: one JSON payload on stdin, one JSON answer on stdout,
 /// exit 0; malformed stdin prints `canonical-check: bad payload: <e>` and
 /// exits 2 (same contract as `publish-review`).
 pub fn run_canonical_check(_args: &[String]) -> i32 {

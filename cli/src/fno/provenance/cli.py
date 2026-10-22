@@ -2,7 +2,7 @@
 
 ``fno do think dispatch <node>`` - the operator, mid-conversation about an
 fno-touched node, hands it to a bg /think that picks it up with full LIVE
-context. The ``/think`` skill's ``dispatch`` mode is the front door; this verb is
+context. The ``/think`` skill's ``dispatch`` mode is the front door; this command is
 the deterministic mechanism (Locked Decision 6: route through
 :func:`fno.provenance.spawn_think.maybe_spawn_think`, never hand-assemble a
 spawn). Explicit-only - there is no auto-grep detector (AC5-FR).
@@ -108,7 +108,7 @@ def dispatch(
     # error, not a silently-forwarded empty argv token). Resolved only when
     # given: absent, the bg /think substrate keeps its claude default rather
     # than inferring the invoking harness (which bg cannot host anyway).
-    # This verb's `--provider/-p` is spelled on the wrong axis and carries a
+    # This command's `--provider/-p` is spelled on the wrong axis and carries a
     # HARNESS: the value is compared against "claude" below and gates on what
     # the bg substrate can host. The flag spelling is a CLI contract and does
     # not move here; `flag=` keeps the refusal naming what the operator typed.
@@ -124,7 +124,7 @@ def dispatch(
         raise typer.Exit(code=2)
 
     # Resolve the LIVE session pointer ambiently across all three harnesses (the
-    # same capture node-birth provenance uses), so the verb works in a
+    # same capture node-birth provenance uses), so the command works in a
     # codex/gemini session too, not only claude (codex P2). Explicit flags win.
     prov = _session_provenance()
     sid = (session_id or prov.get("source_session_id") or "").strip()
@@ -138,7 +138,7 @@ def dispatch(
         typer.echo(
             "fno do think dispatch: detached /think uses Claude bg; omit --provider "
             "to use the Claude fallback; non-Claude headless is a one-shot with "
-            "no live think-session receipt and is not supported by this verb.",
+            "no live think-session receipt and is not supported by this command.",
             err=True,
         )
         raise typer.Exit(code=2)

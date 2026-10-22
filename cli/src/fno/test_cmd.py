@@ -1,7 +1,7 @@
 """`fno doctor test [pytest-args...]` / `fno doctor test rust [cargo-args...]` - run a suite
 honestly AND tersely.
 
-Footguns this verb encodes (tribal knowledge made runtime behavior):
+Footguns this command encodes (tribal knowledge made runtime behavior):
 
 1. A worktree's bare `pytest` imports the *canonical* `fno` (installed editable
    from the main checkout), not the worktree's own source. We pin
@@ -727,7 +727,7 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      'FNO_AGENTS_WORKER="$PWD/crates/fno-agents/target/debug/fno-agents-worker" '
      'crates/fno/target/debug/fno config paths verify scripts/lib/paths.sh'),
     # The debug binary is present here, so the @requires_rust parity suites run
-    # instead of skipping. Stub the provider CLIs on PATH (test_rust_verb_parity
+    # instead of skipping. Stub the provider CLIs on PATH (test_rust_command_parity
     # presence-checks them without faking); per-test fakes still win where a
     # provider is actually executed. Reuses the build above; no second compile.
     # opencode belongs in this list for the same reason codex and gemini do:
@@ -737,7 +737,7 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      'FAKE_BIN="$(mktemp -d)"\n'
      'for p in codex gemini opencode; do printf "%s\\n%s\\n" "#!/bin/sh" "exit 0" > "$FAKE_BIN/$p"; chmod +x "$FAKE_BIN/$p"; done\n'
      'PATH="$FAKE_BIN:$PATH" uv run pytest --tb=short -q '
-     "tests/agents/test_rust_verb_parity.py tests/agents/test_ask_e2e_dispatch.py "
+     "tests/agents/test_rust_command_parity.py tests/agents/test_ask_e2e_dispatch.py "
      "tests/unit/test_claims_core.py::TestSessionWitnessVerdicts"),
     # Same shard contract as the parity suites above: the wrapper carries the
     # @requires_rust marker, so in the pytest shard (binary deleted) it skips,
@@ -816,7 +816,7 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("Menu-cap guard (cap 12 at three levels, hidden counts)", ".",
      "cargo test --quiet --manifest-path crates/fno/Cargo.toml --lib menu_caps"),
     ("Spawn flag-ownership ratchet (owner + provenance per flag)", "cli", "uv run fno-py doctor lint spawn-flag-owners"),
-    ("Verb-surface ratchet (real count, both binaries)", "cli", "uv run fno-py doctor lint verb-ratchet"),
+    ("Command-surface ratchet (real count, both binaries)", "cli", "uv run fno-py doctor lint command-ratchet"),
     ("Schema parity self-test", ".", "bash scripts/tests/check-event-schema-parity-selftest.sh"),
     ("Schema parity check (Python side)", ".", "bash scripts/check-event-schema-parity.sh"),
     ("Provider vocabulary parity selftest", ".", "bash tests/ci/test_provider_vocabulary_parity.sh"),
@@ -1107,7 +1107,7 @@ def _state_canary_snapshot() -> str:
     return str(Path(tempfile.gettempdir()) / f"fno-state-canary.{os.getpid()}.snapshot")
 
 
-def _run_state_canary(root: Path, verb: str) -> int:
+def _run_state_canary(root: Path, command: str) -> int:
     """Run scripts/ci/check-state-canary.sh on the PARENT HOME.
 
     Deliberately NOT under _smoke_env: the sandbox is what the suite is allowed
@@ -1123,7 +1123,7 @@ def _run_state_canary(root: Path, verb: str) -> int:
     """
     script = root / "scripts" / "ci" / "check-state-canary.sh"
     if not script.is_file():
-        if verb == "verify":
+        if command == "verify":
             sys.stderr.write(
                 f"smoke: {script} is missing - cannot verify the operator state "
                 "root was untouched, refusing to call this green\n"
@@ -1132,7 +1132,7 @@ def _run_state_canary(root: Path, verb: str) -> int:
         return 0
     env = dict(os.environ)
     env["FNO_STATE_CANARY_SNAPSHOT"] = _state_canary_snapshot()
-    proc = subprocess.run(["bash", str(script), verb], cwd=str(root), env=env)
+    proc = subprocess.run(["bash", str(script), command], cwd=str(root), env=env)
     return proc.returncode
 
 
@@ -1871,6 +1871,17 @@ def _preserve_claim_door(root: Path, env: dict[str, str]) -> None:
     preserved = preserved_dir / "fno-agents"
     shutil.copyfile(source, preserved)
     preserved.chmod(source.stat().st_mode & 0o777)
+    # The stop gate resolves its gh adapter beside the binary, so a lone
+    # preserved copy strands every judged fire in advisory mode. Carry the
+    # sibling family across when the source directory has it (a cargo build
+    # does; a stub or an earlier preserved copy does not, and skipping is
+    # then correct).
+    for helper in ("fno-gh-loopcheck", "fno-gh-proxy", "fno-gh-coverage"):
+        sibling = source.parent / helper
+        if sibling.is_file() and os.access(sibling, os.X_OK):
+            copied = preserved_dir / helper
+            shutil.copyfile(sibling, copied)
+            copied.chmod(sibling.stat().st_mode & 0o777)
     # The scrub unlinks the target/ copies this function may have been handed,
     # so a BIN inherited from the job env goes dead at exactly the moment the
     # claim consumers run. Re-point it at the preserved copy.
@@ -2568,7 +2579,7 @@ def _run_census_deferred(args: Sequence[str]) -> int:
         "Bare `fno doctor test` runs the Python suite in parallel and captures "
         "to .fno/last-test.log; `--stream` restores inherited stdio. "
         "--census-deferred refuses a quarantined test that now passes. "
-        "Tests only: this verb never type-checks; ruff + mypy run in CI job "
+        "Tests only: this command never type-checks; ruff + mypy run in CI job "
         "main-python-static and locally via bash scripts/ci/check-python-static.sh."
     ),
 )

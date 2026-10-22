@@ -313,7 +313,7 @@ pub fn count_boundaries_since(transcript: &Path, since_epoch: Option<i64>) -> Re
 }
 
 // ---------------------------------------------------------------------------
-// CLI verb: `fno-agents compaction mark --session <id>` (the PreCompact hook
+// CLI command: `fno-agents compaction mark --session <id>` (the PreCompact hook
 // leg) and `status` (read-side debug surface; the daemon and provider_cap call
 // the library in process).
 // ---------------------------------------------------------------------------
@@ -325,9 +325,10 @@ pub fn run_compaction(args: &[String]) -> i32 {
         Some((action, rest)) if action == "status" => compaction_status(&home, rest),
         Some((action, rest)) if action == "operator-turns" => crate::operator_turns::run(rest),
         Some((action, rest)) if action == "ack" => crate::operator_turns::run_ack(rest),
+        Some((action, rest)) if action == "inbox-peers" => crate::inbox_peers::run(rest),
         _ => {
             eprintln!(
-                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns --session <id> --transcript <path> --capture-dir <dir> | ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir>"
+                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir> | inbox-peers [--json]"
             );
             2
         }

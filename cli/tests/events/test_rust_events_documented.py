@@ -43,9 +43,9 @@ REQUIRED_SOURCES = [
 RUST_CLIENT_EVENT_SOURCES = {
     "version_skew": "rust",
     # The native triage engine emits the apply telemetry from the backlog
-    # client verb, the same producer source its Python twin declares.
+    # client command, the same producer source its Python twin declares.
     "triage_applied": "backlog",
-    # The native archive sweep emits from the backlog archive verb.
+    # The native archive sweep emits from the backlog archive command.
     "graph_archive_swept": "backlog",
 }
 

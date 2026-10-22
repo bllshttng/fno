@@ -410,8 +410,8 @@ fn append_resume_event(
     if let Some(reason) = reason {
         fields.push(("reason", Value::String(reason.to_string())));
     }
-    crate::client_verbs::append_agents_event(
-        &crate::client_verbs::trace_events_path(home),
+    crate::client_commands::append_agents_event(
+        &crate::client_commands::trace_events_path(home),
         kind,
         &fields,
     );
@@ -655,7 +655,7 @@ mod tests {
     }
 
     fn events_of(home: &crate::paths::AgentsHome) -> String {
-        crate::event_store::journal_text(&crate::client_verbs::trace_events_path(home), &[])
+        crate::event_store::journal_text(&crate::client_commands::trace_events_path(home), &[])
     }
 
     fn read_row(home: &crate::paths::AgentsHome) -> RegistryEntry {

@@ -22,6 +22,9 @@ from fno.roles import (
     RoutingHint,
 )
 
+# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+pytestmark = pytest.mark.dev_build
+
 
 OPENAI_PROVIDER = {
     "oai": {
@@ -116,7 +119,7 @@ def _configure_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     # x-3954: the provider half of the route resolves in Rust through the
-    # spawn-overlay verb. These journeys test the ROLE-to-argv plumbing, not
+    # spawn-overlay command. These journeys test the ROLE-to-argv plumbing, not
     # the builder (the marked tests in test_model_routing.py pin the real
     # binary), so answer the codex-route kind with exactly the tokens Rust
     # builds; every other kind rides the real transport.

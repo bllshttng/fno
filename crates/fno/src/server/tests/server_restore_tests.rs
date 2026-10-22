@@ -74,7 +74,7 @@ fn restore_policy_resume_runs_the_bulk_driver_and_idle_spawns_nothing() {
     core.agents = rows_for();
     let _known = KnownWorkersGuard;
     set_known_workers(&names);
-    // The verb's own registry read is pinned to the same fake rows, so it
+    // The command's own registry read is pinned to the same fake rows, so it
     // cannot clobber them with the real machine registry.
     let _rows = RestoreRegistryRowsGuard;
     set_restore_registry_rows(rows_for());
@@ -1325,7 +1325,7 @@ fn workspace_restore_member_rows() {
     // candidates.
     let _guard = ResumeProgramGuard;
     set_resume_program(&["/bin/cat"]);
-    // (x-b64e) The verb classifies candidates like the startup path, so
+    // (x-b64e) The command classifies candidates like the startup path, so
     // the test pins the registry seam its members must survive.
     let _known = KnownWorkersGuard;
     set_known_workers(&["t-codex-one"]);
@@ -1441,7 +1441,7 @@ fn workspace_restore_member_rows() {
     let _ = std::fs::remove_dir_all(&cwd);
 
     // The persisted squads reach memory only on the first real attach, so
-    // a pre-attach verb must name the precondition rather than answer an
+    // a pre-attach command must name the precondition rather than answer an
     // empty member list that reads as "nothing to restore".
     let mut core = empty_core();
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
@@ -1461,7 +1461,7 @@ fn workspace_restore_member_rows() {
         }
         other => panic!("expected Err, got {other:?}"),
     }
-    // After the first real attach ran the startup restore, the same verb
+    // After the first real attach ran the startup restore, the same command
     // proceeds instead of refusing.
     core.restored = true;
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
@@ -1540,7 +1540,7 @@ fn workspace_restore_member_rows() {
     // to "the code never ran".
     let _guard = ResumeProgramGuard;
     set_resume_program(&["/bin/cat"]);
-    // (x-b64e) The verb classifies candidates like the startup path, so
+    // (x-b64e) The command classifies candidates like the startup path, so
     // the test pins the registry seam its members must survive.
     let _known = KnownWorkersGuard;
     set_known_workers(&["t-codex-one", "mystery", "routed-glm"]);
@@ -1626,7 +1626,7 @@ fn workspace_restore_member_rows() {
     // session was never restored.
     let _guard = ResumeProgramGuard;
     set_resume_program(&["/bin/cat"]);
-    // (x-b64e) The verb classifies candidates like the startup path, so
+    // (x-b64e) The command classifies candidates like the startup path, so
     // the test pins the registry seam its members must survive.
     let _known = KnownWorkersGuard;
     set_known_workers(&["twin"]);
@@ -1747,7 +1747,7 @@ fn workspace_restore_member_rows() {
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
-// ---- (x-a6b9) the restore verb answers for portals ----
+// ---- (x-a6b9) the restore command answers for portals ----
 
 /// One squad tab whose single leaf is a held portal seat for `key` at
 /// portal index `idx`, plus a live paneless registry row that answers the
@@ -1801,7 +1801,7 @@ fn portal_row<'a>(rows: &'a [RestoreRow], idx: u8) -> &'a RestoreRow {
 
 #[test]
 fn workspace_restore_portal_rows() {
-    // AC1-HP: the verb fills a held portal from the staged attach verdict;
+    // AC1-HP: the command fills a held portal from the staged attach verdict;
     // the seat pane runs the row's Drive argv and the row reads resumed.
     let mut core = empty_core();
     core.shells = vec!["/bin/cat".into()];

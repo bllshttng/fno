@@ -151,7 +151,7 @@ pub fn resolve_daemon_bin() -> PathBuf {
 /// A lock error that is NOT `WouldBlock` (no flock support, an unwritable
 /// state root) answers `true`. The daemon refuses to start at all without a
 /// working flock (`flock_self_test`), so failing open here preserves today's
-/// behavior and its error message rather than wedging every verb behind a
+/// behavior and its error message rather than wedging every command behind a
 /// question the filesystem cannot answer.
 pub(crate) fn daemon_lock_is_free(home: &AgentsHome) -> bool {
     let file = match std::fs::OpenOptions::new()
@@ -230,8 +230,8 @@ async fn wait_for_incumbent(
 /// accept in time read as absent, so the challenger unlinked a LIVE listener and
 /// bound a fresh inode. Every takeover added a supervisor instead of replacing
 /// one, and the added load made the next probe likelier to misread -- 59 of them
-/// at once, measured. `call()` reaches this from every client verb, so every
-/// timed-out verb minted another.
+/// at once, measured. `call()` reaches this from every client command, so every
+/// timed-out command minted another.
 ///
 /// Both halves are now gated on the same sidecar lockfile, which the daemon
 /// holds for its entire process lifetime. Here that means: ask whether any
@@ -271,7 +271,7 @@ pub async fn ensure_daemon(
     // happens, since the outgoing daemon holds the flock for up to the
     // runtime's shutdown timeout past socket removal.
     //
-    // The cost is an honest one: a verb that waits out an incumbent AND then
+    // The cost is an honest one: a command that waits out an incumbent AND then
     // starts a daemon can spend two budgets, so the worst case doubles to ~20s.
     // Only the `Gone` path reaches it, which needs an incumbent that holds the
     // lock and then releases it without ever binding. A start that gets no poll
@@ -361,7 +361,7 @@ pub async fn ensure_daemon(
         }
         // A daemon that REFUSED startup (: a divergent registry exits
         // nonzero before binding, having printed the path and both counts to
-        // inherited stderr) must fail this verb immediately with its real
+        // inherited stderr) must fail this command immediately with its real
         // cause, not burn the full socket budget on a socket that will never
         // appear (code-review on PR 924).
         if let Ok(Some(status)) = child.try_wait() {
@@ -371,7 +371,7 @@ pub async fn ensure_daemon(
             // Exit ZERO without a socket is the race loser's designed ending:
             // it found the lock held, deferred to the winner, and stopped. The
             // winner is coming up on this same socket right now, so failing the
-            // verb here turns "one short-lived extra process" into a
+            // command here turns "one short-lived extra process" into a
             // user-visible error. Wait for the winner instead.
             //
             // Unless nobody holds the lock. Then no race was lost and nobody is
@@ -388,9 +388,9 @@ pub async fn ensure_daemon(
     // Budget spent and the child still lives: it is genuinely slow to boot.
     // Drop the handle WITHOUT killing (tokio does not kill on drop; the child
     // is in its own process group) so it can finish booting and serve a later
-    // verb, matching the old detach behavior. This leak used to be unbounded --
-    // the next verb re-probed, timed out again, and forked again. It is bounded
-    // now: the surviving child holds the singleton lock, so the next verb takes
+    // command, matching the old detach behavior. This leak used to be unbounded --
+    // the next command re-probed, timed out again, and forked again. It is bounded
+    // now: the surviving child holds the singleton lock, so the next command takes
     // the wait branch above instead of spawning a competitor for it.
     drop(child);
     Err(ClientError::DaemonStartTimeout(budget))
@@ -530,14 +530,14 @@ pub struct RestartOutcome {
     /// A `--force` run SIGKILLed the holder rather than draining it; the
     /// transcript must record that a process was killed.
     pub forced: bool,
-    /// Something the operator should hear but that does not fail the verb
+    /// Something the operator should hear but that does not fail the command
     /// (e.g. `--force` declined to signal a recycled pid and restarted
     /// instead). Rendered to stderr, exit stays 0.
     pub note: Option<String>,
 }
 
 /// Why a restart could not complete. Each variant names the pid where relevant
-/// so the `restart` verb can fail *loud* (Locked Decision: a failed restart must
+/// so the `restart` command can fail *loud* (Locked Decision: a failed restart must
 /// never read as success).
 #[derive(Debug, thiserror::Error)]
 pub enum RestartError {
@@ -569,7 +569,7 @@ pub enum RestartError {
 
 /// The grace a SIGTERM'd daemon gets before the restart escalates to SIGKILL.
 /// 30s because a loaded machine measured `fno agents list` at 11.5-18.7s the
-/// same hour, and restart.py wraps the verb in a 600s subprocess timeout:
+/// same hour, and restart.py wraps the command in a 600s subprocess timeout:
 /// 30s grace + two load-aware teardown waits (up to 30s each) + a 60s
 /// start_fresh stays far inside it.
 const RESTART_SIGTERM_GRACE: Duration = Duration::from_secs(30);
@@ -912,7 +912,7 @@ fn restart_transition_error(error: &RestartError) -> bool {
 /// reading its pid from the lockfile content, and SIGKILLs it: a wedged select
 /// loop is not reaching its signal handler, which is the whole reason this path
 /// exists. A `--force` that finds a HEALTHY daemon still kills it; that is
-/// correct for a recovery verb and the caller's help says so.
+/// correct for a recovery command and the caller's help says so.
 pub async fn restart_daemon(
     home: &AgentsHome,
     daemon_bin: &Path,

@@ -3,7 +3,7 @@
 //!
 //! Characterization tests for the `claim review-hold` port (x-1d1e). The
 //! Python leg was captured into tests/golden/review_hold/ before deletion;
-//! each case rebuilds the same fixture and asserts the Rust verb's
+//! each case rebuilds the same fixture and asserts the Rust command's
 //! (exit, stdout, stderr) against the frozen golden. The lapsed case
 //! additionally asserts the `review_hold_expired` event the Rust reader
 //! now emits (the one measured divergence this port fixes).
@@ -133,7 +133,7 @@ fn repo_head(repo: &Path) -> String {
 /// The fake gh the Python capture used, behaviorally byte-for-byte except two
 /// seams: the reader now asks `gh pr view` for the headRefName/headRefOid/state
 /// field set (the REST pulls shape the Python leg parsed), and the head answers
-/// LIVE, `git rev-parse HEAD` in the checkout the verb runs from - the
+/// LIVE, `git rev-parse HEAD` in the checkout the command runs from - the
 /// head-mismatch case commits after the fixture builds, and a frozen oid would
 /// read match where the golden demands a mismatch. Keyed by FGH_MODE.
 fn write_fake_gh(root: &Path) -> PathBuf {
@@ -191,7 +191,7 @@ fn run(fx: &Fixture, args: &[&str], extra_env: &[(&str, String)]) -> (i32, Strin
     (code, stdout, stderr)
 }
 
-/// Seed one review hold through the same binary the verb runs under, so the
+/// Seed one review hold through the same binary the command runs under, so the
 /// seeded record matches what a production acquire writes.
 fn seed_hold(fx: &Fixture, ttl_ms: u64) {
     let head = repo_head(&fx.repo);
@@ -201,7 +201,7 @@ fn seed_hold(fx: &Fixture, ttl_ms: u64) {
         .args(["--holder", "review-session:s1"])
         .args(["--ttl-ms", &ttl_ms.to_string()])
         .args(["--metadata", &meta])
-        // The holder pid is the CALLER's, per the verb's own contract: the
+        // The holder pid is the CALLER's, per the command's own contract: the
         // seed child exits at once, and an unexpired lease naming that dead
         // pid classifies suspect instead of live.
         .args(["--pid", &std::process::id().to_string()])
@@ -294,7 +294,7 @@ fn space_journal(fx: &Fixture) -> PathBuf {
 
 /// The one measured divergence this port fixes: the Rust reader emits the
 /// review_hold_expired receipt the schema describes, with the fields
-/// `_emit_expired` wrote. Read through the event store the verb writes
+/// `_emit_expired` wrote. Read through the event store the command writes
 /// through: the raw .jsonl is a stray the store owns, so a read never
 /// serves the raw bytes.
 fn expired_event_matches(fx: &Fixture) {
@@ -398,7 +398,7 @@ fn acquire_by_branch() {
             &head,
             "--holder",
             "review-session:s1",
-            "--verb",
+            "--command",
             "/fno:review",
         ],
         &[],

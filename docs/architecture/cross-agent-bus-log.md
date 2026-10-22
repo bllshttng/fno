@@ -1,8 +1,8 @@
 # Cross-agent bus log
 
-> **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agents send` were the messaging verbs. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agents mail admin rebuild-render`) and messaging is one namespace, `fno agents mail` (`fno inbox` and `fno agents send` are retired). The verb names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
+> **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agents send` were the messaging commands. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agents mail admin rebuild-render`) and messaging is one namespace, `fno agents mail` (`fno inbox` and `fno agents send` are retired). The command names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
 
-This document describes the canonical message-bus substrate shipped in Group 3 of the cross-agent message bus epic: the global JSONL log, per-agent cursors, the markdown render, `--to-project` anycast resolution, and the `fno inbox` alias. The full design (verb taxonomy, delivery tiers, liveness model) lives in the maintainers' vault; this doc is the shipped-substrate reference.
+This document describes the canonical message-bus substrate shipped in Group 3 of the cross-agent message bus epic: the global JSONL log, per-agent cursors, the markdown render, `--to-project` anycast resolution, and the `fno inbox` alias. The full design (command taxonomy, delivery tiers, liveness model) lives in the maintainers' vault; this doc is the shipped-substrate reference.
 
 ## Problem
 
@@ -148,9 +148,9 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 `fno agents send` (with `fno agents send --to-project <project>` for project-destination anycast) routes through `write_new_thread`, which mirrors a canonical envelope into the bus on every write: one log line per send, the md render and the envelope agree (no md-store divergence), and the existing triage drain finds it. The mirror is best-effort (the md render is the durable copy); a mirror failure warns loudly on stderr because a bus reader would otherwise diverge from the md drain until backfill.
 
-**Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` verb during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects verb skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
+**Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` command during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects command skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 
-`fno agents mail migrate-bus` (and `migrate_md_threads_to_bus`) copies old markdown threads into the canonical log. An old thread is one written before the bus existed, or one written by a stale pre-G3 `fno`. A cursor scan then never strands unread legacy mail. The copy dedups by message-id, so a second run changes nothing. One message that cannot append is counted in `MigrationResult.failed` and skipped, and the batch goes on. A thread already on the bus is never copied again.
+The legacy copy command `fno agents mail migrate-bus` copied old markdown threads into the canonical log once. It is retired, because every thread now lands on the bus first.
 
 ## What is NOT in this group
 
@@ -193,7 +193,7 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 **Boundaries.** Claude: `inject-announce.sh` on SessionStart and UserPromptSubmit, with a SessionStart source of `compact` mapped to the compact boundary. Codex: UserPromptSubmit, PostCompact, and section 6a of `session-start.sh`. The target loop reads natively in `nudge.rs` at its block paths. opencode reads in `experimental.chat.system.transform`. pi reads in `before_agent_start`, the pre-turn event whose returned message is injected into the session. A plain Stop is not a delivery boundary (the turn is over). Urgent wake for idle sessions is wave 4 and waits on the wake-lane fix it depends on.
 
 
-**Projection.** The whole-log `fno inbox view` projection is removed, and no verb replaces it one for one. Two reads cover its uses. `fno agents mail list --all [--from P] [--json]` lists a project's threads. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
+**Projection.** The whole-log `fno inbox view` projection is removed, and no command replaces it one for one. Two reads cover its uses. `fno agents mail list --all [--from P] [--json]` lists a project's threads. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
 
 ## Code map
 
@@ -203,10 +203,10 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | Per-agent cursors + sender-exclusion (`exclude_from`) | `cli/src/fno/bus/cursor.py` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
 | `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir` |
-| Store dual-write + migration | `cli/src/fno/inbox/store.py` |
+| Store dual-write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
-| `inbox` / `ack` / `send --to-project` verbs | `cli/src/fno/agents/cli.py` |
-| `mail migrate-bus` and `mail drain` verbs | `cli/src/fno/mail/cli.py` |
-| peer-project hint reader | `cli/src/fno/inbox/settings.py` |
+| `inbox` / `ack` / `send --to-project` commands | `cli/src/fno/agents/cli.py` |
+| `mail drain` command | `cli/src/fno/mail/cli.py` |
+| peer-project hint reader | `crates/fno-agents/src/inbox_peers.rs` |
 
 See also [cross-project-inbox.md](cross-project-inbox.md) (the inbox this converges) and [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).

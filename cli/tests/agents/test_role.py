@@ -139,6 +139,7 @@ def _spawn_promoted(monkeypatch, tmp_path, *, grantor_env: Optional[str], **role
     )
 
 
+@pytest.mark.dev_build
 def test_role_stamped_grantor_is_the_spawning_session(
     tmp_path: Path, monkeypatch, native_backlog_door
 ) -> None:
@@ -426,7 +427,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
     # here so this exact-dict assertion stays about the role fields. The
     # team-name carry line is the same shape of advisory receipt data.
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: "msg-t delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: "msg-t delivered (hosted)"
     )
     monkeypatch.setattr(role_mod, "_carry_team_name", lambda *args: "carried")
     result = _invoke_role("worker", "--scope", "alpha")
@@ -979,7 +980,11 @@ def test_a_self_widen_fails_closed_without_the_binary(
     _widen_graph(monkeypatch, created_by=WIDEN_LEAD_SESSION)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
 
+    real_call = spawn_overlay_client.spawn_overlay_call
+
     def _unavailable(payload):
+        if payload.get("kind") == "role-resolve":
+            return real_call(payload)
         raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _unavailable)
@@ -1094,7 +1099,11 @@ def test_a_self_add_answer_without_a_grantor_refuses_fail_closed(
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
     before = [asdict(row) for row in load_registry()]
 
+    real_call = spawn_overlay_client.spawn_overlay_call
+
     def _old_binary(payload):
+        if payload.get("kind") == "role-resolve":
+            return real_call(payload)
         return {"widen": True, "added": ["e-2"], "hint": None}
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _old_binary)
@@ -1110,7 +1119,7 @@ def test_succession_by_an_agent_caller_is_refused_with_a_reachable_remedy(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-EDGE: grant_error's succession branch accepts an equal scope because
-    SPAWN succession is legal there. This verb only stamps the target, so it
+    SPAWN succession is legal there. This command only stamps the target, so it
     must refuse - and the refusal has to name a remedy the caller can act on.
     Falling through to the live-holder scan named the caller's OWN row as the
     blocker and offered three remedies that all contradict the refusal: re-scope
@@ -1237,7 +1246,11 @@ def test_in_place_role_refuses_when_the_identity_check_is_unavailable(
         ],
     )
 
-    def unavailable(*args, **kwargs):
+    real_call = spawn_overlay_client.spawn_overlay_call
+
+    def unavailable(payload, *args, **kwargs):
+        if payload.get("kind") == "role-resolve":
+            return real_call(payload, *args, **kwargs)
         raise spawn_overlay_client.SpawnOverlayUnavailable("not built")
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", unavailable)
@@ -1285,10 +1298,10 @@ def test_spawn_role_refuses_before_launch_when_scope_already_occupied(
     assert not _space_manifest(tmp_path, "epic-x").exists()
 
 
-# --- the role types the verb (x-7b36 change 11): raw mail names the delivery
+# --- the role types the command (x-7b36 change 11): raw mail names the delivery
 
 
-def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
+def test_in_place_role_mails_the_term_command_and_names_the_delivery(
     tmp_path: Path, monkeypatch
 ) -> None:
     import fno.agents.role as role_mod
@@ -1301,13 +1314,13 @@ def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
     )
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: sent.append((address, verb)) or "msg-1 delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: sent.append((address, command)) or "msg-1 delivered (hosted)"
     )
 
     receipt = promote_existing_session("worker", ["alpha"])
 
     assert receipt["term_delivery"] == "msg-1 delivered (hosted)"
-    # AC28: the holder receives the plugin-qualified verb by raw mail,
+    # AC28: the holder receives the plugin-qualified command by raw mail,
     # addressed by the full session id (the ADDRESS, never the spawn label).
     assert sent == [("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "/fno:lead alpha")]
 
@@ -1425,6 +1438,7 @@ def _scope_manifest(tmp_path):
     return space_dir(tmp_path) / "leads" / "x-epic.md"
 
 
+@pytest.mark.dev_build
 def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     tmp_path, monkeypatch
 ) -> None:

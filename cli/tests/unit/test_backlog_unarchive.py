@@ -3,7 +3,7 @@
 Under the single store, archive residents are rows carrying ``archived_at``
 in the same graph.db the working graph lives in. Unarchive clears the stamp
 and returns the row to the working population; the round-trip with `archive`
-proves neither verb can drop a node from both populations.
+proves neither command can drop a node from both populations.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -27,7 +27,7 @@ def store(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(gc, "GRAPH_JSON", working)
     monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
     monkeypatch.setattr(gs, "GRAPH_JSON", working)
-    # The verb's archive read resolves through paths, not the constant.
+    # The command's archive read resolves through paths, not the constant.
     from fno import paths
 
     monkeypatch.setattr(paths, "graph_json", lambda: working)
@@ -72,7 +72,7 @@ def _archived_ids(graph: Path) -> set[str]:
 
 def test_a_reminted_node_comes_back_by_its_previous_id(store):
     """A dedupe remint keeps the old id as previous_id; `get` resolves it that
-    way, so `unarchive` - the remedy the dedupe verb names - must too."""
+    way, so `unarchive` - the remedy the dedupe command names - must too."""
     _seed(
         store,
         [_node("ab-99999999", previous_id="ab-22222222", archived_at="2026-02-01T00:00:00Z")],

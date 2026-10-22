@@ -449,7 +449,7 @@ else
 fi
 
 # Checkout staleness lines (AC2-*). A stub fno-agents keeps this test
-# independent of whether CI built the Rust change; the verb's own unit tests
+# independent of whether CI built the Rust change; the command's own unit tests
 # cover the answer. The carrier is pointed at a temp main checkout through
 # CLAUDE_PROJECT_DIR, the same resolution the real hook gets from Claude.
 CHK_PROJECT="$TMP_DIR/chk-project"

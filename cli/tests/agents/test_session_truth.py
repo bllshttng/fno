@@ -1,6 +1,6 @@
 """Unit tests for fno.agents.session_truth.
 
-The truth verb classifies a worker's supervision state from its transcript TAIL
+The truth command classifies a worker's supervision state from its transcript TAIL
 only -- never from pid/argv/daemon/state.json state (all caught lying about a
 live session in one evening). Tests exercise the pure classifier and the
 resolve+read path (through the transcript resolver, so a worktree
@@ -394,7 +394,7 @@ def test_unknown_paths_leave_the_last_event_pair_null(tmp_path):
     assert result["last_message"] is None
 
 
-def test_truth_verb_json_carries_the_last_event_pair(tmp_path, monkeypatch):
+def test_truth_command_json_carries_the_last_event_pair(tmp_path, monkeypatch):
     """The --json payload is an explicit key allowlist: the resolver's fields
     reach nobody until _truth_payload copies them across. Exit code is
     unchanged: these are reporting fields, never a gate."""
@@ -548,7 +548,7 @@ def _truth_result(observed):
 
 
 def test_render_truth_names_the_observed_model():
-    """AC1-HP: the operator asks one verb and gets the real model."""
+    """AC1-HP: the operator asks one command and gets the real model."""
     from fno.agents.session_truth import render_truth
 
     line = render_truth(

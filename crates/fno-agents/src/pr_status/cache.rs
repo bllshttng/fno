@@ -93,7 +93,7 @@ fn write_row(dir: &Path, key: &str, row: &Value) {
 }
 
 /// Print one cached row, degraded to unknown when `stale`, and answer the
-/// verb's exit code; None when the row is not servable (empty output or a
+/// command's exit code; None when the row is not servable (empty output or a
 /// foreign schema: a miss, checked before any write).
 fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
     let mut out = row.get("output").cloned().unwrap_or(Value::Null);
@@ -160,7 +160,7 @@ fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
 // The status door
 // ---------------------------------------------------------------------------
 
-/// The status door: one op dispatch for the verb's stdin payload. Only
+/// The status door: one op dispatch for the command's stdin payload. Only
 /// `status-read` today; the wait, logs, and ci ops land with their ports.
 pub(crate) fn run_door(op: &str, payload: &Value) -> (i32, String, String) {
     match op {
@@ -187,7 +187,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .get("refresh")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    // The verb's readers act on `ready` and the local gates, so it composes
+    // The command's readers act on `ready` and the local gates, so it composes
     // here and never serves a peer's row.
     let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
@@ -215,7 +215,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
 /// `head_read` is the caller's own light head read (the wait's per tick):
 /// a complete block is both the fresh-serve guard and the key material, so
 /// the tick spends the read once; a refused read (empty sha) guards with a
-/// sha no row can carry; None is the self-reading status verb.
+/// sha no row can carry; None is the self-reading status command.
 pub(crate) fn cached_status(
     cwd_str: &str,
     pr: u64,
@@ -492,7 +492,7 @@ fn row_head(row: &Value) -> Option<&str> {
 
 /// The head guard on the pre-key serves: a caller that names a head (the
 /// wait, from its own light read) is never answered by a row minted for a
-/// different one. None (the status verb) keeps the zero-network serve.
+/// different one. None (the status command) keeps the zero-network serve.
 fn serve_head_ok(row: &Value, require_head: Option<&str>) -> bool {
     match require_head {
         None => true,
@@ -535,7 +535,7 @@ pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
 
 /// The wait's zero-network tick: the newest (slug, pr) row answers only
 /// inside the TTL and only when minted for `require_head`, so the head
-/// guard that protects the status verb serves the wait too - fed a sha the
+/// guard that protects the status command serves the wait too - fed a sha the
 /// caller read from local git at no cost instead of from GitHub. None sends
 /// the caller down the network path.
 pub(crate) fn fresh_tick(

@@ -1,4 +1,4 @@
-"""The mux verb's renderer bridge, asserted as a contract.
+"""The mux command's renderer bridge, asserted as a contract.
 
 `fno mux pane send` (Rust) shells to the paired fno-agents binary's `mail
 pane-prepare` renderer for every non-raw send, and FAILS CLOSED when that call
@@ -53,14 +53,14 @@ def _declared_options() -> set[str]:
 
 
 def test_the_rust_bridge_names_a_command_and_flags_this_cli_has():
-    """The bridge's verb and every flag it passes must be ones the command takes.
+    """The bridge's command and every flag it passes must be ones the command takes.
 
     `--session-id` in particular was renamed once already, with `--session`
     kept as a hidden deprecated alias. A second rename that forgot the Rust
     caller would refuse every non-raw send and no test would say so.
     """
     argv = _bridge_argv()
-    # The renderer dispatch shape: the paired binary takes `mail`, then the verb.
+    # The renderer dispatch shape: the paired binary takes `mail`, then the command.
     assert argv[:2] == ["mail", "pane-prepare"], argv
 
     result = CliRunner().invoke(mail_app, ["pane-prepare", "--help"])

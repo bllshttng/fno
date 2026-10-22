@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/pr_watch/_install.py:refresh_watcher
 //!
-//! Characterization for the pr-watch refresh port: the Rust verb
+//! Characterization for the pr-watch refresh port: the Rust command
 //! (`fno-agents pr-watch refresh`, reached through `pr_watch::refresh`) is
 //! pinned by the frozen goldens under tests/golden/pr-watch-refresh/. Under
 //! `FNO_CAPTURE_GOLDEN=1` this file runs as a LIVE differential: the Python

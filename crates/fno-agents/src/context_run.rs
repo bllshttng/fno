@@ -859,7 +859,7 @@ fn build_hook_output(event: &str, contexts: &[String], messages: &[String]) -> S
     Value::Object(out).to_string()
 }
 
-/// Native rows come from the existing `fno doctor --context-audit` verb so
+/// Native rows come from the existing `fno doctor --context-audit` command so
 /// Rust and the Python audit keep one owner for host-source measurement.
 fn fetch_native_manifest(
     input: &CoreInput,

@@ -19,7 +19,7 @@ set -uo pipefail
 PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
-# The Rust front door answers a mux-only verb; the Python `fno-py` has no `mux`
+# The Rust front door answers a mux-only command; the Python `fno-py` has no `mux`
 # subcommand and fails "No such command". This is the same probe `fno doctor`'s
 # `_probe_is_mux` uses. `fno mux ls --json` is read-only, returns `[]` with no
 # server, and does not need the daemon, so it is fast. Bound it anyway so a
@@ -44,7 +44,7 @@ if [[ -n "$FNO_BIN" ]]; then
   with_timeout 3 "$FNO_BIN" mux ls --json >/dev/null 2>&1
   probe_rc=$?
   # 124 means our own bound fired. A wedged socket still PROVES the Rust front
-  # door is present: `fno-py` has no `mux` verb and fails fast with a usage
+  # door is present: `fno-py` has no `mux` command and fails fast with a usage
   # error, it cannot hang here. Treating that as "not the front door" would nag a
   # user to install what they already have, every session, for as long as the
   # socket stays wedged. Now that the cap actually fires on every host rather
@@ -69,7 +69,7 @@ INSTALLER="$PLUGIN_ROOT/.claude-plugin/postinstall.sh"
 if [[ ! -f "$INSTALLER" ]]; then
   echo "## fno is not installed, and the plugin tree carries no installer"
   echo
-  echo "Expected the installer at \`$INSTALLER\` but it is missing; reinstall the footnote plugin. Until \`fno\` is installed, verbs that shell out to \`fno\` fail."
+  echo "Expected the installer at \`$INSTALLER\` but it is missing; reinstall the footnote plugin. Until \`fno\` is installed, commands that shell out to \`fno\` fail."
   exit 0
 fi
 
@@ -94,7 +94,7 @@ EOF
 # notice never reads as "nothing of ours is here".
 if [[ -n "$FNO_BIN" ]]; then
   echo
-  echo "A Python \`fno-py\` already lives beside \`$FNO_BIN\`; verbs that only need the Python CLI work as \`fno-py\` until the full install lands."
+  echo "A Python \`fno-py\` already lives beside \`$FNO_BIN\`; commands that only need the Python CLI work as \`fno-py\` until the full install lands."
 fi
 
 cat <<EOF

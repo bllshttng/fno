@@ -5,7 +5,7 @@ use super::*;
 /// The manifest-independent inputs every coverage/review evaluation needs:
 /// event-log paths, repo identity, the merged settings, and the reviewer sets
 /// derived from them. Extracted from `decide()` so the standalone
-/// `review-coverage` verb resolves EXACTLY what the stop hook resolves - one
+/// `review-coverage` command resolves EXACTLY what the stop hook resolves - one
 /// resolver, no second precedence implementation (the N-implementations trap).
 pub(crate) struct ReviewInputs {
     pub(crate) project_events: PathBuf,

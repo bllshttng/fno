@@ -1,7 +1,7 @@
 //! `corrections-verify`: scores each applied correction against the friction
 //! it targeted, native under d-b6cc1a2a (all new code lands in crates; the
 //! bash pack is a thin caller). Transport-only, dispatched in client.rs
-//! beside `evals-trend`; registers no verb.
+//! beside `evals-trend`; registers no command.
 //!
 //! Inputs: `corrections.log` rows whose SOURCE is `git-rule-edit` or
 //! `skill-commit` (the post-commit hook's applied-correction rows) and
@@ -310,7 +310,7 @@ fn markdown(verdicts: &[Verdict]) -> String {
     let claude_dir = resolve_claude_dir();
     let mut lines = Vec::new();
     for v in verdicts {
-        let verb = match v.verdict {
+        let command = match v.verdict {
             "improved" => "keep".to_string(),
             "flat" => "improve".to_string(),
             "worse" => match v.sha.as_deref().map_or_else(
@@ -336,7 +336,7 @@ fn markdown(verdicts: &[Verdict]) -> String {
             None => String::new(),
         };
         lines.push(format!(
-            "- {} {}: {} ({verb}{ref_suffix})",
+            "- {} {}: {} ({command}{ref_suffix})",
             v.ts.to_rfc3339(),
             v.file,
             v.verdict

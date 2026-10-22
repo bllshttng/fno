@@ -4,7 +4,7 @@ The composition is characterized by the Rust goldens
 (crates/fno-agents/tests/fixtures/spawn_compose/); the seam-visibility tests
 that walked the old Python body live there now. What stays here is the path
 no golden can pin: a real `fno-agents` binary answering the transport's one
-verb call under a pinned FNO_CONFIG.
+command call under a pinned FNO_CONFIG.
 """
 from __future__ import annotations
 

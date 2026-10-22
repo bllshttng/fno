@@ -1449,6 +1449,10 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
         .env("FNO_SPACES_DIR", &env.spaces)
         .env("PYTHONPATH", &env.pypath)
         .env("PATH", path)
+        // Pin the evidence read to the staged adapter: the cargo build places
+        // the real fno-gh-coverage beside the binary under test, and the
+        // sibling lookup would otherwise outrank the PATH shim.
+        .env("FNO_LOOPCHECK_GH_BIN", bin.join("fno-gh-coverage"))
         .env("FNO_CLAIMS_ROOT", env._tmp.path().join("claims-root"))
         // Pin the config chain to this temp project. `$FNO_CONFIG` is
         // the SOLE source when set, so without this a developer who exports it
@@ -2089,7 +2093,7 @@ fn finalize_arms_with_merge_on_an_invalid_strategy() {
 /// gh exits right after queueing and GitHub's server-side merge deletes
 /// nothing, so the flag bought nothing at arm time - while its LOCAL delete
 /// attempt was the x-7267 false-failure shape. Remote cleanup after a
-/// `fno do pr merge` merge is this verb's post-merge step, not an arm flag.
+/// `fno do pr merge` merge is this command's post-merge step, not an arm flag.
 #[test]
 fn finalize_arm_never_carries_delete_branch() {
     for body in [

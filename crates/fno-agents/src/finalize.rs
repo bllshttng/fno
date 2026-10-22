@@ -22,7 +22,7 @@
 //!
 //! ## Why this does not break the read-only stop hook
 //!
-//! `loop-check` stays a pure read-only DECISION verb; `finalize` is a separate
+//! `loop-check` stays a pure read-only DECISION command; `finalize` is a separate
 //! WRITER the shim runs AFTER the allow decision. Nothing `finalize` writes is
 //! read by a future `loop-check` decision as a gate:
 //!
@@ -47,7 +47,7 @@
 //!
 //! The proven Python helpers (`fno.cost._session_cost`, `fno.cost._register`,
 //! both in-package modules run via `python3 -m`) do the cost/dedup/flock work;
-//! the stamp is the in-process plan-doc writer. This verb is a thin
+//! the stamp is the in-process plan-doc writer. This command is a thin
 //! orchestrator (Locked Decision 6 - avoids the Python->Rust byte-parity
 //! trap), so the shim keeps its Rust-only dependency surface (Domain Pitfall).
 
@@ -530,7 +530,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // NO merge event - ship IS its completion - so it must still graduate to
     // `done` here, else the plan is stranded at `in_review` on the active board
     // (codex P2). expected_url_count is still recorded either way for the manual
-    // `graduate` verb and the cross-project safety net.
+    // `graduate` command and the cross-project safety net.
     let mut stamped = false;
     let mut handoff_path: Option<String> = None;
     let mut delivery_terminal_message: Option<String> = None;
@@ -713,7 +713,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // A worker that idles on an unanswered question and then dies (measured:
     // 7h idle, "awaiting operator's terminal/mux info", `fno inbox outstanding`
     // empty the whole time) takes the diagnosis it already completed down
-    // with it. The verb (`fno inbox outstanding ask`) already exists; nothing
+    // with it. The command (`fno inbox outstanding ask`) already exists; nothing
     // forced the filing. Mechanical, not instructional: the same STUCK bucket
     // that gets a postmortem, with an operator-directed question in its last
     // message and nothing already filed for this session, gets it filed here.
@@ -1223,10 +1223,10 @@ fn write_ledger_record(
 // ── stamp (ship only) ────────────────────────────────────────────────────────
 
 /// After a stamp writes, validate the plan's frontmatter via `fno do plan validate`
-/// (the same read-only verb). Non-fatal-but-loud: a non-zero exit (e.g. a stamp
+/// (the same read-only command). Non-fatal-but-loud: a non-zero exit (e.g. a stamp
 /// that left `status` unset) is reported on stderr for the next session to fix;
 /// the stamp is never rolled back and finalize never fails on it (AC1-FR). A
-/// concurrent edit is fine - the verb reads whatever snapshot is on disk.
+/// concurrent edit is fine - the command reads whatever snapshot is on disk.
 fn validate_stamped_frontmatter(cwd: &Path, plan_path: &str) {
     if plan_path.is_empty() {
         return;
@@ -1259,7 +1259,7 @@ fn validate_stamped_frontmatter(cwd: &Path, plan_path: &str) {
 /// write-time projection at merge, not here. For an ADVISORY ship
 /// (`DoneAdvisory`) there is no merge event, so the caller passes `true` and
 /// this graduates the plan now. `expected_url_count` is recorded either way for
-/// the manual `graduate` verb and the cross-project safety net.
+/// the manual `graduate` command and the cross-project safety net.
 fn stamp_and_graduate(
     cwd: &Path,
     plan_path: &str,
@@ -1499,7 +1499,7 @@ fn handoff_cost_line(cwd: &Path, transcript_uuid: &str) -> String {
 ///      parameter owns the bare default, and the ambient global config read
 ///      broke every hermetic fixture on a machine that pins the key.
 ///
-/// Pure-Rust resolution: it never shells `fno`, so the verb keeps its Python-CLI
+/// Pure-Rust resolution: it never shells `fno`, so the command keeps its Python-CLI
 /// independence (it only ever runs the in-package metric modules via
 /// `python3 -m`).
 pub(crate) fn resolve_handoffs_dir(
@@ -2101,7 +2101,14 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    let mut cmd = Command::new("fno-gh-coverage");
+    // The family's one env seam outranks the sibling lookup: a staged fake
+    // must win over the real adapter the cargo build places beside this
+    // binary, exactly as it does for loop-check and review-coverage.
+    let gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::pr_status::quota::helper_bin("fno-gh-coverage"));
+    let mut cmd = Command::new(gh_bin);
     cmd.args([
         "pr",
         "view",

@@ -63,7 +63,7 @@ impl CalibrationArgs {
             return None;
         }
         // The two router flags travel together: a stage without a proposal
-        // read names nothing, and a proposal without a stage has no verb.
+        // read names nothing, and a proposal without a stage has no command.
         if propose != stage.is_some() {
             return None;
         }
@@ -100,7 +100,7 @@ pub fn run(tail: &[String]) -> i32 {
     // same store.
     if crate::graph_get::external_backend_selected() {
         eprintln!(
-            "fno backlog calibration: this verb reads graph state directly; under an \
+            "fno backlog calibration: this command reads graph state directly; under an \
 external tracker backend it is refused rather than computed over a non-authoritative store."
         );
         return 1;
@@ -255,7 +255,7 @@ fn run_by_lane(
         scorecard::stamp_fix_of_fix(&mut built.records, fix_by_pr);
     }
     // The second kind part needs the merge commits, so the git walk runs
-    // only when the kind runs deeper than verb/difficulty; the default
+    // only when the kind runs deeper than command/difficulty; the default
     // output stays the slice-1 read with no git dependency.
     if kind_depth >= 2 {
         if let Some(parts) = scorecard::kind_parts_by_pr(&built.records, &cwd, since_days) {

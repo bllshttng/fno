@@ -21,7 +21,7 @@
 #        refusal latches separately so it never eats the nudge
 #   compact gate: the compact advice matches a MEASURED injection path, all THREE
 #        answers (injectable / not-injectable / could-not-measure), plus source
-#        sweeps for the dead role verb and the raw transport name, each with a
+#        sweeps for the dead role command and the raw transport name, each with a
 #        positive control so a passing absent-assertion proves the file was read
 #
 # No python that can import fno.cli is a HARD FAIL here, not a skip. This file is
@@ -78,10 +78,10 @@ BINDIR="$(mktemp -d)"
 # masked registry-json's Rust port entirely, taking four AC31 assertions
 # down with it before this line existed).
 printf '#!/usr/bin/env bash\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
-# The paths verbs emit-shell, shell-stub, verify and handoff answer natively
+# The paths commands emit-shell, shell-stub, verify and handoff answer natively
 # (crates/fno-agents/src/paths_cli.rs behind crates/fno/src/paths_route.rs):
 # the shim routes exactly those to the built Rust front + worker, the way
-# production resolves them, while every other verb keeps the worktree Python
+# production resolves them, while every other command keeps the worktree Python
 # front this suite pins. Without the routing, the retired Python legs die and
 # the canon ask names no doc (AC5). Spell
 # target/debug/fno contiguously: the smoke runner greps this file for
@@ -108,7 +108,7 @@ export PATH="$BINDIR:$PATH"
 # a stale one elsewhere on PATH. The "auto" runtime's installed-binary search
 # (rust_binary.resolve_installed_binary) deliberately excludes the cargo dev
 # target and would otherwise pick up whatever `fno-agents` a developer machine
-# already has on PATH - possibly a build that predates this verb's port.
+# already has on PATH - possibly a build that predates this command's port.
 # Prepending the fresh debug build wins the PATH search either way.
 AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agents/target/debug"
 # Spell the binary path contiguously: the smoke runner greps this file for
@@ -267,7 +267,7 @@ run_hook() {  # run_hook <payload> ; sets OUT, RC
 
 # Same resolution order as scripts/lib/events.sh. The store commit is the
 # write boundary: the pinned journal keeps no byte trace, so the assertion
-# reads committed rows through the verb and jq -r unwraps the escapes.
+# reads committed rows through the command and jq -r unwraps the escapes.
 ROWS_BIN="${FNO_BIN:-}"
 if [[ -z "$ROWS_BIN" ]]; then
     for _profile in debug release; do
@@ -372,7 +372,7 @@ assert_contains "AC14: names worker kfad-a" "$OUT" 'kfad-a'
 assert_contains "AC14: names worker kfad-b" "$OUT" 'kfad-b'
 assert_contains "AC14: names resolution 1 (team)" "$OUT" 'stay as team'
 # Succession moved into spawn: a sitting lead spawning its successor over its own scope
-# transfers the role in the write that vacates its own. The verb this line used to
+# transfers the role in the write that vacates its own. The command this line used to
 # name, and the flag it used to pass, were both deleted; an assertion pinning them
 # passed while documenting a command that no longer exists.
 assert_contains "AC14: names resolution 2 (spawn the successor)" "$OUT" 'fno agents spawn -k'
@@ -712,10 +712,10 @@ assert_contains "gate: unmeasured -> says it did not measure" "$OUT" 'could not 
 assert_absent   "gate: unmeasured -> claims no path"          "$OUT" 'has NO injection path'
 assert_absent   "gate: unmeasured -> claims a path"           "$OUT" 'HAS an injection path'
 
-# Neither branch may name the plumbing under the front door, nor a deleted verb.
+# Neither branch may name the plumbing under the front door, nor a deleted command.
 HOOK_SRC="$(cat "$HOOK")"
 assert_absent "hook: no raw mail-inject prescription" "$HOOK_SRC" 'mail-inject'
-assert_absent "hook: no deleted role verb"           "$HOOK_SRC" 'agents role'
+assert_absent "hook: no deleted role command"           "$HOOK_SRC" 'agents role'
 assert_absent "hook: no deleted succession flag"      "$HOOK_SRC" '--succeed'
 
 # === Latch location + lifetime =================================================

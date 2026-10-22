@@ -24,7 +24,7 @@ use crate::transcript_activity::{
     hour_string, Activity, FoldReceipt, Roots, Slowdown, TICK_READ_BUDGET,
 };
 
-/// The verb's default budget: bounded, so a plain `--fleet` never scans the
+/// The command's default budget: bounded, so a plain `--fleet` never scans the
 /// whole corpus; `--backfill` lifts it.
 pub(crate) const DEFAULT_WINDOW_DAYS: u64 = 30;
 
@@ -959,7 +959,7 @@ fn cov_of(cov: &SeriesCov) -> SeriesCoverage {
     }
 }
 
-/// The on-demand verb: an argument of the existing `fno-agents intel` fold,
+/// The on-demand command: an argument of the existing `fno-agents intel` fold,
 /// never a new action.
 pub fn run_fleet_cli(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {

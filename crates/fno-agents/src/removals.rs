@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 /// One session removal, whatever record it came from. A receipt-backed
 /// removal carries `resume`/`cwd`/`trigger`/`model`/`receipt`; a recovered
-/// receipt-less one carries the remover verb and the reason the event
+/// receipt-less one carries the remover command and the reason the event
 /// recorded, and the live-record fields stay `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Removal {
@@ -36,7 +36,7 @@ pub struct Removal {
     pub removed_by: String,
     /// The command that wrote the removal, joined from the same-second
     /// `registry_rows_lost` line (`fno-py agents spawn --substrate pane --team`).
-    pub verb: Option<String>,
+    pub command: Option<String>,
     pub reason: Option<String>,
     pub cause: Option<String>,
     pub cause_at: Option<String>,
@@ -116,15 +116,15 @@ fn cause_map(agent_events: &[JEvent]) -> HashMap<String, (String, String, Option
     out
 }
 
-/// `(pid, second) -> verb`, from the `registry_rows_lost` lines: the writer
+/// `(pid, second) -> command`, from the `registry_rows_lost` lines: the writer
 /// that dropped the rows names itself once per process, not once per row.
-fn lost_verbs(agent_events: &[JEvent]) -> HashMap<(String, String), String> {
+fn lost_commands(agent_events: &[JEvent]) -> HashMap<(String, String), String> {
     let mut out = HashMap::new();
     for e in agent_events {
         if e.kind != "registry_rows_lost" {
             continue;
         }
-        let Some(verb) = s_str(&e.data, "verb") else {
+        let Some(command) = s_str(&e.data, "verb") else {
             continue;
         };
         let pid = e
@@ -133,7 +133,7 @@ fn lost_verbs(agent_events: &[JEvent]) -> HashMap<(String, String), String> {
             .and_then(Value::as_i64)
             .map(|p| p.to_string())
             .unwrap_or_default();
-        out.insert((pid, tsec(&e.ts)), verb.to_string());
+        out.insert((pid, tsec(&e.ts)), command.to_string());
     }
     out
 }
@@ -176,7 +176,7 @@ pub fn fold(
     let agents = parse_events(agent_events);
     let global = parse_events(global_events);
     let causes = cause_map(&agents);
-    let verbs = lost_verbs(&agents);
+    let commands = lost_commands(&agents);
     let uncaptured: Vec<&JEvent> = global
         .iter()
         .filter(|e| e.kind == "agent_session_id_uncaptured")
@@ -215,7 +215,7 @@ pub fn fold(
             session_id: Some(r.harness_session_id.clone()),
             node,
             removed_by: r.removed_by.clone(),
-            verb: None,
+            command: None,
             reason: cause.and_then(|(_, _, why)| why.clone()),
             cause: cause.map(|(kind, _, _)| kind.clone()),
             cause_at: cause.map(|(_, ts, _)| ts.clone()),
@@ -271,7 +271,7 @@ pub fn fold(
             session_id: (!sid.is_empty()).then(|| sid.to_string()),
             node: None,
             removed_by: s_str(&e.data, "remover").unwrap_or("").to_string(),
-            verb: verbs.get(&(pid, tsec(&e.ts))).cloned(),
+            command: commands.get(&(pid, tsec(&e.ts))).cloned(),
             reason,
             cause: Some(e.kind.clone()),
             cause_at: Some(e.ts.clone()),
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(r.session_id, None, "never bound: no session id");
         assert_eq!(r.removed_by, "fno-py");
         assert_eq!(
-            r.verb.as_deref(),
+            r.command.as_deref(),
             Some("fno-py agents spawn --substrate pane --team")
         );
         assert_eq!(

@@ -45,9 +45,9 @@ def lineage_of(registry_path, agent_name: str) -> list:
 def find_rows(since: str) -> tuple[list, bool, str]:
     """Retasked dispatch_spawned rows in the window, via the fno binary.
 
-    The verb reads every journal the writers write, so the probe ships no
+    The command reads every journal the writers write, so the probe ships no
     second resolver and cannot disagree with it about where rows live.
-    Returns (rows, truncated, err): truncated means the verb collected
+    Returns (rows, truncated, err): truncated means the command collected
     fewer rows than it matched, so a verdict drawn from rows alone could
     miss the one lineaged row.
     """

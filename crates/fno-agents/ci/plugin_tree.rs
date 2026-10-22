@@ -185,8 +185,8 @@ fn build(source: &Path, dest: &Path, sha: &str, version: &str) -> Result<()> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
-        [verb, root] if verb == "check" => check(Path::new(root)).map(|_| ()),
-        [verb, source, dest, sha, version] if verb == "build" => {
+        [command, root] if command == "check" => check(Path::new(root)).map(|_| ()),
+        [command, source, dest, sha, version] if command == "build" => {
             build(Path::new(source), Path::new(dest), sha, version)
         }
         _ => Err("usage: plugin-tree build SOURCE DEST SHA VERSION | check TREE".into()),

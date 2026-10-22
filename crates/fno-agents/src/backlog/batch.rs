@@ -1,4 +1,4 @@
-//! `fno backlog batch <verb>` - the batch lane's state, ship and metrics
+//! `fno backlog batch <command>` - the batch lane's state, ship and metrics
 //! doors (the wheel backlog/batch.py). State lives in `<canonical>/.fno/
 //! batches/<domain>.json` under one flock per domain; the daemon shells
 //! `prepare` before dispatch and `ship-closeable` after each tick, and a
@@ -14,20 +14,20 @@ pub(crate) const BATCH_HELP: &str = include_str!("batch_help.txt");
 
 const BATCHES_DIRNAME: &str = ".fno/batches";
 
-/// `fno backlog batch <verb>`: dispatch one tail. An unknown verb prints the
+/// `fno backlog batch <command>`: dispatch one tail. An unknown command prints the
 /// usage to stderr and exits 2, the same face the wheel's typer app wore.
 pub fn run_batch(tail: &[String]) -> i32 {
-    let (verb, rest) = match tail.split_first() {
+    let (command, rest) = match tail.split_first() {
         Some((v, r)) => (v.as_str(), r),
         None => {
             print!("{BATCH_HELP}");
             return 0;
         }
     };
-    match verb {
+    match command {
         "open" => batch_open(rest),
         "join" => batch_join(rest),
-        "close" | "abandon" => batch_retired(rest, verb),
+        "close" | "abandon" => batch_retired(rest, command),
         "ship" => batch_ship(rest),
         "prepare" => batch_prepare(rest),
         "ship-closeable" => batch_ship_closeable(rest),
@@ -38,7 +38,7 @@ pub fn run_batch(tail: &[String]) -> i32 {
             0
         }
         _ => {
-            eprintln!("No such command '{verb}'.");
+            eprintln!("No such command '{command}'.");
             eprint!("Try 'fno backlog batch --help' for help.\n");
             2
         }
@@ -48,17 +48,17 @@ pub fn run_batch(tail: &[String]) -> i32 {
 /// The tombstoned close/abandon words: the wheel retired them (tombstones.toml
 /// names ship as the only close path the daemon takes); the native lane
 /// refuses with the same redirect.
-fn batch_retired(rest: &[String], verb: &str) -> i32 {
+fn batch_retired(rest: &[String], command: &str) -> i32 {
     let domain = flag_value(rest, "--domain").or_else(|| flag_value(rest, "-d"));
     match domain {
         Some(d) => {
             eprintln!(
-                "'batch {verb}' is retired; `fno backlog batch ship --domain {d}` is the close path (it requeues members on failure)"
+                "'batch {command}' is retired; `fno backlog batch ship --domain {d}` is the close path (it requeues members on failure)"
             );
             1
         }
         None => {
-            eprintln!("'batch {verb}' is retired; `fno backlog batch ship` is the close path (it requeues members on failure)");
+            eprintln!("'batch {command}' is retired; `fno backlog batch ship` is the close path (it requeues members on failure)");
             1
         }
     }

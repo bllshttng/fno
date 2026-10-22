@@ -1,0 +1,1 @@
+{"op": "combos", "files": {"global": "[accounts]\ncombos = [\"x\"]\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"}, "expect": {"error": "config.providers.combos must be a mapping of name -> spec, got list (<TMP>/home/.fno/config.toml)"}}

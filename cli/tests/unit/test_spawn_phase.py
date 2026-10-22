@@ -1,4 +1,4 @@
-"""The spawn phase inference: label the work from the verb table, never a
+"""The spawn phase inference: label the work from the command table, never a
 guess (x-70e1, x-007c)."""
 
 from __future__ import annotations
@@ -6,9 +6,9 @@ from __future__ import annotations
 from fno.agents.spawn_phase import infer_phase
 
 
-def test_table_maps_every_shipped_work_verb_in_all_three_spellings():
-    """AC1: every shipped work verb labels its phase in the bare (/verb),
-    plugin (/fno:verb) and codex ($fno:verb) spellings."""
+def test_table_maps_every_shipped_work_command_in_all_three_spellings():
+    """AC1: every shipped work command labels its phase in the bare (/command),
+    plugin (/fno:command) and codex ($fno:command) spellings."""
     cases = [
         ("/blueprint x-1", "blueprint"), ("/fno:blueprint x-1", "blueprint"),
         ("$fno:blueprint x-1", "blueprint"),
@@ -24,7 +24,7 @@ def test_table_maps_every_shipped_work_verb_in_all_three_spellings():
 
 
 def test_prefixless_and_unmapped_payloads_stay_unlabeled():
-    """AC2: a first token with no leading / or $, an unmapped verb, or an
+    """AC2: a first token with no leading / or $, an unmapped command, or an
     empty message answers ""."""
     assert infer_phase("review this") == ""
     assert infer_phase("blueprint x-1") == ""

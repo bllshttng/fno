@@ -8,7 +8,7 @@
 //! with a child falls through to the classifier's own hold.
 //!
 //! New decision code lands in Rust (law d-b6cc1a2a). The shell bridge
-//! (`scripts/lib/worktree-occupancy.sh`) runs this verb before the
+//! (`scripts/lib/worktree-occupancy.sh`) runs this command before the
 //! grandfathered Python classifier and passes it only the pids this lane did
 //! not answer. Output rows share the classifier's exact TSV shape so the
 //! bridge's row-count check stays whole.

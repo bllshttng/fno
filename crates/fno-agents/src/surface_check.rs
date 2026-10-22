@@ -116,7 +116,7 @@ pub fn run_surface_check(args: &[String]) -> i32 {
     }
 
     let mut rest: &[String] = args;
-    // Tolerate a leading verb token (kill-check does the same).
+    // Tolerate a leading command token (kill-check does the same).
     if rest.first().map(String::as_str) == Some("surface-check") {
         rest = &rest[1..];
     }

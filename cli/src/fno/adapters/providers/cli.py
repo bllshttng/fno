@@ -1160,7 +1160,7 @@ def pick_account(
 ) -> PickVerdict:
     """Choose an account with headroom that footnote can actually launch on.
 
-    The launchability filter is what keeps the verb honest: a managed account
+    The launchability filter is what keeps the command honest: a managed account
     that is not the slot occupant has no correct env overlay, so offering it as
     a choice would promise a spawn that cannot happen. Filtering it out here is
     also why exit 4 exists - "no launchable candidate" is a setup instruction,
@@ -1468,7 +1468,7 @@ def _slot_identity_findings(harness_kind: str, by_id: dict) -> list[dict]:
         stamped = managed.active_slot_id(harness_kind, root)
         bound = managed.identity_key(managed.record_principal(stamped, root)) if stamped else None
     except (OSError, managed.ManagedStoreError):
-        return []  # a diagnosis we could not make, not a crash in a read-only verb
+        return []  # a diagnosis we could not make, not a crash in a read-only command
     if bound is None:
         return []
     got = resolve_account_binding(None, harness=harness_kind, root=root, by_id=by_id)
@@ -1540,7 +1540,7 @@ def reconcile_slot_cmd(
 ) -> None:
     """Prove who holds a CLI's shared credential slot, and repair the store to match.
 
-    Deliberately NOT a `clear-taint` verb. It reads the live slot credential,
+    Deliberately NOT a `clear-taint` command. It reads the live slot credential,
     resolves its principal, and acts only when that principal binds to exactly
     one registered account - then it refreshes that account's snapshot, stamps
     it active, and clears any taint. Anything less than proof (endpoint

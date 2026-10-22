@@ -1,4 +1,4 @@
-"""High-level claim verbs.
+"""High-level claim commands.
 
 Seven operations on top of io + staleness:
 
@@ -55,7 +55,7 @@ class HolderMismatch(Exception):
 
 
 class ClaimValidationError(ValueError):
-    """Inputs to a verb failed validation (ttl out of range, key too long, ...)."""
+    """Inputs to a command failed validation (ttl out of range, key too long, ...)."""
 
 
 class ClaimContended(Exception):

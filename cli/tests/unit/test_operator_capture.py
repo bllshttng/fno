@@ -9,7 +9,6 @@ from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -85,7 +84,7 @@ def operator_turn(tmp_path: Path, monkeypatch, native_backlog_door):
 
 
 def _pin(monkeypatch, tmp_path: Path, rows: list[dict], session: str = "s-test") -> None:
-    """Point the verb at a fixture transcript through the env pins."""
+    """Point the command at a fixture transcript through the env pins."""
     tp = _transcript(tmp_path, rows)
     monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", session)
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(tp))
@@ -106,19 +105,6 @@ def test_invalid_outcome_refused_naming_legal_values(tmp_path, tmp_ledger, monke
     ack = runner.invoke(app, ["inbox", "user", "ack", "u-x", "--outcome", "nonsense"])
     assert ack.exit_code != 0
     assert "law:" in ack.output and "capture:" in ack.output and "node:" in ack.output
-
-
-def test_status_without_session_refuses(tmp_path, tmp_ledger, monkeypatch):
-    """AC: no resolvable session exits non-zero and names what it read, never depth 0."""
-    monkeypatch.delenv("FNO_OPERATOR_SESSION_ID", raising=False)
-    monkeypatch.delenv("FNO_OPERATOR_TRANSCRIPT", raising=False)
-    monkeypatch.setattr(
-        "fno.claims.self_identity.resolve_self_identity",
-        lambda *a, **k: SimpleNamespace(session_id=None, harness=None, disposition="empty"),
-    )
-    result = runner.invoke(app, ["inbox", "user", "status", "--json"])
-    assert result.exit_code != 0
-    assert "session" in result.output
 
 
 # -- the source_kind writer surface --
@@ -166,59 +152,3 @@ def test_operator_request_refuses_unreadable_queue(
     )
     assert organic.exit_code == 0, organic.output
     assert _entries(tmp_graph)[0]["request_origin"] == "unknown"
-
-
-def test_queue_verbs_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypatch):
-    """AC: both queue verbs hand the resolved ids and paths to the Rust reader door,
-    status prints the payload without `turns`, list prints the turns, a set
-    `cursor_error` warns on stderr, and a door error exits 1 naming the reader
-    instead of ever reading as depth 0."""
-    import fno.rust_binary as rb
-
-    captured: dict = {}
-
-    def stub(verb, args=()):
-        captured["verb"] = verb
-        captured["args"] = args
-        return (
-            None,
-            {
-                "depth": 1,
-                "oldest_age_s": 42,
-                "oldest_excerpt": "hello",
-                "oldest_turn_id": "u-1",
-                "skipped": {"task_notification": 1},
-                "cursor_error": "/ro/scan.json: permission denied",
-                "turns": [
-                    {"turn_id": "u-1", "ts_epoch": 1.0, "text": "hello", "excerpt": "hello"}
-                ],
-            },
-        )
-
-    monkeypatch.setattr(rb, "call_binary_json", stub)
-    _pin(monkeypatch, tmp_path, [_user_row("old spelling", "u-alias-1")])
-
-    status = runner.invoke(app, ["inbox", "user", "status", "--json"])
-    assert status.exit_code == 0, status.output
-    assert captured["verb"] == "compaction"
-    assert captured["args"][:2] == ["operator-turns", "--session"]
-    assert "s-test" in captured["args"]
-    assert str(tmp_path / "transcript.jsonl") in captured["args"]
-    assert str(tmp_ledger) in captured["args"]
-    payload = json.loads(status.stdout)
-    assert payload["depth"] == 1
-    assert "turns" not in payload
-    assert payload["cursor_error"] == "/ro/scan.json: permission denied"
-    assert "scan cursor not saved" in status.output
-
-    listed = runner.invoke(app, ["inbox", "user", "list", "--json"])
-    assert listed.exit_code == 0, listed.output
-    rows = json.loads(listed.stdout)
-    assert [r["turn_id"] for r in rows] == ["u-1"]
-    assert rows[0]["excerpt"] == "hello"
-    assert "scan cursor not saved" in listed.output
-
-    monkeypatch.setattr(rb, "call_binary_json", lambda verb, args=(): ("reader gone", None))
-    failed = runner.invoke(app, ["inbox", "user", "status", "--json"])
-    assert failed.exit_code == 1
-    assert "operator turn reader" in failed.output

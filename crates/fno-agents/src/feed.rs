@@ -1549,7 +1549,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
         page: Page::default(),
         pre: Prefilter::default(),
     };
-    let mut it = crate::client_verbs::expand_eq(rest).into_iter();
+    let mut it = crate::client_commands::expand_eq(rest).into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" | "-J" => args.json = true,
@@ -1624,7 +1624,7 @@ pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    crate::state_layout::place(&root, "graph.json")
+    crate::state_layout::graph_anchor(&root)
 }
 
 /// The agents journal's text filtered to `types`, bounded by the CLI's
@@ -1895,7 +1895,7 @@ pub(crate) fn collect_window(
     (rows, notes)
 }
 
-/// The `fno-agents feed` verb. A missing or unreadable store is not fatal: the
+/// The `fno-agents feed` command. A missing or unreadable store is not fatal: the
 /// rows the other store yielded still emit, with one stderr line naming the
 /// store skipped. Non-JSON output is one line per row, `ts kind node session title`.
 pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
@@ -2173,7 +2173,7 @@ mod tests {
         );
         assert_eq!(kinds(&newest_two), ["decision_recorded", "node_ended"]);
 
-        // The live shape: `decided_by` is the literal verb on every decision
+        // The live shape: `decided_by` is the literal command on every decision
         // row, and `closed_by` is a mechanism name on most closure rows.
         let questions = [
             r#"{"ts":"2026-09-02T17:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-1","question":"ask","node":"x-1111"}}"#,
@@ -2671,7 +2671,7 @@ mod tests {
             session_id: Some("00847995-e0db-47c2-ab5b-24468ba1a4f5".into()),
             node: Some("nd-aaaa".into()),
             removed_by: "gc-sweep".into(),
-            verb: None,
+            command: None,
             reason: Some("every named node done: nd-aaaa".into()),
             cause: Some("agent_row_reaped".into()),
             cause_at: Some("2026-09-06T10:00:00Z".into()),

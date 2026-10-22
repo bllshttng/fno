@@ -18,7 +18,7 @@
 //! shared root this reader exists to end.
 //!
 //! CLI surface (direct dispatch in `bin/client.rs`, not routable `fno agents`
-//! verbs, same reasoning as `kill-check`):
+//! commands, same reasoning as `kill-check`):
 //!   `fno-agents lead-state [--scope S | --session ID] [--root PATH]`
 //!     one JSON LeadState on stdout, exit 0; unknowns are encoded in the JSON.
 //!   `fno-agents lead-shape --scope S --shape pass|org [--session ID]`
@@ -574,18 +574,7 @@ pub fn set_manifest_fields(
             path.display()
         ));
     }
-    let lock_path = path.with_extension("md.lock");
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
-    let result = (|| {
+    with_manifest_lock(&path, || {
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let parsed = crate::loopcheck::parse_lead_manifest(&content)
@@ -648,13 +637,228 @@ pub fn set_manifest_fields(
         }
         fs::rename(&tmp, &path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
         Ok(())
-    })();
+    })
+}
+
+/// Run `f` under the `<manifest>.lock` flock every manifest writer shares
+/// (Python's `_manifest_lock`).
+pub(crate) fn with_manifest_lock<T>(
+    path: &Path,
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let lock_path = sibling(path, ".lock");
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&lock_path)
+        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
+    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let result = f();
     unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
     result
 }
 
+/// `path` with `suffix` appended to its whole name: `x.md` -> `x.md.lock`.
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// The fields a lead manifest is born with: Python `write_manifest`'s
+/// keywords. An absent field takes Python's default.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct ManifestSpec {
+    pub(crate) scope: String,
+    pub(crate) harness_session_id: Option<String>,
+    pub(crate) max_iterations: Option<u64>,
+    pub(crate) respawn_ceiling: Option<u64>,
+    pub(crate) owner_cwd: Option<String>,
+    pub(crate) shape: Option<String>,
+    pub(crate) role_level: Option<serde_json::Value>,
+    pub(crate) role_scope: Option<String>,
+    pub(crate) role_grantor: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) harness: Option<String>,
+}
+
+pub(crate) enum ManifestRefusal {
+    /// The write-once refusal; Python raises `LeadManifestExists` on it.
+    Exists(String),
+    Failed(String),
+}
+
+fn nonblank(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|v| !v.is_empty())
+}
+
+/// The frontmatter fields in write order. `respawn_count` and `wake_times`
+/// start at zero: a successor promotion is a new term generation. Only an
+/// absent `harness` falls back to the arming session's `FNO_HARNESS`.
+pub(crate) fn manifest_fields(
+    spec: &ManifestSpec,
+    fno_id: String,
+    created_at: String,
+) -> Vec<(&'static str, String)> {
+    let shape = match spec.shape.as_deref() {
+        Some(s @ ("pass" | "team")) => s,
+        _ => "pass",
+    };
+    let harness = nonblank(&spec.harness)
+        .map(str::to_owned)
+        .unwrap_or_else(|| std::env::var("FNO_HARNESS").unwrap_or_else(|_| "claude".into()));
+    let owner_cwd = nonblank(&spec.owner_cwd)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default()
+        });
+    let mut fields = vec![
+        ("fno_id", fno_id),
+        ("created_at", created_at),
+        ("scope", spec.scope.clone()),
+        ("shape", shape.to_owned()),
+        ("harness", harness),
+        (
+            "harness_session_id",
+            spec.harness_session_id.clone().unwrap_or_default(),
+        ),
+        (
+            "model",
+            spec.model.as_deref().unwrap_or("").trim().to_owned(),
+        ),
+        ("owner_cwd", owner_cwd),
+        (
+            "budget_max_iterations",
+            spec.max_iterations.unwrap_or(40).to_string(),
+        ),
+        ("respawn_count", "0".to_owned()),
+        (
+            "respawn_ceiling",
+            spec.respawn_ceiling.unwrap_or(4).to_string(),
+        ),
+        ("wake_times", String::new()),
+    ];
+    if let Some(role_scope) = nonblank(&spec.role_scope) {
+        // Python writes `str(role_level)`, so a missing level reads `None`.
+        let level = match &spec.role_level {
+            None | Some(serde_json::Value::Null) => "None".to_owned(),
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(other) => other.to_string(),
+        };
+        fields.push(("role_level", level));
+        fields.push(("role_scope", role_scope.to_owned()));
+        fields.push((
+            "role_grantor",
+            nonblank(&spec.role_grantor).unwrap_or("human").to_owned(),
+        ));
+    }
+    fields
+}
+
+pub(crate) fn render_manifest(fields: &[(&str, String)]) -> String {
+    let mut body = String::from("---\n");
+    for (key, value) in fields {
+        let value = if value.as_str() != value.trim() || value.contains('"') {
+            crate::claude_ask::json_string_ascii(value)
+        } else {
+            value.clone()
+        };
+        body.push_str(&format!("{key}: {value}\n"));
+    }
+    body.push_str("---\n");
+    body
+}
+
+/// Write a lead manifest once, or replace it when `force`. The caller holds
+/// the manifest lock when the file is a live scope's.
+pub(crate) fn write_lead_manifest(
+    path: &Path,
+    spec: &ManifestSpec,
+    force: bool,
+) -> Result<Vec<(&'static str, String)>, ManifestRefusal> {
+    if path.exists() && !force {
+        return Err(ManifestRefusal::Exists(format!(
+            "{} already exists; the lead manifest is write-once. Pass --force to re-init deliberately.",
+            path.display()
+        )));
+    }
+    let fno_id = crate::identity::mint_fno_id().map_err(ManifestRefusal::Failed)?;
+    let created_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let fields = manifest_fields(spec, fno_id, created_at);
+    let failed = |e: std::io::Error| ManifestRefusal::Failed(format!("{}: {e}", path.display()));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(failed)?;
+    }
+    let tmp = sibling(path, ".tmp");
+    fs::write(&tmp, render_manifest(&fields)).map_err(failed)?;
+    fs::rename(&tmp, path).map_err(failed)?;
+    Ok(fields)
+}
+
+/// Only a full 8-4-4-4-12 session uuid matches a transcript basename, which
+/// is what the stop hook's owner guard compares the manifest id against.
+fn full_session_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// `config.lead.enabled`, false when unset or unreadable like every gate here.
+pub(crate) fn lead_loop_enabled(cwd: &Path) -> bool {
+    crate::agents_config::config_value_deep(cwd, &["lead", "enabled"])
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Refresh one scope's manifest at the moment a role becomes authoritative
+/// (Python `arm_lead_manifest`). `Ok(None)` when the lead loop is off: the
+/// stale manifest is removed, best-effort.
+pub(crate) fn arm_manifest(
+    root: &Path,
+    spec: &ManifestSpec,
+    lead_enabled: bool,
+) -> Result<Option<PathBuf>, String> {
+    if !lead_enabled {
+        if let Ok(path) = manifest_path(root, &spec.scope) {
+            let _ = with_manifest_lock(&path, || Ok(fs::remove_file(&path)));
+        }
+        return Ok(None);
+    }
+    let session = spec.harness_session_id.as_deref().unwrap_or("");
+    if session.trim().is_empty() {
+        return Err("a promoted lead manifest needs a harness session id".into());
+    }
+    if !full_session_uuid(session) {
+        return Err(format!(
+            "a promoted lead manifest needs a full session uuid, got {}: the stop hook matches \
+             the manifest id against the transcript basename, and a short id or row name matches \
+             no transcript, so the gate would arm dead. Re-arm with fno agents role once the \
+             session has self-identified.",
+            crate::claude_ask::py_repr(session)
+        ));
+    }
+    let path = manifest_path(root, &spec.scope)?;
+    with_manifest_lock(&path, || {
+        write_lead_manifest(&path, spec, true).map_err(|refusal| match refusal {
+            ManifestRefusal::Exists(m) | ManifestRefusal::Failed(m) => m,
+        })?;
+        let _ = fs::remove_file(path.with_extension("cancelled"));
+        Ok(())
+    })?;
+    Ok(Some(path))
+}
+
 /// Rewrite `shape` in place on one scope's existing manifest. A thin caller
-/// of [`set_manifest_fields`]; kept because the CLI verb and its tests key
+/// of [`set_manifest_fields`]; kept because the CLI command and its tests key
 /// on this name and its `Ok(new_value)` return.
 pub fn set_manifest_shape(
     root: &Path,
@@ -810,8 +1014,8 @@ pub fn run_lead_term(args: &[String]) -> i32 {
     0
 }
 
-fn usage(verb: &str) -> String {
-    format!("fno-agents {verb}: [--scope S | --session ID] [--root PATH] [--registry PATH]")
+fn usage(command: &str) -> String {
+    format!("fno-agents {command}: [--scope S | --session ID] [--root PATH] [--registry PATH]")
 }
 
 /// One orphan team for the org sweep: a manifest that carries a team no
@@ -1132,8 +1336,8 @@ pub fn run_lead_state(args: &[String]) -> i32 {
 }
 
 /// `fno-agents lead-shape [--term SPEC]`: a `--term` flag is a term
-/// declaration wearing the same registered verb (the client-actions shrink
-/// law bars a second verb for this: an argument of an existing action,
+/// declaration wearing the same registered command (the client-actions shrink
+/// law bars a second command for this: an argument of an existing action,
 /// never a new action).
 pub fn run_lead_shape_or_term(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--term") {
@@ -1881,5 +2085,86 @@ mod tests {
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The bytes Python's writer produced: twelve fields in order, the role
+    /// trio when a scope is stamped, JSON quoting only for edge whitespace
+    /// or a quote. The loop's parser reads the file back, and a second
+    /// write without force refuses.
+    #[test]
+    fn manifest_bytes_match_the_python_writer_and_refuse_a_rewrite() {
+        let spec = ManifestSpec {
+            scope: "x-a".into(),
+            harness_session_id: Some("s-1".into()),
+            owner_cwd: Some("/repo".into()),
+            model: Some(" opus ".into()),
+            harness: Some("codex".into()),
+            role_level: Some(serde_json::json!(2)),
+            role_scope: Some("x-a".into()),
+            role_grantor: Some("say \"hi\"".into()),
+            ..Default::default()
+        };
+        let fields = manifest_fields(&spec, "id-1".into(), "2026-10-22T00:00:00Z".into());
+        assert_eq!(
+            render_manifest(&fields),
+            "---\nfno_id: id-1\ncreated_at: 2026-10-22T00:00:00Z\nscope: x-a\nshape: pass\n\
+             harness: codex\nharness_session_id: s-1\nmodel: opus\nowner_cwd: /repo\n\
+             budget_max_iterations: 40\nrespawn_count: 0\nrespawn_ceiling: 4\nwake_times: \n\
+             role_level: 2\nrole_scope: x-a\nrole_grantor: \"say \\\"hi\\\"\"\n---\n"
+        );
+        let dir = tmp("manifest-write-once");
+        let path = dir.join("leads").join("x-a.md");
+        let written = write_lead_manifest(&path, &spec, false).ok().unwrap();
+        let parsed =
+            crate::loopcheck::parse_lead_manifest(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.fno_id, written[0].1);
+        assert_eq!(parsed.harness.as_deref(), Some("codex"));
+        assert!(matches!(
+            write_lead_manifest(&path, &spec, false),
+            Err(ManifestRefusal::Exists(_))
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Arming refuses an id no transcript can match and writes nothing. A
+    /// re-arm replaces the session and fno_id in place and clears the
+    /// cancel signal. A disabled lead loop removes the manifest.
+    #[test]
+    fn arm_refuses_short_ids_rearms_in_place_and_disarms_when_off() {
+        let root = tmp("arm-manifest");
+        let spec = |session: &str| ManifestSpec {
+            scope: "x-a".into(),
+            harness_session_id: Some(session.into()),
+            owner_cwd: Some("/repo".into()),
+            ..Default::default()
+        };
+        let path = manifest_path(&root, "x-a").unwrap();
+        for bogus in ["7c5dcf5d", "t-x1069-glm", ""] {
+            let err = arm_manifest(&root, &spec(bogus), true).unwrap_err();
+            assert!(
+                err.contains("transcript basename") || err.contains("harness session id"),
+                "{err}"
+            );
+        }
+        assert!(!path.exists());
+        let read = |p: &Path| {
+            crate::loopcheck::parse_lead_manifest(&fs::read_to_string(p).unwrap()).unwrap()
+        };
+        let first = "11111111-1111-4111-8111-111111111111";
+        let second = "22222222-2222-4222-8222-222222222222";
+        let armed = arm_manifest(&root, &spec(first), true).unwrap().unwrap();
+        let first_id = read(&armed).fno_id;
+        fs::write(path.with_extension("cancelled"), "").unwrap();
+        assert_eq!(
+            arm_manifest(&root, &spec(second), true).unwrap(),
+            Some(path.clone())
+        );
+        let rearmed = read(&path);
+        assert_eq!(rearmed.harness_session_id.as_deref(), Some(second));
+        assert_ne!(rearmed.fno_id, first_id);
+        assert!(!path.with_extension("cancelled").exists());
+        assert_eq!(arm_manifest(&root, &spec(second), false).unwrap(), None);
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

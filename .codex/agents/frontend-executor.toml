@@ -5,7 +5,7 @@ description = "Run frontend readiness passes, classify findings, and report defe
 sandbox_mode = "workspace-write"
 nickname_candidates = ["frontend-executor", "frontendexecutor", "executor"]
 developer_instructions = """
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 You are **frontend-executor** — the full /impeccable pipeline executor. Your
 job is to synthesize a shape brief from the design doc and per-task AC list,
 select the appropriate /impeccable stages for this task, run them iteratively

@@ -5,7 +5,7 @@
 //! session is in while it pushes fixes, so "retries exhausted" read as
 //! "forgotten until a human noticed": six open PRs parked in one afternoon,
 //! with 17 finished delivery records cluttering the list above them.
-//! This verb is the ONE reader that can change a park record: `list` buckets
+//! This command is the ONE reader that can change a park record: `list` buckets
 //! every parked row (open / finished / foreign), `unpark` clears one or all
 //! open rows, `sweep` un-parks an open row whose PR head moved since it was
 //! parked or whose park passed 24 hours, and marks finished rows handled.
@@ -33,7 +33,7 @@ const HANDLED: &str = "handled";
 const BY_SWEEP: &str = "sweep";
 const BY_MANUAL: &str = "manual";
 
-/// The files this verb reads and writes. Paths are injectable so the Python
+/// The files this command reads and writes. Paths are injectable so the Python
 /// caller can pass its config-resolved ones; the daemon uses [`Paths::from_home`].
 #[derive(Debug, Clone)]
 pub(crate) struct Paths {
@@ -106,7 +106,7 @@ impl Paths {
     }
 }
 
-/// Everything the verb needs from the world, injectable so the sweep is
+/// Everything the command needs from the world, injectable so the sweep is
 /// testable without a network and the list without a graph.
 pub(crate) struct Ctx {
     pub paths: Paths,
@@ -642,7 +642,7 @@ pub(crate) fn now_secs() -> u64 {
 // ---------------------------------------------------------------------------
 
 /// `fno-agents pr-park list|unpark|sweep`. Binary-direct behind
-/// `fno do pr watch`, like `pr-heal`: not a routable `fno agents` verb.
+/// `fno do pr watch`, like `pr-heal`: not a routable `fno agents` command.
 pub fn run(args: &[String]) -> i32 {
     let json_out = crate::json_output::requested(args);
     let mut all_open = false;

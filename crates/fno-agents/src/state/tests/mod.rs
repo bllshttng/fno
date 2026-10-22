@@ -706,7 +706,7 @@ fn update_registry_accounts_for_a_removed_row() {
     let receipt: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&receipt_path).unwrap()).unwrap();
     assert_eq!(receipt["row_name"], "dropped");
-    // The receipt names its writer (the argv verb); the event's
+    // The receipt names its writer (the argv command); the event's
     // `remover` answers the separate process-name question it always did.
     assert!(
         receipt["removed_by"]
@@ -959,7 +959,7 @@ fn a_deployed_binary_under_a_git_managed_home_still_writes() {
 #[test]
 fn update_registry_refuses_a_source_ahead_bump_of_the_shared_registry() {
     // AC8-CON: `registry.json` has writers in two languages, so a guard on
-    // one leaves the daemon, mux, and every client verb still able to
+    // one leaves the daemon, mux, and every client command still able to
     // poison the file. This test binary genuinely runs from
     // `<checkout>/target/...`, so it IS the source-run case; pointing
     // FNO_AGENTS_HOME at a tmp dir outside the checkout makes that dir the

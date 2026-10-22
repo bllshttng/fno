@@ -818,7 +818,7 @@ def resolve_owned_identity(
     ``collide(harness, session_id) -> owner | None`` reports when a live
     registry row already owns an id (two live sessions cannot share one);
     default ``None`` skips the check. Both default off so this module stays
-    dependency-free; the consuming verb injects the real prover and collider.
+    dependency-free; the consuming command injects the real prover and collider.
 
     Resolution order: proof beats collision - a proven marker wins without
     consulting the collider, in both branches; collision then rejects ids a

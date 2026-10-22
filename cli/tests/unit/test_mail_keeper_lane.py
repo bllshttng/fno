@@ -4,12 +4,12 @@ The delivery-matrix file pins the whole name lane GIVEN an injector's answer;
 this file adds the third transport. A keeper-hosted thread has neither lane-A
 socket (claude control.sock, codex app-server), so before x-0ea6 it live-missed
 on every rung and demoted to durable with a live thread right there. The
-keeper's own unix socket is its transport, resolved by the verb from the
+keeper's own unix socket is its transport, resolved by the command from the
 registry row the send already resolved the recipient from.
 
 Test doubles sit at the same boundaries as test_mail_delivery_matrix.py: the
-injector boundary for the ladder, and subprocess for the verb itself. These
-tests pin what the CLI does GIVEN the verb's answer, never the keeper's own
+injector boundary for the ladder, and subprocess for the command itself. These
+tests pin what the CLI does GIVEN the command's answer, never the keeper's own
 correctness (that lives in the Rust suite's mail_inject tests).
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _send(monkeypatch, session, injector, capsys):
     """Drive the name-lane choke point directly with a resolved recipient.
 
     The registry row behind the session id is a keeper THREAD row: a socket
-    under mux/threads, the predicate both the ladder guard and the verb read.
+    under mux/threads, the predicate both the ladder guard and the command read.
     """
     from types import SimpleNamespace
 
@@ -92,7 +92,7 @@ def _send(monkeypatch, session, injector, capsys):
     return recorded, capsys.readouterr()
 
 
-def test_a_keeper_recipient_routes_to_the_keeper_verb_and_reads_delivered(
+def test_a_keeper_recipient_routes_to_the_keeper_command_and_reads_delivered(
     mailbox, monkeypatch, capsys
 ):
     """AC1: the receipt reads delivered, never queued (durable), never typed."""
@@ -114,7 +114,7 @@ def test_a_keeper_recipient_routes_to_the_keeper_verb_and_reads_delivered(
     assert "typed (pane" not in out.out
 
 
-def test_a_keeper_miss_demotes_durably_naming_the_verb_reason(
+def test_a_keeper_miss_demotes_durably_naming_the_command_reason(
     mailbox, monkeypatch, capsys
 ):
     """AC2: an unreachable keeper demotes honestly and states why. The roster
@@ -184,16 +184,16 @@ def test_a_pane_hosted_keeper_lane_harness_keeps_the_pane_rung(
 
 
 # ---------------------------------------------------------------------------
-# The verb boundary itself: argv shape and the reason side-channel.
+# The command boundary itself: argv shape and the reason side-channel.
 # ---------------------------------------------------------------------------
 
 
-def _fake_verb(monkeypatch, stdout: str):
+def _fake_command(monkeypatch, stdout: str):
     calls: list[list[str]] = []
     real_run = subprocess.run
 
     def _run(argv, **_k):
-        # Only the verb's own call is captured; the registry read that gates
+        # Only the command's own call is captured; the registry read that gates
         # bus-only policy shells out for its paths and runs unimpeded.
         if "mail-inject" not in argv:
             return real_run(argv, **_k)
@@ -205,18 +205,18 @@ def _fake_verb(monkeypatch, stdout: str):
     return calls
 
 
-def test_the_keeper_verb_argv_carries_the_hosted_harness_and_no_delay(monkeypatch):
-    """The verb defaults --enter-delay-ms from the hosted harness's own
+def test_the_keeper_command_argv_carries_the_hosted_harness_and_no_delay(monkeypatch):
+    """The command defaults --enter-delay-ms from the hosted harness's own
     contract row, so the Python side passes no delay: one fact, one source."""
     import fno.agents.dispatch as d
 
-    calls = _fake_verb(monkeypatch, '{"delivered": true, "reason": "delivered"}')
+    calls = _fake_command(monkeypatch, '{"delivered": true, "reason": "delivered"}')
     assert d._mail_inject_keeper(KEEPER_SID, "<fno_mail>hi</fno_mail>", harness="pi")
     argv = calls[0]
     assert argv[:2] == ["/fake/fno-agents", "mail-inject"]
     assert argv[argv.index("--session") + 1] == KEEPER_SID
     assert argv[argv.index("--harness") + 1] == "pi"
-    assert "--enter-delay-ms" not in argv, "the verb resolves the delay itself"
+    assert "--enter-delay-ms" not in argv, "the command resolves the delay itself"
 
 
 def test_a_bus_only_keeper_recipient_is_refused_before_the_binary(monkeypatch):

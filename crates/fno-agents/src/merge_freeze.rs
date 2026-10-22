@@ -1,6 +1,6 @@
 //! The merge freeze: one record with a subject, a repo and a pin (a candidate
 //! sha, named PRs, or both), written by the team through the `authorized-merge`
-//! verb's op transport (`{"op": "freeze-set"|"freeze-clear"|"freeze-check",
+//! command's op transport (`{"op": "freeze-set"|"freeze-clear"|"freeze-check",
 //! ...}`).
 //!
 //! The merge owner reads it as a probe in its decision walk, so every caller

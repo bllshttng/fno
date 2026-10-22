@@ -46,7 +46,7 @@ def test_code_review_is_self_servable():
 
     No per-harness map: the owned lane is the invocation on every harness,
     which is the portability the sigma-retirement recharter bought. The
-    harness's own native verb (claude /code-review, codex /review) remains
+    harness's own native command (claude /code-review, codex /review) remains
     the operator's explicit choice (docs/architecture/review-lanes.md), never
     something this table recommends, since a recommendation depending on a
     harness transport is the fragile part the recharter removed."""

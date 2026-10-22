@@ -31,7 +31,7 @@ pub(super) struct FleetArms {
     fleet_page: crate::fleet_page::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
-    provider_cap: crate::provider_cap_verbs::Arm,
+    provider_cap: crate::provider_cap_commands::Arm,
     usage_refresh: crate::usage_refresh::Arm,
     slot_cutover: crate::slot_cutover::Arm,
     attention: crate::attention_arm::Arm,
@@ -65,10 +65,10 @@ pub(super) struct FleetArms {
     // probe, so it gets the same one-in-flight discipline as its neighbors.
     gc_in_flight: Arc<std::sync::atomic::AtomicBool>,
     // Stale-question reconcile: same one-in-flight discipline as the sweeps
-    // beside it. The verb dedupes on outcome identity, so an extra run is a
+    // beside it. The command dedupes on outcome identity, so an extra run is a
     // no-op; the gate exists so a slow fleet probe never stacks.
     stale_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
-    // Park sweep: same one-in-flight discipline. The verb is idempotent on a
+    // Park sweep: same one-in-flight discipline. The command is idempotent on a
     // store nobody touched, so an extra run is a no-op; the gate exists so a
     // slow head probe never stacks.
     park_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
@@ -78,7 +78,7 @@ pub(super) struct FleetArms {
     sandbox_ingest_in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
-/// The merged-cleanup verb command the sweep arm runs, shared by the apply
+/// The merged-cleanup command the sweep arm runs, shared by the apply
 /// pass and the orders probe's dry-run read.
 fn cleanup_command(home: &crate::paths::AgentsHome, root: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
@@ -110,7 +110,7 @@ impl FleetArms {
             fleet_page: crate::fleet_page::Arm::new(opts.agents_config_cwd.clone()),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
-            provider_cap: crate::provider_cap_verbs::Arm::new(opts.agents_config_cwd.clone()),
+            provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
             usage_refresh: crate::usage_refresh::Arm::new(opts.agents_config_cwd.clone()),
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
             attention: crate::attention_arm::Arm::new(opts.agents_config_cwd.clone()),
@@ -209,8 +209,8 @@ impl FleetArms {
                 let now = now_epoch_secs();
                 // The orders probe and the report pass read the same repo in
                 // the same window: the probe's output replays as the report
-                // instead of the verb running twice. Misses (a probe that
-                // never ran the verb) and apply passes still execute.
+                // instead of the command running twice. Misses (a probe that
+                // never ran the command) and apply passes still execute.
                 let probe_runs: std::cell::RefCell<
                     std::collections::HashMap<String, (Option<i32>, String, String)>,
                 > = std::cell::RefCell::new(Default::default());
@@ -227,7 +227,7 @@ impl FleetArms {
                             return true.into();
                         }
                         // An outside merge (`gh pr merge`, the web button)
-                        // mints no request. The verb's own dry-run judgment
+                        // mints no request. The command's own dry-run judgment
                         // is the same merge proof in git form: an eligible
                         // tree reads merged-or-done and clean, and the
                         // --apply pass re-judges every guard per tree.
@@ -243,7 +243,7 @@ impl FleetArms {
                                     .insert(root.to_string(), out.clone());
                                 worktree_sweep::apply_authority(false, Some(out.1.as_str())).into()
                             }
-                            // A probe that cannot run the verb is an
+                            // A probe that cannot run the command is an
                             // unreadable order probe: skip the repo and let
                             // the sweep emit, never collapse into report-only.
                             Err(error) => worktree_sweep::WorktreeSweepOrderRead {
@@ -309,7 +309,7 @@ impl FleetArms {
         crate::fleet_page::maybe_tick(&self.fleet_page, ctx.home.clone());
         crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
-        crate::provider_cap_verbs::maybe_tick(&self.provider_cap, ctx.home.clone());
+        crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());
         // Every account's usage re-measured inside the cache TTL.
         crate::usage_refresh::maybe_tick(&self.usage_refresh);
         crate::slot_cutover::maybe_tick(&self.slot_cutover, ctx.home.clone());

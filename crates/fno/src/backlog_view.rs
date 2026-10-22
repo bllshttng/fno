@@ -380,7 +380,7 @@ pub fn board_scope_reason() -> String {
 }
 
 /// The one card label: `<id> <slug>`, id FIRST - the id is the handle every
-/// verb takes, so it leads and the slug reads after it. An empty slug renders
+/// command takes, so it leads and the slug reads after it. An empty slug renders
 /// the id alone. Every client paint site folds through this so the rows
 /// cannot drift apart.
 pub fn card_label(c: &crate::proto::BacklogCard) -> String {

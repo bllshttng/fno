@@ -2,7 +2,7 @@
 
 The check-in body filters the board to open rows, so a freshly promoted lead
 walks past the done children that record what its epic already established and
-re-measures them. `fno agents lead init` is the promoting verb, so its output
+re-measures them. `fno agents lead init` is the promoting command, so its output
 names the settled children as titles. Nothing prints when none exist: an
 absent section is the positive control, never an empty one.
 """
@@ -49,6 +49,7 @@ def _init(team, scope: str):
     )
 
 
+@pytest.mark.dev_build
 def test_promoting_output_names_the_settled_children(team) -> None:
     _seed(
         [

@@ -444,6 +444,13 @@ pub(crate) fn dispatch_with(
     match crate::state::update_registry(&registry_path, |reg| {
         if reg.find(name).is_some() {
             false
+        } else if let Some(row) = reg.find_by_session_mut(harness, &session_id) {
+            // The harness's session-start hook registered this minted session
+            // first, under its short id and with no lineage. Claim that row
+            // for the spawn instead of pushing a second row the identity check
+            // would refuse.
+            *row = adopt_self_registered(std::mem::take(row), entry.clone());
+            true
         } else {
             reg.entries.push(entry.clone());
             true
@@ -473,7 +480,7 @@ pub(crate) fn dispatch_with(
     // paint, and holding the name that long would queue every other
     // same-name operation behind it.
     drop(_lock);
-    let rendered = crate::provider::render_verb_seed(message, harness);
+    let rendered = crate::provider::render_command_seed(message, harness);
     if !rendered.trim().is_empty() {
         let ready_marker: &[u8] = if arm.ready_marker.is_empty() {
             DEFAULT_READY_MARKER.as_bytes()
@@ -494,8 +501,8 @@ pub(crate) fn dispatch_with(
         }
     }
 
-    crate::client_verbs::append_agents_event(
-        &crate::client_verbs::trace_events_path(home),
+    crate::client_commands::append_agents_event(
+        &crate::client_commands::trace_events_path(home),
         "agent_ask_done",
         &[
             ("stage", Value::String("dispatch".into())),
@@ -507,8 +514,8 @@ pub(crate) fn dispatch_with(
 
     // The receipt: the created-spawn shape the CLI prints, byte-parity JSON
     // (the claude arm's `json_string_ascii` mirrors the Python `json.dumps`
-    // values). A verb-rendered seed carries the effective message and the
-    // pending verb-fired word; the verb-marker chain stays Python until the
+    // values). A command-rendered seed carries the effective message and the
+    // pending command-fired word; the command-marker chain stays Python until the
     // dispatch_spawn port.
     let mut receipt = format!(
         "{{\"name\": {}, \"short_id\": {}, \"harness\": {}, \"status\": \"live\"",
@@ -518,7 +525,7 @@ pub(crate) fn dispatch_with(
     );
     if rendered != message {
         receipt.push_str(&format!(
-            ", \"effective_message\": {}, \"verb_fired\": \"pending\"",
+            ", \"effective_message\": {}, \"command_fired\": \"pending\"",
             crate::claude_ask::json_string_ascii(&rendered)
         ));
     }
@@ -576,6 +583,27 @@ fn build_keeper_thread_entry(
             Some(session_id.to_string()),
             crate::spawn_lineage::ambient_lineage(),
         )
+    }
+}
+
+/// The spawn's row, with what the hook-registered row for the same session
+/// already knew carried over: its short id, creation time, and any model,
+/// account or node the spawn does not set.
+fn adopt_self_registered(existing: RegistryEntry, spawned: RegistryEntry) -> RegistryEntry {
+    RegistryEntry {
+        short_id: existing.short_id,
+        created_at: if existing.created_at.is_empty() {
+            spawned.created_at
+        } else {
+            existing.created_at
+        },
+        provider: spawned.provider.or(existing.provider),
+        model: spawned.model.or(existing.model),
+        model_basis: spawned.model_basis.or(existing.model_basis),
+        effort: spawned.effort.or(existing.effort),
+        node: spawned.node.or(existing.node),
+        account_record_id: spawned.account_record_id.or(existing.account_record_id),
+        ..spawned
     }
 }
 
@@ -1118,6 +1146,64 @@ mod tests {
         assert!(killed_ref.lock().unwrap().contains(&4242));
         let reg = crate::state::load_registry(&home.registry_json()).unwrap();
         assert_eq!(reg.entries.len(), 1);
+    }
+
+    /// The session-start hook can register the minted session under its short
+    /// id before the spawn writes its row. The spawn takes that row over: the
+    /// name and lineage land on it, no second row appears, and exit is 0.
+    #[test]
+    fn a_spawn_takes_over_the_row_the_session_hook_registered_first() {
+        let (dir, home) = home();
+        let seams = Seams {
+            mint: &|_h, _cwd, _req| Ok(SID.to_string()),
+            probe: &|_s| {
+                KeeperProbe::Answered(serde_json::json!({
+                    "keeper_pid": 4242,
+                    "child_pid": 4243,
+                    "argv": ["pi", "--session-id", SID],
+                }))
+            },
+            launch: &|_spec| {
+                let hook_row = RegistryEntry {
+                    name: SID[..8].to_string(),
+                    short_id: SID[..8].to_string(),
+                    harness: Some("pi".into()),
+                    harness_session_id: Some(SID.to_string()),
+                    model: Some("hook-model".into()),
+                    cwd: "/tmp".into(),
+                    created_at: "2026-10-20T00:00:00Z".into(),
+                    ..Default::default()
+                };
+                crate::state::update_registry(&home.registry_json(), |reg| {
+                    reg.entries.push(hook_row.clone());
+                })
+                .unwrap();
+                Ok(4242)
+            },
+            kill: &|_pid| {},
+            worker_bin: Path::new(fake_worker_bin()),
+        };
+        let params = json!({"substrate": "thread"});
+        let outcome = dispatch_with(
+            &home,
+            "pi",
+            WK,
+            "",
+            "tester",
+            dir.path(),
+            &[],
+            &params,
+            &seams,
+        );
+        assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
+        let reg = crate::state::load_registry(&home.registry_json()).unwrap();
+        assert_eq!(reg.entries.len(), 1);
+        let row = read_row(&home, WK).expect("the hook row now carries the spawn name");
+        assert_eq!(row.short_id, SID[..8]);
+        assert_eq!(row.origin.as_deref(), Some("spawn"));
+        assert_eq!(row.model.as_deref(), Some("hook-model"));
+        assert_eq!(row.created_at, "2026-10-20T00:00:00Z");
+        assert_eq!(row.pid, Some(4242));
     }
 
     /// Headless and once refuse with the row's own sentence before anything

@@ -479,7 +479,7 @@ pub fn run(args: &[String]) -> i32 {
                     "model",
                     "provider",
                     "effort",
-                    "dispatch_verb",
+                    "dispatch_command",
                     "dispatch_brief",
                     "mission_id",
                     "mission_wave",

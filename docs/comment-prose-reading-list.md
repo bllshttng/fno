@@ -113,7 +113,7 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.25x | 9 | 4 | `cli/src/fno/config/__init__.py:2364` | `_coerce_enabled` |
 | 2.25x | 9 | 4 | `cli/src/fno/events/__init__.py:74` | `_resolve_manifest_path` |
 | 2.25x | 27 | 12 | `cli/src/fno/graph/store.py:288` | `_normalize_lock_fields` |
-| 2.25x | 9 | 4 | `cli/src/fno/lint_verb_ratchet.py:194` | `_locate_rust_front` |
+| 2.25x | 9 | 4 | `cli/src/fno/lint_command_ratchet.py:194` | `_locate_rust_front` |
 | 2.25x | 9 | 4 | `cli/src/fno/paths.py:1173` | `resolve_plugin_script_durable` |
 | 2.25x | 9 | 4 | `cli/src/fno/roles/context.py:48` | `catalog_revision` |
 | 2.25x | 9 | 4 | `cli/src/fno/rust_binary.py:58` | `_sibling_binary` |
@@ -334,7 +334,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.38x | 11 | 8 | `cli/src/fno/retro/cli.py:178` | `_current_repo_slug` |
 | 1.36x | 34 | 25 | `cli/src/fno/agents/harnesses/codex.py:907` | `remove_session_index_entry` |
 | 1.36x | 19 | 14 | `cli/src/fno/graph/types.py:52` | `_derive_status` |
-| 1.36x | 15 | 11 | `cli/src/fno/inbox/settings.py:31` | `_load_inbox_config` |
 | 1.36x | 15 | 11 | `cli/src/fno/inbox/store.py:224` | `inbox_dir_for` |
 | 1.36x | 19 | 14 | `cli/src/fno/plan/cli.py:410` | `rung` |
 | 1.35x | 23 | 17 | `cli/src/fno/backlog/advance.py:1339` | `_seed_lane_local_settings` |

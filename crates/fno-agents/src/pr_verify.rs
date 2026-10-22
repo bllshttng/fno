@@ -1,6 +1,6 @@
 //! `fno-agents pr-verify --kind merged|reviews`: the two external-outcome
 //! audits the auto-merge / external-review gates read, ported from
-//! `cli/src/fno/pr/_verify.py`, which this verb replaces.
+//! `cli/src/fno/pr/_verify.py`, which this command replaces.
 //!
 //! `--kind merged` audits the GitHub merge-state: records the merge into the
 //! state-file frontmatter when MERGED, blocks with a reason when the merge
@@ -205,7 +205,7 @@ fn verify_merged(
         return 0;
     }
 
-    // This remediation path merges directly, so the sanctioned merge verb
+    // This remediation path merges directly, so the sanctioned merge command
     // cannot protect it. Read the same plan hold the merge gate reads before
     // any merge precondition can flow into remediation.
     let number = pr.parse::<u64>().unwrap_or(0);
@@ -247,7 +247,7 @@ fn verify_merged(
         return 1;
     }
 
-    // Same posture as the merge verb: the checks precondition applies only
+    // Same posture as the merge command: the checks precondition applies only
     // when require_checks_pass is on, and PENDING is not failing - a
     // still-running check flows into the bounded remediation.
     if crate::agents_config::auto_merge_require_checks_pass(cwd) {
@@ -283,7 +283,7 @@ fn verify_merged(
         }
     }
 
-    // The coverage gate the merge verb itself answers, so the audit and the
+    // The coverage gate the merge command itself answers, so the audit and the
     // merge it audits cannot disagree. No review lane configured reads
     // COVERED inside the gate itself.
     let (blocker, _waiver) =
@@ -322,7 +322,7 @@ fn verify_merged(
     )
 }
 
-/// Single authorized-merge ask + single 30s poll (anti-thrash; the verb
+/// Single authorized-merge ask + single 30s poll (anti-thrash; the command
 /// executes - no --auto, no --delete-branch flag on the ask).
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
@@ -338,7 +338,7 @@ fn bounded_remediation(
     err: &mut dyn Write,
 ) -> i32 {
     let strategy = crate::agents_config::auto_merge_strategy(cwd);
-    // The head THIS verb's gate covered, never whatever the local checkout
+    // The head THIS command's gate covered, never whatever the local checkout
     // points at; the state read carried it beside the rollup.
     let mut payload = json!({
         "cwd": cwd.to_string_lossy(),
@@ -377,7 +377,7 @@ fn bounded_remediation(
     };
 
     if outcome == "merged" {
-        // This verb's name is its contract, so the owner's receipt is not the
+        // This command's name is its contract, so the owner's receipt is not the
         // last word: re-read the PR, and give a lagging read ONE bounded poll
         // before reporting. Never a retry loop.
         for attempt in 0..2 {
@@ -477,7 +477,7 @@ fn bounded_remediation(
 }
 
 /// Post-merge remote-branch delete, warn-only: the same `gh api -X DELETE`
-/// against the PR's verified base repo the merge verb runs, split from the
+/// against the PR's verified base repo the merge command runs, split from the
 /// merge so cleanup can never fail one. Never deletes the local branch.
 fn remote_delete_cleanup(number: u64, cwd: &Path, run: RunProbe, err: &mut dyn Write) {
     if !crate::agents_config::auto_merge_delete_branch_on_merge(cwd) {
@@ -498,12 +498,19 @@ fn remote_delete_cleanup(number: u64, cwd: &Path, run: RunProbe, err: &mut dyn W
         .map(|r| r.stdout.trim().split('\t').map(str::to_string).collect())
         .unwrap_or_default();
     let branch = fields.first().map(String::as_str).unwrap_or_default();
+    let head_repo = fields.get(1).map(String::as_str).unwrap_or_default();
     let base_repo = fields.get(2).map(String::as_str).unwrap_or_default();
     if branch.is_empty() || base_repo.is_empty() {
         let _ = writeln!(
             err,
             "verify-pr-merged: post-merge cleanup failed: remote branch name unreadable (non-fatal)"
         );
+        return;
+    }
+    // A fork owns its head branch: deleting a same-named base branch would be
+    // data loss, so a cross-repo head is a silent no-delete terminal (the
+    // queue-merge finisher emits no failure event on an empty sink).
+    if !head_repo.is_empty() && head_repo != base_repo {
         return;
     }
     let deleted = run(
@@ -523,6 +530,23 @@ fn remote_delete_cleanup(number: u64, cwd: &Path, run: RunProbe, err: &mut dyn W
         err,
         "verify-pr-merged: post-merge cleanup failed (non-fatal)"
     );
+}
+
+/// The `merge-remote-delete` op on the authorized-merge door: the queue-merge
+/// finisher's transport (pr port 7). The same gate and warn-only posture the
+/// verify flow's cleanup leg holds; the receipt's `cleanup` word carries the
+/// outcome the Python caller emitted before.
+pub(crate) fn remote_delete_cleanup_op(payload: &Value) -> String {
+    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let cwd = std::path::PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
+    let mut sink: Vec<u8> = Vec::new();
+    let run = |args: &[&str], dir: &std::path::Path| -> Option<crate::gate_probes::Run> {
+        let mut cmd = std::process::Command::new(args[0]);
+        cmd.args(&args[1..]).current_dir(dir);
+        crate::gate_probes::run_probe(cmd)
+    };
+    remote_delete_cleanup(pr, &cwd, &run, &mut sink);
+    serde_json::json!({"cleanup": String::from_utf8_lossy(&sink).into_owned()}).to_string()
 }
 
 // ---------------------------------------------------------------------------

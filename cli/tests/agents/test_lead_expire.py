@@ -18,6 +18,9 @@ from fno.agents.registry import AgentEntry, load_registry, update_registry
 from fno.lead.state import lead_manifest_path, lead_state_root, write_manifest
 from fno.paths_testing import use_tmpdir
 
+# The manifest fixtures write through the Rust creator.
+pytestmark = pytest.mark.dev_build
+
 CALLER_SESSION = "0c1f2f9a-1111-4000-8000-000000000001"
 SCOPE = "epic-x"
 
@@ -46,7 +49,7 @@ def team(tmp_path, monkeypatch, native_backlog_door):
     install_fake_claude(bin_dir)
     monkeypatch.setenv("PATH", str(bin_dir))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER_SESSION)
-    # The verb resolves the manifest state root from the caller's cwd; seat
+    # The command resolves the manifest state root from the caller's cwd; seat
     # the team so that resolution lands on the tmp state root too.
     monkeypatch.chdir(tmp_path)
     return tmp_path
@@ -80,7 +83,7 @@ def _seat(
 
 
 def _manifest(team, scope: str = SCOPE, session: str = CALLER_SESSION):
-    # The verb keys the manifest root on the caller row's cwd, so the fixture
+    # The command keys the manifest root on the caller row's cwd, so the fixture
     # writes through the same call the resolver makes.
     path = lead_manifest_path(scope, state_root=lead_state_root(Path(team)))
     write_manifest(path, scope=scope, harness_session_id=session)

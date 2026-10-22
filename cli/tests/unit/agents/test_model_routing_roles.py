@@ -46,7 +46,7 @@ def _pin_oai_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _call_resolver(resolver, role, *, settings=None, env=None, notice=None, business_lookup=None):
     """``resolve_codex_route`` no longer takes ``env=`` (the key resolves in
-    the Rust verb's process env); the claude signature keeps it."""
+    the Rust command's process env); the claude signature keeps it."""
     kwargs: dict = {}
     if notice is not None:
         kwargs["notice"] = notice
@@ -260,6 +260,7 @@ def test_protected_business_names_validate_manifest_but_keep_primary_route() -> 
     assert called is True
 
 
+@pytest.mark.dev_build
 def test_default_production_lookup_projects_manifest_through_spawn_route(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -319,6 +320,7 @@ def test_default_production_lookup_projects_manifest_through_codex_route(
         ),
     ],
 )
+@pytest.mark.dev_build
 def test_business_manifest_without_routing_hint_ignores_same_name_legacy_route(
     resolver: Callable[..., object],
     settings: SettingsModel,
@@ -333,6 +335,7 @@ def test_business_manifest_without_routing_hint_ignores_same_name_legacy_route(
     assert _call_resolver(resolver, "publisher", settings=settings, env=env) is None
 
 
+@pytest.mark.dev_build
 def test_default_lookup_uses_fixed_precedence_and_accepts_tightening_overlay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -361,6 +364,7 @@ def test_default_lookup_uses_fixed_precedence_and_accepts_tightening_overlay(
     assert result.routing_projection == RoutingHint(provider="zai", model="tightened-model")
 
 
+@pytest.mark.dev_build
 def test_default_lookup_blocks_mixed_revisions_and_authority_expansion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -397,6 +401,7 @@ def test_default_lookup_blocks_mixed_revisions_and_authority_expansion(
     assert expanded.source_layer is RoleLayer.PROJECT
 
 
+@pytest.mark.dev_build
 def test_default_lookup_blocks_ambiguous_role_function_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -425,6 +430,7 @@ def test_default_lookup_blocks_ambiguous_role_function_identity(
     assert "multiple functions" in (ambiguous.detail or "")
 
 
+@pytest.mark.dev_build
 def test_default_production_lookup_blocks_corrupt_sources_even_when_disabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

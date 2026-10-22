@@ -1,0 +1,26 @@
+{
+  "peers": {
+    "web-lead": [
+      "web",
+      "api"
+    ],
+    "cli-lead": [
+      "cli"
+    ]
+  },
+  "projects": {
+    "web-lead": "storefront"
+  },
+  "surface_patterns": {
+    "web": [
+      "web/**",
+      "*.css"
+    ],
+    "api": [
+      "crates/api/**"
+    ],
+    "cli": [
+      "cli/**"
+    ]
+  }
+}

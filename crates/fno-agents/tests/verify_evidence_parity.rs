@@ -6,7 +6,7 @@
 //! ab-8bdb4642).
 //!
 //! These were originally DIFFERENTIAL parity tests that ran BOTH the bash
-//! oracle and the Rust verb over identical fixtures and asserted byte-equality.
+//! oracle and the Rust command over identical fixtures and asserted byte-equality.
 //! The bash oracle has since been deleted (the Rust port is the sole
 //! implementation), so each case now asserts the Rust output against a GOLDEN
 //! `(exit, stdout, stderr)` captured from the proven-correct bash BEFORE
@@ -61,7 +61,7 @@ fn run_bash(func: &str, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Run the Rust port in-process. `sub` is the sub-verb; `args` follows it.
+/// Run the Rust port in-process. `sub` is the sub-command; `args` follows it.
 /// Returns (exit_code, stdout, stderr).
 fn run_rust(sub: &str, args: &[&str]) -> (i32, String, String) {
     let mut argv: Vec<String> = vec![sub.to_string()];
@@ -89,7 +89,7 @@ fn normalize_paths(s: &str, args: &[&str]) -> String {
     out
 }
 
-/// Core golden assertion: assert the Rust `(exit, stdout, stderr)` for a sub-verb
+/// Core golden assertion: assert the Rust `(exit, stdout, stderr)` for a sub-command
 /// equals the frozen golden for this case.
 ///
 /// In capture mode (`FNO_CAPTURE_GOLDEN=1`), runs the bash `func` on the SAME
@@ -118,7 +118,7 @@ fn assert_golden(sub: &str, bash_func: &str, args: &[&str], label: &str) {
     assert_golden_common("verify_evidence", label, &rust, oracle);
 }
 
-/// Assert the child-promise sub-verb matches the frozen `verify_child_promise`
+/// Assert the child-promise sub-command matches the frozen `verify_child_promise`
 /// golden.
 fn assert_child_parity(events: &str, sid: &str, nonce: &str, label: &str) {
     assert_golden(
@@ -129,7 +129,7 @@ fn assert_child_parity(events: &str, sid: &str, nonce: &str, label: &str) {
     );
 }
 
-/// Assert the has-nonclaude sub-verb matches the frozen
+/// Assert the has-nonclaude sub-command matches the frozen
 /// `resolve_has_nonclaud_agent` golden.
 fn assert_nonclaude_parity(artifact: &str, settings: &str, label: &str) {
     assert_golden(

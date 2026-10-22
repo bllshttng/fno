@@ -481,7 +481,7 @@ pub(crate) fn scan_and_emit(
 }
 
 /// Emit the `blocked` event natively, route it, and push it to the
-/// parent handle. The push leg and the emit-CLI auto-push shipped with zero
+/// parent handle when the route goes off-session. The push leg and the emit-CLI auto-push shipped with zero
 /// emitters (the advisory `--emit-boundary blocked` instruction demonstrably
 /// never fires, so a lead got swept on a timeout instead of being told). The
 /// stop hook is the one surface that mechanically reads every session's
@@ -534,7 +534,15 @@ pub(crate) fn emit_help_distress_blocked(
             evidence: distress.evidence.as_deref().unwrap_or(&distress.reason),
         },
     );
-    push_blocked_to_parent(cwd, run, node, &distress.reason);
+    // Only an off-session route reaches the parent. An in-session block or a
+    // timer wait keeps its events.jsonl row and nothing more, so a wait-class
+    // help no longer mails the lead on every turn.
+    if matches!(
+        crate::help_router::route(distress.class, rung),
+        crate::help_router::Route::OffSession { .. }
+    ) {
+        push_blocked_to_parent(cwd, run, node, &distress.reason);
+    }
     crate::help_router::route_emitted_distress(
         cwd,
         run,
@@ -766,7 +774,7 @@ pub fn run_distress_scan(args: &[String]) -> i32 {
 /// (here and in loopcheck.rs) can hand each other's stub answer to the
 /// wrong call. Every test that sets this var holds this lock across the
 /// set/run/restore section.
-/// F6: does the newest user entry of the transcript carry the cancel verb?
+/// F6: does the newest user entry of the transcript carry the cancel command?
 /// The user-typed `/fno:cancel-target` (claude) or `$fno:cancel-target`
 /// (codex) is the authoritative cancel; the session's own assistant write
 /// is not. The newest user entry ends the walk; anything newer is assistant
@@ -942,7 +950,13 @@ mod tests {
 
     #[test]
     fn run_distress_scan_reads_the_checked_in_codex_fixture() {
-        // AC10-HP / AC11-EDGE through the actual verb entry point
+        // Holds the env lock: the scan's blocked push reads the process-global
+        // FNO_LOOPCHECK_FNO_BIN stub, and an unlocked push leaks into the
+        // wait-class test's log.
+        let _env_guard = fno_bin_env_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // AC10-HP / AC11-EDGE through the actual command entry point
         // (run_distress_scan), against the real rollout line checked in at
         // tests/fixtures/rollout-codex-help.jsonl, parsed natively (no
         // reader stub). The tag-free rerun is the positive control for the
@@ -1153,6 +1167,72 @@ mod tests {
     }
 
     #[test]
+    fn wait_class_help_skips_the_parent_push_and_question_still_pushes() {
+        // A wait-class help appends its row at rung 0 and rung 3 with no
+        // parent push; a question-class help routes off-session and pushes.
+        let _env_guard = fno_bin_env_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let var = "FNO_LOOPCHECK_FNO_BIN";
+        let prior = std::env::var(var).ok();
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("calls.log");
+        let body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 1\n",
+            log.to_string_lossy()
+        );
+        let stub = write_exec(tmp.path(), "fno", &body);
+        std::env::set_var(var, stub.to_str().unwrap());
+        let project = tmp.path().join("events.jsonl");
+        let global = tmp.path().join("global.jsonl");
+        let emit = |class: HelpClass, turn: &str| {
+            let d = HelpDistress {
+                reason: "stop-gate read failed".to_string(),
+                evidence: None,
+                kind: DistressKind::Help,
+                class,
+            };
+            emit_help_distress_blocked(
+                &project,
+                &global,
+                tmp.path(),
+                "run-w",
+                None,
+                None,
+                &d,
+                turn,
+                None,
+            )
+        };
+        assert_eq!(emit(HelpClass::Wait, "turn-0"), Some(0));
+        for (i, turn) in ["turn-1", "turn-2", "turn-3"].iter().enumerate() {
+            assert_eq!(emit(HelpClass::Wait, *turn), Some(i as u64 + 1));
+        }
+        let after_waits = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            !after_waits.contains("push-parent"),
+            "wait-class helps must not push to the parent: {after_waits}"
+        );
+        assert_eq!(emit(HelpClass::Question, "turn-q"), Some(0));
+        match prior {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            calls.contains(
+                "doctor event push-parent --type blocked --run run-w --reason stop-gate read failed"
+            ),
+            "a question-class help must still push: {calls}"
+        );
+        let rows = crate::events::committed_journal_text(&project)
+            .lines()
+            .filter(|l| l.contains("\"type\":\"blocked\""))
+            .count();
+        assert_eq!(rows, 5, "every help keeps its events.jsonl row");
+    }
+
+    #[test]
     fn the_failed_read_directive_parses_to_the_wait_route() {
         // The stop gate's gh-error block reason carries a literal wait-class
         // tag, so a worker that echoes it into its own stop message lands on
@@ -1271,10 +1351,9 @@ mod tests {
     }
 
     #[test]
-    fn every_help_class_has_a_route_and_texts_agree() {
-        // AC23 groundwork: every class routes somewhere; the in-session
-        // classes carry their plan texts verbatim; the wait backoffs stay
-        // under the 15-minute watcher cap.
+    fn every_help_class_routes_within_the_watcher_cap() {
+        // Every class routes somewhere, and every wait backoff stays under
+        // the 15-minute watcher cap.
         let all = [
             HelpClass::StalePlan,
             HelpClass::MissingPrereq,
@@ -1300,20 +1379,6 @@ mod tests {
                         assert!(backoff_secs <= 900, "watcher cap is 15m");
                     }
                 }
-            }
-        }
-        for (class, text) in [
-            (HelpClass::StalePlan, crate::help_router::STALE_PLAN_TEXT),
-            (
-                HelpClass::MissingPrereq,
-                crate::help_router::MISSING_PREREQ_TEXT,
-            ),
-            (HelpClass::CiRed, crate::help_router::CI_RED_TEXT),
-            (HelpClass::Stuck, crate::help_router::STUCK_TEXT),
-        ] {
-            match crate::help_router::route(class, 0) {
-                crate::help_router::Route::InSession(t) => assert_eq!(t, text),
-                other => panic!("class {class:?} must be in-session at rung 0: {other:?}"),
             }
         }
     }

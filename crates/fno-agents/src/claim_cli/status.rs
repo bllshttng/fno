@@ -93,7 +93,7 @@ pub fn run(args: &[String]) -> i32 {
         None => super::node_aware_root(&key),
     };
     let payload = match crate::claim_store::read(&key, store_root.as_deref()) {
-        Ok(Some(rec)) => crate::claim_verbs::claim_status_value(&rec),
+        Ok(Some(rec)) => crate::claim_commands::claim_status_value(&rec),
         Ok(None) => json!({"key": key.clone(), "state": "free"}),
         Err(_) => json!({"key": key.clone(), "state": "corrupted"}),
     };

@@ -1,5 +1,5 @@
 //! One PR-status owner: the REST reader, the verdict, the failure detail,
-//! and the job-log cache that heal and the status verb share.
+//! and the job-log cache that heal and the status command share.
 //!
 //! Ported from the Python legs this module retires (`fno.pr._rest`
 //! `fetch_pr_rest`, `fno.pr._status` `verdict_for`, `fno.pr._failures`
@@ -936,7 +936,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         )
     } else {
         let reviews_input = reviews::optional_reviews(probe, cwd, pr, slug);
-        let lane = reviews::review_lane(cwd, pr);
+        let lane = reviews::review_lane(cwd, pr, Some(&head_sha));
         let coverage = reviews::read_review_coverage(cwd, pr, Some(&head_sha), lane, false);
         // The cache layer passes the probe it already ran for the key
         // material; a degraded path (no slug, no cache dir) probes here.
@@ -1070,7 +1070,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         "covered_head": head_sha,
     });
     // This read already paid the hold-check probe above; the preview reuses
-    // the answer instead of spawning the verb a second time. The key is
+    // the answer instead of spawning the command a second time. The key is
     // present only on a clean probe: a crashed or unasked probe must let the
     // walk's own fail-closed probe run.
     if let Some(seams::HoldVerdict::Clear | seams::HoldVerdict::Held(_)) = hold_state.as_ref() {
@@ -1176,7 +1176,7 @@ pub(crate) fn cache_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// name/state/bucket/startedAt/workflow rows the internal gh adapter and the
 /// verify precondition read (`_internal_gh._checks`,
 /// `_verify._failing_required`). `drop_coverage` removes the review-coverage
-/// projections, the same rows the merge verb's covered path ignores.
+/// projections, the same rows the merge command's covered path ignores.
 pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
     let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
     let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
@@ -1272,9 +1272,17 @@ pub(crate) fn status_ci_rows<P: GhProbe>(
 
 pub(crate) mod cache;
 pub(crate) mod compose;
+pub(crate) mod gh_run;
+pub(crate) mod lists;
 pub(crate) mod logs;
+pub(crate) mod memo;
 pub(crate) mod reviews;
 pub(crate) mod seams;
 #[cfg(test)]
 mod tests;
 pub(crate) mod wait;
+// The two the binaries exec through: fno-gh-loopcheck / fno-gh-coverage /
+// fno-gh-proxy, and the pr namespace dispatcher in client.rs's main.
+pub mod adapter;
+pub mod proxy;
+pub mod quota;

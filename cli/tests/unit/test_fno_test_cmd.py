@@ -1,6 +1,6 @@
 """Tests for `fno doctor test` (x-8b64 G).
 
-The load-bearing behaviour: the verb returns pytest's *real* exit code (no pipe
+The load-bearing behaviour: the command returns pytest's *real* exit code (no pipe
 masking) and pins PYTHONPATH to the worktree source. We run a tiny generated
 test file through `_run` and assert the exit code is the genuine pytest result.
 """
@@ -45,7 +45,7 @@ def test_missing_interpreter_writes_exit_127(tmp_path, monkeypatch, no_native_ow
 
 
 def test_stream_with_log_refuses(tmp_path, capsys):
-    # Direct callback call: the verb is a bare click Command, and the runner
+    # Direct callback call: the command is a bare click Command, and the runner
     # surface differs across click versions in this environment.
     with pytest.raises(SystemExit) as exc:
         test_cmd.test_command.callback(

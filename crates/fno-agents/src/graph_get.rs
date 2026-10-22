@@ -2,13 +2,13 @@
 //!
 //! Client-side and daemon-free, like [`crate::wait`]: a batch read is a
 //! filesystem read, not an agent-lifecycle operation, so it needs no daemon
-//! RPC. Not a routable `fno agents` verb (it serves from `bin/client.rs`'s
-//! dispatch, but stays out of `CLIENT_VERB_USAGE` / `RUST_CLIENT_VERBS`, the
+//! RPC. Not a routable `fno agents` command (it serves from `bin/client.rs`'s
+//! dispatch, but stays out of `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`, the
 //! same rule `pr-heal` and `kill-check` follow) - the argv callers are
 //! `fno backlog get`'s Python forwarder (>1 id) and, through the stdin door,
 //! the tracker seam's Python client and the mux's `read_snapshot`.
 //!
-//! The census this verb answers: `backlog get` was 1,516 single-node calls
+//! The census this command answers: `backlog get` was 1,516 single-node calls
 //! over 21 days, one graph read each. A caller naming several ids in one
 //! invocation pays that read once.
 
@@ -17,7 +17,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 /// The graph entry's lifecycle-status key, and its read. Lives here, not in
-/// the plan-reading verbs, because the plan-rung guard freezes every
+/// the plan-reading commands, because the plan-rung guard freezes every
 /// registered plan reader at zero `"status"` literals: a reader that wants a
 /// node's GRAPH status (ready/done/..., never a plan document's frontmatter)
 /// borrows this helper rather than re-spelling the key.
@@ -33,7 +33,7 @@ pub(crate) fn entry_status<'a>(entry: &'a Value) -> &'a str {
 /// around a forwarded HOME, so a sealed Rust child reads the graph its parent
 /// wrote. A `~`-prefixed carrier expands like Python's, so both legs resolve
 /// the same store. Mirrors the FNO_HOME-first resolution every other
-/// client-side verb in this crate uses (see
+/// client-side command in this crate uses (see
 /// `finalize::append_corrections_pointer`). Does not read
 /// `config.paths.graph_json` - a batch convenience read is not where a
 /// config-driven relocation belongs, and `--graph` covers a test or an
@@ -54,7 +54,7 @@ pub(crate) fn default_graph_path() -> PathBuf {
 /// the store the config names.
 pub(crate) fn graph_path_for(cwd: &std::path::Path) -> PathBuf {
     crate::agents_config::state_dir(cwd)
-        .map(|root| crate::state_layout::place(&root, "graph.json"))
+        .map(|root| crate::state_layout::graph_anchor(&root))
         .unwrap_or_else(default_graph_path)
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn external_backend_selected() -> bool {
 
 /// Match one requested token against `id` first, then `slug`, case-insensitive
 /// (mirrors `fuzzy.resolve_node`'s exact-match tiers for these to shapes).
-/// The keeper's `read_ids` verb reuses this one matcher: two matchers for one
+/// The keeper's `read_ids` command reuses this one matcher: two matchers for one
 /// resolution contract is the dual-implementation shape.
 pub(crate) fn find_entry<'a>(entries: &'a [Value], token: &str) -> Option<&'a Value> {
     entries
@@ -107,7 +107,7 @@ pub(crate) fn field_eq(entry: &Value, field: &str, token: &str) -> bool {
 /// whether any token went unmatched. Separated from `run_graph_get` so the
 /// test suite exercises the same function the binary does, rather than
 /// capturing stdout to re-derive it (the `decide()`/`main()` split every other
-/// guard and verb in this crate already uses).
+/// guard and command in this crate already uses).
 fn get_rows(entries: &[Value], ids: &[String]) -> (Vec<Value>, bool) {
     let mut out = Vec::with_capacity(ids.len());
     let mut any_missing = false;
@@ -139,7 +139,7 @@ pub fn run_graph_get(args: &[String]) -> i32 {
     while i < args.len() {
         match args[i].as_str() {
             // Accepted and ignored: the Python forwarder always appends
-            // --json, and this verb's only output shape IS a JSON array.
+            // --json, and this command's only output shape IS a JSON array.
             "--json" | "-J" => {}
             "--graph" => {
                 i += 1;

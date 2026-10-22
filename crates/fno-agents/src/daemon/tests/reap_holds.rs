@@ -1,5 +1,5 @@
 //! The x-e3cc test families: the hold clock on every reaper hold, the
-//! release verb's rulings and refusals. Same-module helpers resolve through
+//! release command's rulings and refusals. Same-module helpers resolve through
 //! the parent glob; gc_receipts' fixtures are `pub(super)`.
 
 use super::gc_receipts::*;
@@ -125,10 +125,10 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
 }
 
 /// AC2-ESC: a hold aged 3001s past a 3000s threshold is escalated in the
-/// JSON and its text line names the release verb. Both sit inside the idle
+/// JSON and its text line names the release command. Both sit inside the idle
 /// hour, past which a spawn row retires instead of holding.
 #[test]
-fn ac2_esc_escalated_hold_names_the_release_verb() {
+fn ac2_esc_escalated_hold_names_the_release_command() {
     let home = tmp_home("gc-ac2-esc");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     state::update_registry(&home.registry_json(), |r| {
@@ -225,7 +225,7 @@ fn ac2_edge_unmeasured_hold_never_escalates() {
     assert_hold_line(&summary, true, "unmrow", "transcript unresolved for");
 }
 
-// ── x-e3cc change 3: the release verb applies a ruling through the
+// ── x-e3cc change 3: the release command applies a ruling through the
 // sweep's own door ────────────────────────────────────────────────────────
 
 /// AC3-HP: a release retires the old transcript-unresolved row, keeps the
@@ -453,10 +453,10 @@ fn a_release_lifts_a_no_provenance_hold() {
     );
 }
 
-/// AC3-ERR, the fresh hold: the verb refuses with exit 2 and the named
+/// AC3-ERR, the fresh hold: the command refuses with exit 2 and the named
 /// line, built by the pure refusal builders the tests assert on.
 #[test]
-fn ac3_err_the_verb_refuses_a_fresh_hold_below_the_threshold() {
+fn ac3_err_the_command_refuses_a_fresh_hold_below_the_threshold() {
     let (dir, home) = staged_graph_home();
     stage_graph(
         dir.path(),
@@ -498,7 +498,7 @@ fn ac3_err_the_verb_refuses_a_fresh_hold_below_the_threshold() {
 /// AC3-ERR, open work: an escalated `sources disagree` hold whose witness
 /// node reads ready refuses; a release never retires open work.
 #[test]
-fn ac3_err_the_verb_refuses_a_not_done_witness() {
+fn ac3_err_the_command_refuses_a_not_done_witness() {
     let (dir, home) = staged_graph_home();
     let sessions_node = json!({
         "id": "x-84b2",

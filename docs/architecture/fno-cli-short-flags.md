@@ -61,9 +61,9 @@ Phase 2 rolls the lowercase map across the everyday commands. Purely additive, s
 | `done` | `-p` pr-number, `-l` link, `-m` note (pre-existing) | - |
 | `carveout add` | `-k` kind, `-p` priority | - |
 
-Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--credentials-source`, `--roadmap-id`, ...) intentionally stay long. `backlog pick`/`queued`/`status` are outside the Phase 2 group and gained nothing. The per-command rule does real work here: `-b` means `--body` on `agents send` (the verb the Phase 2 `-k`/`-b` shorts moved onto when `inbox send` was removed; `-t --to` became `--to-project`, which is long-only) while `backlog pick` keeps `-b --blocked`, and `-p` carries six different per-command meanings - legal because those commands never co-occur.
+Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--credentials-source`, `--roadmap-id`, ...) intentionally stay long. `backlog pick`/`queued`/`status` are outside the Phase 2 group and gained nothing. The per-command rule does real work here: `-b` means `--body` on `agents send` (the command the Phase 2 `-k`/`-b` shorts moved onto when `inbox send` was removed; `-t --to` became `--to-project`, which is long-only) while `backlog pick` keeps `-b --blocked`, and `-p` carries six different per-command meanings - legal because those commands never co-occur.
 
-`agents list`/`resume` lowercase shorts on the Python path remain unassigned to any phase; on the Rust runtime the verb-agnostic parser already accepts them (see below).
+`agents list`/`resume` lowercase shorts on the Python path remain unassigned to any phase; on the Rust runtime the command-agnostic parser already accepts them (see below).
 
 ### Cross-language parity (the load-bearing detail)
 
@@ -71,7 +71,7 @@ Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--creden
 
 So the same aliases live in both parsers. The Rust `build_request` hand-parser gains `-p`/`-c`/`-t` plus the globals it already recognizes (`-J`/`-A`/`-F`/`-Y`). Short value flags take a space-separated value (`-p claude`), matching Click's short-option convention; the `-p=value` form is intentionally not normalized on the Rust path.
 
-Because the Rust parser is verb-agnostic, its aliases apply to every verb that uses those long flags, so `agents list -c /repo` works on the Rust runtime even though the Python `agents list` has no `-c`. This is additive and benign. Phase 2 deliberately did not touch the `agents` family (its delivery group covers the Python-only command surface, where no Rust parity question exists); reconciling Python `agents list`/`resume` is tracked as a separate carveout.
+Because the Rust parser is command-agnostic, its aliases apply to every command that uses those long flags, so `agents list -c /repo` works on the Rust runtime even though the Python `agents list` has no `-c`. This is additive and benign. Phase 2 deliberately did not touch the `agents` family (its delivery group covers the Python-only command surface, where no Rust parity question exists); reconciling Python `agents list`/`resume` is tracked as a separate carveout.
 
 ## Two-spelling canonicalization (Phase 3)
 

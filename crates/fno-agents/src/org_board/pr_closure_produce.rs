@@ -1,8 +1,8 @@
-//! The produce half of the `pr-closure-*` verb family: branch-ids, ensure,
-//! trailer, bind-created, and context. Each verb reads one JSON payload on
+//! The produce half of the `pr-closure-*` command family: branch-ids, ensure,
+//! trailer, bind-created, and context. Each command reads one JSON payload on
 //! stdin (trailer is argv-driven; bind-created takes its payload as one
 //! JSON argv element, matching its CLI door) and answers with the exact
-//! bytes the Python verbs printed, pinned by `tests/golden/pr_closure_produce/`.
+//! bytes the Python commands printed, pinned by `tests/golden/pr_closure_produce/`.
 //!
 //! Envelopes are hand-built strings, not `serde_json::json!`, because key
 //! order is part of the parity contract (`json!` sorts keys; Python dicts
@@ -27,17 +27,17 @@ use crate::node_branch::node_ids;
 type Leg = fn(&serde_json::Value) -> (i32, String, String);
 
 pub(crate) fn run(args: &[String]) -> i32 {
-    let verb = args.first().map(String::as_str).unwrap_or("");
-    match verb {
+    let command = args.first().map(String::as_str).unwrap_or("");
+    match command {
         "pr-closure-trailer" => leg_trailer(&args[1..]),
-        "pr-closure-branch-ids" => run_case_verb(verb, leg_branch_ids),
-        "pr-closure-ensure" => run_case_verb(verb, leg_ensure),
-        "pr-closure-bind-created" => run_argv_verb(
-            verb,
+        "pr-closure-branch-ids" => run_case_command(command, leg_branch_ids),
+        "pr-closure-ensure" => run_case_command(command, leg_ensure),
+        "pr-closure-bind-created" => run_argv_command(
+            command,
             leg_bind,
             args.get(1).map(String::as_str).unwrap_or(""),
         ),
-        "pr-closure-context" => run_case_verb(verb, leg_context),
+        "pr-closure-context" => run_case_command(command, leg_context),
         _ => {
             eprint!(
                 "usage: fno-agents pr-closure-<parse|render|branch-ids|ensure|trailer|bind-created|context>\n"
@@ -49,16 +49,16 @@ pub(crate) fn run(args: &[String]) -> i32 {
 
 /// One JSON payload on stdin, one leg, streams printed verbatim. Every
 /// golden stream ends in a newline, so the line-buffered writers flush.
-fn run_case_verb(verb: &str, leg: Leg) -> i32 {
+fn run_case_command(command: &str, leg: Leg) -> i32 {
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
-        eprint!("{verb}: cannot read stdin\n");
+        eprint!("{command}: cannot read stdin\n");
         return 2;
     }
     let parsed: serde_json::Value = match serde_json::from_str(&payload) {
         Ok(v) => v,
         Err(e) => {
-            eprint!("{verb}: stdin was not JSON: {e}\n");
+            eprint!("{command}: stdin was not JSON: {e}\n");
             return 2;
         }
     };
@@ -69,11 +69,11 @@ fn run_case_verb(verb: &str, leg: Leg) -> i32 {
 /// element (the authorized-merge pattern), because the shared
 /// `_forward_to_binary` passthrough inherits the caller's stdin and a TTY
 /// there would hang a stdin read.
-fn run_argv_verb(verb: &str, leg: Leg, payload: &str) -> i32 {
+fn run_argv_command(command: &str, leg: Leg, payload: &str) -> i32 {
     let parsed: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
         Err(e) => {
-            eprint!("{verb}: argv payload was not JSON: {e}\n");
+            eprint!("{command}: argv payload was not JSON: {e}\n");
             return 2;
         }
     };

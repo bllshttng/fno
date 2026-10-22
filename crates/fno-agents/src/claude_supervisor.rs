@@ -5,7 +5,7 @@
 //! session from that env. A value naming one session, route or delegation is
 //! therefore never right there. One measured birth carried
 //! `FNO_AGENTS_RUNTIME`, `FNO_WAKE_MSG`, `FNO_ROUTE_PROVIDER=zai` and the z.ai
-//! endpoint/token; it disabled every Rust-only `fno agents` verb in every
+//! endpoint/token; it disabled every Rust-only `fno agents` command in every
 //! hosted session for the supervisor's whole life and left the birth
 //! session's identity readable in `ps eww` output.
 //!
@@ -19,7 +19,7 @@
 //! its env until restart.
 //!
 //! Measured 2026-09-19 (throwaway `CLAUDE_CONFIG_DIR`): no
-//! fno-reachable `claude` verb births a supervisor when the verb itself
+//! fno-reachable `claude` command births a supervisor when the command itself
 //! fails; a detached `daemon run` survives 30s+ with zero clients; a later
 //! dirty-env `attach` connects to it same-pid and leaves it clean; and
 //! claude serializes two `daemon run` spawns on one dir itself.
@@ -66,6 +66,7 @@ const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_GH_BUDGET_TEST_ARMED",
     "FNO_GH_CORE_RESERVE",
     "FNO_GH_FACTS_DIR",
+    "FNO_GH_PROXY_DEPTH",
     "FNO_GH_PROXY_DIR",
     "FNO_GLOBAL_SETTINGS_PATH",
     "FNO_HOME",

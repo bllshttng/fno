@@ -381,7 +381,7 @@ fn sync_page_reload() {
     write_if_different(&cli_copy, &bytes);
 }
 
-/// PRODUCE the downstream copy of the spawn verb-to-phase table.
+/// PRODUCE the downstream copy of the spawn command-to-phase table.
 ///
 /// Same shape as [`sync_merge_posture`]: the canonical TOML lives in this
 /// crate, and the Python package reads a byte copy as package data so
@@ -685,15 +685,6 @@ fn sync_check_supersession() {
         check_supersession_codegen::render_rust(&contract),
     )
     .expect("generated Rust supersession source must be writable");
-
-    let Some(root) = repo_root() else { return };
-    let cli = root.join("cli");
-    if cli.is_dir() {
-        write_if_different(
-            &cli.join("src/fno/pr/_check_supersession_generated.py"),
-            check_supersession_codegen::render_python(&contract).as_bytes(),
-        );
-    }
 }
 
 /// PRODUCE the fno crate's provider-key copy from this crate's implementation.

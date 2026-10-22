@@ -1,7 +1,7 @@
 //! The backlog board: the operator's kanban over the one
 //! read model ([`crate::backlog_model`]). Lanes accordion, cards follow the
 //! model's order, the drill-down reads the same gathered `Inputs` (no
-//! process), and every write calls an existing verb with its own last line
+//! process), and every write calls an existing command with its own last line
 //! as the notice.
 //!
 //! The fold copies [`super::feed_view`]'s single-flight/generation
@@ -30,8 +30,8 @@ pub(crate) enum BoardMsg {
     Unchanged,
     /// A full gather landed; the view derives from it.
     Gathered { inputs: backlog_model::Inputs },
-    /// A queued write verb finished; its last line is the notice.
-    VerbDone { notice: String },
+    /// A queued write command finished; its last line is the notice.
+    CommandDone { notice: String },
 }
 
 pub(crate) type BoardTx = tokio::sync::mpsc::UnboundedSender<(u64, BoardMsg)>;
@@ -128,7 +128,7 @@ pub(crate) struct BoardView {
     /// A card id to focus on the first successful gather, restored from
     /// the store at open; `None` once consumed.
     pending_focus: Option<String>,
-    /// The write verb queued for the run loop (one at a time).
+    /// The write command queued for the run loop (one at a time).
     pub(crate) write_action: Option<WriteAction>,
     /// Bumped whenever the gathered read (`inputs` + `body`) is replaced.
     /// The paint memos key on it: a frame recompose must not re-derive.
@@ -244,7 +244,7 @@ pub(crate) enum BoardInputKind {
     Comment,
 }
 
-/// The board's queued write verb.
+/// The board's queued write command.
 #[derive(Debug, Clone)]
 pub(crate) enum WriteAction {
     /// Run these argv (plus optional stdin) through the bounded shell-out.
@@ -502,7 +502,7 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, msg: BoardMsg) {
     let mut notice: Option<String> = None;
     match msg {
         BoardMsg::Unchanged => b.inflight = false,
-        BoardMsg::VerbDone { notice: n } => {
+        BoardMsg::CommandDone { notice: n } => {
             notice = Some(n);
             b.force = true;
             b.want = true;
@@ -1697,7 +1697,7 @@ pub(crate) fn begin_comment(view: &mut View) {
     }
 }
 
-/// Queue one write verb for the run loop (one at a time).
+/// Queue one write command for the run loop (one at a time).
 fn queue_write(b: &mut BoardView, action: WriteAction) -> bool {
     if b.write_action.is_some() {
         return false;
@@ -1727,8 +1727,8 @@ fn gated(b: &BoardView, feature: &str) -> Option<String> {
 /// `e`: the title editor, pre-filled with the current title.
 /// `T`/`K`/`J`: card moves through `fno backlog rank --operator`. `K`/`J`
 /// anchor on the nearest card above/below in the same cell with the same
-/// parent (the verb's own rank scope, the closest pick the view can
-/// make). The verb's refusal shows verbatim.
+/// parent (the command's own rank scope, the closest pick the view can
+/// make). The command's refusal shows verbatim.
 fn rank_move(view: &mut View, word: &str, up: Option<bool>) -> Result<(), String> {
     let Some(b) = view.backlog_board.as_mut() else {
         return Ok(());

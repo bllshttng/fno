@@ -250,13 +250,13 @@ pub struct Request {
     /// re-runs the whole chain. Nothing is merged or armed on this pass.
     pub decide_only: bool,
     /// Which caller asks: `"durable_grant"` (the watcher's merge phase) or
-    /// absent/`"manifest"` (the interactive verb). On the durable-grant lane a
+    /// absent/`"manifest"` (the interactive command). On the durable-grant lane a
     /// red verdict is the state a working session is in while it pushes fixes,
     /// so it holds; spending a retry on it parked six open PRs in one
     /// afternoon. The interactive lane keeps `Failed`, where the
     /// `merge_status=failed` stamp is the worker's signal to stop.
     pub authority: Option<String>,
-    /// Merge-side flake acceptance, passed by the merge verb (`--accept-flake`).
+    /// Merge-side flake acceptance, passed by the merge command (`--accept-flake`).
     pub accept_flake: bool,
     /// Preview-supplied facts, so a preview ask never spawns `fno do pr
     /// status` for what its caller already computed. When a field is absent
@@ -280,7 +280,7 @@ pub struct Request {
     /// probes live).
     pub supplied_dispatch_hold: Option<Option<String>>,
     /// The review-hold answer the caller already probed (`review_activity`
-    /// reads the same registry the `review-hold check` verb does), as a
+    /// reads the same registry the `review-hold check` command does), as a
     /// refusal sentence in `review_hold_refusal`'s own shape. `Some(None)` =
     /// probed clear; `None` = not supplied (probe). Preview-only, same law as
     /// the dispatch-hold answer above.
@@ -410,8 +410,8 @@ pub trait Probes {
         args: &[String],
     ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String>;
     /// The review-coverage verdict for one PR, answered in process. The merge
-    /// gate reads the verdict instead of shelling the coverage-check verb: one
-    /// computation now serves the verb, the publisher and the merge, and a
+    /// gate reads the verdict instead of shelling the coverage-check command: one
+    /// computation now serves the command, the publisher and the merge, and a
     /// fake answers it directly so tests need no network.
     fn coverage_verdict(&self, cwd: &Path, pr: u64)
         -> crate::loopcheck::coverage_gate::GateVerdict;
@@ -648,7 +648,7 @@ fn decide_observed<P: Probes>(
     }
 
     let checks = probes.checks_read(cwd, facts.number);
-    // The gates the Python merge verb owned before this port. They run before
+    // The gates the Python merge command owned before this port. They run before
     // the CI/slot gates below so a PR the coverage or stub gate holds never
     // takes the merge slot and squats it for its TTL.
     if request.effect == Effect::Merge {
@@ -931,7 +931,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
 
     // (2) authority: per-run refusal, live config, posture floor. The code
     // comes from authority_refusal itself, so a preview can never label a
-    // blocker differently from the merge verb on the same head.
+    // blocker differently from the merge command on the same head.
     if let Some((code, reason)) = authority_refusal(probes, cwd, request, facts) {
         blockers.push(match code {
             "auto_merge_disabled" => Blocker::refused("auto_merge_disabled", reason),
@@ -1312,7 +1312,7 @@ fn authority_refusal<P: Probes>(
     facts: &PrFacts,
 ) -> Option<(&'static str, String)> {
     // The PR's own bound target manifest folds first when the caller carried
-    // no posture: a status read never read it, and the merge verb's
+    // no posture: a status read never read it, and the merge command's
     // spaces-aware read arrives here as `approved` when it did. A manifest
     // false is a per-run refusal like any caller-supplied one; a present but
     // unreadable manifest at the PR's branch fails closed. The exact-head
@@ -1640,7 +1640,7 @@ fn classify_failure(effect: Effect, strategy: &str, output: &str) -> Outcome {
         };
     }
     let reason = if lower.contains("fno/review-coverage") {
-        // This verb published that status itself moments ago. GitHub has not
+        // This command published that status itself moments ago. GitHub has not
         // observed it yet, so the refusal clears on a retry.
         "fno/review-coverage is still required after its success status was published; \
          GitHub may not have observed the update yet - retry the merge"
@@ -1666,7 +1666,7 @@ fn classify_failure(effect: Effect, strategy: &str, output: &str) -> Outcome {
 // ---------------------------------------------------------------------------
 
 /// The production [`Probes`]: one guarded `fno do pr info` fetch, the shipped
-/// hold and lineage verbs, and the repo's own config readers.
+/// hold and lineage commands, and the repo's own config readers.
 pub struct RealProbes;
 
 impl RealProbes {
@@ -1765,7 +1765,7 @@ impl Probes for RealProbes {
         // `review-hold check` is the one owner of "a review is RUNNING":
         // clear, held, or unreadable. The probe reads the PR's head ref
         // through the trait's gh read and answers IN PROCESS (d-e11b2b3e:
-        // the seam crossing to the Python verb retires with the Python leg).
+        // the seam crossing to the Python command retires with the Python leg).
         let read = self.run_gh(
             cwd,
             &[
@@ -2509,7 +2509,7 @@ pub fn parse_pr_facts(payload: &Value) -> Result<PrFacts, String> {
     })
 }
 
-/// A moved verb spelling prints one teaching line to stderr. It is not a refusal
+/// A moved command spelling prints one teaching line to stderr. It is not a refusal
 /// reason: kept, it would lead the operator message with noise and permanently
 /// mask the empty-output fallback below.
 pub fn classify_hold_probe(success: bool, stdout: &[u8], stderr: &[u8]) -> ProbeOutcome {
@@ -2602,18 +2602,18 @@ pub fn covered_head_from_event(cwd: &Path) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// The `authorized-merge` verb: one JSON payload in, one receipt out.
+// The `authorized-merge` command: one JSON payload in, one receipt out.
 // ---------------------------------------------------------------------------
 
 pub fn run_authorized_merge(args: &[String]) -> i32 {
     // The operand argv door (`authorized-merge merge <pr> [flags]`): the
-    // client passes post-verb args, so a door word in the lead position is
+    // client passes post-command args, so a door word in the lead position is
     // the native-flow form, never a payload path.
     if matches!(
         args.first().map(String::as_str),
         Some("merge") | Some("merge-result-check") | Some("hold-check")
     ) {
-        return crate::merge_verb::run_operand(args);
+        return crate::merge_command::run_operand(args);
     }
     let (code, stdout, stderr) = run_authorized_merge_capture(args);
     if !stdout.is_empty() {
@@ -2666,12 +2666,12 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
     // cache-key op and the seams probe ride instead of spawning the Python
     // leaf.
     if payload.get("op").and_then(Value::as_str) == Some("hold-check") {
-        return match crate::merge_verb::run_op("hold-check", &payload) {
+        return match crate::merge_command::run_op("hold-check", &payload) {
             Ok(answer) => (0, format!("{answer}\n"), String::new()),
             Err(message) => (3, String::new(), message),
         };
     }
-    // The hold ops are merge-authority writes and reads riding this verb's
+    // The hold ops are merge-authority writes and reads riding this command's
     // payload, not a new top-level root: `{"op": "hold-set"|"hold-verdict"|...,
     // ...}` answers with one receipt instead of a merge verdict.
     if payload
@@ -2700,7 +2700,7 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         );
         return (0, out, String::new());
     }
-    // The grant ops are the durable-grant reader riding this verb's payload,
+    // The grant ops are the durable-grant reader riding this command's payload,
     // the same transport the hold ops use: `{"op": "grant-verdict", ...}`
     // answers one PR, `{"op": "grant-queue", ...}` answers the merge queue.
     if payload
@@ -2712,6 +2712,14 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
             payload.get("op").and_then(Value::as_str).unwrap_or(""),
             &payload,
         );
+        return (0, out, String::new());
+    }
+    // The queue-merge finisher's cleanup write (pr port 7): the deleted
+    // `_merge._post_merge_remote_delete` helper's native owner. Warn-only,
+    // gated on `auto_merge.delete_branch_on_merge` exactly as the verify
+    // flow's cleanup leg is.
+    if payload.get("op").and_then(Value::as_str) == Some("merge-remote-delete") {
+        let out = crate::pr_verify::remote_delete_cleanup_op(&payload);
         return (0, out, String::new());
     }
     // The effect ops are the effect-classification door the ported Python
@@ -2728,7 +2736,7 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         );
         return (0, out, String::new());
     }
-    // The status ops are the pr-status fact readers riding this verb's
+    // The status ops are the pr-status fact readers riding this command's
     // payload, the same transport the hold and grant ops use:
     // `{"op": "status-merge-blocker"|"status-failure-cause", ...}`.
     if payload
@@ -2737,7 +2745,7 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         .is_some_and(|op| op.starts_with("status-"))
     {
         let op = payload.get("op").and_then(Value::as_str).unwrap_or("");
-        // The verb-shaped door ops answer with the verb's own streams and
+        // The command-shaped door ops answer with the command's own streams and
         // exit; the fact ops keep their JSON-receipt contract.
         if matches!(
             op,
@@ -2753,7 +2761,7 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
     // and get the flow receipt plus `exit` back. A refused op answers exit 3,
     // the owner-unreachable shape the flow itself treats as unavailable.
     if payload.get("op").and_then(Value::as_str) == Some("merge") {
-        return match crate::merge_verb::run_op("merge", &payload) {
+        return match crate::merge_command::run_op("merge", &payload) {
             Ok(answer) => (0, format!("{answer}\n"), String::new()),
             Err(message) => (3, String::new(), message),
         };
@@ -2772,13 +2780,13 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         }
     }
     // A preview ask answers with the structured receipt: `ready` is the
-    // receipt's `blockers` being empty, so the verb prints the list itself
+    // receipt's `blockers` being empty, so the command prints the list itself
     // instead of the joined-prose Outcome form the effect arms render.
     if request.effect == Effect::Preview {
         let receipt = preview_receipt(&request);
         return (0, format!("{}\n", receipt), String::new());
     }
-    // The receipt is the verdict, so the exit code answers only whether the verb
+    // The receipt is the verdict, so the exit code answers only whether the command
     // RAN: 0 with a receipt on stdout, 2 when the payload was unusable. A code
     // that also encoded refusal would make a held merge indistinguishable from a
     // binary that could not start, and the caller reads the receipt either way.
@@ -2798,9 +2806,9 @@ pub(crate) use preview_receipt::{
 
 /// The in-process review-activity read the merge gate makes: one shared
 /// `pr_status::reviews::review_activity` answer serves the merge probe and
-/// the verb door (d-e11b2b3e: twins retire first). The gh read failure and
+/// the command door (d-e11b2b3e: twins retire first). The gh read failure and
 /// the unreadable-activity case both read Inconclusive - the exit-4 shape
-/// the Python verb carried, which blocks rather than guesses.
+/// the Python command carried, which blocks rather than guesses.
 pub(crate) fn in_process_review_hold(cwd: &Path, pr_json: &Value) -> ProbeOutcome {
     let branch = pr_json
         .get("headRefName")

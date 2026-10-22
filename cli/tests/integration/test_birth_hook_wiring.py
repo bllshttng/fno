@@ -76,7 +76,7 @@ def test_decompose_never_fires_birth_hook(tmp_path, monkeypatch, capture_born):
 
     The epic doc is a group child's design authority (the blueprint session
     inline-fills each scaffold), so a decompose-born child needs no /think of
-    its own unless the operator flags the group `needs_think`. The verb is
+    its own unless the operator flags the group `needs_think`. The command is
     native now: the receipt's `fanout` array is the spawn evidence, read at
     the door with the fixture root pinned (HOME) so no subprocess write
     escapes to operator state.

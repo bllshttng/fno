@@ -2,7 +2,7 @@
 
 Every `fno agents spawn` passes this seam before the Rust/Python routing
 fork (Locked Decision 9). Per field: explicit CLI flag > lane >
-`agents.profiles.<verb>` (per-harness overlays inside) > `agents.defaults` >
+`agents.profiles.<command>` (per-harness overlays inside) > `agents.defaults` >
 built-in. A bare scalar `model` is scoped to the config `provider`'s harness,
 never the ambient one; an explicit `-m/--model` always wins; a resolved
 `--role` lane owns the model.
@@ -22,7 +22,7 @@ PENDING_TAKE_OVER: List[str] = []
 # Flags that consume the FOLLOWING token. Scanning for our three flags skips a
 # value flag's value so a value that looks like `--model` / `--effort` can never
 # masquerade as one of ours. Mirrors client.rs VALUE_FLAGS + the short aliases
-# typer exposes on the spawn verb.
+# typer exposes on the spawn command.
 _VALUE_FLAGS = frozenset(
     {
         "--provider", "-P", "--harness", "-H", "--model", "-m", "--effort",
@@ -43,7 +43,7 @@ _EFFORT_FLAGS = ("--effort",)
 
 
 def _scan(args: Sequence[str]) -> Tuple[bool, Optional[str], bool, bool]:
-    """One pass over a spawn argv (verb already stripped by the caller).
+    """One pass over a spawn argv (command already stripped by the caller).
 
     Returns ``(harness_present, harness_value, model_present, effort_present)``.
     The scanned flag is ``-H/--harness``: this pass reads the HARNESS axis and
@@ -174,7 +174,7 @@ def seedless_thread_refusal(
 ) -> Optional[str]:
     """The refusal text for a fresh claude thread spawn with no message, else None.
 
-    A resume continues a transcript and a role spawn gets the term verb typed
+    A resume continues a transcript and a role spawn gets the term command typed
     later in dispatch, so neither needs a message here.
     """
     if harness != "claude" or substrate not in ("thread", "bg"):
@@ -435,12 +435,12 @@ def normalize_spawn_args(
     rng: Optional[random.Random] = None,
     stderr: Optional[IO[str]] = None,
 ) -> List[str]:
-    """Canonicalize a ``spawn`` argv (verb at index 0); pure argv -> argv.
+    """Canonicalize a ``spawn`` argv (command at index 0); pure argv -> argv.
 
     The single positional is the MESSAGE; the name rides ``--name`` and is
     minted (``adjective-noun``) when omitted. A second positional -> exit 2.
 
-    Non-``spawn`` verbs and ``spawn --help`` pass through unchanged. Read-only
+    Non-``spawn`` commands and ``spawn --help`` pass through unchanged. Read-only
     (registry names, session resolver); writes no state.
     """
     out = list(args)
@@ -511,15 +511,15 @@ def normalize_spawn_args(
 
 
 # --------------------------------------------------------------------------- #
-# Per-verb profile resolution: a pure string rule over the seed's first
-# token selects `config.agents.profiles.<verb>`, layered over `agents.defaults`.
-# No content-based inference of any kind - only an explicit leading slash-verb.
+# Per-command profile resolution: a pure string rule over the seed's first
+# token selects `config.agents.profiles.<command>`, layered over `agents.defaults`.
+# No content-based inference of any kind - only an explicit leading slash-command.
 # --------------------------------------------------------------------------- #
 
 # Keep the old spelling on the canonical profile key for one release.
-_VERB_ALIASES = {"do": "execute"}
-# Lead work walks the role slot whichever verb opens its seed.
-_ROLE_VERBS = frozenset({"lead", "term", "fno-me"})
+_COMMAND_ALIASES = {"do": "execute"}
+# Lead work walks the role slot whichever command opens its seed.
+_ROLE_COMMANDS = frozenset({"lead", "term", "fno-me"})
 
 # The one built-in answer to "what permission mode does an unattended worker
 # get". Formerly config.agents.spawn_permission_mode's default; a constant now,
@@ -656,21 +656,21 @@ def _substrate_compatible(substrate: str, provider: str) -> bool:
         substrate = "thread"
     if substrate != "thread":
         return True
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        answer = verb_call(
+        answer = command_call(
             "spawn-overlay",
             {"kind": "compat", "harness": provider, "substrate": substrate},
-            VerbUnavailable,
+            CommandUnavailable,
         )
-    except VerbUnavailable:
+    except CommandUnavailable:
         return provider == "claude"
     return bool((answer.get("substrate") or {}).get("compatible"))
 
 
 def _overlay_payload(obj: object) -> dict:
-    """One spawn-defaults block as the verb's JSON view. ``model_dump()`` is
+    """One spawn-defaults block as the command's JSON view. ``model_dump()`` is
     the pydantic shape (extra=allow keeps smuggled keys visible); getattr is
     the test-fixture shape."""
     dump = getattr(obj, "model_dump", None)
@@ -701,7 +701,7 @@ def resolve_lane_vendor(
     harness: Optional[str] = None,
 ) -> Optional[str]:
     """The model vendor a final spawn argv bills: route > provider > harness.
-    The vocabulary and the judgment live in the spawn-overlay verb; this shim
+    The vocabulary and the judgment live in the spawn-overlay command; this shim
     resolves the harness-side inputs (explicit arg, then -H, then dispatch
     inference from env) and reads the answer."""
     from fno.agents.spawn_overlay_client import (
@@ -741,13 +741,13 @@ def compose_spawn_argv(
     env: Optional[Mapping[str, str]] = None,
     stderr: Optional[IO[str]] = None,
     apply_permission_builtin: bool = True,
-    node_verb: Optional[str] = None,
+    node_command: Optional[str] = None,
 ) -> List[str]:
     """Return ``args`` with config spawn-defaults injected where absent.
 
     The composition lives in Rust (crates/fno-agents/src/spawn_compose.rs);
-    this is the transport: normalize, project the argv scan, one verb call,
-    apply the answer. Raises SystemExit on the verb's refusals (exit 2, or
+    this is the transport: normalize, project the argv scan, one command call,
+    apply the answer. Raises SystemExit on the command's refusals (exit 2, or
     78 with the exhausted payload on stdout). The old seam's degrade-open
     stance survives as the unavailable-owner arm: a missing binary must not
     brick an otherwise valid spawn, so it prints one named line and returns
@@ -767,7 +767,7 @@ def compose_spawn_argv(
     err = stderr if stderr is not None else sys.stderr
     # Ergonomic normalization runs FIRST: the substrate-token / -r /
     # autogen-name rewrites consider only operator-supplied argv, so config
-    # defaults injected by the verb never fight the token form.
+    # defaults injected by the command never fight the token form.
     out = normalize_spawn_args(out, stderr=err)
     tail = out[1:]
 
@@ -785,7 +785,7 @@ def compose_spawn_argv(
     payload = {
         "kind": "compose",
         "argv": list(out),
-        "node_verb": node_verb,
+        "node_command": node_command,
         "env_node": (env or {}).get("FNO_NODE") or None,
         "permission_builtin": SPAWN_PERMISSION_BUILTIN if apply_permission_builtin else None,
         "scan": scan,
@@ -821,7 +821,7 @@ def compose_spawn_argv(
 
 def _scan_projection(tail: Sequence[str]) -> dict:
     """The scan projection the transport sends, one scanner call each. The
-    scanners answer what the OPERATOR typed; the verb owns every config
+    scanners answer what the OPERATOR typed; the command owns every config
     decision over the result."""
     has_harness, explicit_harness, has_model, has_effort = _scan(tail)
     # A fenced --model (the -m shorthand lands there) occupies the model axis.
@@ -839,7 +839,7 @@ def _scan_projection(tail: Sequence[str]) -> dict:
     has_permission = _has_permission_mode(tail)
     permission_value = _flag_value(tail, "--permission-mode")
     if not permission_value and has_permission:
-        # --yolo/-Y are the same knob as --permission-mode; the verb must see
+        # --yolo/-Y are the same knob as --permission-mode; the command must see
         # them or it can hand a yolo spawn a harness the gate refuses.
         permission_value = "yolo"
     slot = _seed_slot(tail)
@@ -881,13 +881,13 @@ def substrate_lane_flags(substrate: Optional[str]) -> List[str]:
 
 
 def spawn_seam_marker() -> str:
-    """The marker token both bridges carry, straight after the spawn verb."""
+    """The marker token both bridges carry, straight after the spawn command."""
     return f"--defaults-applied={routing_enforcement_state()}"
 
 
 def routing_enforcement_state(settings: object = None) -> str:
     """The marker verdict: the config-blind binary's only record of the
-    seam's decision. Read through the verb's policy mode; read failure
+    seam's decision. Read through the command's policy mode; read failure
     degrades open, and a strict seam refuses upstream."""
     del settings
     try:

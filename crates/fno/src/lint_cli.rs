@@ -1,6 +1,6 @@
 //! Native `fno doctor lint` checks for the front door. `style` runs in the
-//! sibling fno-agents binary's hidden `style-check` verb; `menu-caps` runs
-//! in-process here (crate::menu_caps), because no new verb may land on
+//! sibling fno-agents binary's hidden `style-check` command; `menu-caps` runs
+//! in-process here (crate::menu_caps), because no new command may land on
 //! fno-agents. Every other `doctor lint` check keeps forwarding to the
 //! Python CLI, and the classified argv passes on byte-verbatim.
 
@@ -50,7 +50,7 @@ mod tests {
             Some(NativeLint::MenuCaps(mk(&[])))
         );
         // Every other check keeps forwarding to the Python CLI.
-        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "verb-ratchet"])).is_none());
+        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "command-ratchet"])).is_none());
         assert!(classify_doctor_lint(&mk(&["doctor", "lint"])).is_none());
         // A different tree keeps forwarding.
         assert!(classify_doctor_lint(&mk(&["doctor", "event", "rows"])).is_none());

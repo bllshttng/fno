@@ -1,7 +1,7 @@
 """Python-seam tests for the worked overlay: the fleet read, the
 reachability pass, and the degradation contracts. The join itself (seat
 records, role exclusion, provenance, ship rows, closed receipts) is the
-Rust `fno-agents worked-nodes` verb; its contracts are tested in Rust
+Rust `fno-agents worked-nodes` command; its contracts are tested in Rust
 (crates/fno-agents/src/worked_nodes.rs)."""
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from fno.graph.statuses import live_worked_node_ids
 
 @pytest.fixture(autouse=True)
 def _no_worked_reply(monkeypatch):
-    """Hermetic overlay: the verb never runs unless a test provides a reply."""
+    """Hermetic overlay: the command never runs unless a test provides a reply."""
     monkeypatch.setattr(
         "fno.graph.statuses._worked_nodes_reply", lambda rows: {}
     )
@@ -64,7 +64,7 @@ def test_ac8_edge_degrades_loudly_when_roster_is_unreadable(monkeypatch, capsys)
 
 def test_a_stopped_worker_drops_out_of_the_payload(monkeypatch):
     """Liveness stays a Python contract: the transcript/stopped-at predicate
-    filters the payload, so a killed worker never reaches the verb."""
+    filters the payload, so a killed worker never reaches the command."""
     captured: list[list[dict]] = []
 
     def fake_reply(rows):
@@ -83,15 +83,15 @@ def test_a_stopped_worker_drops_out_of_the_payload(monkeypatch):
     assert live_worked_node_ids() == {"ac1-node": ["bp-worker"]}
     state[0] = "killed"
     assert live_worked_node_ids() == {}
-    # The killed worker never reaches the verb: its second payload is empty,
-    # and the verb's empty-rows answer reads as no worked nodes.
+    # The killed worker never reaches the command: its second payload is empty,
+    # and the command's empty-rows answer reads as no worked nodes.
     assert len(captured) == 2
     assert [r["name"] for r in captured[0]] == ["bp-worker"]
     assert captured[1] == []
 
 
 def test_the_payload_passes_attribution_and_marks_unmeasured(monkeypatch):
-    """The delegate's one Python-side contract: the rows it sends the verb
+    """The delegate's one Python-side contract: the rows it sends the command
     carry each row's node attribution (attributed rows survive the dedupe a
     seat-only pass would lose) and an unmeasured row rides its marked label."""
     captured: list[list[dict]] = []

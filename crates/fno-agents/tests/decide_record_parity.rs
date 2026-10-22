@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.decide
 //!
-//! Characterization harness for the native decide verb. The corpus was
+//! Characterization harness for the native decide command. The corpus was
 //! driven through both implementations before the Python leg was deleted
 //! (captured through `fno backlog decide`, the deleted leg's canonical
 //! spelling); its frozen answers are the six identity-independent answers
@@ -22,7 +22,7 @@ const WORKER: &str = env!("CARGO_BIN_EXE_fno-agents-worker");
 
 static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// The frozen corpus: key, and the decide argv after the verb tokens.
+/// The frozen corpus: key, and the decide argv after the command tokens.
 const CASES: &[(&str, &[&str])] = &[
     (
         "happy_no_node",

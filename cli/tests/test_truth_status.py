@@ -162,7 +162,7 @@ def test_real_live_claim_end_to_end(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_parse_worker_mission_maps_verb_codes_to_kinds():
+def test_parse_worker_mission_maps_command_codes_to_kinds():
     # t/f are target-class; bp/r/th are the plan-artifact branch.
     assert ts.parse_worker_mission("t-x-1-build") == ("x-1", "target")
     assert ts.parse_worker_mission("f-x-1-mend") == ("x-1", "target")

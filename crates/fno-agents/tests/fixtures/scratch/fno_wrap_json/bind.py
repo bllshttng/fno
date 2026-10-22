@@ -9,7 +9,7 @@ except Exception:
 if isinstance(rows, dict):
     rows = rows.get('agents') or rows.get('sessions') or rows.get('rows') or []
 
-for name in ('t-e882-identity', 't-0961-verbfix'):
+for name in ('t-e882-identity', 't-0961-commandfix'):
     r = next((x for x in rows if (x.get('name') or '') == name), None)
     if not r:
         print('%s: NOT FOUND' % name)

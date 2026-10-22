@@ -287,22 +287,22 @@ def test_update_registry_retries_revision_conflict_and_keeps_concurrent_row(
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     _seed_registry(registry_path)
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
     commits = {"n": 0, "applies": 0}
 
-    def _conflict_once(verb, payload, **kwargs):
-        if verb == "registry-commit" and "revision" in payload:
+    def _conflict_once(command, payload, **kwargs):
+        if command == "registry-commit" and "revision" in payload:
             commits["n"] += 1
             if commits["n"] == 1:
-                raise rb.VerbUnavailable(
+                raise rb.CommandUnavailable(
                     "registry-commit: lock at /x/graph.json.lock stayed busy past the 10s "
                     "deadline; no holder recorded in the lock file"
                 )
             if commits["n"] == 2:
-                raise rb.VerbUnavailable(_CONFLICT_JSON)
-        return real_verb_call(verb, payload, **kwargs)
+                raise rb.CommandUnavailable(_CONFLICT_JSON)
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _conflict_once)
+    monkeypatch.setattr(rb, "command_call", _conflict_once)
 
     def _append_spawned(entries):
         commits["applies"] += 1
@@ -331,24 +331,24 @@ def test_update_registry_reapplies_when_a_writer_lands_between_load_and_commit(
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     _seed_registry(registry_path)
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
     concurrent = AgentEntry(name="concurrent", harness="claude", cwd="/tmp", log_path="/tmp/c.log")
     landed = {"done": False}
 
-    def _writer_lands_after_first_read(verb, payload, **kwargs):
-        answer = real_verb_call(verb, payload, **kwargs)
+    def _writer_lands_after_first_read(command, payload, **kwargs):
+        answer = real_command_call(command, payload, **kwargs)
         if payload.get("op") == "read" and not landed["done"]:
             landed["done"] = True
             doc = answer["document"]
             rows = doc["agents"] + [asdict(concurrent)]
-            real_verb_call(
-                verb,
+            real_command_call(
+                command,
                 {"path": payload["path"], "schema_version": doc["schema_version"],
                  "agents": rows, "revision": answer["revision"]},
             )
         return answer
 
-    monkeypatch.setattr(rb, "verb_call", _writer_lands_after_first_read)
+    monkeypatch.setattr(rb, "command_call", _writer_lands_after_first_read)
 
     update_registry(
         lambda entries: entries
@@ -383,16 +383,16 @@ def test_update_registry_conflict_exhaustion_and_non_conflict_single_shot(
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     _seed_registry(registry_path)
 
-    real_verb_call = rb.verb_call
+    real_command_call = rb.command_call
     commits = {"n": 0}
 
-    def _always_conflict(verb, payload, **kwargs):
-        if verb == "registry-commit" and "revision" in payload:
+    def _always_conflict(command, payload, **kwargs):
+        if command == "registry-commit" and "revision" in payload:
             commits["n"] += 1
-            raise rb.VerbUnavailable(_CONFLICT_JSON)
-        return real_verb_call(verb, payload, **kwargs)
+            raise rb.CommandUnavailable(_CONFLICT_JSON)
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _always_conflict)
+    monkeypatch.setattr(rb, "command_call", _always_conflict)
 
     def _append(entries):
         return entries + [
@@ -406,13 +406,13 @@ def test_update_registry_conflict_exhaustion_and_non_conflict_single_shot(
 
     commits["n"] = 0
 
-    def _schema_refused(verb, payload, **kwargs):
-        if verb == "registry-commit" and "revision" in payload:
+    def _schema_refused(command, payload, **kwargs):
+        if command == "registry-commit" and "revision" in payload:
             commits["n"] += 1
-            raise rb.VerbUnavailable('{"status":"refused","reason":"schema_refused"}')
-        return real_verb_call(verb, payload, **kwargs)
+            raise rb.CommandUnavailable('{"status":"refused","reason":"schema_refused"}')
+        return real_command_call(command, payload, **kwargs)
 
-    monkeypatch.setattr(rb, "verb_call", _schema_refused)
+    monkeypatch.setattr(rb, "command_call", _schema_refused)
     with pytest.raises(RegistryVersionError, match="schema_refused"):
         update_registry(_append, path=registry_path)
     assert commits["n"] == 1
@@ -892,7 +892,7 @@ def test_every_resumable_harness_resolves_an_identity() -> None:
     """Every harness that DECLARES resume support must resolve a resume id.
 
     The lower bound is the capability contract, because that is what the
-    resume verb's own support check reads. The bound this replaces was
+    resume command's own support check reads. The bound this replaces was
     KNOWN_PROVIDERS, the Python dispatch set, which is ("claude", "codex") -
     so pi, gemini, agy and opencode all passed it vacuously and it could not
     fail when a harness joined the contract without joining the map (x-efd7).

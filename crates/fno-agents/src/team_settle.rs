@@ -1,6 +1,6 @@
 //! `team-settle`: whether a teamed spawn is granted, transfers, or refuses,
 //! reached as payload kind `team-settle` on the existing `spawn-overlay`
-//! verb (law d-fe66560a bars new top-level verbs, hidden ones included).
+//! command (law d-fe66560a bars new top-level commands, hidden ones included).
 //!
 //! A port of Python's `settle_spawn_team` (`cli/src/fno/agents/team.py`)
 //! with one new branch: a human caller with `succession` may transfer a

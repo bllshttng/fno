@@ -114,7 +114,7 @@ fn place_with_fit_too_small_tab_hands_pane_to_next_with_room() {
         .tabs
         .push(leaf_tab(20, 2));
     // 3 rows cannot hold two MIN_ROWS(2)-tall halves -> Dir::Down refusal.
-    core.tab_areas.insert(10, (3, 80));
+    core.sizing.areas.insert(10, (3, 80));
 
     let (_sid, tid, fell_back) = core
         .place_with(
@@ -144,7 +144,7 @@ fn place_with_fit_too_small_everywhere_mints_with_fell_back() {
     core.session
         .add_squad(1, vec!["/a".into()], None, leaf_tab(10, 1));
     // 3 rows cannot hold two MIN_ROWS(2)-tall halves -> Dir::Down refusal.
-    core.tab_areas.insert(10, (3, 80));
+    core.sizing.areas.insert(10, (3, 80));
 
     let (_sid, tid, fell_back) = core
         .place_with(

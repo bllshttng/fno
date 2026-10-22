@@ -192,7 +192,7 @@ log "T2: no fno-agents binary -> one stderr line, exit 0 (AC15-EDGE)"
         fail "T2: expected empty stdout, got: $HOOK_STDOUT"
         t2_ok=false
     fi
-    if ! echo "$HOOK_STDERR" | grep -q "no fno-agents could answer the hook verb"; then
+    if ! echo "$HOOK_STDERR" | grep -q "no fno-agents could answer the hook command"; then
         fail "T2: expected the one stderr line; got: $HOOK_STDERR"
         t2_ok=false
     fi
@@ -201,13 +201,16 @@ log "T2: no fno-agents binary -> one stderr line, exit 0 (AC15-EDGE)"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T3: no-intent fire with no gh on PATH -> the advisory gate runs before the
-# no-intent block: exit 2, the advisory line on stderr.
+# T3: no-intent fire with no gh -> the advisory gate runs before the
+# no-intent block: exit 2, the advisory line on stderr. Gh absence is pinned
+# with the gate's own env override: the helper now resolves beside the
+# binary, so PATH stripping alone no longer simulates absence.
 # ─────────────────────────────────────────────────────────────────────────────
 log "T3: no-intent fire, gh absent -> exit 2 + advisory line on stderr"
 {
     setup_env "cccc-0003"
-    run_hook "$TMP_DIR" "$(payload sess-t3)"
+    run_hook "$TMP_DIR" "$(payload sess-t3)" \
+        "FNO_LOOPCHECK_GH_BIN=$TMP_DIR/gh-absent-by-contract"
 
     t3_ok=true
     if [[ "$HOOK_RC" -ne 2 ]]; then
@@ -229,7 +232,8 @@ log "T4: no_ship manifest + promise -> DoneAdvisory allow, exit 0"
 {
     setup_env "dddd-0004"
     printf '%s\n' "no_ship: true" >> "$STATE_FILE"
-    run_hook "$TMP_DIR" "$(promise_payload sess-t4)"
+    run_hook "$TMP_DIR" "$(promise_payload sess-t4)" \
+        "FNO_LOOPCHECK_GH_BIN=$TMP_DIR/gh-absent-by-contract"
 
     t4_ok=true
     if [[ "$HOOK_RC" -ne 0 ]]; then
@@ -336,7 +340,8 @@ log "T13: codex-authored manifest + a CLAUDE stop -> exit 0, no block"
 log "T14: codex-authored manifest + that codex session's own stop -> judged"
 {
     setup_env_codex "rollout-20260905T000000-th-uuid-14" "th-uuid-14"
-    run_hook "$TMP_DIR" "$(payload sess-t14)"
+    run_hook "$TMP_DIR" "$(payload sess-t14)" \
+        "FNO_LOOPCHECK_GH_BIN=$TMP_DIR/gh-absent-by-contract"
 
     t14_ok=true
     # The ownership check needs a gh read first; with gh absent the stop is

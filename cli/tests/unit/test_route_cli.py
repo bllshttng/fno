@@ -1,4 +1,4 @@
-"""Tests for the `fno route` verb family (ls / set / unset / env) - x-b0b4."""
+"""Tests for the `fno route` command family (ls / set / unset / env) - x-b0b4."""
 from __future__ import annotations
 from pathlib import Path
 

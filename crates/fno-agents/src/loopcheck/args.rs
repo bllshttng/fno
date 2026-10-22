@@ -69,8 +69,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
     let mut ledger_path: Option<PathBuf> = None;
     let mut gh_budget_ledger: Option<PathBuf> = None;
     let mut now_override: Option<String> = None;
-    let mut gh_bin =
-        std::env::var("FNO_LOOPCHECK_GH_BIN").unwrap_or_else(|_| "fno-gh-loopcheck".to_string());
+    let mut gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
+        .unwrap_or_else(|_| crate::pr_status::quota::helper_bin("fno-gh-loopcheck"));
     let mut git_bin = std::env::var("FNO_LOOPCHECK_GIT_BIN").unwrap_or_else(|_| "git".to_string());
     let mut author_harness_override: Option<String> = None;
     let mut hook_input_stdin = false;
@@ -85,7 +85,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok());
 
-    // Skip the "loop-check" verb itself if present
+    // Skip the "loop-check" command itself if present
     let args = if args.first().map(|s| s.as_str()) == Some("loop-check") {
         &args[1..]
     } else {

@@ -90,6 +90,7 @@ def _row(name: str) -> AgentEntry:
 # --- the role lands on bg ---------------------------------------------------
 
 
+@pytest.mark.dev_build
 def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
     import fno.lead.state as lead_state
 
@@ -203,6 +204,7 @@ def test_headless_role_is_refused(bg_home) -> None:
 
 
 @pytest.mark.parametrize("harness", ["codex", "opencode", "pi"])
+@pytest.mark.dev_build
 def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> None:
     """All persistent carriers promote their row and arm the lead loop.
     Codex carries the stamp at mint; keeper promotion precedes seed submission.
@@ -286,10 +288,10 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
         "--cwd", str(bg_home), "--promote", "epic-x",
     )
     assert result.exit_code == 0, result.output
-    # Codex spells the plugin verb with $; a /fno:lead seed would hand the
+    # Codex spells the plugin command with $; a /fno:lead seed would hand the
     # lead's first turn a command its harness cannot invoke.
-    verb = {"codex": "$fno:lead", "pi": "/skill:lead"}.get(harness, "/fno:lead")
-    assert seen["seed"].splitlines()[0] == f"{verb} epic-x"
+    command = {"codex": "$fno:lead", "pi": "/skill:lead"}.get(harness, "/fno:lead")
+    assert seen["seed"].splitlines()[0] == f"{command} epic-x"
 
     row = _row("lead-codex")
     assert row.role_level == 2, "an epic is a Director"

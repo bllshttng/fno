@@ -1,4 +1,4 @@
-//! The `heal` verb: revive an enabled-but-dead watcher. Ported from the
+//! The `heal` command: revive an enabled-but-dead watcher. Ported from the
 //! `fno do pr watch heal` leaf in `cli/src/fno/pr_watch/cli.py` (the
 //! SessionStart self-heal entrypoint) and doctor's `heal_watcher` dead-cure
 //! in `cli/src/fno/pr_watch/_install.py`, whose bodies this change deletes.
@@ -15,7 +15,7 @@ use crate::pr_watch::refresh;
 use crate::pr_watch::status::{self, as_bool, cfg_lookup};
 
 // The single-flight key, scope and TTL the Python leaf used, kept verbatim:
-// a heal in flight from an older client and one from this verb are the same
+// a heal in flight from an older client and one from this command are the same
 // flight.
 const FLIGHT_KEY: &str = "pr-watch:heal";
 const FLIGHT_SCOPE: &str = "pr-watch SessionStart self-heal";
@@ -54,7 +54,7 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
         return ("pr-watch heal: disabled; nothing to heal\n".to_string(), 0);
     }
 
-    // The bounce-pending guard reads the same verdict the status verb
+    // The bounce-pending guard reads the same verdict the status command
     // reports, in process: pending means a bounce is inside its
     // healthy-pending grace, and re-bouncing would hide the fault for
     // another 2x interval.

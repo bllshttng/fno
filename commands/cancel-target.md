@@ -16,9 +16,9 @@ Cancels a target pipeline. Behavior depends on whether a state file exists:
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 STATE_DIR="$REPO_ROOT/.fno"
-# The manifest resolves through the one-owner path verb (state_path.rs):
+# The manifest resolves through the one-owner path command (state_path.rs):
 # the live manifest sits in the repo's space dir, not at <repo>/.fno/, and
-# only the verb's fallback leg still names the checkout path. Guessing
+# only the command's fallback leg still names the checkout path. Guessing
 # <repo>/.fno/target-state.md here sent every worktree session's cancel down
 # the orphan branch. When fno-agents is absent entirely, the checkout path
 # is the honest guess.

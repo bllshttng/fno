@@ -11,7 +11,7 @@ THE LADDER IS THREE RUNGS, EACH A FACT ABOUT THE SCOPE:
 
 No rung for an implementer: a non-epic node is work, not territory, so a role
 aimed at one is REFUSED - which is why no caller passes a level;
-``derive_role_level`` reads the rung off the scope, and a scope naming no
+``resolve_role`` reads the rung off the scope, and a scope naming no
 territory has none to read. Callers hand-type no altitude (the old surface let a
 backwards ladder - 0 is the TOP - silently mint wrong authority).
 
@@ -173,7 +173,7 @@ def split_scope(scope: Optional[str]) -> list[str]:
 def _graph_entry(node_id: str) -> Optional[dict]:
     """The node record for ``node_id``, or None. Reads footnote-minted
     metadata (type/project) through the guarded default-backend reader: the
-    role ladder's epic rung classifies nodes footnote's own verbs typed, so
+    role ladder's epic rung classifies nodes footnote's own commands typed, so
     an external selection degrades to None - the same path as an unknown id
     (configured projects, the top rungs, still resolve from settings)."""
     from fno.tracker.metadata import ExternalMetadataUnavailable, read_entries
@@ -236,98 +236,34 @@ def _canonical_project(name: str) -> Optional[str]:
         return None
 
 
-def _epic_or_refuse(raw: str, *, graph_entry=None) -> str:
-    """``raw`` as a backlog epic id, or the refusal that names why not.
-
-    One message set for the single-epic and epic-set paths alike: a member of
-    a set that is a typo or a non-epic node gets the same named remedy it
-    would get alone. ``graph_entry`` lets a set-resolving caller pass one
-    ``_graph_index`` read so members do not pay a full graph parse apiece.
-    """
-    entry = (graph_entry or _graph_entry)(raw)
-    if entry is None:
-        raise RoleScopeError(
-            f"{raw!r} is neither a configured project nor a backlog node; "
-            "nothing to term over (check for a typo)"
-        )
-    if entry.get("type") != "epic":
-        raise RoleScopeError(
-            f"{raw!r} is a {entry.get('type') or 'node'}, not an epic. "
-            "Implementers get no roles - a single node is work, not a territory. "
-            f"If {raw} IS meant to be an epic: fno backlog update {raw} type=epic. "
-            "Otherwise role the epic above it, or its project."
-        )
-    return raw
-
-
-def _member_rung(raw: str, canon: Optional[str], *, graph_entry=None) -> str:
-    """One scope member spelled with its rung, for a mixed-rung refusal."""
-    if canon:
-        return f"{canon} (a project)"
-    entry = (graph_entry or _graph_entry)(raw)
-    if entry is not None and entry.get("type") == "epic":
-        return f"{raw} (an epic)"
-    if entry is not None:
-        return f"{raw} (a {entry.get('type') or 'node'}, not an epic)"
-    return f"{raw} (not a configured project or a known node)"
-
-
 def resolve_role(scopes: list[str], *, graph_entry=None) -> "tuple[int, str]":
-    """``scopes`` -> the (rung, stored scope) they imply, both derived together.
-
-    ONE call rather than a derive-then-encode pair, because the two answers must
-    agree and a caller holding them separately can mismatch them: the rung is
-    counted over CANONICAL project names, so a scope encoded from the raw
-    spelling would be a different territory than the one that was counted.
+    """``scopes`` -> the (rung, stored scope) they imply, derived together by the
+    Rust ladder (``territory::resolve_role``). This shim sends its own alias map
+    and member rows, so the answer reads the sources this module reads.
 
     Raises :class:`RoleScopeError` when the scopes name no territory - the
-    refusal that keeps implementers unpromoted. Mixed scopes are refused rather
-    than coerced: a portfolio is projects and rung 2 is a set of epics, so
-    naming a project and an epic together is a mistake about what is being
-    ruled, not a role over both.
+    refusal that keeps implementers unpromoted - or when the resolver cannot
+    answer.
     """
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
     members = split_scope(canonical_scope(scopes))
-    if not members:
-        raise RoleScopeError("a role needs a scope: name an epic or a project")
-
-    # Resolve aliases FIRST, then dedupe: `-k alpha -k a` is one project spelled
-    # twice, not a two-project portfolio.
-    resolved = [(m, _canonical_project(m)) for m in members]
-    projects = [canon for _, canon in resolved if canon]
-    non_projects = [raw for raw, canon in resolved if not canon]
-
-    if len(members) > 1:
-        if not non_projects:
-            scope = canonical_scope(projects)
-            # One project named twice collapses to one project, not a portfolio.
-            return (0 if len(split_scope(scope)) > 1 else 1), scope
-        # ONE graph parse serves every per-member refusal below; a graph this
-        # rung could not read answers None, and the per-call fallback keeps
-        # the single-read behavior for that machine.
-        by_id = None if graph_entry else _graph_index()
-        entry_of = graph_entry or (_graph_entry if by_id is None else by_id.get)
-        if not projects:
-            # Rung 2 rules a SET of epics, stored with the same separator: a
-            # lead over two epics at once is one role, not a failed portfolio.
-            return 2, canonical_scope(
-                [_epic_or_refuse(raw, graph_entry=entry_of) for raw in non_projects]
-            )
-        raise RoleScopeError(
-            "a multi-scope role rules PROJECTS or EPICS, never both at once: "
-            f"{', '.join(_member_rung(raw, canon, graph_entry=entry_of) for raw, canon in resolved)}. "
-            "Name projects only (a portfolio) or epics only (a set)."
+    projects = {m: canon for m in members if (canon := _canonical_project(m))}
+    by_id = None if graph_entry or len(members) == len(projects) else _graph_index()
+    entry_of = graph_entry or (by_id.get if by_id is not None else (lambda _id: None))
+    rows = [row for m in members if m not in projects and (row := entry_of(m)) is not None]
+    try:
+        answer = spawn_overlay_call(
+            {"kind": "role-resolve", "scopes": members, "projects": projects, "entries": rows}
         )
-
-    raw = members[0]
-    if projects:
-        return 1, projects[0]
-    return 2, _epic_or_refuse(raw, graph_entry=graph_entry)
-
-
-def derive_role_level(scopes: list[str]) -> int:
-    """The rung alone. Thin wrapper over :func:`resolve_role` for callers that
-    only need the altitude."""
-    return resolve_role(scopes)[0]
+    except SpawnOverlayUnavailable as exc:
+        raise RoleScopeError(f"the ladder resolver did not answer: {exc}") from exc
+    if answer.get("refusal"):
+        raise RoleScopeError(answer["refusal"])
+    try:
+        return int(answer["level"]), str(answer["scope"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RoleScopeError(f"the ladder resolver answered malformed JSON: {answer!r}") from exc
 
 
 def scope_contains(
@@ -400,11 +336,11 @@ def grant_error(
     """Why this caller may not grant a role over ``requested_scope``, or None.
 
     The rule the docs have always stated and nothing was enforcing after the
-    promotion verb was deleted: you cannot hand down authority you do not hold.
+    promotion command was deleted: you cannot hand down authority you do not hold.
     ``scope_contains`` existed but had no caller, so any spawned worker could
     mint portfolio-level authority for its child.
 
-    Two grantor classes, matching what the verb used to accept, plus three
+    Two grantor classes, matching what the command used to accept, plus three
     failure modes that must fail closed:
 
     - **an attended human** (``caller_row`` is None - a shell with no agent
@@ -795,66 +731,41 @@ def _widen_answer(scope: str, caller, target_name: str) -> dict:
         return {}
 
 
-def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
-    """Set mission_active on every open epic in a promoted scope. Operator rule:
-    an epic with an owner is a mission, or no drain loop can see its children.
-    Returns the epic ids newly armed, or None when the graph write failed."""
-    armed: list[str] = []
-    try:
-        from fno.rust_binary import verb_call
-        from fno.agents import events
-        from fno.graph.cli import _container_ids
+def spawn_team_write(op: str, **payload: Any) -> dict:
+    """One spawn-team write op in Rust (team_spawn.rs), with the journal
+    path this process resolves. Prints the op's notices to stderr."""
+    import sys
 
-        # ONE graph parse serves every member: a graph this rung could not
-        # read answers None, and the per-call fallback keeps that machine
-        # working one member at a time.
-        by_id = _graph_index()
-        entry_of = _graph_entry if by_id is None else by_id.get
-        containers = _container_ids(list(by_id.values())) if by_id else set()
-        for member in split_scope(scope):
-            entry = entry_of(member) or {}
-            if entry.get("type") != "epic":
-                continue
-            if entry.get("status") in ("done", "superseded"):
-                continue
-            if member not in containers:
-                # advance_epic refuses a childless epic as not-a-container and
-                # leaves the flag standing, which the drain then polls forever.
-                # The dispatch lever arms it once children exist.
-                continue
-            if verb_call(["backlog", "advance", "--stdin"], {"op": "mission", "node_id": member, "active": True})["changed"]:
-                events.emit(
-                    "mission_activated",
-                    epic_id=member, source="role",
-                )
-                armed.append(member)
-    except Exception as exc:  # noqa: BLE001 - the role already committed
+    from fno import paths
+    from fno.agents.spawn_overlay_client import spawn_overlay_call
+
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": op, **payload,
+                                 "events": str(paths.global_events_json()),
+                                 "registry": str(paths.agents_registry_path())})
+    for note in answer.get("notices", []):
+        print(note, file=sys.stderr)
+    return answer
+
+
+def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
+    """Mission-arm every open epic container in a promoted scope; the ids
+    newly armed, or None when the graph write failed."""
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable
+
+    try:
+        return spawn_team_write("missions", scope=scope or "")["armed"]
+    except SpawnOverlayUnavailable as exc:
         import sys
 
-        print(
-            f"role: WARNING: mission arming failed for scope {scope!r} ({exc}); "
-            "arm it with: fno backlog advance --epic <id>",
-            file=sys.stderr,
-        )
+        print(f"role: WARNING: mission arming failed for scope {scope!r} ({exc}); "
+              "arm it with: fno backlog advance --epic <id>", file=sys.stderr)
         return None
-    return armed
 
 
 def journal_spawn_role(outcome: Optional[str], vacated: list, *, name, level, scope, grantor) -> None:
-    """Journal one committed spawn write: a vacate line per cleared holder, one
-    reown line per team child that followed the role, plus the grant line."""
-    from fno.agents import events
-    from fno.agents.spawn_overlay_client import spawn_overlay_call
-
-    answer = spawn_overlay_call({
-        "kind": "spawn-team", "op": "journal", "outcome": outcome,
-        "vacated": [(asdict(row), cause) for row, cause in vacated],
-        "name": name, "level": level, "scope": scope, "grantor": grantor,
-    })
-    for event in answer["events"]:
-        events.emit(event["kind"], **event["data"])
-    if answer["arm_missions"]:
-        arm_promoted_missions(scope)
+    """Journal one committed spawn write and arm the scope's missions."""
+    spawn_team_write("record", outcome=outcome, name=name, level=level, scope=scope,
+                     grantor=grantor, vacated=[(asdict(row), cause) for row, cause in vacated])
 
 
 def reclaim_role(handle: Optional[str] = None) -> dict[str, Any]:
@@ -1090,7 +1001,7 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     ):
         raise RolePromotionError(
             f"refusing to role {handle!r}: {scope!r} is your OWN scope, and "
-            "this verb only stamps the target, so it cannot hand a role over. "
+            "this command only stamps the target, so it cannot hand a role over. "
             "Succession runs through `fno agents spawn --promote <scope> "
             "--hand-off` instead, which vacates you and stamps the new holder "
             "in a single registry write, so the scope is never doubly ruled "
@@ -1274,7 +1185,7 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     except Exception:
         # Advisory receipt data must never crash a role that committed.
         receipt["stranded_subordinates"] = None
-    # The role TYPES the verb: the holder learns it terms through raw mail
+    # The role TYPES the command: the holder learns it terms through raw mail
     # typed as the operator would. Rendered per harness through the one
     # normalizer; an unknown harness keeps the `/fno:` spelling.
     target_row = next((r for r in rows_after if r.name == target_name), None)
@@ -1290,13 +1201,13 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     from fno.agents.harness_map import DispatchResolveError, normalize_command
 
     try:
-        verb = normalize_command(f"/fno:lead {scope}", target_harness or "")
+        command = normalize_command(f"/fno:lead {scope}", target_harness or "")
     except DispatchResolveError:
-        verb = f"/fno:lead {scope}"
+        command = f"/fno:lead {scope}"
     if caller is not None and target_name == caller.name:
         receipt["term_delivery"] = "skipped: self-edit, this session already terms"
     else:
-        receipt["term_delivery"] = _send_term_verb(address, verb)
+        receipt["term_delivery"] = _send_term_command(address, command)
     return receipt
 
 
@@ -1325,11 +1236,11 @@ def _carry_team_name(vacated_scope: Optional[str], scope: str, row_after, level:
     return "carried" if answer.get("carried") else str(answer.get("reason") or "unchanged")
 
 
-def _send_term_verb(address: str, verb: str) -> str:
-    """Mail the term verb to a freshly promoted holder; never raises.
+def _send_term_command(address: str, command: str) -> str:
+    """Mail the term command to a freshly promoted holder; never raises.
 
     Advisory receipt data: a failure is named on the receipt, because a promoted
-    session that never receives the verb improvises the ritual. `--raw` types
+    session that never receives the command improvises the ritual. `--raw` types
     the payload as the operator would, so a slash arrives as a command.
     """
     import subprocess
@@ -1338,7 +1249,7 @@ def _send_term_verb(address: str, verb: str) -> str:
     try:
         proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
             [sys.executable, "-m", "fno.cli", "agents", "mail",
-             "send", address, verb, "--raw"],
+             "send", address, command, "--raw"],
             capture_output=True,
             text=True,
             timeout=30,

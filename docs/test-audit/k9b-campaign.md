@@ -27,7 +27,7 @@ ambient default).
 | src/client/tests/backlog_board_tests.rs | 37 | 16 | board render, wide layout, t key, sideline toggles, chords, panel cells, compose, ux shots, edit keys, pickers, facets |
 | src/team_overlay.rs | 33 | 11 | parse, glance, expanded fleet, census, refusal, census degrade, fold failure, ttl, panel lifecycle |
 | src/client/questions.rs | 33 | 11 | block layout, page, detail nav, answer keys, submit, detail keys nav, toggle toast, apply result, block hit |
-| src/proto.rs | 29 | 8 | backlog verb baseline, codec roundtrip, agent-row backcompat, placement backcompat, wire skew, reader, socket |
+| src/proto.rs | 29 | 8 | backlog command baseline, codec roundtrip, agent-row backcompat, placement backcompat, wire skew, reader, socket |
 | src/digest_overlay.rs | 29 | 14 | theme overrides, config reader, config layer, key reader, json lines, user theme |
 | src/pty.rs | 29 | 18 | keeper shape, keeper argv, fd limit, fd ceiling, shell integration, zsh hop (the 12 PTY_GATE tests stay standalone) |
 | src/client_tests/feed_view_tests.rs | 29 | 8 | render, hit, click, width, header, detail fields |

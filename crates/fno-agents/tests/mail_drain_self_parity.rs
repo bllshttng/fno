@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.mail.cli.cmd_drain_self
 //!
-//! The drain-self leaf is a finished port: the python verb body is gone and
+//! The drain-self leaf is a finished port: the python command body is gone and
 //! the python surface forwards to this rust front. These tests hold the rust
 //! behavior against goldens captured from the python leg BEFORE the leaf
 //! landed, so capture mode is a refusal here: the oracle symbol

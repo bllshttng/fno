@@ -1317,7 +1317,7 @@ def _plan_path_door(args: list[str]) -> str:
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"plan-path door timed out after 5s: {args}") from exc
     if proc.returncode != 0:
-        detail = (proc.stderr or "plan-path verb failed").strip()
+        detail = (proc.stderr or "plan-path command failed").strip()
         raise RuntimeError(detail)
     return proc.stdout.strip()
 

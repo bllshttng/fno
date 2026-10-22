@@ -3,13 +3,13 @@
 ``rm`` tears down the harness's own session record before it touches the fno
 registry, and that record IS the resume handle. The transcript survives on
 disk, so the loss is reversible with ``fno agents adopt`` -- but nothing in
-the verb, its help, or its receipt used to say either half.
+the command, its help, or its receipt used to say either half.
 
 This module lives at the routing seam because that is the one path every
 ``rm`` takes: the Rust binary serves ``fno agents rm`` (an installed binary
 wins at the ``rust_runtime`` seam, and there is no Python rm to fall back
-to). A notice inside the verb's implementation would be decorative; the seam
-gate below is what covers the verb however it is reached.
+to). A notice inside the command's implementation would be decorative; the seam
+gate below is what covers the command however it is reached.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ import sys
 from typing import IO, Optional
 
 #: Verbatim in the notice and asserted on by the round-trip test. A caller who
-#: greps a receipt for the recovery verb finds this exact string.
-ADOPT_VERB = "fno agents adopt"
+#: greps a receipt for the recovery command finds this exact string.
+ADOPT_COMMAND = "fno agents adopt"
 
 #: Stamped by the seam once it has written the notice. Its reader was the
 #: deleted Python rm twin; the stamp stays so a future second writer below the
@@ -65,7 +65,7 @@ def resume_handle_notice(name: str, harness: str, handle: str) -> str:
         f"WARN: removing the {harness} session record for {name} ({handle}).\n"
         "      The transcript stays on disk.\n"
         + recovery_line
-        + f"      Reverse it with: {ADOPT_VERB} {handle} --cross-project\n"
+        + f"      Reverse it with: {ADOPT_COMMAND} {handle} --cross-project\n"
     )
 
 
@@ -104,7 +104,7 @@ def lookup_row(name: str):
 
     Returns ``None`` on any failure: an unreadable registry, a torn one, an
     ambiguous token. A notice is an advisory, so a read that cannot answer
-    degrades to silence and lets the real verb produce the real error.
+    degrades to silence and lets the real command produce the real error.
     """
     try:
         from fno.agents.registry import resolve_agent

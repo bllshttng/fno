@@ -426,7 +426,7 @@ def test_registration_identity_collision_is_never_degraded_to_a_synthesized_row(
         resolve_agent("deadbeef")
 
 
-# --- verb wiring: the heal must reach every resolution surface --------------
+# --- command wiring: the heal must reach every resolution surface --------------
 
 
 def test_resume_heals_an_unregistered_session(_registry_home):
@@ -599,7 +599,7 @@ def test_adopt_stamps_the_newest_entry_not_the_mtime(tmp_path):
 
 
 def test_raising_store_import_degrades_pid_and_resolution_survives(monkeypatch, tmp_path):
-    """A failing fno.inbox.store import degrades to pid=None; the verb completes.
+    """A failing fno.inbox.store import degrades to pid=None; the command completes.
 
     The lazy import sat inside the try, so a raising import (module or dep
     missing) made ``except ProjectIdentificationError:`` evaluate an unbound

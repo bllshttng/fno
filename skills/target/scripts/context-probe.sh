@@ -22,11 +22,11 @@ if [ $# -lt 1 ] || [ -z "$1" ]; then
   exit "$_EXIT_UNREADABLE"
 fi
 
-# `context` is a Python verb, so reach it through the Python CLI (`fno-py`)
+# `context` is a Python command, so reach it through the Python CLI (`fno-py`)
 # directly and fall back to the `fno` mux front door. The smoke gate runs
 # `uv run fno-py` off the in-tree source, which carries `context`; a bare `fno`
 # there is either absent or the mux forwarding to an older published wheel that
-# predates the verb, so `fno whoami context` dies and takes the test suite with it.
+# predates the command, so `fno whoami context` dies and takes the test suite with it.
 # Preferring fno-py changes nothing where both exist (the mux forwards to it).
 if command -v fno-py >/dev/null 2>&1; then
   _ctx_door=fno-py

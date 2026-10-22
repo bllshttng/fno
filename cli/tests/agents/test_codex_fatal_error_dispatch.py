@@ -58,7 +58,7 @@ def test_codex_invocation_error_maps_to_exit_1(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-HP: CodexInvocationError(1) -> DispatchAskError(exit_code=1).
-    Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn verb)."""
+    Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn command)."""
     use_tmpdir(monkeypatch, tmp_path)
     _force_codex_on_path(monkeypatch, tmp_path)
 
@@ -108,7 +108,7 @@ def test_no_session_id_error_maps_to_exit_11(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-ERR: NoSessionIdError -> DispatchAskError(exit_code=11).
-    Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn verb)."""
+    Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn command)."""
     use_tmpdir(monkeypatch, tmp_path)
     _force_codex_on_path(monkeypatch, tmp_path)
 

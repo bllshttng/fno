@@ -15,7 +15,7 @@
 //! never `wait()`s for - the shape a plain `wait()`-based reaper cannot see.
 //!
 //! Internal dispatch only (`fno-agents test-run`, matched in `bin/client.rs`
-//! next to `probe-run`) - never a public `fno` verb.
+//! next to `probe-run`) - never a public `fno` command.
 //! `cli/src/fno/test_runner.py` is the thin Python adapter that shells to
 //! this binary.
 

@@ -6,13 +6,13 @@ agents adopt` rebuilds the row from what is left. Every notice added here
 prints that recovery, so a test that never checks it would ship a promise
 nobody verified.
 
-`adopt` itself is a Rust verb, so these tests pin the Python half its recovery
+`adopt` itself is a Rust command, so these tests pin the Python half its recovery
 actually depends on: the store probe that `adopt`'s third resolution step runs
 (`heal_token` -> `probe_stores`), which is what finds a reaped session by its
 8-hex short id. That is the load-bearing link, and it is hermetic.
 
 ACs:
-- AC1-HP  : rm writes the session id and the literal adopt verb to stderr
+- AC1-HP  : rm writes the session id and the literal adopt command to stderr
             BEFORE any harness teardown is issued, and still completes.
 - AC2-HP  : the transcript survives rm, and the store probe still resolves the
             short id afterwards -- the round trip adopt performs.

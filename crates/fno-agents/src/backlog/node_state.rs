@@ -1,7 +1,7 @@
 //! The single bounded node-state owner (wave 1).
 //!
 //! A node carries ONE `current_state` object in its extras: `{body, revision,
-//! updated_at, source_session_id, source_harness}`. The public note verb
+//! updated_at, source_session_id, source_harness}`. The public note command
 //! appends to the node's thread and leaves this object alone. The direct
 //! writers here (replacement, clear) submit the revision they read, and the
 //! exact pre-image is journaled first (see `note_history`), so the hot node
