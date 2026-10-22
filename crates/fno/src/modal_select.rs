@@ -114,10 +114,13 @@ pub fn frame_end() {
         let Some(blocks) = s.building.take() else {
             return;
         };
+        // Only a live selection names cells; a press still waiting on its
+        // release holds no text, so a refresh in between must not eat the click.
         let stale = s.sel.as_ref().is_some_and(|sel| {
-            !blocks
-                .iter()
-                .any(|b| b.key == sel.key && b.sig() == sel.sig)
+            sel.live
+                && !blocks
+                    .iter()
+                    .any(|b| b.key == sel.key && b.sig() == sel.sig)
         });
         if stale {
             s.sel = None;
