@@ -724,7 +724,7 @@ def _resolve_time() -> float:
 # ---------------------------------------------------------------------------
 
 @cli.command("show")
-def show_provider(
+def show_forward(
     provider_id: str = typer.Argument(...),
     print_binding: bool = typer.Option(
         False,
@@ -736,6 +736,7 @@ def show_provider(
     ),
 ) -> None:
     """Show all fields of a single account record."""
+    # Transport only: `fno-agents accounts show` owns the verb.
     import subprocess
 
     from fno.rust_binary import resolve_binary
