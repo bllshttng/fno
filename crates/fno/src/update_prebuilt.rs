@@ -88,25 +88,149 @@ pub(crate) fn newest_published_rev(assets: &[serde_json::Value], platform: &str)
     best.map(|(_, rev)| rev)
 }
 
-/// The bin-cache release asset list from the GitHub REST API.
-/// Unauthenticated: one read per update run; a refused read errors by name
-/// and the caller skips rather than compiles.
+/// The bin-cache asset naming the newest published rev, one `<rev> <platform>`
+/// line per tarball. main-binaries.yml uploads it after the tarballs, so a
+/// rev it names is downloadable.
+pub(crate) const LATEST_MANIFEST: &str = "fno-bin-latest.txt";
+
+/// The rev the latest manifest names for `platform`, or None.
+pub(crate) fn manifest_rev(text: &str, platform: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        let rev = words.next()?;
+        (words.next() == Some(platform)
+            && !rev.is_empty()
+            && rev.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| rev.to_ascii_lowercase())
+    })
+}
+
+/// The latest manifest through the download URL. That URL is not rate
+/// limited, so machines behind one IP never spend the 60-an-hour REST
+/// allowance on it.
+fn fetch_latest_manifest(platform: &str) -> Result<String, String> {
+    let url = format!(
+        "https://github.com/{}/releases/download/{BIN_CACHE_TAG}/{LATEST_MANIFEST}",
+        release_repo()
+    );
+    let dest = std::env::temp_dir().join(format!("fno-prebuilt-latest-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&dest);
+    let fetched = curl_to(&url, &dest);
+    let text = std::fs::read_to_string(&dest).unwrap_or_default();
+    let _ = std::fs::remove_file(&dest);
+    fetched?;
+    manifest_rev(&text, platform)
+        .ok_or_else(|| format!("{LATEST_MANIFEST} names no build for {platform}"))
+}
+
+/// A GitHub token for the REST fallback: GH_TOKEN, GITHUB_TOKEN, then
+/// `gh auth token`. None reads unauthenticated.
+fn github_token() -> Option<String> {
+    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(t) = std::env::var(var) {
+            if !t.trim().is_empty() {
+                return Some(t.trim().to_string());
+            }
+        }
+    }
+    let out = crate::process_admission::std_command("gh")
+        .args(["auth", "token"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !t.is_empty()).then_some(t)
+}
+
+/// Why a REST listing read failed, from its status code and response
+/// headers. A 403 or 429 with no reads left names the rate limit and when it
+/// resets, so the operator sees the cause instead of a bare curl exit.
+pub(crate) fn listing_refusal(code: &str, headers: &str, authed: bool) -> String {
+    let header = |name: &str| {
+        headers.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| v.trim().to_string())
+        })
+    };
+    let exhausted = header("x-ratelimit-remaining").as_deref() == Some("0");
+    if (code == "403" || code == "429") && exhausted {
+        let reset = header("x-ratelimit-reset")
+            .and_then(|s| s.parse::<i64>().ok())
+            .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
+            .map(|t| format!(", resets {}", t.format("%H:%M:%SZ")))
+            .unwrap_or_default();
+        return if authed {
+            format!("HTTP {code}: the token's GitHub API rate limit is spent{reset}")
+        } else {
+            format!("HTTP {code}: the unauthenticated GitHub API limit (60 reads an hour per IP) is spent{reset}; set GH_TOKEN or run `gh auth login`")
+        };
+    }
+    format!("HTTP {code} for the bin-cache release listing")
+}
+
+/// The bin-cache release asset list from the GitHub REST API, the fallback
+/// when the latest manifest cannot answer. Sends a token when one exists:
+/// the unauthenticated allowance is per IP, so machines behind one router
+/// spend it together. The token goes through curl's stdin config, never
+/// argv, so `ps` cannot read it.
 pub(crate) fn fetch_release_assets() -> Result<Vec<serde_json::Value>, String> {
+    use std::io::Write;
     let url = format!(
         "https://api.github.com/repos/{}/releases/tags/{}",
         release_repo(),
         BIN_CACHE_TAG
     );
-    let dest =
-        std::env::temp_dir().join(format!("fno-prebuilt-assets-{}.json", std::process::id()));
+    let tmp = std::env::temp_dir();
+    let pid = std::process::id();
+    let dest = tmp.join(format!("fno-prebuilt-assets-{pid}.json"));
+    let head = tmp.join(format!("fno-prebuilt-assets-{pid}.headers"));
+    let token = github_token();
+    let mut child = crate::process_admission::std_command("curl")
+        .args([
+            "-sSL",
+            "--max-time",
+            FETCH_SECS,
+            "-K",
+            "-",
+            "-w",
+            "%{http_code}",
+            "-D",
+        ])
+        .arg(&head)
+        .arg("-o")
+        .arg(&dest)
+        .arg(&url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("curl: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut config = String::from("header = \"Accept: application/vnd.github+json\"\n");
+        if let Some(t) = &token {
+            config.push_str(&format!("header = \"Authorization: Bearer {t}\"\n"));
+        }
+        let _ = stdin.write_all(config.as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"));
+    let body = std::fs::read_to_string(&dest).unwrap_or_default();
+    let headers = std::fs::read_to_string(&head).unwrap_or_default();
     let _ = std::fs::remove_file(&dest);
-    let body = {
-        let fetched = curl_to(&url, &dest);
-        let text = std::fs::read_to_string(&dest).unwrap_or_default();
-        let _ = std::fs::remove_file(&dest);
-        fetched?;
-        text
-    };
+    let _ = std::fs::remove_file(&head);
+    let out = out?;
+    let code = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() {
+        return Err(format!(
+            "curl exited {} for {url}: {}",
+            out.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    if code != "200" {
+        return Err(listing_refusal(&code, &headers, token.is_some()));
+    }
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| format!("the bin-cache release listing is not JSON: {e}"))?;
     let assets = v
@@ -117,10 +241,17 @@ pub(crate) fn fetch_release_assets() -> Result<Vec<serde_json::Value>, String> {
 }
 
 /// The newest published tarball rev for `platform`, or None when the
-/// release lists none for it.
+/// release lists none for it. The latest manifest answers first; the REST
+/// listing answers only when the manifest cannot.
 pub(crate) fn newest_published(platform: &str) -> Result<Option<String>, String> {
-    let assets = fetch_release_assets()?;
-    Ok(newest_published_rev(&assets, platform))
+    let manifest_why = match fetch_latest_manifest(platform) {
+        Ok(rev) => return Ok(Some(rev)),
+        Err(why) => why,
+    };
+    match fetch_release_assets() {
+        Ok(assets) => Ok(newest_published_rev(&assets, platform)),
+        Err(why) => Err(format!("{LATEST_MANIFEST}: {manifest_why}; listing: {why}")),
+    }
 }
 
 /// The hex digest from a `sha256sum`-format line (`<hex>  <name>`).
@@ -300,6 +431,36 @@ mod tests {
         }
         let leftovers = std::fs::read_dir(dest.path()).unwrap().count();
         assert_eq!(leftovers, BINARIES.len());
+    }
+
+    #[test]
+    fn manifest_rev_reads_the_line_for_this_platform() {
+        let text = "aaaa1111 macos-arm64\nAAAA1111 linux-x64\nnot-hex linux-arm64\n";
+        assert_eq!(
+            manifest_rev(text, "macos-arm64"),
+            Some("aaaa1111".to_string())
+        );
+        assert_eq!(
+            manifest_rev(text, "linux-x64"),
+            Some("aaaa1111".to_string())
+        );
+        assert_eq!(manifest_rev(text, "linux-arm64"), None);
+        assert_eq!(manifest_rev(text, "macos-x64"), None);
+        assert_eq!(manifest_rev("", "macos-arm64"), None);
+    }
+
+    #[test]
+    fn listing_refusal_names_the_ip_limit_and_its_reset() {
+        let spent = "HTTP/2 403\r\nX-RateLimit-Remaining: 0\r\nx-ratelimit-reset: 1792620000\r\n";
+        let anon = listing_refusal("403", spent, false);
+        assert!(anon.contains("60 reads an hour per IP"), "{anon}");
+        assert!(anon.contains("resets "), "{anon}");
+        assert!(anon.contains("GH_TOKEN"), "{anon}");
+        let authed = listing_refusal("403", spent, true);
+        assert!(authed.contains("token's GitHub API rate limit"), "{authed}");
+        // A 403 with reads left is some other refusal, never named the limit.
+        let other = listing_refusal("403", "x-ratelimit-remaining: 12\n", false);
+        assert_eq!(other, "HTTP 403 for the bin-cache release listing");
     }
 
     #[test]
