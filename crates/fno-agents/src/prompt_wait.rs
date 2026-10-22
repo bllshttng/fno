@@ -129,11 +129,16 @@ pub(crate) fn observe(
     Ok(out)
 }
 
+/// A row names its session in either id field, the way burn-watch reads it.
+fn is_session(r: &crate::state::RegistryEntry, sid: &str) -> bool {
+    r.harness_session_id.as_deref() == Some(sid) || r.session_id.as_deref() == Some(sid)
+}
+
 fn parent_of(home: &AgentsHome, registry: &Registry, sid: &str) -> Option<String> {
     registry
         .entries
         .iter()
-        .find(|r| r.harness_session_id.as_deref() == Some(sid))
+        .find(|r| is_session(r, sid))
         .and_then(|r| r.spawned_by_session.clone())
         .or_else(|| crate::spawn_watch::caller_of(home, sid))
         .filter(|s| !s.is_empty() && s != sid)
@@ -144,7 +149,7 @@ fn parent_of(home: &AgentsHome, registry: &Registry, sid: &str) -> Option<String
 fn recipients(home: &AgentsHome, registry: &Registry, sid: &str) -> Vec<String> {
     let lead = |s: &str| {
         let mut rows = registry.entries.iter();
-        rows.any(|r| r.harness_session_id.as_deref() == Some(s) && r.role_level.is_some())
+        rows.any(|r| is_session(r, s) && r.role_level.is_some())
     };
     let mut out: Vec<String> = parent_of(home, registry, sid).into_iter().collect();
     let mut cur = out.first().cloned();
