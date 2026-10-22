@@ -67,13 +67,26 @@ def test_duplicate_cwd_refuses_rather_than_picks(tmp_path, monkeypatch):
     assert live_thread_row_for_cwd(str(cwd_a)) is None
 
 
-def test_claude_row_never_names_a_markerless_neighbour(tmp_path, monkeypatch):
+def test_markerless_claude_process_never_adopts_a_neighbour_row(tmp_path, monkeypatch):
+    from fno.claims.self_identity import _fill_spawn_record
+    from fno.harness_identity import OwnedHarnessIdentity
+
     cwd_a = tmp_path / "worker-a"
     cwd_a.mkdir()
     row = _thread_row("worker-a", str(cwd_a), "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4")
     row["harness"] = "claude"
     _write_registry(tmp_path, monkeypatch, [row])
-    assert live_thread_row_for_cwd(str(cwd_a)) is None
+    monkeypatch.chdir(cwd_a)
+    bare = OwnedHarnessIdentity(session_id=None, harness=None)
+    assert _fill_spawn_record(bare).session_id is None
+    named = OwnedHarnessIdentity(
+        session_id=None,
+        harness=None,
+        markers_present=(
+            ("CLAUDE_CODE_SESSION_ID", "claude", "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"),
+        ),
+    )
+    assert _fill_spawn_record(named).session_id == "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
 
 
 def test_exited_rows_own_no_identity(tmp_path, monkeypatch):

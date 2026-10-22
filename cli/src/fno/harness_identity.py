@@ -1288,7 +1288,7 @@ def live_thread_row_for_cwd(
                 continue
             harness = row.get("harness")
             session_id = row.get("harness_session_id")
-            if not harness or not session_id or harness == "claude":
+            if not harness or not session_id:
                 continue
             row_cwd = row.get("cwd")
             if not row_cwd or os.path.realpath(str(row_cwd)) != wanted:
