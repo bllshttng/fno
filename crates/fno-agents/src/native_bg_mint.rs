@@ -81,13 +81,15 @@ pub(crate) fn mint_missing_native_bg(
         // Two-key dedup, the same shape liveness_sweep's find() runs: a row
         // keyed only by its short id still holds this session.
         let held_by_short = entries.iter().any(|e| e.short_id == session);
+        if held_by_short
+            || crate::session_report::find_row(&entries, "claude", session, None).is_some()
+        {
+            continue;
+        }
         // Only a session that joined fno, or one a launch record names, is
         // adopted; the listing then only rescues a row that went missing.
         let record = crate::launch_record::claimed_edge(home.root(), session);
-        if (record.is_none() && !crate::join_marker::is_joined(home.root(), "claude", session))
-            || held_by_short
-            || crate::session_report::find_row(&entries, "claude", session, None).is_some()
-        {
+        if record.is_none() && !crate::join_marker::is_joined(home.root(), "claude", session) {
             continue;
         }
         let transcript = find_transcript_for(row, session);
