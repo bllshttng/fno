@@ -98,8 +98,37 @@ fn plan_of(arm: &SimpleArm, ctx: &PaneContext) -> ArmPlan {
     make_plan(arm, ctx).unwrap_or_else(|r| panic!("{} plan refused: {}", arm.harness, r.line))
 }
 
+/// The capture machine's seam env, held for the parity legs: the goldens
+/// expect the `--add-dir` grant tokens the seams derive from
+/// `FNO_WORKER_ADD_DIRS`, which a bare CI env lacks. The lock serializes the
+/// set/restore against the lib's other env readers.
+struct CaptureEnv {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    prior: Option<String>,
+}
+
+impl CaptureEnv {
+    fn hold() -> Self {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("FNO_WORKER_ADD_DIRS").ok();
+        std::env::set_var("FNO_WORKER_ADD_DIRS", "/fno-row8-capture/state");
+        CaptureEnv { _guard, prior }
+    }
+}
+
+impl Drop for CaptureEnv {
+    fn drop(&mut self) {
+        match self.prior.take() {
+            Some(v) => std::env::set_var("FNO_WORKER_ADD_DIRS", v),
+            None => std::env::remove_var("FNO_WORKER_ADD_DIRS"),
+        }
+    }
+}
+
 #[test]
 fn argv_parity_row8_goldens() {
+    let _capture = CaptureEnv::hold();
     let enriched = enrich_spawn_payload("do x");
 
     // opencode: byte parity of the provider argv, plus the mesh wrapper
@@ -334,6 +363,7 @@ fn normalize_command_and_verb_seed() {
 
 #[test]
 fn claude_argv_parity_row8_golden() {
+    let _capture = CaptureEnv::hold();
     let claude = golden(CLAUDE);
 
     // The arm table seats claude (the seating assert from the retired

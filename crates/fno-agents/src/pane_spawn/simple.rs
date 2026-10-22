@@ -144,6 +144,9 @@ fn build_pi(ctx: &PaneContext, seed: &str, uuid: Option<&str>) -> Vec<String> {
     argv.extend(route.tokens);
     argv.extend(grant_tokens("pi"));
     if !seed.is_empty() {
+        // argv-fence: exempt - pi takes the seed as a trailing positional
+        // after its flag block; the python leg pushes it bare and the golden
+        // pins the unfenced form (mux_spawn.py's pi branch).
         argv.push(seed.to_string());
     }
     argv.extend(ctx.passthrough.iter().cloned());

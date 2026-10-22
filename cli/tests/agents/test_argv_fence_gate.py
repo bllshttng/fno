@@ -369,7 +369,10 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     # reason as pi_run_tail, and its prompt always starts with `[from:` or a
     # verb sigil. Fifteen: the post-merge judgment spawn in ritual.rs, whose
     # model rides the fenced tail as claude's own flag, so its prompt (the
-    # ritual's own text) must precede the fence.
-    assert counts.get("exempt", 0) == 15, counts
+    # ritual's own text) must precede the fence. Sixteen: the pi pane arm's
+    # builder in pane_spawn/simple.rs, on the same probed pi reason as
+    # pi_run_tail - the seed is a trailing positional after the flag block
+    # and the row-8 golden pins the unfenced form.
+    assert counts.get("exempt", 0) == 16, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts
