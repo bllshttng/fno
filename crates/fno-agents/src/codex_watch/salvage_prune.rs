@@ -67,7 +67,7 @@ fn stray_on_base(repo: &Path, base: &str, sha: &str) -> bool {
 /// content is already on `base`. The delete pins the SHA it read, so a ref
 /// moved since the listing survives.
 pub(super) fn prune(repo: &Path, base: &str, now: i64) -> Result<Vec<Pruned>, String> {
-    let (_, listing) = git(
+    let (code, listing) = git(
         repo,
         &[
             "for-each-ref",
@@ -75,6 +75,9 @@ pub(super) fn prune(repo: &Path, base: &str, now: i64) -> Result<Vec<Pruned>, St
             "refs/heads/recovery/",
         ],
     )?;
+    if code != 0 {
+        return Err(format!("for-each-ref exited {code}"));
+    }
     let mut pruned = Vec::new();
     for line in listing.lines() {
         let Some((refname, sha)) = line.split_once(' ') else {
@@ -133,6 +136,12 @@ mod tests {
         );
         assert_eq!(salvage_epoch("refs/heads/feature/x-1"), None);
         assert_eq!(salvage_epoch("refs/heads/recovery/no-epoch-here"), None);
+    }
+
+    #[test]
+    fn a_failed_listing_is_an_error_not_an_empty_prune() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(prune(dir.path(), "main", 0).is_err());
     }
 
     #[test]
