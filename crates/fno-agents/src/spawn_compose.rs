@@ -386,6 +386,9 @@ struct Seam {
     suppressed: Vec<Value>,
     inject: Vec<String>,
     bundle: Vec<String>,
+    /// A pick's model with no route: it rides the harness argv behind the
+    /// `--` fence, after any lane bundle.
+    harness_model: Option<String>,
     events: Vec<Value>,
     exit: Option<i32>,
     stdout: Option<Value>,
@@ -426,7 +429,6 @@ struct Stage<'a> {
     grid_account_injected: bool,
     node_id_present: bool,
     overlay_answer: Option<Value>,
-    out_tail_empty: bool,
     fields: Option<Fields>,
 }
 
@@ -601,7 +603,6 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         grid_account_injected: false,
         node_id_present,
         overlay_answer: None,
-        out_tail_empty: false,
         fields: None,
     };
     walk_stage(&mut stage, seam);
@@ -620,6 +621,7 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         }
     }
     grid_inject(&mut stage, seam);
+    lane_model_pin(&stage, seam);
     billing_axes(&mut stage, seam);
     overlay_stage(&mut stage, seam);
     if seam.exit.is_some() {
@@ -1029,13 +1031,81 @@ fn grid_inject(stage: &mut Stage, seam: &mut Seam) {
             ));
         }
     }
-    // The grid's harness/model/effort pins rode flags that are retired; a
-    // pick expresses through its route (which owns the model) and nothing
-    // else. The receipt still names the pick.
+    // The spawn's --model flag is retired, the harness's is not: a pick
+    // whose route did not apply puts its model on the harness argv, or the
+    // harness launches its own default whatever the band picked.
+    if route.is_empty() && !stage.scan.explicit_route {
+        applied_any |= pin_harness_model(stage, seam, &harness, &model, &src);
+    }
+    // The receipt names a pick that applied, and always an operator pin row.
     if applied_any || !pin_row.is_empty() {
         seam.applied
             .push(json!(["grid", format!("{harness}/{model}"), src]));
     }
+}
+
+/// Pin `model` on the harness argv when the pick is for the harness this
+/// spawn launches. A model for another harness never rides: its flag value
+/// would mean nothing to this CLI.
+fn pin_harness_model(
+    stage: &Stage,
+    seam: &mut Seam,
+    harness: &str,
+    model: &str,
+    src: &str,
+) -> bool {
+    if model.is_empty() || stage.scan.has_model {
+        return false;
+    }
+    let launched = resolved_harness(stage).unwrap_or_default();
+    if !harness.is_empty() && harness != launched {
+        seam.note(format!(
+            "fno agents spawn: model skipped (pick is for harness {}, spawn launches {}); {} ignored",
+            crate::spawn_axes::repr(harness),
+            crate::spawn_axes::repr(&launched),
+            crate::spawn_axes::repr(model),
+        ));
+        return false;
+    }
+    seam.harness_model = Some(model.to_string());
+    seam.applied.push(json!(["model", model, src]));
+    true
+}
+
+/// A lane pick (`agents.profiles.<verb>.lanes`) with a model and no route
+/// pins that model the same way a grid pick does.
+fn lane_model_pin(stage: &Stage, seam: &mut Seam) {
+    let Some(candidate) = stage.slot_candidate.as_ref() else {
+        return;
+    };
+    if candidate.get("lane_rung").is_none()
+        || stage.scan.explicit_route
+        || !stage.fields().route.0.is_empty()
+    {
+        return;
+    }
+    // An inline lane carries its harness as `provider` in its fields, not
+    // on a row; read both so a codex lane's model never pins onto claude.
+    let s = |key: &str, field: &str| {
+        [
+            candidate.get(key),
+            candidate.get("lane_fields").and_then(|f| f.get(field)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_string()
+    };
+    let src = format!("lane {}", s("lane", "lane"));
+    pin_harness_model(
+        stage,
+        seam,
+        &s("harness", "provider"),
+        &s("model", "model"),
+        &src,
+    );
 }
 
 /// The billing axes (route/account/model, ruling 4) through the one Rust
@@ -1150,13 +1220,6 @@ fn pane_bundle_stage(stage: &mut Stage, seam: &mut Seam) {
             }
         }
     }
-    if answer
-        .get("out_tail_append_empty")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        stage.out_tail_empty = true;
-    }
 }
 
 /// The axes answer's mechanical application, shared by all three calls.
@@ -1215,12 +1278,44 @@ fn assemble(stage: &mut Stage, seam: &mut Seam) {
         argv = next;
         seam.injected = true;
     }
+    if let Some(model) = seam.harness_model.take() {
+        fence_model(&argv, &mut seam.bundle, model, &mut seam.stderr);
+    }
     if !seam.bundle.is_empty() {
+        // typer fills MESSAGE first, so a spawn with no prompt keeps the
+        // slot with an explicit empty, or the first fenced token becomes it.
+        if !stage.scan.positional_present && seam.bundle.first().is_some_and(|t| t == "--") {
+            argv.push(String::new());
+        }
         argv.extend(seam.bundle.iter().cloned());
         seam.injected = true;
     }
     seam.argv = Some(argv);
     journal(stage, seam, &stage.fingerprint);
+}
+
+/// Add `--model <model>` to the harness tokens. The typed passthrough wins:
+/// a fenced `--model`/`-m` keeps the operator's value. An `--argv` payload is
+/// a whole harness command, so nothing joins it.
+fn fence_model(argv: &[String], bundle: &mut Vec<String>, model: String, stderr: &mut Vec<String>) {
+    if argv.iter().any(|t| t == "--argv") {
+        stderr.push(format!(
+            "fno agents spawn: model skipped (argv already carries an --argv payload); {model} ignored"
+        ));
+        return;
+    }
+    let typed = argv.iter().position(|t| t == "--").map(|i| &argv[i + 1..]);
+    let typed_model = typed.is_some_and(|tail| {
+        tail.iter()
+            .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
+    });
+    if typed_model {
+        return;
+    }
+    if typed.is_none() && bundle.is_empty() {
+        bundle.push("--".to_string());
+    }
+    bundle.extend(["--model".to_string(), model]);
 }
 
 /// The spawn_defaults_applied receipt, through the journal op (the WRITE
@@ -1495,6 +1590,41 @@ pub fn fill_values(payload: &Value) -> std::collections::BTreeMap<String, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pick's model rides behind the fence: it opens a fence when none
+    /// exists, joins a lane bundle, yields to a typed `--model`, and refuses
+    /// to join an `--argv` payload with a named line instead of dropping.
+    #[test]
+    fn a_pick_model_rides_the_harness_argv() {
+        fn argv(t: &[&str]) -> Vec<String> {
+            t.iter().map(|s| s.to_string()).collect()
+        }
+        fn pin(a: &[String], mut bundle: Vec<String>) -> (Vec<String>, Vec<String>) {
+            let mut stderr = Vec::new();
+            fence_model(a, &mut bundle, "claude-haiku-5-5".into(), &mut stderr);
+            (bundle, stderr)
+        }
+        let seed = argv(&["spawn", "--name", "w", "/fno:target x-1"]);
+        assert_eq!(
+            pin(&seed, vec![]).0,
+            argv(&["--", "--model", "claude-haiku-5-5"])
+        );
+        let lane = argv(&["--", "--verbose"]);
+        assert_eq!(
+            pin(&seed, lane).0,
+            argv(&["--", "--verbose", "--model", "claude-haiku-5-5"])
+        );
+        let typed = argv(&["spawn", "go", "--", "-m", "sonnet"]);
+        assert!(pin(&typed, vec![]).0.is_empty(), "the typed model wins");
+        let fenced = argv(&["spawn", "go", "--", "--verbose"]);
+        assert_eq!(
+            pin(&fenced, vec![]).0,
+            argv(&["--model", "claude-haiku-5-5"])
+        );
+        let (bundle, stderr) = pin(&argv(&["spawn", "--argv", "claude"]), vec![]);
+        assert!(bundle.is_empty());
+        assert!(stderr[0].contains("model skipped"), "{stderr:?}");
+    }
 
     type Saved = Vec<(&'static str, Option<std::ffi::OsString>)>;
 

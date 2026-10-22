@@ -57,6 +57,7 @@
     },
     "stderr": [
       "fno agents spawn: slot note agents.profiles.target.lanes[0] uncapped (no vendor declared)",
+      "fno agents spawn: model skipped (pick is for harness 'codex', spawn launches 'claude'); 'luna-x' ignored",
       "fno agents spawn: applied slot=agents.profiles.target.lanes[0] agents.profiles.target.lanes[0] (routing)"
     ],
     "stdout": null

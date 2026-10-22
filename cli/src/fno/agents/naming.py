@@ -109,6 +109,10 @@ def dispatch_agent_name(source, verb, identity, *, slug=None, qualifier=None, di
                  *_flags(("--slug", slug), ("--qualifier", qualifier), ("--discriminator", discriminator),
                          ("--model", model)))
 
+def worker_name(node=None, *, seed=None, slug=None):
+    """``t-<short slug>``, a target worker's default name; an empty node reads a ``/target`` seed."""
+    return _mint("--worker", node or "", *_flags(("--seed", seed), ("--slug", slug)))
+
 def mint_or_none(source, verb, identity, **kwargs):
     """The mint for degradable seams: a stale/missing binary reads as None."""
     try:

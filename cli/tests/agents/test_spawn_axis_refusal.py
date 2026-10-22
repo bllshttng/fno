@@ -12,7 +12,6 @@ from typer.testing import CliRunner
 from fno.agents.cli import agents_app
 
 RETIRED_VALUES = [
-    ("--model", "opus"),
     ("--provider", "zai"),
     ("--yolo", None),
     ("--permission-mode", "default"),

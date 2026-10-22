@@ -543,6 +543,20 @@ fn spawn_attach_writer(
 /// own session (the title names it); the launch record goes first and the
 /// row binds at the worker's session report. Fire-and-forget by design: the
 /// turn runs on the serve; the launched process only drives it.
+/// The first passthrough token the serve lane cannot carry, else None. It
+/// carries `--model M`, `--model=M` and `-m M`, nothing else.
+pub fn uncarried_flag(tokens: &[String]) -> Option<&str> {
+    let mut it = tokens.iter();
+    while let Some(tok) = it.next() {
+        if tok == "--model" || tok == "-m" {
+            it.next();
+        } else if !tok.starts_with("--model=") {
+            return Some(tok);
+        }
+    }
+    None
+}
+
 pub fn dispatch_opencode_serve(
     home: &AgentsHome,
     name: &str,
