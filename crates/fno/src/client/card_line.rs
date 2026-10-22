@@ -69,6 +69,28 @@ pub(super) fn binding_suffix(a: &AgentRow) -> String {
     }
 }
 
+/// Fit the node beside a name that must stay whole: `keep` is the first
+/// column the node may take. The node keeps its tail and cuts its front
+/// (`…0e630a0a`), and drops when fewer than three of its characters fit.
+pub(super) fn fit_node(
+    node: &str,
+    span: Range<usize>,
+    keep: usize,
+) -> Option<(Range<usize>, String)> {
+    if span.start >= keep {
+        return Some((span, node.to_string()));
+    }
+    let room = span.end.saturating_sub(keep);
+    if room < 4 {
+        return None;
+    }
+    let chars: Vec<char> = node.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(room - 1)..]
+        .iter()
+        .collect();
+    Some((span.end - room..span.end, format!("\u{2026}{tail}")))
+}
+
 pub(super) fn node_span(a: &AgentRow, text_w: usize) -> Option<Range<usize>> {
     identity_spans(a, text_w).node
 }
@@ -505,5 +527,18 @@ mod binding_display_tests {
         assert_eq!(pr, 28..40);
         assert_eq!(spans.node, Some(20..25));
         assert_eq!(spans.separator, Some(25..28));
+    }
+
+    #[test]
+    fn fit_node_cuts_the_node_front_before_the_name() {
+        // `scout` ends at column 7 with one space after it, so the node may
+        // start at 8. The specimen cut the name to `scou` instead.
+        let node = "ab-0e630a0a";
+        assert_eq!(fit_node(node, 10..21, 8), Some((10..21, node.into())));
+        assert_eq!(
+            fit_node(node, 6..17, 8),
+            Some((8..17, "\u{2026}0e630a0a".into()))
+        );
+        assert_eq!(fit_node(node, 6..17, 14), None, "under 3 node chars drops");
     }
 }

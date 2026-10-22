@@ -1116,6 +1116,8 @@ pub(crate) struct View {
     /// The esc-close spans the last compose painted: the one list a tap
     /// checks, whichever overlay drew them.
     close_chips: std::cell::RefCell<Vec<chrome::CloseSpan>>,
+    /// Card line 1's node span per agent name, as the last paint drew it.
+    card_node_spans: std::cell::RefCell<HashMap<String, Option<std::ops::Range<usize>>>>,
     /// The pending new-workspace name buffer, `Some` while the `+`
     /// create overlay is open. Keys divert to `overlay_keys::create_keys`: printable append,
     /// Backspace pops, Enter sends [`Command::NewSquad`] (empty keeps it open),
@@ -2085,6 +2087,7 @@ impl View {
             confirm: None,
             modal_release_swallow: false,
             close_chips: Default::default(),
+            card_node_spans: Default::default(),
             create: None,
             folder_pick: Default::default(),
             create_esc: Vec::new(),
