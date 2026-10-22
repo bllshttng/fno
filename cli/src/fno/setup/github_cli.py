@@ -14,10 +14,11 @@ from typing import Callable, Mapping, Optional
 from fno.paths import github_cli_proxy_dir
 
 PROXY_EXEC_LINE = 'exec fno-gh-proxy "$@"'
-# The OTHER shape a shim takes: pip and uv write a console script importing the
-# entry point, with no exec line, so it read as a real binary. On 2026-09-07
-# `~/.local/bin/gh` was one, and every gh read died on the re-entry refusal.
-PROXY_IMPORT_LINE = "from fno.pr.gh_proxy import main"
+# A shim can also take the pip/uv console-script shape: an import line for the
+# Python entry point retired by pr port 7, with no exec line, so it read as a
+# real binary. On 2026-09-07 `~/.local/bin/gh` was one, and every gh read died
+# on the re-entry refusal. The native broker still recognizes that retired
+# shape on disk; this installer only ever writes the exec-line form.
 _WRAPPER = f"#!/bin/sh\n{PROXY_EXEC_LINE}\n"
 _PROXY_DIR_ENV = "FNO_GH_PROXY_DIR"
 # The proxy stamps this into the env it hands `os.execve`, so its own successor
@@ -42,6 +43,33 @@ def fallback_proxy_dir() -> Path:
     return Path(tempfile.gettempdir()) / f"fno-{uid}" / "github-cli"
 
 
+def _bundled_helper(name: str) -> Optional[Path]:
+    """The wheel's co-located gh-transport binary (``fno/_bin/<name>``).
+
+    The Rust spawners reach the same file as sibling-of-their-own-exe; the
+    shim installer needs it spelled out, because a pip-only box has no
+    ``fno-gh-proxy`` on PATH and no venv script sibling."""
+    try:
+        import fno
+    except ImportError:
+        return None
+    candidate = Path(fno.__file__).with_name("_bin") / name
+    return candidate if candidate.is_file() else None
+
+
+def _helper_resolvable() -> bool:
+    """True when the bare ``fno-gh-proxy`` name the wrapper execs resolves:
+    on PATH, co-located in the wheel's ``_bin``, or beside the interpreter.
+    Without it the wrapper would strand every gh call behind a not-found
+    exec (the symlink that backs the bare name is skipped), so the
+    installers degrade and leave the real gh unswrapped."""
+    if shutil.which("fno-gh-proxy"):
+        return True
+    if _bundled_helper("fno-gh-proxy") is not None:
+        return True
+    return Path(sys.executable).with_name("fno-gh-proxy").is_file()
+
+
 def _is_wrapper(path: Path) -> bool:
     # A stock CI runner's gh is a compiled binary, not utf-8 text.
     try:
@@ -62,8 +90,21 @@ def ensure_proxy(
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
     link = root / "fno-gh-proxy"
-    helper = shutil.which("fno-gh-proxy") or str(Path(sys.executable).with_name("fno-gh-proxy"))
-    if not link.exists() and os.path.isfile(helper):
+    helper = shutil.which("fno-gh-proxy")
+    if not helper:
+        bundled = _bundled_helper("fno-gh-proxy")
+        if bundled is not None:
+            helper = str(bundled)
+    if not helper:
+        sibling = Path(sys.executable).with_name("fno-gh-proxy")
+        helper = str(sibling) if sibling.is_file() else None
+    if helper is None:
+        # Nothing provides the name the wrapper execs, so the install would
+        # strand every gh call behind a not-found exec. Degrade: leave the
+        # real gh unswrapped and let the quota policy stand down for this
+        # process tree.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    if helper and not link.exists() and os.path.isfile(helper):
         link.unlink(missing_ok=True)
         with suppress(FileExistsError):
             link.symlink_to(helper)
@@ -150,6 +191,11 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
             env.pop("FNO_REAL_GH", None)
             return env
     else:
+        if not _helper_resolvable():
+            # No helper: no shim install and no PATH prepend. The children
+            # resolve gh by plain PATH order and the quota policy stands
+            # down for this process tree.
+            return env
         try:
             result = ensure_proxy(
                 directory=Path(requested_dir) if requested_dir else None,

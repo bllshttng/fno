@@ -1657,6 +1657,24 @@ def _silent_switch_report(
     return {"findings": findings, "posture": _read_posture_stamp()}
 
 
+def _cwd_repo_root() -> Path:
+    """The invoking repo's root, resolved as the review predicate resolves it
+    (cwd -> toplevel). Never the fno source checkout: the lanes that matter
+    are the invoking repo's, and an install with no source checkout at all
+    (plugin, PyPI) is exactly the install this check protects - a
+    source-rooted read no-ops there."""
+    import subprocess as _subprocess
+
+    rev = _subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=os.getcwd(), capture_output=True, text=True, timeout=10,
+    )
+    top = rev.stdout.strip()
+    # rev-parse answers the repo root itself; the retired _repo_state_dir
+    # returned the .fno dir UNDER it, which is where its .parent came from.
+    return Path(top) if rev.returncode == 0 and top else Path(os.getcwd())
+
+
 def _auto_merge_review_gap(
     armed_manifests: Optional[dict[str, int]] = None,
 ) -> Optional[dict[str, Any]]:
@@ -1689,14 +1707,7 @@ def _auto_merge_review_gap(
         )
         if enabled is not True:
             return None
-        # The project doctor runs IN, resolved the same way the predicate
-        # resolves it (rev-parse from cwd). Never the fno source checkout:
-        # the lanes that matter are the invoking repo's, and an install with
-        # no source checkout at all (plugin, PyPI) is exactly the install
-        # this check protects - a source-rooted read no-ops there.
-        from fno.pr._merge import _repo_state_dir
-
-        root = Path(_repo_state_dir(os.getcwd())).parent
+        root = _cwd_repo_root()
         from fno.rust_binary import verb_call
 
         lane = verb_call(

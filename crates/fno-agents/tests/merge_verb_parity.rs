@@ -1,4 +1,4 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.pr._merge.run_merge
 //!
 //! The goldens under tests/golden/merge_verb/ were captured from the Python
@@ -10,7 +10,8 @@
 //! (`fno-agents authorized-merge merge ...`), and compares masked streams and
 //! call folds against the frozen goldens. Capture mode is a no-op here: the
 //! driver is the capture path, and a golden can only be re-frozen by running
-//! the driver against the Python leg, never from this binary.
+//! the driver against the Python leg, never from this binary. The Python leg
+//! was deleted by the pr retirement; the frozen goldens are now the contract.
 
 use std::collections::HashMap;
 use std::fs;

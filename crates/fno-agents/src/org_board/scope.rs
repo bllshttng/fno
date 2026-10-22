@@ -31,7 +31,7 @@ pub(crate) fn graph_json_path(_cwd: &Path) -> PathBuf {
         Some(home) => PathBuf::from(home),
         None => home_dot_fno(),
     };
-    crate::state_layout::place(&root, "graph.json")
+    crate::state_layout::graph_anchor(&root)
 }
 
 /// `paths.operator_lane()`: pinned global like the ledger - one file per

@@ -14,6 +14,7 @@ pub struct DayInputs {
     pub decisions_raw: String,
     pub decisions_path: String,
     pub graph_entries: Vec<Value>,
+    pub graph_path: String,
     pub event_journals: Vec<(String, String)>,
     /// (path, state) pairs parallel to `event_journals`: `read`, `missing` or
     /// `unreadable`. Empty means every provided journal was read.
@@ -379,7 +380,7 @@ pub fn fold_day(inputs: &DayInputs) -> Result<Value, String> {
     let mut receipts = vec![
         json!({"source":"questions", "path": inputs.questions_path, "state": inputs.questions_state, "scanned": inputs.questions_raw.lines().count(), "matched": open_items.len()}),
         json!({"source":"decisions", "path": inputs.decisions_path, "state":"read", "scanned": inputs.decisions_raw.lines().count(), "matched": retractions.iter().filter(|r| r["kind"] == "decision").count()}),
-        json!({"source":"graph", "path":"graph.json", "state":"read", "scanned": inputs.graph_entries.len(), "matched": completed_items.len()}),
+        json!({"source":"graph", "path": inputs.graph_path, "state":"read", "scanned": inputs.graph_entries.len(), "matched": completed_items.len()}),
     ];
     for (path, raw) in &inputs.event_journals {
         let state = inputs
@@ -507,7 +508,7 @@ fn graph_path(home: &crate::paths::AgentsHome) -> PathBuf {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    crate::state_layout::place(&root, "graph.json")
+    crate::state_layout::graph_anchor(&root)
 }
 
 pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
@@ -627,6 +628,9 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         decisions_raw,
         decisions_path: decisions_path.display().to_string(),
         graph_entries,
+        graph_path: crate::backlog::database_path(&graph_path(home))
+            .display()
+            .to_string(),
         event_journals: journals,
         journal_states,
         checkin_scan,

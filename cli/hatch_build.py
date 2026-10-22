@@ -34,7 +34,18 @@ except ImportError:  # hatchling is the build backend, absent when unit-testing
 #: without the advertised `fno` command. They are standalone executables, NOT
 #: CPython extensions, so the wheel tag stays `py3-none-<platform>` (see
 #: apply_binary_bundle).
-_BINARY_BASENAMES = ("fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker")
+_BINARY_BASENAMES = (
+    "fno",
+    "fno-agents",
+    "fno-agents-daemon",
+    "fno-agents-worker",
+    # The gh transport trio, native since pr port 7: the Python modules they
+    # replaced are deleted, so the wheel's binary-complete-or-refuse hook now
+    # stages these from the same cargo output.
+    "fno-gh-proxy",
+    "fno-gh-loopcheck",
+    "fno-gh-coverage",
+)
 #: Windows appends .exe; os.name reflects the BUILD machine, which is the correct
 #: platform for the wheel being produced, so the hook probes the right names on
 #: the windows runner (else it no-ops and silently ships a pure-Python wheel).

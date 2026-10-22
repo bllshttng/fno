@@ -2972,7 +2972,7 @@ pub(crate) fn audit_load_snapshot(
                                                                             // store owns the index, so this consumer never reads a file. Rows are
                                                                             // flattened: data fields at the top level plus ts and _event_type.
     let decision_rows: Vec<Value> = crate::backlog::api::decisions(
-        &crate::backlog::api::Store::new(&state_root.join("graph.json")),
+        &crate::backlog::api::Store::new(&crate::state_layout::graph_anchor(&state_root)),
         None,
         None,
     )

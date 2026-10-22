@@ -1,0 +1,50 @@
+[
+  {
+    "error": null,
+    "function_id": "marketing",
+    "layer": "built-in",
+    "role_id": "owner",
+    "source": "built-in/\u00e9quipe.json",
+    "status": "valid"
+  },
+  {
+    "error": null,
+    "function_id": "marketing",
+    "layer": "company",
+    "role_id": "analyst",
+    "source": "company/sub/nested.json",
+    "status": "valid"
+  },
+  {
+    "error": "<ERROR>",
+    "function_id": null,
+    "layer": "project",
+    "role_id": null,
+    "source": "project/bad.json",
+    "status": "invalid"
+  },
+  {
+    "error": "<ERROR>",
+    "function_id": "support",
+    "layer": "project",
+    "role_id": "broken",
+    "source": "project/broken.json",
+    "status": "invalid"
+  },
+  {
+    "error": "FileNotFoundError: [Errno 2] No such file or directory: '<FIXTURE>/extra/missing.json'",
+    "function_id": null,
+    "layer": "plan",
+    "role_id": null,
+    "source": "<FIXTURE>/extra/missing.json",
+    "status": "unreadable"
+  },
+  {
+    "error": "<ERROR>",
+    "function_id": null,
+    "layer": "plan",
+    "role_id": null,
+    "source": "plan",
+    "status": "invalid"
+  }
+]

@@ -55,6 +55,8 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "verb-collapse-flags.txt"
 NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
+    "agents roles ls",
+    "roles ls",
     "backlog advance",
     "backlog album",
     "backlog archive",
@@ -99,6 +101,39 @@ NATIVE_SERVED_LEAVES = {
     "do review post-dispositions",
     "do review classify",
     "do review invocations",
+    # The pr spellings answer through the native front door now; the wheel's
+    # pr group keeps only the watch and stub-manifest mounts, whose leaves the
+    # enumerator still reads from the live typer tree.
+    "do pr attestation retract",
+    "do pr base-check",
+    "do pr base-lineage-check",
+    "do pr bind-created",
+    "do pr closure-trailer",
+    "do pr coverage-check",
+    "do pr coverage-publish",
+    "do pr coverage-waive",
+    "do pr create",
+    "do pr evidence-check",
+    "do pr evidence-required",
+    "do pr global-receipt-events-path",
+    "do pr graphql-exec",
+    "do pr heal",
+    "do pr hold-check",
+    "do pr info",
+    "do pr list",
+    "do pr logs",
+    "do pr merge",
+    "do pr merge-result-check",
+    "do pr next-receipt-generation",
+    "do pr publish-review",
+    "do pr push",
+    "do pr rebase",
+    "do pr review-hold",
+    "do pr ritual",
+    "do pr status",
+    "do pr sync-canonical",
+    "do pr verify",
+    "do pr wait",
 }
 
 # Two people hit these gates cold within an hour and both reverse-engineered the

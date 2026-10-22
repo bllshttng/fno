@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from fno.company.contracts import WorkOrderRef
 from fno.plugins.activate import activate, deactivate
 from fno.plugins.registry import PackRegistryStore
@@ -18,6 +20,9 @@ from fno.roles.models import (
 )
 from fno.roles.registry import discover_role_definitions
 from fno.roles.resolver import resolve_role
+
+# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+pytestmark = pytest.mark.dev_build
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "growth-studio" / "plugin.yaml"

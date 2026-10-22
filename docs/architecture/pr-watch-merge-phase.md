@@ -16,10 +16,10 @@ The queue itself is Rust's (`crates/fno-agents/src/merge_grant.rs`). It drops `s
 
 - It re-loads the entry under the per-PR lock. Every unattempted row is reported on `pr_watch_skipped`. The reason names the cause: `merged`, `parked`, `not-open`, `no-watermark`, `locked`, or `execute-budget`. Budget refusals count separately.
 - The floor is `max(_MERGE_FLOOR_S, slowest)`. `slowest` is the longest attempt this drain has run. A real merge measured about 120s and head attempts ran 115-128s under load. The drain requires at least 150s left.
-- The merge core's printed reason is kept on `fno.pr._merge.LAST_RECEIPT`. Every held and failed `merge_grant_execution` row records it, capped at 300 characters. A hold whose reason starts with `PR already ` is the core's terminal exemption. That hold stamps `last_seen_state = "NOT_OPEN"` on the row. A closed or merged PR then costs at most one attempt, even while the listing lags.
+- The merge core's printed reason is kept on `fno.pr_watch._dispatch.LAST_RECEIPT` (the deleted pr package's seam moved into the drain at the pr-port-7 retirement). Every held and failed `merge_grant_execution` row records it, capped at 300 characters. A hold whose reason starts with `PR already ` is the core's terminal exemption. That hold stamps `last_seen_state = "NOT_OPEN"` on the row. A closed or merged PR then costs at most one attempt, even while the listing lags.
 - It persists `retries + 1` BEFORE the merge call. `WatermarkStore.set` persists per write. An alarm cut mid-call therefore counts as one failed attempt. The PR parks at `max_retries` instead of replaying at the head of every tick.
 - rc 0 marks the merge done. rc 2 restores the prior retry count. A canonical guard's hold is a state to wait out, not a failure. Anything else is a failed attempt that feeds the park.
-- The drain calls canonical `run_merge([str(pr)], cwd=..., authority="durable_grant", timeout_s=_ritual_timeout())` directly. The `timeout_s` bounds the authorized-merge owner call at the slice remainder. The interactive default stays 300s.
+- The drain calls the authorized-merge door's merge op (`verb_call("authorized-merge", {"op": "merge", "argv": [str(pr)], "authority": "durable_grant", "cwd": ...}, timeout=900)`); the flow's own exit rides the receipt, so a held or failed merge still answers exit 0 with its reason. The door call itself is bounded at 900s.
 
 ## Why every cure defers to a live tick
 

@@ -247,6 +247,9 @@ enum Role {
     /// only turned around and exec'd the same binary. The argv passes
     /// through byte-verbatim.
     AgentsStatus(Vec<OsString>),
+    /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
+    /// `fno-agents spawn-overlay roles`, the group options carried along.
+    AgentsRoles(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -310,6 +313,10 @@ enum Role {
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
     Backlog,
+    /// `fno do pr ...` (except watch and stub-manifest): the whole pr
+    /// namespace execs the sibling Rust binary's pr dispatcher. The argv
+    /// passes through byte-verbatim, the backlog namespace's contract.
+    DoPr,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -324,6 +331,9 @@ enum Role {
     /// `fno inbox decide ...`: the native decide record verb, classified
     /// beside the law verbs.
     InboxDecide(Vec<OsString>),
+    /// `fno inbox user|operator status`: the native queue read; the carried
+    /// tail is the `fno-agents compaction` argv.
+    InboxUser(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// verb because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -479,6 +489,36 @@ fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     classify_agents_verb(args, "status")
+}
+
+/// `fno agents roles <op>`, the deprecated root `fno roles <op>`, and a
+/// root `-J` before either (`agents org roles` arrives here already
+/// rewritten by the agents menu). The group options may precede the op.
+/// Only the ops the Rust door owns are claimed; any other op, and the bare
+/// group's help, still forward.
+fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    let tail = match args.first()?.to_str()? {
+        "agents" if args.get(1)?.to_str()? == "roles" => &args[2..],
+        "roles" => &args[1..],
+        _ => return None,
+    };
+    let mut i = 0;
+    while i < tail.len() {
+        match tail[i].to_str()? {
+            "--json" | "-J" => {}
+            "--root" | "--source" => i += 1,
+            a if a.starts_with("--root=") || a.starts_with("--source=") => {}
+            "ls" => {
+                let json = root_json.then(|| OsString::from("--json"));
+                return Some(json.into_iter().chain(tail.iter().cloned()).collect());
+            }
+            _ => return None,
+        }
+        i += 1;
+    }
+    None
 }
 
 fn classify_group_verb(args: &[OsString], group: &str, verb: &str) -> Option<Vec<OsString>> {
@@ -786,6 +826,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
     }
+    if let Some(rest) = classify_agents_roles(args) {
+        return Role::AgentsRoles(rest);
+    }
     if let Some(role) = classify_mail_show(args) {
         return role;
     }
@@ -811,6 +854,32 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if args.first().and_then(|a| a.to_str()) == Some("backlog") {
         return Role::Backlog;
     }
+    // The pr namespace claims itself lexically, like backlog: the sibling
+    // dispatcher owns the 29 spellings and the handover stays byte-verbatim
+    // (pr port 7). The two carve-outs stay with the Python wheel: `watch`
+    // and `stub-manifest` are the watcher's own surface, and do_cli.py keeps
+    // their mounts answering under `fno do pr`. Bare `fno do pr` claims too:
+    // the grouped help is native once the Python pr_app is gone.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(2).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
+    }
+    // The bare `fno pr` legacy spelling claims natively too: the wheel's
+    // hidden lazy entry points at the deleted Python pr_app, so a claim here
+    // keeps the muscle-memory spelling answering instead of a traceback.
+    if args.first().and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(1).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -822,6 +891,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::law_cli::classify_inbox_decide(args) {
         return Role::InboxDecide(rest);
+    }
+    if let Some(argv) = fno::inbox_user::classify_inbox_user(args) {
+        return Role::InboxUser(argv);
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
@@ -1055,6 +1127,7 @@ fn main() {
     match decide_role(&args, is_tty) {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
+        Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -1185,6 +1258,11 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
+        Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
+            "fno agents roles",
+            &["spawn-overlay", "roles"],
+            &rest,
+        )),
         Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
             Some(bin) => std::process::exit(fno_agents_exec_bin(
                 "fno agents status",
@@ -1285,6 +1363,9 @@ fn main() {
         Role::InboxLaw(rest) => std::process::exit(fno::law_cli::run(&rest)),
         Role::InboxDecisions(rest) => std::process::exit(fno::law_cli::run_decisions(&rest)),
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
+        Role::InboxUser(argv) => {
+            std::process::exit(fno_agents_exec("fno inbox user", &["compaction"], &argv))
+        }
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
@@ -1397,6 +1478,36 @@ mod tests {
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn do_pr_claims_the_namespace_and_leaves_the_mounts_to_python() {
+        assert_eq!(
+            decide_role(&os(&["do", "pr", "status", "41"]), false),
+            Role::DoPr
+        );
+        assert_eq!(decide_role(&os(&["do", "pr", "--help"]), false), Role::DoPr);
+        // Bare `fno do pr` claims too: the grouped help is native.
+        assert_eq!(decide_role(&os(&["do", "pr"]), false), Role::DoPr);
+        // The bare `fno pr` legacy spelling claims natively as well: the
+        // wheel's hidden lazy entry died with the Python pr_app.
+        assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
+        assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
+        // The two Python mounts stay unclaimed: they forward to the wheel.
+        assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
+        assert_ne!(
+            decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false),
+            Role::DoPr
+        );
+        // A non-pr `do` tree stays with its owners.
+        assert_ne!(
+            decide_role(&os(&["do", "wizard", "--json"]), false),
+            Role::DoPr
+        );
+        assert_ne!(
+            decide_role(&os(&["do", "review", "--help"]), false),
+            Role::DoPr
+        );
     }
 
     #[test]
@@ -1683,6 +1794,20 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
+        );
+        // `roles ls` is the Rust door's in every spelling, group options
+        // carried; an op still on Python forwards.
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "--root", "r", "ls", "-J"]), false),
+            Role::AgentsRoles(os(&["--root", "r", "ls", "-J"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["-J", "roles", "--source=plan=p", "ls"]), false),
+            Role::AgentsRoles(os(&["--json", "--source=plan=p", "ls"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "show", "x"]), false),
+            Role::Forward
         );
     }
 

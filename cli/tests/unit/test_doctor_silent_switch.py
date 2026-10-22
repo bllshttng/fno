@@ -228,9 +228,7 @@ def _patch_gap(
         monkeypatch.setattr(
             doctor, "_resolve_source", lambda _source: source_points_elsewhere
         )
-    monkeypatch.setattr(
-        "fno.pr._merge._repo_state_dir", lambda _cwd: str(repo / ".fno")
-    )
+    monkeypatch.setattr(doctor, "_cwd_repo_root", lambda: repo)
     import fno.rust_binary as rust_binary
 
     def fake_lane_door(verb, payload, unavailable=None, **kw):
