@@ -9,7 +9,7 @@
 //! the session provenance (phase, harness, session id, started_at) survives,
 //! stamped `ended_by: "reap-sweep"` because the sweep infers the end instant
 //! rather than observing it. A row the settle cannot fill on a node still in
-//! flight keeps under `open do row on done node`. That stranded population
+//! flight keeps under `open do row`. That stranded population
 //! (an open do row is what holds its node out of this settle's own gate) has
 //! its own lane: `fno backlog maintain` detects it in Python, where the
 //! transcript resolver lives, and reaps a row only after the prover proves
@@ -1485,6 +1485,10 @@ fn hold_clock(age: Option<i64>, created_at: &str, now: i64) -> (Option<i64>, &'s
     }
 }
 
+/// The no-provenance hold's detail; a release must quote it to match.
+const NO_PROVENANCE_DETAIL: &str =
+    "no source resolved a node: sessions, registry, name, transcript";
+
 /// The settle blocker an open-do-row hold names: the same pr_state
 /// read the confirm step makes, so the hold line carries the why the settle
 /// refused, not only the node.
@@ -2197,7 +2201,7 @@ pub(crate) fn run_with_release(
             planning,
             planning_closed,
             planning_plan_written,
-            planning_released: false,
+            hold_released: false,
             // The halted-planner fact: the latest inside-leg report reads
             // `done` AND fno never stopped the row. A planner fno stopped
             // holds as unfinished (its node still needs its plan), never as
@@ -2239,22 +2243,25 @@ pub(crate) fn run_with_release(
         };
         let (mut action, mut reason) = gc_decide(&row, grace_secs);
         // d-81c6da7e: a release matched to the planning hold answers the
-        // marker question by ruling. Flip the row's released flag and
+        // marker question by ruling, and one matched to the no-provenance
+        // hold answers the node question. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,
-        // so only the planner's quiet clock stands between the row and its
+        // so only the quiet clock stands between the row and its
         // retirement.
         if action == GcAction::Keep {
-            if let Some(KeepReason::PlanningUnclosed { node, status }) = &reason {
+            let held = match &reason {
+                Some(KeepReason::PlanningUnclosed { node, status }) => {
+                    Some(planning_hold_detail(node, status))
+                }
+                Some(KeepReason::NoProvenance) => Some(NO_PROVENANCE_DETAIL.to_string()),
+                _ => None,
+            };
+            let hold_reason = reason.as_ref().map_or("", KeepReason::as_str);
+            if let Some(detail) = held {
                 if release_note.is_none() {
-                    let hold_reason = KeepReason::PlanningUnclosed {
-                        node: node.clone(),
-                        status: status.clone(),
-                    }
-                    .as_str();
-                    let detail = planning_hold_detail(node, status);
                     if let Some(r) = release_for_row {
                         if r.matches(hold_reason, &detail) {
-                            row.planning_released = true;
+                            row.hold_released = true;
                             release_note =
                                 Some(release_basis_prefix(hold_reason, hold_age_s, &detail));
                             let (next_action, next_reason) = gc_decide(&row, grace_secs);
@@ -2269,8 +2276,10 @@ pub(crate) fn run_with_release(
             if let Some(r) = release_for_row {
                 if release_note.is_none() {
                     summary.release_refused.push(format!(
-                        "{id}: release refused: hold changed from {} ({}) to {:?}",
-                        r.reason, r.detail, reason
+                        "{id}: release refused: hold changed from {} ({}) to {}",
+                        r.reason,
+                        r.detail,
+                        reason.as_ref().map_or("no hold", KeepReason::as_str)
                     ));
                 }
             }
@@ -2291,8 +2300,7 @@ pub(crate) fn run_with_release(
                     summary.holds.push(Hold {
                         id,
                         reason: KeepReason::NoProvenance.as_str(),
-                        detail: "no source resolved a node: sessions, registry, name, transcript"
-                            .into(),
+                        detail: NO_PROVENANCE_DETAIL.into(),
                         age_s: hold_age_s,
                         age_basis: hold_age_basis,
                         escalated: false,
@@ -2793,10 +2801,16 @@ pub(crate) fn run_with_release(
                     RetireRefusal::NoReceipt(reason) => summary.kept_no_receipt.push((id, reason)),
                     RetireRefusal::GraphObligation(node) => {
                         summary.kept_open_do_row.push((id.clone(), node.clone()));
+                        let detail = match graph.statuses.get(&node).map(String::as_str) {
+                            Some("done") | None => settle_blocker_detail(graph, &node),
+                            Some(status) => format!(
+                                "node status {status}: a session on unmerged work never retires"
+                            ),
+                        };
                         summary.holds.push(Hold {
                             id,
                             reason: KeepReason::OpenDoRow { node: node.clone() }.as_str(),
-                            detail: settle_blocker_detail(graph, &node),
+                            detail,
                             age_s: hold_age_s,
                             age_basis: hold_age_basis,
                             escalated: false,
@@ -2885,7 +2899,7 @@ pub(crate) fn run_with_release(
                         .find(|(_, s)| crate::gc::PLANNING_MOVED_ON_STATUSES.contains(&s.as_str()))
                     {
                         format!("planning finished on {node}: node {moved_status}")
-                    } else if probed.planning_released {
+                    } else if probed.hold_released {
                         format!("planning finished on {node}: released")
                     } else if probed.turn_ended {
                         format!("planning halted on {node}: turn ended with no plan")
@@ -3366,7 +3380,7 @@ pub(crate) fn commit_retirements(
     // Names actually removed under the lock (identity still matched), so the
     // emit + summary report only what really happened.
     let retiring: std::collections::BTreeSet<String> = to_retire.keys().cloned().collect();
-    let write = state::update_registry(&home.registry_json(), |r| {
+    let write = state::update_registry_retiring(&home.registry_json(), &retiring, |r| {
         // `run`'s snapshot is stop-confirmation, receipt-write, and probe
         // seconds old by the time a prune fires, so revalidate shared-cwd
         // occupancy under the lock; ties among rows retiring this pass were
@@ -3573,11 +3587,17 @@ pub(crate) fn commit_retirements(
                 &json!({"op": caller, "error": err.to_string()}),
             );
             // Nothing was removed; report no retirements (no event/disk
-            // divergence).
+            // divergence), and name every staged row so the real sweep
+            // reports what it held where the dry run reported it.
             report.retired.clear();
             report.pruned.clear();
             report.prune_failed.clear();
             report.retired_names.clear();
+            for order in to_retire.values() {
+                report
+                    .kept_no_receipt
+                    .push((order.id.clone(), format!("registry write refused: {err}")));
+            }
         }
     }
     report
