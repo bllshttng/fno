@@ -180,12 +180,7 @@ vocabulary as a contiguous TRAILING run (right-anchored), so a posture word that
 sits mid-task ("spawn the node that will merge two branches") stays task text and
 does NOT silently set the posture. A bare `as` with no name after it is an error.
 
-**Dash-flags still work (undocumented back-compat).** A desktop scripter's
-existing `--yolo` / `-n <name>` / `-m` / `--model <name>` / `-i` / `-y`
-invocations are canonicalized to the same fields (`-y`/`--yes` is accepted and
-ignored - the free lanes no longer confirm, see CONFIRM). `--model` has no short
-form at this layer (`-m` is `--allow-merge`); `fno agents spawn` itself takes `-m` for the model. A genuinely unknown dash-flag fails loud.
-Dashless is the only form you advertise; never instruct a user to type a dash.
+**Dash-flags still work (undocumented back-compat).** A desktop scripter's existing `--yolo` / `-n <name>` / `-m` / `--model <name>` / `-i` / `-y` invocations are canonicalized to the same fields. The free lanes no longer confirm, so `-y`/`--yes` is accepted and ignored (see CONFIRM). `--model` has no short form at this layer, because `-m` is `--allow-merge`. `fno agents spawn` itself takes `-m` for the model. A genuinely unknown dash-flag fails loud. Dashless is the only form you advertise. Never instruct a user to type a dash.
 
 ### Flow: NORMALIZE -> RESOLVE -> VALIDATE -> CONFIRM -> SPAWN -> REPORT
 
@@ -399,7 +394,7 @@ bash "${SKILL_DIR}/scripts/spawn.sh" --name "$name" --provider "$provider" \
   [--permission-mode "$permission_mode"] [--role "$role"] [--timeout "$timeout"] [--fresh] [--here]
 ```
 
-Pass `--self "$self_holder"` only for a confirmed self-handoff (your `target_claim_holder` matched the live `.holder` in the collision pre-check); it makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. Pass `--role "$role"` / `--timeout "$timeout"` only when normalize emitted a non-empty value; pass `--fresh` only when `fresh=1` and `--here` only when `here=1` (spawn.sh forwards each to `fno agents spawn`, which validates values fail-closed). A normalized `substrate=headless` rides `--once` (the one-shot); thread and pane are the native lane's own defaults. Pass `--model "$model"`, `--effort "$effort"` and `--permission-mode "$permission_mode"` only when normalize emitted a non-empty value; spawn.sh forwards each to `fno agents spawn`, where it is shorthand for the harness's own flag. `--yolo` stays retired.
+Pass `--self "$self_holder"` for a confirmed self-handoff only. That means your `target_claim_holder` matched the live `.holder` in the collision pre-check. The flag makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. Pass `--role "$role"` and `--timeout "$timeout"` if normalize emitted a non-empty value. Pass `--fresh` if `fresh=1`. Pass `--here` if `here=1`. spawn.sh forwards each to `fno agents spawn`, which validates values fail-closed. A normalized `substrate=headless` rides `--once` (the one-shot). Thread and pane are the native lane's own defaults. If normalize emitted a non-empty value, pass `--model "$model"`, `--effort "$effort"` and `--permission-mode "$permission_mode"`. spawn.sh forwards each to `fno agents spawn`, where it is shorthand for the harness's own flag. `--yolo` stays retired.
 
 An empty `substrate` is the built-in default: `thread` where the harness seats one (else `pane`), injected explicitly by the spawn seam. A spawn with no placement flag opens no view. A default never creates one. When the work needs a screen, the mux thread door tunes one.
 Pass `--node` whenever `node` is non-empty. The spawn derives the verb from the node, so a build message need not name one; a typed `/fno:target` or `/fno:blueprint` that disagrees with the node's verb is refused. Choose the `--cwd` source in this priority order, so launch cwd
