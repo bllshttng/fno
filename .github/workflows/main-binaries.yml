@@ -29,7 +29,7 @@ on:
 # older builds in flight; the update and the post-merge sync read the
 # newest published rev, so a cancelled middle build never stalls them.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
