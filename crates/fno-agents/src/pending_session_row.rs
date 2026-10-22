@@ -108,7 +108,7 @@ fn payload_graph(payload: &Value) -> PathBuf {
 /// stamps `started_at` here because the park IS the spawn instant - the
 /// spawn-side path (spawn_lineage) stamps its open at the same moment - so
 /// the deferred open never reads a later start than a spawn-side row.
-fn park(payload: &Value) -> Result<Value, String> {
+pub(crate) fn park(payload: &Value) -> Result<Value, String> {
     let registry = payload_registry(payload);
     let name = payload
         .get("name")

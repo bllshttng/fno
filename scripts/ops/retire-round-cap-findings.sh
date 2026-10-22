@@ -21,6 +21,8 @@ FNO_BIN="${FNO:-fno}"
 OWNER_NODE="x-aaaa"
 CAUSE="vented at the round cap; the vent is deleted"
 SURFACE="crates/fno-agents/src/loopcheck/coverage_gate.rs"
+REASON="the round-cap vent that filed it is deleted"
+COVERS="the node describes an act the gate no longer performs; nothing is left to build"
 TITLE_PREFIX="review finding filed at round cap:"
 APPLY=0
 [[ "${1:-}" == "--apply" ]] && APPLY=1
@@ -57,7 +59,7 @@ fi
 for id in "${IDS[@]}"; do
   if [[ "$APPLY" -eq 1 ]]; then
     "$FNO_BIN" backlog supersede "$OWNER_NODE" --replaces "$id" \
-      --cause "$CAUSE" --surface "$SURFACE"
+      --cause "$CAUSE" --surface "$SURFACE" --reason "$REASON" --covers "$COVERS"
   else
     echo "would supersede: $id"
   fi

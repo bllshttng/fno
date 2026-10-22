@@ -920,9 +920,6 @@ def test_routing_predicates_stop_at_argv_boundary() -> None:
     assert not rr._is_role_bearing_spawn(
         "spawn", ["spawn", "w", "--argv", "--", "tool", "--role", "x"]
     )
-    assert not rr._is_provenance_bearing_spawn(
-        "spawn", ["spawn", "w", "--argv", "--", "tool", "--node", "x"]
-    )
     assert not rr._is_route_bearing_spawn(
         "spawn", ["spawn", "w", "--argv", "--", "tool", "--route", "x"]
     )

@@ -1461,53 +1461,13 @@ pub(crate) fn health_report(
                 .map(|id| (id.to_string(), e))
         })
         .collect();
-    let mut supersession_unverified = Vec::new();
-    for e in &entries {
-        let Some(record) = e.get("supersession").filter(|r| r.is_object()) else {
-            continue;
-        };
-        if record
-            .get("verified_at")
-            .map(|v| !v.is_null())
-            .unwrap_or(false)
-            || e.get("completed_at").map(|v| !v.is_null()).unwrap_or(false)
-        {
-            continue;
-        }
-        let Some(succ_id) = e.get("superseded_by").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(successor) = index.get(succ_id) else {
-            continue;
-        };
-        let Some(succ_done) = successor.get("completed_at").and_then(Value::as_str) else {
-            continue;
-        };
-        if succ_done.is_empty() || successor.get("pr_number").and_then(Value::as_i64).is_none() {
-            continue;
-        }
-        let surfaces = record
-            .get("surfaces")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let matched = record
-            .get("matched_surfaces")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let uncovered: Vec<Value> = surfaces
-            .iter()
-            .filter(|s| !matched.contains(s))
-            .cloned()
+    // A record-less row predates the supersession record, so it goes to the
+    // groom brief only: breaching on it would turn every older store red.
+    let supersession_unverified: Vec<Value> =
+        super::supersession::shipped_successor_unproven(&entries, &all_entries)
+            .into_iter()
+            .filter(|row| row["recorded"] == Value::Bool(true))
             .collect();
-        supersession_unverified.push(json!({
-            "predecessor": e.get("id"),
-            "successor": succ_id,
-            "evidence_pr": successor.get("pr_number"),
-            "uncovered_surfaces": uncovered,
-        }));
-    }
     let mut blocked_by_held = Vec::new();
     for e in &entries {
         let raw = e

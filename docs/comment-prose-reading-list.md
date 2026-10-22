@@ -124,7 +124,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.2x | 11 | 5 | `cli/src/fno/agents/harnesses/claude.py:267` | `_resolved_request_model` |
 | 2.2x | 11 | 5 | `cli/src/fno/agents/harnesses/claude.py:1535` | `claude_rm` |
 | 2.2x | 11 | 5 | `cli/src/fno/agents/registry.py:763` | `_is_identity_token` |
-| 2.2x | 11 | 5 | `cli/src/fno/agents/rust_runtime.py:707` | `_is_provenance_bearing_spawn` |
 | 2.2x | 11 | 5 | `cli/src/fno/backlog/groom.py:154` | `_mechanical_legs` |
 | 2.2x | 22 | 10 | `cli/src/fno/pr/_merge.py:216` | `_review_lane_configured` |
 | 2.17x | 13 | 6 | `cli/src/fno/agents/registry.py:505` | `resolve_agent` |

@@ -521,6 +521,7 @@ pub mod spawn_gate_lanes;
 pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
 pub(crate) mod spawn_gate_slots;
+pub mod spawn_guard;
 pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;

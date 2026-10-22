@@ -1591,6 +1591,9 @@ fn seam_rows() {
             "/tmp".into(),
             "--node".into(),
             "x-90a9".into(),
+            "--slug".into(),
+            "probe-slug".into(),
+            "--plan=/plans/p.md".into(),
             "--".into(),
             "/target x-90a9".into(),
         ],
@@ -1599,6 +1602,8 @@ fn seam_rows() {
     assert!(!spawn_needs_python_seam(&params));
     assert_eq!(params["message"], "/target x-90a9");
     assert_eq!(params["node"], "x-90a9");
+    assert_eq!(params["slug"], "probe-slug");
+    assert_eq!(params["plan"], "/plans/p.md");
 
     // A typo'd marker must refuse loudly, not degrade to unenforced: the
     // value is the binary's only record of the seam's policy decision.

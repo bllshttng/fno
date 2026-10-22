@@ -644,7 +644,7 @@ Apply the user's choice:
 
 - **Option 1 (proceed):** continue to step 3b. Once the new node ID is known, run `fno backlog update <new-id> 'collisions_acknowledged=ab-XYZ,ab-ABC,...'` so the new node carries an audit trail of the collisions deliberately ignored.
 - **Option 2 (modify):** print the existing plan path and exit cleanly. The user edits the older plan. The new file is left on disk for reference but not adopted.
-- **Option 3 (supersede):** continue to step 3b. After adoption, run `fno backlog supersede <new-id> --replaces ab-XYZ --cause "..." --surface <path>`. Use the colliding plan's rationale or ask the user for a reason.
+- **Option 3 (supersede):** continue to step 3b. After adoption, run `fno backlog supersede <new-id> --replaces ab-XYZ --cause "..." --surface <path> --reason "..." --covers "..."`. Use the colliding plan's rationale or ask the user for a reason.
 - **Option 4 (cancel):** delete the plan file and exit cleanly.
 
 Medium and low-severity collisions are reported as single-line warnings on

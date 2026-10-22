@@ -335,7 +335,7 @@ A blueprint can also run as a subagent of the org session: `/fno:blueprint subag
 
 Group the wave by shape before you count dispatches. When one plan can name the same files or fix the same defect from two sides, the two nodes are the same shape. Title words do not decide this. The file and the defect decide it, the same identity test the Consolidation Gate uses (`skills/blueprint/SKILL.md` step 2d).
 
-A shape group becomes ONE node before it becomes one plan. Run `fno backlog supersede <keeper> --replaces <other> --reason "<why>"`, then dispatch the keeper. `plan == PR == node` stays untouched. The waves live in the plan's `## Execution Strategy` block. Reverse with `fno backlog unsupersede <other>`.
+A shape group becomes ONE node before it becomes one plan. Run `fno backlog supersede <keeper> --replaces <other> --cause "..." --surface <path> --reason "<why>" --covers "<how the keeper covers it>"`, then dispatch the keeper. `plan == PR == node` stays untouched. The waves live in the plan's `## Execution Strategy` block. Reverse with `fno backlog unsupersede <other>`.
 
 Fifteen one-node spawns re-read the repo fifteen times. Each spawn is a process. That volume cost an account.
 

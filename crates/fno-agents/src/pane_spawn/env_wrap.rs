@@ -4,10 +4,10 @@
 //! substrate and seed attribution ride the wrapper as assignments and the
 //! parent's own identity rides out as `-u` unsets.
 //!
-//! Scope, recorded: the role/provenance/account legs of the Python pairs are
-//! NOT ported here. Every shape that carries them is seam-carved to Python
-//! (`_is_role_bearing_spawn`, `_is_provenance_bearing_spawn`) and never
-//! reaches an arm. The route overlay IS: the claude arm (row 8, PR B) hands
+//! Scope, recorded: the role and account legs of the Python pairs are NOT
+//! ported here. Every shape that carries them is seam-carved to Python
+//! (`_is_role_bearing_spawn`) and never reaches an arm. Node provenance is
+//! ported: the spawn guard exports it and the pairs carry it. The route overlay IS: the claude arm (row 8, PR B) hands
 //! its resolved route env to this wrapper through the `overlay` param, which
 //! the pairs append after the claude extras and the unsets answer with the
 //! account_env.py scrub floor when the harness is claude.
@@ -80,10 +80,10 @@ pub const SCRUB_AUTH_VARS: [&str; 10] = [
     "ANTHROPIC_DEFAULT_FABLE_MODEL",
 ];
 
-/// `_mesh_env_pairs` for the shapes an arm answers: no role, no provenance,
-/// no account overlay (seam-carved), so the pairs reduce to identity,
-/// substrate, the pinned session, the claude extras, the caller's route
-/// overlay and the seed sidecar. Returns `(unset, pairs)` in the Python
+/// `_mesh_env_pairs` for the shapes an arm answers: no role and no account
+/// overlay (seam-carved), so the pairs reduce to identity, substrate, the
+/// pinned session, the claude extras, the caller's route overlay, the node
+/// provenance the guard exported and the seed sidecar. Returns `(unset, pairs)` in the Python
 /// construction order.
 pub fn mesh_env_pairs(
     name: &str,
@@ -150,8 +150,10 @@ pub fn mesh_env_pairs(
             unset.extend(["-u".to_string(), key.to_string()]);
         }
     }
-    // Node provenance, set-or-clear (never reached with a value through an
-    // arm, so it is always the clear half here).
+    // Node provenance, set-or-clear: the guard's exported values ride as
+    // pairs, and every key it did not export clears, so an ad-hoc pane never
+    // carries its parent's node.
+    let provenance = crate::spawn_guard::exported_provenance();
     for key in [
         "FNO_NODE",
         "FNO_SLUG",
@@ -159,8 +161,11 @@ pub fn mesh_env_pairs(
         "FNO_NODE_CLAIM_HOLDER",
         "FNO_WORKTREE_POLICY",
     ] {
-        unset.extend(["-u".to_string(), key.to_string()]);
+        if !provenance.iter().any(|(k, _)| *k == key) {
+            unset.extend(["-u".to_string(), key.to_string()]);
+        }
     }
+    pairs.extend(provenance.iter().map(|(k, v)| format!("{k}={v}")));
     let resolved: std::collections::HashSet<&str> =
         seed_prov.iter().map(|(k, _)| k.as_str()).collect();
     for key in SEED_PROVENANCE_KEYS {

@@ -1576,7 +1576,7 @@ fn prepare_intake(
                     "plan_path already intaked as {existing_id}, but --claims names \
                      {claim_id}. Remove or supersede {existing_id} before claiming, \
                      e.g.:\n  fno backlog supersede {claim_id} --replaces {existing_id} \
-                     --reason \"...\""
+                     --cause \"...\" --surface <path> --reason \"...\" --covers \"...\""
                 ));
             }
         }

@@ -64,7 +64,7 @@ consolidation:
   #  - decision_id: d-XXXXXXXX
   #    reason: <why this ruling does not close this work>
   # outcome: absorb - the other node is a wave of THIS deliverable. After
-  # intake run: fno backlog supersede <this-node> --replaces <id> --cause "..." --surface <path>
+  # intake run: fno backlog supersede <this-node> --replaces <id> --cause "..." --surface <path> --reason "..." --covers "..."
   # absorbed:
   #   - id: x-0000
   #     reason: <why this node is a wave of this deliverable>
