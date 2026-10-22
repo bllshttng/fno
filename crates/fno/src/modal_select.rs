@@ -350,6 +350,8 @@ pub fn drag(row: usize, col: usize) -> bool {
             sel.live = true;
         }
         sel.head = head;
+        // A drag after a double-click reshapes the selection: copy the new one.
+        sel.copied = false;
         true
     })
 }
