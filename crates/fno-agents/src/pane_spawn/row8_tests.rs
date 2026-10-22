@@ -415,14 +415,18 @@ fn claude_argv_parity_row8_golden() {
     assert_eq!(tail[sid + 2], "--name", "the pin precedes --name");
     // The rest of the tail is the plain capture's shape (the golden captured
     // a raw "do x"; through the arm the seed is enriched, so only the
-    // token STRUCTURE compares, not the seed text).
+    // token STRUCTURE compares, not the seed text). The grant value is
+    // capture-ambient: stripped from both sides, like the plain leg.
     let want = str_list(&claude["cases"]["argv"]["pinned_session"]);
-    let want_no_pin: Vec<String> = want
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !(1..=2).contains(i))
-        .map(|(_, t)| t.clone())
-        .collect();
+    let want_no_pin = strip_flag_values(
+        &want
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !(1..=2).contains(i))
+            .map(|(_, t)| t.clone())
+            .collect::<Vec<_>>(),
+        "--add-dir",
+    );
     let got_no_pin = strip_flag_values(&tail_no_pin(&tail, sid), "--add-dir");
     assert_eq!(got_no_pin.len(), want_no_pin.len());
     assert_eq!(got_no_pin[0], "claude");
