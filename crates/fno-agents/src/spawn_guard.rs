@@ -1085,19 +1085,18 @@ mod tests {
             ("dispatch:x-1".to_string(), "spawn-cli:1".to_string()),
             ("node:x-1".to_string(), "spawn-handover:w".to_string()),
         ];
-        let mut kept = Some(SpawnHold {
-            claims: claims.clone(),
-            root: Some(tmp.path().to_path_buf()),
-            launched: false,
-        });
-        settle(&mut kept, 0);
-        drop(kept);
-        assert!(holder_of(tmp.path(), "dispatch:x-1").is_some());
-        drop(SpawnHold {
+        let hold = |claims, launched| SpawnHold {
             claims,
             root: Some(tmp.path().to_path_buf()),
-            launched: false,
-        });
+            launched,
+            node: "x-1".into(),
+            phase: "execute".into(),
+            message: String::new(),
+            one_shot: false,
+        };
+        drop(hold(claims.clone(), true));
+        assert!(holder_of(tmp.path(), "dispatch:x-1").is_some());
+        drop(hold(claims, false));
         assert_eq!(holder_of(tmp.path(), "dispatch:x-1"), None);
         assert_eq!(holder_of(tmp.path(), "node:x-1"), None);
     }
