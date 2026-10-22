@@ -47,6 +47,15 @@ pub(crate) struct NativeMint {
     pub(crate) native: bool,
 }
 
+/// The parent edge a claimed launch record proves: its launcher's triple.
+pub(crate) fn launcher_lineage(r: &crate::launch_record::Record) -> Lineage {
+    Lineage::captured((
+        Some(r.launcher_session.clone()),
+        r.launcher_harness.clone(),
+        r.launcher_cwd.clone(),
+    ))
+}
+
 pub(crate) fn prepare_mint(
     home: &crate::paths::AgentsHome,
     harness: &str,
@@ -116,11 +125,7 @@ pub(crate) fn prepare_mint(
             Some(session_id.to_string()),
             if native {
                 match record {
-                    Some(r) => Lineage::captured((
-                        Some(r.launcher_session.clone()),
-                        r.launcher_harness.clone(),
-                        r.launcher_cwd.clone(),
-                    )),
+                    Some(r) => launcher_lineage(r),
                     None => Lineage::unproven(
                         "spawned row absent at first report; minted at the session report",
                     ),
