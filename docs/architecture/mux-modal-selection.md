@@ -6,7 +6,7 @@ A mux modal lets you drag the mouse over its text. The release copies the select
 
 The painters report each body row they draw. `chrome::blit` and `popup::draw` call `modal_select::paint_line`. The recorder keeps the rows of the last frame as blocks of cells. It skips the border, the title and the footer, so a selection never holds them.
 
-The selection paints with the theme `sel` surface from the same call. A selection drops when the text under it changes. A scroll or a refresh does this.
+The selection paints with the theme `sel` surface from the same call. When the text under a selection changes, the selection drops. A scroll or a refresh changes it.
 
 The copy goes through `clipboard::deliver`. A local tool takes it first. Over ssh the client sends OSC 52 to your terminal.
 
