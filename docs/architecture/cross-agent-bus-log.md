@@ -150,7 +150,7 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 **Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` verb during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects verb skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 
-`fno agents mail migrate-bus` (and `migrate_md_threads_to_bus`) copies old markdown threads into the canonical log. An old thread is one written before the bus existed, or one written by a stale pre-G3 `fno`. A cursor scan then never strands unread legacy mail. The copy dedups by message-id, so a second run changes nothing. One message that cannot append is counted in `MigrationResult.failed` and skipped, and the batch goes on. A thread already on the bus is never copied again.
+The legacy copy verb `fno agents mail migrate-bus` copied old markdown threads into the canonical log once. It is retired, because every thread now lands on the bus first.
 
 ## What is NOT in this group
 
@@ -203,10 +203,10 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | Per-agent cursors + sender-exclusion (`exclude_from`) | `cli/src/fno/bus/cursor.py` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
 | `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir` |
-| Store dual-write + migration | `cli/src/fno/inbox/store.py` |
+| Store dual-write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` verbs | `cli/src/fno/agents/cli.py` |
-| `mail migrate-bus` and `mail drain` verbs | `cli/src/fno/mail/cli.py` |
+| `mail drain` verb | `cli/src/fno/mail/cli.py` |
 | peer-project hint reader | `cli/src/fno/inbox/settings.py` |
 
 See also [cross-project-inbox.md](cross-project-inbox.md) (the inbox this converges) and [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).
