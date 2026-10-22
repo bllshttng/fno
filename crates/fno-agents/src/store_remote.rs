@@ -15,12 +15,13 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 const CONNECT_WAIT: Duration = Duration::from_secs(3);
 const REPLY_WAIT: Duration = Duration::from_secs(15);
 const KEY: &str = "store.remote_url";
+const ADDRS_KEY: &str = "store.remote_addrs";
 const UNREACHABLE: &str = "is unreachable";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,6 +136,7 @@ pub struct Remote {
     port: u16,
     path: String,
     token: Option<String>,
+    fallbacks: Vec<SocketAddr>,
 }
 
 impl Remote {
@@ -167,7 +169,25 @@ impl Remote {
             port,
             path,
             token: token.filter(|t| !t.is_empty()),
+            fallbacks: Vec::new(),
         })
+    }
+
+    /// Addresses to dial, in order, after the host name's own: a Tailscale
+    /// IP still works when MagicDNS does not. An entry is an IP or an
+    /// IP:port; a bare IP takes the URL's port.
+    pub fn with_fallbacks(mut self, addrs: &[String]) -> Result<Self, String> {
+        let port = self.port;
+        self.fallbacks = addrs
+            .iter()
+            .map(|addr| {
+                let addr = addr.trim();
+                addr.parse::<SocketAddr>()
+                    .or_else(|_| addr.parse::<IpAddr>().map(|ip| SocketAddr::new(ip, port)))
+                    .map_err(|_| format!("{ADDRS_KEY} entry {addr:?}: not an IP or IP:port"))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(self)
     }
 
     pub fn url(&self) -> &str {
@@ -345,14 +365,32 @@ impl Remote {
         )
     }
 
+    /// Connect to the first address that answers: the host name's, then each
+    /// fallback. Only the connect moves on. A request already written can
+    /// have reached the primary, so it is never sent to a second address.
+    fn connect(&self) -> Result<TcpStream, String> {
+        let mut failures = Vec::new();
+        let resolved: Vec<SocketAddr> = match (self.host.as_str(), self.port).to_socket_addrs() {
+            Ok(addrs) => addrs.collect(),
+            Err(e) => {
+                failures.push(format!("resolve {}: {e}", self.host));
+                Vec::new()
+            }
+        };
+        if resolved.is_empty() && failures.is_empty() {
+            failures.push(format!("resolve {}: no address", self.host));
+        }
+        for address in resolved.iter().chain(&self.fallbacks) {
+            match TcpStream::connect_timeout(address, CONNECT_WAIT) {
+                Ok(stream) => return Ok(stream),
+                Err(e) => failures.push(format!("connect {address}: {e}")),
+            }
+        }
+        Err(failures.join("; "))
+    }
+
     fn post(&self, route: &str, body: &str) -> Result<String, String> {
-        let address = (self.host.as_str(), self.port)
-            .to_socket_addrs()
-            .map_err(|e| e.to_string())?
-            .next()
-            .ok_or("the host name resolves to no address")?;
-        let mut stream =
-            TcpStream::connect_timeout(&address, CONNECT_WAIT).map_err(|e| e.to_string())?;
+        let mut stream = self.connect()?;
         stream
             .set_read_timeout(Some(REPLY_WAIT))
             .and_then(|()| stream.set_write_timeout(Some(REPLY_WAIT)))
@@ -451,12 +489,28 @@ pub fn configured() -> Result<Option<Remote>, String> {
                         .and_then(|v| v.as_str().map(str::to_string))
                         .filter(|v| !v.trim().is_empty())
                 };
-                lookup("remote_url")
-                    .map(|url| Remote::parse(&url, lookup("remote_token")))
-                    .transpose()
+                let Some(url) = lookup("remote_url") else {
+                    return Ok(None);
+                };
+                Remote::parse(&url, lookup("remote_token"))?
+                    .with_fallbacks(&configured_addrs()?)
+                    .map(Some)
             })
             .clone()
     }
+}
+
+/// `store.remote_addrs`: unset is no fallback, and anything but a list of
+/// strings refuses, so a typo never drops the fallback in silence.
+#[cfg(not(test))]
+fn configured_addrs() -> Result<Vec<String>, String> {
+    let Some(value) = crate::agents_config::config_lookup_global(&["store", "remote_addrs"]) else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect())
+        .ok_or_else(|| format!("{ADDRS_KEY} = {value}: expected a list of IPs"))
 }
 
 /// The primary that holds the shared backlog. Both `store.remote_url` and
@@ -668,5 +722,38 @@ pub(crate) mod test_primary {
             },
             _ => json!({"type": "ok", "response": {"type": "close"}}),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_that_does_not_resolve_falls_back_to_the_listed_addresses() {
+        let primary = test_primary::start();
+        let lost = Remote::parse(
+            &format!("http://r2d2.invalid:{}", primary.remote.port),
+            None,
+        )
+        .unwrap();
+        let error = lost.execute("SELECT 1", &[]).unwrap_err();
+        assert!(
+            is_unreachable(&error) && error.contains("resolve r2d2.invalid"),
+            "{error}"
+        );
+
+        // A dead fallback is skipped; the bare IP takes the URL's port.
+        let dead = format!("127.0.0.1:{}", test_primary::dead().port);
+        let found = lost.with_fallbacks(&[dead, "127.0.0.1".into()]).unwrap();
+        let reply = found.execute("SELECT 1", &[]).unwrap();
+        assert_eq!(reply.rows, vec![vec![SqlValue::Integer(1)]]);
+    }
+
+    #[test]
+    fn a_fallback_that_is_not_an_ip_refuses() {
+        let remote = Remote::parse("http://r2d2:18080", None).unwrap();
+        let error = remote.with_fallbacks(&["r2d2.lan".into()]).unwrap_err();
+        assert!(error.contains(ADDRS_KEY), "{error}");
     }
 }

@@ -7,7 +7,7 @@ them and the unknown-key walker stays quiet.
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
 
 class StoreBlock(BaseModel):
@@ -17,6 +17,7 @@ class StoreBlock(BaseModel):
 
     remote_url: Optional[str] = None
     remote_token: Optional[str] = None
+    remote_addrs: Optional[list[StrictStr]] = None
     # Strict: Rust's as_bool() reads a "true" string as off, so lax coercion
     # would report sharing on while the backlog stays local.
     share_backlog: StrictBool = False
