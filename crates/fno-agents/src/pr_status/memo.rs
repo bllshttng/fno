@@ -28,6 +28,30 @@ pub(crate) fn read(cwd: &Path, kind: &str, name: &str) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
+/// Whether any memo of `kind` whose name starts with `prefix` holds `true`.
+pub(crate) fn any_true(cwd: &Path, kind: &str, prefix: &str) -> bool {
+    let Some(path) = memo_path(cwd, kind, prefix) else {
+        return false;
+    };
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let file = entry.file_name();
+            let file = file.to_string_lossy();
+            file.starts_with(prefix)
+                && file.ends_with(".json")
+                && std::fs::read_to_string(entry.path())
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                    == Some(Value::Bool(true))
+        })
+}
+
 /// Store `value`, then delete the kind's other files that start with
 /// `superseded` (an older head of the same PR). A failed write is ignored:
 /// the next refresh reads the network again.
@@ -96,6 +120,8 @@ mod tests {
         );
         assert!(read(cwd, PAYLOAD_CODE, "o--r-7-aaa").is_none());
         assert_eq!(read(cwd, PAYLOAD_CODE, "o--r-7-bbb"), Some(json!(true)));
+        assert!(any_true(cwd, PAYLOAD_CODE, "o--r-7-"));
+        assert!(!any_true(cwd, PAYLOAD_CODE, "o--r-8-"));
         // PR 70 shares the "o--r-7" text but not the "o--r-7-" prefix.
         assert_eq!(read(cwd, PAYLOAD_CODE, "o--r-70-aaa"), Some(json!(true)));
         std::fs::write(dir.join("payload-code/o--r-7-bbb.json"), "{not json").unwrap();

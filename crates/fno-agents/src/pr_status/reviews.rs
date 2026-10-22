@@ -766,7 +766,7 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
 
 /// Whether review is required for this PR: a configured lane, OR the
 /// self-review floor for a code payload on a stock install. Fail-closed.
-/// `head` keys the payload memo. None reads the file list every time.
+/// `head` keys the payload memo. None accepts a memo kept for any head.
 pub(crate) fn review_lane(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
     if inputs.lane_configured || inputs.code_review_configured {
@@ -818,10 +818,15 @@ pub(crate) fn payload_is_code(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let memo = head
         .filter(|h| !h.is_empty())
         .map(|h| format!("{prefix}{h}"));
-    if let Some(name) = &memo {
-        if super::memo::read(cwd, PAYLOAD_MEMO, name) == Some(Value::Bool(true)) {
-            return true;
-        }
+    // With no head, a code answer kept for any head of this PR serves. It can
+    // only err toward code (a push that removed every code file), which
+    // fails closed, the same way a failed read does.
+    let kept = match &memo {
+        Some(name) => super::memo::read(cwd, PAYLOAD_MEMO, name) == Some(Value::Bool(true)),
+        None => super::memo::any_true(cwd, PAYLOAD_MEMO, &prefix),
+    };
+    if kept {
+        return true;
     }
     for page in 1..=10 {
         let mut cmd = std::process::Command::new("gh");
