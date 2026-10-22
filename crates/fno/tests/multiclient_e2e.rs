@@ -44,6 +44,14 @@ fn sh_server(scratch: &Scratch) -> common::ServerProc {
     spawn_server(&scratch.sock(), &[("SHELL", "/bin/sh")])
 }
 
+/// The pre-`latest` behaviour: the tab takes the smallest viewer's size.
+fn sh_server_smallest(scratch: &Scratch) -> common::ServerProc {
+    spawn_server(
+        &scratch.sock(),
+        &[("SHELL", "/bin/sh"), ("FNO_MUX_WINDOW_SIZE", "smallest")],
+    )
+}
+
 /// Run the real `fno` binary with `FNO_MUX_DIR` pointed at this scratch (no
 /// TTY - the mux verbs are plain subprocess surfaces). FNO_AGENTS_HOME rides
 /// along so a store-touching verb (workspace prune) writes the SAME isolated
@@ -63,7 +71,7 @@ fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
 #[test]
 fn multiclient_clamp_letterbox_area_and_regrow_on_abrupt_death() {
     let scratch = Scratch::new("clamp");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -109,7 +117,7 @@ fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
     // the tree at min pane size - no panic, no overlap, exact recovery when
     // the tiny client leaves.
     let scratch = Scratch::new("tiny");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
@@ -155,7 +163,7 @@ fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
 #[test]
 fn multiclient_coviewed_tui_repaints_and_redraw_binding_nudges() {
     let scratch = Scratch::new("repaint");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -369,6 +377,39 @@ while :; do sleep 0.2; done\n",
     }
 }
 
+/// The default `latest` policy: the tab takes the size of the client that
+/// last attached, typed or resized, so a big window is not letterboxed by a
+/// small one it is not using.
+#[test]
+fn multiclient_window_size_latest_follows_the_active_client() {
+    let scratch = Scratch::new("latest");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane);
+    // B attached last, so B owns the size.
+    let mut b = FakeClient::attach(&scratch.sock(), 20, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "a follows b", |l| l.area == (20, 80));
+    b.wait_layout(10, "b owns the size", |l| l.area == (20, 80));
+
+    // A types: the tab follows A, and the shell's kernel winsize with it.
+    a.input(b"echo sz=$(stty size)#\r");
+    a.wait_layout(10, "a owns the size", |l| l.area == (40, 120));
+    b.wait_layout(10, "b follows a", |l| l.area == (40, 120));
+    a.wait_pane_text(15, pane, |t| t.contains("sz=38 118#"));
+
+    // B resizes its window: B is the latest client again.
+    b.resize(22, 90);
+    a.wait_layout(10, "a follows b's resize", |l| l.area == (22, 90));
+    b.wait_layout(10, "b owns its resized size", |l| l.area == (22, 90));
+    b.input(b"echo sz2=$(stty size)#\r");
+    b.wait_pane_text(15, pane, |t| t.contains("sz2=20 88#"));
+}
+
 // -- AC2: two clients, different views --------------------------------------
 
 #[test]
@@ -498,7 +539,7 @@ fn multiclient_resize_storm_while_coviewing_settles_on_final_clamp() {
     // (The strict SIGWINCH count bound is covered structurally by the
     // no-op-tail rule in push_layout plus per-client channel coalescing.)
     let scratch = Scratch::new("storm");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
