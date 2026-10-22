@@ -163,7 +163,7 @@ jobs:
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
           case "$files" in
-            *src/client.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*mux-demo-snapshot.sh*)
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*mux-demo-snapshot.sh*)
               echo "shoot=1" >> "$GITHUB_ENV"
               echo "the bell surface changed: shooting"
               ;;
@@ -197,6 +197,10 @@ jobs:
           mkdir -p shots
           for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban navigator-pr navigator-model; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
+          done
+          # The whole mux with no view open: the card sideline at two widths.
+          for size in 200x56 120x40; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
           done
 
       - name: Upload the shots
