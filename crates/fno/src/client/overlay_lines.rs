@@ -249,10 +249,7 @@ impl View {
             &chrome,
             &lines,
             &self.theme,
-            // The navigator is the uncapped selector this whole change
-            // points operators at, so its cursor must stay on screen too:
-            // a session with more rows than the viewport would otherwise
-            // drive the selection below the fold. +1 for the query line.
+            // Keep the cursor on screen past the fold; +1 for the query line.
             Some(nav.cursor + 1),
         );
     }
