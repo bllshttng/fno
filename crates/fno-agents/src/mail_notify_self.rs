@@ -16,7 +16,6 @@
 //! moves, so a crash in between re-renders (at-least-once), never drops.
 
 use serde_json::{json, Value};
-use std::io::Write as _;
 use std::path::Path;
 
 /// Entry behind the client.rs early-dispatch arm.
@@ -144,7 +143,12 @@ pub(crate) fn pending<'a>(
 ) -> Pending<'a> {
     let handle = crate::identity::canonical_handle(session);
     let unread = crate::mail_control_drain::unread_messages(bus_dir, msgs, &handle);
-    let present = crate::mail_control_drain::present_mail_ids(projects_base, session);
+    // The transcript can run to tens of MB: read it only when there is mail.
+    let present = if unread.is_empty() {
+        None
+    } else {
+        crate::mail_control_drain::present_mail_ids(projects_base, session)
+    };
     let rows: Vec<(&Value, bool)> = unread
         .into_iter()
         .map(|m| {
