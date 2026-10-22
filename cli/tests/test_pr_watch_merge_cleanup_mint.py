@@ -57,6 +57,15 @@ class TestDefaultEnsureMergeCleanup:
             lambda cwd: ("/repo", "proj"),
         )
 
+        def fake_emit(envelope, events_path, **_kwargs):
+            # The store write path, simulated in place: the journal contract
+            # (a request or a skip, never silence) stays observable.
+            with open(events_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(envelope, separators=(",", ":")) + "\n")
+            return {"inserted": True}
+
+        monkeypatch.setattr("fno.events.store_client.emit_envelope", fake_emit)
+
         def fake_run(cmd, **_kwargs):
             if cmd[:1] == ["gh"]:
                 return subprocess.CompletedProcess(cmd, 0, pr_json, "")
@@ -69,6 +78,7 @@ class TestDefaultEnsureMergeCleanup:
             minted.append(payload)
 
         monkeypatch.setattr("fno.rust_binary.verb_call", fake_mint)
+        return journal
 
     def test_every_closed_gate_holds_the_mint(self, tmp_path, monkeypatch):
         from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
@@ -123,7 +133,7 @@ class TestDefaultEnsureMergeCleanup:
         from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
 
         minted: list = []
-        self._patch_parts(
+        journal = self._patch_parts(
             monkeypatch, minted, journal_rows=[], tmp_path=tmp_path,
             pr_json='{"state": "OPEN", "headRefName": "feature/x"}',
         )
@@ -134,6 +144,6 @@ class TestDefaultEnsureMergeCleanup:
         _default_ensure_merge_cleanup(_make_candidate(repo_dir=repo_dir), "MERGED")
 
         assert minted == []
-        rows = daemon_lifecycle_log().read_text().splitlines()
+        rows = journal.read_text().splitlines()
         skips = [json.loads(r) for r in rows if "merge_cleanup_skipped" in r]
         assert any(s["data"]["reason"] == "not-merged" for s in skips)

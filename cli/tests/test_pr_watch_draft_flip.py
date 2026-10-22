@@ -116,9 +116,12 @@ def test_flip_leg_forwards_the_door_call(tmp_path, monkeypatch, is_draft, expect
     _seed_open(store_path)
     calls = []
     _run_tick(tmp_path, monkeypatch, calls, is_draft)
-    assert len(calls) == expect_calls
+    # The tick's quota preflight rides the same sink; the flip leg's own
+    # forwarding is the graph-get.
+    flips = [call for call in calls if call[0] == "graph-get"]
+    assert len(flips) == expect_calls
     if expect_calls:
-        verb, payload, kw = calls[0]
+        verb, payload, kw = flips[0]
         assert verb == "graph-get"
         flip = payload["pr_draft_ready"]["flip"]
         assert flip["pr"] == 7

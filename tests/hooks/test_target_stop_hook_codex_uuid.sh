@@ -21,7 +21,10 @@ if [[ -z "$BIN" ]]; then
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    (cd "$ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
+    # --bins, not --bin: the quota helper family (fno-gh-loopcheck and kin)
+    # resolves beside this binary, and a lone fno-agents build strands the
+    # probe in advisory mode.
+    (cd "$ROOT/crates/fno-agents" && cargo build --bins >/dev/null 2>&1)
     BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
 fi
 [[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary missing at $BIN" >&2; exit 1; }
@@ -74,6 +77,9 @@ set -e
 [[ "$RC" -eq 2 ]] || { echo "FAIL: expected Codex block rc=2, got $RC: $OUT" >&2; exit 1; }
 echo "$OUT" | grep -q "continue working" || {
   echo "FAIL: expected the decision's continue block, got: $OUT" >&2
+  # The probe's own verdict (absent vs spawn trouble, and what it probed)
+  # lands in the events file; show it so the next failure names its layer.
+  grep -h "gh_probe" "$EVENTS" 2>/dev/null | tail -3 >&2
   exit 1
 }
 
