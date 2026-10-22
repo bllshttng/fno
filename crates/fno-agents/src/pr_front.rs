@@ -77,13 +77,18 @@ fn spelling_help(sub: &str) -> Option<&'static str> {
 }
 
 /// Parse `--purpose X` / `--purpose=X` off the graphql-exec tail; `Err` when
-/// absent.
+/// absent. The first bare `--` ends flag parsing and is dropped: everything
+/// after it is gh's own argv, command words first.
 fn parse_purpose(tail: &[String]) -> Result<(String, Vec<String>), String> {
     let mut purpose: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut index = 0;
     while index < tail.len() {
         let arg = &tail[index];
+        if arg == "--" {
+            rest.extend_from_slice(&tail[index + 1..]);
+            break;
+        }
         if arg == "--purpose" {
             purpose = tail.get(index + 1).cloned();
             index += 2;
@@ -388,4 +393,45 @@ fn sync_canonical(tail: &[String]) -> i32 {
         eprintln!("{line}");
     }
     exit
+}
+
+#[cfg(test)]
+mod graphql_exec_argv_tests {
+    use super::parse_purpose;
+    use crate::pr_status::quota::command_args;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn the_separator_never_reaches_gh_argv() {
+        // The exact tail pr_status/reviews.rs builds for its reader.
+        let tail = argv(&[
+            "--purpose",
+            "discretionary",
+            "--",
+            "api",
+            "graphql",
+            "-f",
+            "query=q",
+            "--jq",
+            ".x",
+        ]);
+        let (purpose, rest) = parse_purpose(&tail).unwrap();
+        assert_eq!(purpose, "discretionary");
+        assert_eq!(
+            rest,
+            argv(&["api", "graphql", "-f", "query=q", "--jq", ".x"])
+        );
+        assert_eq!(command_args(&rest)[0], "api");
+    }
+
+    #[test]
+    fn a_purpose_flag_after_the_separator_belongs_to_gh() {
+        let tail = argv(&["--purpose=coverage", "--", "api", "--purpose", "x"]);
+        let (purpose, rest) = parse_purpose(&tail).unwrap();
+        assert_eq!(purpose, "coverage");
+        assert_eq!(rest, argv(&["api", "--purpose", "x"]));
+    }
 }
