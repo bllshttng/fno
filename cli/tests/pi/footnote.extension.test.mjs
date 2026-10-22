@@ -9,7 +9,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import footnote from "../../src/fno/setup/assets/pi/footnote.ts"
@@ -24,7 +24,7 @@ case "\$1" in
     if [ -n "\$STUB_STATE_PATH" ]; then echo "\$STUB_STATE_PATH"; fi
     ;;
   hook)
-    if [ -n "\$STUB_STDIN_LOG" ]; then cat >> "\$STUB_STDIN_LOG"; echo >> "\$STUB_STDIN_LOG"; fi
+    if [ -n "\$STUB_STDIN_DIR" ]; then cat > "\$STUB_STDIN_DIR/\$\$.json"; fi
     ;;
   loop-check)
     if [ -n "\$STUB_LOOPCHECK_SLEEP" ]; then sleep "\$STUB_LOOPCHECK_SLEEP"; fi
@@ -272,9 +272,9 @@ test("AC11-ERR: discovery with no plugin-root pointer returns empty, prints one 
 })
 
 test("per-turn state: turn start, tool call and settle each push through the session-state entry", async () => {
-  const stdinLog = join(tmpdir(), `fno-pi-stdin-${process.pid}-${Date.now()}.log`)
-  writeFileSync(stdinLog, "")
-  const world = makeWorld({ env: { STUB_STDIN_LOG: stdinLog } })
+  // One file per fire: concurrent stub processes never interleave a payload.
+  const stdinDir = mkdtempSync(join(tmpdir(), "fno-pi-stdin-"))
+  const world = makeWorld({ env: { STUB_STDIN_DIR: stdinDir } })
   try {
     const ctx = {
       sessionManager: { getSessionId: () => "s-1", buildContextEntries: () => [] },
@@ -286,8 +286,9 @@ test("per-turn state: turn start, tool call and settle each push through the ses
     await world.settle(ctx)
     // The push is fire-and-forget, so wait for all three payloads to land.
     const end = Date.now() + 3000
-    const payloads = () => readFileSync(stdinLog, "utf8").split("\n").filter(Boolean)
-    while (Date.now() < end && payloads().length < 3) {
+    const payloads = () =>
+      readdirSync(stdinDir).map((f) => readFileSync(join(stdinDir, f), "utf8")).filter((t) => t.endsWith("}"))
+    while (Date.now() < end && payloads().filter((t) => t.includes("hook_event_name")).length < 3) {
       await new Promise((r) => setTimeout(r, 20))
     }
     const events = world
@@ -307,7 +308,7 @@ test("per-turn state: turn start, tool call and settle each push through the ses
     assert.equal(parsed.find((p) => p.hook_event_name === "PreToolUse").tool_name, "read")
   } finally {
     world.cleanup()
-    rmSync(stdinLog, { force: true })
+    rmSync(stdinDir, { recursive: true, force: true })
   }
 })
 

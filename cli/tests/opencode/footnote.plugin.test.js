@@ -9,7 +9,7 @@
 // space-resolved manifest verb), `loop-check`, and `distress-scan`.
 
 import { describe, test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import footnote, { resolveHookRoot, FOREIGN_SESSION_MARKERS } from "../../src/fno/setup/assets/opencode/footnote.js"
@@ -923,19 +923,18 @@ describe("opencode hooks.json host", () => {
 })
 
 describe("opencode per-turn session-state push", () => {
-  // The stub logs argv and the stdin payload of every `hook session-state`
-  // fire, so the test asserts on the real subprocess the plugin spawns.
-  const PUSH_STUB = `if [ "$1" = "hook" ]; then echo "ARGS: $*" >> "$FNO_STUB_LOG"; cat >> "$FNO_STUB_LOG"; echo >> "$FNO_STUB_LOG"; fi`
-  const fires = (log) =>
-    readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("ARGS: hook session-state"))
+  // The stub writes each `hook session-state` fire to its own file, named by
+  // pid and event ($5), so concurrent fires never interleave in one log.
+  const PUSH_STUB = `if [ "$1" = "hook" ] && [ "$2" = "session-state" ]; then cat > "$FNO_STUB_DIR/$$.$5.json"; fi`
+  const fires = (out) => readdirSync(out).filter((f) => f.endsWith(".json"))
 
   test("1.x: prompt, tool, permission and idle each push their state with the served model", async () => {
     const dir = makeProject()
-    const log = join(dir, "push.log")
-    writeFileSync(log, "")
+    const out = join(dir, "pushes")
+    mkdirSync(out)
     const bin = stubBin(PUSH_STUB)
     await withEnv(
-      { FNO_AGENTS_BIN: bin, FNO_STUB_LOG: log, FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
+      { FNO_AGENTS_BIN: bin, FNO_STUB_DIR: out, FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
       async () => {
         const hooks = await FootnotePlugin({ directory: dir, client: fakeClient([]), $: fakeShell().shell })
         await hooks["chat.message"]({
@@ -949,12 +948,13 @@ describe("opencode per-turn session-state push", () => {
         })
         await hooks.event({ event: { type: "permission.replied", properties: { sessionID: "ses_P" } } })
         await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_P" } } })
-        // The stub echoes argv before it reads stdin, so wait on the payloads.
-        await until(() => (readFileSync(log, "utf8").match(/"hook_event_name"/g) || []).length >= 5)
+        await until(() => fires(out).length >= 5)
+        // A file exists before its payload is flushed; wait for every body.
+        await until(() => fires(out).every((f) => readFileSync(join(out, f), "utf8").endsWith("}")))
       },
     )
-    const text = readFileSync(log, "utf8")
-    const events = fires(log).map((l) => l.split(" ").pop()).sort()
+    const text = fires(out).map((f) => readFileSync(join(out, f), "utf8")).join("\n")
+    const events = fires(out).map((f) => f.split(".")[1]).sort()
     expect(events).toEqual(["Notification", "PreToolUse", "PreToolUse", "Stop", "UserPromptSubmit"])
     expect(text).toContain('"model":"zai/glm-5.3"')
     expect(text).toContain('"message":"Run rm -rf build"')
