@@ -1904,6 +1904,7 @@ class InboxBlock(BaseModel):
 
     unclaimed_ttl: int = 1800
     landed_abandon_ttl: int = 21600
+    tool_boundary_ordinary: bool = False  # read in Rust by mail_control_drain.rs
 
     @field_validator("unclaimed_ttl", "landed_abandon_ttl")
     @classmethod
