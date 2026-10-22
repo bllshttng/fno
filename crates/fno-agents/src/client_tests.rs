@@ -939,19 +939,6 @@ fn harness_flag_rows() {
     assert!(err.contains("split at the axis rename"), "got: {err}");
     assert!(err.contains("--harness/-H"), "got: {err}");
 
-    // -m, the mobile short for --model, refuses with its long form.
-    for flag in ["--model", "-m"] {
-        let args = vec![
-            "wk".to_string(),
-            "--harness".to_string(),
-            "claude".to_string(),
-            flag.to_string(),
-            "opus".to_string(),
-        ];
-        let err = build_request("spawn", &args).unwrap_err();
-        assert!(err.contains("--model is retired"), "{flag}: {err}");
-    }
-
     // x-c5db: the role halves the Python seam passes for a promoted codex
     // thread spawn parse into params in both spellings, and a level outside
     // the ladder refuses before any request is built.

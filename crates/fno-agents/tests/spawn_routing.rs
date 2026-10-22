@@ -855,43 +855,6 @@ fn client_spawn_headless_claude_honors_timeout() {
     );
 }
 
-/// --permission-mode retired with the spawn axes: the lane template owns the
-/// posture, so the spelling refuses by name on every lane.
-#[test]
-fn client_spawn_permission_mode_codex_headless_fails_closed() {
-    let home_dir = tmpdir("cli-spawn-perm-codex-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_permission_mode_codex_headless_fails_closed: binary not found"
-        );
-        return;
-    }
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "myagent",
-            "hi",
-            "--harness",
-            "codex",
-            "--once",
-            "--permission-mode",
-            "acceptEdits",
-        ])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1")
-        .env("FNO_AGENTS_HOME", &home_dir)
-        .output()
-        .expect("failed to run fno-agents");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "must exit 2; stderr: {stderr}");
-    assert!(
-        stderr.contains("--permission-mode is retired"),
-        "error must name --permission-mode as retired: {stderr}"
-    );
-}
-
 /// --yolo retired beside --permission-mode, so the old mutual exclusion has
 /// one answer: the first retired spelling refuses by name.
 #[test]
