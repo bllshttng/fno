@@ -4,10 +4,11 @@
 //! resolve healed the same codex session, and the adopted duplicate blocked
 //! resume).
 //!
-//! One producer (the Rust daemon's rm), one consumer (the Python healer in
-//! `cli/src/fno/agents/store_fallback.py`, reached through the daemon's
-//! heal-token shellout). The grace window is duplicated across the seam by
-//! design: the file is the contract, not a shared constant. Expired entries
+//! One producer (the Rust daemon's rm). Two consumers: the session-report
+//! mint here, and the Python healer in `cli/src/fno/agents/store_fallback.py`,
+//! reached through the daemon's heal-token shellout. The file is the
+//! contract, not a shared constant: this side keeps an entry as long as a
+//! reap receipt, and the healer still reads only its own 24 h. Expired entries
 //! are pruned on write; a failed write surfaces on the rm receipt, never a
 //! refused removal. The row's transport short id, name and cwd ride
 //! along on each record, so the stop verb resolves a just-removed
