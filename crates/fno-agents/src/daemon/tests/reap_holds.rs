@@ -1010,7 +1010,10 @@ fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
     );
 
     assert!(
-        summary.needs_live_stop.iter().any(|(id, _)| id == "cxrow000"),
+        summary
+            .needs_live_stop
+            .iter()
+            .any(|(id, _)| id == "cxrow000"),
         "the unlisted codex row reaches the pipeline and holds at the stop proof: {summary:?}"
     );
     assert_eq!(
