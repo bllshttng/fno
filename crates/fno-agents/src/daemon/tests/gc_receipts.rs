@@ -295,6 +295,14 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
         receipts.join("claude-sess-a.json").exists(),
         "the resume handle must be durable before the row leaves"
     );
+    assert!(
+        !summary
+            .kept_no_receipt
+            .iter()
+            .any(|(_, reason)| reason.contains("registry write refused")),
+        "{:?}",
+        summary.kept_no_receipt
+    );
 
     // AC4-EDGE: touch A's transcript and rerun as a fresh home - the same
     // row shape with a fresh transcript is ACTIVE, nothing retires.
@@ -1303,6 +1311,47 @@ fn a_row_reaps_only_after_its_receipt_is_durable() {
     );
     let reg = state::load_registry(&home.registry_json()).unwrap();
     assert!(reg.entries.iter().any(|e| e.name == "undeliverable"));
+}
+
+/// A retirement whose registry write refuses names every row it staged in
+/// `kept_no_receipt`, so the real sweep reports what the dry run reports.
+#[test]
+fn a_refused_retirement_write_names_every_staged_row() {
+    let home = tmp_home("gc-write-refused");
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let transcripts = tempfile::tempdir().unwrap();
+    let quiet = quiet_transcript(transcripts.path(), "refused.jsonl", 2 * 3600);
+    state::update_registry(&home.registry_json(), |r| {
+        let mut e = ask_row("refused", None);
+        e.short_id = "refusd".into();
+        e.origin = Some("spawn".into());
+        r.entries.push(e);
+    })
+    .unwrap();
+    // A newer writer floor: reads still serve, every write refuses.
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.registry_json()).unwrap()).unwrap();
+    doc["min_writer_version"] = serde_json::json!(state::REGISTRY_SCHEMA_VERSION + 1);
+    std::fs::write(home.registry_json(), serde_json::to_vec(&doc).unwrap()).unwrap();
+
+    let summary = staged_sweep(
+        &home,
+        &emitter,
+        900,
+        graph_read(&[("refused-sess", "N1", "done")], &[]),
+        &move |_| Some(vec![quiet.clone()]),
+        &|_| (Some(true), Some(true)),
+    );
+
+    assert!(summary.retired.is_empty(), "{summary:?}");
+    assert!(
+        summary
+            .kept_no_receipt
+            .iter()
+            .any(|(id, reason)| id == "refusd" && reason.starts_with("registry write refused: ")),
+        "{:?}",
+        summary.kept_no_receipt
+    );
 }
 
 #[test]

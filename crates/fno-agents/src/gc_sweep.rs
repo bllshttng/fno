@@ -3366,7 +3366,7 @@ pub(crate) fn commit_retirements(
     // Names actually removed under the lock (identity still matched), so the
     // emit + summary report only what really happened.
     let retiring: std::collections::BTreeSet<String> = to_retire.keys().cloned().collect();
-    let write = state::update_registry(&home.registry_json(), |r| {
+    let write = state::update_registry_retiring(&home.registry_json(), &retiring, |r| {
         // `run`'s snapshot is stop-confirmation, receipt-write, and probe
         // seconds old by the time a prune fires, so revalidate shared-cwd
         // occupancy under the lock; ties among rows retiring this pass were
@@ -3573,11 +3573,17 @@ pub(crate) fn commit_retirements(
                 &json!({"op": caller, "error": err.to_string()}),
             );
             // Nothing was removed; report no retirements (no event/disk
-            // divergence).
+            // divergence), and name every staged row so the real sweep
+            // reports what it held where the dry run reported it.
             report.retired.clear();
             report.pruned.clear();
             report.prune_failed.clear();
             report.retired_names.clear();
+            for order in to_retire.values() {
+                report
+                    .kept_no_receipt
+                    .push((order.id.clone(), format!("registry write refused: {err}")));
+            }
         }
     }
     report
