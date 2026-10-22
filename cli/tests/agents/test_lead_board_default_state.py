@@ -49,7 +49,7 @@ def captured_argv(monkeypatch):
     real_binary = rust_binary.resolve_binary()
 
     def fake_run(cmd, *args, **kwargs):
-        if list(cmd[1:2]) == ["registry-commit"]:
+        if list(cmd[1:2]) in (["registry-commit"], ["spawn-overlay"]):
             return real_run([str(real_binary), *cmd[1:]], *args, **kwargs)
         seen.append(cmd)
         if str(cmd[0]) == "/fake/fno-agents":
