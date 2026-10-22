@@ -59,6 +59,22 @@ pub fn normalize(harness: &str, event: &str, payload: &serde_json::Value) -> Hoo
     ev
 }
 
+/// The payload a plugin-hosted harness (opencode, pi) sends: the plugin owns
+/// the event translation and builds claude-shaped JSON, so one reader serves
+/// both. Neither names a posture.
+fn plugin_shaped(harness: &str, event: &str, payload: &serde_json::Value) -> HookEvent {
+    HookEvent {
+        harness: harness.into(),
+        event: event.into(),
+        session_id: str_field(payload, "session_id"),
+        tool: str_field(payload, "tool_name"),
+        message: str_field(payload, "message"),
+        model: str_field(payload, "model"),
+        effort: effort_field(payload),
+        posture: None,
+    }
+}
+
 /// Extract a string field, tab/newline-free is NOT enforced here: the report
 /// rides JSON-RPC, not the shell producer's TSV handoff, so values pass
 /// through verbatim.
@@ -111,6 +127,27 @@ mod tests {
             assert_eq!(ev.message, "");
             assert_eq!(ev.model, "");
             assert_eq!(ev.effort, "");
+            assert_eq!(ev.posture, None);
+        }
+    }
+
+    /// The plugin-hosted harnesses carry the served `provider/model`, the
+    /// permission text and the tool name through the one shared reader.
+    #[test]
+    fn plugin_payloads_carry_model_message_and_tool() {
+        for harness in ["opencode", "pi"] {
+            let ev = normalize(
+                harness,
+                "PreToolUse",
+                &json!({"session_id": "s-1", "tool_name": "Bash", "model": "zai/glm-5.3",
+                        "message": "Run: ls", "effort": "high"}),
+            );
+            assert_eq!(ev.harness, harness);
+            assert_eq!(ev.session_id, "s-1");
+            assert_eq!(ev.tool, "Bash");
+            assert_eq!(ev.model, "zai/glm-5.3");
+            assert_eq!(ev.message, "Run: ls");
+            assert_eq!(ev.effort, "high");
             assert_eq!(ev.posture, None);
         }
     }
