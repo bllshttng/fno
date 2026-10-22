@@ -870,7 +870,6 @@ pub fn guard_client_spawn(
         return Ok(None);
     };
     let node = raw_node.trim();
-    let phase = spawn_phase(params, node)?;
     let provenance = if node.is_empty() {
         Vec::new()
     } else {
@@ -888,6 +887,25 @@ pub fn guard_client_spawn(
         );
         return Err(2);
     };
+    // The Python door guards first and then execs this client for its codex
+    // and opencode lanes with the same --node. The reservation then names the
+    // parent, so a second judgment would refuse the spawn the parent just
+    // admitted. The parent owns the keys and the stamps; this carries the env.
+    let parent = format!(
+        "{SPAWN_CLI_HOLDER_PREFIX}{}",
+        std::os::unix::process::parent_id()
+    );
+    let reserved = crate::claims::status(&format!("dispatch:{guarded}"), None).1;
+    if reserved.is_some_and(|r| r.holder == parent) {
+        for (key, value) in &provenance {
+            std::env::set_var(key, value);
+        }
+        if let Ok(mut exported) = EXPORTED.lock() {
+            *exported = provenance;
+        }
+        return Ok(None);
+    }
+    let phase = spawn_phase(params, node)?;
     let pid = std::process::id();
     let holder = format!("{SPAWN_CLI_HOLDER_PREFIX}{pid}");
     // The worker's name is the whole proof of successorship; an empty one
