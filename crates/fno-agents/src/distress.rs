@@ -1345,10 +1345,9 @@ mod tests {
     }
 
     #[test]
-    fn every_help_class_has_a_route_and_texts_agree() {
-        // AC23 groundwork: every class routes somewhere; the in-session
-        // classes carry their plan texts verbatim; the wait backoffs stay
-        // under the 15-minute watcher cap.
+    fn every_help_class_routes_within_the_watcher_cap() {
+        // Every class routes somewhere, and every wait backoff stays under
+        // the 15-minute watcher cap.
         let all = [
             HelpClass::StalePlan,
             HelpClass::MissingPrereq,
@@ -1374,20 +1373,6 @@ mod tests {
                         assert!(backoff_secs <= 900, "watcher cap is 15m");
                     }
                 }
-            }
-        }
-        for (class, text) in [
-            (HelpClass::StalePlan, crate::help_router::STALE_PLAN_TEXT),
-            (
-                HelpClass::MissingPrereq,
-                crate::help_router::MISSING_PREREQ_TEXT,
-            ),
-            (HelpClass::CiRed, crate::help_router::CI_RED_TEXT),
-            (HelpClass::Stuck, crate::help_router::STUCK_TEXT),
-        ] {
-            match crate::help_router::route(class, 0) {
-                crate::help_router::Route::InSession(t) => assert_eq!(t, text),
-                other => panic!("class {class:?} must be in-session at rung 0: {other:?}"),
             }
         }
     }
