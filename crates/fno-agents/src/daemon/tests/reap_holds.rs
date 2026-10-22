@@ -388,14 +388,15 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
     );
 }
 
-/// A release matched to a no-provenance hold lifts it, and the row retires
-/// on its quiet clock like a released planner.
+/// A release matched to a no-provenance hold lifts it. The row then answers
+/// to its idle clock like a released planner: inside the hour it keeps as
+/// active, and the release is not refused.
 #[test]
 fn a_release_lifts_a_no_provenance_hold() {
     let home = tmp_home("gc-release-noprov");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "np.jsonl", 2 * 3600);
+    let quiet = quiet_transcript(transcripts.path(), "np.jsonl", 1800);
     state::update_registry(&home.registry_json(), |r| {
         let mut row = ask_row("np-row", None);
         row.short_id = "nprow".into();
@@ -406,39 +407,49 @@ fn a_release_lifts_a_no_provenance_hold() {
     })
     .unwrap();
 
-    let graph = graph_read(&[], &[]);
     let release = gc_sweep::Release {
         handle: "nprow".to_string(),
         reason: crate::gc::KeepReason::NoProvenance.as_str().to_string(),
         detail: "no source resolved a node: sessions, registry, name, transcript".to_string(),
     };
-    let summary = gc_sweep::run_with_release(
-        &home,
-        &emitter,
-        900,
-        false,
-        7,
-        &move |_| graph.clone(),
-        &|_| None,
-        &staged_ages_at(crate::daemon::now_epoch_secs(), &|_| {
-            Some(vec![quiet.clone()])
-        }),
-        &|_| true,
-        &|_| crate::daemon::CascadeOutcome::NotApplicable,
-        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-        &no_agents,
-        &|_| (None, None),
-        &|_| None,
-        false,
-        Some(&release),
+    let sweep = |release: Option<&gc_sweep::Release>| {
+        let graph = graph_read(&[], &[]);
+        let quiet = quiet.clone();
+        gc_sweep::run_with_release(
+            &home,
+            &emitter,
+            900,
+            true,
+            7,
+            &move |_| graph.clone(),
+            &|_| None,
+            &staged_ages_at(crate::daemon::now_epoch_secs(), &move |_| {
+                Some(vec![quiet.clone()])
+            }),
+            &|_| true,
+            &|_| crate::daemon::CascadeOutcome::NotApplicable,
+            &|_e| crate::daemon::CascadeOutcome::NotApplicable,
+            &no_agents,
+            &|_| (None, None),
+            &|_| None,
+            false,
+            release,
+        )
+    };
+
+    let held = sweep(None);
+    assert_eq!(
+        held.kept_no_provenance,
+        vec!["nprow".to_string()],
+        "{held:?}"
     );
 
+    let released = sweep(Some(&release));
+    assert!(released.kept_no_provenance.is_empty(), "{released:?}");
+    assert!(released.release_refused.is_empty(), "{released:?}");
     assert!(
-        summary
-            .retired
-            .iter()
-            .any(|(id, basis)| id == "nprow" && basis.starts_with("released no provenance")),
-        "{summary:?}"
+        released.kept_active.iter().any(|(id, _)| id == "nprow"),
+        "{released:?}"
     );
 }
 
