@@ -21,7 +21,10 @@ if [[ -z "$BIN" ]]; then
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    (cd "$ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
+    # --bins, not --bin: the quota helper family (fno-gh-loopcheck and kin)
+    # resolves beside this binary, and a lone fno-agents build strands the
+    # probe in advisory mode.
+    (cd "$ROOT/crates/fno-agents" && cargo build --bins >/dev/null 2>&1)
     BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
 fi
 [[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary missing at $BIN" >&2; exit 1; }
@@ -74,6 +77,14 @@ set -e
 [[ "$RC" -eq 2 ]] || { echo "FAIL: expected Codex block rc=2, got $RC: $OUT" >&2; exit 1; }
 echo "$OUT" | grep -q "continue working" || {
   echo "FAIL: expected the decision's continue block, got: $OUT" >&2
+  # Name the resolution inputs: the binary the hook answered with, whether
+  # the quota helper family sits beside it, and any probe rows the gate
+  # managed to journal. Each read is guarded: an unmatched grep exits 1,
+  # and under pipefail that would abort the block before the later
+  # diagnostics print.
+  echo "BIN=$BIN" >&2
+  ls "$(dirname "$BIN")" | grep "^fno-gh" >&2 || true
+  grep -rh "gh_probe" "$EVENTS" "$HOME_DIR" 2>/dev/null | tail -3 >&2 || true
   exit 1
 }
 

@@ -54,7 +54,7 @@ pub(crate) fn default_graph_path() -> PathBuf {
 /// the store the config names.
 pub(crate) fn graph_path_for(cwd: &std::path::Path) -> PathBuf {
     crate::agents_config::state_dir(cwd)
-        .map(|root| crate::state_layout::place(&root, "graph.json"))
+        .map(|root| crate::state_layout::graph_anchor(&root))
         .unwrap_or_else(default_graph_path)
 }
 

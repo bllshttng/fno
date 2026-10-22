@@ -637,7 +637,7 @@ flags:
   --plan <path>            plan file for stale
   --offset N --limit N     page the history read (default limit 50)
   --json                   machine output; history emits {{total, offset, records}}
-  --graph <path>           store to read (default ~/.fno/graph.json)
+  --graph <path>           store to read (default ~/.fno/db/graph.db)
   -h, --help               this text"
     );
 }

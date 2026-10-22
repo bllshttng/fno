@@ -16,8 +16,8 @@
 //! fail-closed shape fail_invalid_record freezes. An unparseable config
 //! layer never raises the record load (it reads as empty) but does fail the
 //! settings load, which is why the switch read is strict and fails open.
-//! Pydantic refusals on untouched metadata fields (tags, reset_timezone,
-//! window_minutes, account_id, description) are NOT mirrored.
+//! The record read is `accounts::records::load`, which holds the whole
+//! refusal surface, metadata fields and dangling agent pins included.
 
 mod common;
 

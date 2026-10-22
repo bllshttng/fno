@@ -78,10 +78,7 @@ directory inside it holds one markdown file per thread, named
 than creating new files, so a recipient sees a self-contained
 conversation per file instead of a wall of unrelated msg-blocks.
 
-Pre-2026-05 layouts used a single flat `inbox.md` per recipient. The
-migration script `scripts/migrate-inbox-flat-to-threads.py` is a
-one-shot, idempotent rewrite that splits flat files into thread files
-and renames the original to `inbox-pre-migration.md` as a safety net.
+Pre-2026-05 layouts used a single flat `inbox.md` per recipient. Their migration script is retired, because the bus log is now the mail record and the thread files are a derived view.
 
 The two substrates never overlap: questions/fyi never become graph
 entries; only triaged heads-up threads do (via `fno agents mail triage` ->

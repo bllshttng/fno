@@ -117,6 +117,13 @@ pub fn find(legacy_name: &str) -> Option<&'static Row> {
     rows().iter().find(|r| r.legacy == legacy_name)
 }
 
+/// The graph store's anchor under `root`, through the layout ladder. The name
+/// is frozen: the lock, its queue, the keeper socket and the note journal all
+/// derive from it.
+pub fn graph_anchor(root: &Path) -> PathBuf {
+    place(root, "graph.json")
+}
+
 /// The anchor probe: a virtual graph.json exists when its .db sibling does.
 fn db_twin(p: &Path) -> PathBuf {
     p.with_extension("db")

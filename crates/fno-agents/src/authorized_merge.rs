@@ -2714,6 +2714,14 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         );
         return (0, out, String::new());
     }
+    // The queue-merge finisher's cleanup write (pr port 7): the deleted
+    // `_merge._post_merge_remote_delete` helper's native owner. Warn-only,
+    // gated on `auto_merge.delete_branch_on_merge` exactly as the verify
+    // flow's cleanup leg is.
+    if payload.get("op").and_then(Value::as_str) == Some("merge-remote-delete") {
+        let out = crate::pr_verify::remote_delete_cleanup_op(&payload);
+        return (0, out, String::new());
+    }
     // The effect ops are the effect-classification door the ported Python
     // approvals callers route through, the same transport the grant ops use:
     // `{"op": "effect-classify"|"effect-submit"|"effect-verdict", ...}`.

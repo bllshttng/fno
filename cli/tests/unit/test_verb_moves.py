@@ -153,7 +153,7 @@ def test_every_moved_spelling_is_hidden():
     ctx = click.Context(root)
     for name in VERB_MOVES:
         cmd = root.get_command(ctx, name)
-        # x-6233: `yard` was an eager @app.command, so its release form is a
+        # `yard` was an eager @app.command, so its release form is a
         # removed registration rather than a hidden lazy row - forwarding is
         # owned by VERB_MOVES, not by the registry. `decide` joined it when
         # the family ported native: every destination the move names is a
@@ -161,10 +161,12 @@ def test_every_moved_spelling_is_hidden():
         # nothing. `review` joined the same way when its ROOT claim moved to
         # the rust front door, which prints the move notice and execs
         # `do review` itself; a python registration would sit behind an
-        # intercept that never reaches it. Every OTHER moved spelling keeps a
+        # intercept that never reaches it. `pr` joined for the same reason
+        # when its root claim moved native (the front door execs the
+        # dispatcher with the argv intact). Every OTHER moved spelling keeps a
         # one-release registration, and any registration that exists must be
         # hidden: an advertised moved name teaches a doomed spelling.
-        if name in ("decide", "yard", "review"):
+        if name in ("decide", "yard", "review", "pr"):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
         assert cmd is not None, f"moved spelling {name!r} must stay registered"

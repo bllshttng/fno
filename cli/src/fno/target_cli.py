@@ -961,18 +961,22 @@ def review_invocation_cmd(
 def _read_pr_metadata(pr_number: int, cwd: Path) -> dict[str, Any]:
     """Read the PR identity required before a native self-review can fire.
 
-    The REST lane (`fetch_pr_info_rest`), never `gh pr view`: the fno gh
+    The REST lane (the status-pr-info op), never `gh pr view`: the fno gh
     proxy routes that spelling through the GraphQL broker, which refuses
     discretionary reads once the shared quota hits its reserve - exactly
     when a fleet is busiest - and the ship step would stall on a read the
     REST endpoint serves freely.
     """
-    from fno.pr._rest import fetch_pr_info_rest
+    from fno.rust_binary import verb_call
 
-    info, reason = fetch_pr_info_rest(str(pr_number), cwd=str(cwd))
-    if info is None:
+    info = verb_call(
+        "authorized-merge",
+        {"op": "status-pr-info", "cwd": str(cwd), "pr": pr_number},
+        timeout=120,
+    )
+    if info.get("error"):
         raise RuntimeError(
-            f"cannot read PR {pr_number}: {(reason or 'REST read failed')[:240]}"
+            f"cannot read PR {pr_number}: {(info.get('error') or 'REST read failed')[:240]}"
         )
     return {
         "number": info.get("pr", pr_number),

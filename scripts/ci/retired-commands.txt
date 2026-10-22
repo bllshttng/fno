@@ -120,8 +120,14 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 # one-for-one successor. The python plan stamper was ported to plan_doc.
 fno inbox view|fno agents mail list --all [--from P] [--json], or fno agents mail unread [-n NAME]|the mail-verb fold
 fno inbox drain|fno agents mail drain|the mail-verb fold
-fno inbox migrate-bus|fno agents mail migrate-bus|the mail-verb fold
+fno inbox migrate-bus|nothing: the bus log is the mail record|the mail-verb fold
 stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
+
+# The markdown-render admin verbs retired with the render readers: the bus log
+# is the mail record and the render is a derived view.
+fno agents mail lint|fno agents mail unread|d-64ef8f90
+fno agents mail migrate-bus|nothing: the bus log is the mail record|d-64ef8f90
+fno agents mail rebuild-render|fno agents mail unread|d-64ef8f90
 
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.

@@ -6,7 +6,6 @@ already-terminal reply, raises the floor after a slow attempt, and counts
 every granted queue row exactly once.
 """
 
-import fno.pr._merge as _merge
 import fno.pr_watch._dispatch as d
 from fno.pr_watch._state import WatermarkStore
 from fno.pr_watch._discover import PrCandidate
@@ -134,7 +133,7 @@ def test_an_already_closed_reply_stamps_not_open_and_the_next_drain_skips(
         pr = int(payload["argv"][0])
         calls.append(pr)
         return {"pr": pr, "outcome": "skipped",
-                "reason": _merge.ALREADY_TERMINAL + "closed; nothing to merge",
+                "reason": d.ALREADY_TERMINAL + "closed; nothing to merge",
                 "strategy": "none", "exit": 2}
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _already_closed)
