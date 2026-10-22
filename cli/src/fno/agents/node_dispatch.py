@@ -32,7 +32,7 @@ class NodeSeed:
 
 
 def _with_dispatch_command(row: dict) -> dict:
-    """The row with a legacy stored ``dispatch_verb`` surfaced as ``dispatch_command``.
+    """The row with the legacy stored key surfaced as ``dispatch_command``.
 
     A row the store has not migrated yet (or one a defer/undefer rewrote) can
     carry only the old key; every reader below looks up the new one."""
