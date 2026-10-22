@@ -448,7 +448,7 @@ fn sticky_footer_and_the_in_list_new_squad_row_never_paint_twice() {
         agents,
         focus_node: None,
     });
-    let label = "+ workspace";
+    let label = view.footer_buttons(28).text;
     let count = |view: &View| {
         let (rows, cols, panel_w) = (10usize, 72usize, 28usize);
         let mut cells = vec![Cell::default(); rows * cols];
@@ -457,7 +457,7 @@ fn sticky_footer_and_the_in_list_new_squad_row_never_paint_twice() {
             .iter()
             .map(|c| c.c)
             .collect::<String>()
-            .matches(label)
+            .matches(label.as_str())
             .count()
     };
     // Park the selector on the NewSquad row and clamp: the window scrolls so

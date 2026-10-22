@@ -1116,6 +1116,8 @@ pub(crate) struct View {
     /// The esc-close spans the last compose painted: the one list a tap
     /// checks, whichever overlay drew them.
     close_chips: std::cell::RefCell<Vec<chrome::CloseSpan>>,
+    /// Card line 1's node span per agent name, as the last paint drew it.
+    card_node_spans: std::cell::RefCell<HashMap<String, Option<std::ops::Range<usize>>>>,
     /// The pending new-workspace name buffer, `Some` while the `+`
     /// create overlay is open. Keys divert to `overlay_keys::create_keys`: printable append,
     /// Backspace pops, Enter sends [`Command::NewSquad`] (empty keeps it open),
@@ -1417,7 +1419,7 @@ struct SearchView {
 /// under an open navigator is reflected at once.
 pub(crate) struct NavView {
     /// Incremental text filter (substring, case-insensitive) over row match
-    /// keys: label + pane id + node id + slug + workspace.
+    /// keys: the label plus the row's identity tokens ([`NavRow::match_key`]).
     query: String,
     /// The active state chip; `None` = all states. `Tab` cycles it.
     state_filter: Option<PaneState>,
@@ -1812,7 +1814,9 @@ mod keys_settings;
 mod messages_detail;
 mod messages_reply;
 mod overlay_lines;
-pub(crate) use overlay_lines::{humanize_age, nav_overlay_lines, peek_overlay_lines};
+pub(crate) use overlay_lines::{
+    humanize_age, nav_agent_tokens, nav_overlay_lines, peek_overlay_lines,
+};
 mod messages_view;
 mod org_board;
 mod org_detail;
@@ -2083,6 +2087,7 @@ impl View {
             confirm: None,
             modal_release_swallow: false,
             close_chips: Default::default(),
+            card_node_spans: Default::default(),
             create: None,
             folder_pick: Default::default(),
             create_esc: Vec::new(),
@@ -4029,15 +4034,7 @@ impl View {
                     cross(s.id),
                     None,
                     agent_hit(a, self.layout.active_squad),
-                    &[
-                        a.pane_id.map(|p| p.to_string()).unwrap_or_default(),
-                        s.name.clone(),
-                        // The portal index joins the match key so an
-                        // EXISTING portal is reachable by number through the
-                        // navigator; the `portal:` prefix keeps it from
-                        // colliding with pane ids and node hex.
-                        a.portal.map(|p| format!("portal:{p}")).unwrap_or_default(),
-                    ],
+                    &nav_agent_tokens(a, Some(&s.name)),
                 ));
             }
         }
@@ -4051,10 +4048,7 @@ impl View {
                 None,
                 None,
                 agent_hit(a, self.layout.active_squad),
-                &[
-                    a.pane_id.map(|p| p.to_string()).unwrap_or_default(),
-                    a.portal.map(|p| format!("portal:{p}")).unwrap_or_default(),
-                ],
+                &nav_agent_tokens(a, None),
             ));
         }
         out
@@ -6735,10 +6729,11 @@ pub(crate) struct NavRow {
     /// Rendering only - the text filter matches [`NavRow::match_key`].
     label: String,
     /// The searchable identity, composed at build time and NEVER
-    /// displayed: `label` plus the mux pane id, the bound node id, the
-    /// title-slug and the workspace name, lowercased and space-joined. The
-    /// text filter matches HERE, so a row is findable by what it IS (pane
-    /// `307`, node ``, a slug) not just by its label text. A row whose
+    /// displayed: `label` plus the row's identity tokens (a pane's id and
+    /// workspace; an agent's [`nav_agent_tokens`]), lowercased and
+    /// space-joined. The text filter matches HERE, so a row is findable by
+    /// what it IS (pane `307`, PR `3706`, model `opus`) not just by its
+    /// label text. A row whose
     /// hit is invisible in the label shows the matched token
     /// ([`nav_overlay_lines`]) - a hit with no visible reason reads as a bug.
     match_key: String,

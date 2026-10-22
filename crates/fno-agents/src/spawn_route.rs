@@ -61,7 +61,12 @@ pub fn parse_target(raw: &str) -> Option<(String, String)> {
     Some((provider.to_lowercase(), model.to_string()))
 }
 
-fn refused(route: &str, reason: &str) -> String {
+/// The shared reason a target resolves to nothing: the pane arm and the
+/// thread seam name the same gap in the same words (cli.py:1702 is the
+/// Python door's twin).
+pub(crate) const ROUTE_KEYLESS: &str = "provider unknown, non-anthropic, or keyless";
+
+pub(crate) fn refused(route: &str, reason: &str) -> String {
     format!(
         "--route {} refused ({reason}); no worker launched, node stays dispatchable.",
         py_repr(route)
@@ -125,17 +130,14 @@ pub fn route_seam(
     // resolve_explicit_route: a blank provider or model resolves nothing.
     let pname = provider.trim().to_lowercase();
     if pname.is_empty() || model.trim().is_empty() {
-        return RouteSeam::Refuse(refused(
-            route,
-            "provider unknown, non-anthropic, or keyless",
-        ));
+        return RouteSeam::Refuse(refused(route, crate::spawn_route::ROUTE_KEYLESS));
     }
     let ctx = RouteCtx::Peer(pname.clone());
     let mut env = match claude_route(cwd, &pname, model.trim(), &ctx, env_get) {
         ClaudeRoute::Routed { env, .. } => env,
         ClaudeRoute::Skipped { notices } => {
             let reason = if notices.is_empty() {
-                "provider unknown, non-anthropic, or keyless".to_string()
+                crate::spawn_route::ROUTE_KEYLESS.to_string()
             } else {
                 notices.join("; ")
             };

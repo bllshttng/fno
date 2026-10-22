@@ -164,6 +164,9 @@ mkdir -p "$ROOT/code/checkout/plans"
 printf -- '---\nstatus: ready\n---\n# Rate limit the checkout api per key\n' >"$ROOT/code/checkout/plans/rate-limit.md"
 "$FNO" backlog update "${IDS[0]}" 'plan_path=~/code/checkout/plans/rate-limit.md' >/dev/null
 "$FNO" backlog rank "${IDS[0]}" --top --operator >/dev/null
+# A PR on the first claimed node, so its pane's row carries one and the
+# navigator-pr view has a number to find.
+"$FNO" backlog update "${IDS[0]}" pr_url=https://github.com/demo/checkout/pull/412 pr_number=412 >/dev/null
 
 # Pane text: an invented transcript per harness, shown by a process that
 # never prints a prompt. The cursor is hidden, so no block reads as a glyph.

@@ -61,6 +61,26 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
     lines
 }
 
+/// An agent nav row's identity tokens: the mux pane id, the squad (a
+/// squad-hosted row), the portal as `portal:<n>` (kept apart from pane ids
+/// and node hex), the bound node, the PR as `#N` (a substring hit for `N`
+/// too), the harness, the full model id and the card's short model name.
+/// The short name earns its own token because `opus-4.8` is no substring of
+/// `claude-opus-4-8`.
+pub(crate) fn nav_agent_tokens(a: &AgentRow, squad: Option<&str>) -> Vec<String> {
+    let mut t = vec![
+        a.pane_id.map(|p| p.to_string()).unwrap_or_default(),
+        squad.unwrap_or_default().to_string(),
+        a.portal.map(|p| format!("portal:{p}")).unwrap_or_default(),
+        a.node.clone().unwrap_or_default(),
+        a.pr.map(|n| format!("#{n}")).unwrap_or_default(),
+        a.harness.clone().unwrap_or_default(),
+        a.model.clone().unwrap_or_default(),
+    ];
+    t.extend(super::card_line::model_label(a).filter(|m| Some(m) != a.model.as_ref()));
+    t
+}
+
 /// The table's last-activity cell: the same buckets as [`humanize_ago`],
 /// right-justified to a fixed width of 4 so the column never reflows when a
 /// value rolls from `59m` to `1h`. An absent reading renders EMPTY, like the
