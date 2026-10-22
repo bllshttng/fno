@@ -260,7 +260,10 @@ def resolve_role(scopes: list[str], *, graph_entry=None) -> "tuple[int, str]":
         raise RoleScopeError(f"the ladder resolver did not answer: {exc}") from exc
     if answer.get("refusal"):
         raise RoleScopeError(answer["refusal"])
-    return int(answer["level"]), str(answer["scope"])
+    try:
+        return int(answer["level"]), str(answer["scope"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RoleScopeError(f"the ladder resolver answered malformed JSON: {answer!r}") from exc
 
 
 def scope_contains(

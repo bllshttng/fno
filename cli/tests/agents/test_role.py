@@ -979,7 +979,11 @@ def test_a_self_widen_fails_closed_without_the_binary(
     _widen_graph(monkeypatch, created_by=WIDEN_LEAD_SESSION)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
 
+    real_call = spawn_overlay_client.spawn_overlay_call
+
     def _unavailable(payload):
+        if payload.get("kind") == "role-resolve":
+            return real_call(payload)
         raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _unavailable)
@@ -1094,7 +1098,11 @@ def test_a_self_add_answer_without_a_grantor_refuses_fail_closed(
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
     before = [asdict(row) for row in load_registry()]
 
+    real_call = spawn_overlay_client.spawn_overlay_call
+
     def _old_binary(payload):
+        if payload.get("kind") == "role-resolve":
+            return real_call(payload)
         return {"widen": True, "added": ["e-2"], "hint": None}
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _old_binary)
@@ -1237,7 +1245,11 @@ def test_in_place_role_refuses_when_the_identity_check_is_unavailable(
         ],
     )
 
-    def unavailable(*args, **kwargs):
+    real_call = spawn_overlay_client.spawn_overlay_call
+
+    def unavailable(payload, *args, **kwargs):
+        if payload.get("kind") == "role-resolve":
+            return real_call(payload, *args, **kwargs)
         raise spawn_overlay_client.SpawnOverlayUnavailable("not built")
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", unavailable)
