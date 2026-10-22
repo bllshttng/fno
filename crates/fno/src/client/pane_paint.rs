@@ -616,15 +616,17 @@ mod tests {
         assert!(frame.cursor_row < 1 + 20 && frame.cursor_col < 28 + 50);
 
         let view = view_with((60, 200), (60, 200));
-        assert_eq!(view.visible_area(), (29, 72));
+        // 30 rows minus the tab strip and the status row; 100 minus the panel.
+        assert_eq!(view.visible_area(), (28, 72));
         assert_eq!(view.hit_test(5, 40).map(|h| h.0), Some(10));
         let frame = view.compose();
         assert_eq!(frame.cells[5 * cols + 40].c, 'a');
         let filler = (1..29)
+            // rows 1..=28 are content; row 29 is the status row.
             .flat_map(|r| (28..100).map(move |c| (r, c)))
             .filter(|&(r, c)| frame.cells[r * cols + c].c == '·')
             .count();
         assert_eq!(filler, 0, "a cropped window paints no letterbox filler");
-        assert!(frame.cursor_row < 1 + 29 && frame.cursor_col < 28 + 72);
+        assert!(frame.cursor_row < 1 + 28 && frame.cursor_col < 28 + 72);
     }
 }
