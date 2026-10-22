@@ -950,6 +950,12 @@ mod tests {
 
     #[test]
     fn run_distress_scan_reads_the_checked_in_codex_fixture() {
+        // Holds the env lock: the scan's blocked push reads the process-global
+        // FNO_LOOPCHECK_FNO_BIN stub, and an unlocked push leaks into the
+        // wait-class test's log.
+        let _env_guard = fno_bin_env_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // AC10-HP / AC11-EDGE through the actual verb entry point
         // (run_distress_scan), against the real rollout line checked in at
         // tests/fixtures/rollout-codex-help.jsonl, parsed natively (no
