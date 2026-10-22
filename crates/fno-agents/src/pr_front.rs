@@ -153,6 +153,14 @@ through the fno front door"
         return 0;
     }
     let tail = &args[1..];
+    if tail.iter().any(|arg| arg == "--help" || arg == "-h") {
+        if let Some(wording) = spelling_help(sub) {
+            println!("Usage: fno do pr {sub}");
+            println!();
+            println!("    {wording}");
+            return 0;
+        }
+    }
     if matches!(
         sub.as_str(),
         "verify" | "status" | "base-lineage-check" | "merge-result-check" | "coverage-check"
