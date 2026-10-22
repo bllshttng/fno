@@ -2,23 +2,21 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from fno.paths import github_cli_proxy_dir
+from fno.rust_binary import resolve_binary
 
-PROXY_EXEC_LINE = 'exec fno-gh-proxy "$@"'
-# A shim can also take the pip/uv console-script shape: an import line for the
-# Python entry point retired by pr port 7, with no exec line, so it read as a
-# real binary. On 2026-09-07 `~/.local/bin/gh` was one, and every gh read died
-# on the re-entry refusal. The native broker still recognizes that retired
-# shape on disk; this installer only ever writes the exec-line form.
-_WRAPPER = f"#!/bin/sh\n{PROXY_EXEC_LINE}\n"
+# The proxy is the `gh` subcommand of fno-agents, exec'd by absolute path, so
+# no PATH entry or helper binary stands between the shim and it. A reinstall
+# that dropped the old fno-gh-proxy helper broke gh in every session.
+# The native broker still recognizes the older shim shapes on disk.
 _PROXY_DIR_ENV = "FNO_GH_PROXY_DIR"
 # The proxy stamps this into the env it hands `os.execve`, so its own successor
 # can recognize itself. It is good for that one hop only. Anything else building
@@ -42,47 +40,30 @@ def fallback_proxy_dir() -> Path:
     return Path(tempfile.gettempdir()) / f"fno-{uid}" / "github-cli"
 
 
-def _bundled_helper(name: str) -> Optional[Path]:
-    """The wheel's co-located gh-transport binary (``fno/_bin/<name>``).
+def _wrapper(binary: Path) -> str:
+    return f'#!/bin/sh\nexec {shlex.quote(str(binary))} gh "$@"\n'
 
-    The Rust spawners reach the same file as sibling-of-their-own-exe; the
-    shim installer needs it spelled out, because a pip-only box has no
-    ``fno-gh-proxy`` on PATH and no venv script sibling."""
+
+def _read_text(path: Path) -> Optional[str]:
+    # A stock CI runner's gh is a compiled binary, not utf-8 text.
     try:
-        import fno
-    except ImportError:
+        return path.read_text()
+    except (OSError, UnicodeDecodeError):
         return None
-    candidate = Path(fno.__file__).with_name("_bin") / name
-    return candidate if candidate.is_file() else None
-
-
-def _helper_resolvable() -> bool:
-    """True when the bare ``fno-gh-proxy`` name the wrapper execs resolves:
-    on PATH, co-located in the wheel's ``_bin``, or beside the interpreter.
-    Without it the wrapper would strand every gh call behind a not-found
-    exec (the symlink that backs the bare name is skipped), so the
-    installers degrade and leave the real gh unswrapped."""
-    if shutil.which("fno-gh-proxy"):
-        return True
-    if _bundled_helper("fno-gh-proxy") is not None:
-        return True
-    return Path(sys.executable).with_name("fno-gh-proxy").is_file()
-
-
-def _is_retired_script(path: str) -> bool:
-    try:
-        with open(path, "rb") as handle:
-            return b"fno.pr.gh_proxy" in handle.read(4096)
-    except OSError:
-        return False
 
 
 def _is_wrapper(path: Path) -> bool:
-    # A stock CI runner's gh is a compiled binary, not utf-8 text.
-    try:
-        return path.read_text() == _WRAPPER
-    except (OSError, UnicodeDecodeError):
+    """Any shim this installer wrote, current or from an older install."""
+    text = _read_text(path)
+    if text == '#!/bin/sh\nexec fno-gh-proxy "$@"\n':
+        return True
+    if text is None or not text.startswith("#!/bin/sh\nexec "):
         return False
+    try:
+        words = shlex.split(text.splitlines()[1])
+    except (IndexError, ValueError):
+        return False
+    return len(words) == 4 and Path(words[1]).name == "fno-agents" and words[2:] == ["gh", "$@"]
 
 
 def ensure_proxy(
@@ -94,53 +75,33 @@ def ensure_proxy(
     resolved = real_gh or (Path(found) if (found := which("gh")) else None)
     if resolved is None:
         raise FileNotFoundError("real gh executable not found on PATH")
+    binary = resolve_binary()
+    if binary is None:
+        # No fno-agents to exec, so the shim would strand every gh call.
+        # Degrade: leave the real gh unswrapped and let the quota policy
+        # stand down for this process tree.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    wrapper = _wrapper(Path(os.path.abspath(binary)))
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
-    link = root / "fno-gh-proxy"
-    # Skip the link's own dir (it would answer for its own stale target) and
-    # the console script pr port 7 retired: its import dies on a newer fno.
-    on_path = (
-        _WHICH("fno-gh-proxy", path=part)
-        for part in os.environ.get("PATH", "").split(os.pathsep)
-        if part and os.path.realpath(part) != os.path.realpath(root)
-    )
-    helper = next((h for h in on_path if h and not _is_retired_script(h)), None)
-    if not helper:
-        bundled = _bundled_helper("fno-gh-proxy")
-        if bundled is not None:
-            helper = str(bundled)
-    if not helper:
-        sibling = Path(sys.executable).with_name("fno-gh-proxy")
-        helper = str(sibling) if sibling.is_file() else None
-    if helper is None:
-        # Nothing provides the name the wrapper execs, so the install would
-        # strand every gh call behind a not-found exec. Degrade: leave the
-        # real gh unswrapped and let the quota policy stand down for this
-        # process tree.
-        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
-    # A link left on an old target outlives the install it named: replace it.
-    relinked = os.path.realpath(link) != os.path.realpath(helper)
-    if relinked:
-        staged = root / f".fno-gh-proxy.{os.getpid()}"
-        staged.unlink(missing_ok=True)
-        staged.symlink_to(helper)
-        os.replace(staged, link)
+    # Retired: the old shim exec'd this link by PATH name.
+    (root / "fno-gh-proxy").unlink(missing_ok=True)
     proxy = root / "gh"
     resolved = resolved.resolve()
     if resolved == proxy.resolve():
         raise RuntimeError("resolved gh delegate points back to the Footnote proxy")
 
     backup = None
-    changed = not proxy.exists() or not _is_wrapper(proxy)
+    changed = _read_text(proxy) != wrapper
     if changed:
-        if proxy.exists():
+        if proxy.exists() and not _is_wrapper(proxy):
             backup = proxy.with_name("gh.pre-fno")
             if not backup.exists():
                 shutil.copy2(proxy, backup)
         fd, raw_tmp = tempfile.mkstemp(prefix=".gh.", dir=root)
         try:
             with os.fdopen(fd, "w") as handle:
-                handle.write(_WRAPPER)
+                handle.write(wrapper)
                 handle.flush()
                 os.fsync(handle.fileno())
             tmp = Path(raw_tmp)
@@ -148,7 +109,7 @@ def ensure_proxy(
             os.replace(tmp, proxy)
         finally:
             Path(raw_tmp).unlink(missing_ok=True)
-    return InstallResult(proxy=proxy, delegate=resolved, changed=changed or relinked, backup=backup)
+    return InstallResult(proxy=proxy, delegate=resolved, changed=changed, backup=backup)
 
 
 def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
@@ -208,8 +169,8 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
             env.pop("FNO_REAL_GH", None)
             return env
     else:
-        if not _helper_resolvable():
-            # No helper: no shim install and no PATH prepend. The children
+        if resolve_binary() is None:
+            # No fno-agents: no shim install and no PATH prepend. The children
             # resolve gh by plain PATH order and the quota policy stands
             # down for this process tree.
             return env
