@@ -397,7 +397,7 @@ fn nav_on(v: &mut View, query: &str) {
 async fn ctrl_o_then_x_on_a_stopped_navigator_row_removes_it_like_the_sideline() {
     // The navigator's menu is the sideline's: x on a stopped row runs the same
     // confirm and sends the same RemoveAgent the sideline's Remove sends, and
-    // the navigator stays up so the next dead row can go too.
+    // the navigator closes first, as the confirm always does.
     let mut v = view_with_agents(vec![lifecycle_row("dead-nav", true, false)]);
     v.set_squad_view(1, SectionView::Expanded);
     nav_on(&mut v, "dead-nav");
@@ -407,7 +407,7 @@ async fn ctrl_o_then_x_on_a_stopped_navigator_row_removes_it_like_the_sideline()
     row_menu_keys(&mut v, b"x", &mut buf).await.unwrap();
     confirm_keys(&mut v, b"\r", &mut buf).await.unwrap();
     let from_nav = decode_cmds(buf);
-    assert!(v.nav.is_some(), "a remove leaves the navigator open");
+    assert!(v.nav.is_none());
 
     let mut s = view_with_agents(vec![lifecycle_row("dead-nav", true, false)]);
     s.set_squad_view(1, SectionView::Expanded);

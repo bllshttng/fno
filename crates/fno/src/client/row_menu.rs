@@ -1325,12 +1325,10 @@ pub(super) async fn row_menu_execute_selected(
     }
     view.row_menu = None;
     if let Some((action, target)) = picked {
-        // A menu opened from the navigator closes it first, so the overlay an
-        // action opens (peek, rename, a picker) owns the keys.
-        if !nav_survives(action) {
-            view.nav = None;
-            view.nav_esc.clear();
-        }
+        // A menu opened from the navigator closes it first, so the overlay or
+        // confirm an action opens owns the keys.
+        view.nav = None;
+        view.nav_esc.clear();
         execute_row_menu_action(view, action, target, sock_w).await?;
     }
     Ok(())
@@ -1681,12 +1679,4 @@ impl View {
         }
         opened
     }
-}
-
-/// Whether the navigator stays open after a menu action ran from it. Only the
-/// actions that prune or stop a row do: the operator is clearing several in a
-/// row, and the list repaints without the gone one. Everything else leaves for
-/// another surface (a pane, a peek, an overlay) that needs the keys.
-pub(super) fn nav_survives(action: MenuAction) -> bool {
-    matches!(action, MenuAction::Remove | MenuAction::Stop)
 }
