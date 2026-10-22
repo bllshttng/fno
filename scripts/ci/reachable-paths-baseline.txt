@@ -68,7 +68,6 @@ A	bounded mux pane placement	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-ag
 A	cache_creation_input_tokens	py=cli/src/fno/cost/_session_cost.py|scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/context_window.rs|crates/fno-agents/src/eval_attempt/tests_observe.rs|crates/fno-agents/src/model_price.rs|crates/fno-agents/src/session_activity.rs|crates/fno/src/context_used.rs	# CLASSIFY protocol|msg-twin|data
 A	cache_write_input_tokens	py=scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/session_activity.rs	# CLASSIFY protocol|msg-twin|data
 A	caller-assigned-cwd-scoped	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
-A	check thread files for malformed shape.	py=cli/src/fno/mail/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	claim pid must be positive	py=cli/src/fno/claims/types.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	claim requires a positive pid or pid_unavailable: true	py=cli/src/fno/claims/types.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	claim {claim_key} unreadable (biased live)	py=cli/src/fno/target/orient.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
@@ -420,7 +419,6 @@ A	queued (durable){live}{corr} [{reason}]{window_tail}	py=cli/src/fno/mail/cli.p
 A	sender_provenance_unknown	py=cli/src/fno/agents/sender_provenance.py;rs=crates/fno-agents/src/mail_cli/send/engine.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	usage: fno agents mail send --to-lead <scope> <message>	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	{one_line} - run `fno agents mail drain-self`	py=cli/src/fno/mail/receipts.py;rs=crates/fno-agents/src/mail_cli/send/verify.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
-A	check thread files for malformed shape.	py=cli/src/fno/mail/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	durable answers a promoted session leaves behind.	py=cli/src/fno/lead/lead_faq.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	fn retired_command_pointer(command:	py=cli/src/fno/lint_command_ratchet.py;rs=crates/fno/src/menu_caps.rs	# shared-vocabulary: the source anchor both command guards scan in fno-agents client.rs
 A	instruments over the harness capability table.	py=cli/src/fno/agents/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted

@@ -4,7 +4,7 @@
 # Columns: path, ceiling, note (where the fold goes).
 agents (python compat)	102	the flat agents registrations the menu forwards to; delete them when the old spellings retire
 agents lead (python compat)	13	the lead group behind org; goes with the compat leg
-agents mail (python compat)	20	the flat mail registrations behind mail and mail admin; goes with the compat leg
+agents mail (python compat)	17	the flat mail registrations behind mail and mail admin; goes with the compat leg
 agents org (python compat)	13	the Python org group the front door shadows; goes with the compat leg
 backlog	54	retire the legacy flat spellings once their window ends; split the admin junk drawer
 config	19	nest under typed groups

@@ -613,7 +613,7 @@ def find_thread_by_msg_id(recipient: str, msg_id: str) -> Optional[ThreadHandle]
 #     RAISES and the send fails (never a silent loss).
 #   - ``_write_render_best_effort`` writes the derived markdown: a failure is
 #     logged loudly but never fatal, because the durable bus append already
-#     landed and ``rebuild_render`` can regenerate the render from the log.
+#     landed and the log keeps the message.
 
 def _append_to_bus(
     *,
@@ -693,7 +693,7 @@ def _write_render_best_effort(target: Path, content: str) -> bool:
 
     LD2 : the render is derived from the canonical log, so a write
     failure here is logged loudly but never fatal - the durable bus append has
-    already landed, and ``rebuild_render`` regenerates the render from the log.
+    already landed, and the log keeps the message.
     Returns True on success, False on a logged failure.
     """
     try:
@@ -711,8 +711,7 @@ def _write_render_best_effort(target: Path, content: str) -> bool:
         )
         print(
             f"warning: markdown render write failed for {target} "
-            f"({type(exc).__name__}: {exc}); the message is durable on the bus log, "
-            f"regenerate the render with `fno agents mail rebuild-render`",
+            f"({type(exc).__name__}: {exc}); the message is durable on the bus log",
             file=sys.stderr,
         )
         return False
@@ -1018,7 +1017,7 @@ def append_to_thread(
     # Best-effort: update the derived markdown render under the per-path lock.
     # A reply to an already-read thread resets read_at so the md view resurfaces
     # it for drain. A render failure is logged, not fatal - the durable bus
-    # append already landed and rebuild_render can regenerate the render.
+    # append already landed and the log keeps the message.
     lock = _acquire_lock(thread_path)
     try:
         current = read_thread(thread_path)
@@ -1045,7 +1044,7 @@ def append_to_thread(
                 print(
                     f"warning: markdown render update failed for {thread_path} "
                     f"({type(exc).__name__}: {exc}); the reply is durable on the "
-                    f"bus log, regenerate with `fno agents mail rebuild-render`",
+                    f"bus log",
                     file=sys.stderr,
                 )
     finally:
@@ -1072,105 +1071,6 @@ def mark_thread_read(thread_path: Path, ts: Optional[datetime] = None) -> None:
         _atomic_write_text(thread_path, _format_thread(h))
     finally:
         _release_lock(lock)
-
-
-def _unique_render_path(inbox: Path, base: str) -> Path:
-    """Pick an unused ``{base}.md`` (bumping ``-1``, ``-2``, ...) under ``inbox``.
-
-    Used by ``rebuild_render`` after the render dir has been cleared, so the only
-    collisions are two threads whose bodies slug to the same base name.
-    """
-    candidate = inbox / f"{base}.md"
-    n = 0
-    while candidate.exists():
-        n += 1
-        candidate = inbox / f"{base}-{n}.md"
-    return candidate
-
-
-def rebuild_render(recipient: str) -> int:
-    """Regenerate ``recipient``'s markdown render from the canonical bus log.
-
-    LD2 / AC1-EDGE : the JSONL bus log is the source of truth and
-    the per-recipient markdown is a derived, throwaway view. This clears the
-    recipient's existing render files and rewrites them from the log so a
-    deleted or corrupted render is recovered with no message lost. Idempotent:
-    after a rebuild the render exactly mirrors the log, so re-running it changes
-    nothing. Returns the number of threads written.
-
-    Note: the bus log carries no per-recipient read/ack state, so a rebuilt
-    render shows every message as unread in the markdown view. The canonical
-    consume position is the per-recipient bus cursor, which this never touches.
-    """
-    from fno.bus.log import Envelope, dedupe_by_id, is_deliverable, iter_messages
-
-    # Collect this recipient's envelopes, grouped by thread, preserving log
-    # (oldest-first) order within each thread. One row per id: a staged body
-    # row and its durable fallback twin share an id, so the render matches the
-    # drain's one-print-per-id.
-    threads: dict[str, list[Envelope]] = {}
-    order: list[str] = []
-    for env in dedupe_by_id(
-        [e for e in iter_messages() if e.to == recipient and is_deliverable(e)]
-    ):
-        tid = env.thread or env.id
-        if tid not in threads:
-            threads[tid] = []
-            order.append(tid)
-        threads[tid].append(env)
-
-    inbox = inbox_dir_for(recipient)
-    inbox.mkdir(parents=True, exist_ok=True)
-    # The render is throwaway: clear it, then rewrite to exactly match the log.
-    for p in inbox.glob("*.md"):
-        try:
-            p.unlink()
-        except OSError:
-            pass
-
-    written = 0
-    for tid in order:
-        envs = threads[tid]
-        # The thread root is the envelope whose id == thread id (or the first).
-        root = next((e for e in envs if e.id == tid), envs[0])
-        meta = root.meta or {}
-        refs: dict[str, str] = {}
-        if isinstance(meta.get("refs"), dict):
-            refs = {k: str(v) for k, v in meta["refs"].items()}
-        messages = [
-            ThreadMessage(
-                msg_id=e.id,
-                timestamp=_parse_dt(e.ts) or datetime.now(tz=timezone.utc),
-                from_project=e.from_,
-                body=e.body,
-            )
-            for e in envs
-        ]
-        created = _parse_dt(root.ts) or datetime.now(tz=timezone.utc)
-        date_part = created.astimezone(timezone.utc).strftime("%Y-%m-%d")
-        slug = _slug_for(root.body, fallback_msg_id=tid)
-        target = _unique_render_path(inbox, f"{date_part}-{slug}")
-        handle = ThreadHandle(
-            thread_id=tid,
-            path=target,
-            from_project=root.from_,
-            to_project=recipient,
-            kind=root.kind,
-            origin=root.origin,
-            created=created,
-            read_at=None,
-            replies_to=root.in_reply_to,
-            persist_to_memory=bool(meta.get("persist_to_memory", False)),
-            refs=refs,
-            messages=messages,
-        )
-        lock = _acquire_lock(target)
-        try:
-            _atomic_write_text(target, _format_thread(handle))
-        finally:
-            _release_lock(lock)
-        written += 1
-    return written
 
 
 # ---------------------------------------------------------------------------
@@ -1273,123 +1173,3 @@ def log_inbox_error(reason: str, **extra) -> None:
     }
     with errors_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
-
-
-# ---------------------------------------------------------------------------
-# Legacy md-thread migration into the bus (Group 3 Task 3.4)
-# ---------------------------------------------------------------------------
-# Markdown threads written before the bus log existed (or by a stale pre-G3
-# `fno`) live only on disk, not in the canonical log. The cutover backfills them
-# so a cursor scan / agent inbox never strands unread mail invisibly. Dedup by
-# message-id makes the migration idempotent (re-running re-sees nothing new).
-
-@dataclass
-class MigrationResult:
-    migrated: int
-    threads_scanned: int
-    recipients: list[str]
-    failed: int = 0  # messages skipped because their bus append raised
-
-
-def _inbox_base() -> Optional[Path]:
-    """Base dir holding ``<recipient>/inbox/`` folders, for recipient enumeration.
-
-    ``FNO_INBOX_ROOT`` (test override) wins; otherwise the vault-/state-derived
-    ``paths.inbox_agents_root()``. A custom ``config.paths.inbox_dir`` template
-    is not auto-enumerated (its ``{project}`` placeholder is ambiguous to walk);
-    callers in that rare setup pass ``recipients`` explicitly.
-    """
-    override = _inbox_root()
-    if override is not None:
-        return override
-    from fno import paths as _paths
-    return _paths.inbox_agents_root()
-
-
-def _enumerate_recipients() -> list[str]:
-    base = _inbox_base()
-    if base is None or not base.exists():
-        return []
-    try:
-        return [
-            d.name
-            for d in sorted(base.iterdir())
-            if d.is_dir() and (d / "inbox").is_dir()
-        ]
-    except OSError as exc:
-        print(
-            f"warning: cannot enumerate inbox recipients in {base}: {exc}",
-            file=sys.stderr,
-        )
-        return []
-
-
-def migrate_md_threads_to_bus(
-    *, recipients: Optional[list[str]] = None
-) -> MigrationResult:
-    """Backfill markdown threads into the bus log; idempotent (dedup by msg-id).
-
-    Every message in every recipient's md threads that is not already in the log
-    is appended as an envelope (root messages thread under their own id; appended
-    messages correlate via ``in_reply_to`` to the thread root). Returns counts so
-    a caller (the ``fno agents mail migrate-bus`` command) can report what moved.
-    """
-    from fno.bus.log import Envelope, append as _bus_append, iter_messages
-
-    existing_ids = {e.id for e in iter_messages()}
-    recips = recipients if recipients is not None else _enumerate_recipients()
-
-    migrated = 0
-    scanned = 0
-    failed = 0
-    for recip in recips:
-        for h in read_all_threads(recip):
-            scanned += 1
-            for m in h.messages:
-                if m.msg_id in existing_ids:
-                    continue
-                meta: dict[str, object] = {"render_path": str(h.path)}
-                if h.refs:
-                    meta["refs"] = dict(h.refs)
-                if h.persist_to_memory:
-                    meta["persist_to_memory"] = True
-                # One unappendable message must not abort the whole migration
-                # (mirrors the skip-corrupt-and-keep-going discipline of the
-                # reader). Count it, warn, and continue.
-                try:
-                    _bus_append(
-                        Envelope(
-                            id=m.msg_id,
-                            thread=h.thread_id,
-                            from_=m.from_project,
-                            to=h.to_project,
-                            kind=h.kind,
-                            body=m.body,
-                            ts=_format_dt(m.timestamp),
-                            in_reply_to=(
-                                h.thread_id if m.msg_id != h.thread_id else None
-                            ),
-                            meta=meta,
-                        )
-                    )
-                except Exception as exc:  # noqa: BLE001 - resilient batch migration
-                    failed += 1
-                    log_inbox_error(
-                        "bus_migration_failed",
-                        msg_id=m.msg_id,
-                        error=f"{type(exc).__name__}: {exc}",
-                    )
-                    print(
-                        f"warning: could not migrate {m.msg_id} to the bus "
-                        f"({type(exc).__name__}: {exc}); skipping",
-                        file=sys.stderr,
-                    )
-                    continue
-                existing_ids.add(m.msg_id)
-                migrated += 1
-    return MigrationResult(
-        migrated=migrated,
-        threads_scanned=scanned,
-        recipients=list(recips),
-        failed=failed,
-    )

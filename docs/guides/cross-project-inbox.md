@@ -108,23 +108,6 @@ A thread is "unread" when its frontmatter has no `read_at:` field.
 Drain sets `read_at:` after dispatch (except for `kind: question`,
 which intentionally stays unread until a human handles it).
 
-## Migrating from the pre-2026-05 flat layout
-
-If you have existing flat-file inboxes at
-`~/your-vault/internal/agents/*/inbox.md`, run the one-shot migration:
-
-```bash
-python3 scripts/migrate-inbox-flat-to-threads.py --dry-run   # preview
-python3 scripts/migrate-inbox-flat-to-threads.py             # apply
-```
-
-The script splits each `inbox.md` into one thread file per
-conversation, collapses `reply_to:` chains into a single thread, maps
-removed kinds to their replacements (notification -> fyi, lesson -> fyi
-with persist_to_memory, answer/complete -> fyi with replies_to), and
-renames the original file to `inbox-pre-migration.md` as a safety net.
-Idempotent: re-running on already-migrated projects is a no-op.
-
 The `com.fno.backlog-sync` launchd job mirrors `~/.fno/graph.json` to obsidian; the inbox files already live in the obsidian vault, so no separate sync is needed.
 
 ## Draining
@@ -132,14 +115,6 @@ The `com.fno.backlog-sync` launchd job mirrors `~/.fno/graph.json` to obsidian; 
 There is no automatic in-loop drain: the retired megawalk Step 0 was cut with the walker. Recipients drain with `fno agents mail drain` - manually, or from an autonomous worker. Only `kind: question` interrupts mid-feature work. All other kinds wait until between features so cross-project chatter cannot derail focused work.
 
 The retired per-kind handler reference (`skills/megawalk/references/inbox-handlers.md`) went away with the skill. `fno agents mail` is the messaging surface now.
-
-## Linting and recovering from corruption
-
-```bash
-fno agents mail admin lint acme-web
-```
-
-Reports any malformed message blocks, with line numbers, and exits non-zero if any errors are found. The malformed blocks themselves are skipped during normal `unread`/`list` calls (they appear in `inbox-errors.jsonl` but not in the user-facing output).
 
 ## Draining mail
 

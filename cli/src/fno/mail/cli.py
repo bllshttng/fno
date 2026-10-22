@@ -16,8 +16,6 @@ Commands:
     drain          - drain unread threads (per-kind dispatch)
     status         - one-screen health snapshot for own mailbox
     view           - render the jsonl bus as an inbox projection
-    lint           - check thread render files for malformed shape
-    rebuild-render - regenerate a recipient's render from the bus log
 
 Call shape (one rule, because the commands used to disagree):
     The message BODY is uniform across ``send`` and ``reply``. Both take it
@@ -66,9 +64,7 @@ from fno.inbox.store import (
     ThreadHandle,
     find_thread_by_msg_id,
     inbox_dir_for,
-    log_inbox_error,
     read_all_threads,
-    read_thread,
     resolve_project,
 )
 from fno import paths
@@ -105,48 +101,6 @@ mail_app = typer.Typer(
     help="Durable polled mailbox: send/unread/ack/reply/list/drain/status/view.",
     no_args_is_help=True,
 )
-
-
-_OLD_PATH_WARNED = False
-
-
-def _maybe_warn_old_path() -> None:
-    global _OLD_PATH_WARNED
-    if _OLD_PATH_WARNED:
-        return
-    # The pre-2026-05 flat layout only ever existed under an Obsidian vault
-    # (``<vault>/agents/inbox``). A neutral, vault-less install never had it,
-    # so there is nothing to warn about there.
-    vault = paths.vault_root()
-    if vault is None:
-        return
-    old = vault / "agents" / "inbox"
-    if old.exists():
-        # migrate-inbox-path.sh now takes explicit roots (no hardcoded vault),
-        # so spell out the full command rather than the bare script name, which
-        # would exit immediately on the required-env guard.
-        new = paths.inbox_agents_root()
-        print(
-            f"warning: old inbox path {old} exists. Run:\n"
-            f"  FNO_INBOX_OLD_ROOT={old} FNO_INBOX_NEW_ROOT={new} "
-            f"scripts/migrate-inbox-path.sh",
-            file=sys.stderr,
-        )
-        _OLD_PATH_WARNED = True
-
-
-def _project_root() -> Path:
-    """Per-project base under the inbox root, e.g. ``.../{project}/``."""
-    override = os.environ.get("FNO_INBOX_ROOT")
-    if override:
-        return Path(override)
-    _maybe_warn_old_path()
-    return paths.inbox_agents_root()
-
-
-def _legacy_inbox_md(project: str) -> Path:
-    """Path to the pre-migration ``inbox.md`` file (for status/lint hints)."""
-    return _project_root() / project / "inbox.md"
 
 
 def _resolve_from(from_project: Optional[str]) -> str:
@@ -487,33 +441,6 @@ def cmd_drain(
         typer.echo(f"{r.thread_id}  kind:{r.kind}  action:{r.action}")
 
 
-@mail_app.command("migrate-bus", hidden=True)
-def cmd_migrate_bus(
-    json_out: bool = typer.Option(False, "--json", "-J", help="Output as JSON"),
-) -> None:
-    """Backfill pre-bus markdown threads into the canonical bus log.
-
-    Group 3 cutover (US8 AC8-EDGE): markdown threads written before the bus log
-    existed live only on disk. This imports any message not already in the log
-    so a cursor scan / agent inbox never strands unread legacy mail. Idempotent
-    (dedup by message-id); safe to re-run.
-    """
-    from fno.inbox.store import migrate_md_threads_to_bus
-
-    res = migrate_md_threads_to_bus()
-    if json_out:
-        typer.echo(json.dumps({
-            "migrated": res.migrated,
-            "threads_scanned": res.threads_scanned,
-            "recipients": res.recipients,
-        }))
-        return
-    typer.echo(
-        f"migrated {res.migrated} message(s) from {res.threads_scanned} thread(s) "
-        f"across {len(res.recipients)} recipient(s)"
-    )
-
-
 @mail_app.command("status")
 def cmd_status(
     json_out: bool = typer.Option(False, "--json", "-J", help="Output as JSON"),
@@ -589,50 +516,6 @@ def cmd_pane_prepare_forward(
     if style_exception is not None:
         argv.extend(["--style-exception", style_exception])
     _forward_mail_pane_prepare(argv)
-
-
-@mail_app.command("lint", hidden=True)
-def cmd_lint(
-    project: Optional[str] = typer.Argument(None, help="Project to lint (default: own)"),
-) -> None:
-    """Check thread files for malformed shape."""
-    if project is None:
-        try:
-            project = resolve_project()
-        except ProjectIdentificationError as exc:
-            typer.echo(f"error: {exc}", err=True)
-            raise typer.Exit(code=1)
-
-    inbox = inbox_dir_for(project)
-    legacy = _legacy_inbox_md(project)
-
-    if not inbox.exists():
-        if legacy.exists():
-            typer.echo(
-                f"warning: {project!r} still on the pre-2026-05 flat layout "
-                f"({legacy}). Run scripts/migrate-inbox-flat-to-threads.py.",
-            )
-            raise typer.Exit(code=1)
-        typer.echo(f"no inbox/ for {project}")
-        return
-
-    bad: list[Path] = []
-    good = 0
-    for p in sorted(inbox.glob("*.md")):
-        h = read_thread(p)
-        if h is None:
-            bad.append(p)
-            log_inbox_error("thread parse failure", path=str(p), project=project)
-        else:
-            good += 1
-
-    if bad:
-        typer.echo(f"lint: {project} found {len(bad)} malformed thread file(s):")
-        for p in bad:
-            typer.echo(f"  {p}")
-        raise typer.Exit(code=1)
-
-    typer.echo(f"lint: {project} OK ({good} thread(s))")
 
 
 # Output helpers
@@ -2309,28 +2192,3 @@ def cmd_drain_self_forward(
     if json_out:
         argv.append("--json")
     _forward_mail(argv, label="fno agents mail drain-self")
-
-
-@mail_app.command("rebuild-render", hidden=True)
-def cmd_rebuild_render(
-    recipient: Optional[str] = typer.Argument(
-        None, help="Recipient whose render to rebuild (default: own project)."
-    ),
-    json_out: bool = typer.Option(
-        False, "--json", "-J", help="Print {recipient, threads} as JSON."
-    ),
-) -> None:
-    """Regenerate a recipient's markdown render from the canonical bus log.
-
-    LD2 : the jsonl bus log is the source of truth; the per-recipient
-    markdown is a derived, throwaway view. This rebuilds it from the log so a
-    deleted or corrupted render is recovered with no message lost. Idempotent.
-    """
-    from fno.inbox.store import rebuild_render
-
-    target = recipient if recipient is not None else _resolve_from(None)
-    n = rebuild_render(target)
-    if json_out:
-        typer.echo(json.dumps({"recipient": target, "threads": n}))
-        return
-    typer.echo(f"rebuilt {n} thread render(s) for {target!r} from the bus log")

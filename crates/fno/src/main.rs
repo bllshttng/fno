@@ -300,6 +300,9 @@ enum Role {
     /// `fno agents mail view`: refused by name; the command is now `show`
     /// (no compat shell, the same rule as a removed mux command).
     MailViewRenamed,
+    /// `fno agents mail lint|migrate-bus|rebuild-render`: retired with the
+    /// markdown render readers, refused by name.
+    MailRetired(String),
     /// A reader-shaped guess (`read`, `open`, `fetch`, `cat`) at the mail
     /// tree: refused by name, pointing at the reader, before the Python
     /// fallback answers with typer's near-miss guess.
@@ -748,6 +751,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .collect(),
         )),
         "view" => Some(Role::MailViewRenamed),
+        "lint" | "migrate-bus" | "rebuild-render" => Some(Role::MailRetired(command.to_string())),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongCommand(command.to_string())),
         _ => None,
     }
@@ -1353,6 +1357,13 @@ fn main() {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
             std::process::exit(2);
         }
+        Role::MailRetired(name) => {
+            eprintln!(
+                "fno agents mail {name} is retired: the bus log is the mail record and \
+                 the markdown render is a derived view. Read mail with `fno agents mail unread`"
+            );
+            std::process::exit(2);
+        }
         Role::MailWrongCommand(command_name) => {
             eprintln!(
                 "no mail command {command_name:?}. An `fmail-<id>` header in a delivered turn is read \
@@ -1556,6 +1567,13 @@ mod tests {
             decide_role(&os(&["mail", "cat", "fmail-x"]), false),
             Role::MailWrongCommand(_)
         ));
+        // The markdown-render admin commands are retired and refused by name.
+        for command in ["lint", "migrate-bus", "rebuild-render"] {
+            assert_eq!(
+                decide_role(&os(&["agents", "mail", command]), false),
+                Role::MailRetired(command.to_string())
+            );
+        }
         // The hidden `fno mail <command>` mount claims and refuses alike.
         assert_eq!(
             decide_role(&os(&["mail", "show", "fmail-x"]), false),
