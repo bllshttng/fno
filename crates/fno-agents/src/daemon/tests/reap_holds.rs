@@ -395,7 +395,7 @@ fn a_release_lifts_a_no_provenance_hold() {
     let home = tmp_home("gc-release-noprov");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "np.jsonl", 1800);
+    let quiet = quiet_transcript(transcripts.path(), "np.jsonl", 2 * 3600);
     state::update_registry(&home.registry_json(), |r| {
         let mut row = ask_row("np-row", None);
         row.short_id = "nprow".into();
