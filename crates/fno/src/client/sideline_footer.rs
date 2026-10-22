@@ -23,33 +23,41 @@ pub(super) struct FooterButtons {
 }
 
 impl View {
-    /// The footer at this panel width. The hinted labels (`+ session (i)`)
-    /// resolve through the live chord table (`key_for`), so a rebind
-    /// relabels the row. When the hints do not fit, the bare labels keep
-    /// every button's seat (the density-button rule: the hint drops, the
-    /// affordance stays). Narrower still, or with a recruit-mark tally on
-    /// the row, the legacy one-button row paints.
+    /// The footer at this panel width, one row of three buttons joined by
+    /// ` · `: `+ session (i) · + workspace (N) · menu (P)`. The keys resolve
+    /// through the live chord table (`key_for`), so a rebind relabels the
+    /// row. A narrow panel shows the keys only (`i · N · P`), each still a
+    /// button. Narrower still, or with a recruit-mark tally on the row, the
+    /// legacy one-button row paints.
     pub(super) fn footer_buttons(&self, panel_w: usize) -> FooterButtons {
         // last column is the divider
         let tw = panel_w.saturating_sub(1);
         if self.marks.is_empty() {
-            for hint in [true, false] {
-                let label = |(action, bare): (&str, &str)| match crate::keys::key_for(action) {
-                    Some(k) if hint => format!("{bare} ({k})"),
-                    _ => bare.to_string(),
+            // Columns as the row painter counts them, so a rebound key
+            // with a wide glyph cannot move a range off its label.
+            let cols = |s: &str| s.chars().map(super::glyph_cols).sum::<usize>();
+            for with_label in [true, false] {
+                let label = |(action, bare): (&str, &str)| {
+                    crate::keys::key_for(action).map(|k| {
+                        if with_label {
+                            format!("{bare} ({k})")
+                        } else {
+                            k.to_string()
+                        }
+                    })
                 };
-                let (session, workspace, menu) = (label(SESSION), label(WORKSPACE), label(MENU));
-                // Columns as the row painter counts them, so a rebound key
-                // with a wide glyph cannot move a range off its label.
-                let cols = |s: &str| s.chars().map(super::glyph_cols).sum::<usize>();
-                let left = format!("{session}  {workspace}");
-                if cols(&left) + 1 + cols(&menu) <= tw {
-                    let menu_at = tw - cols(&menu);
-                    let pad = " ".repeat(menu_at - cols(&left));
+                let (Some(session), Some(workspace), Some(menu)) =
+                    (label(SESSION), label(WORKSPACE), label(MENU))
+                else {
+                    continue;
+                };
+                let text = format!("{session} \u{b7} {workspace} \u{b7} {menu}");
+                if cols(&text) <= tw {
+                    let menu_at = cols(&text) - cols(&menu);
                     return FooterButtons {
-                        text: format!("{left}{pad}{menu}"),
                         session: Some(0..cols(&session)),
-                        menu: Some(menu_at..tw),
+                        menu: Some(menu_at..cols(&text)),
+                        text,
                     };
                 }
             }

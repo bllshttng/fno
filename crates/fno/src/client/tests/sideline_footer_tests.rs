@@ -6,8 +6,8 @@ use super::*;
 fn footer_buttons_open_what_their_keys_open() {
     // The footer row is three buttons: `+ session` opens the composer
     // (prefix+i), `+ workspace` the create overlay (prefix+N), `menu` the
-    // MENU popup (prefix+P). A wide panel shows each key; the default
-    // panel keeps every seat with the bare labels.
+    // MENU popup (prefix+P). A wide panel shows each label with its key;
+    // the default panel keeps every seat with the keys alone.
     let mut v = two_pane_view();
     v.term = (30, 100);
     let footer = v
@@ -19,8 +19,8 @@ fn footer_buttons_open_what_their_keys_open() {
     // offset + 1.
     let trow = (footer - v.sideline_offset()) as u16 + 1;
     for (width, want) in [
-        (28u16, "+ session  + workspace"),
-        (60, "+ session (i)  + workspace (N)"),
+        (28u16, "i \u{b7} N \u{b7} P"),
+        (60, "+ session (i) \u{b7} + workspace (N) \u{b7} menu (P)"),
     ] {
         v.sideline_width = width;
         let panel_w = v.panel_w() as usize;
@@ -29,10 +29,7 @@ fn footer_buttons_open_what_their_keys_open() {
             .nth(trow as usize)
             .unwrap_or_default()
             .to_string();
-        assert!(
-            line.starts_with(want) && line.contains("menu"),
-            "width {width}: {line:?}"
-        );
+        assert!(line.starts_with(want), "width {width}: {line:?}");
         let buttons = v.footer_buttons(panel_w);
         let (session, menu) = (
             buttons.session.expect("session seat"),
