@@ -8246,7 +8246,7 @@ event_types:
       required: []
   - name: mail_hold_stamped
     description: "A writer stamped a session's registry row bus-only (DND). The row names the writer, this process's argv and its parent's command line, so a stamp nobody armed traces to its caller."
-    sources: [daemon, agents]
+    sources: [daemon, rust]
     data:
       required: [session_id, writer]
       properties:

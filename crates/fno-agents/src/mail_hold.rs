@@ -156,7 +156,7 @@ pub(crate) fn record_stamp(writer: &str, session_id: &str) {
         .ok()
         .map(|o| clip(String::from_utf8_lossy(&o.stdout).trim()))
         .unwrap_or_default();
-    let _ = crate::events::EventEmitter::new(AgentsHome::from_env().events_jsonl(), "agents").emit(
+    let _ = crate::events::EventEmitter::new(AgentsHome::from_env().events_jsonl(), "rust").emit(
         "mail_hold_stamped",
         &serde_json::json!({
             "session_id": session_id,
