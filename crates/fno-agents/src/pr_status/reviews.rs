@@ -814,7 +814,9 @@ pub(crate) fn payload_is_code(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let Some(slug) = crate::merge_gates::repo_slug_from_origin(&url) else {
         return true;
     };
-    let prefix = format!("{}-{pr}-", slug.replace('/', "--"));
+    // `@` cannot occur in a GitHub owner or repo name, so PR 7 of `o/r`
+    // never shares a prefix with PR 1 of `o/r-7`.
+    let prefix = format!("{}@{pr}@", slug.replace('/', "--"));
     let memo = head
         .filter(|h| !h.is_empty())
         .map(|h| format!("{prefix}{h}"));

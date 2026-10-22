@@ -95,37 +95,37 @@ mod tests {
         let dir = tmp.path();
         std::env::set_var("FNO_PR_STATUS_CACHE_DIR", dir);
         let cwd = Path::new(".");
-        assert!(read(cwd, PAYLOAD_CODE, "o--r-7-aaa").is_none());
+        assert!(read(cwd, PAYLOAD_CODE, "o--r@7@aaa").is_none());
         write(
             cwd,
             PAYLOAD_CODE,
-            "o--r-7-aaa",
+            "o--r@7@aaa",
             &json!(true),
-            Some("o--r-7-"),
+            Some("o--r@7@"),
         );
         write(
             cwd,
             PAYLOAD_CODE,
-            "o--r-70-aaa",
+            "o--r@70@aaa",
             &json!(true),
-            Some("o--r-70-"),
+            Some("o--r@70@"),
         );
-        assert_eq!(read(cwd, PAYLOAD_CODE, "o--r-7-aaa"), Some(json!(true)));
+        assert_eq!(read(cwd, PAYLOAD_CODE, "o--r@7@aaa"), Some(json!(true)));
         write(
             cwd,
             PAYLOAD_CODE,
-            "o--r-7-bbb",
+            "o--r@7@bbb",
             &json!(true),
-            Some("o--r-7-"),
+            Some("o--r@7@"),
         );
-        assert!(read(cwd, PAYLOAD_CODE, "o--r-7-aaa").is_none());
-        assert_eq!(read(cwd, PAYLOAD_CODE, "o--r-7-bbb"), Some(json!(true)));
-        assert!(any_true(cwd, PAYLOAD_CODE, "o--r-7-"));
-        assert!(!any_true(cwd, PAYLOAD_CODE, "o--r-8-"));
-        // PR 70 shares the "o--r-7" text but not the "o--r-7-" prefix.
-        assert_eq!(read(cwd, PAYLOAD_CODE, "o--r-70-aaa"), Some(json!(true)));
-        std::fs::write(dir.join("payload-code/o--r-7-bbb.json"), "{not json").unwrap();
-        assert!(read(cwd, PAYLOAD_CODE, "o--r-7-bbb").is_none());
+        assert!(read(cwd, PAYLOAD_CODE, "o--r@7@aaa").is_none());
+        assert_eq!(read(cwd, PAYLOAD_CODE, "o--r@7@bbb"), Some(json!(true)));
+        assert!(any_true(cwd, PAYLOAD_CODE, "o--r@7@"));
+        assert!(!any_true(cwd, PAYLOAD_CODE, "o--r@8@"));
+        // PR 70 shares the "o--r@7" text but not the "o--r@7@" prefix.
+        assert_eq!(read(cwd, PAYLOAD_CODE, "o--r@70@aaa"), Some(json!(true)));
+        std::fs::write(dir.join("payload-code/o--r@7@bbb.json"), "{not json").unwrap();
+        assert!(read(cwd, PAYLOAD_CODE, "o--r@7@bbb").is_none());
         std::env::remove_var("FNO_PR_STATUS_CACHE_DIR");
     }
 }
