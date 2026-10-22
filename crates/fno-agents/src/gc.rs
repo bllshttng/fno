@@ -82,10 +82,10 @@ pub struct GcRow {
     /// other session's planning row on it started earlier. The sweep
     /// resolves it from the graph; empty on every row that did not plan.
     pub planning_plan_written: Vec<String>,
-    /// A `reap --release` ruling matched this row's planning hold: the
-    /// marker question is answered (the operator ruled the assignment
-    /// over), so only the 1200 s quiet gate remains.
-    pub planning_released: bool,
+    /// A `reap --release` ruling matched this row's planning or
+    /// no-provenance hold: the operator ruled the question answered, so only
+    /// the quiet gate remains (1200 s for a planner).
+    pub hold_released: bool,
     /// The row's latest inside-leg report reads `done`: the turn
     /// ended and the session is not waiting. A halted planner - one whose
     /// turn ended with no plan on the node - counts as finished, never as
@@ -317,7 +317,7 @@ impl KeepReason {
             KeepReason::Active { .. } => "active",
             KeepReason::TranscriptUnresolved => "transcript unresolved",
             KeepReason::GraphUnreadable => "graph unreadable",
-            KeepReason::OpenDoRow { .. } => "open do row on done node",
+            KeepReason::OpenDoRow { .. } => "open do row",
             KeepReason::OpenPr { .. } => "open pr",
             KeepReason::DeadOpenWork { .. } => "dead open work",
             KeepReason::LiveClaim { .. } => "live claim held",
@@ -424,7 +424,11 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // no-node row that never wrote a done report used to keep
             // forever. It takes the same grace gate a reported-done row
             // takes.
-            if row.turn_ended || row.session_released() || row.registry_terminal {
+            if row.turn_ended
+                || row.session_released()
+                || row.registry_terminal
+                || row.hold_released
+            {
                 spawn_idle_gate(row)
             } else {
                 (GcAction::Keep, Some(KeepReason::NoProvenance))
@@ -450,7 +454,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // session-shaped releases below, and an unfinished assignment
             // holds even when the node's status would free a non-planner.
             if let Some(assignments) = &row.planning {
-                if row.planning_released {
+                if row.hold_released {
                     return spawn_idle_gate(row);
                 }
                 // An EMPTY status set fails closed: a lane that fires on a
@@ -2432,7 +2436,7 @@ mod tests {
             planning: None,
             planning_closed: Vec::new(),
             planning_plan_written: Vec::new(),
-            planning_released: false,
+            hold_released: false,
             turn_ended: false,
             confirm_hold: None,
             session_terminal: None,
@@ -2579,7 +2583,7 @@ mod tests {
                 status: "idea".into(),
             },
             planning: Some(vec![("x-m2".to_string(), "idea".to_string())]),
-            planning_released: true,
+            hold_released: true,
             turn_ended: true,
             ..retiring()
         };
@@ -3124,7 +3128,7 @@ mod tests {
             planning: None,
             planning_closed: Vec::new(),
             planning_plan_written: Vec::new(),
-            planning_released: false,
+            hold_released: false,
             turn_ended: false,
             confirm_hold: None,
             session_terminal: None,

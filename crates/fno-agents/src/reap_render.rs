@@ -363,7 +363,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
             .map(|h| h.detail.as_str())
             .unwrap_or("");
         out.push_str(&format!(
-            "  kept {id} (open do row on done node: {node}: {detail}){}\n",
+            "  kept {id} (open do row: {node}: {detail}){}\n",
             hold_line(summary, id)
         ));
     }

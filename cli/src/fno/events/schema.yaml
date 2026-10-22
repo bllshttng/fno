@@ -90,6 +90,16 @@ event_types:
         node: { type: string, description: "The node id read from the launch prompt" }
     consumers: [operator]
 
+  - name: native_bg_parent_backfilled
+    description: "A native-bg registry row born with no parent gained its spawner from the launch record its child claimed. One row per fill."
+    sources: [daemon]
+    data:
+      required: [name, spawned_by_session]
+      properties:
+        name: { type: string, description: "The registry row's name" }
+        spawned_by_session: { type: string, description: "The launcher session the claimed record names" }
+    consumers: [operator]
+
   - name: native_bg_mint_deferred
     description: "The native-bg roster adopt hit its per-beat budget; the remaining candidates wait for later beats."
     sources: [daemon]

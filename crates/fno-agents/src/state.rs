@@ -2649,6 +2649,20 @@ pub fn update_registry<F, T>(path: &Path, f: F) -> Result<T, StateError>
 where
     F: FnOnce(&mut Registry) -> T,
 {
+    update_registry_retiring(path, &BTreeSet::new(), f)
+}
+
+/// [`update_registry`] for a writer that removes rows on purpose: the names
+/// in `retiring` are not live-row loss to the write guard. The reaper passes
+/// the rows whose receipts it has already persisted.
+pub(crate) fn update_registry_retiring<F, T>(
+    path: &Path,
+    retiring: &BTreeSet<String>,
+    f: F,
+) -> Result<T, StateError>
+where
+    F: FnOnce(&mut Registry) -> T,
+{
     let transaction = crate::registry_store::begin(path)?;
     let (mut registry, raw_rows) = decode_registry_value(path, transaction.document.clone())?;
     let min_writer = effective_min_writer(&registry);
@@ -2739,12 +2753,10 @@ where
     // root - a pinned FNO_AGENTS_HOME or a tempdir-sandboxed home stands down -
     // so the refusal names exactly the two shapes that cost the fleet its
     // rows on 2026-09-27: a test or probe process writing fleet state, and a
-    // closure about to drop most live rows. Python's `write_registry` mirrors
-    // both arms.
+    // closure about to drop most live rows.
     crate::registry_guard::check_env(
         path,
-        crate::registry_guard::count_live(&before_entries),
-        crate::registry_guard::count_live(&registry.entries),
+        crate::registry_guard::live_loss(&before_entries, &registry.entries, retiring),
     )
     .map_err(StateError::WriteGuard)?;
     // Write-path harness sync (AC6-FR): a closure that mutated a legacy
@@ -3629,8 +3641,7 @@ pub(crate) fn validate_registry_document_change(
     refuse_source_ahead_schema_bump(path, before.schema_version)?;
     crate::registry_guard::check_env(
         path,
-        crate::registry_guard::count_live(&before.entries),
-        crate::registry_guard::count_live(&after.entries),
+        crate::registry_guard::live_loss(&before.entries, &after.entries, &BTreeSet::new()),
     )
     .map_err(StateError::WriteGuard)?;
     let identities = before.entries.iter().map(identity_signature).collect();
