@@ -33,7 +33,7 @@ The overlay owns every keystroke, so bare arrows are free there.
 - `Left` or `Esc`: back to the pane you came from.
 - `Up`/`Down` or `Ctrl-p`/`Ctrl-n`: move the cursor.
 - `Tab`/`Shift-Tab`: cycle the state chip.
-- `Ctrl-o`: open the row menu on the selected row. Agent rows get the sideline's menu, with the same keys inside it (`x` remove, `p` peek, `m` mail, `s` stop, `P` portal, and the rest). Tab and workspace rows get their own menus. A plain pane row has none. `Esc` returns to the list. `Remove` and `Stop` keep the navigator open; every other action closes it. Bare letters stay filter text, so the menu is one keypress away.
+- `Ctrl-o`: open the row menu on the selected row. An agent row gets the sideline's menu with the same keys (`x` remove, `p` peek, `m` mail, `s` stop, `P` portal). Tab and workspace rows get their own menus. A plain pane row has none. `Esc` returns to the list. `Remove` and `Stop` keep the navigator open. Every other action closes it. Bare letters stay filter text, so the menu is one keypress away.
 - Typing: filter by what the row IS. A hit invisible in the label shows the matched token as a suffix.
 
 ## Rebinding the prefix form

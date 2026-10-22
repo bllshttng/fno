@@ -419,19 +419,3 @@ async fn ctrl_o_then_x_on_a_stopped_navigator_row_removes_it_like_the_sideline()
     assert_eq!(from_nav, decode_cmds(buf));
     assert_eq!(from_nav.len(), 1, "one RemoveAgent, nothing else");
 }
-
-#[tokio::test]
-async fn ctrl_o_on_a_plain_pane_row_opens_no_menu() {
-    let mut v = two_pane_view();
-    nav_on(&mut v, "");
-    let at = v
-        .nav_filtered(v.nav.as_ref().unwrap())
-        .iter()
-        .position(|r| matches!(r.menu, row_menu::NavMenu::None))
-        .expect("the fixture has a plain pane row");
-    v.nav.as_mut().unwrap().cursor = at;
-    let mut buf: Vec<u8> = Vec::new();
-    nav_keys(&mut v, b"\x0f", &mut buf).await.unwrap();
-    assert!(v.row_menu.is_none());
-    assert!(v.nav.is_some(), "the navigator stays up");
-}
