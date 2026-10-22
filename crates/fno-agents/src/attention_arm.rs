@@ -573,23 +573,22 @@ fn close_elsewhere(
         // no stamp (delivered before the stamp existed) closes as lost
         // once: done/ already holding its lost copy stays the arm's hand.
         let mine = io.arm_id();
+        // The id's one lost copy in done/, if any: an unstamped page with a
+        // copy already there stays open, and the close below reuses the
+        // copy instead of minting `<id>-N`.
+        let lost_copy = done_pages.iter().find_map(|(path, front)| {
+            (front.question_id == id && front.recorded_by.as_deref() == Some(LOST_BY))
+                .then(|| path.clone())
+        });
         if let Some(other) = page.front.arm.as_deref() {
             if mine.as_deref() != Some(other) {
                 tick.detail
                     .push(format!("foreign page {} (arm {other})", page.stem));
                 return;
             }
-        } else if done_pages.iter().any(|(_, front)| {
-            front.question_id == id && front.recorded_by.as_deref() == Some(LOST_BY)
-        }) {
+        } else if lost_copy.is_some() {
             return;
         }
-        // Reuse the one lost copy the id already has, so a re-lost never
-        // mints `<id>-N`.
-        let onto = done_pages.iter().find_map(|(path, front)| {
-            (front.question_id == id && front.recorded_by.as_deref() == Some(LOST_BY))
-                .then(|| path.clone())
-        });
         close_and_move(
             page,
             dir,
@@ -601,7 +600,7 @@ fn close_elsewhere(
             io,
             tick,
             true,
-            onto.as_deref(),
+            lost_copy.as_deref(),
         );
         return;
     };

@@ -209,6 +209,7 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
         epic: fill_none(routing.epic.as_ref()),
         team: fill_none(routing.team.as_ref()),
         lead: fill_none(routing.lead.as_ref()),
+        arm: None,
         answer: Some(String::new()),
         answered_at: None,
         recorded_by: None,
