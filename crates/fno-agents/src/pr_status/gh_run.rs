@@ -7,7 +7,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// The captured outcome of an external command (text mode), the
@@ -52,7 +52,7 @@ pub(crate) fn run(
     let (program, args) = cmd
         .split_first()
         .ok_or_else(|| RunError::Io("run needs at least a program name".to_string()))?;
-    let mut command = Command::new(program);
+    let mut command = crate::pr_status::quota::helper_command(std::ffi::OsStr::new(program));
     command.args(args);
     if let Some(dir) = cwd {
         command.current_dir(dir);

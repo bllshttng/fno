@@ -334,7 +334,7 @@ fn is_interpreter(base: &str) -> bool {
 fn fno_agents_label(args: &[String]) -> Label {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
-        "" | "fleet-incident" | "pr-worktree" => Label::Skip,
+        "" | "fleet-incident" | "pr-worktree" | "gh" | "gh-adapter" => Label::Skip,
         "authorized-merge" => {
             // The spawner wrapper carries no JSON op and skips; an op names
             // the caller down to the wait flavor.

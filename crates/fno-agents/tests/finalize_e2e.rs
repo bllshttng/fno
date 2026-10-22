@@ -1449,9 +1449,8 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
         .env("FNO_SPACES_DIR", &env.spaces)
         .env("PYTHONPATH", &env.pypath)
         .env("PATH", path)
-        // Pin the evidence read to the staged adapter: the cargo build places
-        // the real fno-gh-coverage beside the binary under test, and the
-        // sibling lookup would otherwise outrank the PATH shim.
+        // Pin the evidence read to the staged adapter: the bare name runs
+        // the built-in `gh-adapter coverage`, never the PATH shim.
         .env("FNO_LOOPCHECK_GH_BIN", bin.join("fno-gh-coverage"))
         .env("FNO_CLAIMS_ROOT", env._tmp.path().join("claims-root"))
         // Pin the config chain to this temp project. `$FNO_CONFIG` is

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fno hook: PostToolUse - Bash merge capture
 #
-# Backstop for a gh merge that skipped fno-gh-proxy (absolute-path gh,
+# Backstop for a gh merge that skipped the gh proxy (absolute-path gh,
 # aliases). Pipes the PostToolUse payload into the graph-get stdin door as
 # {"merge_provenance": {"hook": <payload>}}; the Rust arm decides whether
 # the command was a merge and records one merge_requested span. It never
