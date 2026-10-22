@@ -110,6 +110,18 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-relocation-allow.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": "permission_prompt|agent_needs_input",

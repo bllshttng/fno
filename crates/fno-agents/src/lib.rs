@@ -66,6 +66,7 @@ mod agy_transcript_tests;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;
+pub mod ask_project;
 pub mod attach;
 pub(crate) mod attended;
 pub mod attention;
@@ -414,6 +415,7 @@ pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
 pub mod process_probe;
+pub(crate) mod prompt_wait;
 pub mod protocol;
 pub mod prove_it_verdicts;
 pub mod provenance;
@@ -1601,6 +1603,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "codex_turn_error",
     "quiet_worker_nudge",
     "quiet_worker_recovery",
+    // Who stamped a row bus-only (mail_hold.rs record_stamp).
+    "mail_hold_stamped",
     "quiet_worker_error",
     "agent_create_no_session",
     "agent_orphan_reaped",
