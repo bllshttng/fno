@@ -642,7 +642,10 @@ pub fn set_manifest_fields(
 
 /// Run `f` under the `<manifest>.lock` flock every manifest writer shares
 /// (Python's `_manifest_lock`).
-fn with_manifest_lock<T>(path: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_manifest_lock<T>(
+    path: &Path,
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     let lock_path = sibling(path, ".lock");
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)
