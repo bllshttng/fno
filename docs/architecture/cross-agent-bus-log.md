@@ -150,7 +150,7 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 **Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` verb during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects verb skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 
-The legacy copy verb `fno agents mail migrate-bus` copied old markdown threads into the canonical log once. It is retired, because every thread now lands on the bus first.
+The legacy copy command `fno agents mail migrate-bus` copied old markdown threads into the canonical log once. It is retired, because every thread now lands on the bus first.
 
 ## What is NOT in this group
 
@@ -206,7 +206,7 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | Store dual-write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` verbs | `cli/src/fno/agents/cli.py` |
-| `mail drain` verb | `cli/src/fno/mail/cli.py` |
+| `mail drain` command | `cli/src/fno/mail/cli.py` |
 | peer-project hint reader | `cli/src/fno/inbox/settings.py` |
 
 See also [cross-project-inbox.md](cross-project-inbox.md) (the inbox this converges) and [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).

@@ -1279,9 +1279,9 @@ fn main() {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
             std::process::exit(2);
         }
-        Role::MailRetired(verb) => {
+        Role::MailRetired(name) => {
             eprintln!(
-                "fno agents mail {verb} is retired: the bus log is the mail record and \
+                "fno agents mail {name} is retired: the bus log is the mail record and \
                  the markdown render is a derived view. Read mail with `fno agents mail unread`"
             );
             std::process::exit(2);
