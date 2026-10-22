@@ -113,6 +113,9 @@ pub(super) async fn spawn_codex_thread_lane(
             state_dirs.push(dir);
         }
     }
+    // A fenced `--model` (a grid pick with no route) names the thread's
+    // model when the request carried none; the row records the same value.
+    let model = model.or(carry.model.as_deref());
     let seed = req
         .params
         .get("message")

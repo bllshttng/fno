@@ -302,6 +302,35 @@ def _positional_indices(toks: Sequence[str]) -> List[int]:
 
 
 
+def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
+    """Move ``--model``/``-m`` from the head behind the ``--`` fence.
+
+    Spawn allows every harness flag, and the model is the one an operator
+    types most, so the head spelling is shorthand for the harness's own flag.
+    A prompt-less spawn keeps an explicit empty MESSAGE, or the first fenced
+    token would become the prompt.
+    """
+    cut = toks.index("--") if "--" in toks else len(toks)
+    kept: List[str] = []
+    moved: List[str] = []
+    it = iter(toks[:cut])
+    for tok in it:
+        if tok in _MODEL_FLAGS:
+            moved += ["--model", next(it, "")]
+        elif tok.startswith("--model="):
+            moved += ["--model", tok.split("=", 1)[1]]
+        else:
+            kept.append(tok)
+    if not moved:
+        return toks
+    if not all(moved[1::2]):
+        print("fno agents spawn: --model needs a value; no worker launched", file=err)
+        raise SystemExit(2)
+    if not _positional_indices(kept):
+        kept.append("")
+    return [*kept, "--", *moved, *toks[cut + 1 :]]
+
+
 def _mint_slug(existing: Set[str], rng: random.Random, err: IO[str]) -> str:
     """Best-effort collision-avoided ``adjective-noun`` slug.
 
@@ -344,60 +373,29 @@ def _head_flag_value(head: Sequence[str], flags: Tuple[str, ...]) -> Optional[st
     return None
 
 
-def _node_slug_from_graph(node: str) -> Tuple[Optional[str], Optional[str]]:
-    """Return ``(canonical_id, slug)`` from an exact id or slug lookup.
-
-    Native read failures fall back to the graph; the caller owns naming fallback.
-    """
-    from fno.graph.load import load_graph
-    from fno.graph.store import GRAPH_JSON, read_nodes_by_ids
-
-    fast = read_nodes_by_ids(GRAPH_JSON, [node])
-    for rec in fast["entries"] if fast is not None else load_graph():
-        if not rec.get("archived_at") and (rec.get("id") == node or rec.get("slug") == node):
-            return rec.get("id") or node, rec.get("slug") or None
-    return node, None
-
-
 def _mint_node_name(
-    node: str,
-    slug_flag: Optional[str],
-    model: Optional[str],
-    existing: Optional[Set[str]] = None,
+    node: Optional[str], seed: Optional[str], slug_flag: Optional[str], existing: Set[str]
 ) -> Optional[str]:
-    """The ``t-<hex>-<slug>-<model>`` mint for a node-driven spawn.
+    """The ``t-<short slug>`` default of a node-driven or ``/target`` spawn.
 
-    Routes through :func:`fno.agents.naming.dispatch_agent_name` - the single
-    owner of the 64-char budget - with no source (a manual launch) and the
-    model tag as the name's final segment. The mint is
-    deterministic, so a name already taken by a live worker gets a ``-2``,
-    ``-3``... suffix (the same collision-avoidance the adjective-noun mint
-    retries for): a re-spawn on one node must not turn into a refusal. Any
-    failure (graph read, budget, contract) returns ``None`` so pass 3 falls
-    back to the adjective-noun mint: a spawn must never die on a naming lookup.
+    The binary owns the form (naming.rs ``worker_name``). A name a live worker
+    holds gets a ``-2``..``-5`` suffix, so a re-spawn on one node is never a
+    refusal. Any failure returns ``None`` and the adjective-noun mint runs: a
+    spawn must never die on a naming lookup.
     """
-    from fno.agents.naming import AgentNameError, dispatch_agent_name
+    from fno.agents.naming import AgentNameError, BridgeUsageError, worker_name
 
+    if not (node or seed):
+        return None
     try:
-        node_id, slug = _node_slug_from_graph(node)
-    except Exception:
+        name = worker_name(node, seed=seed, slug=slug_flag)
+    except (AgentNameError, BridgeUsageError):
         return None
-    if slug_flag:
-        slug = slug_flag
-    try:
-        name = dispatch_agent_name(
-            None, "t", node_id or node, slug=slug, model=model
-        )
-    except AgentNameError:
-        return None
-    if existing and name in existing:
-        for n in range(2, 6):
-            if len(name) + len(str(n)) + 1 > 64:
-                return None
-            if f"{name}-{n}" not in existing:
-                return f"{name}-{n}"
-        return None
-    return name
+    for n in range(1, 6):
+        candidate = name if n == 1 else f"{name}-{n}"
+        if candidate not in existing:
+            return candidate
+    return None
 
 
 def _read_registry_rows() -> list[object]:
@@ -446,6 +444,8 @@ def normalize_spawn_args(
     else:
         toks, payload = body, []
 
+    if not payload:
+        toks = _fence_model_shorthand(toks, err)
     fence = next((i for i, t in enumerate(toks) if t == "--"), None)
 
     # Pass 3: the NAME axis. `spawn` takes ONE positional and it is the MESSAGE;
@@ -467,26 +467,15 @@ def normalize_spawn_args(
             if existing_names is not None
             else {str(getattr(e, "name", "")) for e in _read_registry_rows()}
         )
-        # a node-driven spawn carries what an operator remembers. The
-        # name is the registry row's ONLY node carrier, so a nodeless mint makes
-        # the row unfindable by node or slug. Mint ``t-<node>-<slug>-<model>``
-        # through the canonical owner when --node is present; any lookup
-        # failure falls back to the adjective-noun mint, never a refusal.
-        node = _head_flag_value(head, ("--node",))
-        minted: Optional[str] = None
-        if node:
-            slug_flag = _head_flag_value(head, ("--slug",))
-            model = _head_flag_value(head, _MODEL_FLAGS)
-            if not model:
-                route = _head_flag_value(head, ("--route",))
-                # Canonical route spelling is provider/model (comma is
-                # legacy); take the model half of either.
-                model = (
-                    route.replace(",", "/").rsplit("/", 1)[1].strip()
-                    if route and ("/" in route or "," in route)
-                    else None
-                )
-            minted = _mint_node_name(node, slug_flag, model, names)
+        # A node-driven or `/target <node>` spawn is named for its node's
+        # slug; the row's `node` and `model` fields carry the rest.
+        seeds = [toks[i] for i in _positional_indices(head)]
+        minted = _mint_node_name(
+            _head_flag_value(head, ("--node",)),
+            seeds[0] if seeds else None,
+            _head_flag_value(head, ("--slug",)),
+            names,
+        )
         name = minted or _mint_slug(names, rng if rng is not None else random.Random(), err)
         toks = ["--name", name, *toks]
     extra = _positional_indices(toks)
@@ -500,20 +489,6 @@ def normalize_spawn_args(
         raise SystemExit(2)
 
     return ["spawn", *toks, *payload]
-
-
-def _default_resolver(short_id: str) -> Optional[str]:
-    """Resolve an 8-hex claude short-id to its full session uuid (bg sessions).
-
-    Uses the bounded-retry lane so a short-id issued while claude is still writing
-    the session entry is not rejected on a transient miss (blueprint Concurrency).
-    """
-    try:
-        from fno.agents.harnesses.claude import resolve_session_uuid_at_spawn
-
-        return resolve_session_uuid_at_spawn(short_id)
-    except Exception:
-        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -589,20 +564,6 @@ def _role_of(toks: Sequence[str]) -> Optional[str]:
         if t.startswith("--role="):
             return t.split("=", 1)[1]
     return None
-
-
-def _role_resolves(role: str, settings: object, env: Optional[Mapping[str, str]]) -> bool:
-    """Whether ``role`` resolves to a real spawn route (a non-None env overlay).
-
-    resolve_route is fail-SAFE, so this is True only when the role is routed AND
-    its provider is configured with an anthropic endpoint AND a key is present.
-    Any resolution error degrades to False (never bricks the spawn)."""
-    from fno.agents.model_routing import resolve_route
-
-    try:
-        return resolve_route(role, settings=settings, env=env) is not None  # type: ignore[arg-type]
-    except Exception:
-        return False
 
 
 def _has_permission_mode(toks: Sequence[str]) -> bool:
@@ -844,6 +805,11 @@ def _scan_projection(tail: Sequence[str]) -> dict:
     scanners answer what the OPERATOR typed; the command owns every config
     decision over the result."""
     has_harness, explicit_harness, has_model, has_effort = _scan(tail)
+    # A fenced --model (the -m shorthand lands there) occupies the model axis.
+    if "--" in tail and not has_model:
+        from fno.agents.mux_spawn import passthrough_model
+
+        has_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :]) is not None
     explicit_vendor = _flag_value(tail, "--provider", "-P")
     explicit_route = _flag_present(tail, "--route")
     role = _role_of(tail)

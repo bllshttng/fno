@@ -27,7 +27,11 @@ const ASK: &[&str] = &[
     "need you",
     "needs your",
     "need your",
-    "reply ",
+    // A bare "reply " matched every sentence that mentions a reply ("the
+    // reply from codex"), so a reply ask counts only as an imperative.
+    "please reply",
+    "or reply ",
+    "just reply",
     "say so",
     "say yes",
     "tell me",
@@ -40,7 +44,9 @@ const ASK: &[&str] = &[
     "please confirm",
     "can you ",
 ];
-const START: &[&str] = &["answer ", "approve ", "confirm ", "pick ", "choose "];
+const START: &[&str] = &[
+    "answer ", "approve ", "confirm ", "pick ", "choose ", "reply ",
+];
 const NOT_ASK: &[&str] = &[
     "nothing needs you",
     "nothing needs your",

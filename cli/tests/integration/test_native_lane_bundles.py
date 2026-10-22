@@ -112,10 +112,10 @@ def test_sibling_lane_selection_carries_that_lanes_bundle(monkeypatch):
         ["spawn", "--name", "w", "/fno:target x-1"],
         stderr=err,
     )
-    assert "--model" not in out, "the lane owns its model; compose names none"
+    # The selected lane's model rides its bundle; the skipped lane's never does.
     i = out.index("--")
-    assert out[i + 1 : i + 3] == ["--settings", "b.json"]
-    assert "a.json" not in out
+    assert out[i + 1 :] == ["--settings", "b.json", "--model", "claude-opus-5"]
+    assert "a.json" not in out and "claude-sonnet-5" not in out
     assert "agents.profiles.target.lanes[1].args" in err.getvalue()
     assert "unverified" in err.getvalue()
 

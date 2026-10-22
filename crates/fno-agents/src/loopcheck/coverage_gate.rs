@@ -266,6 +266,14 @@ fn coverage_has_local_pass(row: &Value, reviewer: &str) -> bool {
         })
 }
 
+/// The posture refusal that still binds. A spent round budget ends the review
+/// phase, so it outranks the posture rung: the review lane refuses a new round
+/// at the cap, and a posture that demands one at a moved head could never be
+/// met. The waived posture is named in the discharge note instead.
+fn posture_holds(posture: Option<&str>, covered: bool, spent: bool) -> Option<String> {
+    posture.filter(|_| covered && !spent).map(str::to_string)
+}
+
 /// The refusal when the resolved review posture is unsatisfied or unknown.
 /// The verdict is the Rust producer's (`review_posture` on the row); this
 /// gate reads it and never reclassifies. A covered row that NAMES no posture
@@ -714,27 +722,26 @@ fn ordinary_verdict<P: Probes>(
         }
         parts.join("; ")
     };
-    // The Rust posture verdict outranks the budget: Python's ladder refused
-    // an unsatisfied posture even with the round budget spent, because the
-    // rung names evidence the cap cannot waive. Read before the discharge.
-    if covered {
-        if let Some(posture_text) = posture {
-            return (
-                GateVerdict {
-                    state: GateState::Refused,
-                    refusal: posture_text,
-                    covered_head: String::new(),
-                    note: join_notes(None),
-                },
-                Some((head, waiver_hard)),
-            );
-        }
+    let spent = rounds >= max_rounds || row_spent;
+    if let Some(posture_text) = posture_holds(posture.as_deref(), covered, spent) {
+        return (
+            GateVerdict {
+                state: GateState::Refused,
+                refusal: posture_text,
+                covered_head: String::new(),
+                note: join_notes(None),
+            },
+            Some((head, waiver_hard)),
+        );
     }
     // Reaching the cap DISCHARGES the review obligation - it does not fail
     // it. `>=`, not `>`: max_rounds is a MAXIMUM, and the last funded round
     // is the second one. The waiver is NAMED in the note, never silent.
-    if rounds >= max_rounds || row_spent {
+    if spent {
         let mut unsatisfied_parts: Vec<String> = Vec::new();
+        if let Some(posture_text) = posture.filter(|_| covered) {
+            unsatisfied_parts.push(posture_text);
+        }
         if !failed.is_empty() {
             unsatisfied_parts.push(failed.to_string());
         }
@@ -1197,6 +1204,18 @@ merge"
     fn absent_posture_passes_a_stored_pre_posture_row() {
         let row = json!({"coverage": "covered"});
         assert_eq!(posture_refusal(&row, false), None);
+    }
+
+    #[test]
+    fn spent_budget_outranks_an_unsatisfied_posture_at_a_moved_head() {
+        let gap = "review posture 'self' (rank 1) is unsatisfied: self: no real final-head review at this head";
+        assert_eq!(posture_holds(Some(gap), true, false).as_deref(), Some(gap));
+        assert_eq!(
+            posture_holds(Some(gap), true, true),
+            None,
+            "rounds spent: no new round is owed at the final head"
+        );
+        assert_eq!(posture_holds(Some(gap), false, false), None);
     }
 
     #[test]

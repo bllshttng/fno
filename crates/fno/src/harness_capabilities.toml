@@ -351,7 +351,7 @@ headless = "argv-add-dir"
 # paneless start.
 [harness.codex.thread]
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir"]
-passthrough = ["-c", "--config", "--add-dir"]
+passthrough = ["-c", "--config", "--add-dir", "-m", "--model"]
 
 [harness.codex.permission_response.allow_once]
 supported = true
@@ -809,7 +809,7 @@ headless = "unmeasured"
 # attach writer, and the journey names the evidence for this seat.
 [harness.opencode.thread]
 carries = ["model", "effort"]
-passthrough = []
+passthrough = ["-m", "--model"]
 
 # THE NATIVE BG LINE for the serve lane: opencode creates its own session
 # (the title names it), the turn runs on the shared serve, and the row binds

@@ -545,10 +545,95 @@ fn positionals(args: &[String]) -> Vec<String> {
     out
 }
 
+/// Slug words a target worker's default name keeps.
+const WORKER_SLUG_WORDS: usize = 3;
+/// A three-word head longer than this keeps two words, so a sideline row
+/// stays readable.
+const WORKER_SLUG_CAP: usize = 24;
+
+/// The default name of a target worker: `t-` and the first words of its
+/// node's slug (`visual-approval-gate-two-paint` -> `t-visual-approval-gate`).
+/// It carries no model token: the lane picks the model after the name is
+/// set, so a model in the name can be false. The row's `node` and `model`
+/// fields carry those facts.
+pub fn worker_name(slug: &str) -> Option<String> {
+    let clean = slug_component(Some(slug), usize::MAX);
+    let words: Vec<&str> = clean.split('-').filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut head = words[..words.len().min(WORKER_SLUG_WORDS)].join("-");
+    if head.len() > WORKER_SLUG_CAP && words.len() > 2 {
+        head = words[..2].join("-");
+    }
+    let head = cut_slug(Some(head.as_str()), WORKER_SLUG_CAP);
+    (!head.is_empty()).then(|| format!("t-{head}"))
+}
+
+/// The node a `/target <node>` seed names, else None. Only a target seed
+/// binds: another command's worker keeps its own name form.
+fn target_seed_node(seed: &str) -> Option<String> {
+    let first = seed.split_whitespace().next()?;
+    match crate::provider::parse_command_token(first) {
+        Some(("target", _)) => crate::node_seed::scan_seed_node(seed),
+        _ => None,
+    }
+}
+
+/// The slug of the node `token` names (id first, then slug), else None.
+fn node_slug(token: &str) -> Option<String> {
+    let path = crate::graph_get::graph_path_for(std::path::Path::new("."));
+    let by_id = crate::backlog::RowQuery {
+        filter: crate::backlog::api::NodeFilter {
+            id_in: Some(vec![token.to_string()]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut rows = crate::graph_store::read_rows_where(&path, &by_id).ok()?;
+    if rows.is_empty() {
+        rows = crate::graph_store::read_rows_where(&path, &Default::default()).ok()?;
+    }
+    crate::graph_get::find_entry(&rows, token)?
+        .get("slug")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// `name-mint --worker <node> [--seed TEXT] [--slug S]`: the default name of
+/// a target worker. An empty `--worker` reads the node from a `/target`
+/// seed. Prints the name; exit 3 when no node or slug resolves.
+fn run_worker_mint(args: &[String]) -> i32 {
+    let nonblank = |v: &String| !v.trim().is_empty();
+    let node = value_of(args, "--worker")
+        .filter(nonblank)
+        .or_else(|| value_of(args, "--seed").and_then(|s| target_seed_node(&s)));
+    let slug = value_of(args, "--slug")
+        .filter(nonblank)
+        .or_else(|| node.as_deref().and_then(node_slug));
+    match slug.as_deref().and_then(worker_name) {
+        Some(name) => {
+            println!("{name}");
+            0
+        }
+        None => {
+            eprintln!("error: no node slug to name the worker from");
+            3
+        }
+    }
+}
+
 /// `fno-agents name-mint [prefix] <node> [--slug S] [--qualifier Q]
 /// [--discriminator D] [--source S] [--command V]`: the bridge, byte-compatible
 /// with `fno agents name`. Prints the name; exit 2 usage, 3 refusal.
 pub fn run_name_mint(args: &[String]) -> i32 {
+    if args
+        .iter()
+        .any(|a| a == "--worker" || a.starts_with("--worker="))
+    {
+        return run_worker_mint(args);
+    }
     let pos = positionals(args);
     // One positional binds the node (the CLI contract: Click would bind it to
     // the legacy prefix slot; the bridge reads it as the node instead).
@@ -761,6 +846,36 @@ mod tests {
         let err = dispatch_agent_name(Some("ab"), "t", &long, None, None, None, None).unwrap_err();
         assert!(err.message.contains("64-char"), "{err}");
         assert_eq!(err.exit, 3);
+    }
+
+    /// A target worker's default name: `t-` and the first slug words, two
+    /// when three run long, and no model token. Only a target seed binds.
+    #[test]
+    fn worker_name_keeps_the_slug_head_and_no_model() {
+        assert_eq!(
+            worker_name("visual-approval-gate-two-paint").as_deref(),
+            Some("t-visual-approval-gate")
+        );
+        assert_eq!(
+            worker_name("spawned-workers-name-them-t-short").as_deref(),
+            Some("t-spawned-workers-name")
+        );
+        assert_eq!(
+            worker_name("observability-instrumentation-dashboards").as_deref(),
+            Some("t-observability")
+        );
+        assert_eq!(worker_name("fix").as_deref(), Some("t-fix"));
+        assert_eq!(worker_name("--"), None);
+        assert_eq!(
+            target_seed_node("/fno:target x-aaaa").as_deref(),
+            Some("x-aaaa")
+        );
+        assert_eq!(
+            target_seed_node("$fno:target L x-aaaa").as_deref(),
+            Some("x-aaaa")
+        );
+        assert_eq!(target_seed_node("/fno:blueprint x-aaaa"), None);
+        assert_eq!(target_seed_node("go"), None);
     }
 
     #[test]

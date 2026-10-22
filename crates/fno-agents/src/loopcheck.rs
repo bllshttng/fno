@@ -1470,6 +1470,7 @@ pub(crate) fn decide_with_payload(
             Some(&resolve_posture_config(&settings)),
             &resolved_local_peer_reviewers_for_author(&settings, author_harness.as_deref()),
             node_pr_selector.as_deref(),
+            node_id.as_deref(),
         );
 
         match done_result {
@@ -2581,32 +2582,45 @@ fn run_done(
     // pins the terminal read to the session's own PR so a merged, deleted or
     // detached head cannot turn the read into a branch-resolution failure.
     pr_selector: Option<&str>,
+    node_id: Option<&str>,
 ) -> Result<PrInfo, GhReadError> {
-    let info = read_pr_info(
-        gh_bin,
-        git_bin,
-        cwd,
-        ci_declared_none,
-        no_external,
-        required_bots,
-        optional_bots,
-        optional_lane_configured,
-        external_reviewers,
-        reviewers,
-        nudge_configs,
-        head_sha,
-        events_path,
-        global_events_path,
-        repo_slug,
-        author_session,
-        pr_selector,
-        None,
-        github_approval_satisfies,
-        max_rounds,
-        carry_interdiff_lines,
-        posture,
-        peer_reviewers,
-    )?;
+    let read = |selector: Option<&str>| {
+        read_pr_info(
+            gh_bin,
+            git_bin,
+            cwd,
+            ci_declared_none,
+            no_external,
+            required_bots,
+            optional_bots,
+            optional_lane_configured,
+            external_reviewers,
+            reviewers,
+            nudge_configs,
+            head_sha,
+            events_path,
+            global_events_path,
+            repo_slug,
+            author_session,
+            selector,
+            None,
+            github_approval_satisfies,
+            max_rounds,
+            carry_interdiff_lines,
+            posture,
+            peer_reviewers,
+        )
+    };
+    let mut info = read(pr_selector)?;
+    // A closed PR whose node shipped through a replacement: read the live
+    // one instead, so the write-once manifest never pins done() to it.
+    if matches!(info.state, PrState::Closed) {
+        if let Some(live) = node_id
+            .and_then(|node| pr_read::live_fixes_pr(gh_bin, cwd, repo_slug, node, info.number))
+        {
+            info = read(Some(live.as_str()))?;
+        }
+    }
     // read_pr_info stays read-only against GitHub; the CALLER owns
     // the write. A row was just emitted for this PR, so the publisher has the
     // same evidence the merge gate will read, and the status targets the live

@@ -1804,7 +1804,12 @@ fn render_lines_with(
                 .into_iter()
                 .flatten()
             {
-                lines.push(format!("  target-ready: /fno:target {}", dash(Some(id))));
+                // The spawn command to copy: with no --name, spawn names the
+                // worker t-<short slug> and the lane picks its model.
+                lines.push(format!(
+                    "  target-ready: fno agents spawn \"/fno:target {}\"",
+                    dash(Some(id))
+                ));
             }
             for skip in bp
                 .get("skips")

@@ -821,6 +821,21 @@ pub struct HarnessFlags<'a> {
     pub route: Option<RouteStamp<'a>>,
 }
 
+/// The model a fenced passthrough names (`--model M`, `--model=M`, `-m M`),
+/// last one winning as the harness CLI reads it.
+pub fn passthrough_model(tokens: &[String]) -> Option<&str> {
+    let mut found = None;
+    let mut it = tokens.iter();
+    while let Some(tok) = it.next() {
+        if tok == "--model" || tok == "-m" {
+            found = it.next().map(String::as_str).or(found);
+        } else if let Some(value) = tok.strip_prefix("--model=") {
+            found = Some(value);
+        }
+    }
+    found.filter(|m| !m.is_empty())
+}
+
 /// The identity of a routed thread spawn (see `spawn_route::route_seam`).
 #[derive(Clone, Copy, Debug)]
 pub struct RouteStamp<'a> {
@@ -3216,7 +3231,12 @@ fn create(
     // A routed spawn stamps the route's vendor and model token where an
     // unrouted one stamps anthropic and its model (fork_lineage.axis_overrides).
     let route = flags.route;
-    let model = route.map(|r| r.model).or(model);
+    // A grid or lane pick with no route rides the fence as `--model`; the
+    // row records it too, or it reads null while claude runs that model.
+    let model = route
+        .map(|r| r.model)
+        .or(model)
+        .or_else(|| passthrough_model(flags.passthrough));
     let mut new_entry = RegistryEntry {
         // client-side mint - this process inherited the spawning
         // session's env, so the exported FNO_NODE names the node THIS spawn

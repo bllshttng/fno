@@ -2908,7 +2908,7 @@ def dispatch_spawn(
                         )
                     short_id = _opencode_serve_spawn(
                         name=name, message=message, cwd=cwd,
-                        from_name=from_name, node=node,
+                        from_name=from_name, node=node, passthrough=list(passthrough or ()),
                     )
                     if promotion is not None:
                         settle_thread_promotion(promotion, name=name, cwd=cwd, session_id=short_id)

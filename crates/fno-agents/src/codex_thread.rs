@@ -2599,11 +2599,14 @@ pub struct HarnessCarry {
     pub config: serde_json::Map<String, Value>,
     /// `--add-dir` roots, appended to the state-root grant.
     pub add_dirs: Vec<String>,
+    /// `--model`/`-m`: the thread's model, the last one winning.
+    pub model: Option<String>,
 }
 
 /// Parse the fenced `--` tokens a spawn routed to this lane. Only the
 /// spellings the codex CLI itself takes are accepted: `-c`/`--config
-/// key=value` and `--add-dir <dir>`, two-token or `=`-joined on the long
+/// key=value`, `--add-dir <dir>` and `--model`/`-m <model>`, two-token or
+/// `=`-joined on the long
 /// forms. Anything else is a front-door contract break - the spawn front
 /// door demotes a flag this lane cannot carry to the pane, so a stray token
 /// here is a router bug - and is refused by name rather than dropped
@@ -2621,15 +2624,23 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
     let mut carry = HarnessCarry {
         config: serde_json::Map::new(),
         add_dirs: Vec::new(),
+        model: None,
     };
     let mut values = tokens.iter();
     while let Some(token) = values.next() {
         let (flag, inline): (&str, Option<&str>) = match token.split_once('=') {
-            Some((flag, rest)) if flag == "--config" || flag == "--add-dir" => (flag, Some(rest)),
+            Some((flag, rest)) if matches!(flag, "--config" | "--add-dir" | "--model") => {
+                (flag, Some(rest))
+            }
             _ => (token.as_str(), None),
         };
         match (flag, inline) {
             ("--add-dir", Some(dir)) => carry.add_dirs.push(dir.to_string()),
+            ("--model", Some(model)) => carry.model = Some(model.to_string()),
+            ("--model", None) | ("-m", None) => match values.next() {
+                Some(model) => carry.model = Some(model.clone()),
+                None => return Err(format!("{flag} arrives with no model")),
+            },
             ("--add-dir", None) => match values.next() {
                 Some(dir) => carry.add_dirs.push(dir.clone()),
                 None => return Err("--add-dir arrives with no directory".into()),
@@ -2652,7 +2663,7 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
             _ => {
                 return Err(format!(
                     "harness token {token:?} is not one the codex thread lane carries \
-                     (-c/--config key=value, --add-dir dir); the spawn front door owns \
+                     (-c/--config key=value, --add-dir dir, --model model); the spawn front door owns \
                      the -- fence and should have routed it to the pane"
                 ));
             }
@@ -2900,6 +2911,8 @@ mod tests {
             "--add-dir",
             "/tmp/x",
             "--config=model_reasoning_effort=high",
+            "-m",
+            "gpt-luna",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2916,6 +2929,11 @@ mod tests {
             "a non-TOML scalar stays a string, as the codex CLI reads it"
         );
         assert_eq!(carry.add_dirs, vec!["/tmp/x".to_string()]);
+        assert_eq!(
+            carry.model.as_deref(),
+            Some("gpt-luna"),
+            "a fenced model rides the thread"
+        );
 
         let error = parse_harness_args(&["-p".to_string(), "profile".to_string()])
             .err()
