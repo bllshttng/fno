@@ -17,8 +17,6 @@
 
 use super::*;
 
-use std::os::unix::fs::PermissionsExt;
-
 /// A fixture world with one team-less graph and an empty vendor roster. The
 /// env is captured and restored on drop; `test_env_lock` serializes against
 /// the other env-mutating tests.
@@ -60,9 +58,7 @@ impl OccupancyFixture {
         // roster row can resolve to the fixture node.
         let bin = dir.join("stub-bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let stub = bin.join("claude");
-        std::fs::write(&stub, "#!/bin/sh\necho '{\"agents\": []}'\n").unwrap();
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = crate::write_exec_stub(&bin, "claude", "#!/bin/sh\necho '{\"agents\": []}'\n");
         // The transcript store redirect: an empty projects dir keeps the
         // reachability read off the real machine's store.
         let claude_dir = dir.join("claude-dir");
