@@ -72,7 +72,7 @@ def _helper_resolvable() -> bool:
 def _is_retired_script(path: str) -> bool:
     try:
         with open(path, "rb") as handle:
-            return b"from fno.pr.gh_proxy import main" in handle.read(4096)
+            return b"fno.pr.gh_proxy" in handle.read(4096)
     except OSError:
         return False
 
@@ -100,7 +100,7 @@ def ensure_proxy(
     # Skip the link's own dir (it would answer for its own stale target) and
     # the console script pr port 7 retired: its import dies on a newer fno.
     on_path = (
-        shutil.which("fno-gh-proxy", path=part)
+        _WHICH("fno-gh-proxy", path=part)
         for part in os.environ.get("PATH", "").split(os.pathsep)
         if part and os.path.realpath(part) != os.path.realpath(root)
     )

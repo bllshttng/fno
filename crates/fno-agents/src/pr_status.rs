@@ -250,7 +250,7 @@ pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> Re
         .filter(|l| !crate::authorized_merge::is_proxy_noise_line(l))
         .collect();
     let fallback = match meaningful.first() {
-        Some(first) if first.starts_with("Traceback (most recent call last)") => {
+        Some(first) if first.starts_with("Traceback ") => {
             meaningful.last().copied().unwrap_or(first)
         }
         Some(first) => first,
