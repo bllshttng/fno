@@ -67,6 +67,15 @@ def test_duplicate_cwd_refuses_rather_than_picks(tmp_path, monkeypatch):
     assert live_thread_row_for_cwd(str(cwd_a)) is None
 
 
+def test_claude_row_never_names_a_markerless_neighbour(tmp_path, monkeypatch):
+    cwd_a = tmp_path / "worker-a"
+    cwd_a.mkdir()
+    row = _thread_row("worker-a", str(cwd_a), "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4")
+    row["harness"] = "claude"
+    _write_registry(tmp_path, monkeypatch, [row])
+    assert live_thread_row_for_cwd(str(cwd_a)) is None
+
+
 def test_exited_rows_own_no_identity(tmp_path, monkeypatch):
     cwd_a = tmp_path / "worker-a"
     cwd_a.mkdir()
