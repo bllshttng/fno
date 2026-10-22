@@ -118,8 +118,6 @@ paths
 phase kill-check
 plan
 plugins
-pr
-pr merge
 pr-watch
 project init
 research
