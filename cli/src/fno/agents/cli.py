@@ -1077,7 +1077,10 @@ def _retired_axis(flag: str, admit: str = ""):
     "spawn",
     epilog=(
         "--as picks the lane: thread (the default), pane, headless, or cloud. "
-        "Placement flags need --as pane; --once means headless. Declared "
+        "Placement flags need --as pane; --once means headless. --model/-m, "
+        "--effort and --permission-mode are the harness's own flags: typed before "
+        "the fence they ride it, and a lane that cannot carry one refuses and "
+        "names it. Declared "
         "harnesses: claude, codex, opencode, pi, agy, cursor-agent, grok "
         "(docs/HARNESSES.md)."
     ),
@@ -1225,25 +1228,6 @@ def cmd_spawn(
             "Provider RECORD from `dispatch resolve --autonomous`; its env "
             "rides for ANY harness, credentials never travel. Fail-closed."
         ),
-    ),
-    model: str | None = typer.Option(
-        None,
-        "--model",
-        "-m",
-        hidden=True,
-        callback=_retired_axis("--model"),
-    ),
-    permission_mode: str | None = typer.Option(
-        None,
-        "--permission-mode",
-        hidden=True,
-        callback=_retired_axis("--permission-mode"),
-    ),
-    effort: str | None = typer.Option(
-        None,
-        "--effort",
-        hidden=True,
-        callback=_retired_axis("--effort"),
     ),
     resume: str | None = typer.Option(
         None,
@@ -1441,7 +1425,9 @@ def cmd_spawn(
     # stays for the refusals below; the harness resolves from the default
     # rung; vendor and recorded-provider retired with the flags.
     route_spelling = f"--route {route}" if route is not None else None
-    model = None
+    # --model, --effort and --permission-mode are the harness's own flags: the
+    # pre-pass moves them behind the fence, so this leg never reads them.
+    model = effort = permission_mode = None
     try:
         harness, harness_source = resolve_dispatch_harness(harness)
     except DispatchFlagError as exc:

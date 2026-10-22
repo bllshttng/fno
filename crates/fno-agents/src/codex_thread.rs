@@ -2605,7 +2605,8 @@ pub struct HarnessCarry {
 
 /// Parse the fenced `--` tokens a spawn routed to this lane. Only the
 /// spellings the codex CLI itself takes are accepted: `-c`/`--config
-/// key=value`, `--add-dir <dir>` and `--model`/`-m <model>`, two-token or
+/// key=value`, `--add-dir <dir>`, `--model`/`-m <model>` and `--effort <level>`
+/// (a `model_reasoning_effort` config pair), two-token or
 /// `=`-joined on the long
 /// forms. Anything else is a front-door contract break - the spawn front
 /// door demotes a flag this lane cannot carry to the pane, so a stray token
@@ -2629,7 +2630,9 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
     let mut values = tokens.iter();
     while let Some(token) = values.next() {
         let (flag, inline): (&str, Option<&str>) = match token.split_once('=') {
-            Some((flag, rest)) if matches!(flag, "--config" | "--add-dir" | "--model") => {
+            Some((flag, rest))
+                if matches!(flag, "--config" | "--add-dir" | "--model" | "--effort") =>
+            {
                 (flag, Some(rest))
             }
             _ => (token.as_str(), None),
@@ -2637,6 +2640,20 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
         match (flag, inline) {
             ("--add-dir", Some(dir)) => carry.add_dirs.push(dir.to_string()),
             ("--model", Some(model)) => carry.model = Some(model.to_string()),
+            // codex spells reasoning effort as a config key; the
+            // effort_surface owner holds the same mapping for the pane lanes.
+            ("--effort", inline) => {
+                let value = match inline {
+                    Some(v) => v.to_string(),
+                    None => values
+                        .next()
+                        .cloned()
+                        .ok_or("--effort arrives with no level")?,
+                };
+                carry
+                    .config
+                    .insert("model_reasoning_effort".to_string(), json!(value));
+            }
             ("--model", None) | ("-m", None) => match values.next() {
                 Some(model) => carry.model = Some(model.clone()),
                 None => return Err(format!("{flag} arrives with no model")),
@@ -2663,7 +2680,7 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
             _ => {
                 return Err(format!(
                     "harness token {token:?} is not one the codex thread lane carries \
-                     (-c/--config key=value, --add-dir dir, --model model); the spawn front door owns \
+                     (-c/--config key=value, --add-dir dir, --model model, --effort level); the spawn front door owns \
                      the -- fence and should have routed it to the pane"
                 ));
             }
@@ -2951,6 +2968,15 @@ mod tests {
             error.contains("--add-dir"),
             "the refusal names the flag: {error}"
         );
+
+        // --effort is codex's `model_reasoning_effort` config key; a flag
+        // codex has no spelling for (--permission-mode) refuses by name.
+        let effort = parse_harness_args(&["--effort".to_string(), "xhigh".to_string()]).unwrap();
+        assert_eq!(effort.config["model_reasoning_effort"], json!("xhigh"));
+        let error = parse_harness_args(&["--permission-mode".to_string(), "plan".to_string()])
+            .err()
+            .expect("codex has no --permission-mode");
+        assert!(error.contains("--permission-mode"), "{error}");
     }
 
     /// The turn replaces the WHOLE policy, so a bounded thread whose server

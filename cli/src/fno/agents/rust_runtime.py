@@ -1304,11 +1304,8 @@ def _scrub_ambient_identity_at_exec(verb: str) -> None:
 #: seed naming a flag is prompt text, never a routed spawn.
 _RETIRED_AXIS_LONGS = (
     "--provider",
-    "--model",
     "--substrate",
     "--yolo",
-    "--permission-mode",
-    "--effort",
     "--resume",
     "--add-dir",
     "--agent",

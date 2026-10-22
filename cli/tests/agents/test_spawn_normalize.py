@@ -188,3 +188,13 @@ def test_head_model_flag_is_shorthand_for_the_fenced_harness_flag():
     assert out == ["spawn", "--name", "w", "go", "--", "--model", "sonnet", "--verbose"]
     bare = _norm(["spawn", "--name", "w", "--model=haiku"])
     assert bare == ["spawn", "--name", "w", "", "--", "--model", "haiku"]
+
+
+def test_head_effort_and_permission_mode_ride_the_fence_with_the_model():
+    out = _norm(
+        ["spawn", "--name", "w", "--effort", "high", "--permission-mode=bypassPermissions", "go"]
+    )
+    assert out == [
+        "spawn", "--name", "w", "go", "--",
+        "--effort", "high", "--permission-mode", "bypassPermissions",
+    ]

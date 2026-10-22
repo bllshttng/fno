@@ -353,7 +353,7 @@ fn spawn_claude_receipt_byte_shape() {
         "spawn claude happy path should exit 0, stderr: {}",
         out.stderr
     );
-    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "status": "live"}\n
+    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "model_basis": "lane-default", "status": "live"}\n
     let receipt = out.stdout.trim_end_matches('\n');
     assert!(
         receipt.starts_with(r#"{"name": "myspawn", "short_id": "#),
@@ -361,8 +361,9 @@ fn spawn_claude_receipt_byte_shape() {
         out.stdout
     );
     assert!(
-        receipt.ends_with(r#""harness": "claude", "status": "live"}"#),
-        "receipt must end with harness/status: {}",
+        receipt
+            .ends_with(r#""harness": "claude", "model_basis": "lane-default", "status": "live"}"#),
+        "receipt must end with harness/basis/status: {}",
         out.stdout
     );
     // Parse as JSON to verify structure.

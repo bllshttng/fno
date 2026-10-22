@@ -3932,10 +3932,20 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // instead of queueing for a free slot. Client-side only.
                 params.insert("no_wait".into(), Value::Bool(true));
             }
-            "--model" | "-m" => {
-                // Spawn refuses this axis at scan; the arm dies here so a
-                // direct call on another verb cannot revive the spelling.
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--model"));
+            // The harness's own flags, typed before the fence, are shorthand
+            // for the same flag behind it. They join the fenced tail in
+            // harness_args, so every lane that carries a fenced flag carries
+            // these, and a lane that cannot refuses by name.
+            "--model" | "-m" | "--effort" | "--permission-mode" if verb == "spawn" => {
+                let flag = if a == "-m" { "--model" } else { a.as_str() };
+                let value = str_arg(&mut it, flag)?;
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String(flag.to_string()));
+                    list.push(value);
+                }
             }
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
@@ -3969,14 +3979,6 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                     return Err("--defaults-applied takes 'enforced' or 'unenforced'".into());
                 }
                 params.insert("defaults_applied".into(), Value::String(v.into()));
-            }
-            "--permission-mode" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
-                    "--permission-mode",
-                ));
-            }
-            "--effort" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--effort"));
             }
             // Tier-3 harness-native passthrough died with the axes: the
             // harness's own flags ride --argv/--harness-arg now, and these

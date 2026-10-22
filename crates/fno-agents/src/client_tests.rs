@@ -591,18 +591,29 @@ fn spawn_flag_rows() {
             "{args:?}: {err}"
         );
     };
-    refused(
-        &[
-            "wk",
-            "--harness",
-            "agy",
-            "--once",
-            "--model",
-            "Gemini 3.5 Flash (High)",
-        ],
-        "--model",
+    // The harness's own flags typed before the fence are shorthand for the
+    // same flag behind it: they join the fenced tail in harness_args.
+    let harness_args = |args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let (_m, params) = build_request("spawn", &args).expect("harness shorthand parses");
+        params["harness_args"].clone()
+    };
+    assert_eq!(
+        harness_args(&["wk", "--model", "Gemini 3.5 Flash (High)"]),
+        serde_json::json!(["--model", "Gemini 3.5 Flash (High)"])
     );
-    refused(&["wk", "--model=pro"], "--model");
+    assert_eq!(
+        harness_args(&["wk", "-m", "pro"]),
+        serde_json::json!(["--model", "pro"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--model=pro", "--effort", "high"]),
+        serde_json::json!(["--model", "pro", "--effort", "high"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--permission-mode=bypassPermissions"]),
+        serde_json::json!(["--permission-mode", "bypassPermissions"])
+    );
 
     let (_method, short) = build_request(
         "spawn",
@@ -658,17 +669,6 @@ fn spawn_flag_rows() {
     );
 
     refused(
-        &[
-            "wk",
-            "--harness",
-            "claude",
-            "--permission-mode",
-            "acceptEdits",
-        ],
-        "--permission-mode",
-    );
-    refused(&["wk", "--permission-mode=plan"], "--permission-mode");
-    refused(
         &["wk", "--harness", "claude", "--substrate", "thread"],
         "--substrate",
     );
@@ -693,10 +693,6 @@ fn spawn_flag_rows() {
         refused(&["wk", flag, "x"], flag);
     }
     refused(&["wk", "--add-dir=/extra"], "--add-dir");
-    refused(
-        &["wk", "--harness", "codex", "--once", "--effort", "high"],
-        "--effort",
-    );
 }
 
 // x-d012: --account parses into params (space + equals form) so the spawn
