@@ -4,12 +4,8 @@
     1   one project        scope names one config project
     2   a set of epics     every scope names a backlog node with type == "epic"
 
-There is no operator-supplied level anywhere in the surface. That is the point of
-these tests: the old grammar made callers hand-type an altitude on a ladder whose
-direction reads backwards (0 is the TOP), and a wrong guess minted authority at
-the wrong rung with no error. The rung is now a fact about the territory, so the
-only way to get it wrong is to name the wrong territory - which is checkable, and
-checked here.
+The rung itself is derived in Rust (crates/fno-agents/tests/role_ladder_parity.rs
+pins it). These tests pin containment across the ladder, which stays in Python.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -57,95 +53,7 @@ def territory(tmp_path, monkeypatch):
     proj_resolve._clear_cache()
 
 
-def _derive(scopes):
-    from fno.agents.role import derive_role_level
-
-    return derive_role_level(scopes)
-
-
-def _refusal(scopes) -> str:
-    from fno.agents.role import RoleScopeError, derive_role_level
-
-    with pytest.raises(RoleScopeError) as exc:
-        derive_role_level(scopes)
-    return str(exc.value)
-
-
-# --- the three rungs ---------------------------------------------------------
-
-
-# --- implementers get no role ----------------------------------------------
-
-
-def test_a_non_epic_node_is_refused_not_stamped_at_a_bottom_rung(territory) -> None:
-    """The old ladder had an IC rung, so any node minted a role. A single task is
-    work, not a territory: nobody terms for a day over it."""
-    msg = _refusal(["n-1"])
-    assert "not an epic" in msg
-    assert "Implementers get no roles" in msg
-    # AC2-HP: the refusal names the exact fix when the node IS meant to be an
-    # epic - one command away, not a dead end.
-    assert "fno backlog update n-1 type=epic" in msg
-
-
-def test_an_unresolvable_scope_is_refused(territory) -> None:
-    """A typo used to fall through to level 0, minting a VP over a scope nobody
-    could find. Refusing is the whole reason derivation returns no default."""
-    assert "neither a configured project nor a backlog node" in _refusal(["banana"])
-
-
-def test_an_empty_scope_is_refused(territory) -> None:
-    assert "needs a scope" in _refusal([])
-
-
-# --- mixed scopes are a mistake about what is being ruled --------------------
-
-
-def test_a_mixed_scope_names_each_scopes_rung(territory) -> None:
-    """The refusal names what each scope IS, so the operator can see the
-    mistake (a project beside an epic) rather than just that one exists."""
-    msg = _refusal(["alpha", "e-1"])
-    assert "rules PROJECTS" in msg
-    assert "alpha (a project)" in msg
-    assert "e-1 (an epic)" in msg
-
-
-# --- rung 2 rules a SET of epics ----------------------------------------------
-#
-# The operator's mux lead oversees two epics at once; before the set grammar
-# that lead had no legal role: two epics was read as a failed portfolio.
-
-
-def test_the_epic_set_is_canonical_order_and_dedup(territory) -> None:
-    """The stored form is the canonical join, so two spellings of one set are
-    one role - the one-live-role guard compares stored scopes."""
-    from fno.agents.role import resolve_role
-
-    assert resolve_role(["e-2", "e-1", "e-2"]) == (2, "e-1,e-2")
-
-
 # --- containment is now real, not an honor system ----------------------------
-
-
-# --- an alias is the same territory, not a second one ------------------------
-#
-# `resolve_project_name` accepts a project's `short_name`, so one project can be
-# spelled two ways. The stored scope must be the CANONICAL name, or the
-# equality-based one-live-role guard sees two territories where there is one.
-
-
-def test_one_project_named_twice_is_not_a_portfolio(territory) -> None:
-    """`-k alpha -k a` is one project spelled two ways. Deduping the raw strings
-    would count two members and mint portfolio authority over a single project."""
-    from fno.agents.role import resolve_role
-
-    assert resolve_role(["alpha", "a"]) == (1, "alpha")
-
-
-def test_a_real_portfolio_still_derives_level_0_through_aliases(territory) -> None:
-    from fno.agents.role import resolve_role
-
-    assert resolve_role(["a", "beta"]) == (0, "alpha,beta")
 
 
 def test_containment_is_checkable_across_the_ladder(territory) -> None:
