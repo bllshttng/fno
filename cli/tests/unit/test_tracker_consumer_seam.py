@@ -83,7 +83,7 @@ def test_metadata_class_guards_external(external_store, contradictory_graph):
     caller keeps its missing-data path - never a stale graph row."""
     from fno.tracker import metadata
 
-    from fno.agents.role import _graph_entry
+    from fno.agents.role import _graph_index
 
     def _active_missions():
         # The fail-safe shape every mission reader keeps: a guarded read that
@@ -99,7 +99,7 @@ def test_metadata_class_guards_external(external_store, contradictory_graph):
         ]
 
     assert _active_missions() == []
-    assert _graph_entry("n-000001") is None
+    assert _graph_index() is None
 
 
 def test_graph_mode_scans_project_from_the_store(tmp_path, monkeypatch):
