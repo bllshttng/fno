@@ -7,6 +7,7 @@
 //! them: `--json`/`-J`, `--root PATH` and the repeatable
 //! `--source LAYER=PATH`. Refusals keep the click wording and exit 2.
 
+use super::context;
 use super::models::{self, RoleRef, WorkOrderRef};
 use super::registry::{self, Discovered, DiscoveryInputError};
 use super::resolver::{self, Resolution, Unchecked};
@@ -52,6 +53,23 @@ Options:
   --snapshot TEXT      Expected input snapshot revision.
   -J, --json           Emit stable structured JSON.
   --help               Show this message and exit.
+";
+
+const CONTEXT_HELP: &str = "Usage: fno agents roles context [OPTIONS]
+
+  Emit honest ContextReference observations for configured artifacts.
+
+  Reads the generic ``[context.artifacts]`` map and produces one observation
+  per entry: a real sha256 and byte size for a readable file, or
+  ``readable=false`` with a naming reason for an unreadable one. Composes with
+  ``resolve``: ``fno agents roles resolve --snapshot <rev> --context <(fno
+  agents roles context --json --snapshot <rev>) ...``.
+
+Options:
+  --snapshot TEXT  Alignment revision stamped on every reference (pass to
+                   `resolve --snapshot`).
+  -J, --json       Emit a stable JSON array (pipes into `resolve --context`).
+  --help           Show this message and exit.
 ";
 
 #[derive(Default)]
@@ -143,6 +161,7 @@ pub fn run(args: &[String]) -> i32 {
         Some("ls") => ls(options, tail),
         Some("show") => show(options, tail),
         Some("resolve") => resolve(options, tail),
+        Some("context") => context(options, tail),
         Some(other) => usage_error(
             GROUP,
             "[OPTIONS] COMMAND [ARGS]...",
@@ -629,4 +648,109 @@ fn resolve(mut options: GroupOptions, tail: &[String]) -> i32 {
         Resolution::Blocked(_) => 1,
         Resolution::Resolved(_) => 0,
     }
+}
+
+/// Emit one honest `ContextReference` per configured artifact, stamped
+/// with `--snapshot` or the catalog's own revision.
+fn context(mut options: GroupOptions, tail: &[String]) -> i32 {
+    let command = format!("{GROUP} context");
+    let mut snapshot: Option<String> = None;
+    let mut extras: Vec<&str> = Vec::new();
+    let mut options_done = false;
+    let mut i = 0;
+    while i < tail.len() {
+        let arg = tail[i].as_str();
+        i += 1;
+        if options_done || !arg.starts_with('-') || arg == "-" {
+            extras.push(arg);
+            continue;
+        }
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_string())),
+            _ => (arg, None),
+        };
+        match flag {
+            "--" => options_done = true,
+            "--json" | "-J" => options.json = true,
+            "--help" => {
+                print!("{CONTEXT_HELP}");
+                return 0;
+            }
+            "--snapshot" => {
+                let value = match inline {
+                    Some(value) => value,
+                    None => match tail.get(i) {
+                        Some(value) => {
+                            i += 1;
+                            value.clone()
+                        }
+                        None => {
+                            return usage_error(
+                                &command,
+                                "[OPTIONS]",
+                                "Option '--snapshot' requires an argument.",
+                            )
+                        }
+                    },
+                };
+                snapshot = Some(value);
+            }
+            _ => return usage_error(&command, "[OPTIONS]", &format!("No such option: {arg}")),
+        }
+    }
+    if !extras.is_empty() {
+        let plural = if extras.len() > 1 { "s" } else { "" };
+        return usage_error(
+            &command,
+            "[OPTIONS]",
+            &format!(
+                "Got unexpected extra argument{plural} ({})",
+                extras.join(" ")
+            ),
+        );
+    }
+    let root = context::repo_root();
+    let artifacts = match context::configured_artifacts(&root) {
+        Ok(artifacts) => artifacts,
+        Err(message) => {
+            eprintln!("{command}: invalid config: {message}");
+            return 1;
+        }
+    };
+    let revision = snapshot
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| context::catalog_revision(&artifacts));
+    let references = context::build_catalog(&artifacts, &revision, &root);
+    if options.json {
+        let rows: Vec<Value> = references
+            .iter()
+            .map(models::ContextReference::to_json)
+            .collect();
+        let sorted = crate::backlog::decisions_cli::sort_keys(&Value::Array(rows));
+        println!("{}", python_json(&sorted));
+        return 0;
+    }
+    if references.is_empty() {
+        println!(
+            "no artifacts configured ([context.artifacts] in .fno/config.toml); revision={revision}"
+        );
+        return 0;
+    }
+    for reference in &references {
+        let state = if reference.readable {
+            let digest = reference
+                .content_digest
+                .as_deref()
+                .map_or("(none)", |d| &d[..12]);
+            format!("ok digest={digest}")
+        } else {
+            let reason = reference.unavailable_reason.as_deref().unwrap_or_default();
+            format!("unreadable: {reason}")
+        };
+        println!(
+            "{} sensitivity={} bytes={} {state} revision={revision}",
+            reference.identifier, reference.sensitivity, reference.byte_size
+        );
+    }
+    0
 }

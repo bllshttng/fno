@@ -1,0 +1,3 @@
+zeta sensitivity=public bytes=22 ok digest=22957c33c4c8 revision=context:087e04fbec543a11
+absent sensitivity=internal bytes=0 unreadable: <FIXTURE>/repo/docs/missing.md: FileNotFoundError revision=context:087e04fbec543a11
+folder sensitivity=restricted bytes=0 unreadable: <FIXTURE>/repo/docs: IsADirectoryError revision=context:087e04fbec543a11
