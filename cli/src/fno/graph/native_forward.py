@@ -1,9 +1,9 @@
-"""The route the wheel keeps for verbs whose bodies moved to the Rust
-dispatcher: forward the whole argv to `fno-agents backlog <verb>`.
+"""The route the wheel keeps for commands whose bodies moved to the Rust
+dispatcher: forward the whole argv to `fno-agents backlog <command>`.
 
 The triage forward carried this shape first; intake and decompose joined
 when their wheel bodies ported. The wheel keeps the route so a front door
-whose `fno` resolves to this wheel still serves the verb, and the
+whose `fno` resolves to this wheel still serves the command, and the
 classification/collapse registries keep describing a live command.
 """
 
@@ -14,11 +14,11 @@ import subprocess
 import typer
 
 
-def _native_forward(verb: str):
+def _native_forward(command: str):
     def _forward(ctx: typer.Context) -> None:
-        """The native door owns the verb; the wheel keeps the route.
+        """The native door owns the command; the wheel keeps the route.
 
-        The whole argv rides `fno-agents backlog <verb>`; its output is
+        The whole argv rides `fno-agents backlog <command>`; its output is
         echoed back through the wheel and its exit code returned. The child
         gets `FNO_STATE_DIR` set to the state root the wheel's own graph
         resolver answers, so both legs read one store even when that root
@@ -31,7 +31,7 @@ def _native_forward(verb: str):
         binary = rust_binary.resolve_binary()
         if binary is None:
             typer.echo(
-                f"Error: `fno backlog {verb}` is served by the native door; "
+                f"Error: `fno backlog {command}` is served by the native door; "
                 "no fno-agents binary found.",
                 err=True,
             )
@@ -39,7 +39,7 @@ def _native_forward(verb: str):
         anchor = paths.graph_json().parent
         state_root = anchor.parent if anchor.name == "db" else anchor
         proc = subprocess.run(
-            [str(binary), "backlog", verb, *ctx.args],
+            [str(binary), "backlog", command, *ctx.args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -54,11 +54,11 @@ def _native_forward(verb: str):
     return _forward
 
 
-def register_native_forward(cli, verb: str, *, hidden: bool = True) -> None:
-    """Register the hidden `<verb>` route on the backlog group."""
+def register_native_forward(cli, command_name: str, *, hidden: bool = True) -> None:
+    """Register the hidden `<command>` route on the backlog group."""
     cli.command(
-        verb,
+        command_name,
         hidden=hidden,
         context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
         add_help_option=False,
-    )(_native_forward(verb))
+    )(_native_forward(command_name))

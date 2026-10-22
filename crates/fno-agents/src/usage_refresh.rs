@@ -5,7 +5,7 @@
 //! with `accounts.quota.observe` on. A machine that dispatched nothing for five
 //! minutes read every account as `unknown(stale)` in `accounts list`, the
 //! Connections modal and the route gate alike. One `fno config accounts usage
-//! --refresh` per beat keeps each reading fresh; the verb owns the probes, the
+//! --refresh` per beat keeps each reading fresh; the command owns the probes, the
 //! attribution proof and the cache write.
 
 use std::path::PathBuf;
@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The verb probes each claude account over the network (a profile call and a
+/// The command probes each claude account over the network (a profile call and a
 /// usage call), so it gets far more room than one beat needs.
-const VERB_TIMEOUT: Duration = Duration::from_secs(90);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The beat for a usage TTL: four fifths of it, so a reading never ages out
 /// between beats, and never under a minute, so a tiny TTL cannot turn the arm
@@ -65,7 +65,7 @@ pub fn maybe_tick(arm: &Arm) {
     let cwd = arm.cwd.clone();
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        let ok = crate::route_capacity::refresh_usage_readings(&cwd, VERB_TIMEOUT).is_some();
+        let ok = crate::route_capacity::refresh_usage_readings(&cwd, COMMAND_TIMEOUT).is_some();
         if failing.swap(!ok, Ordering::SeqCst) != !ok {
             eprintln!(
                 "usage-refresh: {}",

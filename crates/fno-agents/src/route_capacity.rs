@@ -4,7 +4,7 @@
 //! Port of the Python `route_resolve.runtime_capacity` + `runtime_state.headrooms`
 //! (both deleted there, law d-b6cc1a2a): one headroom implementation lives in
 //! `fallback_chain::headroom`, one state-file reader here, and one probe path
-//! through the existing `fno config accounts usage --refresh --json` verb.
+//! through the existing `fno config accounts usage --refresh --json` command.
 //! The refresh is fail-open: a failed probe leaves the readings as they were
 //! and the walk judges on the stale evidence, naming it in the chain.
 
@@ -19,7 +19,7 @@ use crate::fallback_chain::{
 /// The harnesses the Python default named, plus every inventory row's harness.
 pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
 
-/// How long the one refresh subprocess may run: the verb probes every
+/// How long the one refresh subprocess may run: the command probes every
 /// account record, each network probe bounded at 10s, so the walk pays this
 /// at most once per call.
 pub(crate) const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -131,14 +131,14 @@ fn identity_evidence(harness: &str, accounts: &[String], root: &Path) -> Map<Str
     out
 }
 
-/// Run the existing probe verb once and parse its one JSON object. Returns
+/// Run the existing probe command once and parse its one JSON object. Returns
 /// None on spawn failure, timeout, AC4-EDGE, or bad JSON: fail-open, the
 /// readings stay as they were.
 pub(crate) fn refresh_usage_readings(
     cwd: &Path,
     timeout: std::time::Duration,
 ) -> Option<Map<String, Value>> {
-    let stdout = crate::provider_cap_verbs::run_fno_output(
+    let stdout = crate::provider_cap_commands::run_fno_output(
         &["config", "accounts", "usage", "--refresh", "--json"],
         Some(cwd),
         timeout,
@@ -285,7 +285,7 @@ pub(crate) fn capacity(
 }
 
 /// The `{harness: state}` summary the walk answer carries: the one piece the
-/// Python `explain` renderer built, now read straight off the verb's answer.
+/// Python `explain` renderer built, now read straight off the command's answer.
 pub(crate) fn capacity_summary(capacity: &Value) -> Value {
     Value::Object(
         capacity

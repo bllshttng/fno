@@ -8,7 +8,7 @@
 #   T06-T08 - the --run door: the same three at the runner
 #   T09/T10 - argv refusals
 #   T11     - a build-script rustc (CARGO_CFG_* set) never asks
-#   T12/T13 - a binary without the verb is named with its remedy and the
+#   T12/T13 - a binary without the command is named with its remedy and the
 #             event is journaled, at both doors
 #   T17-T19 - the sccache client watcher: a server that runs no compile is
 #             stopped and the compile falls back; the bound spares a running
@@ -126,10 +126,10 @@ STUB
 t04_admission_failure_builds_anyway() {
   local stub_dir out_file err_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  # The wrapper reads the verb's usage once after the failing admit, so the
+  # The wrapper reads the command's usage once after the failing admit, so the
   # stub answers two calls per cargo: a bare call (no --cargo-pid) gets the
-  # usage refusal a binary with the verb prints, keeping T04 on the "error"
-  # line rather than the "verb missing" line.
+  # usage refusal a binary with the command prints, keeping T04 on the "error"
+  # line rather than the "command missing" line.
   cat > "$stub_dir/fno-agents" <<STUB
 #!/usr/bin/env bash
 echo called >> "$stub_dir/calls.txt"
@@ -140,8 +140,8 @@ esac
 exit 2
 STUB
   chmod +x "$stub_dir/fno-agents"
-  # The verb answered, so the journal row carries reason "error", not
-  # "verb_missing" (AC4). A recording fno stub sits on PATH to catch it.
+  # The command answered, so the journal row carries reason "error", not
+  # "command_missing" (AC4). A recording fno stub sits on PATH to catch it.
   fno_calls="$stub_dir/fno-calls.txt"
   cat > "$stub_dir/fno" <<STUB
 #!/usr/bin/env bash
@@ -223,7 +223,7 @@ t07_failed_run_admission_runs_anyway_once_per_cargo() {
   local stub_dir out_file err_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   # Same shape as T04: the bare usage read gets the marker a binary with
-  # the verb prints, so T07 stays the "error" case.
+  # the command prints, so T07 stays the "error" case.
   cat > "$stub_dir/fno-agents" <<STUB
 #!/usr/bin/env bash
 echo called >> "$stub_dir/calls.txt"
@@ -322,7 +322,7 @@ STUB
   rm -rf "$stub_dir"
 }
 
-t12_missing_verb_is_named_and_journaled() {
+t12_missing_command_is_named_and_journaled() {
   local stub_dir out_file err_file rc found
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   cat > "$stub_dir/fno-agents" <<'STUB'
@@ -344,30 +344,30 @@ STUB
   [[ "$rc" -eq 0 ]] || { fail "T12: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
   grep -q "compiling" "$out_file" || { fail "T12: the compile did not run"; rm -rf "$stub_dir"; return; }
   grep -q "has no build-admit" "$err_file" \
-    || { fail "T12: stderr does not name the missing verb: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
+    || { fail "T12: stderr does not name the missing command: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
   grep -q "fno doctor update" "$err_file" \
     || { fail "T12: stderr does not name the remedy: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
   found=0
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     if [[ -s "$fno_calls" ]] \
       && grep -q "doctor event emit build_admission_unavailable" "$fno_calls" \
-      && grep -q '"reason":"verb_missing"' "$fno_calls"; then
+      && grep -q '"reason":"command_missing"' "$fno_calls"; then
       found=1
       break
     fi
     sleep 0.2
   done
   [[ "$found" -eq 1 ]] \
-    || { fail "T12: no build_admission_unavailable event with reason verb_missing: $(cat "$fno_calls" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
+    || { fail "T12: no build_admission_unavailable event with reason command_missing: $(cat "$fno_calls" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
   TMPDIR="$stub_dir" PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" /bin/echo compiling >"$out_file" 2>"$err_file"
   [[ "$(wc -l < "$fno_calls" | tr -d ' ')" == "1" ]] \
     || { fail "T12: a second compile under the same cargo wrote a second event: $(cat "$fno_calls")"; rm -rf "$stub_dir"; return; }
   [[ -s "$err_file" ]] && { fail "T12: the second compile repeated the warning: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
-  pass "T12 a missing verb is named with its remedy and journaled once per cargo"
+  pass "T12 a missing command is named with its remedy and journaled once per cargo"
   rm -rf "$stub_dir"
 }
 
-t13_run_door_missing_verb_is_named() {
+t13_run_door_missing_command_is_named() {
   local stub_dir out_file err_file rc found
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   cat > "$stub_dir/fno-agents" <<'STUB'
@@ -389,19 +389,19 @@ STUB
   [[ "$rc" -eq 0 ]] || { fail "T13: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
   grep -q "running" "$out_file" || { fail "T13: the binary did not run"; rm -rf "$stub_dir"; return; }
   grep -q "has no run-admit" "$err_file" \
-    || { fail "T13: stderr does not name the missing verb: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
+    || { fail "T13: stderr does not name the missing command: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
   found=0
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     if [[ -s "$fno_calls" ]] \
       && grep -q "doctor event emit run_admission_unavailable" "$fno_calls" \
-      && grep -q '"reason":"verb_missing"' "$fno_calls"; then
+      && grep -q '"reason":"command_missing"' "$fno_calls"; then
       found=1
       break
     fi
     sleep 0.2
   done
   [[ "$found" -eq 1 ]] \
-    || { fail "T13: no run_admission_unavailable event with reason verb_missing: $(cat "$fno_calls" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
+    || { fail "T13: no run_admission_unavailable event with reason command_missing: $(cat "$fno_calls" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
   pass "T13 the run door names the missing run-admit and journals the event"
   rm -rf "$stub_dir"
 }
@@ -678,8 +678,8 @@ t08_signalled_run_admission_runs_nothing
 t09_run_without_a_program_refuses
 t10_joined_runner_arrays_run_the_binary_once
 t11_build_script_probe_never_asks
-t12_missing_verb_is_named_and_journaled
-t13_run_door_missing_verb_is_named
+t12_missing_command_is_named_and_journaled
+t13_run_door_missing_command_is_named
 t14_slot_busy_refuses_the_compile
 t15_slot_busy_refuses_the_run
 t16_wrapper_exports_never_stop_idle_timeout

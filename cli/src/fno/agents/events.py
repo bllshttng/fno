@@ -384,7 +384,7 @@ def emit_session_transition(
     _emit_daemon_envelope(kind, data)
 
 
-# The skip kind stays Python-side (the merge verb's cleanup gate owns it);
+# The skip kind stays Python-side (the merge command's cleanup gate owns it);
 # the requested mint is native (crates/fno-agents/src/merge_reap.rs).
 KIND_MERGE_CLEANUP_SKIPPED = "merge_cleanup_skipped"
 

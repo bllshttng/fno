@@ -1,9 +1,9 @@
-"""Unit tests for the `fno agents spawn-guard` verb (x-73cc).
+"""Unit tests for the `fno agents spawn-guard` command (x-73cc).
 
-The verb is the single source of truth for the bg-dispatch mutex shared by
+The command is the single source of truth for the bg-dispatch mutex shared by
 `/target bg` (dispatch-node.sh) and `/agent spawn` (spawn.sh): Guard 1 (the
 node:<id> claim probe, fail-closed) + Guard 2 (the create-only dispatch:<id>
-reservation). The Rust guard decides, so the verb tests need the dev build.
+reservation). The Rust guard decides, so the command tests need the dev build.
 These tests root all claims under a tmp dir so they never touch real
 ~/.fno do state.
 
@@ -243,7 +243,7 @@ def test_direct_node_spawn_failure_releases_shared_reservation(
 
 @pytest.mark.dev_build
 def test_malformed_ttl_fails_closed(claims_tmp):
-    # _parse_ttl raises ValueError on a bad TTL; the verb must fail CLOSED
+    # _parse_ttl raises ValueError on a bad TTL; the command must fail CLOSED
     # (verdict=error, non-zero) rather than trace out, so the caller refuses.
     res = _invoke("x-4444", "--holder", "h", "--ttl", "not-a-ttl", "--json")
     assert res.exit_code != 0

@@ -1,7 +1,7 @@
 """CLI-level tests for the explicit ``--source-node`` origin flag (x-d157).
 
 The unit-level precedence chain lives in ``test_graph_provenance.py``; this file
-covers the verb surface, where the fail-closed contract actually bites: an
+covers the command surface, where the fail-closed contract actually bites: an
 assertion that does not resolve must refuse the command rather than file a node
 that looks organically captured.
 """
@@ -58,7 +58,7 @@ def _by_id(g: Path, node_id: str) -> dict:
 
 
 def test_ac1_hp_explicit_source_node_stamps_the_origin(tmp_graph):
-    """AC1-HP: --source-node on a filing verb stamps exactly that origin."""
+    """AC1-HP: --source-node on a filing command stamps exactly that origin."""
     result = run_native_create(tmp_graph, "idea", "follow-up", "--source-node", "x-aaaa", "--difficulty", "low")
     assert result.exit_code == 0, result.output
     new_id = json.loads(result.stdout)["id"]

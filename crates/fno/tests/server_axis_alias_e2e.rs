@@ -1,4 +1,4 @@
-//! x-f209: the mux server axis is spelled `server`. The verbs with no pure
+//! x-f209: the mux server axis is spelled `server`. The commands with no pure
 //! parser (tab, layout, workspace restore, rows, where, `mux server`,
 //! `serve --web`) accept `--server`, keep `--session` working with exactly
 //! one deprecation line, and the env precedence is flag > FNO_SERVER >
@@ -33,12 +33,12 @@ fn fno_env(scratch: &Scratch, envs: &[(&str, &str)], args: &[&str]) -> std::proc
 }
 
 #[test]
-fn server_axis_verbs_accept_server_and_warn_only_on_session() {
-    // AC1/AC2 on the verbs with no pure parser. Every verb here has no live
+fn server_axis_commands_accept_server_and_warn_only_on_session() {
+    // AC1/AC2 on the commands with no pure parser. Every command here has no live
     // server under its name, so the parse-level proof is: stderr names the
     // server value, never `unknown argument`, and the --session spelling
     // carries exactly one deprecation line while --server carries none.
-    let scratch = Scratch::new("axis-verbs");
+    let scratch = Scratch::new("axis-commands");
 
     // rows (take_common_flags -> run_on_existing_server refuses naming it).
     let out = fno_env(&scratch, &[], &["mux", "rows", "--server", "s-rows"]);
@@ -87,7 +87,7 @@ fn server_axis_verbs_accept_server_and_warn_only_on_session() {
     );
     assert_eq!(count(&err, FLAG_LINE), 1, "one line: {err}");
 
-    // tab ls (per-verb parser).
+    // tab ls (per-command parser).
     let out = fno_env(&scratch, &[], &["mux", "tab", "ls", "--server", "s-tab"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -156,7 +156,7 @@ fn server_axis_verbs_accept_server_and_warn_only_on_session() {
     assert_eq!(count(&err, FLAG_LINE), 0, "no line for --server: {err}");
 }
 
-/// Mint a server for `name` via the public verb, wait for its socket, then
+/// Mint a server for `name` via the public command, wait for its socket, then
 /// kill it. `alias` picks the spelling under test. Returns the child's stderr
 /// (empty when not captured).
 fn mint_and_kill(scratch: &Scratch, name: &str, alias: &str, capture_stderr: bool) -> String {

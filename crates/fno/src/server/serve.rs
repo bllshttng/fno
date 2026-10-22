@@ -509,7 +509,7 @@ pub(super) async fn serve(
                     let conn_stats = accept_stats.clone();
                     // Count from the accept itself, not the task's first poll:
                     // a scheduler-starved newborn task would otherwise leave
-                    // the reaper a mid-verb window with conns_alive == 0.
+                    // the reaper a mid-command window with conns_alive == 0.
                     let alive = ConnAlive::new(&accept_conns);
                     tokio::spawn(async move {
                         let _alive = alive;

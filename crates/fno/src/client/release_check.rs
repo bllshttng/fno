@@ -386,7 +386,7 @@ pub(crate) async fn probe_release() -> ReleaseOutcome {
 }
 
 /// Run the channel's upgrade off the UI loop and return one notice line.
-pub(crate) async fn run_upgrade_verb(channel: Channel) -> String {
+pub(crate) async fn run_upgrade_command(channel: Channel) -> String {
     let argv = channel.upgrade_argv();
     // The probe may have found uv in an install dir off PATH; spawn that one.
     let program = match channel {

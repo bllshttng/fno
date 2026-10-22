@@ -89,7 +89,7 @@ impl HarnessStoreIndex {
                 // CODEX_HOME redirect never reads this reaper into a store
                 // the worker never wrote (an empty wrong-store read would
                 // read as "session gone" - death evidence from an absence).
-                _ => crate::client_verbs::codex_home().map(|h| h.join("sessions")),
+                _ => crate::client_commands::codex_home().map(|h| h.join("sessions")),
             }
         })
     }
@@ -177,7 +177,7 @@ impl HarnessStoreIndex {
                     // them carries conversation is a content question this
                     // existence probe does not need to answer.
                     "claude" => name.starts_with(sid) && name.ends_with(".jsonl"),
-                    _ => crate::client_verbs::codex_rollout_matches(&name, sid),
+                    _ => crate::client_commands::codex_rollout_matches(&name, sid),
                 })
                 .map(|(_, p)| p.clone())
                 .collect(),
@@ -456,7 +456,7 @@ fn claude_store_sessions() -> Result<BTreeMap<String, Vec<PathBuf>>, String> {
 /// The codex rollout store walked once: the thread id embedded in each
 /// `rollout-<stamp>-<uuid>.jsonl` filename under `$CODEX_HOME/sessions`.
 pub(crate) fn codex_store_sessions() -> Result<BTreeMap<String, Vec<PathBuf>>, String> {
-    let root = crate::client_verbs::codex_home()
+    let root = crate::client_commands::codex_home()
         .ok_or_else(|| "no codex home".to_string())?
         .join("sessions");
     codex_store_sessions_from(&root)

@@ -1,6 +1,6 @@
 """`fno carveout update` - correct a carve-out without changing its identity.
 
-The verb exists because the old correction path was `resolve` then `add`, which
+The command exists because the old correction path was `resolve` then `add`, which
 has two defects a test can pin. It minted a new id, so an id already quoted in a
 PR body or a mail became a dead pointer. And it was lossy: two writes, and a
 failure between them left the ledger holding neither row. That happened live.
@@ -128,7 +128,7 @@ def test_a_torn_write_leaves_the_whole_ledger_intact(ledger_root, monkeypatch):
 
 
 def test_no_field_given_is_a_usage_error(ledger_root):
-    """A no-op that prints a success line is the lie this verb exists to stop."""
+    """A no-op that prints a success line is the lie this command exists to stop."""
     cid = _seed(ledger_root)
     res = runner.invoke(app, ["carveout", "update", cid])
     assert res.exit_code == 2

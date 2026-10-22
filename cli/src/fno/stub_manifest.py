@@ -248,7 +248,7 @@ stub_manifest_app = typer.Typer(
 
 @stub_manifest_app.callback()
 def _root() -> None:
-    """Group callback. Keeps `fno do pr stub-manifest <verb>` routing intact even at a
+    """Group callback. Keeps `fno do pr stub-manifest <command>` routing intact even at a
     single subcommand (a lone @command would collapse into the group)."""
 
 
@@ -286,9 +286,9 @@ def cmd_write(
     # manifest exists, fire the reconcile dispatch exactly once. Best-effort and
     # non-fatal: a write must never fail because the (optional) re-fire stumbled.
     try:
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
-        fired = verb_call(["backlog", "advance", "--stdin"], {"op": "fire-pending", "node_id": node, "root": str(root)}, timeout=30)
+        fired = command_call(["backlog", "advance", "--stdin"], {"op": "fire-pending", "node_id": node, "root": str(root)}, timeout=30)
         if fired and fired.get("decision") == "scheduled":
             typer.echo(f"reconcile scheduled for pending sentinel: {node}", err=True)
     except Exception as exc:  # noqa: BLE001 - the manifest write is the contract

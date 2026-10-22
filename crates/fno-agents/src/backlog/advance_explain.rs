@@ -92,7 +92,7 @@ pub(super) fn build(o: &Args) -> Result<Value, String> {
     } else {
         json!({})
     };
-    let probe = crate::spawn_gate_verb::probe_answer(
+    let probe = crate::spawn_gate_command::probe_answer(
         &json!({"mode":"probe","caller_session":crate::claims::resolve_identity().1}),
     );
     let mut gates = Vec::new();
@@ -165,12 +165,12 @@ fn routing(node: Option<&Value>, model: Option<&str>) -> Value {
     let Some(node) = node else {
         return json!({"chain":[],"candidate":null,"inputs":{},"routing":"unarmed","skipped":[]});
     };
-    let verb = crate::backlog_ready::effective_verb(node)
+    let command = crate::backlog_ready::effective_command(node)
         .ok()
         .and_then(|v| v.0)
         .unwrap_or_else(|| "target".into());
-    let verb = super::fields::canonical_verb_key(&verb);
-    let payload = json!({"rung_base":format!("agents.profiles.{verb}"),"node":node,"substrate":null,"permission_mode":null,"constrain_harness":null,"explicit_lane":false,"gate_bypassed":false,"role":if s(node,"plan_path").is_empty(){Some("planning")}else{None},"protected_role":null,"model_occupied":false,"work_verb":verb,"explicit_model_value":model,"explicit_route_value":null,"explicit_vendor_value":null,"capacity_refresh":true});
+    let command = super::fields::canonical_command_key(&command);
+    let payload = json!({"rung_base":format!("agents.profiles.{command}"),"node":node,"substrate":null,"permission_mode":null,"constrain_harness":null,"explicit_lane":false,"gate_bypassed":false,"role":if s(node,"plan_path").is_empty(){Some("planning")}else{None},"protected_role":null,"model_occupied":false,"work_command":command,"explicit_model_value":model,"explicit_route_value":null,"explicit_vendor_value":null,"capacity_refresh":true});
     let answer = crate::route_slot::resolve_slot_payload(&payload);
     let chain = answer["chain"].as_array().cloned().unwrap_or_default();
     json!({"chain":chain,"candidate":answer["candidate"],"inputs":{"difficulty":node["difficulty"],"priority":node["priority"],"role":payload["role"],"plan_path":node["plan_path"],"capacity":answer["meta"]["capacity"]},"routing":answer["verdict"],"skipped":chain.iter().filter(|s|s.as_str().is_some_and(|s|s.starts_with("slot skip "))).collect::<Vec<_>>()})

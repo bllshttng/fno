@@ -29,7 +29,7 @@ def accept_legacy_spawn_permission_mode(data: object) -> object:
         # The retired field defaulted to "bypassPermissions", so an operator
         # who explicitly wrote "" was opting OUT of auto-approval on
         # autonomous dispatch. The surviving field's "" means unset, not
-        # opt-out, so that opt-out is lost here - a verb-seeded spawn with no
+        # opt-out, so that opt-out is lost here - a command-seeded spawn with no
         # other config now resolves the built-in instead. Loud on purpose:
         # this is a real behavior change, not a cosmetic rename.
         defaults_dict["permission_mode"] = legacy_val
@@ -39,7 +39,7 @@ def accept_legacy_spawn_permission_mode(data: object) -> object:
             '"" (the old opt-out from auto-approval on autonomous dispatch); '
             "agents.defaults.permission_mode has no equivalent opt-out - an "
             "unset value there resolves the built-in bypassPermissions for "
-            "any verb-seeded spawn. Set agents.defaults.permission_mode to "
+            "any command-seeded spawn. Set agents.defaults.permission_mode to "
             '"default" to keep normal prompting.',
         )
     else:

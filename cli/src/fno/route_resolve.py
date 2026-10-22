@@ -10,7 +10,7 @@ docs/architecture/role-based-model-routing.md.
 
 The config gather and the inventory fold live in Rust now
 (crates/fno-agents/src/route_gather.rs); this module is the transport: it
-sends the verb the explicit inputs and nothing gathered, so the binary's
+sends the command the explicit inputs and nothing gathered, so the binary's
 answers are the only routing decisions.
 """
 from __future__ import annotations
@@ -68,7 +68,7 @@ class Inventory:
 
 
 def _inventory_from_answer(answer: Mapping[str, Any]) -> Inventory:
-    """The verb's ``mode: "inventory"`` answer as an Inventory: rows in
+    """The command's ``mode: "inventory"`` answer as an Inventory: rows in
     declared order, the objective already validated on the Rust side."""
     rows: dict[str, InventoryRow] = {}
     for row in answer.get("rows") or []:
@@ -107,7 +107,7 @@ def _inventory_from_answer(answer: Mapping[str, Any]) -> Inventory:
 
 def resolve_inventory() -> Inventory:
     """Read the declared inventory from config. Never raises: an unloadable
-    config or a missing verb is an EMPTY inventory, not a dead spawn."""
+    config or a missing command is an EMPTY inventory, not a dead spawn."""
     from fno.route_slot_client import route_slot_call
 
     try:
@@ -116,22 +116,22 @@ def resolve_inventory() -> Inventory:
         return Inventory()
 
 
-#: The verbs fno dispatches, and therefore the slots an operator fills.
+#: The commands fno dispatches, and therefore the slots an operator fills.
 #: PR creation runs inline in the invoking session; it dispatches no slot.
-SLOT_VERBS = ("think", "blueprint", "target", "review", "role")
+SLOT_COMMANDS = ("think", "blueprint", "target", "review", "role")
 
 
-def slot_verbs() -> list[str]:
-    """Every verb the readout should show: the dispatched verbs plus any
-    profile carrying lane configuration (the inventory answer's verbs)."""
+def slot_commands() -> list[str]:
+    """Every command the readout should show: the dispatched commands plus any
+    profile carrying lane configuration (the inventory answer's commands)."""
     from fno.route_slot_client import route_slot_call
 
     try:
         answer = route_slot_call({"mode": "inventory"})
-        verbs = [str(v) for v in answer.get("verbs") or [] if str(v)]
-    except Exception:  # noqa: BLE001 - a read failure shows the known verbs
-        verbs = []
-    return verbs or list(SLOT_VERBS)
+        commands = [str(v) for v in answer.get("verbs") or [] if str(v)]
+    except Exception:  # noqa: BLE001 - a read failure shows the known commands
+        commands = []
+    return commands or list(SLOT_COMMANDS)
 
 
 def _node_payload(node: Optional[Mapping]) -> Optional[dict]:
@@ -148,7 +148,7 @@ def _node_payload(node: Optional[Mapping]) -> Optional[dict]:
 
 
 def resolve_slot(
-    verb: Optional[str],
+    command: Optional[str],
     node: Optional[dict],
     capacity: Optional[Mapping[str, object]],
     *,
@@ -159,7 +159,7 @@ def resolve_slot(
     protected_role: Optional[str] = None,
     model_occupied: bool = False,
     explicit_lane: bool = False,
-    work_verb: Optional[str] = None,
+    work_command: Optional[str] = None,
     explicit_model_value: Optional[str] = None,
     explicit_route_value: Optional[str] = None,
     explicit_vendor_value: Optional[str] = None,
@@ -170,15 +170,15 @@ def resolve_slot(
     Selection is Rust (``fno-agents route-slot``); chain strings come back
     verbatim, and a missing or failing binary is a named refusal. The
     config-derived payload keys (declared rows, the slot table, the policy)
-    are the verb's to gather now: this transport sends the explicit inputs
-    and nothing else. ``work_verb`` is the original dispatch command,
-    audit-only since the derived verb IS the command. The third element is
+    are the command's to gather now: this transport sends the explicit inputs
+    and nothing else. ``work_command`` is the original dispatch command,
+    audit-only since the derived command IS the command. The third element is
     the walk's own verdict word: armed, unarmed, or a hold. Callers that need
-    the structured refusal pass ``meta``; it is filled with the verb's
+    the structured refusal pass ``meta``; it is filled with the command's
     ``refusal_terminal`` object when the answer carries one."""
     import os
 
-    rung_base = f"agents.profiles.{verb}" if verb else "agents.profiles"
+    rung_base = f"agents.profiles.{command}" if command else "agents.profiles"
     gate_bypassed = os.environ.get("FNO_SPAWN_GATE") == "0"
     from fno.route_slot_client import RouteSlotUnavailable, route_slot_call
 
@@ -193,7 +193,7 @@ def resolve_slot(
         "role": role,
         "protected_role": protected_role,
         "model_occupied": model_occupied,
-        "work_verb": work_verb or verb,
+        "work_command": work_command or command,
         "explicit_model_value": explicit_model_value,
         "explicit_route_value": explicit_route_value,
         "explicit_vendor_value": explicit_vendor_value,
@@ -205,8 +205,8 @@ def resolve_slot(
     try:
         out = route_slot_call(payload, timeout=90.0 if capacity_refresh else 30.0)
     except RouteSlotUnavailable as exc:
-        # The transport fault never reaches the verb, so the Python side owns
-        # this one refusal composition: same shape the verb answers with.
+        # The transport fault never reaches the command, so the Python side owns
+        # this one refusal composition: same shape the command answers with.
         text = f"route-slot-unavailable ({exc});"
         if _routing_enforced():
             text += " (strict routing: config routing.enforce_inventory)"
@@ -226,7 +226,7 @@ def resolve_slot(
 
 
 def _routing_enforced() -> bool:
-    """The strict-routing flag through the verb's policy mode; an unreadable
+    """The strict-routing flag through the command's policy mode; an unreadable
     flag reads as off."""
     from fno.route_slot_client import route_slot_call
 
@@ -238,14 +238,14 @@ def _routing_enforced() -> bool:
 
 
 def _answer(out: dict[str, Any], key: str) -> tuple[Any, list[str]]:
-    """The verb's named field plus its chain, lines coerced verbatim."""
+    """The command's named field plus its chain, lines coerced verbatim."""
     return out.get(key), [str(line) for line in (out.get("chain") or [])]
 
 
-def slot_states(verb: str, capacity: Optional[Mapping[str, object]] = None) -> dict[str, Any]:
-    """Readout of one verb's slot: lanes, policy lines, and would_take - the
-    verb's own answer. Display, never selection."""
-    rung_base = f"agents.profiles.{verb}"
+def slot_states(command: str, capacity: Optional[Mapping[str, object]] = None) -> dict[str, Any]:
+    """Readout of one command's slot: lanes, policy lines, and would_take - the
+    command's own answer. Display, never selection."""
+    rung_base = f"agents.profiles.{command}"
     payload: dict[str, Any] = {
         "rung_base": rung_base,
         "node": None,
@@ -255,7 +255,7 @@ def slot_states(verb: str, capacity: Optional[Mapping[str, object]] = None) -> d
         "explicit_lane": False,
         "gate_bypassed": False,
         "model_occupied": False,
-        "work_verb": verb,
+        "work_command": command,
         "mode": "states",
     }
     if capacity is not None:
@@ -265,10 +265,10 @@ def slot_states(verb: str, capacity: Optional[Mapping[str, object]] = None) -> d
         from fno.route_slot_client import route_slot_call
 
         states = route_slot_call(payload)
-    except Exception as exc:  # noqa: BLE001 - a missing verb degrades the readout
+    except Exception as exc:  # noqa: BLE001 - a missing command degrades the readout
         states = {"would_take": f"slot=route-slot-unavailable ({exc})"}
     out: dict[str, Any] = {
-        "verb": verb, "lanes": [], "on_exhausted": "", "would_take": "",
+        "verb": command, "lanes": [], "on_exhausted": "", "would_take": "",
         "routing": "unarmed",
     }
     for key in (
@@ -278,7 +278,7 @@ def slot_states(verb: str, capacity: Optional[Mapping[str, object]] = None) -> d
     ):
         if key in states:
             out[key] = states[key]
-    # The difficulty note is the verb's vocabulary: take it back verbatim.
+    # The difficulty note is the command's vocabulary: take it back verbatim.
     for line in states.get("chain") or []:
         note_prefix = f"slot note {rung_base} "
         if line.startswith(note_prefix):
@@ -302,8 +302,8 @@ def resolve_dispatch_model(
     provider: Optional[str] = None,
 ) -> tuple[Optional[str], str, list[str]]:
     """Apply the full precedence chain; ``(model, decision_source, chain)``.
-    The chain runs in the verb's dispatch_model mode; pins bypass it without
-    a verb round trip - superuser authority outranks routing, and the old
+    The chain runs in the command's dispatch_model mode; pins bypass it without
+    a command round trip - superuser authority outranks routing, and the old
     seam answered a pin in-process."""
     if explicit:
         return explicit, "explicit", ["explicit"]

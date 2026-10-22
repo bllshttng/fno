@@ -94,7 +94,7 @@ def write_cmd(
     worktree: str = typer.Option(..., "--worktree", help="Absolute worktree path"),
     branch: str = typer.Option(..., "--branch", help="git branch"),
     head: str = typer.Option(..., "--head", help="git HEAD sha (the candidate)"),
-    next_verb: str = typer.Option(..., "--next-verb", help="Exactly one next action verb"),
+    next_command: str = typer.Option(..., "--next-command", "--next-verb", help="Exactly one next action command"),  # verb-wording: allow (old flag, one release)
     next_target: Optional[str] = typer.Option(None, "--next-target", help="Next action target (node/task)"),
     completed_tasks: Optional[str] = typer.Option(None, "--completed-tasks", help="Newline-separated completed task ids"),
     remaining_tasks: Optional[str] = typer.Option(None, "--remaining-tasks", help="Newline-separated remaining task ids"),
@@ -131,7 +131,7 @@ def write_cmd(
             worktree=worktree,
             branch=branch,
             head=head,
-            next_verb=next_verb,
+            next_command=next_command,
             next_target=next_target,
             written_at=written_at or _now_utc(),
             completed_tasks=_split_list(completed_tasks),
@@ -255,15 +255,15 @@ def validate_cmd(
 
     # A receipt that carries a binding revalidates it natively BEFORE the
     # authority checks; identity expectations ride only when named. The native
-    # gate verb owns the declared semantics; this door maps refusals to exits.
+    # gate command owns the declared semantics; this door maps refusals to exits.
     context_answer: Optional[dict] = None
     if receipt.task_context is not None:
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         expect = {"node": node, **({"session": session} if session_id else {})}
         try:
-            answer = verb_call("task-context-gate", {"node": node, "root": str(wt), "binding": receipt.task_context, "expect": expect})
-        except VerbUnavailable as exc:
+            answer = command_call("task-context-gate", {"node": node, "root": str(wt), "binding": receipt.task_context, "expect": expect})
+        except CommandUnavailable as exc:
             typer.echo(json.dumps({"ok": False, "reason": "context_native_verifier_unavailable", "error": str(exc)}))
             raise typer.Exit(code=3)
         if not answer.get("ok"):
@@ -312,7 +312,7 @@ def validate_cmd(
         "reason": res.reason,
         "node": node,
         "receipt": str(latest),
-        "next_action": {"verb": receipt.next_action.verb, "target": receipt.next_action.target},
+        "next_action": {"verb": receipt.next_action.command, "target": receipt.next_action.target},
         "idempotency_keys": list(receipt.idempotency_keys),
         "checked": checked,
         "context_checked": context_answer is not None,
@@ -356,11 +356,11 @@ def show_cmd(
     # is verified natively, a corrupt one refuses by name.
     out["task_context_bound"] = receipt.task_context is not None
     if receipt.task_context is not None:
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            shown = verb_call("task-context-show", {"binding": receipt.task_context})
-        except VerbUnavailable as exc:
+            shown = command_call("task-context-show", {"binding": receipt.task_context})
+        except CommandUnavailable as exc:
             typer.echo(json.dumps({"ok": False, "reason": "native_verifier_unavailable", "error": str(exc)}))
             raise typer.Exit(code=3)
         if not shown.get("ok"):

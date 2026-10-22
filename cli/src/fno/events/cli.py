@@ -625,10 +625,10 @@ def emit(
         try:
             import os
 
-            from fno.rust_binary import verb_call
+            from fno.rust_binary import command_call
 
             _data = event.get("data", {})
-            result = verb_call(
+            result = command_call(
                 "publish-review",
                 {
                     "pr_number": None,
@@ -875,7 +875,7 @@ def find(
     from fno.paths import event_journals
 
     session = session_id or session_legacy
-    # KIND-vs---kinds is refused by the native verb itself; relaying keeps
+    # KIND-vs---kinds is refused by the native command itself; relaying keeps
     # the refusal single-sourced. The value parsers stay local: their
     # refusals read better than a spawned-binary error.
     try:

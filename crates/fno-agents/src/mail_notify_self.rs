@@ -1,10 +1,10 @@
-//! Prompt-boundary mail delivery as a native verb:
+//! Prompt-boundary mail delivery as a native command:
 //! `mail-notify-self --bus-dir <bus> --session <sid>`.
 //!
 //! The UserPromptSubmit hook used to shell out to the Python `fno agents
 //! mail notify-self`, whose interpreter start alone outran its hook budget
 //! on a loaded box: every run was cancelled, so nothing ever delivered. The
-//! shell layer is a cheap gate now and this verb owns scan, cursors, dedup,
+//! shell layer is a cheap gate now and this command owns scan, cursors, dedup,
 //! and rendering, dispatched from client.rs before the tokio runtime builds
 //! so a fire answers in microseconds.
 //!

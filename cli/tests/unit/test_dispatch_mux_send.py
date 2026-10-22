@@ -29,7 +29,7 @@ def _entry():
 
 
 def _runner(calls, *, screen="", returncode=0):
-    """A fake ``subprocess.run`` covering the pane verbs this lane issues.
+    """A fake ``subprocess.run`` covering the pane commands this lane issues.
 
     The ``mail-envelope`` render is NOT faked: the renderer lives behind the
     Rust binary, and a fake here would turn the envelope assertions below into
@@ -79,7 +79,7 @@ def _pasted(calls):
     return ""
 
 
-def _verbs(calls):
+def _commands(calls):
     return [
         c["argv"][3] for c in calls if c["argv"][1:3] == ["mux", "pane"] and len(c["argv"]) > 3
     ]
@@ -232,7 +232,7 @@ def test_an_unrunnable_detector_refuses_rather_than_typing_blind(monkeypatch, ca
     _detector(monkeypatch, [], {"matched": False, "error": "manifest-eval unavailable"})
 
     assert dispatch._mux_pane_send(_entry(), "hello", guarded=False) is False
-    assert "send" not in _verbs(calls)
+    assert "send" not in _commands(calls)
     err = capsys.readouterr().err
     assert "manifest-eval unavailable" in err
     assert "refusing to type blind" in err
@@ -258,7 +258,7 @@ def test_a_blocked_pane_with_no_answer_grammar_is_still_refused(monkeypatch, cap
     )
 
     assert dispatch._mux_pane_send(_entry(), "hello", guarded=False) is False
-    assert "send" not in _verbs(calls)
+    assert "send" not in _commands(calls)
     err = capsys.readouterr().err
     assert "auth_wall" in err
     assert "blocking prompt" in err
@@ -286,7 +286,7 @@ def test_a_non_mail_payload_is_verbatim_but_still_gated(monkeypatch, capsys):
     )
 
     assert dispatch._deliver_live(_entry(), "run the ritual", "fno") is False
-    assert "send" not in _verbs(calls), "a blocked pane must receive nothing"
+    assert "send" not in _commands(calls), "a blocked pane must receive nothing"
     assert "auth_wall" in capsys.readouterr().err
 
 

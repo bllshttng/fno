@@ -5,7 +5,7 @@ Run: python3 tests/hooks/test_merge_guard_coverage.py
  or: pytest tests/hooks/test_merge_guard_coverage.py
 
 `_coverage_refusal` consults the merge guard's own coverage predicate through
-the hidden `fno pr coverage-check` verb, so a bare `gh pr merge` that the
+the hidden `fno pr coverage-check` command, so a bare `gh pr merge` that the
 sanctioned guard would refuse cannot pass this hook on the hook's different
 two-factor question. The invariants pinned here are the two that would make
 the veto decorative or dangerous: absence REFUSES (an empty read means
@@ -56,7 +56,7 @@ def test_confirmed_refusal_denies(monkeypatch):
     seen = _patch_run(
         monkeypatch,
         _Proc(3, stderr="coverage uncovered: 0 reviewed (no head-pinned pass "
-                        "attestation - run the review verb at HEAD)\n"),
+                        "attestation - run the review command at HEAD)\n"),
     )
     msg = git_protection._coverage_refusal("gh pr merge 900 --squash")
     assert msg and msg.startswith("coverage uncovered: 0 reviewed")
@@ -122,7 +122,7 @@ def test_dispatch_hold_veto_refuses_bare_merge_with_named_reason(monkeypatch):
     two-factor path can still authorize (prefer_pr=None single-session), so
     the hold veto skipping them let a bare merge proceed against an active
     plan-level hold with the hold check never running. The refusal must name
-    the reason and the sanctioned verb, and must not spend a probe."""
+    the reason and the sanctioned command, and must not spend a probe."""
     calls = _patch_run(monkeypatch, _Proc(0))
     for command in ("gh pr merge", "gh pr merge my-branch", "gh pr merge --squash"):
         msg = git_protection._dispatch_hold_refusal(command)

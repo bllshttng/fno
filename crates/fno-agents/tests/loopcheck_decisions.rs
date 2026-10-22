@@ -236,7 +236,7 @@ fn withdrawn_close_does_not_block() {
 
 /// The journals are a UNION: a question asked and closed in the project
 /// journal is cleared by a decision recorded in the global journal. The
-/// operator verbs write to the canonical root's journal, which a worktree
+/// operator commands write to the canonical root's journal, which a worktree
 /// stop gate reaches only through the union fold.
 #[test]
 fn record_in_a_sibling_journal_clears_the_gate() {

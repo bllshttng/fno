@@ -43,7 +43,7 @@ for surface in "${SURFACES[@]}"; do
   fi
 
   # AC18-HP: a failed filing must never mint a carveout to repair the citation.
-  # Pin the INVOCATION, not the mention - the surviving prose names the verb on
+  # Pin the INVOCATION, not the mention - the surviving prose names the command on
   # purpose so a future editor reads why it is absent rather than restoring it.
   if [[ "$section" == *'$(fno carveout add'* || "$section" == *'$(fno backlog carveout add'* || "$section" == *"CV_ID="* ]]; then
     fail "$label: still mints a synthetic carveout fallback"

@@ -18,7 +18,7 @@ When validation fails:
      source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/checkpoint.sh"
      rollback_checkpoint "${CHECKPOINT_NAME}"
      ```
-4. If 3 or more AND no checkpoint: touch `.fno/.target-cancelled` (cancel sentinel); the loop-check verb will terminate with `Interrupted` on next stop.
+4. If 3 or more AND no checkpoint: touch `.fno/.target-cancelled` (cancel sentinel); the loop-check command will terminate with `Interrupted` on next stop.
 
 **On validation success:** Reset in-session counter. Run checkpoint cleanup:
 
@@ -63,7 +63,7 @@ Options:
 
 - **Option 1:** Reset `consecutive_same_error`, set `tripped: false`, retry with prompt: "Previous approach failed 3 times with: {signature}. Tried: {approaches}. FORBIDDEN: repeating any listed approach. Analyze root cause from scratch."
 - **Option 2:** Mark current task as skipped, move to next task/wave
-- **Option 3:** Touch `.fno/.target-cancelled` (cancel sentinel — the loop-check verb will terminate with `Interrupted` on next stop).
+- **Option 3:** Touch `.fno/.target-cancelled` (cancel sentinel — the loop-check command will terminate with `Interrupted` on next stop).
 - **Option 4:** Reset `consecutive_same_error`. If `trip_count >= 3`, touch `.fno/.target-cancelled` to hand off to the user.
 
 **On any success:** Reset `circuit_breaker.consecutive_same_error` to 0, clear `tripped`, clear `approaches_tried` to `[]`.
@@ -74,7 +74,7 @@ Options:
 
 ## Session termination diagnostics
 
-When it stops the session, the loop-check verb emits a `termination` event to `.fno/events.jsonl` with a `TerminationReason`. Use `fno whoami status` to read the latest termination reason:
+When it stops the session, the loop-check command emits a `termination` event to `.fno/events.jsonl` with a `TerminationReason`. Use `fno whoami status` to read the latest termination reason:
 
 | `TerminationReason` | Cause | Recovery |
 |---|---|---|
@@ -102,7 +102,7 @@ The failure-recovery machinery above is builder-side: `stuck_test` self-aborts o
 
 ### Honor sequence (strictly ordered)
 
-The order is load-bearing: supersede runs **before** cancel so no window exists where the old node is both unclaimed and dispatchable (the dispatcher-stampede class this repo has hit before). Every step is a CLI verb with an exit code - **a failure at any step stops the sequence with the error surfaced; never assume a step succeeded and continue.**
+The order is load-bearing: supersede runs **before** cancel so no window exists where the old node is both unclaimed and dispatchable (the dispatcher-stampede class this repo has hit before). Every step is a CLI command with an exit code - **a failure at any step stops the sequence with the error surfaced; never assume a step succeeded and continue.**
 
 1. **Mint the successor, carrying the lessons.** The lessons block becomes the successor's `details` so the next attempt starts knowing what to avoid:
    ```bash
@@ -117,7 +117,7 @@ The order is load-bearing: supersede runs **before** cancel so no window exists 
    ```bash
    gh pr close <N> --comment "Superseded by <NEW_ID> (reviewer-ordered restart). Lessons are in the details of node <NEW_ID>. Branch preserved."
    ```
-4. **Cancel this session.** The loop-check verb terminates as `Interrupted`, never any `Done` variant:
+4. **Cancel this session.** The loop-check command terminates as `Interrupted`, never any `Done` variant:
    ```bash
    touch .fno/.target-cancelled
    ```

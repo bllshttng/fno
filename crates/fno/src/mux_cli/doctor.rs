@@ -7,7 +7,7 @@ use super::*;
 /// `fno mux doctor`'s squad-store check: count how many persisted squads the
 /// prune predicate would reap. Read-only (load + registry/roster reads, no pane
 /// probe, no mutation). An unreadable registry means the count is unknown, so
-/// the check warns and points at the prune verb (which is fail-safe regardless).
+/// the check warns and points at the prune command (which is fail-safe regardless).
 pub(super) fn squad_store_check() -> Check {
     let loaded = crate::squad_store::load();
     let total = loaded.squads.len();

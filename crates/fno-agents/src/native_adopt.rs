@@ -72,14 +72,14 @@ pub(crate) fn prepare_mint(
         return None;
     }
     // A hand session gets a row only once it joined fno (its first fno skill
-    // or verb), unless `agents.auto_register_sessions` opts every session in.
+    // or command), unless `agents.auto_register_sessions` opts every session in.
     if !native
         && !crate::join_marker::is_joined(home.root(), harness, session_id)
         && !auto_register_sessions(report_cwd)
     {
         return None;
     }
-    let short = crate::client_verbs::derived_short_id(session_id);
+    let short = crate::client_commands::derived_short_id(session_id);
     let origin = if native { "spawn" } else { "operator" };
     // Name precedence: the record's name, then the row the worker lost, then
     // the child's own name, then the draw (transcript title, else t-short).

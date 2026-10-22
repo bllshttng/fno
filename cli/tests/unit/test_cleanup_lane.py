@@ -49,7 +49,7 @@ def _attestations(repo: Path) -> list[dict]:
 
     path = project_log("events.jsonl", project_root=repo)
     # The store commit is the write boundary: the emit's row lives in the
-    # store, and the rows verb folds any pre-store raw lines in on the way.
+    # store, and the rows command folds any pre-store raw lines in on the way.
     committed = native_rows(path, types=["review_attestation"])
     if committed is None:
         return []

@@ -64,11 +64,15 @@ fn body_file(dir: &Path, body: &str) -> PathBuf {
     p
 }
 
-fn run_verb(cwd: &Path, extra: &[&str]) -> (i32, String, String) {
-    run_verb_with_stdin(cwd, extra, None)
+fn run_command(cwd: &Path, extra: &[&str]) -> (i32, String, String) {
+    run_command_with_stdin(cwd, extra, None)
 }
 
-fn run_verb_with_stdin(cwd: &Path, extra: &[&str], stdin: Option<&str>) -> (i32, String, String) {
+fn run_command_with_stdin(
+    cwd: &Path,
+    extra: &[&str],
+    stdin: Option<&str>,
+) -> (i32, String, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
     cmd.envs(fno_agents::test_run::self_owner_env())
         .args(["pr-body-check"])
@@ -109,7 +113,7 @@ fn every_guard_passes_exit_0() {
         write_guard(&work, name, PASS_STUB);
     }
     let body = body_file(&work, "clean body\n\nBacklog-Closure: x-3830\n");
-    let (code, out, err) = run_verb(
+    let (code, out, err) = run_command(
         &work,
         &[
             "--body-file",
@@ -132,7 +136,7 @@ fn a_failing_guard_carries_its_own_output_and_exits_1() {
     write_guard(&work, "check-pr-node-closure.sh", PASS_STUB);
     write_guard(&work, "check-oos-tracked.sh", FAIL_STUB);
     let body = body_file(&work, "body\n");
-    let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
+    let (code, out, err) = run_command(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(out.contains("fail check-oos-tracked.sh"), "{out}");
     assert!(out.contains("pass check-pr-node-closure.sh"), "{out}");
@@ -151,7 +155,7 @@ fn all_guards_run_even_after_a_failure() {
     write_guard(&work, "check-pr-node-closure.sh", FAIL_STUB);
     write_guard(&work, "check-oos-tracked.sh", FAIL_STUB);
     let body = body_file(&work, "body\n");
-    let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
+    let (code, out, err) = run_command(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(out.contains("fail check-pr-node-closure.sh"), "{out}");
     assert!(out.contains("fail check-oos-tracked.sh"), "{out}");
@@ -163,7 +167,7 @@ fn a_repo_with_no_guards_skips_every_guard() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
     let body = body_file(&work, "body\n");
-    let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
+    let (code, out, err) = run_command(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert_eq!(out.matches("skip check-").count(), 2, "{out}");
     assert!(out.contains("1 ran, 0 failed"), "{out}");
@@ -173,7 +177,7 @@ fn a_repo_with_no_guards_skips_every_guard() {
 fn a_missing_body_file_names_the_path_and_exits_2() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
-    let (code, out, err) = run_verb(&work, &["--body-file", "/nonexistent/b.md"]);
+    let (code, out, err) = run_command(&work, &["--body-file", "/nonexistent/b.md"]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(err.contains("/nonexistent/b.md"), "{err}");
 }
@@ -192,7 +196,7 @@ fn an_unresolvable_merge_base_is_a_read_error_naming_the_fetch() {
     git(&work, &["add", "-A"]);
     git(&work, &["commit", "-m", "init"]);
     let body = body_file(&work, "body\n");
-    let (code, out, err) = run_verb(&work, &["--body-file", body.to_str().unwrap()]);
+    let (code, out, err) = run_command(&work, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(err.contains("git fetch origin main"), "{err}");
 }
@@ -213,7 +217,7 @@ fn every_guard_gets_the_same_env_contract() {
     );
     write_guard(&work, "check-oos-tracked.sh", PASS_STUB);
     let body = body_file(&work, "the body text\n");
-    let (code, out, err) = run_verb(
+    let (code, out, err) = run_command(
         &work,
         &[
             "--body-file",
@@ -243,7 +247,7 @@ fn dash_reads_the_body_from_stdin() {
     let work = init_repo_with_origin(tmp.path());
     write_guard(&work, "check-pr-node-closure.sh", PASS_STUB);
     write_guard(&work, "check-oos-tracked.sh", PASS_STUB);
-    let (code, out, err) = run_verb_with_stdin(
+    let (code, out, err) = run_command_with_stdin(
         &work,
         &["--body-file", "-", "--head", "feature/x-3830"],
         Some("stdin body\n"),
@@ -258,7 +262,7 @@ fn not_a_git_repo_is_a_read_error() {
     let plain = tmp.path().join("plain");
     std::fs::create_dir_all(&plain).unwrap();
     let body = body_file(&plain, "body\n");
-    let (code, out, err) = run_verb(&plain, &["--body-file", body.to_str().unwrap()]);
+    let (code, out, err) = run_command(&plain, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(err.contains("not a git repository"), "{err}");
 }
@@ -267,7 +271,7 @@ fn not_a_git_repo_is_a_read_error() {
 fn a_missing_body_file_flag_is_a_usage_error() {
     let tmp = tempfile::tempdir().unwrap();
     let work = init_repo_with_origin(tmp.path());
-    let (code, out, err) = run_verb(&work, &[]);
+    let (code, out, err) = run_command(&work, &[]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(err.contains("--body-file is required"), "{err}");
 }
@@ -288,7 +292,7 @@ fn seed_fno_home(tmp: &Path) -> PathBuf {
     home
 }
 
-fn run_verb_with_fno_home(cwd: &Path, fno_home: &Path, extra: &[&str]) -> (i32, String, String) {
+fn run_command_with_fno_home(cwd: &Path, fno_home: &Path, extra: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .envs(fno_agents::test_run::self_owner_env())
         .env("FNO_HOME", fno_home)
@@ -312,7 +316,7 @@ fn a_body_citing_an_unknown_ruling_id_fails_ruling_citations() {
     let home = seed_fno_home(tmp.path());
     let body = body_file(&work, "per d-deadbeef we ruled\n");
     let (code, out, err) =
-        run_verb_with_fno_home(&work, &home, &["--body-file", body.to_str().unwrap()]);
+        run_command_with_fno_home(&work, &home, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(out.contains("fail ruling-citations"), "{out}");
     assert!(out.contains("d-deadbeef"), "{out}");
@@ -326,7 +330,7 @@ fn a_body_citing_a_live_ruling_id_passes_ruling_citations() {
     let home = seed_fno_home(tmp.path());
     let body = body_file(&work, "per d-aaaa0001 we ruled\n");
     let (code, out, err) =
-        run_verb_with_fno_home(&work, &home, &["--body-file", body.to_str().unwrap()]);
+        run_command_with_fno_home(&work, &home, &["--body-file", body.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("pass ruling-citations"), "{out}");
 }

@@ -1,6 +1,6 @@
 """Tests for `fno backlog task` - the native claim-gated task grain.
 
-The verb answers from the binary (the claim IS the transition), so these
+The command answers from the binary (the claim IS the transition), so these
 exec it over a fixture store with the plan file the node binds to; they
 skip where this checkout has no dev build.
 """

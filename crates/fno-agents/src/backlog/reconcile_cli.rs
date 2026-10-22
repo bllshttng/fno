@@ -42,7 +42,7 @@ use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
 const USAGE: &str = "usage: fno-agents backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo]";
 
 /// The door owns the help now: the Python parser that rendered the option
-/// surface is deleted with its verb. The epilog's reopen pointer survives
+/// surface is deleted with its command. The epilog's reopen pointer survives
 /// verbatim.
 const HELP: &str = "\
 fno-agents backlog reconcile
@@ -51,7 +51,7 @@ Close open backlog nodes whose PR has merged outside the ship gate.
 The completion ritual (stamp plan -> mark node done -> capture follow-ups)
 runs automatically only through /target's ship gate or
 scripts/lib/pr-merge.sh. A PR merged any other way (manual GitHub merge,
-bare gh pr merge) leaves the node open. This verb detects that drift and
+bare gh pr merge) leaves the node open. This command detects that drift and
 closes it mechanically: mark done, best-effort stamp the plan, and drop a
 retro sentinel so a later session captures follow-ups. It never
 auto-creates inbox lines or backlog nodes, never auto-resumes work, and
@@ -72,10 +72,10 @@ Options:
   --repo OWNER/REPO  owner/repo scoping --pr-number's gh query and cross-repo claim check. Resolved from the checkout's origin remote when omitted.
   -h, --help       Show this message and exit.
 
-Paired verb: `fno backlog reopen <id> --reason ...` reverses a close this
+Paired command: `fno backlog reopen <id> --reason ...` reverses a close this
 made. It refuses on a merged PR, which is what closed the node here, so an
 intentional correction of an auto-close needs --force. Correction is
-reopen, a verb the native binary serves after the python leg retired.
+reopen, a command the native binary serves after the python leg retired.
 ";
 
 struct Args {
@@ -1179,8 +1179,8 @@ fn promise_gate_leg(
             gated.push(record.clone());
         } else {
             // The FULL refusal rides the row: the notice router puts the
-            // reason and the remedy verb in the question body, so a lead
-            // reads why the node held without re-running the verb.
+            // reason and the remedy command in the question body, so a lead
+            // reads why the node held without re-running the command.
             let reason = verdict.reason.unwrap_or_default();
             let outcome = match verdict.outcome {
                 PromiseOutcome::Unmet => "promise_unmet",
@@ -1194,7 +1194,7 @@ fn promise_gate_leg(
 
 /// The held-open roll, split by WHY the node stayed open.
 fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
-    let verb = if dry_run { "Holding" } else { "Held" };
+    let command = if dry_run { "Holding" } else { "Held" };
     let headlines = [
         ("promise_unmet", "merged PR, unmet plan promise"),
         (
@@ -1220,7 +1220,10 @@ fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
             .find(|(k, _)| k == outcome)
             .map(|(_, v)| *v)
             .unwrap_or(outcome);
-        lines.push(format!("{verb} {} node(s) open ({headline}):", rows.len()));
+        lines.push(format!(
+            "{command} {} node(s) open ({headline}):",
+            rows.len()
+        ));
         for (nid, reason, _) in rows {
             // The roll stays a summary: the first line of the refusal.
             // The full text rides the --json rows for the notice router.
@@ -1361,7 +1364,7 @@ fn close_provenance(entry: &mut Value, _record: &MergeDriftRecord) {
 }
 
 /// A merge the journal never saw is labelled `merged_outside_fno` so a
-/// later reader can tell an fno-verb merge from a github.com or
+/// later reader can tell an fno-command merge from a github.com or
 /// foreign-machine one. Called after the graph close published, so a
 /// retried publish finds its own earlier row through `has_record`.
 fn emit_outside_merge_label(record: &MergeDriftRecord) {
@@ -1902,7 +1905,7 @@ fn revert_leg(
 /// Canonical-sync catch-up: reconcile auto-fires on SessionStart, so when
 /// the pr-watch daemon is dead the next interactive session catches the
 /// canonical up instead of the outage waiting for a human. Native: the
-/// Python shim was one verb_call over this same crate's catchup sweep.
+/// Python shim was one command_call over this same crate's catchup sweep.
 /// --dry-run skips (a preview mutates nothing); a failure never fails the
 /// sweep.
 fn sync_catchup_leg(dry_run: bool, json_out: bool) -> Value {
@@ -1939,14 +1942,14 @@ fn sync_catchup_leg(dry_run: bool, json_out: bool) -> Value {
 /// and printed nothing, so no dead claim was ever archived. Best-effort like
 /// sync_catchup: a reap error never fails the sweep.
 fn claim_reap_leg(dry_run: bool, json_out: bool) -> Value {
-    let summary = crate::claim_verbs::reap_roots(Vec::new(), !dry_run, None, CLAIM_REAP_BUDGET);
+    let summary = crate::claim_commands::reap_roots(Vec::new(), !dry_run, None, CLAIM_REAP_BUDGET);
     if !json_out {
         let count = summary[if dry_run { "would_reap" } else { "reaped" }]
             .as_u64()
             .unwrap_or(0);
         if count > 0 {
-            let verb = if dry_run { "would archive" } else { "archived" };
-            eprintln!("claim reap: {verb} {count} dead claim(s)");
+            let command = if dry_run { "would archive" } else { "archived" };
+            eprintln!("claim reap: {command} {count} dead claim(s)");
         }
         let deferred = summary["deferred"].as_u64().unwrap_or(0);
         if deferred > 0 {
@@ -2643,13 +2646,13 @@ fn human_lines(
         }
     }
     if !outcomes.reverted.is_empty() {
-        let verb = if args.dry_run {
+        let command = if args.dry_run {
             "Would stamp"
         } else {
             "Stamped"
         };
         out.push(format!(
-            "{verb} {} node(s) reverted:",
+            "{command} {} node(s) reverted:",
             outcomes.reverted.len()
         ));
         for rev in &outcomes.reverted {
@@ -2683,7 +2686,7 @@ fn human_lines(
 /// One line per batch. Bare lead is the past tense whose line start groom
 /// parses (`^re-parented N stranded child`); "Would " previews instead.
 fn reparent_receipt_line(pairs: &[(String, Option<String>)], lead: &str) -> String {
-    let verb = if lead.is_empty() {
+    let command = if lead.is_empty() {
         "re-parented"
     } else {
         "re-parent"
@@ -2693,7 +2696,7 @@ fn reparent_receipt_line(pairs: &[(String, Option<String>)], lead: &str) -> Stri
         .map(|(cid, p)| format!("{cid} -> {}", p.clone().unwrap_or_else(|| "(none)".into())))
         .collect();
     format!(
-        "{lead}{verb} {} stranded child(ren) under terminal parents: {}",
+        "{lead}{command} {} stranded child(ren) under terminal parents: {}",
         pairs.len(),
         listed.join(", ")
     )

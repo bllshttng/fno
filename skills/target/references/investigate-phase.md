@@ -26,4 +26,4 @@ The plan is the record. A later reader sees what was measured and why the route 
 
 ## Red CI mid-run
 
-When CI goes red after the PR opens, run the repair loop in [fix-loop.md](fix-loop.md). It makes one fix per iteration and reverts on regression. It names the root cause before any defensive check. `/fix` stays a standalone verb for a known break. `/target` carries the same loop, so a target run never hands off to it.
+When CI goes red after the PR opens, run the repair loop in [fix-loop.md](fix-loop.md). It makes one fix per iteration and reverts on regression. It names the root cause before any defensive check. `/fix` stays a standalone command for a known break. `/target` carries the same loop, so a target run never hands off to it.

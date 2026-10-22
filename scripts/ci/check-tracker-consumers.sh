@@ -3,7 +3,7 @@
 #
 # Runs both census modalities plus the self-test. Every direct read_graph
 # consumer (Python) and every direct graph.json open (Rust, production
-# sources) must attribute to a named class; every backlog verb must carry
+# sources) must attribute to a named class; every backlog command must carry
 # exactly one classification marker; the self-test must prove the detectors
 # detect before this gate reports clean. Real exit codes throughout - the
 # caller must not pipe this into a truncating command.
@@ -21,7 +21,7 @@ PY=(uv run --project "$ROOT/cli" python3)
     echo "check-tracker-consumers: self-test did not pass" >&2
     exit 1
 }
-"${PY[@]}" "$TOOL" --verbs >/dev/null
+"${PY[@]}" "$TOOL" --commands >/dev/null
 "${PY[@]}" "$TOOL" --reads >/dev/null
 
 # Writer ratchet: only the publish path (graph/store.py) and the archive
@@ -40,4 +40,4 @@ if [[ -n "$offenders" ]]; then
     exit 1
 fi
 
-echo "check-tracker-consumers: OK - verbs classified, reads attributed, self-test green"
+echo "check-tracker-consumers: OK - commands classified, reads attributed, self-test green"

@@ -47,7 +47,7 @@ Every Task tool prompt MUST contain:
 - Prompt contains "based on your findings" or "as described in"
 - Prompt says "fix the bug" without specifying which bug, where, or how
 - Prompt references a task number without restating the task content
-- Prompt uses "implement" as a verb without specifying what to write
+- Prompt uses "implement" as a command without specifying what to write
 
 ## Anti-Delegation Rules (ENFORCED)
 

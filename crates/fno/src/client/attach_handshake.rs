@@ -101,7 +101,7 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                 }
                 view.frames.insert(pane_id, frame);
             }
-            // Info answers a pre-Attach Query; the v4 control-verb replies
+            // Info answers a pre-Attach Query; the v4 control-command replies
             // answer one-shot `fno mux pane` connections. Neither belongs on
             // an attached connection - ignore rather than desync.
             Ok(
@@ -125,7 +125,7 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                 // PeekBody answers a post-attach PeekAgent: impossible
                 // in the preamble, ignore rather than desync.
                 | ServerMsg::PeekBody { .. }
-                // (v41) Script-layout control-verb replies: only ever sent on a
+                // (v41) Script-layout control-command replies: only ever sent on a
                 // one-shot control connection, never to an attached client.
                 | ServerMsg::TabList { .. }
                 | ServerMsg::LayoutTree { .. }
@@ -136,7 +136,7 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                 | ServerMsg::LayoutGrafted { .. }
                 | ServerMsg::TabLocation { .. }
                 | ServerMsg::TabClosed { .. }
-                // (v60/v71/v75/v78) one-shot control-verb replies: never
+                // (v60/v71/v75/v78) one-shot control-command replies: never
                 // attached-client traffic.
                 | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                 | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }

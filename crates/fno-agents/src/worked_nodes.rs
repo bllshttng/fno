@@ -11,7 +11,7 @@
 //! One JSON reply on stdout:
 //!   {"worked": {"<node-id>": ["<label>", ...]}}
 //!
-//! The gate this verb owns (the role ruling on the dispatch false refusal):
+//! The gate this command owns (the role ruling on the dispatch false refusal):
 //!   - a promoted lead row is never a node worker (registry `role_level`);
 //!   - a seat record alone is a witness: a seated session joins its node
 //!     only when the row's own attribution names the node or the session
@@ -220,7 +220,7 @@ fn join_worked(
 }
 
 fn promoted_names(registry_path: &PathBuf) -> Result<HashSet<String>, String> {
-    let entries = crate::client_verbs::load_registry_entries(registry_path)?;
+    let entries = crate::client_commands::load_registry_entries(registry_path)?;
     Ok(entries
         .iter()
         .filter(|e| e.get("role_level").map(|v| !v.is_null()).unwrap_or(false))

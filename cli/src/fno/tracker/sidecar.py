@@ -286,7 +286,7 @@ def _save_to_file(sidecar: Sidecar) -> Path:
 
     fields = json.loads(sidecar.model_dump_json(exclude_unset=True))
     fields.pop("id", None)
-    out = rust_binary.verb_call(["backlog", "get"], {"tracker": "sidecar-set", "id": sidecar.id, "path": str(sidecar_path(sidecar.id)), "fields": fields}, TrackerError)
+    out = rust_binary.command_call(["backlog", "get"], {"tracker": "sidecar-set", "id": sidecar.id, "path": str(sidecar_path(sidecar.id)), "fields": fields}, TrackerError)
     if out.get("error"):
         raise TrackerError(out["error"])
     return Path(out["saved"])

@@ -7,11 +7,11 @@ The PUBLIC surface reaches the cloud lane through ``fno agents spawn -H claude
      cloud session id the CLI minted (``session_...``), and the registry row
      carries ``substrate=cloud``, ``harness=claude`` and that id as the
      canonical ``harness_session_id``;
-  2. one mail follow-up lands: the mail-inject verb resolves the cloud row,
+  2. one mail follow-up lands: the mail-inject command resolves the cloud row,
      renders the contract's follow-up argv, and the claude CLI answers
      ``Sent to cloud session.`` with exit 0 - the measured delivery answer;
   3. the teleport pre-check refuses a dirty tree by name (the stash
-     sentence) before any exec, exercised against the real attach verb;
+     sentence) before any exec, exercised against the real attach command;
   4. cleanup removes the registry row without any local stop.
 
 The reply itself never returns on stdout (the CLI enqueues and exits), and

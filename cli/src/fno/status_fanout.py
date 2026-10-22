@@ -904,14 +904,14 @@ def tick_cmd(
                        + ", ".join(result.undeliverable_sinks))
         else:
             typer.echo("status-fanout: no enabled sinks (no-op)")
-    verb = "would-send" if dry_run else "dispatched"
+    command = "would-send" if dry_run else "dispatched"
     for sr in result.sinks:
         if not (dry_run or sr.matched or sr.dropped or sr.short_circuited):
             continue
         sent = sr.matched if dry_run else sr.dispatched
         extra = " short-circuited" if sr.short_circuited else ""
         typer.echo(
-            f"status-fanout: {sr.name} matched={sr.matched} {verb}={sent} "
+            f"status-fanout: {sr.name} matched={sr.matched} {command}={sent} "
             f"dropped={sr.dropped}{extra}"
         )
     if result.skipped_lines:

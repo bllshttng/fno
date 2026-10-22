@@ -3,7 +3,7 @@
 use super::*;
 
 /// The commit-status context the merge ruleset requires. One const for
-/// both emitter call sites and the standalone verb arm; the Python publisher
+/// both emitter call sites and the standalone command arm; the Python publisher
 /// and refresher workflow pin the same name from their own surfaces, and a
 /// context string that splits in two is a green marker on nothing.
 pub(super) const COVERAGE_STATUS_CONTEXT: &str = "fno/review-coverage";
@@ -12,7 +12,7 @@ pub(super) const COVERAGE_UNAVAILABLE_STATUS_CONTEXT: &str = "fno/review-coverag
 
 pub(super) fn coverage_unavailable_description(head: &str) -> String {
     format!(
-        "coverage read unavailable at {}; retry the review verb",
+        "coverage read unavailable at {}; retry the review command",
         short_sha(head)
     )
 }
@@ -67,7 +67,7 @@ pub(super) fn bounded_success_text(result: Result<BoundedOutput, GhReadError>) -
 /// Whether the PR carries the `coverage-override` label. The label is durable
 /// shared state: EVERY writer of the coverage status re-reads it before
 /// posting, so a green stamped by the gate workflow's labeled arm survives a
-/// later stop-hook or verb fire instead of being clobbered red. `None` means
+/// later stop-hook or command fire instead of being clobbered red. `None` means
 /// all three reads failed; the caller then checks the current marker
 /// description before deciding whether an override green needs protection.
 pub(super) fn pr_has_override_label(gh_bin: &str, cwd: &Path, pr_number: i64) -> Option<bool> {
@@ -308,18 +308,18 @@ pub(super) fn post_coverage_status(
 #[allow(clippy::too_many_arguments)]
 /// The `failure` status description for an uncovered head.
 ///
-/// NEVER names a harness-specific verb, and the rule is the whole reason this
+/// NEVER names a harness-specific command, and the rule is the whole reason this
 /// is a named function rather than an inline format. This description is ONE
 /// string on a shared GitHub commit status: written once by whichever harness
 /// happened to publish it, then read by every harness, every CI runner, and
-/// every human on the PR page. Embedding the publisher's own verb hands a
+/// every human on the PR page. Embedding the publisher's own command hands a
 /// claude `/code-review ...` to a codex worker, which has no such command -
 /// measured, not theoretical. The harness-neutral command named here resolves
-/// the right verb LOCALLY, on whatever harness runs it, which is the only
+/// the right command LOCALLY, on whatever harness runs it, which is the only
 /// place that resolution is correct.
 ///
 /// The worker's own held reason (`coverage_receipt_line`) still names the
-/// sized verb, and rightly: that text is read in the session that produced
+/// sized command, and rightly: that text is read in the session that produced
 /// it, on that session's harness. Shared artifact, neutral; local text,
 /// sized. That is the line.
 ///
@@ -407,7 +407,7 @@ pub(super) fn publish_coverage_status(
             );
             // The diagnostic mirrors the override arm, not the
             // possibly-Unknown computed read: a waived review must not wear
-            // "retry the review verb" beside its override success, and the
+            // "retry the review command" beside its override success, and the
             // two writers of one context must post the same state.
             post_coverage_status(
                 gh_bin,
@@ -490,7 +490,7 @@ pub(super) fn publish_coverage_status(
             &description,
         );
         // The diagnostic mirrors the waiver, not the computed read: a waived
-        // review must not wear "retry the review verb" beside its waiver
+        // review must not wear "retry the review command" beside its waiver
         // success, same as the override arm above.
         post_coverage_status(
             gh_bin,

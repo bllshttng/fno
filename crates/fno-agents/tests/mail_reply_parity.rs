@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.mail.cli.cmd_reply
 //!
-//! Characterization harness for the `mail reply` wrapped-verb port.
+//! Characterization harness for the `mail reply` wrapped-command port.
 //! The goldens were captured from the Python leg (cmd_reply) before its body
 //! was deleted, through tests/capture/mail_reply_capture.py; the frozen bytes
 //! are the contract now that the front routes every reply to this leaf. The
@@ -37,7 +37,7 @@ const DROP_PREFIXES: [&str; 6] = [
     "  obsidian enabled:",
     "  sentinel:",
     // The escalation stderr advisory names whether the OS notifier displayed,
-    // a property of the host, not of the verb. The receipt is the contract.
+    // a property of the host, not of the command. The receipt is the contract.
     "escalated to human (",
 ];
 

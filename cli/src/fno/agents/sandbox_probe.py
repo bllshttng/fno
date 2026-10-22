@@ -30,13 +30,13 @@ def probe_codex_sandbox(cwd: Path, *, mode: str | None = None) -> SandboxProbe:
     An unavailable owner answers ``unknown`` with the reason, never a guessed
     ``reachable``: an unjudged spawn launches with a named caveat, a blocked
     one refuses at exit 85."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        answer = verb_call(
-            "sandbox-probe", {"cwd": str(cwd), "mode": mode}, VerbUnavailable
+        answer = command_call(
+            "sandbox-probe", {"cwd": str(cwd), "mode": mode}, CommandUnavailable
         )
-    except VerbUnavailable as exc:
+    except CommandUnavailable as exc:
         return SandboxProbe("unknown", note=f"sandbox probe owner unavailable: {exc}")
     blocked = [(str(b[0]), str(b[1])) for b in answer.get("blocked") or [] if isinstance(b, (list, tuple)) and len(b) >= 2]
     note = str(answer.get("note") or "")

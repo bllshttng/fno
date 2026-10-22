@@ -4,8 +4,8 @@
 //! about a pane-hosted row. A pane row's ONE live ref is the mux pane
 //! (state.rs invariant: mux XOR worker-socket identity XOR bg thread), and
 //! `stop` reaches no pane. Answering it with a success would report work this
-//! verb did not perform over a live pane - the zombie shape. Refuse and name
-//! the working verb with the row's own ref, in handle_rm's refusal voice.
+//! command did not perform over a live pane - the zombie shape. Refuse and name
+//! the working command with the row's own ref, in handle_rm's refusal voice.
 //! Keys on the row's mux ref, never the harness, so it covers claude, codex,
 //! opencode, and agy pane rows in one branch.
 //!

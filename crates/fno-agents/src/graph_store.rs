@@ -588,7 +588,7 @@ pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
 
 /// The shared archive read both archive consumers ask for: the
 /// reaper's graph read (`gc_sweep::read_graph_rows`) and the backlog get
-/// verb's archived tier (`backlog::get_cli`). The migrated `db/` spelling
+/// command's archived tier (`backlog::get_cli`). The migrated `db/` spelling
 /// of the SQLite archive first, then the legacy top-level JSON; every read
 /// is advisory - a missing or unparsable file contributes nothing, so a
 /// broken archive can never blind a consumer to the working graph.

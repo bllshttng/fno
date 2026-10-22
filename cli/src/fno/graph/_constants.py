@@ -377,7 +377,7 @@ DEFERRED_KINDS: tuple[str, ...] = (
 # Exact-string table: reason -> kind. Footnote-stamped strings ONLY (the
 # maintain drain at its default threshold, and the stale-quarantine guard
 # from maintain.STALE_QUARANTINE_REASON). Operator-specific prose rides the
-# backfill verb's --map file instead, never this table. Matching is exact,
+# backfill command's --map file instead, never this table. Matching is exact,
 # byte for byte: no strip, no lowercase, no substring, no regex.
 DEFERRED_KIND_BY_REASON: dict[str, str] = {
     "stale >30d, drained by maintain": "expired",
@@ -392,9 +392,9 @@ def classify_deferred_reason(
 
     Pure lookup: the reason is never normalized, so a near-miss (a different
     staleness threshold, a trailing space) stays honestly unknown rather than
-    silently classifying as expired. ``extra_map`` (the backfill verb's --map)
+    silently classifying as expired. ``extra_map`` (the backfill command's --map)
     merges over the code defaults and is validated for kind membership at
-    load time by the verb, not here.
+    load time by the command, not here.
     """
     if not isinstance(reason, str):
         return None
@@ -443,7 +443,7 @@ def write_canonical_difficulty(
 
     The ONE canonical-write shape : the drain must ride the write,
     because leaving ``model_tier`` behind manufactures a both-spellings row
-    the migration refuses batch-wide, with no verb left that can remove the
+    the migration refuses batch-wide, with no command left that can remove the
     key (its flag is a tombstone). ``history_on``: ``"change"`` (update - a
     manual revision that keeps the band is a no-op) or ``"always"`` (claim -
     the filed-versus-revised delta counts confirmations too).

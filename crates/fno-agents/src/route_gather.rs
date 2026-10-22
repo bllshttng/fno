@@ -1,4 +1,4 @@
-//! The config gather behind the route-slot verb, ported from Python
+//! The config gather behind the route-slot command, ported from Python
 //! `fno.route_resolve` (`_slot_payload` and the inventory fold it called).
 //! [`fill`] adds each config-derived payload key the caller left out; an
 //! explicit key wins untouched, the rule `vendor_maps` follows, so the
@@ -10,7 +10,7 @@ use std::path::Path;
 
 const MODEL_TIERS_TABLE: &str = include_str!("model_tiers.toml");
 
-const SLOT_VERBS: [&str; 5] = ["think", "blueprint", "target", "review", "role"];
+const SLOT_COMMANDS: [&str; 5] = ["think", "blueprint", "target", "review", "role"];
 const OBJECTIVES: [&str; 3] = ["cheapest-that-clears", "best-available", "prefer-harness"];
 /// A band's minimum coding percentile; a tier is a MINIMUM, so a model
 /// clears it at the floor or above.
@@ -49,9 +49,9 @@ fn toml_str_trim(v: Option<&toml::Value>) -> String {
     toml_str(v).trim().to_string()
 }
 
-/// The verb a payload's `rung_base` names: `agents.profiles.target` ->
-/// `target`; the bare `agents.profiles` names no verb.
-fn rung_verb(rung_base: &str) -> Option<String> {
+/// The command a payload's `rung_base` names: `agents.profiles.target` ->
+/// `target`; the bare `agents.profiles` names no command.
+fn rung_command(rung_base: &str) -> Option<String> {
     rung_base
         .strip_prefix("agents.profiles.")
         .filter(|v| !v.is_empty())
@@ -95,7 +95,7 @@ fn declared_rows(cwd: &Path) -> Value {
 }
 
 /// The `{"on_exhausted", "on_low", "on_unknown", "by_difficulty"}` view of
-/// one profile (or the empty-fields answer when the verb declares none).
+/// one profile (or the empty-fields answer when the command declares none).
 fn profile_fields(table: Option<&toml::Table>) -> Value {
     let mut out = Map::new();
     for key in ["on_exhausted", "on_low", "on_unknown"] {
@@ -115,7 +115,7 @@ fn profile_fields(table: Option<&toml::Table>) -> Value {
 }
 
 /// One lanes_raw entry: the lane rides VERBATIM (a string stays a string; a
-/// table converts as-is). The padded vocabulary view is `slot_by_verb`'s
+/// table converts as-is). The padded vocabulary view is `slot_by_command`'s
 /// business, never the walk's input. The climb's accept line reads the same
 /// raw shape, so one mapper feeds both.
 pub(crate) fn lanes_raw_entry(table: &toml::Value) -> Value {
@@ -125,12 +125,12 @@ pub(crate) fn lanes_raw_entry(table: &toml::Value) -> Value {
     }
 }
 
-/// `(profile_fields, lanes_raw)` for the payload's verb: the profile's own
-/// lanes list, or `null` when the verb declares no profile at all (the shape
+/// `(profile_fields, lanes_raw)` for the payload's command: the profile's own
+/// lanes list, or `null` when the command declares no profile at all (the shape
 /// the slot lookup's None arm builds).
-fn slot_entry(cwd: &Path, verb: Option<&str>) -> (Value, Value) {
-    let table =
-        verb.and_then(|v| crate::agents_config::config_value_deep(cwd, &["agents", "profiles", v]));
+fn slot_entry(cwd: &Path, command: Option<&str>) -> (Value, Value) {
+    let table = command
+        .and_then(|v| crate::agents_config::config_value_deep(cwd, &["agents", "profiles", v]));
     match table.as_ref().and_then(toml::Value::as_table) {
         None => (profile_fields(None), Value::Null),
         Some(t) => {
@@ -144,26 +144,26 @@ fn slot_entry(cwd: &Path, verb: Option<&str>) -> (Value, Value) {
     }
 }
 
-/// Every verb slot_verbs reports, as JSON: the walk's strict-policy branch
-/// picks the EFFECTIVE work kind's slot from this table. A verb with no
+/// Every command slot_commands reports, as JSON: the walk's strict-policy branch
+/// picks the EFFECTIVE work kind's slot from this table. A command with no
 /// profile still gets a row (empty fields and `null` lanes), so a
 /// configured profile the table omitted can never strict-refuse while its
 /// lanes sat in config.
 fn slot_profiles_table(cwd: &Path) -> Value {
     let mut out = Map::new();
-    let mut verbs: Vec<String> = SLOT_VERBS.iter().map(|s| s.to_string()).collect();
+    let mut commands: Vec<String> = SLOT_COMMANDS.iter().map(|s| s.to_string()).collect();
     if let Some(profiles) = crate::agents_config::config_value_deep(cwd, &["agents", "profiles"])
         .as_ref()
         .and_then(toml::Value::as_table)
     {
         for key in profiles.keys() {
-            if !verbs.iter().any(|v| v == key) {
-                verbs.push(key.clone());
+            if !commands.iter().any(|v| v == key) {
+                commands.push(key.clone());
             }
         }
     }
-    // A verb with no profile gets the empty row too (the doc comment's arm).
-    for key in &verbs {
+    // A command with no profile gets the empty row too (the doc comment's arm).
+    for key in &commands {
         let (profile, lanes) = slot_entry(cwd, Some(key));
         out.insert(
             key.clone(),
@@ -535,12 +535,12 @@ pub fn fill(payload: &Value, cwd: &Path) -> Value {
         let rows = declared_rows(cwd);
         obj.insert("declared_rows".into(), rows);
     }
-    let verb = obj
+    let command = obj
         .get("rung_base")
         .and_then(Value::as_str)
-        .and_then(rung_verb);
+        .and_then(rung_command);
     if !obj.contains_key("lanes_raw") || !obj.contains_key("profile") {
-        let (profile, lanes) = slot_entry(cwd, verb.as_deref());
+        let (profile, lanes) = slot_entry(cwd, command.as_deref());
         if !obj.contains_key("profile") {
             obj.insert("profile".into(), profile);
         }
@@ -560,9 +560,9 @@ pub fn fill(payload: &Value, cwd: &Path) -> Value {
         let inv = inventory(cwd);
         obj.insert("inventory".into(), inv);
     }
-    if !obj.contains_key("slot_by_verb") {
+    if !obj.contains_key("slot_by_command") {
         let table = slot_profiles_table(cwd);
-        obj.insert("slot_by_verb".into(), table);
+        obj.insert("slot_by_command".into(), table);
     }
     // The three lookup tables read the FILLED payload's own universe:
     // gathered or explicit, the caller's answer is authoritative either way.
@@ -682,7 +682,7 @@ fn dedup_first_seen(items: &[String]) -> Vec<String> {
 
 /// The three gather modes, answered here and dispatched in
 /// `run_route_slot_capture` before the walk. `inventory` returns the fold
-/// plus the slot verbs; `policy` the strict-routing flags; `dispatch_model`
+/// plus the slot commands; `policy` the strict-routing flags; `dispatch_model`
 /// the precedence chain Python's `resolve_dispatch_model` ran.
 pub fn run_mode(payload: &Value, cwd: &Path) -> Value {
     match payload.get("mode").and_then(Value::as_str).unwrap_or("") {
@@ -693,7 +693,7 @@ pub fn run_mode(payload: &Value, cwd: &Path) -> Value {
                 "objective": inv["objective"],
                 "prefer_harness": inv["prefer_harness"],
                 "rows": inv["rows"],
-                "verbs": slot_verbs_list(cwd),
+                "verbs": slot_commands_list(cwd),
             })
         }
         "policy" => policy(cwd),
@@ -805,8 +805,8 @@ pub(crate) fn lane_for_axes(provider: &str, model: &str, cwd: &Path) -> Option<V
     }
 }
 
-fn slot_verbs_list(cwd: &Path) -> Vec<Value> {
-    let mut verbs: Vec<Value> = SLOT_VERBS.iter().map(|v| json!(v)).collect();
+fn slot_commands_list(cwd: &Path) -> Vec<Value> {
+    let mut commands: Vec<Value> = SLOT_COMMANDS.iter().map(|v| json!(v)).collect();
     if let Some(profiles) = crate::agents_config::config_value_deep(cwd, &["agents", "profiles"])
         .as_ref()
         .and_then(toml::Value::as_table)
@@ -816,12 +816,12 @@ fn slot_verbs_list(cwd: &Path) -> Vec<Value> {
             if key.is_empty() {
                 continue;
             }
-            if !verbs.iter().any(|v| v.as_str() == Some(key)) {
-                verbs.push(json!(key));
+            if !commands.iter().any(|v| v.as_str() == Some(key)) {
+                commands.push(json!(key));
             }
         }
     }
-    verbs
+    commands
 }
 
 /// The precedence Python's `resolve_dispatch_model` ran: explicit, task pin,

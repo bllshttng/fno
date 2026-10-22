@@ -77,7 +77,7 @@ fi
 if [[ "$1" == "backlog" && "$2" == "get" ]]; then
   exec python3 "$MOCK_ABI_GET" "${@:2}"
 fi
-# The owned-identity verb: a test that pins the refusal wording controls the
+# The owned-identity command: a test that pins the refusal wording controls the
 # KEY=value answer here (empty by default, which reads as the stale-fno
 # fail-open path).
 if [[ "$1" == "do" && "$2" == "target" && "$3" == "resolve-owned-identity" ]]; then
@@ -137,7 +137,7 @@ def main() -> int:
     if node is None:
         return 1
     value = node.get(field) if field else node
-    # The verb's text output prints scalars bare (ab-deadbeef, True, 123);
+    # The command's text output prints scalars bare (ab-deadbeef, True, 123);
     # only containers ride the JSON spelling.
     if isinstance(value, (str, bool, int, float)) or value is None:
         print(value)
@@ -219,7 +219,7 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     # The state-path stub owns FNO_AGENTS_BIN, and the ported claim leaf
     # resolves that env FIRST, so the front's claim delegation would exec the
     # stub and inherit its silent no-binary exit 1 (a smoke runner keeps no
-    # fno-agents on PATH). The stub's own contract answers this: other verbs
+    # fno-agents on PATH). The stub's own contract answers this: other commands
     # delegate to the next real fno-agents on PATH, so give the walk one.
     env["PATH"] = f"{bindir}:{native.parent}:{env['PATH']}"
     return repo, home, log, env

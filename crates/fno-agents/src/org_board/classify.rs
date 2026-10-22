@@ -323,7 +323,7 @@ pub(crate) fn roster_verdict(
 /// lead manifest, and
 /// the session holding that manifest is the one building, so a scope hit is a
 /// live team. The epic carries no claim of its own (a team is not a claim),
-/// so without this state the leading epic reads "none" and no verb can clear
+/// so without this state the leading epic reads "none" and no command can clear
 /// the row. A PR bound to the epic keeps it reading none - undriven_pr owns
 /// that shape, and a PR needs a driver of its own. In-scope leaves stay
 /// claim-driven: a dead worker under a team is still a dead handoff.

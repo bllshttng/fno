@@ -1,5 +1,5 @@
 """The CPU probe the Rust gate reads: its time budget, its knobs, and the
-console-script entry that must answer byte for byte like the verb.
+console-script entry that must answer byte for byte like the command.
 """
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def test_non_finite_never_disarms_a_machine_guard():
 
 
 class TestCauseMainProbeEntry:
-    """AC1-HP: the console script IS the verb, byte for byte.
+    """AC1-HP: the console script IS the command, byte for byte.
 
     The Rust gate reads the probe's stdout and exit code; if the narrow entry
     point ever answered differently from `fno-py doctor footprint --json
@@ -126,19 +126,19 @@ class TestCauseMainProbeEntry:
                 code = ei.value.code
             return capsys.readouterr().out, code
 
-        verb_out, verb_code = invoke(
+        command_out, command_code = invoke(
             lambda: doctor_footprint.footprint_command(json_output=True, cause_only=True)
         )
         probe_out, probe_code = invoke(doctor_footprint.cause_main)
-        return (verb_out, verb_code), (probe_out, probe_code)
+        return (command_out, command_code), (probe_out, probe_code)
 
     def test_gapped_reading_parity_admits_on_the_upper_bound(self, monkeypatch, capsys):
         """x-7783 LD3: a gap no longer forces exit 4. Both transports answer
         identically with the interval carried and the exit 0."""
-        (verb, verb_code), (probe, probe_code) = self._run_both(
+        (command, command_code), (probe, probe_code) = self._run_both(
             monkeypatch, capsys, gap="21 unmapped bg-socket rows"
         )
-        assert (probe, probe_code) == (verb, verb_code)
+        assert (probe, probe_code) == (command, command_code)
         assert probe_code == 0
         payload = json.loads(probe)
         assert payload["exit_code"] == 0
@@ -146,10 +146,10 @@ class TestCauseMainProbeEntry:
         assert payload["attribution_gap"] == "21 unmapped bg-socket rows"
 
     def test_failed_reading_names_the_error_and_exits_4(self, monkeypatch, capsys):
-        (verb, verb_code), (probe, probe_code) = self._run_both(
+        (command, command_code), (probe, probe_code) = self._run_both(
             monkeypatch, capsys, error="footprint unavailable: ps failed"
         )
-        assert (probe, probe_code) == (verb, verb_code)
+        assert (probe, probe_code) == (command, command_code)
         assert probe_code == 4
         assert json.loads(probe) == {
             "error": "footprint unavailable: ps failed",

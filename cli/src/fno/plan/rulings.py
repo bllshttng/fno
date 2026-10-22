@@ -3,7 +3,7 @@
 A plan can rule another node's proposal out, and the ruling used to stay
 where the planner wrote it, in plan frontmatter - invisible to every reader
 the ruled-out node consults. :func:`plan_rulings` is the one scan; the
-decisions verb, the think inspect receipt, and the reversal verbs all call it
+decisions command, the think inspect receipt, and the reversal commands all call it
 rather than re-walking the plans directory.
 """
 
@@ -106,7 +106,7 @@ def ruling_lines(
     """The lines a reader prints for one node's plan rulings.
 
     ``style="reversal"`` is the one-line shape undefer and unsupersede emit
-    on stderr; ``style="recall"`` is the two-line block the decisions verb
+    on stderr; ``style="recall"`` is the two-line block the decisions command
     prints before its index answer. One formatter, so the surfaces cannot
     drift over the same ruling.
     """

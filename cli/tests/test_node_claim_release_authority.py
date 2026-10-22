@@ -50,7 +50,7 @@ SCAN_DIRS = ["cli/src/fno", "scripts", "skills", "hooks", "crates"]
 # single-authority release at a sanctioned lifecycle boundary).
 ALLOWLIST = {
     # `fno backlog unclaim`/`release`/`requeue`: the sanctioned one-shot un-claim
-    # and queue-return verbs. Their lockfile release is holder-verified - it
+    # and queue-return commands. Their lockfile release is holder-verified - it
     # drops the lock ONLY when the holder is stale (PID dead / TTL expired) or
     # matches the invoking session, and REFUSES a live foreign holder (warn +
     # point at force-release). Single authority at an explicit operator
@@ -101,7 +101,7 @@ ALLOWLIST = {
     # initiative.
     "crates/fno-agents/src/backlog/update_cli.rs",
     # crates/fno-agents/src/backlog/cutover.rs run_unclaim: the unclaim
-    # verb's native release ladder (the wheel leg retired with
+    # command's native release ladder (the wheel leg retired with
     # lifecycle.py). Holder-verified on the same contract as requeue.py:
     # a stale lock releases, a live holder releases only when it matches
     # the invoking session, and a live foreign holder survives with its
@@ -232,7 +232,7 @@ def _rust_node_release_lines(text: str) -> list[int]:
         if '"node:' in key or key in node_vars:
             hits.append(scrubbed.count("\n", 0, m.start()) + 1)
     # The direct form: `release(claim_key, ...)` — the same key check, so the
-    # claims::release front the session verbs call is as visible as the
+    # claims::release front the session commands call is as visible as the
     # literal-argument spelling above.
     for m in _RS_DIRECT_RELEASE.finditer(scrubbed):
         key = m.group(1).strip().lstrip("&").strip()

@@ -1,6 +1,6 @@
 //! `fno config paths emit-shell` and `shell-stub`: generate paths.sh natively.
 //!
-//! One verb per PR (law d-450caaeb): this file serves `emit-shell` and
+//! One command per PR (law d-450caaeb): this file serves `emit-shell` and
 //! and `handoff`; only `verify` still answers in Python
 //! (cli/src/fno/paths_cli.py) until its child node ports. The defaults
 //! emitter reproduces the checked-in scripts/lib/paths.sh byte for byte;
@@ -460,7 +460,7 @@ fn glob_check(field: &str, raw: &str) -> Result<(), String> {
 
 /// One config value, format-agnostic like the Python loader: `$FNO_CONFIG`
 /// may pin a legacy YAML file the Python loader parses by suffix, and the
-/// smoke suite pins exactly that shape for this verb, so the emitter reads
+/// smoke suite pins exactly that shape for this command, so the emitter reads
 /// both formats where the TOML-only getters read one.
 fn live_lookup(cwd: &Path, keys: &[&str]) -> Option<Result<toml::Value, ()>> {
     if let Some(explicit) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
@@ -861,7 +861,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Worker lane entry for `--paths-exec <verb> [args...]`.
+/// Worker lane entry for `--paths-exec <command> [args...]`.
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("emit-shell") => run_emit_shell(&args[1..]),
@@ -897,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn run_refuses_unknown_verb() {
+    fn run_refuses_unknown_command() {
         assert_eq!(run(&["bogus".to_string()]), 2);
     }
 

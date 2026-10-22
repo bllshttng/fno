@@ -2,7 +2,7 @@
 
 The registry lives in the graph database. ``registry.json`` is a migration
 fence, never a file to parse, so every Python read and write goes through the
-native ``registry-commit`` verb.
+native ``registry-commit`` command.
 """
 
 from __future__ import annotations
@@ -25,10 +25,10 @@ def read_registry_document(path: Optional[Path] = None) -> tuple[dict[str, Any],
 
     target = Path(path) if path is not None else Path(paths.agents_registry_path())
     try:
-        answer = rust_binary.verb_call(
+        answer = rust_binary.command_call(
             "registry-commit", {"path": str(target.absolute()), "op": "read"}
         )
-    except rust_binary.VerbUnavailable as exc:
+    except rust_binary.CommandUnavailable as exc:
         raise RegistryDoorError(f"registry read refused {target}: {exc}") from exc
     document = answer.get("document")
     revision = answer.get("revision")
@@ -54,11 +54,11 @@ def commit_registry_document(
     from fno import rust_binary
 
     try:
-        answer = rust_binary.verb_call(
+        answer = rust_binary.command_call(
             "registry-commit",
             {**payload, "path": str(Path(path).absolute()), "revision": revision},
         )
-    except rust_binary.VerbUnavailable as exc:
+    except rust_binary.CommandUnavailable as exc:
         # a revision_conflict refusal or a busy-lock timeout rides the stderr
         if "revision_conflict" in str(exc) or "stayed busy past" in str(exc):
             raise RegistryRevisionConflict(

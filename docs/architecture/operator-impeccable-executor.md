@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Operator-managed `/impeccable` executor
 
 This document covers the per-task executor mechanism that operator gained on

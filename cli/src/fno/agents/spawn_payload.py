@@ -33,11 +33,11 @@ def prepare_spawn_payload(message: str) -> tuple[str, dict]:
     payload = enrich_spawn_payload(message)
     measures: dict = {"task_context": False, "payload_bytes": len(payload.encode("utf-8"))}
     if TASK_CONTEXT_TAG not in payload:
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            block = verb_call("task-context-payload", {}).get("block")
-        except VerbUnavailable:
+            block = command_call("task-context-payload", {}).get("block")
+        except CommandUnavailable:
             block = None
         if block:
             payload = f"{payload}\n\n{block}"

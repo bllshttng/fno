@@ -12,7 +12,7 @@
 /// shape (diff pane, portal) must never be misreported as whatever
 /// auto-reflow would have picked.
 fn r_layout() -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["mux", "layout", "get", "--json"])?;
+    let (_, out, err) = fno_command(&["mux", "layout", "get", "--json"])?;
     if out.trim().is_empty() {
         return Err(format!("layout unavailable: {}", stderr_cause(&err)));
     }

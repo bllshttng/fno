@@ -88,8 +88,8 @@ STUB
 
 count_lines_matching() {
     # The store commit is the write boundary: count committed rows via the
-    # rows verb, never the raw file (the loop_check events leave no bytes).
-    # The verb prints one JSON array line, so count MATCHES, not lines.
+    # rows command, never the raw file (the loop_check events leave no bytes).
+    # The command prints one JSON array line, so count MATCHES, not lines.
     local pattern="$1" file="$2" rows
     rows="$("$CLI_BIN" doctor event rows --events "$file" 2>/dev/null || true)"
     printf '%s' "$rows" | grep -o "$pattern" 2>/dev/null | wc -l | tr -d '[:space:]'

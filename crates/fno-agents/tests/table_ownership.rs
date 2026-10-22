@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const WRITE_VERBS: &[&str] = &[
+const WRITE_COMMANDS: &[&str] = &[
     // "insert or replace into" must be tried before "insert into".
     "insert or replace into",
     "replace into",
@@ -23,26 +23,26 @@ fn word_boundary_chars(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// True when the lowercased line writes to `table`: some write verb is
+/// True when the lowercased line writes to `table`: some write command is
 /// followed by whitespace and the table as a whole word.
 fn contains_write(table: &str, line_lower: &str) -> bool {
-    for verb in WRITE_VERBS {
+    for command in WRITE_COMMANDS {
         let mut search_from = 0;
-        while let Some(hit) = line_lower[search_from..].find(verb) {
-            let verb_start = search_from + hit;
-            let verb_end = verb_start + verb.len();
-            search_from = verb_end;
-            // A verb glued to earlier word characters is someone else's word
+        while let Some(hit) = line_lower[search_from..].find(command) {
+            let command_start = search_from + hit;
+            let command_end = command_start + command.len();
+            search_from = command_end;
+            // A command glued to earlier word characters is someone else's word
             // ("reupdate", "updated_at").
-            if verb_start > 0
-                && line_lower[..verb_start]
+            if command_start > 0
+                && line_lower[..command_start]
                     .chars()
                     .next_back()
                     .map_or(false, word_boundary_chars)
             {
                 continue;
             }
-            let token: String = line_lower[verb_end..]
+            let token: String = line_lower[command_end..]
                 .chars()
                 .skip_while(|c: &char| c.is_whitespace())
                 .take_while(|c| word_boundary_chars(*c))

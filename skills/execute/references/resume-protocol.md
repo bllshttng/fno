@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Resume Execution Protocol
 
 Two resume layers compose: the lightweight STATE.md wave/task trail (below) and

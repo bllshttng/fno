@@ -2,7 +2,7 @@
 
 Every test injects a temp ``journal`` path so nothing touches the real
 machine-global ``~/.fno/events.jsonl``. The fold is exercised both through the
-recording verb (real append + re-read) and directly with hand-written events.
+recording command (real append + re-read) and directly with hand-written events.
 """
 from __future__ import annotations
 

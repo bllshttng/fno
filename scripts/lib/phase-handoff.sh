@@ -14,7 +14,7 @@
 PH_MAX_CHARS=2000
 
 # Resolve artifact directory (worktree-local, beside the manifest). Falls back
-# to the legacy checkout path when fno predates the verb.
+# to the legacy checkout path when fno predates the command.
 _ph_dir() {
   local d
   d=$(fno-agents state path target-state 2>/dev/null | xargs dirname 2>/dev/null || true)

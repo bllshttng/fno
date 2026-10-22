@@ -30,7 +30,7 @@ Never hand-rolls graph writes - goes through locked_mutate_graph for safety.
 Registered under `fno backlog done` : the plain node-id close is
 graph.cli's cmd_done; this command owns the rich completion surface
 (--backfill rollups, PR/link/note metadata, fuzzy and branch queries) and is
-reached through cmd_done's delegation and the `fno done` VERB_MOVES shim.
+reached through cmd_done's delegation and the `fno done` COMMAND_MOVES shim.
 """
 
 from __future__ import annotations
@@ -912,11 +912,11 @@ def done_command(
     tag_bits.extend(rollup_tags)
     typer.echo(f"fno backlog done: {node_id} -> done  " + "  ".join(tag_bits))
 
-    # Superuser-authority matrix (LD3/LD29): the top-level `fno done` verb is an
+    # Superuser-authority matrix (LD3/LD29): the top-level `fno done` command is an
     # allowed action during a drive window, but audit-tag it so the trail
     # attributes the completion to the operator rather than the LLM. Mirrors
-    # `graph/cli.py::cmd_done` exactly so both done verbs emit the identical
-    # event kind, source, and envelope -- the audit trail must not fork by verb.
+    # `graph/cli.py::cmd_done` exactly so both done commands emit the identical
+    # event kind, source, and envelope -- the audit trail must not fork by command.
     # Reached only on a fresh completion: the collision path returns above and
     # `--backfill` returns before the normal flow, so no guard on
     # `collision_state["detected"]` is needed here. Best-effort: a write failure

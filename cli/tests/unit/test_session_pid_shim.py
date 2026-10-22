@@ -1,4 +1,4 @@
-"""The session_pid shim over the native `claim session-pid` verb.
+"""The session_pid shim over the native `claim session-pid` command.
 
 The walk itself is Rust (`spawn_context::session_identity_from_table`), so
 these tests pin the shim's contract only: one cached exec per from_pid (AC6),

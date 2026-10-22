@@ -37,11 +37,11 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
-  # Mirror the real Rust client: the verb refuses while the anti-recursion
+  # Mirror the real Rust client: the command refuses while the anti-recursion
   # pin is set (a leaked FNO_AGENTS_RUNTIME=python). The hook must
   # strip the pin before the read.
   if [ -n "${FNO_AGENTS_RUNTIME:-}" ]; then
-    echo "no Python implementation -- this verb runs only on the 'fno-agents' Rust runtime" >&2
+    echo "no Python implementation -- this command runs only on the 'fno-agents' Rust runtime" >&2
     exit 127
   fi
   cat "$LEAD_REG_FIXTURE"
@@ -53,9 +53,9 @@ elif [ "$1" = "agents" ] && [ "$2" = "org" ] && [ "$3" = "faq" ] && [ "$4" = "li
 elif [ "$1" = "config" ] && [ "$2" = "paths" ] && [ "$3" = "handoff" ]; then
   cat "$LEAD_HANDOFF_PATH_FIXTURE" 2>/dev/null || true
 elif [ "$1" = "backlog" ] && [ "$2" = "get" ]; then
-  # Batch node read: the fixture answers with the real verb's shape (a JSON
+  # Batch node read: the fixture answers with the real command's shape (a JSON
   # array, misses as {"id":...,"error":"not found"}). Absent fixture = the
-  # verb itself failing (empty stdout, nonzero exit).
+  # command itself failing (empty stdout, nonzero exit).
   if [ -n "$LEAD_BACKLOG_FIXTURE" ] && [ -f "$LEAD_BACKLOG_FIXTURE" ]; then
     cat "$LEAD_BACKLOG_FIXTURE"
   else
@@ -345,7 +345,7 @@ printf '%s' "$OUT" | grep -q "abcd-1234" \
   || pass "uuid masked before id extraction"
 
 # 8c. An error row from the batch read is unresolved, never resolved: the
-#     verb reports the miss as data and the hook relays it as a correction.
+#     command reports the miss as data and the hook relays it as a correction.
 printf '%s' "$OUT" | grep -q "unresolved: ee-77778888" \
   && pass "batch error row lands under unresolved" \
   || fail "error row not surfaced as unresolved: ${OUT:0:200}"

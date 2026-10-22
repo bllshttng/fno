@@ -2054,7 +2054,7 @@ pub fn dispatch_set(
                 return Ok(false);
             };
             parsed.dispatch = d.clone().unwrap_or(Dispatch {
-                verb: None,
+                command: None,
                 brief: None,
                 model: None,
             });

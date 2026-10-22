@@ -1,10 +1,10 @@
 //! The `status-pr-info` op: the Python `fno do pr info` read, ported beside
-//! its REST twins. The verb's read is one REST pulls fetch; a refusal
+//! its REST twins. The command's read is one REST pulls fetch; a refusal
 //! classified CORE (the budget drained, not the request rate) hands the same
 //! selector to `read_pr_view_fields`, whose brokered GraphQL fallback is the
 //! stop gate's own machinery, and the reply maps onto the REST payload keys
 //! so every consumer reads one shape whichever transport served it. The
-//! Python verb is a bare forward to this op: three net lines in cli/src/fno
+//! Python command is a bare forward to this op: three net lines in cli/src/fno
 //! carrying the ask, the exit codes, and no transport decision.
 
 use crate::pr_status::{map_mergeable, map_pr_state, rest_reason, RestReason};
@@ -16,12 +16,12 @@ use std::time::Duration;
 
 /// Per-spawn bound for the fallback read, the stop gate's own read bound.
 /// `read_pr_view_fields` can spend up to three spawns (primary read, quota
-/// probe, fallback retry), so the verb forward's timeout must cover the
+/// probe, fallback retry), so the command forward's timeout must cover the
 /// sum, not one spawn.
 const FALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The `status-pr-info` op receipt. `error` present means the read refused:
-/// the verb forward maps it to exit 4, and the payload's info keys stay
+/// the command forward maps it to exit 4, and the payload's info keys stay
 /// absent. Success answers the REST payload's keys, whichever transport
 /// served the read.
 pub(crate) fn run_op(payload: &Value) -> Value {
@@ -107,7 +107,7 @@ pub(crate) fn run_op(payload: &Value) -> Value {
     }
 }
 
-/// The verb receipt's error text when the fallback also failed: the ORIGINAL
+/// The command receipt's error text when the fallback also failed: the ORIGINAL
 /// REST refusal first (its rate-limit wording is what downstream
 /// classifiers read; the broker's own prose carries neither the marker nor a
 /// park trigger), the fallback's cause appended so the operator sees that a
@@ -169,7 +169,7 @@ fn resolve_pr(pr: Option<u64>, cwd: &Path, slug: &str) -> Result<Option<u64>, Re
         .and_then(Value::as_u64))
 }
 
-/// One REST pulls read mapped onto the verb payload's keys, the byte shape
+/// One REST pulls read mapped onto the command payload's keys, the byte shape
 /// `fetch_pr_info_rest` returned. Every refusal is classified
 /// (`rest_reason`), so the caller knows CORE from everything else.
 fn fetch_rest(pr: u64, cwd: &Path, slug: &str) -> Result<Value, RestReason> {
@@ -237,7 +237,7 @@ fn fallback_payload(
     }
 }
 
-/// The REST pulls body mapped onto the verb payload's keys, the twin of
+/// The REST pulls body mapped onto the command payload's keys, the twin of
 /// `fetch_pr_info_rest`'s return: state and mergeability through the shared
 /// mappers, the head sha load-bearing, auto_merge passed through whole.
 fn rest_payload(pr: u64, pulls: &Value) -> Option<Value> {
@@ -346,7 +346,7 @@ mod tests {
             Some("clean")
         );
 
-        // A pulls body with no head sha refuses the mapper; the verb reports
+        // A pulls body with no head sha refuses the mapper; the command reports
         // that as the malformed-body refusal.
         let shaless = serde_json::json!({"head": {}, "base": {"ref": "main"}});
         assert!(rest_payload(7, &shaless).is_none());

@@ -100,12 +100,12 @@ def install_starship_module(
 
 
 def summarize(result: StarshipResult) -> str:
-    verb = {
+    command = {
         "appended": f"appended the fno provenance module to {result.target}",
         "already": f"already present in {result.target} (left as-is)",
         "missing-snippet": "starship snippet not found (nothing installed)",
     }.get(result.action, result.action)
-    return f"  starship: {verb}"
+    return f"  starship: {command}"
 
 
 # --- Portable shell-rc renderer (the starship-free path) -------------------
@@ -157,9 +157,9 @@ def install_shell_source_line(snippet_path: Path, rc_path: Path) -> StarshipResu
 
 
 def summarize_shell(result: StarshipResult) -> str:
-    verb = {
+    command = {
         "appended": f"added the provenance source line to {result.target}",
         "already": f"already sourced in {result.target} (left as-is)",
         "missing-snippet": "shell snippet not found (nothing installed)",
     }.get(result.action, result.action)
-    return f"  shell prompt: {verb}"
+    return f"  shell prompt: {command}"

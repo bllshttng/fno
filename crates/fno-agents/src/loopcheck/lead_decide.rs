@@ -712,7 +712,7 @@ mod stale_team_doc_tests {
     }
 
     /// The CLI stub answers `config paths handoff --scope` with a path inside
-    /// `handoffs_dir`, the way the real verb prints the scope's newest doc.
+    /// `handoffs_dir`, the way the real command prints the scope's newest doc.
     fn stub_fno(dir: &Path, handoffs_dir: &Path) -> String {
         std::fs::create_dir_all(dir).unwrap();
         let stub = crate::write_exec_stub(

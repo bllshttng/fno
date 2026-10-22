@@ -194,7 +194,7 @@ fn pr_number(args: &[String], cwd: Option<&Path>) -> Result<u64, String> {
     }
 }
 
-/// The REST info read behind every metadata leg, via the op the verb rides
+/// The REST info read behind every metadata leg, via the op the command rides
 /// (the same receipt shape, whichever transport answered it).
 fn fetch_info(number: u64, cwd: Option<&Path>, repo: Option<&str>) -> Result<Value, String> {
     let mut payload = json!({

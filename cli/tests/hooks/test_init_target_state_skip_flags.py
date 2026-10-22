@@ -72,13 +72,13 @@ _FNO_STUB = """\
 # Test stub: answers the fno round-trips hooks/helpers/init-target-state.sh makes
 # in a bare env (no graph, no config), so this hook test pays ~0s/round-trip
 # instead of ~0.45s of real CLI startup - the load-sensitive cost behind the
-# flake (a different size profile blew the timeout each full-suite run). Per-verb
+# flake (a different size profile blew the timeout each full-suite run). Per-command
 # exit status below was captured from ONE real bare-env run (HOME=tmp, no graph),
 # not guessed. NOT a blanket exit: the hook branches on fno's exit code (claim
 # acquire sets _NODE_OWNED), so a flipped code changes the manifest path. stdout
 # is empty everywhere; the hook's degrade paths (|| true, sanctioned-empty
 # _SESSION_PID at init-target-state.sh:1044) handle it byte-for-byte as today's
-# real-fno runs. Unknown verbs exit nonzero = conservative bare-env behavior
+# real-fno runs. Unknown commands exit nonzero = conservative bare-env behavior
 # (real fno fails without a graph).
 printf '%s\\n' "$*" >> "${FNO_CALLS_LOG:-./fno-calls.log}"
 case "$1" in
@@ -400,7 +400,7 @@ def test_fno_absent_refuses_named_node_hold_lookup(tmp_path):
 
 def test_env_grant_honored_on_operator_origin_run(tmp_path):
     """AC-HP: TARGET_AUTO_MERGE=1 on an attended, agent-free run folds to the
-    env grant. This is the documented per-run arm the merge verb and finalize
+    env grant. This is the documented per-run arm the merge command and finalize
     honor; the role's own origin bar (no FNO_AGENT_SELF) decides who holds
     it."""
     proc = _run_init_script(

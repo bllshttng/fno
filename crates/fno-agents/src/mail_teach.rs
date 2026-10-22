@@ -1,7 +1,7 @@
-//! The fmail read verb's once-per-session teaching state.
+//! The fmail read command's once-per-session teaching state.
 //!
 //! A delivered mail opens with one header line whose id is the only cue the
-//! receiver gets; the header shipped without teaching the read verb, and no
+//! receiver gets; the header shipped without teaching the read command, and no
 //! hook, skill or spawn brief on main mentions it. One line teaches it, at
 //! most once per session and again after each compaction: every carrier
 //! (the session-start drain and the post-compact reinject) asks this module
@@ -33,7 +33,7 @@ fn teach_path_at(root: &Path, session: &str) -> PathBuf {
     lesson_path_at(root, Lesson::Mail, session)
 }
 
-/// One stamp per lesson: the fmail read verb and the using-fno preamble share
+/// One stamp per lesson: the fmail read command and the using-fno preamble share
 /// the "due once, again after compaction" rule, each in its own directory.
 #[derive(Clone, Copy)]
 pub enum Lesson {
@@ -150,7 +150,7 @@ pub fn lesson_due_at(
 }
 
 // ---------------------------------------------------------------------------
-// CLI verb: `fno-agents mail-teach [--session <id> | --self]
+// CLI command: `fno-agents mail-teach [--session <id> | --self]
 //           [--transcript <path>] [--mark]`
 //
 // Prints the teaching line when the lesson is due, records the taught
@@ -325,13 +325,13 @@ mod tests {
             teach_if_due_at(home.root(), "s3", None, None, false),
             "a missing transcript leaves never-taught due"
         );
-        // The lesson names the LIVE read verb: the const the dispatch arm
+        // The lesson names the LIVE read command: the const the dispatch arm
         // itself matches on, so a rename follows in the same edit.
         let line = crate::chats::teach_line();
         assert!(
             line.contains(&format!(
                 "fno agents mail {} <id>",
-                crate::chats::MAIL_READ_VERB
+                crate::chats::MAIL_READ_COMMAND
             )),
             "{line}"
         );

@@ -215,7 +215,7 @@ def _send_mail(text: str, session_id: str, monkeypatch, capsys) -> None:
     """One prompt through the real mail lane: the same name-lane choke point
     `fno agents mail send` runs, with the injector binary resolved to the
     worktree build (a deployed binary can predate the keeper lane). A
-    not-confirmed landing fails HERE, naming the verb's reason, never later
+    not-confirmed landing fails HERE, naming the command's reason, never later
     as a mysterious missing answer."""
     from fno.agents.discover import DiscoveredSession
     from fno.mail import cli as mail_cli

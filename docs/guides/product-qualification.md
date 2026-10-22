@@ -31,7 +31,7 @@ A conformance run needs no provider because the journey task is grade-only.
 
 ## Read the report
 
-The report verb folds the declared expected set against the history:
+The report command folds the declared expected set against the history:
 
 ```bash
 fno doctor evals report --qualification evals/fixtures/product-delivery/qualification.json

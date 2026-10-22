@@ -5,7 +5,7 @@
 //! `paths::space_slug`. Binary-direct (no daemon), resolved from the process
 //! cwd. The `escalations` key is Rust-owned: nothing in Python reads the
 //! directory, so it has no Python accessor to mirror. Same for the
-//! `plans-dirs` subverb (plans_dirs.rs): Rust-owned, with the plan-location
+//! `plans-dirs` subcommand (plans_dirs.rs): Rust-owned, with the plan-location
 //! guard as its only consumer.
 
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ pub fn run(args: &[String]) -> i32 {
     // `plans-dirs` is not a single-path accessor: it answers with one dir per
     // REGISTERED project (see plans_dirs.rs), so it dispatches before the
     // name-to-path table. `plan-dir`/`plan-path` are the plans-chain port
-    // (plans_path.rs): the Python verb and the probe both resolve through it.
+    // (plans_path.rs): the Python command and the probe both resolve through it.
     // `migrate` is the state-root migration: same pre-table dispatch, since
     // it answers a receipt, not a path (state_layout.rs).
     if name == "plans-dirs" {
@@ -189,7 +189,7 @@ fn dir_door_root() -> PathBuf {
 /// `fno.paths`. `events` honors `FNO_EVENTS_PATH` and
 /// migrates the legacy checkout journal so a hook append never splits the
 /// file; `target-state` falls back to the pre-space checkout manifest.
-/// `pub(crate)`: the route-slot verb resolves its refusal-journal path here,
+/// `pub(crate)`: the route-slot command resolves its refusal-journal path here,
 /// so the pin and the space fallback have one owner.
 pub(crate) fn resolve(name: &str, cwd: &std::path::Path) -> Option<PathBuf> {
     if name == "events" {

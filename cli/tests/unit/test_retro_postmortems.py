@@ -248,7 +248,7 @@ def _wire_cli(tmp_path: Path, monkeypatch):
 # -- CLI wiring (`fno retro drain-postmortems`, x-42f6 US3) ---------------------
 
 def test_drain_postmortems_drains_and_reports(tmp_path: Path, monkeypatch) -> None:
-    """AC4-HP: the narrow verb drains each postmortem, stamps consumed_at, and
+    """AC4-HP: the narrow command drains each postmortem, stamps consumed_at, and
     exits 0. AC4-FR: a second drain is an idempotent no-op."""
     from typer.testing import CliRunner
 

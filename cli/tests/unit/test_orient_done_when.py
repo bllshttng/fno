@@ -78,11 +78,11 @@ def test_empty_peer_identity_is_absent_not_configured(repo):
 
 def test_stock_install_announces_the_self_review_floor(repo, monkeypatch):
     # A code payload on a lane-less stock install carries the self-review
-    # obligation: the done-when line names it and a verb this harness serves.
-    def _stub_invocation(verb, payload, *args, **kwargs):
+    # obligation: the done-when line names it and a command this harness serves.
+    def _stub_invocation(command, payload, *args, **kwargs):
         return {"invocation": "/fno:review <level> --comment", "harness": "claude"}
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _stub_invocation)
+    monkeypatch.setattr("fno.rust_binary.command_call", _stub_invocation)
     root = repo("")
     line = _done_when_line({}, root)
     assert "self-review required for code" in line

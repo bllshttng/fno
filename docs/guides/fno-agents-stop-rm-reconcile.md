@@ -1,13 +1,13 @@
 # Managing agents — `stop` / `rm` / `reconcile` / `attach`
 
-The four lifecycle write verbs in the `fno agents` subsystem. Use them when you want to:
+The four lifecycle write commands in the `fno agents` subsystem. Use them when you want to:
 
 - stop a running claude background session cleanly (keep the conversation resumable)
 - remove an agent from the registry — and from claude's supervisor too
 - sweep the fleet to find orphaned or recovered sessions
 - drop into a claude agent's interactive TUI
 
-These complement the read verbs (`list`, `logs`) and the create / follow-up verb (`ask`). Together they form the full lifecycle: ask → list → logs → stop → rm.
+These complement the read commands (`list`, `logs`) and the create / follow-up command (`ask`). Together they form the full lifecycle: ask → list → logs → stop → rm.
 
 ## `fno agents session stop` — pause a claude session
 
@@ -16,7 +16,7 @@ fno agents session stop worker-claude
 # stopped: worker-claude (7c5dcf5d)
 ```
 
-<!-- retired-ok: names the shellout this verb performs. -->
+<!-- retired-ok: names the shellout this command performs. -->
 For **claude** agents, this shells out to `claude stop <short_id>` with a 30-second timeout. The supervisor session is paused but the conversation file stays on disk — a subsequent `claude attach <short_id>` (or `fno agents session attach worker-claude`) wakes it back up.
 
 For **codex** and **gemini** agents, `stop` is a no-op with an informational stderr message: those providers are synchronous between asks, so there is no persistent process to stop. To interrupt an in-flight `ask`, send SIGINT to the fno process directly.
@@ -39,8 +39,8 @@ fno agents session rm worker-claude
 # removed: worker-claude
 ```
 
-<!-- retired-ok: names the shellout this verb performs, in order. -->
-`rm` is the cleanup verb. For **claude** agents the sequence is strict: `claude rm <short_id>` runs first, and the registry row is dropped only after claude reports success. If `claude rm` refuses (e.g., the worktree has uncommitted changes), the registry stays intact so you can address the underlying issue and retry.
+<!-- retired-ok: names the shellout this command performs, in order. -->
+`rm` is the cleanup command. For **claude** agents the sequence is strict: `claude rm <short_id>` runs first, and the registry row is dropped only after claude reports success. If `claude rm` refuses (e.g., the worktree has uncommitted changes), the registry stays intact so you can address the underlying issue and retry.
 
 To override claude's refusal:
 
@@ -68,7 +68,7 @@ Codex rollout files under `~/.codex/sessions/<date>/<id>` are never touched, so 
 Removing an agent also does not stop a running session; use `fno agents session stop` for that.
 
 **Why opencode is registry-only.**
-`opencode session delete` is the store's only deletion verb, and it is not record-only: it also deletes the session's child sessions and every message row (`message.session_id` is `ON DELETE CASCADE`, so no direct-sqlite variant avoids this either).
+`opencode session delete` is the store's only deletion command, and it is not record-only: it also deletes the session's child sessions and every message row (`message.session_id` is `ON DELETE CASCADE`, so no direct-sqlite variant avoids this either).
 The conversation is keyed to the record, so there is no way to drop one and keep the other.
 `rm` will not destroy a conversation as a side effect of cleaning up a registry row, so it drops the row, names the surviving session, and leaves the deletion to you:
 
@@ -146,7 +146,7 @@ fno agents session attach worker-claude
 
 For **claude** agents, `attach` shells out to `claude attach <short_id>` inheriting stdin / stdout / stderr — the claude TUI takes over the terminal. fno's exit code mirrors claude's on detach.
 
-For a **codex thread**, `attach` execs the row's declared attach form (`codex resume <thread-id> --remote unix://...`). A **pi** row joins its own session. Every other row is asked of the capability table: `features.attach` in `harness_capabilities.toml` says whether fno can reach a live session on that harness. A harness that reads `native` (opencode, for example) attaches through the daemon-kept lane, the mux thread portal, which the verb tries first for every harness. With no live mux server that lane is down, and the refusal says so with exit 24:
+For a **codex thread**, `attach` execs the row's declared attach form (`codex resume <thread-id> --remote unix://...`). A **pi** row joins its own session. Every other row is asked of the capability table: `features.attach` in `harness_capabilities.toml` says whether fno can reach a live session on that harness. A harness that reads `native` (opencode, for example) attaches through the daemon-kept lane, the mux thread portal, which the command tries first for every harness. With no live mux server that lane is down, and the refusal says so with exit 24:
 
 ```bash
 fno agents session attach worker-opencode
@@ -190,7 +190,7 @@ A different harness is a handoff doc plus `/fno:agent handoff <doc> <provider>`,
 
 ## When to use what
 
-| Scenario | Verb |
+| Scenario | Command |
 |----------|------|
 | "I want to pause this agent but keep the conversation" | `stop` |
 | "I want to delete this agent entirely" | `rm` |
@@ -201,7 +201,7 @@ A different harness is a handoff doc plus `/fno:agent handoff <doc> <provider>`,
 
 ## Forensics: events.jsonl
 
-Every lifecycle verb writes a structured event to `~/.fno/events.jsonl`:
+Every lifecycle command writes a structured event to `~/.fno/events.jsonl`:
 
 - `agent_stopped` — `{name, provider, claude_exit?, short_id?, timed_out?, lock_timeout?}`
 - `agent_removed` — `{name, provider, claude_exit?, force, registry_changed, short_id?, lock_timeout?, error?}`
@@ -223,6 +223,6 @@ tail -f ~/.fno/events.jsonl | jq 'select(.kind == "agent_stopped" or .kind == "r
 
 ## See also
 
-- [fno-agents-ask-followup.md](fno-agents-ask-followup.md) — the create / follow-up verb
-- [fno-agents-list-logs.md](fno-agents-list-logs.md) — the read verbs
+- [fno-agents-ask-followup.md](fno-agents-ask-followup.md) — the create / follow-up command
+- [fno-agents-list-logs.md](fno-agents-list-logs.md) — the read commands
 - [`docs/architecture/fno-agents-lifecycle.md`](../architecture/fno-agents-lifecycle.md) — full architecture

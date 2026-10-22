@@ -529,16 +529,16 @@ def test_land_runs_the_filing_time_dedup_net_when_entries_are_passed(capsys):
     from fno.retro.types import Candidate
 
     cand = Candidate(
-        title="loop-check verb and the stop hook shim",
-        body="the loop-check verb never sees the stop hook shim payload",
+        title="loop-check command and the stop hook shim",
+        body="the loop-check command never sees the stop hook shim payload",
         tier="node",
         priority="p2",
         source_pr=604,
         source_id="finding-1",
         content_hash="abc123",
-        finding_text="the loop-check verb never sees the stop hook shim payload",
+        finding_text="the loop-check command never sees the stop hook shim payload",
     )
-    entries = [{"id": "x-4444", "title": "loop-check verb and stop hook shim", "status": "triage"}]
+    entries = [{"id": "x-4444", "title": "loop-check command and stop hook shim", "status": "triage"}]
 
     results = land_candidates(
         [cand],

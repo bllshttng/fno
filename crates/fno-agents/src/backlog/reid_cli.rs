@@ -208,7 +208,7 @@ fn apply_dedup(mut aliases: Vec<Value>) -> Vec<Value> {
 /// and the free-text decision subjects. The dispatch/provenance/sessions
 /// satellites ride the fold's upserts; renaming them here first keeps the
 /// cascade on the old nodes row empty either way. Any SQL failure aborts the
-/// publish loudly; a silent partial rename is the one outcome this verb must
+/// publish loudly; a silent partial rename is the one outcome this command must
 /// never produce.
 fn rewrite_satellites(graph: &Path, old: &str, new: &str) -> Result<String, String> {
     // The publication seam's own opener: schema-guaranteed and
@@ -221,7 +221,7 @@ fn rewrite_satellites(graph: &Path, old: &str, new: &str) -> Result<String, Stri
     let tx = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    // Each table's SQL lives in its owning module (TABLE_OWNERS); the verb
+    // Each table's SQL lives in its owning module (TABLE_OWNERS); the command
     // only opens the connection and the transaction around them.
     let edges = super::edges::rename_node_endpoints(&tx, old, new)?;
     let supersessions = super::nodes::rename_supersession_rows(&tx, old, new)?;

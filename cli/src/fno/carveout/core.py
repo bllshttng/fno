@@ -419,7 +419,7 @@ def update_carveout(
     """Edit one carve-out IN PLACE, preserving its identity. Returns the new record.
 
     ``id``, ``ts`` and ``session_id`` are never touched. That is the whole point
-    of the verb: correcting a carve-out used to mean ``resolve`` then ``add``,
+    of the command: correcting a carve-out used to mean ``resolve`` then ``add``,
     which minted a new id, so every id already quoted in a PR body or a mail
     became a dead pointer. It was also LOSSY - the two steps are two writes, and
     a failure between them left the ledger with neither row. This does one

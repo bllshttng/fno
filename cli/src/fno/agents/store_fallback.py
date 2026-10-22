@@ -3,10 +3,10 @@ sessions when the fno registry misses.
 
 The registry is a cache of reality, not a gate in front of it. A session with no
 roster row -- reaped after a terminal stop, or never spawn-created -- was
-unreachable by every fno verb even though the harness itself resumes it fine.
+unreachable by every fno command even though the harness itself resumes it fine.
 This module owns the store probes behind ``registry.resolve_agent``. Every short
 session-shaped registry hit is checked against them for cross-source ambiguity;
-on a registry miss, exactly one match is registered so the verb proceeds AND the
+on a registry miss, exactly one match is registered so the command proceeds AND the
 session returns to the roster.
 
 Three rules keep it from guessing:
@@ -319,7 +319,7 @@ def _project_identity(cwd: Optional[str]) -> "tuple[Optional[str], Optional[str]
             pid = None
         except ProjectIdentificationError:
             pid = None
-        except Exception:  # noqa: BLE001 - membership must degrade, never crash the verb
+        except Exception:  # noqa: BLE001 - membership must degrade, never crash the command
             pid = None
     gdir = _git_common_dir(Path(cwd)) if cwd else None
     return (pid, gdir)
@@ -614,7 +614,7 @@ def heal_from_harness_store(
     docstring's project-confinement rule.
 
     Registration is best-effort. If the registry write fails, the synthesized row
-    is still returned so the verb reaches the session anyway -- reaching it wins,
+    is still returned so the command reaches the session anyway -- reaching it wins,
     and the row appears on the next resolution.
     """
     from fno.agents.registry import AgentResolutionError

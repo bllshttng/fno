@@ -2,7 +2,7 @@
 
 Before this module the two autonomous target launchers disagreed: ``backlog
 advance`` could walk the active combo and land on another harness, while the
-retired ``agents dispatch`` verb (d-496680aa) could only defer or
+retired ``agents dispatch`` command (d-496680aa) could only defer or
 decline-to-defer on the Claude account pool. So the all-accounts-walled case
 terminated in a wait of up to a week while an idle Codex subscription sat there.
 
@@ -354,7 +354,7 @@ def select_autonomous_route(
         # not in a caller because the picking incident (2026-08, recorded in the
         # dual-implementation inventory) happened when only ONE caller had the
         # check: identical fixtures deferred under `backlog advance` and
-        # launched under the retired dispatch verb. That launcher is gone
+        # launched under the retired dispatch command. That launcher is gone
         # (- everything dispatches through `fno agents spawn` now), and
         # this function stays the single seam every remaining caller reads.
         if not pinned and _healthy_alternate_exists(node_cwd):

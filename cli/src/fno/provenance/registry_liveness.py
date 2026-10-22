@@ -17,7 +17,7 @@ def registry_status_index() -> "dict[str, str] | None":
         from fno.agents.registry import load_registry
 
         rows = load_registry()
-    except Exception:  # noqa: BLE001 - liveness must never fail the verb
+    except Exception:  # noqa: BLE001 - liveness must never fail the command
         return None
     index: dict[str, str] = {}
     for row in rows or []:

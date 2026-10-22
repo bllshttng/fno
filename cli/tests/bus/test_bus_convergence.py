@@ -2,7 +2,7 @@
 
 The bus log is the system of record; the per-recipient markdown thread file is
 its render (written on every mutation). Every store write mirrors an envelope
-into the global log. The mail read and ack verbs are native; their goldens
+into the global log. The mail read and ack commands are native; their goldens
 live under crates/fno-agents/tests/golden/mail_unread and mail_ack.
 """
 from __future__ import annotations

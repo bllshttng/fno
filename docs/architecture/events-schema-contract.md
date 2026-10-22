@@ -126,7 +126,7 @@ tolerated.
 | `target` | the target skill / pre-promise sequence |
 | `megawalk` | the megawalk stop hook + roadmap loop |
 | `megatron` | mission lifecycle events |
-| `fno-loop` | HISTORICAL: the pre-wedge headless `fno loop` driver (verb removed in step-5 group 3); the source value survives in old journals |
+| `fno-loop` | HISTORICAL: the pre-wedge headless `fno loop` driver (command removed in step-5 group 3); the source value survives in old journals |
 | `hook` | every other in-tree hook (PostToolUse, PreToolUse, etc.) |
 | `subagent` | reserved for direct subagent emissions |
 | `migration` | the one-shot `scripts/migrate-events-shape.py` |
@@ -206,7 +206,7 @@ the operator's signal of substrate degradation.
   `scripts/lib/verify-event-evidence.sh` into the bundled binary in US1.
   Returns rc=0 (match), rc=1 (missing OR nonce mismatch),
   rc=2 (substrate failure). Diagnostics go to stderr.
-- **Python (in-package parallel)**: `verify_child_promise(session_id, nonce, events_path)` in `cli/src/fno/events/verify_child_promise.py`. Returns `tuple[Literal[True], None]` on match, or `tuple[Literal[False], ChildPromiseError]` on failure. The error key is one of `child_promise_missing`, `child_promise_nonce_mismatch`, or `events_unreadable`. The Python error keys map one-to-one to the fno-agents verb's stderr substrings.
+- **Python (in-package parallel)**: `verify_child_promise(session_id, nonce, events_path)` in `cli/src/fno/events/verify_child_promise.py`. Returns `tuple[Literal[True], None]` on match, or `tuple[Literal[False], ChildPromiseError]` on failure. The error key is one of `child_promise_missing`, `child_promise_nonce_mismatch`, or `events_unreadable`. The Python error keys map one-to-one to the fno-agents command's stderr substrings.
 
 ### `verification_receipt`
 

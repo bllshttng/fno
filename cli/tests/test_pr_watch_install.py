@@ -77,7 +77,7 @@ def test_ac3hp_render_plist_contains_required_keys(tmp_home, plist_kwargs):
 
     assert "sh.fno.pr-watcher" in rendered
     assert "fno" in rendered
-    # AC4-HP: the argv carries the current verb spelling; the retired
+    # AC4-HP: the argv carries the current command spelling; the retired
     # pr-watch token must not appear as a bare argv string.
     assert (
         "<string>do</string>\n"
@@ -140,16 +140,16 @@ def test_config_pr_watch_nonmapping_degrades_to_defaults():
     assert cb.pr_watch.interval_seconds == 600
 
 
-def _record_runner(calls, *, rc_by_verb=None, timeout_verb=None):
+def _record_runner(calls, *, rc_by_command=None, timeout_command=None):
     """A _run_launchctl_timed stub that records calls and can inject rc/timeout."""
-    rc_by_verb = rc_by_verb or {}
+    rc_by_command = rc_by_command or {}
 
     def _run(*args, timeout_s=0):
         calls.append(args)
-        verb = args[0]
-        if verb == timeout_verb:
+        command = args[0]
+        if command == timeout_command:
             return (-1, True)
-        return (rc_by_verb.get(verb, 0), False)
+        return (rc_by_command.get(command, 0), False)
 
     return _run
 
@@ -175,7 +175,7 @@ def test_bounce_tolerates_bootout_failure_when_not_loaded(tmp_launch_agents):
     calls: list[tuple] = []
     msg, rc = m.bounce(
         plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls, rc_by_verb={"bootout": 1}),
+        run=_record_runner(calls, rc_by_command={"bootout": 1}),
     )
     assert rc == 0  # bootout nonzero is expected, not fatal
     assert [c[0] for c in calls] == ["bootout", "bootstrap", "kickstart"]
@@ -186,7 +186,7 @@ def test_bounce_bootstrap_failure_is_reported(tmp_launch_agents):
     calls: list[tuple] = []
     msg, rc = m.bounce(
         plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls, rc_by_verb={"bootstrap": 5}),
+        run=_record_runner(calls, rc_by_command={"bootstrap": 5}),
         sleep=lambda _s: None,
     )
     assert rc == 1 and "bootstrap" in msg
@@ -202,7 +202,7 @@ def test_bounce_kickstart_hang_names_the_wedged_step(tmp_launch_agents):
     calls: list[tuple] = []
     msg, rc = m.bounce(
         plist_path=tmp_launch_agents / "x.plist", uid=501,
-        run=_record_runner(calls, timeout_verb="kickstart"),
+        run=_record_runner(calls, timeout_command="kickstart"),
     )
     assert rc == 1 and "kickstart" in msg and "timed out" in msg
 

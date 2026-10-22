@@ -83,13 +83,13 @@ Readers refuse corruption. They never repair, replace, or silently rebuild a liv
 
 Writers and importers run no integrity sweep on open: a scan walks every page of a healthy store, and the write-open door sits on the per-fire hook append path, so the sweep cost scaled with store size on every Bash turn. Page damage instead surfaces as a SQLite statement error when a statement touches the damaged page. A write door that hits such an error refuses the write and appends a pin to the existing questions journal beside the store family; every door that hits the damage pins the same deduplicated question. Damage on pages a door never reads does not block that door. Deliberate sweeps still belong on a copy: `PRAGMA quick_check` and `PRAGMA integrity_check` remain the recovery-time instruments, and the copy procedure below is unchanged. Both native crates bundle SQLite 3.53.2 through rusqlite 0.40.2. SQLite documents the [WAL-reset race and its fix](https://sqlite.org/wal.html#walreset) in 3.51.3 and later. A vulnerable engine and WAL mode establish exposure. They do not prove the historical race occurred.
 
-Use the native copy verb on a quiescent offline database with its matching `-wal` sibling. The output directory must not exist. Both paths must stay outside the operator state root.
+Use the native copy command on a quiescent offline database with its matching `-wal` sibling. The output directory must not exist. Both paths must stay outside the operator state root.
 
 ```bash
 fno doctor event recover --copy-store --source /tmp/evidence/events.db --output /tmp/recovered-events
 ```
 
-The verb captures DB and WAL into scratch and refuses changed sources or linked files. SQL reconstruction preserves every readable table, explicit index, schema version, event identity, sequence, metadata row, and observation state. It resets only the derived `ingest_cursor`. Each preserved table receives a row count and matching source/candidate digest. Publication requires both `quick_check` and `integrity_check` to return `ok`. The new `events.db` and `recovery.json` are copy artifacts only. An unreadable authoritative table fails the verb. No JSONL rebuild or live installation occurs.
+The command captures DB and WAL into scratch and refuses changed sources or linked files. SQL reconstruction preserves every readable table, explicit index, schema version, event identity, sequence, metadata row, and observation state. It resets only the derived `ingest_cursor`. Each preserved table receives a row count and matching source/candidate digest. Publication requires both `quick_check` and `integrity_check` to return `ok`. The new `events.db` and `recovery.json` are copy artifacts only. An unreadable authoritative table fails the command. No JSONL rebuild or live installation occurs.
 
 ## Grammar
 

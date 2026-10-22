@@ -121,7 +121,7 @@ for skill in "${ALL_RETIRED[@]}"; do
   # Intentionally NOT matched:
   #   - .fno/<name>.md style artifact paths - <name>.<ext> indicates the
   #     output file, which keeps the same name even after a skill is demoted
-  #     to a CLI verb. The `.` after the name is the discriminator: a slash
+  #     to a CLI command. The `.` after the name is the discriminator: a slash
   #     command never has a file extension immediately after.
   #   - bare-word usages in stage lists (e.g. impeccable's `distill, extract`)
   #   - `fno:<name>` alias form (false-positives on slash-command matchers
@@ -226,11 +226,11 @@ for old in "${RENAMED_OLD_NAMES[@]}"; do
 done
 
 # --- Retired command surfaces --------------------------------
-# Messaging consolidated into the `fno agents mail` namespace: the `fno inbox <verb>`
-# surface and the `fno agents send` verb are deleted clean (no shim). A stale
+# Messaging consolidated into the `fno agents mail` namespace: the `fno inbox <command>`
+# surface and the `fno agents send` command are deleted clean (no shim). A stale
 # caller in production code would break at runtime, so reject any surviving
-# invocation. The inbox pattern is verb-anchored so a documentation mention of
-# the retired namespace that carries no verb does not false-positive;
+# invocation. The inbox pattern is command-anchored so a documentation mention of
+# the retired namespace that carries no command does not false-positive;
 # `fno agents send` is the exact removed command form.
 CUT_SURFACE_PATTERNS=(
   'fno inbox (send|unread|ack|reply|list|drain|triage|status|lint|view|migrate-bus)'

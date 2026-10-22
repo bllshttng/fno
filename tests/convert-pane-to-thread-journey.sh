@@ -11,7 +11,7 @@ set -euo pipefail
 # Nothing here trusts an exit code. Every step reads the world back: the child
 # pid before and after, the socket at both paths, and the pane listing.
 #
-# Step 3b runs the conversion verb's dry run against a hermetic daemon: a
+# Step 3b runs the conversion command's dry run against a hermetic daemon: a
 # seeded registry row classifies the pane, the daemon plans keeper-rebind,
 # and nothing moves. The claude and codex conversion strategies still need
 # real CLIs and stay unproven here.
@@ -162,7 +162,7 @@ SURVIVOR_PIDS="$KEEPER_PID $CHILD_PID"
 [[ -S "$OLD_SOCKET" ]] || fail "the keeper socket $OLD_SOCKET is not a socket"
 echo "[3] keeper $KEEPER_PID answers at $OLD_SOCKET"
 
-# 3b. The conversion verb's dry run, hermetic and default-on. The daemon
+# 3b. The conversion command's dry run, hermetic and default-on. The daemon
 #     lazy-starts in the private home, classifies the pane from a seeded
 #     registry row, plans keeper-rebind, and moves nothing: the dry run is
 #     the arm CI can prove without a real harness CLI.
@@ -201,7 +201,7 @@ done
 echo "[3b] dry run: strategy keeper-rebind, outcome dry-run, $OLD_SOCKET untouched (daemon $DAEMON_PID)"
 
 # 4. The hand-off: the socket moves into the thread tree, the pane is
-#    released. This is the verb the conversion's keeper-rebind arm drives.
+#    released. This is the command the conversion's keeper-rebind arm drives.
 NEW_SOCKET="$MUX_DIR/threads/convert-proof.sock"
 "$MUX_BIN" mux pane kill --server "$SESSION" "$PANE_ID" --hand-off-to "$NEW_SOCKET"
 sleep 1

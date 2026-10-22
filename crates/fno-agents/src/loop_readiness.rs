@@ -142,7 +142,7 @@ pub fn admit(readiness: EffectiveLoopReadiness) -> Result<EffectiveLoopReadiness
 /// exists, so the stop leg reads ready with a reason naming the worker's own
 /// Stop hook. Shared by `loop readiness --pre-launch` and the target-family
 /// gate's native arm, which must refuse a looping dispatch on exactly the
-/// legs the readiness verb refuses on.
+/// legs the readiness command refuses on.
 fn pre_launch_snapshot(harness: &str, command: &str, owner: String) -> EffectiveLoopReadiness {
     let stop = ReadinessLeg {
         state: LegState::Ready,
@@ -361,7 +361,7 @@ fn stop_leg(harness: &str, session: &str, cwd: &Path) -> ReadinessLeg {
     stop_leg_from_events(&events, harness, session)
 }
 
-/// Direct client verb used by the Python admission seams. All four legs are
+/// Direct client command used by the Python admission seams. All four legs are
 /// assembled before the result is rendered, so a caller pays one native read
 /// and gets one refusal that names the failed leg.
 pub fn run(args: &[String]) -> i32 {

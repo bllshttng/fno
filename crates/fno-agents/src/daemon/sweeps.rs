@@ -10,7 +10,7 @@ use crate::pr_park;
 /// How long between stale-question reconciles. Stale rows are measured in
 /// hundreds of hours, so the interval bounds discovery lag, not freshness:
 /// a row that crosses the wake ceiling waits at most one interval before a
-/// human is told. Identity-keyed dedupe lives in the verb, so an eager run
+/// human is told. Identity-keyed dedupe lives in the command, so an eager run
 /// costs one sweep and changes nothing.
 pub(crate) const STALE_SWEEP_INTERVAL_SECS: i64 = 21_600;
 
@@ -18,7 +18,7 @@ pub(crate) const STALE_SWEEP_INTERVAL_SECS: i64 = 21_600;
 /// moves; the sweep costs one `fno do pr info` per open parked row.
 pub(crate) const PARK_SWEEP_INTERVAL_SECS: i64 = 600;
 
-/// One fleet's stale-sweep reading, parsed from the verb's JSON line.
+/// One fleet's stale-sweep reading, parsed from the command's JSON line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleSweepReport {
     pub stale: usize,
@@ -114,7 +114,7 @@ pub fn stale_sweep(
 
 /// Park sweep on a 10-minute floor: un-parks open rows whose PR head moved since
 /// the park baseline or whose park passed 24 hours, and marks finished rows
-/// handled. The verb inside (`fno-agents pr-park sweep`) is idempotent on an
+/// handled. The command inside (`fno-agents pr-park sweep`) is idempotent on an
 /// untouched store, so a re-run costs one head probe per open row and
 /// changes nothing.
 ///

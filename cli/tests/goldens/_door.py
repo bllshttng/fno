@@ -109,7 +109,7 @@ def roster_stub(root: Path, rows: list | None = None) -> str:
 def door_graph(
     graph: Path, *args: str, env_override: dict[str, str] | None = None
 ) -> tuple[int, str, str]:
-    """Run a selection verb (next/undispatched) through the binary against a
+    """Run a selection command (next/undispatched) through the binary against a
     fixture-seeded store at graph.parent. Writes config.toml when the fixture
     has none, isolates claims under the state root, and stubs the roster
     listing empty so the worked fold never leaves the sandbox. The door
@@ -125,7 +125,7 @@ def door_graph(
 
 
 class DoorResult(NamedTuple):
-    """A native verb's run in the shape CliRunner results had."""
+    """A native command's run in the shape CliRunner results had."""
 
     exit_code: int
     stdout: str
@@ -139,13 +139,13 @@ class DoorResult(NamedTuple):
 def door_cli(
     graph: Path, *args: str, env_override: dict[str, str] | None = None
 ) -> DoorResult:
-    """`door_graph` for a backlog verb that left the python app."""
+    """`door_graph` for a backlog command that left the python app."""
     return DoorResult(*door_graph(graph, *args, env_override=env_override))
 
 
 def write_gh_stub(tmp_path: Path, body: str = "[]\n") -> str:
     """A PATH dir whose `gh` answers one JSON line to every call, so the
-    GitHub-reading verbs stay hermetic."""
+    GitHub-reading commands stay hermetic."""
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
     gh = stub_bin / "gh"
@@ -201,7 +201,7 @@ def graph_rows(root: Path) -> list[dict]:
 
 
 def native_backlog(*argv: str, env_override: dict[str, str] | None = None) -> DoorResult:
-    """`fno backlog <verb>` for a verb the native binary serves, run against
+    """`fno backlog <command>` for a command the native binary serves, run against
     the store the test pinned through `fno.paths.graph_json`."""
     from fno import paths
 

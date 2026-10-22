@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The `{"kind": "launch"}` arm: the child streams to the verb's own stdio
+/// The `{"kind": "launch"}` arm: the child streams to the command's own stdio
 /// and the answer carries its exit code, since the runner prints one JSON
 /// line after the stream.
 pub fn launch_kind(payload: &Value) -> Result<Value, String> {

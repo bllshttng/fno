@@ -151,7 +151,7 @@ pub struct GcSummary {
     /// `(id, node)` for the rows the open-PR keep named, and the nudge
     /// ladder's DRY-RUN plan: `would nudge <id> (<action>)`, no effect and
     /// no state. Empty on a real run: the ladder fires on the daemon arm
-    /// only, never from a manual verb.
+    /// only, never from a manual command.
     pub open_pr_nudge: Vec<(String, String)>,
     /// `(node, harness, session_id)` for every stale open do row this pass
     /// FILLED. The row stays; only `ended_at` and `ended_by` are added.
@@ -206,7 +206,7 @@ pub struct GcSummary {
     /// count it.
     pub holds: Vec<Hold>,
     /// The escalation threshold `mark_escalated` stamped with, so the
-    /// renderer prints the same number the verb enforced. `None` until
+    /// renderer prints the same number the command enforced. `None` until
     /// stamped; an unstamped summary renders no escalation.
     pub hold_escalate_after_s: Option<u64>,
     /// Rulings the sweep could not apply: a release named a row
@@ -222,7 +222,7 @@ pub struct GcSummary {
     pub dead_work_rows: Vec<OpenPrRow>,
     /// The dead-team sweep's report when it ran beside this pass; `None`
     /// when it did not run. The daemon arm reports teams through its detail
-    /// line, the manual verb fills this field.
+    /// line, the manual command fills this field.
     pub teams: Option<crate::team_reap::TeamReap>,
 }
 
@@ -253,7 +253,7 @@ pub struct OpenPrRow {
 }
 
 /// The ruling a `reap --release <row>` carries into the sweep: the
-/// row's classified hold, captured when the verb classified it. The sweep
+/// row's classified hold, captured when the command classified it. The sweep
 /// lifts one gate on the matching row only, and only while the row's
 /// current hold still equals the captured one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -341,7 +341,7 @@ impl GcSummary {
     }
 
     /// Stamp every hold's escalation flag against the configured threshold
-    ///. Called once per verb run, after the sweep filled the
+    ///. Called once per command run, after the sweep filled the
     /// buckets; the sweep itself stays clock-free so a dry run and a real
     /// run carry the same hold rows.
     pub fn mark_escalated(&mut self, after: Duration) {
@@ -1010,7 +1010,7 @@ enum SettleRefusal {
 }
 
 /// Fill ONE open do row with `ended_by: "reap-release"`: the
-/// release verb's narrowed settle. The fill runs through `api::session_end`
+/// release command's narrowed settle. The fill runs through `api::session_end`
 /// (fill-if-absent over a fresh read inside the store's own mutation), the
 /// same blocker gate the batch settle applies (a node whose additional PRs
 /// are not recorded merged is not fillable), and the same bounded retry
@@ -1107,7 +1107,7 @@ pub(crate) fn without_settled(
 /// Node id -> `(status, merge_status)` over the same read. The merge reaper's
 /// doneness re-read: a node must read done AND merged before its worker's
 /// rows or tree go.
-/// The node states the merge reaper and the release verb read: status,
+/// The node states the merge reaper and the release command read: status,
 /// recorded merge_status, and the count of additional_prs entries still
 /// open by recorded state. The count rides so a done+merged node with an
 /// open additional PR holds its cleanup request instead of retiring rows
@@ -1153,7 +1153,7 @@ pub(crate) fn read_graph_node_states(
 /// Stop a retiring row's held process from a sync caller. The stop is async,
 /// so it runs on a dedicated thread with a one-shot current-thread runtime:
 /// `Handle::block_on` on the caller's own thread panics inside an ambient
-/// runtime (the CLI verb runs under `main`'s `block_on`, the daemon's tick
+/// runtime (the CLI command runs under `main`'s `block_on`, the daemon's tick
 /// under `spawn_blocking`), and a fresh thread is legal in both. A runtime
 /// that cannot be built fails closed: the row keeps under `stop_refused`.
 pub(crate) fn stop_row_process(home: &AgentsHome, e: &state::RegistryEntry) -> bool {
@@ -1609,7 +1609,7 @@ pub(crate) fn run_with_release(
 ) -> GcSummary {
     let mut summary = GcSummary::default();
     // change 2: the open-work window, resolved once per pass beside
-    // the grace the caller handed in. The daemon and the verb both resolve
+    // the grace the caller handed in. The daemon and the command both resolve
     // grace against the process cwd, so this reads the same config ladder
     // without a new parameter threaded through every caller.
     let open_work_retire_s =
@@ -2353,7 +2353,7 @@ pub(crate) fn run_with_release(
                 Some(KeepReason::TranscriptUnresolved) => {
                     // Main's bucket carries the clock the TU line
                     // renders; the holds projection stays the one answer for
-                    // every hold kind the question lane and the release verb
+                    // every hold kind the question lane and the release command
                     // read.
                     summary.kept_transcript_unresolved.push(UnresolvedHold {
                         id: id.clone(),

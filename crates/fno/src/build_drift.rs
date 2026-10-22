@@ -150,7 +150,7 @@ pub fn keeper_path_note(top_commands: &[String], installed_exe: Option<&Path>) -
 
 /// Format the agent-actionable drift warning, or `None` when there is nothing to
 /// warn about (`Fresh`/`DaemonDown`/`Unknown`). The message is advisory and
-/// names the exact remedy verb. The caller routes it to **stderr** only, so a
+/// names the exact remedy command. The caller routes it to **stderr** only, so a
 /// `--json` stdout consumer is never contaminated (Locked Decision #5).
 ///
 /// `pid` is the running daemon's pid when the caller has it (the `status`
@@ -315,11 +315,14 @@ mod tests {
     }
 
     #[test]
-    fn drift_warning_names_restart_verb() {
-        // AC1-HP (message half): a Drifted state warns, names the restart verb,
+    fn drift_warning_names_restart_command() {
+        // AC1-HP (message half): a Drifted state warns, names the restart command,
         // and weaves in the pid when present.
         let msg = drift_warning(&drift_state(), Some(91627)).expect("warns on drift");
-        assert!(msg.contains("fno agents restart"), "names the remedy verb");
+        assert!(
+            msg.contains("fno agents restart"),
+            "names the remedy command"
+        );
         assert!(msg.contains("build"), "describes a build mismatch");
         assert!(msg.contains("91627"), "names the pid when known");
         assert!(

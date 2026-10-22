@@ -3,8 +3,8 @@
 //!
 //! The sent view was frozen from the Python front while it still ran its own
 //! body: each case seeded a hermetic root (bus log, cursors, recipient
-//! transcripts, identity markers) and invoked the verb in a non-tty
-//! subprocess. Those frozen bytes are the contract; the Python verb now
+//! transcripts, identity markers) and invoked the command in a non-tty
+//! subprocess. Those frozen bytes are the contract; the Python command now
 //! forwards here, so this test pins the port to the answers the oracle gave.
 //!
 //! The matrix: the full-view filter (kind == send stamped with this

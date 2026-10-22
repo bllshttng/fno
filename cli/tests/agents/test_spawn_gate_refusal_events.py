@@ -11,7 +11,7 @@ had already exited.
 Since x-6089 the gate's axes are decided in Rust and the refusals arrive as
 data; the Python side still emits every one of them through `_refuse` when the
 spawn enters Python. The receipts these tests feed `_refuse` are the same
-shapes the verb answers carry. Every assertion is on a POSITIVE marker: a
+shapes the command answers carry. Every assertion is on a POSITIVE marker: a
 parsed JSON line whose `kind` is `spawn_gate_refused`. Never on a line count
 alone, and never on the absence of an error - an absence has three
 explanations and only one of them is the outcome.
@@ -88,7 +88,7 @@ def test_lead_share_refusal_emits_though_it_carries_no_receipt(journal: Path) ->
 
     This is the branch the seam exists for: four refusals never built a
     receipt, so a design that only forwarded receipts would have left them as
-    silent as before. The verb's event map carries the same fields today.
+    silent as before. The command's event map carries the same fields today.
     """
     spawn_gate._CURRENT_SPAWN.set(("t-probe", "thread"))
 

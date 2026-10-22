@@ -4,7 +4,7 @@
 //! so the over-budget file shrinks; everything here reaches the client's
 //! private items through `super::*`.
 
-use super::release_check::{probe_release, run_upgrade_verb, Channel, ReleaseOutcome};
+use super::release_check::{probe_release, run_upgrade_command, Channel, ReleaseOutcome};
 use super::*;
 
 /// The client's view of `fno doctor update --check`'s payload - only
@@ -145,7 +145,7 @@ pub(crate) const UPDATE_PROBE_TIMEOUT: Duration = Duration::from_millis(30_000);
 /// or panic (AC6-EDGE).
 ///
 /// `--check` already prints JSON on its own (`update` has no local `--json`
-/// option, and the global `--json` flag only applies before the verb) - do
+/// option, and the global `--json` flag only applies before the command) - do
 /// not add `--json` after `--check` here, it makes the CLI exit 2 and every
 /// probe degrade (P1, codex on PR #881).
 pub(crate) async fn probe_update_readiness() -> UpdateOutcome {
@@ -562,17 +562,17 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
 }
 
 impl View {
-    /// The verb's verdict lands as a notice, and a re-probe arms so the next
+    /// The command's verdict lands as a notice, and a re-probe arms so the next
     /// menu shows the post-upgrade state.
     pub(crate) fn land_update_verdict(&mut self, verdict: String) {
-        self.update_verb_inflight = false;
+        self.update_command_inflight = false;
         self.set_notice(verdict);
         self.update_probe_want = true;
     }
 }
 
 /// The event loop's update wants: kick a readiness probe and an upgrade
-/// verb, at most one of each in flight. The select loop never blocks on the
+/// command, at most one of each in flight. The select loop never blocks on the
 /// probe - the menu and overlay render whatever is already in
 /// `view.update_outcome`. Lives here so the over-budget client.rs shrinks
 /// (the update surface owns its own pump).
@@ -590,7 +590,7 @@ pub(crate) fn pump_wants(
             let _ = tx.send(outcome);
         });
     }
-    if let (false, Some(channel)) = (view.update_verb_inflight, view.update_verb_want) {
+    if let (false, Some(channel)) = (view.update_command_inflight, view.update_command_want) {
         kick_upgrade(view, restart_tx.clone(), channel);
     }
 }
@@ -612,7 +612,7 @@ pub(crate) async fn open_pr(view: &mut View, url: String) {
 /// the caller has already restored the terminal, so the receipts print
 /// live and are their own verdict - a captured run cannot carry them (the
 /// mux leg kills this client's server out from under the TUI). Never
-/// --force. Returns the verb's exit code.
+/// --force. Returns the command's exit code.
 pub(crate) async fn run_restart_foreground() -> i32 {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command.args(["agents", "restart", "--mux"]);
@@ -632,10 +632,10 @@ const RESTART_REATTACH_EXIT: i32 = 42;
 
 /// The update-modal taps' shared guard (the modal named every effect, so
 /// the tap is the confirmation): close the modal, and refuse while an
-/// update verb is queued or in flight. True = proceed with the tapped one.
+/// update command is queued or in flight. True = proceed with the tapped one.
 pub(crate) fn update_tap(view: &mut View) -> bool {
     view.aux = None;
-    if view.update_verb_inflight || view.update_verb_want.is_some() {
+    if view.update_command_inflight || view.update_command_want.is_some() {
         view.set_notice("an update action is already running".into());
         false
     } else {
@@ -665,7 +665,7 @@ pub(crate) fn detach_exit(view: &View) -> i32 {
 }
 
 /// run_inner's restart unwind: the sentinel means the TUI is gone (the
-/// terminal guard dropped on the way out), so the verb runs where the
+/// terminal guard dropped on the way out), so the command runs where the
 /// receipts are visible, then this process execs a fresh client for the
 /// same session. exec, not an in-process restart: the detached client's
 /// stdin thread holds a blocking stdin lock a second reader would deadlock
@@ -694,10 +694,10 @@ pub(crate) fn kick_upgrade(
     tx: tokio::sync::mpsc::UnboundedSender<String>,
     channel: Channel,
 ) {
-    view.update_verb_want = None;
-    view.update_verb_inflight = true;
+    view.update_command_want = None;
+    view.update_command_inflight = true;
     tokio::spawn(async move {
-        let verdict = run_upgrade_verb(channel).await;
+        let verdict = run_upgrade_command(channel).await;
         let _ = tx.send(verdict);
     });
 }

@@ -9,7 +9,7 @@ satisfy its own PR's review gate.
 
 Inside the ritual the order is pinned in Rust now
 (crates/fno-agents/src/post_merge/ritual.rs, `retro_precedes_every_removal_leg`):
-the ritual verb is native and its leg order moves with it.
+the ritual command is native and its leg order moves with it.
 
 The gap this file still owns is the OTHER path. `fno worktree cleanup --merged`
 knows nothing about a retro and neither does the daemon tick. A guard on one of

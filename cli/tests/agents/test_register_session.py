@@ -135,7 +135,7 @@ def test_register_rejects_unknown_provider(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# `fno agents register` verb (the /fno-me seam): self-service join resolved
+# `fno agents register` command (the /fno-me seam): self-service join resolved
 # from the ambient harness identity, no --session-id argument.
 # ---------------------------------------------------------------------------
 
@@ -148,7 +148,7 @@ _MARKERS = (
 )
 
 
-def test_register_verb_joins_under_canonical_handle(tmp_path: Path, monkeypatch) -> None:
+def test_register_command_joins_under_canonical_handle(tmp_path: Path, monkeypatch) -> None:
     """A claude session self-registers under its canonical ambient-id first-eight."""
     use_tmpdir(monkeypatch, tmp_path)
     for m in _MARKERS:
@@ -174,7 +174,7 @@ def test_register_verb_joins_under_canonical_handle(tmp_path: Path, monkeypatch)
     assert len(rows) == 1 and rows[0].name == "deadbeef" and rows[0].status == "idle"
 
 
-def test_register_verb_exit3_without_ambient_identity(tmp_path: Path, monkeypatch) -> None:
+def test_register_command_exit3_without_ambient_identity(tmp_path: Path, monkeypatch) -> None:
     """No harness marker in env -> nothing addressable -> exit 3, no row written."""
     use_tmpdir(monkeypatch, tmp_path)
     for m in _MARKERS:
@@ -642,7 +642,7 @@ def test_a_refused_observation_is_visible_and_the_hook_stays_fail_soft(
     assert BIRTH in err and FORK in err, "both recorded ids are in the visible line"
     assert (
         f"fno agents adopt {THIRD}" in err
-    ), "the refusal names the adopt verb that mints the parked id a row"
+    ), "the refusal names the adopt command that mints the parked id a row"
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +667,7 @@ def _write_pane_row(name: str, harness: str, **overrides):
     return row
 
 
-def test_register_verb_refuses_when_fno_agent_self_row_exists(tmp_path: Path, monkeypatch) -> None:
+def test_register_command_refuses_when_fno_agent_self_row_exists(tmp_path: Path, monkeypatch) -> None:
     """/fno-me inside a spawned or recovered pane worker must
     refuse instead of minting a SECOND row named by the bare short-id beside
     the worker's real row. The refusal names the row; nothing is written."""
@@ -769,7 +769,7 @@ def test_session_start_first_fill_opens_the_parked_row(
     assert row.harness_session_id == REMINT
 
 
-def test_register_verb_refuses_in_the_row_pending_window(tmp_path: Path, monkeypatch) -> None:
+def test_register_command_refuses_in_the_row_pending_window(tmp_path: Path, monkeypatch) -> None:
     """x-0345 review: the row-pending marker names the row the spawner is
     about to write, so /fno-me in that window refuses too - not just when
     the row already exists."""

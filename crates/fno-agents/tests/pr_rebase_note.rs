@@ -2,7 +2,7 @@
 //! a successful rebase prints ONE stderr nudge suggesting the stale-base tag
 //! command and emits no event of its own; a failed rebase prints none. Runs
 //! the built binary against real temp git repos because the nudge is a
-//! stderr side effect of the verb entry point.
+//! stderr side effect of the command entry point.
 
 use std::process::Command;
 
@@ -52,7 +52,7 @@ fn repo_with_stale_base(tmp: &std::path::Path) -> std::path::PathBuf {
     work
 }
 
-fn run_verb(cwd: &std::path::Path) -> (i32, String) {
+fn run_command(cwd: &std::path::Path) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .envs(fno_agents::test_run::self_owner_env())
         .args([
@@ -73,7 +73,7 @@ fn run_verb(cwd: &std::path::Path) -> (i32, String) {
 fn rebase_success_prints_one_nudge_and_no_event() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_stale_base(tmp.path());
-    let (rc, err) = run_verb(&work);
+    let (rc, err) = run_command(&work);
     assert_eq!(rc, 0);
     assert!(err.contains("gate-escape stale-base"), "{err}");
     assert_eq!(err.matches("note:").count(), 1, "{err}");
@@ -85,7 +85,7 @@ fn rebase_failure_prints_no_nudge() {
     let work = repo_with_stale_base(tmp.path());
     // On main: the protected-branch refusal, a non-zero outcome.
     git(&work, &["checkout", "main"]);
-    let (rc, err) = run_verb(&work);
+    let (rc, err) = run_command(&work);
     assert_ne!(rc, 0);
     assert!(!err.contains("gate-escape"), "{err}");
 }

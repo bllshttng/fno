@@ -13,36 +13,36 @@ def _trailer_ensure_passthrough(monkeypatch):
     """Answer ship's trailer write in process.
 
     The closure producer lives in the fno-agents binary now; ship reaches it
-    only through `fno.rust_binary.verb_call`. These tests mock subprocess.run
+    only through `fno.rust_binary.command_call`. These tests mock subprocess.run
     with a fixed list of side effects, so a real binary call would consume one
     and every later assertion shifts by one call. Passthrough here: this file
     tests ship's PR logic, and the trailer grammar has its own suite.
     """
     import fno.rust_binary as rb
 
-    def _passthrough(verb, payload, unavailable=None, **kwargs):
-        if verb == "pr-base-check":
+    def _passthrough(command, payload, unavailable=None, **kwargs):
+        if command == "pr-base-check":
             # The stale-base guard answers from the binary now. Every test in
             # this file wants the clear pass; a refusal case patches this seam
             # itself.
             return {"code": 0, "message": None}
-        assert verb == "pr-closure-ensure", verb
+        assert command == "pr-closure-ensure", command
         return {"body": payload["body"]}
 
-    monkeypatch.setattr(rb, "verb_call", _passthrough)
+    monkeypatch.setattr(rb, "command_call", _passthrough)
 
 
 @pytest.fixture(autouse=True)
 def _verified_head(monkeypatch):
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, *a, **k: {"required": True, "reason": "required"}
+        "fno.rust_binary.command_call",
+        lambda command, payload, *a, **k: {"required": True, "reason": "required"}
         if payload.get("op") == "required"
         else {"required": False, "reason": "x"},
     )
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, *a, **k: {
+        "fno.rust_binary.command_call",
+        lambda command, payload, *a, **k: {
             "satisfied": True,
             "mode": "full",
             "result": "passed",
@@ -73,20 +73,20 @@ def _make_state(tmp_path: Path, extra: dict | None = None) -> Path:
 
 
 def _door_stub(**answers):
-    """A verb-aware ``fno.rust_binary.verb_call`` stub.
+    """A command-aware ``fno.rust_binary.command_call`` stub.
 
-    Keys name the door as ship reaches it: ``"verb"``, or ``"verb op"`` when
+    Keys name the door as ship reaches it: ``"verb"``, or ``"command op"`` when
     the payload's op selects the arm. An unlisted call raises instead of
     answering another door's shape, so a test fails at the stub it forgot
     rather than three gates later.
     """
 
-    def _stub(verb, payload, *a, **k):
-        name = verb if isinstance(verb, str) else " ".join(verb)
+    def _stub(command, payload, *a, **k):
+        name = command if isinstance(command, str) else " ".join(command)
         op = payload.get("op")
         key = f"{name} {op}" if op and f"{name} {op}" in answers else name
         if key not in answers:
-            raise AssertionError(f"door stub: unexpected verb_call {verb!r} {payload!r}")
+            raise AssertionError(f"door stub: unexpected command_call {command!r} {payload!r}")
         answer = answers[key]
         return answer(payload) if callable(answer) else answer
 
@@ -138,7 +138,7 @@ def test_existing_pr_still_requires_current_verification(tmp_path, monkeypatch):
         MagicMock(returncode=0, stdout=json.dumps(existing_pr), stderr=""),
     ]
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(
             **{
                 "verify-evidence required": {"required": True},
@@ -187,7 +187,7 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(
             **{
                 "verify-evidence required": {"required": False},
@@ -243,7 +243,7 @@ def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(
             **{
                 "verify-evidence required": {"required": False},
@@ -287,7 +287,7 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     refusal = "stale base: your branch's merge-base with origin/main is 3.0 days behind"
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(
             **{
                 "verify-evidence required": {"required": False},
@@ -324,7 +324,7 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     )
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(
             **{
                 "verify-evidence required": {"required": False},
@@ -358,7 +358,7 @@ def test_non_full_verification_refuses_pr_create(tmp_path, monkeypatch):
         MagicMock(returncode=0, stdout="[]", stderr=""),
     ]
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
+        "fno.rust_binary.command_call",
         _door_stub(
             **{
                 "verify-evidence required": {"required": True},

@@ -289,7 +289,7 @@ def test_us5_no_writer_closes_a_node_whose_pr_is_open(done_graph, tmp_path, monk
 def test_exit_code_contract_is_owned_by_one_table():
     """The Rust loop keys on 5 for AwaitingMerge, so these numbers are frozen.
 
-    Both done verbs raise `evidence.exit_code` rather than re-deriving the
+    Both done commands raise `evidence.exit_code` rather than re-deriving the
     mapping, which is what keeps them from drifting apart.
     """
     from fno.graph._reconcile import MergeEvidence

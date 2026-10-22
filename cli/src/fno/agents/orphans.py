@@ -426,7 +426,7 @@ def scan(reap: bool = False, skip_probe: Optional[str] = None) -> ScanResult:
     if not roots:
         # No git root means the CWD arm has no territory. The first fix here
         # fell back to os.getcwd(), which made every PPID-1 process under $HOME
-        # a finding when the verb ran from a home directory: a wall of noise
+        # a finding when the command ran from a home directory: a wall of noise
         # from the one command whose output has to stay trustworthy. Inventing
         # territory to keep a control green is the absence trap wearing a
         # different hat, so refuse and say which arm has nowhere to look.
@@ -701,7 +701,7 @@ def seen_path() -> Path:
 def filter_new(result: ScanResult, seen_path: Path) -> bool:
     """Record this scan's findings and answer "is any of them new?".
 
-    The verb always reports everything. This exists for the SessionStart
+    The command always reports everything. This exists for the SessionStart
     nudge, which fires on every session and would otherwise reprint the same
     long-lived third-party daemons forever until someone disables the hook. A
     known finding is not news; an unknown one is.

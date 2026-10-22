@@ -5,7 +5,7 @@
 //! miss, classified by the same provenance rules `fno-agents intel` folds
 //! with. Retirement itself is the origin rule in `gc.rs`: an fno-started
 //! row retires after one idle hour and a user-started row never does;
-//! these reads are the stop verb's and the sweep's short-window witnesses.
+//! these reads are the stop command's and the sweep's short-window witnesses.
 
 use crate::provenance::{
     classify_turn, is_user_turn, turn_text, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
@@ -67,9 +67,9 @@ fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     };
     let args = xml_block(text, "<command-args>", "</command-args>").unwrap_or("");
     let mut seed_parts = seed.splitn(2, char::is_whitespace);
-    let verb = seed_parts.next().unwrap_or("");
+    let command = seed_parts.next().unwrap_or("");
     let rest = seed_parts.next().unwrap_or("").trim();
-    name == verb && args == rest
+    name == command && args == rest
 }
 
 /// The bus index both arms classify with, read off the state root the way
@@ -183,7 +183,7 @@ pub(crate) fn sweep_hold(
     })
 }
 
-/// The stop-verb refusal: `Some(why)` when the row's store-resolved
+/// The stop-command refusal: `Some(why)` when the row's store-resolved
 /// transcript carries a typed turn inside the window. The bus join keys on
 /// the row's harness session id, the same key `fno-agents intel` joins on.
 /// The caller names its own error shape.
