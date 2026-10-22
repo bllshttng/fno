@@ -1,18 +1,8 @@
 //! The thread-prompt watch: a native `claude --bg` worker parked on a
-//! permission prompt.
-//!
-//! A thread worker has no mux pane, so the pane scrape in the check-in's
-//! prompt-parked reading never sees it. A worker sat 11h on an EnterWorktree
-//! prompt that way, with nobody near the host. `claude agents --json` names
-//! the wait (`waitingFor: "permission prompt"`) but not when it began, so
-//! each read records the first time it saw a session waiting, one small
-//! file per short id under `prompt-wait/`. A row that stops waiting loses
-//! its file, so a second prompt counts from its own start.
-//!
-//! The daemon reads every 60s on every host. Past [`PARK_AFTER_MS`] it mails
-//! the spawner and the nearest lead above it once per wait. With no
-//! recipient it files one fleet task. The lead check-in reads the same files
-//! and prints one `WAITING ON APPROVAL` line per overdue worker.
+//! permission prompt. It has no mux pane, so the check-in's pane scrape never
+//! sees it. `claude agents --json` names the wait but not when it began, so
+//! each read records the first sighting under `prompt-wait/<short id>.json`.
+//! Contract: docs/architecture/spawn-watch.md.
 
 use crate::claude_roster::{ClaudeAgentRow, ClaudeAgentsSnapshot};
 use crate::paths::AgentsHome;
@@ -21,8 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// How long a prompt stays up before it is news. A person answering at the
-/// keyboard clears it well inside this.
+/// A person answering at the keyboard clears a prompt well inside this.
 pub(crate) const PARK_AFTER_MS: i64 = 5 * 60_000;
 const SENDER: &str = "fno/prompt-wait";
 /// The spawner walk stops here, so a lineage loop cannot hang a pass.
@@ -73,17 +62,15 @@ fn dir(home: &AgentsHome) -> PathBuf {
     home.root().join("prompt-wait")
 }
 
-/// A short id is the file name, so only a plain hex id is admitted.
-fn admissible(short_id: &str) -> bool {
-    !short_id.is_empty() && short_id.len() <= 64 && short_id.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
+/// The short id is the file name, so only a plain hex id is admitted.
 fn waiting_on_permission(row: &ClaudeAgentRow, carries_pids: bool) -> bool {
+    let id = &row.short_id;
+    let waits = row.waiting_for.as_deref().unwrap_or_default();
     row.has_live_process(carries_pids)
-        && row
-            .waiting_for
-            .as_deref()
-            .is_some_and(|w| w.to_ascii_lowercase().contains("permission"))
+        && waits.to_ascii_lowercase().contains("permission")
+        && !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Record the first sighting of every waiting row and return them all. A
@@ -105,25 +92,19 @@ pub(crate) fn observe(
     let mut out = Vec::new();
     let mut keep = HashSet::new();
     for row in rows {
-        if !waiting_on_permission(row, carries_pids) || !admissible(&row.short_id) {
+        if !waiting_on_permission(row, carries_pids) {
             continue;
         }
         keep.insert(row.short_id.clone());
         let path = dir.join(format!("{}.json", row.short_id));
-        let seen = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice::<Seen>(&bytes).unwrap_or_default(),
-            Err(_) => Seen::default(),
-        };
-        let seen = if seen.first_seen_ms > 0 {
-            seen
-        } else {
-            let fresh = Seen {
-                first_seen_ms: now,
-                notified: false,
-            };
-            state::write_json_atomic(&path, &fresh).map_err(|e| e.to_string())?;
-            fresh
-        };
+        let mut seen: Seen = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        if seen.first_seen_ms <= 0 {
+            seen.first_seen_ms = now;
+            state::write_json_atomic(&path, &seen).map_err(|e| e.to_string())?;
+        }
         out.push(Waiting {
             short_id: row.short_id.clone(),
             session_id: row.session_id.clone(),
@@ -134,15 +115,12 @@ pub(crate) fn observe(
             notified: seen.notified,
         });
     }
-    let clean = snapshot.is_known() && snapshot.warning_text().is_empty();
-    if clean {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            let stale = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .is_some_and(|id| !keep.contains(id));
-            if stale && path.extension().and_then(|e| e.to_str()) == Some("json") {
+    if snapshot.is_known() && snapshot.warning_text().is_empty() {
+        for path in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = path.path();
+            let json = path.extension().is_some_and(|e| e == "json");
+            let stem = path.file_stem().and_then(|s| s.to_str());
+            if json && stem.is_some_and(|id| !keep.contains(id)) {
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -164,25 +142,21 @@ fn parent_of(home: &AgentsHome, registry: &Registry, sid: &str) -> Option<String
 /// Who hears about this wait: the spawner, then the nearest ancestor that
 /// holds a lead role. One session that is both hears it once.
 fn recipients(home: &AgentsHome, registry: &Registry, sid: &str) -> Vec<String> {
-    let Some(spawner) = parent_of(home, registry, sid) else {
-        return Vec::new();
+    let lead = |s: &str| {
+        let mut rows = registry.entries.iter();
+        rows.any(|r| r.harness_session_id.as_deref() == Some(s) && r.role_level.is_some())
     };
-    let mut out = vec![spawner.clone()];
-    let mut cur = spawner;
+    let mut out: Vec<String> = parent_of(home, registry, sid).into_iter().collect();
+    let mut cur = out.first().cloned();
     for _ in 0..MAX_HOPS {
-        let is_lead = registry.entries.iter().any(|r| {
-            r.harness_session_id.as_deref() == Some(cur.as_str()) && r.role_level.is_some()
-        });
-        if is_lead {
-            if !out.contains(&cur) {
-                out.push(cur);
+        let Some(s) = cur.take() else { break };
+        if lead(s.as_str()) {
+            if !out.contains(&s) {
+                out.push(s);
             }
             break;
         }
-        match parent_of(home, registry, &cur) {
-            Some(next) => cur = next,
-            None => break,
-        }
+        cur = parent_of(home, registry, &s);
     }
     out
 }
@@ -230,31 +204,29 @@ fn run_pass_with(
             .as_deref()
             .map(|sid| recipients(home, &registry, sid))
             .unwrap_or_default();
-        let mut reached = false;
-        for sid in &to {
-            match crate::first_check::send_mail(&mut *runner, SENDER, sid, &text) {
-                Ok(()) => reached = true,
-                Err(e) => {
-                    first_error.get_or_insert(e);
-                }
-            }
-        }
-        if !reached && to.is_empty() {
+        // With no spawner on record, one fleet task reaches the operator.
+        let results: Vec<Result<(), String>> = if to.is_empty() {
             let run = format!("claude attach {}", w.short_id);
-            match crate::fleet_task::file_once(
-                &crate::provider_cap::questions_path(home),
+            let store = crate::provider_cap::questions_path(home);
+            let key = format!("prompt wait {}", w.short_id);
+            vec![crate::fleet_task::file_once(
+                &store,
                 SENDER,
-                &format!("prompt wait {}", w.short_id),
+                &key,
                 &w.cwd,
                 &text,
                 Some(&run),
                 None,
-            ) {
-                Ok(_) => reached = true,
-                Err(e) => {
-                    first_error.get_or_insert(e);
-                }
-            }
+            )
+            .map(|_| ())]
+        } else {
+            let mut send =
+                |sid: &String| crate::first_check::send_mail(&mut *runner, SENDER, sid, &text);
+            to.iter().map(&mut send).collect()
+        };
+        let reached = results.iter().any(Result::is_ok);
+        if let Some(Err(e)) = results.into_iter().find(Result::is_err) {
+            first_error.get_or_insert(e);
         }
         if reached {
             let seen = Seen {

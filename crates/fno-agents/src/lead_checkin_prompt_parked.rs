@@ -143,16 +143,10 @@ fn add_thread_rows(value: &mut Value, waiting: &[crate::prompt_wait::Waiting], n
         .iter()
         .filter(|w| w.overdue(now) && !named.contains(&w.name))
     {
-        rows.push(json!({
-            "holder": w.name,
-            "harness": "claude",
-            "pane_id": null,
-            "short_id": w.short_id,
-            "rule_id": "waiting_for",
-            "prompt_head": w.waiting_for,
-            "answer_key": null,
-            "line": w.line(now),
-        }));
+        let (holder, line) = (&w.name, w.line(now));
+        rows.push(
+            json!({"holder": holder, "harness": "claude", "short_id": w.short_id, "line": line}),
+        );
     }
 }
 
