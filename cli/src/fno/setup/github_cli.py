@@ -99,12 +99,12 @@ def ensure_proxy(
     link = root / "fno-gh-proxy"
     # Skip the link's own dir (it would answer for its own stale target) and
     # the console script pr port 7 retired: its import dies on a newer fno.
-    found = (
+    on_path = (
         shutil.which("fno-gh-proxy", path=part)
         for part in os.environ.get("PATH", "").split(os.pathsep)
         if part and os.path.realpath(part) != os.path.realpath(root)
     )
-    helper = next((h for h in found if h and not _is_retired_script(h)), None)
+    helper = next((h for h in on_path if h and not _is_retired_script(h)), None)
     if not helper:
         bundled = _bundled_helper("fno-gh-proxy")
         if bundled is not None:
