@@ -81,7 +81,9 @@ mod tests {
             );
             assert!(classify_inbox_user(&mk(&["inbox", group, "list", "--limit", "0"])).is_none());
             assert!(classify_inbox_user(&mk(&["inbox", group, "list", "--limit"])).is_none());
-            assert!(classify_inbox_user(&mk(&["inbox", group, "status", "--limit", "1"])).is_none());
+            assert!(
+                classify_inbox_user(&mk(&["inbox", group, "status", "--limit", "1"])).is_none()
+            );
             assert!(classify_inbox_user(&mk(&["inbox", group, "ack", "u-1"])).is_none());
             assert!(classify_inbox_user(&mk(&["inbox", group])).is_none());
         }
