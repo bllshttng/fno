@@ -1376,16 +1376,17 @@ fn opencode_version(db: &Path, session_id: &str) -> Option<i64> {
     Some(newest?.wrapping_mul(1_000_003).wrapping_add(count))
 }
 
-/// The transcript file for a resolved session: the row's own stamp when it
-/// carries one, else the harness lookup (claude projects store; codex
+/// The transcript file for a resolved session: the row's own stamp when the
+/// file is there, else the harness lookup (claude projects store; codex
 /// sessions tree), cached so a sweep lists neither store per row. opencode
-/// has none.
+/// has none. A stamp can name the launch cwd's project dir while the session
+/// wrote under its worktree's, so a missing file falls through to the scan.
 fn transcript_for<C: CursorAccess>(
     session: &TruthSession,
     stores: &Stores,
     cursors: &mut C,
 ) -> Option<PathBuf> {
-    if let Some(path) = session.transcript_path.as_ref() {
+    if let Some(path) = session.transcript_path.as_ref().filter(|p| p.exists()) {
         return Some(path.clone());
     }
     match session.agent.as_str() {
@@ -1568,6 +1569,29 @@ mod tests {
             third["reason"], "not-found",
             "the next beat resolves again: {third}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stamped transcript that is not on disk falls through to the store
+    /// scan, so the session still answers an age.
+    #[test]
+    fn a_missing_stamped_transcript_falls_back_to_the_store() {
+        let dir = tmp("stamp-gone");
+        let sid = "abcd1234-0000-0000-0000-000000000000";
+        let mut gone = row("g1", "claude", &dir.join("launch-cwd").join("gone.jsonl"));
+        gone.harness_session_id = Some(sid.to_string());
+        let stores = stores(&dir);
+        let project = stores.projects_root.join("-worktree");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join(format!("{sid}.jsonl")),
+            r#"{"type":"assistant","timestamp":"2026-10-08T11:59:00Z","message":{"role":"assistant","model":"claude-opus-5-5","content":"reading"}}"#.to_string() + "\n",
+        )
+        .unwrap();
+        let mut cursors = TruthCursors::new();
+        let rows = vec![gone];
+        let payload = resolve_payload(Some(&rows), "g1", NOW, &stores, &mut cursors);
+        assert!(payload["last_activity_age_s"].is_number(), "{payload}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
