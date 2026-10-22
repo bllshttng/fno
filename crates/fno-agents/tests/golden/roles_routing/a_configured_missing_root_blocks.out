@@ -1,0 +1,11 @@
+{
+  "detail": "configured role root does not exist",
+  "reason": "invalid_manifest",
+  "reference": "publisher",
+  "role": {
+    "function_id": "unavailable",
+    "id": "publisher"
+  },
+  "source_id": "<FIXTURE>/missing",
+  "source_layer": null
+}

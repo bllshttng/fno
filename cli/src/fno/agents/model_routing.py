@@ -47,7 +47,7 @@ Two non-negotiable invariants:
 - **Fail safe, not fail closed** (US4): if no key is configured for the role's
   provider, the role falls back to the primary Anthropic model with a one-line
   notice and the spawn still succeeds. The legacy :func:`resolve_route` path
-  never raises; an opted-in business lookup fails closed on typed resolution
+  never raises; the business-role lookup fails closed on typed resolution
   errors so they cannot be mistaken for legacy fallback.
 - **Hard quality guard**: ``implement`` / ``review-verdict`` are in
   ``PROTECTED_ROLES`` and short-circuit to ``None`` *before* any config is read.
@@ -71,14 +71,7 @@ from fno.config._tiers import TIER_ALIASES
 
 if TYPE_CHECKING:
     from fno.config import ModelRoutingBlock, SettingsModel
-    from fno.roles import (
-        ManifestRoutingResolution,
-        ResolvedRole,
-        RoleResolution,
-        RoleResolutionBlocked,
-    )
-
-BusinessRoleLookup = Callable[[str], "RoleResolution | ManifestRoutingResolution"]
+    from fno.roles import RoleResolutionBlocked
 
 # Built-in default endpoint for the z.ai provider: the Anthropic-compatible
 # endpoint a claude worker needs. The preset itself (base_url, key env, key
@@ -184,7 +177,6 @@ def resolve_spawn_route(
     *,
     intent: Optional[str] = None,
     notice: Optional[Callable[[str], None]] = None,
-    business_lookup: Optional[BusinessRoleLookup] = None,
     resolved_provider: Optional[Callable[[str], None]] = None,
 ) -> Optional[dict[str, str]]:
     """Resolve one spawn route; a pre-resolved route must be a complete unit.
@@ -234,7 +226,6 @@ def resolve_spawn_route(
         route = resolve_route(
             role,
             notice=notice,
-            business_lookup=business_lookup,
             resolved_provider=provider_names.append,
         )
         if route and provider_names:
@@ -763,7 +754,6 @@ def resolve_route(
     settings: "Optional[SettingsModel]" = None,
     env: Optional[Mapping[str, str]] = None,
     notice: Optional[Callable[[str], object]] = None,
-    business_lookup: Optional[BusinessRoleLookup] = None,
     resolved_provider: Optional[Callable[[str], None]] = None,
 ) -> Optional[dict[str, str]]:
     """Resolve per-spawn env overrides for ``role``.
@@ -773,7 +763,7 @@ def resolve_route(
 
     ``None`` is returned for: no role, a production/unrouted role, a disabled
     block, an unconfigured / non-Anthropic provider, or a missing key
-    (fail-safe). The legacy path never raises. An opted-in business lookup
+    (fail-safe). The legacy path never raises. The business-role lookup
     raises a typed error when an existing business role is blocked or lacks a
     complete composable routing projection.
 
@@ -788,7 +778,7 @@ def resolve_route(
     if not name:
         return None
 
-    business_role = _resolve_business_role(requested_role, business_lookup)
+    business_role = _resolve_business_role(requested_role)
 
     # A protected role never routes, even if config or a business manifest
     # asks it to. Discovery still runs first so a malformed manifest cannot
@@ -1270,7 +1260,6 @@ def resolve_codex_route(
     *,
     settings: "Optional[SettingsModel]" = None,
     notice: Optional[Callable[[str], object]] = None,
-    business_lookup: Optional[BusinessRoleLookup] = None,
 ) -> Optional[CodexRoute]:
     """Resolve codex-lane routing for ``role`` against an OpenAI-protocol
     provider, or ``None`` (use codex's default config, change nothing).
@@ -1280,7 +1269,7 @@ def resolve_codex_route(
     provider (that belongs to the claude lane, silently), a missing
     base_url/key, or a value that can't be safely embedded in TOML all return
     ``None`` (with a one-line notice where a misconfiguration is worth
-    surfacing). The legacy path never raises; an opted-in business lookup fails
+    surfacing). The legacy path never raises; the business-role lookup fails
     closed with the same typed errors as the Claude lane.
 
     The provider half (record read, protocol check, key, TOML tokens) is owned
@@ -1296,7 +1285,7 @@ def resolve_codex_route(
     if not name:
         return None
 
-    business_role = _resolve_business_role(requested_role, business_lookup)
+    business_role = _resolve_business_role(requested_role)
     if name in PROTECTED_ROLES:
         _emit(
             notice,
@@ -1377,101 +1366,36 @@ def _role_target(role: str, block: "ModelRoutingBlock") -> Optional[tuple[str, s
     return _parse_target(str(raw))
 
 
-def _resolve_business_role(
-    role: str,
-    business_lookup: Optional[BusinessRoleLookup],
-) -> "Optional[ResolvedRole | ManifestRoutingResolution]":
-    """Validate the production business-role tri-state before routing policy."""
-    if business_lookup is None:
-        business_lookup = _default_business_lookup
+def _resolve_business_role(role: str) -> Optional[dict]:
+    """The business-role tri-state, answered by fno-agents (spawn-overlay kind
+    business-role): None when no business role has the name, the routing
+    answer, or the typed refusal, raised before any routing policy."""
+    from fno import rust_binary
+    from fno.roles import RoleResolutionBlocked
 
-    from fno.roles import (
-        ManifestRoutingResolution,
-        ResolvedRole,
-        RoleResolutionBlocked,
-        RoleResolutionReason,
-    )
-
-    result = business_lookup(role)
-    if isinstance(result, RoleResolutionBlocked):
-        if result.reason is RoleResolutionReason.NOT_FOUND:
-            return None
-        raise BusinessRoleResolutionBlockedError(result)
-    if not isinstance(result, (ResolvedRole, ManifestRoutingResolution)):
-        raise BusinessRoleRoutingProjectionError(
-            f"business lookup for role {role!r} returned no typed resolution; no worker launched"
-        )
-    return result
-
-
-def _default_business_lookup(
-    role: str,
-) -> "ManifestRoutingResolution | RoleResolutionBlocked":
-    """Discover conventional manifests only when a role root actually exists."""
-    from pathlib import Path
-    import stat
-
-    from fno.company.contracts import RoleRef
-    from fno.roles import (
-        RoleResolutionBlocked,
-        RoleResolutionReason,
-        default_role_root,
-        discover_role_definitions,
-        resolve_manifest_routing,
-    )
-
-    configured_root = os.environ.get("FNO_ROLES_ROOT")
-    root = Path(configured_root).expanduser() if configured_root else default_role_root()
-    try:
-        root_status = root.stat()
-    except FileNotFoundError:
-        if configured_root:
-            return RoleResolutionBlocked(
-                role=RoleRef(id=role, function_id="unavailable"),
-                reason=RoleResolutionReason.INVALID_MANIFEST,
-                source_id=str(root),
-                reference=role,
-                detail="configured role root does not exist",
-            )
-        return RoleResolutionBlocked(
-            role=RoleRef(id=role, function_id="unavailable"),
-            reason=RoleResolutionReason.NOT_FOUND,
-            reference=role,
-        )
-    except OSError as exc:
-        return RoleResolutionBlocked(
-            role=RoleRef(id=role, function_id="unavailable"),
-            reason=RoleResolutionReason.INVALID_MANIFEST,
-            source_id=str(root),
-            reference=role,
-            detail=f"{type(exc).__name__}: {exc}",
-        )
-    if not stat.S_ISDIR(root_status.st_mode):
-        return RoleResolutionBlocked(
-            role=RoleRef(id=role, function_id="unavailable"),
-            reason=RoleResolutionReason.INVALID_MANIFEST,
-            source_id=str(root),
-            reference=role,
-            detail="role root exists but is not a directory",
-        )
-    return resolve_manifest_routing(role, discover_role_definitions(root=root))
+    answer = rust_binary.verb_call("spawn-overlay", {"kind": "business-role", "role": role})
+    if "reason" not in answer:
+        return answer
+    if answer["reason"] == "not_found":
+        return None
+    raise BusinessRoleResolutionBlockedError(RoleResolutionBlocked.model_validate(answer))
 
 
 def _business_role_target(
     role: str,
     block: "ModelRoutingBlock",
-    business_role: "Optional[ResolvedRole | ManifestRoutingResolution]",
+    business_role: Optional[dict],
 ) -> Optional[tuple[str, str]]:
     """Project only provider/model material into the legacy routing target."""
     legacy_target = _role_target(role, block)
     if business_role is None:
         return legacy_target
 
-    projection = business_role.routing_projection
+    projection = business_role.get("routing_projection")
     if projection is None:
         return None
-    provider = projection.provider if projection is not None else None
-    model = projection.model if projection is not None else None
+    provider = projection.get("provider")
+    model = projection.get("model")
     if legacy_target is not None:
         provider = provider or legacy_target[0]
         model = model or legacy_target[1]

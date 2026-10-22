@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fno import rust_binary
 from fno.agents import model_routing as mr
 from fno.agents import spawn_overlay_client as soc
 from fno.company.contracts import FunctionRef, RoleRef
@@ -15,12 +16,10 @@ from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
 from fno.roles import (
     AuthorityCeiling,
     DeliveryPolicy,
-    ResolvedRole,
     ReviewPolicy,
     RoleDefinitionSource,
     RoleLayer,
     RoleManifest,
-    RoleResolutionBlocked,
     RoleResolutionReason,
     RoutingHint,
 )
@@ -44,14 +43,12 @@ def _pin_oai_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
 
 
-def _call_resolver(resolver, role, *, settings=None, env=None, notice=None, business_lookup=None):
+def _call_resolver(resolver, role, *, settings=None, env=None, notice=None):
     """``resolve_codex_route`` no longer takes ``env=`` (the key resolves in
     the Rust command's process env); the claude signature keeps it."""
     kwargs: dict = {}
     if notice is not None:
         kwargs["notice"] = notice
-    if business_lookup is not None:
-        kwargs["business_lookup"] = business_lookup
     if resolver is mr.resolve_route:
         kwargs["settings"] = settings
         kwargs["env"] = env
@@ -67,18 +64,25 @@ def _settings(**block_kwargs: object) -> SettingsModel:
     )
 
 
-def _not_found(name: str) -> RoleResolutionBlocked:
-    return RoleResolutionBlocked(
-        role=RoleRef(id=name, function_id="test-function"),
-        reason=RoleResolutionReason.NOT_FOUND,
-        reference=name,
-    )
+def _resolved(*, provider: str | None = None, model: str | None = None) -> dict:
+    role = {"id": "publisher", "function_id": "communications"}
+    projection = {"provider": provider, "model": model}
+    return {"role": role, "source_digest": "0" * 64, "routing_projection": projection}
 
 
-def _resolved(*, provider: str | None = None, model: str | None = None) -> ResolvedRole:
-    return ResolvedRole.model_construct(
-        routing_projection=RoutingHint(provider=provider, model=model)
-    )
+def _answer_business_role(monkeypatch: pytest.MonkeyPatch, answer: dict) -> list[str]:
+    """Answer the business-role door with ``answer``; return the roles asked."""
+    asked: list[str] = []
+    real = rust_binary.verb_call
+
+    def door(verb, payload, *args, **kwargs):
+        if payload.get("kind") != "business-role":
+            return real(verb, payload, *args, **kwargs)
+        asked.append(payload["role"])
+        return answer
+
+    monkeypatch.setattr(rust_binary, "verb_call", door)
+    return asked
 
 
 OPENAI_PROVIDER = {
@@ -90,29 +94,19 @@ OPENAI_PROVIDER = {
 }
 
 
-def _write_business_role(
-    root: Path,
-    *,
-    provider: str | None,
-    model: str | None,
-    role_id: str = "publisher",
-    function_id: str = "communications",
-    layer: RoleLayer = RoleLayer.COMPANY,
-    revision: str = "snapshot-1",
-    authority: AuthorityCeiling = AuthorityCeiling.INTERNAL,
-) -> Path:
-    role = RoleRef(id=role_id, function_id=function_id)
+def _write_business_role(root: Path, *, provider: str | None, model: str | None) -> Path:
+    role = RoleRef(id="publisher", function_id="communications")
     source = RoleDefinitionSource(
-        layer=layer,
-        source_id=f"{layer.value}/{role_id}.json",
-        snapshot_revision=revision,
+        layer=RoleLayer.COMPANY,
+        source_id="company/publisher.json",
+        snapshot_revision="snapshot-1",
         role=role,
         manifest=RoleManifest(
             role=role,
             function=FunctionRef(id=role.function_id),
             mission="Publish one bounded artifact.",
             deliverable_kinds=("brief",),
-            authority_ceiling=authority,
+            authority_ceiling=AuthorityCeiling.INTERNAL,
             review_policy=ReviewPolicy(required=True, minimum_reviewers=1),
             delivery_policy=DeliveryPolicy(required_evidence=("artifact",)),
             default_topology="direct",
@@ -123,16 +117,9 @@ def _write_business_role(
             ),
         ),
     )
-    path = root / layer.value / f"{role_id}.json"
+    path = root / "company" / "publisher.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(source.model_dump(mode="json")), encoding="utf-8")
-    return path
-
-
-def _write_corrupt_role(root: Path) -> Path:
-    path = root / "project" / "broken.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not-json", encoding="utf-8")
     return path
 
 
@@ -159,25 +146,6 @@ def _canned_route_stub(payload: dict, **_kwargs: object) -> dict:
     return {"route": route, "notices": []}
 
 
-def test_ac_r4_compat_spawn_route_delegates_not_found_without_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ZAI_API_KEY", "zai-key")
-    monkeypatch.setattr(mr, "_routing_block", lambda settings: _settings().model_routing)
-    monkeypatch.setattr(soc, "spawn_overlay_call", _canned_route_stub)
-
-    legacy_notices: list[str] = []
-    bridge_notices: list[str] = []
-    legacy = mr.resolve_spawn_route("coordinate", notice=legacy_notices.append)
-    bridged = mr.resolve_spawn_route(
-        "coordinate", notice=bridge_notices.append, business_lookup=_not_found
-    )
-
-    assert bridged == legacy
-    assert bridged is not None
-    assert bridge_notices == legacy_notices
-
-
 def test_resolved_business_role_changes_only_claude_provider_and_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -194,11 +162,11 @@ def test_resolved_business_role_changes_only_claude_provider_and_model(
     )
 
     monkeypatch.setattr(soc, "spawn_overlay_call", _canned_route_stub)
+    _answer_business_role(monkeypatch, _resolved(provider="deepseek", model="business-model"))
     route = mr.resolve_route(
         "build",
         settings=settings,
         env={"ZAI_API_KEY": "zai-key", "DEEPSEEK_API_KEY": "deepseek-key"},
-        business_lookup=lambda _: _resolved(provider="deepseek", model="business-model"),
     )
 
     assert route is not None
@@ -211,53 +179,50 @@ def test_resolved_business_role_changes_only_claude_provider_and_model(
     )
 
 
-def test_incomplete_projection_without_legacy_target_names_the_missing_field() -> None:
+def test_incomplete_projection_without_legacy_target_names_the_missing_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _answer_business_role(monkeypatch, _resolved(provider="zai"))
     with pytest.raises(mr.BusinessRoleRoutingProjectionError, match="missing model"):
-        mr.resolve_route(
-            "publisher",
-            settings=_settings(),
-            env={"ZAI_API_KEY": "zai-key"},
-            business_lookup=lambda _: _resolved(provider="zai"),
-        )
+        mr.resolve_route("publisher", settings=_settings(), env={"ZAI_API_KEY": "zai-key"})
 
 
 @pytest.mark.parametrize("resolver", [mr.resolve_route, mr.resolve_codex_route])
 def test_disabled_routing_invalid_manifest_still_fails_closed(
     resolver: Callable[..., object],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    blocked = RoleResolutionBlocked(
-        role=RoleRef(id="publisher", function_id="communications"),
-        reason=RoleResolutionReason.INVALID_MANIFEST,
-        source_id="company/roles.toml",
-        reference="publisher",
-    )
+    blocked = {
+        "role": {"id": "publisher", "function_id": "communications"},
+        "reason": "invalid_manifest",
+        "source_layer": None,
+        "source_id": "company/roles.toml",
+        "reference": "publisher",
+        "detail": None,
+    }
+    _answer_business_role(monkeypatch, blocked)
 
     with pytest.raises(mr.BusinessRoleResolutionBlockedError) as caught:
-        _call_resolver(
-            resolver, "publisher", settings=_settings(enabled=False), business_lookup=lambda _: blocked
-        )
+        _call_resolver(resolver, "publisher", settings=_settings(enabled=False))
 
-    assert caught.value.result is blocked
+    assert caught.value.result.reason is RoleResolutionReason.INVALID_MANIFEST
+    assert caught.value.result.source_id == "company/roles.toml"
 
 
-def test_protected_business_names_validate_manifest_but_keep_primary_route() -> None:
-    called = False
-
-    def lookup(_: str) -> ResolvedRole:
-        nonlocal called
-        called = True
-        return _resolved(provider="oai", model="unsafe")
+def test_protected_business_names_validate_manifest_but_keep_primary_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked = _answer_business_role(monkeypatch, _resolved(provider="oai", model="unsafe"))
 
     assert (
         _call_resolver(
             mr.resolve_route,
             "implement",
             settings=_settings(providers=OPENAI_PROVIDER, roles={"implement": "oai/unsafe"}),
-            business_lookup=lookup,
         )
         is None
     )
-    assert called is True
+    assert asked == ["implement"]
 
 
 @pytest.mark.dev_build
@@ -335,130 +300,3 @@ def test_business_manifest_without_routing_hint_ignores_same_name_legacy_route(
     assert _call_resolver(resolver, "publisher", settings=settings, env=env) is None
 
 
-@pytest.mark.dev_build
-def test_default_lookup_uses_fixed_precedence_and_accepts_tightening_overlay(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "roles"
-    _write_business_role(
-        root,
-        provider="zai",
-        model="tightened-model",
-        layer=RoleLayer.PROJECT,
-        authority=AuthorityCeiling.INTERNAL,
-    )
-    _write_business_role(
-        root,
-        provider="zai",
-        model="base-model",
-        layer=RoleLayer.BUILT_IN,
-        authority=AuthorityCeiling.EXTERNAL,
-    )
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-
-    result = mr._default_business_lookup("publisher")
-
-    assert not isinstance(result, RoleResolutionBlocked)
-    assert len(result.source_digest) == 64
-    assert result.routing_projection == RoutingHint(provider="zai", model="tightened-model")
-
-
-@pytest.mark.dev_build
-def test_default_lookup_blocks_mixed_revisions_and_authority_expansion(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "roles"
-    _write_business_role(
-        root,
-        provider="zai",
-        model="base-model",
-        layer=RoleLayer.BUILT_IN,
-        revision="snapshot-1",
-    )
-    _write_business_role(
-        root,
-        provider="zai",
-        model="overlay-model",
-        layer=RoleLayer.PROJECT,
-        revision="snapshot-2",
-        authority=AuthorityCeiling.EXTERNAL,
-    )
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-
-    mixed = mr._default_business_lookup("publisher")
-    assert isinstance(mixed, RoleResolutionBlocked)
-    assert mixed.reason is RoleResolutionReason.MIXED_REVISION
-
-    overlay_path = root / RoleLayer.PROJECT.value / "publisher.json"
-    raw = json.loads(overlay_path.read_text(encoding="utf-8"))
-    raw["snapshot_revision"] = "snapshot-1"
-    overlay_path.write_text(json.dumps(raw), encoding="utf-8")
-    expanded = mr._default_business_lookup("publisher")
-    assert isinstance(expanded, RoleResolutionBlocked)
-    assert expanded.reason is RoleResolutionReason.AUTHORITY_EXPANSION
-    assert expanded.source_layer is RoleLayer.PROJECT
-
-
-@pytest.mark.dev_build
-def test_default_lookup_blocks_ambiguous_role_function_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "roles"
-    _write_business_role(
-        root,
-        provider="zai",
-        model="communications-model",
-        layer=RoleLayer.BUILT_IN,
-        function_id="communications",
-    )
-    _write_business_role(
-        root,
-        provider="zai",
-        model="sales-model",
-        layer=RoleLayer.COMPANY,
-        function_id="sales",
-    )
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-
-    ambiguous = mr._default_business_lookup("publisher")
-
-    assert isinstance(ambiguous, RoleResolutionBlocked)
-    assert ambiguous.reason is RoleResolutionReason.INVALID_MANIFEST
-    assert "multiple functions" in (ambiguous.detail or "")
-
-
-@pytest.mark.dev_build
-def test_default_production_lookup_blocks_corrupt_sources_even_when_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "roles"
-    _write_corrupt_role(root)
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-
-    with pytest.raises(mr.BusinessRoleResolutionBlockedError) as caught:
-        _call_resolver(mr.resolve_route, "publisher", settings=_settings(enabled=False), env={})
-
-    assert caught.value.result.reason is RoleResolutionReason.INVALID_MANIFEST
-    assert caught.value.result.source_layer is RoleLayer.PROJECT
-    assert caught.value.result.source_id == "project/broken.json"
-    assert "JSONDecodeError" in (caught.value.result.detail or "")
-
-
-def test_default_production_lookup_blocks_missing_explicit_role_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "missing-roles"
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-    monkeypatch.setattr(mr, "_routing_block", lambda settings: _settings().model_routing)
-
-    with pytest.raises(mr.BusinessRoleResolutionBlockedError) as caught:
-        mr.resolve_spawn_route("coordinate")
-
-    assert caught.value.result.reason is RoleResolutionReason.INVALID_MANIFEST
-    assert caught.value.result.source_id == str(root)
-    assert "does not exist" in (caught.value.result.detail or "")

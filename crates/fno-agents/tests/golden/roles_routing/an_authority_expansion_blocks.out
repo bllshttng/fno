@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "authority_expansion",
+  "reference": "authority_ceiling",
+  "role": {
+    "function_id": "communications",
+    "id": "publisher"
+  },
+  "source_id": "project/publisher.json",
+  "source_layer": "project"
+}
