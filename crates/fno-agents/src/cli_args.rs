@@ -165,9 +165,6 @@ impl SpawnAxes {
         "-P",
         "--harness",
         "-H",
-        "--model",
-        "-m",
-        "--effort",
         "--resume",
         "-r",
         "--substrate",
@@ -208,8 +205,6 @@ impl SpawnAxes {
                 None
             } else if tok.starts_with("-P") {
                 Some("--provider")
-            } else if tok.starts_with("-m") {
-                Some("--model")
             } else if tok.starts_with("-r") {
                 Some("--resume")
             } else {
@@ -274,7 +269,6 @@ impl SpawnAxes {
                     // A short names its long, as the Python stubs print it.
                     let named = match long {
                         "-P" => "--provider",
-                        "-m" => "--model",
                         "-r" => "--resume",
                         other => other,
                     };
@@ -507,22 +501,35 @@ mod tests {
     }
 
     #[test]
+    fn spawn_axes_leave_the_harness_shorthand_flags_alone() {
+        let toks: Vec<String> = [
+            "-m",
+            "sonnet",
+            "--effort",
+            "high",
+            "--permission-mode=plan",
+            "-msonnet",
+            "--route",
+            "zai/glm",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (axes, fence) = SpawnAxes::scan(&toks).expect("shorthand flags are not axes");
+        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
+        let kept = SpawnAxes::strip_axes(&toks, fence);
+        assert_eq!(kept[..6], toks[..6], "the harness flags survive the strip");
+    }
+
+    #[test]
     fn spawn_axes_retired_spellings_refuse_by_name() {
         // Every retired spelling refuses with the same line the Python
         // stubs print, so both doors teach one native form.
-        for flag in [
-            "--provider",
-            "-P",
-            "--model",
-            "-m",
-            "--effort",
-            "--substrate",
-        ] {
+        for flag in ["--provider", "-P", "--substrate"] {
             let toks: Vec<String> = [flag, "x"].iter().map(|s| s.to_string()).collect();
             let err = SpawnAxes::scan(&toks).expect_err("retired axis refuses");
             let long = match flag {
                 "-P" => "--provider",
-                "-m" => "--model",
                 f => f,
             };
             assert!(
@@ -556,7 +563,6 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
             ("-rabc", "--resume"),
             ("-r=x", "--resume"),
             ("-Pzai", "--provider"),
-            ("-msonnet", "--model"),
         ] {
             let toks: Vec<String> = [tok].iter().map(|s| s.to_string()).collect();
             let err = SpawnAxes::scan(&toks).expect_err("an attached retired short refuses");

@@ -302,11 +302,25 @@ def _positional_indices(toks: Sequence[str]) -> List[int]:
 
 
 
-def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
-    """Move ``--model``/``-m`` from the head behind the ``--`` fence.
+#: Harness flags a spawn accepts before the fence as shorthand for the same
+#: flag behind it. Each takes one value.
+_FENCE_SHORTHAND = {
+    "--model": "--model",
+    "-m": "--model",
+    "--effort": "--effort",
+    "--permission-mode": "--permission-mode",
+    "--add-dir": "--add-dir",
+    "--agent": "--agent",
+    "--tools": "--tools",
+}
 
-    Spawn allows every harness flag, and the model is the one an operator
-    types most, so the head spelling is shorthand for the harness's own flag.
+
+def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
+    """Move ``--model``/``-m``, ``--effort``, ``--permission-mode``, ``--add-dir``,
+    ``--agent`` and ``--tools`` from the head behind the ``--`` fence.
+
+    Spawn allows every harness flag, and these are the ones an operator types
+    most, so the head spelling is shorthand for the harness's own flag.
     A prompt-less spawn keeps an explicit empty MESSAGE, or the first fenced
     token would become the prompt.
     """
@@ -315,16 +329,21 @@ def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
     moved: List[str] = []
     it = iter(toks[:cut])
     for tok in it:
-        if tok in _MODEL_FLAGS:
-            moved += ["--model", next(it, "")]
-        elif tok.startswith("--model="):
-            moved += ["--model", tok.split("=", 1)[1]]
+        flag, eq, value = tok.partition("=")
+        if tok in _FENCE_SHORTHAND:
+            moved += [_FENCE_SHORTHAND[tok], next(it, "")]
+        elif eq and flag.startswith("--") and flag in _FENCE_SHORTHAND:
+            moved += [_FENCE_SHORTHAND[flag], value]
         else:
             kept.append(tok)
     if not moved:
         return toks
     if not all(moved[1::2]):
-        print("fno agents spawn: --model needs a value; no worker launched", file=err)
+        print(
+            f"fno agents spawn: {' / '.join(sorted(set(moved[0::2])))} needs a value; "
+            "no worker launched",
+            file=err,
+        )
         raise SystemExit(2)
     if not _positional_indices(kept):
         kept.append("")
@@ -810,6 +829,10 @@ def _scan_projection(tail: Sequence[str]) -> dict:
         from fno.agents.mux_spawn import passthrough_model
 
         has_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :]) is not None
+    # The head spelling of --effort lands behind the fence too, so a fenced
+    # one is the operator's choice and a config default must not stack on it.
+    if "--" in tail and not has_effort:
+        has_effort = _flag_value(list(tail)[list(tail).index("--") + 1 :], "--effort") is not None
     explicit_vendor = _flag_value(tail, "--provider", "-P")
     explicit_route = _flag_present(tail, "--route")
     role = _role_of(tail)

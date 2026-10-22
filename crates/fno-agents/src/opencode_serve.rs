@@ -769,6 +769,14 @@ fn dispatch_opencode_serve_inner(
             "incarnation": format!("{}:{}", serve.pid, serve.pid_start.unwrap_or_default()),
             "endpoint": serve.base_url,
             "log_path": log_path.to_string_lossy(),
+            // The model the launch carries, and where it came from: a model
+            // the caller typed, or the lane's own default.
+            "model": model_value,
+            "model_basis": if model.is_some_and(|m| !m.is_empty()) {
+                "requested"
+            } else {
+                "lane-default"
+            },
             // No session id at launch: opencode mints it and the worker's
             // session report binds the row.
             "binding": "session-report",
