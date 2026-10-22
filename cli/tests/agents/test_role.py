@@ -139,6 +139,7 @@ def _spawn_promoted(monkeypatch, tmp_path, *, grantor_env: Optional[str], **role
     )
 
 
+@pytest.mark.dev_build
 def test_role_stamped_grantor_is_the_spawning_session(
     tmp_path: Path, monkeypatch, native_backlog_door
 ) -> None:
@@ -1425,6 +1426,7 @@ def _scope_manifest(tmp_path):
     return space_dir(tmp_path) / "leads" / "x-epic.md"
 
 
+@pytest.mark.dev_build
 def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     tmp_path, monkeypatch
 ) -> None:

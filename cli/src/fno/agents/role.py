@@ -795,66 +795,41 @@ def _widen_answer(scope: str, caller, target_name: str) -> dict:
         return {}
 
 
-def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
-    """Set mission_active on every open epic in a promoted scope. Operator rule:
-    an epic with an owner is a mission, or no drain loop can see its children.
-    Returns the epic ids newly armed, or None when the graph write failed."""
-    armed: list[str] = []
-    try:
-        from fno.rust_binary import verb_call
-        from fno.agents import events
-        from fno.graph.cli import _container_ids
+def spawn_team_write(op: str, **payload: Any) -> dict:
+    """One spawn-team write op in Rust (team_spawn.rs), with the journal
+    path this process resolves. Prints the op's notices to stderr."""
+    import sys
 
-        # ONE graph parse serves every member: a graph this rung could not
-        # read answers None, and the per-call fallback keeps that machine
-        # working one member at a time.
-        by_id = _graph_index()
-        entry_of = _graph_entry if by_id is None else by_id.get
-        containers = _container_ids(list(by_id.values())) if by_id else set()
-        for member in split_scope(scope):
-            entry = entry_of(member) or {}
-            if entry.get("type") != "epic":
-                continue
-            if entry.get("status") in ("done", "superseded"):
-                continue
-            if member not in containers:
-                # advance_epic refuses a childless epic as not-a-container and
-                # leaves the flag standing, which the drain then polls forever.
-                # The dispatch lever arms it once children exist.
-                continue
-            if verb_call(["backlog", "advance", "--stdin"], {"op": "mission", "node_id": member, "active": True})["changed"]:
-                events.emit(
-                    "mission_activated",
-                    epic_id=member, source="role",
-                )
-                armed.append(member)
-    except Exception as exc:  # noqa: BLE001 - the role already committed
+    from fno import paths
+    from fno.agents.spawn_overlay_client import spawn_overlay_call
+
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": op, **payload,
+                                 "events": str(paths.state_dir() / "events.jsonl"),
+                                 "registry": str(paths.agents_registry_path())})
+    for note in answer.get("notices", []):
+        print(note, file=sys.stderr)
+    return answer
+
+
+def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
+    """Mission-arm every open epic container in a promoted scope; the ids
+    newly armed, or None when the graph write failed."""
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable
+
+    try:
+        return spawn_team_write("missions", scope=scope or "")["armed"]
+    except SpawnOverlayUnavailable as exc:
         import sys
 
-        print(
-            f"role: WARNING: mission arming failed for scope {scope!r} ({exc}); "
-            "arm it with: fno backlog advance --epic <id>",
-            file=sys.stderr,
-        )
+        print(f"role: WARNING: mission arming failed for scope {scope!r} ({exc}); "
+              "arm it with: fno backlog advance --epic <id>", file=sys.stderr)
         return None
-    return armed
 
 
 def journal_spawn_role(outcome: Optional[str], vacated: list, *, name, level, scope, grantor) -> None:
-    """Journal one committed spawn write: a vacate line per cleared holder, one
-    reown line per team child that followed the role, plus the grant line."""
-    from fno.agents import events
-    from fno.agents.spawn_overlay_client import spawn_overlay_call
-
-    answer = spawn_overlay_call({
-        "kind": "spawn-team", "op": "journal", "outcome": outcome,
-        "vacated": [(asdict(row), cause) for row, cause in vacated],
-        "name": name, "level": level, "scope": scope, "grantor": grantor,
-    })
-    for event in answer["events"]:
-        events.emit(event["kind"], **event["data"])
-    if answer["arm_missions"]:
-        arm_promoted_missions(scope)
+    """Journal one committed spawn write and arm the scope's missions."""
+    spawn_team_write("record", outcome=outcome, name=name, level=level, scope=scope,
+                     grantor=grantor, vacated=[(asdict(row), cause) for row, cause in vacated])
 
 
 def reclaim_role(handle: Optional[str] = None) -> dict[str, Any]:
