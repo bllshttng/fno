@@ -2123,13 +2123,14 @@ mod tests {
         let t = beat(&own_b, &["q-own"], 1150, &mut io);
         assert_eq!(t.closed, 0, "arm B closes nothing of arm A's");
         assert!(io.path_of("q-own").is_some(), "B delivers its own page");
-        for (items, asked, now) in [
-            (kept_a.as_slice(), &["q-kept"][..], 1180),
-            (own_b.as_slice(), &["q-own"][..], 1210),
-            (kept_a.as_slice(), &["q-kept"][..], 1240),
-            (own_b.as_slice(), &["q-own"][..], 1270),
-            (kept_a.as_slice(), &["q-kept"][..], 1300),
+        for (arm, items, asked, now) in [
+            ("aaaa1111aaaa1111", kept_a.as_slice(), &["q-kept"][..], 1180),
+            ("bbbb2222bbbb2222", own_b.as_slice(), &["q-own"][..], 1210),
+            ("aaaa1111aaaa1111", kept_a.as_slice(), &["q-kept"][..], 1240),
+            ("bbbb2222bbbb2222", own_b.as_slice(), &["q-own"][..], 1270),
+            ("aaaa1111aaaa1111", kept_a.as_slice(), &["q-kept"][..], 1300),
         ] {
+            io.arm = Some(arm.to_string());
             let t = beat(items, asked, now, &mut io);
             assert_eq!(t.closed, 0, "no arm closes the other's pages: {t:?}");
             assert!(
