@@ -6,7 +6,6 @@ import shutil
 import stat
 import sys
 import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
@@ -70,6 +69,14 @@ def _helper_resolvable() -> bool:
     return Path(sys.executable).with_name("fno-gh-proxy").is_file()
 
 
+def _is_retired_script(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return b"fno.pr.gh_proxy" in handle.read(4096)
+    except OSError:
+        return False
+
+
 def _is_wrapper(path: Path) -> bool:
     # A stock CI runner's gh is a compiled binary, not utf-8 text.
     try:
@@ -90,7 +97,14 @@ def ensure_proxy(
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
     link = root / "fno-gh-proxy"
-    helper = shutil.which("fno-gh-proxy")
+    # Skip the link's own dir (it would answer for its own stale target) and
+    # the console script pr port 7 retired: its import dies on a newer fno.
+    on_path = (
+        _WHICH("fno-gh-proxy", path=part)
+        for part in os.environ.get("PATH", "").split(os.pathsep)
+        if part and os.path.realpath(part) != os.path.realpath(root)
+    )
+    helper = next((h for h in on_path if h and not _is_retired_script(h)), None)
     if not helper:
         bundled = _bundled_helper("fno-gh-proxy")
         if bundled is not None:
@@ -104,10 +118,13 @@ def ensure_proxy(
         # real gh unswrapped and let the quota policy stand down for this
         # process tree.
         return InstallResult(proxy=resolved, delegate=resolved, changed=False)
-    if helper and not link.exists() and os.path.isfile(helper):
-        link.unlink(missing_ok=True)
-        with suppress(FileExistsError):
-            link.symlink_to(helper)
+    # A link left on an old target outlives the install it named: replace it.
+    relinked = os.path.realpath(link) != os.path.realpath(helper)
+    if relinked:
+        staged = root / f".fno-gh-proxy.{os.getpid()}"
+        staged.unlink(missing_ok=True)
+        staged.symlink_to(helper)
+        os.replace(staged, link)
     proxy = root / "gh"
     resolved = resolved.resolve()
     if resolved == proxy.resolve():
@@ -131,7 +148,7 @@ def ensure_proxy(
             os.replace(tmp, proxy)
         finally:
             Path(raw_tmp).unlink(missing_ok=True)
-    return InstallResult(proxy=proxy, delegate=resolved, changed=changed, backup=backup)
+    return InstallResult(proxy=proxy, delegate=resolved, changed=changed or relinked, backup=backup)
 
 
 def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
