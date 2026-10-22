@@ -1443,6 +1443,16 @@ pub fn provenance_verdict(
 /// answered, else seconds since the row's `created_at`, else unmeasured -
 /// and an unmeasured hold never escalates, because a wrong number is not a
 /// clock.
+/// The report clock an unresolved transcript ages on: seconds since the
+/// row's last session report, else since the row was created.
+fn report_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
+    e.last_report_at
+        .as_deref()
+        .and_then(crate::tick_ledger::parse_rfc3339_unix)
+        .or_else(|| crate::tick_ledger::parse_rfc3339_unix(&e.created_at))
+        .map(|at| (now - at as i64).max(0))
+}
+
 fn hold_clock(age: Option<i64>, created_at: &str, now: i64) -> (Option<i64>, &'static str) {
     match age {
         Some(a) => (Some(a), "transcript quiet"),
@@ -1891,8 +1901,13 @@ pub(crate) fn run_with_release(
         let mut release_stop = false;
         // Locked Decision 1: every named node done but one still carries an
         // OPEN do row for this session -> the row stays and the node is
-        // named. The retirement never settles graph rows itself.
-        if matches!(work, WorkState::AllDone { .. }) {
+        // named. The retirement never settles graph rows itself. Past the
+        // origin ruling's idle hour a spawn row no longer holds on it.
+        let idle_hour_past = e.origin.as_deref() == Some("spawn")
+            && (*age)
+                .or_else(|| report_age(e, now))
+                .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS);
+        if matches!(work, WorkState::AllDone { .. }) && !idle_hour_past {
             if let Some(nodes) = graph.open_do.get(&sid.to_ascii_lowercase()) {
                 let node = nodes.first().cloned().unwrap_or_default();
                 let reason = KeepReason::OpenDoRow { node: node.clone() }.as_str();
@@ -2144,6 +2159,7 @@ pub(crate) fn run_with_release(
             teamed: e.role_level.is_some(),
             work,
             transcript_age_s: age,
+            report_age_s: report_age(e, now),
             owns_worktree,
             worktree_clean: None,
             branch_merged: None,
@@ -2666,7 +2682,7 @@ pub(crate) fn run_with_release(
             |entry: &state::RegistryEntry| death.is_some() || release_stop || stop_confirmed(entry);
         // the session-shaped release that let an OPEN-work row
         // retire. The obligation re-checks (stage and commit) yield to it.
-        let released = row.session_released();
+        let released = row.session_released() || crate::gc::past_idle_hour(&row);
         // The stop gate's read-only answer, folded here where the evidence
         // lives: harness death state, a stop-family release, or the pane
         // precheck's already-stopped. Staging decides with it, and the
@@ -2824,6 +2840,8 @@ pub(crate) fn run_with_release(
                         .find(|(_, s)| crate::gc::PLANNING_MOVED_ON_STATUSES.contains(&s.as_str()))
                     {
                         format!("planning finished on {node}: node {moved_status}")
+                    } else if crate::gc::past_idle_hour(&probed) {
+                        format!("idle past the hour on {node} {status}")
                     } else if probed.planning_released || !probed.turn_ended {
                         format!("planning finished on {node}: released")
                     } else {
@@ -2838,6 +2856,8 @@ pub(crate) fn run_with_release(
                     )
                 } else if crate::gc::INACTIVE_NODE_STATUSES.contains(&status.as_str()) {
                     format!("node {node} is {status}, not active work")
+                } else if crate::gc::past_idle_hour(&probed) {
+                    format!("idle past the hour on {node} {status}")
                 } else {
                     format!("node {node} {status}; recorded merge_status merged")
                 }
