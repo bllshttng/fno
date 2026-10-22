@@ -161,14 +161,16 @@ fn ls_row(record: &Discovered) -> Value {
 /// List source-attributed definitions without resolving context.
 fn ls(mut options: GroupOptions, tail: &[String]) -> i32 {
     let command = format!("{GROUP} ls");
+    let mut options_done = false;
     for arg in tail {
         match arg.as_str() {
-            "--json" | "-J" => options.json = true,
-            "--help" => {
+            "--" if !options_done => options_done = true,
+            "--json" | "-J" if !options_done => options.json = true,
+            "--help" if !options_done => {
                 print!("{LS_HELP}");
                 return 0;
             }
-            other if other.starts_with('-') => {
+            other if !options_done && other.starts_with('-') && other.len() > 1 => {
                 return usage_error(&command, "[OPTIONS]", &format!("No such option: {other}"))
             }
             other => {
@@ -258,14 +260,17 @@ fn show(mut options: GroupOptions, tail: &[String]) -> i32 {
     const USAGE: &str = "[OPTIONS] ROLE";
     let command = format!("{GROUP} show");
     let mut positionals: Vec<&str> = Vec::new();
+    // A bare `--` ends the options, as click reads it.
+    let mut options_done = false;
     for arg in tail {
         match arg.as_str() {
-            "--json" | "-J" => options.json = true,
-            "--help" => {
+            "--" if !options_done => options_done = true,
+            "--json" | "-J" if !options_done => options.json = true,
+            "--help" if !options_done => {
                 print!("{SHOW_HELP}");
                 return 0;
             }
-            other if other.starts_with('-') && other.len() > 1 => {
+            other if !options_done && other.starts_with('-') && other.len() > 1 => {
                 return usage_error(&command, USAGE, &format!("No such option: {other}"))
             }
             other => positionals.push(other),

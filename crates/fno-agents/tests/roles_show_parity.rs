@@ -144,7 +144,7 @@ fn roles_show_matches_the_python_goldens() {
     let roles_arg = roles.to_string_lossy().into_owned();
     let missing = format!("plan={}", fixture.join("extra/missing.json").display());
     let group = ["--root", roles_arg.as_str(), "--source", missing.as_str()];
-    let cases: [(&str, Vec<&str>); 7] = [
+    let cases: [(&str, Vec<&str>); 8] = [
         (
             "show text marks the contributing and shadowed sources",
             [&group[..], &["show", "owner"][..]].concat(),
@@ -167,6 +167,15 @@ fn roles_show_matches_the_python_goldens() {
         ),
         ("show without a role refuses", vec!["show"]),
         ("show help", vec!["show", "--help"]),
+        (
+            "show reads the role after the end of options",
+            [
+                &["-J"][..],
+                &group[..],
+                &["show", "--", "marketing/owner"][..],
+            ]
+            .concat(),
+        ),
     ];
     for (label, argv) in cases {
         let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
