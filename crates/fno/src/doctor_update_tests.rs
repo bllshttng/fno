@@ -38,8 +38,8 @@ fn parse_args_reads_every_flag() {
     assert_eq!(f.source, Some(PathBuf::from("/tmp/src")));
     assert!(f.dry_run && f.force && f.rust && !f.no_rust && !f.check);
 
-    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check"])).expect("parses");
-    assert!(f.dry_run && f.force && f.no_rust && f.check);
+    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--last-green"])).expect("parses");
+    assert!(f.dry_run && f.force && f.no_rust && f.check && f.last_green);
 
     assert!(parse_args(&os(&["--bogus"])).is_err());
     assert!(parse_args(&os(&["--source"])).is_err());
@@ -420,4 +420,31 @@ fn python_holds_whenever_rust_trails_the_source() {
         assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
     }
     assert_eq!(python_hold_line(None), None);
+}
+
+#[test]
+fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    git_ok(
+        tmp.path(),
+        &["init", "-q", "-b", "main", &repo.to_string_lossy()],
+    );
+    std::fs::create_dir_all(repo.join("crates")).unwrap();
+    let mut revs = Vec::new();
+    // Crates change, python-only, crates change, python-only.
+    for (n, file) in ["crates/a", "cli", "crates/a", "cli"].iter().enumerate() {
+        std::fs::write(repo.join(file), n.to_string()).unwrap();
+        git_ok(&repo, &["add", "-A"]);
+        git_ok(&repo, &["commit", "-q", "-m", &format!("c{n}")]);
+        revs.push(git_ok(&repo, &["rev-parse", "HEAD"]));
+    }
+    // CI published only the older crates rev: the python-only rev after it
+    // shares those bins and is the newest that does.
+    assert_eq!(last_green_rev(&repo, &revs[0]).unwrap(), revs[1]);
+    // The tip's own crates rev published: the tip is the last green.
+    assert_eq!(last_green_rev(&repo, &revs[2]).unwrap(), revs[3]);
+    // A published rev off this line is named, never guessed.
+    let err = last_green_rev(&repo, "0123456789abcdef").unwrap_err();
+    assert!(err.contains("0123456789ab"), "{err}");
 }

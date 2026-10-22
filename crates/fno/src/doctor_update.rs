@@ -102,6 +102,7 @@ pub(crate) struct Flags {
     pub(crate) rust: bool,
     pub(crate) no_rust: bool,
     pub(crate) check: bool,
+    pub(crate) last_green: bool,
 }
 
 pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
@@ -123,6 +124,7 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
             "--rust" => f.rust = true,
             "--no-rust" => f.no_rust = true,
             "--check" => f.check = true,
+            "--last-green" => f.last_green = true,
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -394,9 +396,100 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
     )
     .then(|| {
         format!(
-            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together (`--no-rust` moves python alone, at your risk)"
+            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together (`--last-green` installs both from the newest published rev; `--no-rust` moves python alone, at your risk)"
         )
     })
+}
+
+/// The newest commit on `repo`'s first-parent line whose crates/ rev is
+/// `published`: every commit from that crates/ change up to the next one
+/// shares the published bins, so the newest of them is the last green rev.
+/// Candidates are HEAD, then the commit before each crates/ change.
+pub(crate) fn last_green_rev(repo: &Path, published: &str) -> Result<String, String> {
+    let changes = git_in(
+        repo,
+        &[
+            "rev-list",
+            "--first-parent",
+            "--max-count=50",
+            "HEAD",
+            "--",
+            "crates/",
+        ],
+    )
+    .unwrap_or_default();
+    let candidates =
+        std::iter::once("HEAD".to_string()).chain(changes.lines().map(|c| format!("{c}^1")));
+    for candidate in candidates {
+        let crates = git_in(
+            repo,
+            &["log", "-1", "--format=%H", &candidate, "--", "crates/"],
+        );
+        if crates.as_deref() == Some(published) {
+            return git_in(repo, &["rev-parse", &candidate])
+                .ok_or_else(|| format!("cannot resolve {candidate}"));
+        }
+    }
+    Err(format!(
+        "the newest published build {} is not on this checkout's first-parent line within the last 50 crates/ changes",
+        &published[..published.len().min(12)]
+    ))
+}
+
+/// `--last-green`: Some((rev, crates_rev)) when the source's crates/ rev has
+/// no published build yet, None when it has one (a plain update then
+/// installs it). Local dev only: it needs a git checkout and the bin-cache
+/// tarballs, never the release channel.
+fn resolve_last_green(source: &Path) -> Result<Option<(String, String)>, String> {
+    let repo = git_in(source, &["rev-parse", "--show-toplevel"])
+        .map(PathBuf::from)
+        .ok_or("--last-green needs a git source checkout (local dev only)")?;
+    let platform =
+        crate::update_prebuilt::platform().ok_or("CI builds no binary for this platform")?;
+    let published = crate::update_prebuilt::newest_published(platform)
+        .map_err(|why| format!("cannot list the published builds ({why})"))?
+        .ok_or_else(|| format!("no published build for {platform} at all"))?;
+    if rust_subtree_rev(source).as_deref() == Some(published.as_str()) {
+        return Ok(None);
+    }
+    let rev = last_green_rev(&repo, &published)?;
+    Ok(Some((rev, published)))
+}
+
+/// Check `rev` out, detached, in the update's own worktree under the install
+/// dir, and return the source path inside it. The developer's checkout never
+/// moves backward.
+fn stage_last_green(source: &Path, rev: &str) -> Result<PathBuf, String> {
+    let repo = git_in(source, &["rev-parse", "--show-toplevel"])
+        .ok_or("--last-green needs a git source checkout")?;
+    let prefix = git_in(source, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    let dir = install_dir().join("last-green");
+    let dir_s = dir.to_string_lossy().into_owned();
+    let git = |cwd: &str, args: &[&str]| {
+        let mut argv: Vec<String> = ["-C", cwd, "-c", "core.hooksPath=/dev/null"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        argv.extend(args.iter().map(|a| a.to_string()));
+        match run_bounded(Path::new("git"), &argv, Duration::from_secs(120), None) {
+            Ok((0, _, _)) => Ok(()),
+            Ok((code, _, err)) => Err(format!("git {} exited {code}: {}", args[0], err.trim())),
+            Err(e) => Err(format!("git {}: {e}", args[0])),
+        }
+    };
+    let reused = dir.join(".git").exists()
+        && git(&dir_s, &["checkout", "--quiet", "--detach", "--force", rev]).is_ok();
+    if !reused {
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = git(&repo, &["worktree", "prune"]);
+        git(
+            &repo,
+            &[
+                "worktree", "add", "--quiet", "--detach", "--force", &dir_s, rev,
+            ],
+        )?;
+    }
+    Ok(dir.join(prefix))
 }
 
 fn command_for(bin: &Path, args: &[String]) -> std::io::Result<Command> {
@@ -1932,6 +2025,10 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         eprintln!("fno doctor update: --rust and --no-rust are mutually exclusive");
         return 2;
     }
+    if flags.last_green && (flags.no_rust || flags.check) {
+        eprintln!("fno doctor update: --last-green moves both halves to one rev; it cannot combine with --no-rust or --check");
+        return 2;
+    }
     if target_in_progress() && !flags.force {
         eprintln!("{GUARD_MSG}");
         return 1;
@@ -1960,7 +2057,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         eprintln!("{SOURCE_PIN_UNAVAILABLE}");
         return 1;
     };
-    let resolved = PathBuf::from(path_str);
+    let mut resolved = PathBuf::from(path_str);
     println!("Reinstalling fno from {}", resolved.display());
 
     let mut failed: Vec<String> = Vec::new();
@@ -1968,6 +2065,23 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
 
     if flags.dry_run {
         let _ = sync_source_checkout(&resolved, true);
+        if flags.last_green {
+            match resolve_last_green(&resolved) {
+                Ok(Some((r, crates))) => println!(
+                    "Would install the last green rev {} (crates {}) from {}",
+                    &r[..r.len().min(12)],
+                    &crates[..crates.len().min(12)],
+                    install_dir().join("last-green").display()
+                ),
+                Ok(None) => println!(
+                    "--last-green: the source rev is published; a plain update installs it"
+                ),
+                Err(why) => {
+                    eprintln!("fno doctor update: --last-green refused: {why}");
+                    return 1;
+                }
+            }
+        }
         // The rust leg still prints its plan here (a dry run states
         // everything an update would do); it EXECUTES only below, under the
         // claim. A dry run writes NOTHING.
@@ -2016,6 +2130,38 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         return 1;
     }
     rev = source_rev(&resolved);
+
+    // --last-green swaps the source for a detached checkout of the newest rev
+    // CI published, so the rust bins, the wheel, and the plugin stage all
+    // come from that one rev. The pinned source checkout stays as it is.
+    let mut last_green: Option<String> = None;
+    if flags.last_green {
+        let staged = resolve_last_green(&resolved).and_then(|found| match found {
+            None => Ok(None),
+            Some((r, crates)) => stage_last_green(&resolved, &r).map(|dir| Some((r, crates, dir))),
+        });
+        match staged {
+            Ok(None) => println!(
+                "fno doctor update: --last-green: the source rev is published; installing it as usual"
+            ),
+            Ok(Some((r, crates, dir))) => {
+                println!(
+                    "fno doctor update: --last-green: installing rev {} (crates {}) from {}; the source tip has no published build yet",
+                    &r[..r.len().min(12)],
+                    &crates[..crates.len().min(12)],
+                    dir.display()
+                );
+                resolved = dir;
+                rev = Some(r.clone());
+                last_green = Some(r);
+            }
+            Err(why) => {
+                release_update_claim();
+                eprintln!("fno doctor update: --last-green refused: {why}");
+                return 1;
+            }
+        }
+    }
 
     // The lifecycle journal opens here, matching the deleted Python leg:
     // started after the claim, built on the rust leg's own verdict,
@@ -2202,7 +2348,13 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {
-        Ok(line) if failed.is_empty() => println!("fno update: done; {line}."),
+        Ok(line) if failed.is_empty() => match &last_green {
+            Some(r) => println!(
+                "fno update: done; last green rev {}; {line}.",
+                &r[..r.len().min(12)]
+            ),
+            None => println!("fno update: done; {line}."),
+        },
         Err(line) if failed.is_empty() => eprintln!("fno update: FAILED: installed, but {line}."),
         Ok(line) | Err(line) => {
             eprintln!("fno update: FAILED step(s): {}; {line}.", failed.join(", "))
