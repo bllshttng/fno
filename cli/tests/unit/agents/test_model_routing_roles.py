@@ -291,7 +291,6 @@ def test_default_production_lookup_projects_manifest_through_spawn_route(
     assert route["ANTHROPIC_MODEL"] == "business-model"
 
 
-@pytest.mark.dev_build
 @requires_rust
 def test_default_production_lookup_projects_manifest_through_codex_route(
     tmp_path: Path,
