@@ -36,6 +36,12 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
+    // Inside the idle hour, so the work-state keeps still hold.
+    let recent = quiet_transcript(transcripts.path(), "recent.jsonl", 1800);
+    let stamp = |ago_s: i64| {
+        (chrono::Utc::now() - chrono::Duration::seconds(ago_s))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    };
     state::update_registry(&home.registry_json(), |r| {
         // sources disagree: sessions names x-aaaa, the registry field x-cccc.
         let mut conf = ask_row("conf-row", None);
@@ -52,6 +58,7 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
         tu.short_id = "turow".into();
         tu.harness_session_id = Some("sess-tu".into());
         tu.origin = Some("spawn".into());
+        tu.created_at = stamp(1800);
         // The verdict door reads the stored status first; these scenarios vary
         // the vendor word, so the row itself must be fno-undecided.
         tu.status = crate::AgentStatus::Idle;
@@ -88,6 +95,7 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
         ),
         &|e| match e.harness_session_id.as_deref() {
             Some("sess-tu") => None,
+            Some("sess-conf") | Some("sess-odr") => Some(vec![recent.clone()]),
             _ => Some(vec![quiet.clone()]),
         },
         no_agents(),
@@ -116,8 +124,9 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
     }
 }
 
-/// AC2-ESC: a hold aged 5401s past a 5400s threshold is escalated in the
-/// JSON and its text line names the release command.
+/// AC2-ESC: a hold aged 3001s past a 3000s threshold is escalated in the
+/// JSON and its text line names the release command. Both sit inside the idle
+/// hour, past which a spawn row retires instead of holding.
 #[test]
 fn ac2_esc_escalated_hold_names_the_release_command() {
     let home = tmp_home("gc-ac2-esc");
@@ -144,7 +153,7 @@ fn ac2_esc_escalated_hold_names_the_release_command() {
         7,
         &move |_| graph.clone(),
         &|_| None,
-        &uniform_ages(5401),
+        &uniform_ages(3001),
         &|_| true,
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -152,11 +161,11 @@ fn ac2_esc_escalated_hold_names_the_release_command() {
         &|_| (None, None),
         &|_| None,
     );
-    summary.mark_escalated(std::time::Duration::from_secs(5400));
+    summary.mark_escalated(std::time::Duration::from_secs(3000));
 
     let h = find_hold(&summary, "escrow");
     assert_eq!(h.reason, "sources disagree");
-    assert_eq!(h.age_s, Some(5401));
+    assert_eq!(h.age_s, Some(3001));
     assert!(h.escalated, "{h:?}");
     let text = crate::reap_render::render_reap(&summary, false, true);
     assert!(
@@ -331,6 +340,9 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
         row.short_id = "chgrow".into();
         row.harness_session_id = Some("sess-chg".into());
         row.origin = Some("spawn".into());
+        // Inside the idle hour, so the row holds as transcript unresolved.
+        row.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         r.entries.push(row);
     })
     .unwrap();
@@ -437,7 +449,15 @@ fn ac3_err_the_command_refuses_a_not_done_witness() {
         "sessions": [],
     });
     stage_graph(dir.path(), json!([sessions_node, registry_node]));
-    let created = (chrono::Utc::now() - chrono::Duration::seconds(7200))
+    // The hold must escalate inside the idle hour: past it a spawn row
+    // retires instead of holding.
+    std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+    std::fs::write(
+        dir.path().join(".fno/config.toml"),
+        "[agents]\nhold_escalate_after_s = 3000\n",
+    )
+    .unwrap();
+    let created = (chrono::Utc::now() - chrono::Duration::seconds(3300))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     state::update_registry(&home.registry_json(), |r| {
         let mut row = ask_row("wit-row", None);
@@ -478,7 +498,9 @@ fn ac1_hp_open_pr_keep_survives_a_terminal_state_through_the_sweep() {
     let home = tmp_home("gc-open-pr");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
+    // Past the grace, so the keep asks the PR; inside the idle hour, so the
+    // keep still holds.
+    let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 1800);
     state::update_registry(&home.registry_json(), |r| {
         let mut row = claude_worker_row("pr-row", "cccc9999");
         row.origin = Some("spawn".into());
@@ -558,11 +580,12 @@ fn dead_work_sweep(
     tag: &str,
     roster: crate::claude_roster::ClaudeAgentsSnapshot,
     peer_row: bool,
+    quiet_s: i64,
 ) -> crate::gc_sweep::GcSummary {
     let home = tmp_home(tag);
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
+    let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", quiet_s);
     // The live-peer map only trusts a peer whose transcript is inside the
     // grace window, so the peer row reads fresh while the dead row stays
     // quiet past it.
@@ -637,7 +660,7 @@ fn ac2_hp_dead_worker_on_in_progress_node_is_kept_and_laddered() {
         crate::claude_roster::ClaudeAgentRow::new("cccc9999", Some("blocked")),
         crate::claude_roster::ClaudeAgentRow::new("peer0001", Some("working")).with_pid(Some(5001)),
     ]);
-    let summary = dead_work_sweep("gc-dead-work", agents, false);
+    let summary = dead_work_sweep("gc-dead-work", agents, false, 1800);
     assert!(
         summary
             .kept_open_work
@@ -850,7 +873,7 @@ fn a_blocked_row_with_a_pid_is_not_laddered_and_idles_out_past_the_hour() {
         crate::claude_roster::ClaudeAgentRow::new("cccc9999", Some("blocked")).with_pid(Some(5003)),
         crate::claude_roster::ClaudeAgentRow::new("peer0001", Some("working")).with_pid(Some(5001)),
     ]);
-    let summary = dead_work_sweep("gc-dead-work-alive", agents, false);
+    let summary = dead_work_sweep("gc-dead-work-alive", agents, false, 2 * 3600);
     assert_eq!(summary.dead_work_rows, vec![]);
     assert_eq!(summary.retired.len(), 1, "{summary:?}");
     assert_eq!(summary.retired[0].0, "cccc9999");

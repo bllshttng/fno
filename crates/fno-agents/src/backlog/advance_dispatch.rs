@@ -1194,7 +1194,7 @@ fn ambient_scrub_names() -> Vec<&'static str> {
 }
 
 /// fno's builtin unattended permission answer (spawn_compose's constant).
-const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
+pub(crate) const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
 
 /// Emit the one dispatch_spawned row and return the launch identity.
 /// `receipt` mirrors the launch rows into the caller's receipt dict.

@@ -4,10 +4,11 @@
 //! resolve healed the same codex session, and the adopted duplicate blocked
 //! resume).
 //!
-//! One producer (the Rust daemon's rm), one consumer (the Python healer in
-//! `cli/src/fno/agents/store_fallback.py`, reached through the daemon's
-//! heal-token shellout). The grace window is duplicated across the seam by
-//! design: the file is the contract, not a shared constant. Expired entries
+//! One producer (the Rust daemon's rm). Two consumers: the session-report
+//! mint here, and the Python healer in `cli/src/fno/agents/store_fallback.py`,
+//! reached through the daemon's heal-token shellout. The file is the
+//! contract, not a shared constant: this side keeps an entry as long as a
+//! reap receipt, and the healer still reads only its own 24 h. Expired entries
 //! are pruned on write; a failed write surfaces on the rm receipt, never a
 //! refused removal. The row's transport short id, name and cwd ride
 //! along on each record, so the stop command resolves a just-removed
@@ -19,10 +20,11 @@ use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// How long a removal keeps blocking store re-adoption. Long enough to cover
-/// the re-adoption window the incident showed (62s) with room for a working
-/// day; short enough that a deliberate later adoption is one wait away.
-pub(crate) const GRACE_SECS: i64 = 86_400;
+/// How long a removal keeps blocking re-adoption and the session-report
+/// mint: as long as a reap receipt is kept by default, so an rm-removed
+/// session and a reaped one stay out for the same span.
+pub(crate) const GRACE_SECS: i64 =
+    crate::agents_config::DEFAULT_REAP_RECEIPT_RETAIN_DAYS as i64 * 86_400;
 
 const FILENAME: &str = "rm_tombstones.json";
 
@@ -122,6 +124,7 @@ pub(crate) struct RemovedSession {
     pub name: String,
     pub cwd: String,
     pub host_mode: String,
+    pub removed_at: i64,
 }
 
 /// The in-window removal `token` names, matched against the row's own
@@ -137,13 +140,10 @@ pub(crate) fn lookup_removed_beside(registry_path: &Path, token: &str) -> Option
     let entries: Vec<Value> = serde_json::from_str(&raw).ok()?;
     let now = now_epoch_secs();
     entries.into_iter().rev().find_map(|row| {
-        let in_window = row
+        let removed_at = row
             .get("removed_at")
             .and_then(Value::as_i64)
-            .is_some_and(|at| now.saturating_sub(at) <= GRACE_SECS);
-        if !in_window {
-            return None;
-        }
+            .filter(|at| now.saturating_sub(*at) <= GRACE_SECS)?;
         let session_id = row
             .get("session_id")
             .and_then(Value::as_str)
@@ -175,6 +175,7 @@ pub(crate) fn lookup_removed_beside(registry_path: &Path, token: &str) -> Option
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            removed_at,
         })
     })
 }

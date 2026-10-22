@@ -113,6 +113,8 @@ These five move or remove state around sessions. None stops or removes a session
 14. the dry-run unverified gate: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`
 15. the tree verdict, then the commit: `kept tree {id} (...)` lines, then the retire lines
 
+The origin rule cuts across steps 6 to 10. It covers a spawn row, and an adopted row whose Claude state reads done, stopped or failed. Operator rows never retire. Take such a row idle past the hour with no live work-claim. It skips the open-do-row gate at step 6. It retires at step 7, ahead of every keep below it (`gc.rs` `past_idle_hour`). At stage and commit, an open do row on a done node no longer holds it. An open do row on a node still open is fresh work, and it still holds (`gc_sweep.rs` `obligation`). Inside the hour every step reads as listed.
+
 ## A dry run and a real run answer different questions
 
 A dry run classifies exactly as a real run does. It subtracts three things:
@@ -146,7 +148,7 @@ Measured on 2026-09-10: 4 of 51 judged rows carried `origin adopted` or `operato
 
 ## The row is waiting on work
 
-Four reasons mean real work still points at the row.
+Four reasons mean real work still points at the row. For a spawn row, each one holds only inside the idle hour. Past it the row retires and the graph keeps the record: the PR, the node and the open do row stay for their own owners. The nudge ladder acts inside the hour.
 
 ### open work
 
@@ -252,6 +254,8 @@ To tell them apart, run `fno agents session list` and read the `HARNESS` column 
 
 A reader who assumes the last cause is the only cause deletes a row that is merely on another harness. That is why all four causes are listed.
 
+A spawn row does not keep here forever. Its unresolved transcript ages on the report clock: the row's last session report, else its creation time. Past the hour the row retires (`gc.rs` `unresolved_transcript`). A finished adopted row takes the same clock. A row with no clock at all still keeps.
+
 ### no provenance
 
 The line reads `kept {id} (no provenance: no source resolved a node (sessions, registry, name, transcript))`. No declared source resolved a node (`gc.rs` `gc_decide`). The sessions join answered nothing, the registry node field is empty, the name carries no node token, and the transcript mentions none.
@@ -341,6 +345,8 @@ Each item here cost a real session time. One corrects an older belief.
 6. **A daemon older than the installed binary reports every status as `unknown`.** Unknown keeps rows. Run `fno agents session list` and read its warning. Measured on 2026-09-10: one restart turned 57 unknown rows into 26 orphaned, 16 writing, 12 quiet, and 2 parked.
 7. **The mux tab prune is scheduled, not manual-only.** An older belief held that nothing scheduled it. The manual command adds `--include-used-shells` (`client.rs` `run_reap`). The daemon retire arm uses default flags (`gc.rs` `maybe_retirement_sweep`). `--no-mux` skips it on the manual command.
 8. **A row refused on every pass stays, and the report names the refusal each time.** Older builds discarded the reason. Today the render carries it (`reap_render.rs` `render_reap`).
+9. **A retired row stays retired.** On 2026-10-22 all 50 eval rows in the registry had a reap receipt. A reaped worker's own Stop hook reported after the sweep, and the session report minted its row again. Now a reap receipt, or an rm tombstone, refuses that mint (`native_adopt.rs` `retired_session`). A tombstone lasts as long as a receipt is kept by default: 7 days. A refused claude session also gets `claude rm`, so it stops reporting and leaves Claude's list (`session_report.rs` `remove_retired_claude_session`). Claude sessions that never had an fno row are left alone. A launch record newer than the retirement is a relaunch and mints. A session you resume by hand still gets your own operator row. To bring a reaped session back on purpose, run `fno agents adopt <session-id>`.
+10. **The retire tick names its build.** A daemon that outlives a binary install keeps sweeping with the old code. On 2026-10-22 a manual `reap --done --apply` retired 83 rows the older daemon kept. Each `retire` tick detail ends in `build=<rev>`. Compare it with the installed binary (`fno doctor`), and restart the daemon on a mismatch.
 
 ## Every JSON key
 

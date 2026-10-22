@@ -342,8 +342,15 @@ pub(crate) fn tidy_lapsed(handle: &str) {
     if until > chrono::Utc::now() {
         return;
     }
-    let _ = std::fs::remove_file(hold_sidecar_path(handle));
-    let _ = set_policy(handle, None);
+    // Unstamp first: the clock is the only record the sweep can find the
+    // stamp by, so a failed registry write must leave it for the next pass.
+    // A handle no row carries has no stamp to orphan, so its clock goes.
+    let rowless = load_registry(&AgentsHome::shared_registry_json())
+        .map(|registry| row_for_session(&registry, handle).is_none())
+        .unwrap_or(false);
+    if set_policy(handle, None).is_some() || rowless {
+        let _ = std::fs::remove_file(hold_sidecar_path(handle));
+    }
 }
 
 /// The clock read's shape: the extend print's fields plus source, with null
@@ -1166,6 +1173,51 @@ pub(crate) fn tidy_lapsed_holds(home: &AgentsHome, now: chrono::DateTime<chrono:
     for handle in lapsed_hold_handles(&registry, now) {
         spawn_release_timer(&handle);
     }
+    for (name, sid) in orphan_stamp_rows(&registry, now) {
+        // A conversation arm may have written a clock since the pick.
+        if gate_clock_addresses(&sid, &sid)
+            .iter()
+            .any(|h| read_clock(h).is_some())
+        {
+            continue;
+        }
+        if set_policy(&sid, None).is_some() {
+            eprintln!("mail-hold: cleared orphan bus-only stamp on {name} ({sid})");
+        }
+    }
+}
+
+/// How old a spawned worker's row must be before a clock-less `bus-only`
+/// stamp on it counts as an orphan: the conversation backstop, so no live
+/// answering window can still own it.
+const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
+
+/// The (name, session id) of every spawned worker row stamped `bus-only`
+/// with no clock file, older than [`ORPHAN_STAMP_AGE_S`]. Only `origin ==
+/// "spawn"` rows qualify: `fno agents register --delivery-policy bus-only`
+/// stamps an operator row with no clock on purpose, and a row with no
+/// `origin` or no readable `created_at` has no proof of age or source. Pure
+/// so the pick is testable without a registry write.
+pub(crate) fn orphan_stamp_rows(
+    registry: &crate::state::Registry,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<(String, String)> {
+    registry
+        .entries
+        .iter()
+        .filter(|e| e.delivery_policy.as_deref() == Some("bus-only"))
+        .filter(|e| e.origin.as_deref() == Some("spawn"))
+        .filter_map(|e| {
+            let sid = e.harness_session_id.as_deref()?;
+            let born = chrono::DateTime::parse_from_rfc3339(&e.created_at).ok()?;
+            let old = now - born.with_timezone(&chrono::Utc)
+                > chrono::Duration::seconds(ORPHAN_STAMP_AGE_S);
+            let clockless = gate_clock_addresses(sid, sid)
+                .iter()
+                .all(|h| read_clock(h).is_none());
+            (old && clockless).then(|| (e.name.clone(), sid.to_string()))
+        })
+        .collect()
 }
 
 /// `fno-agents mail-hold --session <id> [--off | --gate]`
@@ -1853,6 +1905,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn tidy_lapsed_unstamps_the_row_then_drops_the_clock() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
+            let handle = identity_key(SID);
+            let lapsed = chrono::Utc::now() - chrono::Duration::seconds(120);
+            write_clock(&handle, Some(lapsed), 60, "wall", None, None).unwrap();
+            tidy_lapsed(&handle);
+            assert!(!clock_path(dir, SID).exists());
+            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
+            assert!(registry.entries[0].delivery_policy.is_none());
+            // A handle no row carries has no stamp to orphan: its lapsed
+            // clock still goes.
+            let stray = "eeeeeeee-1111-2222-3333-444455556666";
+            write_clock(&identity_key(stray), Some(lapsed), 60, "wall", None, None).unwrap();
+            tidy_lapsed(&identity_key(stray));
+            assert!(!clock_path(dir, stray).exists());
+        });
+    }
+
+    #[test]
     fn gate_delivers_a_lapsed_clock_and_holds_a_live_one() {
         with_hold_env(|dir| {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
@@ -2137,6 +2209,53 @@ pub(crate) mod tests {
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
             let picked = lapsed_hold_handles(&registry, now);
             assert_eq!(picked, vec![identity_key(sid_a)], "only a lapsed 90s");
+        });
+    }
+
+    #[test]
+    fn orphan_sweep_picks_only_old_clockless_spawn_stamps() {
+        with_hold_env(|dir| {
+            let now = chrono::Utc::now();
+            let old = (now - chrono::Duration::seconds(ORPHAN_STAMP_AGE_S + 60))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            let young = (now - chrono::Duration::seconds(60))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            let sid = |n: u8| format!("{n:08}-1111-2222-3333-444455556666");
+            let row = |name: &str, n: u8, origin: Option<&str>, born: &str| {
+                let mut r = stamped_row(name, &sid(n));
+                r["created_at"] = serde_json::Value::String(born.into());
+                if let Some(o) = origin {
+                    r["origin"] = serde_json::Value::String(o.into());
+                }
+                r
+            };
+            write_registry(
+                dir,
+                serde_json::json!([
+                    row("orphan", 1, Some("spawn"), &old),
+                    row("young", 2, Some("spawn"), &young),
+                    row("registered", 3, Some("operator"), &old),
+                    row("unmarked", 4, None, &old),
+                    row("clocked", 5, Some("spawn"), &old),
+                ]),
+            );
+            write_clock(
+                &identity_key(&sid(5)),
+                Some(now + chrono::Duration::seconds(600)),
+                600,
+                "wall",
+                None,
+                None,
+            )
+            .unwrap();
+            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
+            assert_eq!(
+                orphan_stamp_rows(&registry, now),
+                vec![("orphan".to_string(), sid(1))],
+                "only the old clock-less spawn stamp is an orphan"
+            );
         });
     }
 }

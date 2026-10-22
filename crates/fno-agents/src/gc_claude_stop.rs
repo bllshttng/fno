@@ -17,6 +17,20 @@
 use crate::claude_roster::ClaudeAgentRow;
 use crate::state;
 
+/// The read-only half of [`stop_claude_confirmed`]: the roster no longer
+/// lists the session, so the real stop confirms without acting. A dry run
+/// reads it to promise exactly what the apply run will do.
+pub(crate) fn already_gone(e: &state::RegistryEntry) -> bool {
+    let Some(short) = e
+        .transport_short()
+        .map(str::to_string)
+        .or_else(|| roster_short(&e.harness_session_id))
+    else {
+        return false;
+    };
+    roster_lists(&short, e.harness_session_id.as_deref()) == Some(false)
+}
+
 /// Stop a claude row's session before the row drops. The roster is the exited
 /// proof: a session the live roster no longer lists is already gone, and
 /// running `claude stop` on it would fail on every future sweep, wedging the

@@ -52,6 +52,10 @@ pub struct GcRow {
     /// harness store. `None` = unresolved, and an unresolved transcript is
     /// NEVER quiet.
     pub transcript_age_s: Option<i64>,
+    /// Seconds since the row's last session report, else since it was
+    /// created: the clock an unresolved transcript ages on. `None` when
+    /// neither stamp parses.
+    pub report_age_s: Option<i64>,
     /// Does this row own a REMOVABLE worktree? False for a one-shot ask, a
     /// row in the canonical checkout, or a cwd that is not a linked worktree.
     pub owns_worktree: bool,
@@ -379,6 +383,11 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     // readable as the PR's remedy - so an open-PR row keeps. A live adopted
     // row keeps exactly as before.
     if row.origin.as_deref() != Some("spawn") && !row.origin_corpse {
+        // Ruling d-1538e896: an adopted row Claude reports finished takes
+        // the idle-hour rule ahead of every keep, like a spawn row.
+        if past_idle_hour(row) {
+            return spawn_idle_gate(row);
+        }
         let adopted_finished = row.origin.as_deref() == Some("adopted")
             && row.registry_terminal
             && row.open_pr.is_none();
@@ -387,6 +396,13 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             return (GcAction::Keep, Some(KeepReason::NotSpawn { origin }));
         }
         return grace_gate(row, grace_secs);
+    }
+    // d-e3defbb7: an fno-started row idle past the hour retires, done node
+    // or not. Every work-state keep below (an open or contradicting PR, a
+    // dead worker on open work, an unfinished plan, no provenance) holds
+    // only inside the hour. A live claim still keeps (spawn_idle_gate).
+    if past_idle_hour(row) {
+        return spawn_idle_gate(row);
     }
     // The cascade's holds relay through here so every keep is named by the
     // policy: a conflict between witnesses, or PR evidence contradicting a
@@ -517,8 +533,8 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // hour, bounded below by any tighter configured retire window;
             // a row inside it keeps, and the keep names the node pinning
             // it, so an operator can act on the node rather than on the
-            // row. An UNRESOLVED transcript has no clock to age past
-            // anything, so it keeps under the unchanged open-work reason.
+            // row. An UNRESOLVED transcript past the hour on the report
+            // clock retired above; inside it, the open-work reason keeps.
             let open_idle_window = row.open_work_retire_s.min(SPAWN_IDLE_RETIRE_SECS);
             match row.transcript_age_s {
                 Some(age) if age > open_idle_window => spawn_idle_gate(row),
@@ -551,6 +567,41 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
 pub const SPAWN_IDLE_RETIRE_SECS: i64 = 3_600;
 pub const SPAWN_IDLE_GRACE_SECS: i64 = 3_300;
 
+/// The origin ruling's idle clock: the transcript's quiet age, else the
+/// report clock when the transcript never resolved.
+fn idle_age_s(row: &GcRow) -> Option<i64> {
+    row.transcript_age_s.or(row.report_age_s)
+}
+
+/// An fno-started row, or an adopted row whose harness reads it terminal
+/// (ruling d-1538e896), idle past the origin ruling's hour with no live
+/// claim: it retires whatever its work state says. Operator rows never do.
+pub fn past_idle_hour(row: &GcRow) -> bool {
+    let fleet = match row.origin.as_deref() {
+        Some("spawn") => true,
+        Some("adopted") => row.session_terminal.is_some(),
+        _ => false,
+    };
+    fleet
+        && row.live_claim.is_none()
+        && idle_age_s(row).is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
+}
+
+/// The unresolved-transcript arm both idle gates share: a release reads the
+/// absence as quiet, and a report clock past the hour retires. Inside the
+/// hour, or with no clock at all, the row keeps.
+fn unresolved_transcript(row: &GcRow) -> (GcAction, Option<KeepReason>) {
+    if row.release_quiet
+        || row
+            .report_age_s
+            .is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
+    {
+        (GcAction::Retire, None)
+    } else {
+        (GcAction::Keep, Some(KeepReason::TranscriptUnresolved))
+    }
+}
+
 /// The idle gate the origin ruling gives every fno-started row: the same
 /// shape as [`grace_gate`] (a live claim outranks the clock, an unresolved
 /// transcript keeps) with the ruling's own two numbers. A typed turn is
@@ -566,8 +617,7 @@ fn spawn_idle_gate(row: &GcRow) -> (GcAction, Option<KeepReason>) {
         );
     }
     match row.transcript_age_s {
-        None if row.release_quiet => (GcAction::Retire, None),
-        None => (GcAction::Keep, Some(KeepReason::TranscriptUnresolved)),
+        None => unresolved_transcript(row),
         Some(age) if age <= SPAWN_IDLE_GRACE_SECS => {
             (GcAction::Keep, Some(KeepReason::Active { age_s: age }))
         }
@@ -593,10 +643,9 @@ fn grace_gate(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>) {
         );
     }
     match row.transcript_age_s {
-        // the release lifts this one gate for this one row. Every
-        // other path reads absence as unresolved, never as quiet.
-        None if row.release_quiet => (GcAction::Retire, None),
-        None => (GcAction::Keep, Some(KeepReason::TranscriptUnresolved)),
+        // A release, or a report clock past the hour, lifts this gate for
+        // this one row. Absence alone is unresolved, never quiet.
+        None => unresolved_transcript(row),
         // Recency outranks every death reading now - a terminal roster
         // state and an ESRCH pid included. The 2026-09-25 sweeps retired
         // two thread workers inside the grace window on exactly this
@@ -1514,9 +1563,13 @@ pub fn maybe_retirement_sweep(
                 teams.kept.len()
             )
         };
+        // The running build rides every tick: a daemon that outlived a
+        // binary install keeps sweeping with the old code, and only the
+        // tick can show it.
         let detail = format!(
-            "roster={roster_detail} {mux_detail} {teams_detail} {builds_detail} held={}",
-            summary.holds.len()
+            "roster={roster_detail} {mux_detail} {teams_detail} {builds_detail} held={} build={}",
+            summary.holds.len(),
+            crate::gc_verify::current_rev()
         );
         // `acted` counts BOTH sweeps' retirements: the registry sweep's and
         // the roster sweep's. A tick that retired only roster sessions reads
@@ -2000,7 +2053,9 @@ mod tests {
             e.origin = Some("spawn".into());
             e.harness = Some("codex".into());
             e.harness_session_id = Some("s-h1".into());
-            e.created_at = "2026-09-01T00:00:00Z".into();
+            // Inside the idle hour, so the unfinished-plan hold still holds.
+            e.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             e.status = crate::AgentStatus::Exited;
             r.entries.push(e);
         })
@@ -2370,6 +2425,7 @@ mod tests {
                 nodes: vec!["N1".into()],
             },
             transcript_age_s: Some(SPAWN_IDLE_RETIRE_SECS + 1),
+            report_age_s: None,
             owns_worktree: true,
             worktree_clean: Some(true),
             branch_merged: Some(true),
@@ -2677,6 +2733,7 @@ mod tests {
             },
             planning: Some(vec![("x-dddd".to_string(), "ready".to_string())]),
             planning_closed: Vec::new(),
+            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS + 1),
             ..retiring()
         };
         assert_eq!(
@@ -2896,9 +2953,25 @@ mod tests {
             gc_decide(&unresolved, GRACE),
             (GcAction::Keep, Some(KeepReason::TranscriptUnresolved))
         );
+        // The report clock ages an unresolved transcript: past the hour the
+        // row retires, inside it the row keeps.
+        let reported = GcRow {
+            report_age_s: Some(SPAWN_IDLE_RETIRE_SECS + 1),
+            ..unresolved.clone()
+        };
+        assert_eq!(gc_decide(&reported, GRACE), (GcAction::Retire, None));
+        let recent = GcRow {
+            report_age_s: Some(SPAWN_IDLE_GRACE_SECS),
+            ..unresolved
+        };
+        assert_eq!(
+            gc_decide(&recent, GRACE),
+            (GcAction::Keep, Some(KeepReason::TranscriptUnresolved))
+        );
 
         let no_provenance = GcRow {
             work: WorkState::NoProvenance,
+            transcript_age_s: Some(GRACE + 1),
             ..retiring()
         };
         assert_eq!(
@@ -3044,6 +3117,7 @@ mod tests {
                 status: status.into(),
             },
             transcript_age_s: Some(10_000),
+            report_age_s: None,
             owns_worktree: true,
             worktree_clean: None,
             branch_merged: None,
@@ -3087,6 +3161,80 @@ mod tests {
                 node: "x-node".into(),
                 pr: 1943,
             })
+        );
+    }
+
+    /// d-e3defbb7: past the idle hour a spawn row retires through every
+    /// work-state keep. Inside the hour each keep still holds, and a live
+    /// claim outranks the hour.
+    #[test]
+    fn the_idle_hour_outranks_every_work_state_keep() {
+        let contradicts = KeepReason::PrStateContradicts {
+            node: "x-node".into(),
+            detail: "merge_status: open".into(),
+        };
+        let dead = GcRow {
+            process_gone: true,
+            open_pr: None,
+            ..open_pr_row("x-node", "in_progress", 1)
+        };
+        let held = GcRow {
+            confirm_hold: Some(contradicts.clone()),
+            ..retiring()
+        };
+        let keeps = [
+            (
+                open_pr_row("x-node", "in_review", 1943),
+                KeepReason::OpenPr {
+                    node: "x-node".into(),
+                    pr: 1943,
+                },
+            ),
+            (
+                dead,
+                KeepReason::DeadOpenWork {
+                    node: "x-node".into(),
+                },
+            ),
+            (held, contradicts),
+        ];
+        for (row, reason) in keeps {
+            assert_eq!(
+                gc_decide(&row, GRACE),
+                (GcAction::Retire, None),
+                "{reason:?}"
+            );
+            let inside = GcRow {
+                transcript_age_s: Some(30 * 60),
+                ..row.clone()
+            };
+            assert_eq!(gc_decide(&inside, GRACE), (GcAction::Keep, Some(reason)));
+            let claimed = GcRow {
+                live_claim: Some("node:x-node (holder s-1)".into()),
+                ..row
+            };
+            assert_eq!(gc_decide(&claimed, GRACE).0, GcAction::Keep);
+        }
+        // Ruling d-1538e896: an adopted row Claude reports finished takes the
+        // same hour; one Claude still runs keeps as not fno's.
+        let adopted = GcRow {
+            origin: Some("adopted".into()),
+            session_terminal: Some("done".into()),
+            ..open_pr_row("x-node", "in_review", 1943)
+        };
+        assert_eq!(gc_decide(&adopted, GRACE), (GcAction::Retire, None));
+        let running = GcRow {
+            session_terminal: None,
+            ..adopted
+        };
+        assert_eq!(
+            gc_decide(&running, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::NotSpawn {
+                    origin: "adopted".into()
+                })
+            )
         );
     }
 }

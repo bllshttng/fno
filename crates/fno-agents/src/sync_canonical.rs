@@ -706,10 +706,26 @@ fn bin_platform() -> Option<&'static str> {
     }
 }
 
-/// Fetch origin, read the merge's crates/ rev (the key main-binaries.yml
-/// publishes under), then ask the download URL for its digest. The download
-/// URL, not the REST listing: the listing is the read that answered 403 on
-/// 2026-10-14.
+/// The crates/ rev the sync's pull lands on: the fetched upstream head,
+/// falling back to the merge sha when the canonical tracks no upstream.
+/// main-binaries.yml builds only the newest main head and cancels older
+/// runs, so the merge's own rev may never publish while a later one does.
+fn pull_crates_rev(canonical: &Path, sha: &str) -> Option<String> {
+    ["@{upstream}", sha].into_iter().find_map(|at| {
+        let mut log = std::process::Command::new("git");
+        log.arg("-C")
+            .arg(canonical)
+            .args(["log", "-1", "--format=%H", at, "--", "crates/"]);
+        let out = crate::bounded_cmd::output_with_timeout(log, PROBE_TIMEOUT_SECS)?;
+        let rev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !rev.is_empty()).then_some(rev)
+    })
+}
+
+/// Fetch origin, read the crates/ rev the pull lands on (the key
+/// main-binaries.yml publishes under), then ask the download URL for its
+/// digest. The download URL, not the REST listing: the listing is the read
+/// that answered 403 on 2026-10-14.
 fn real_build(canonical: &Path, sha: &str) -> Build {
     let Some(platform) = bin_platform() else {
         return Build::Unknown("CI builds no binary for this platform".to_string());
@@ -723,19 +739,9 @@ fn real_build(canonical: &Path, sha: &str) -> Build {
         Some(out) if out.status.success() => {}
         _ => return Build::Unknown("git fetch origin failed".to_string()),
     }
-    let mut log = std::process::Command::new("git");
-    log.arg("-C")
-        .arg(canonical)
-        .args(["log", "-1", "--format=%H", sha, "--", "crates/"]);
-    let rev = match crate::bounded_cmd::output_with_timeout(log, PROBE_TIMEOUT_SECS) {
-        Some(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
-        _ => String::new(),
-    };
-    if rev.is_empty() {
+    let Some(rev) = pull_crates_rev(canonical, sha) else {
         return Build::Unknown(format!("no crates/ rev readable at {}", sha12(sha)));
-    }
+    };
     let repo =
         std::env::var("FNO_RELEASE_REPO").unwrap_or_else(|_| DEFAULT_RELEASE_REPO.to_string());
     let url = format!(
@@ -2058,5 +2064,55 @@ mod tests {
             elapsed < std::time::Duration::from_secs(3),
             "elapsed {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn pull_crates_rev_reads_the_upstream_head_not_the_merge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let origin = tmp.path().join("origin");
+        std::fs::create_dir_all(origin.join("crates")).unwrap();
+        git(&origin, &["init", "-q", "-b", "main"]);
+        let commit = |msg: &str| {
+            std::fs::write(origin.join("crates").join("f"), msg).unwrap();
+            git(&origin, &["add", "."]);
+            git(&origin, &["commit", "-q", "-m", msg]);
+            git(&origin, &["rev-parse", "HEAD"])
+        };
+        let merged = commit("merge one");
+        let canonical = tmp.path().join("canonical");
+        git(
+            tmp.path(),
+            &["clone", "-q", origin.to_str().unwrap(), "canonical"],
+        );
+        // A later burst merge whose build superseded the cancelled one.
+        let newest = commit("merge two");
+        git(&canonical, &["fetch", "-q", "origin"]);
+        assert_eq!(pull_crates_rev(&canonical, &merged), Some(newest));
+
+        // No upstream: the merge sha answers.
+        git(&canonical, &["branch", "--unset-upstream"]);
+        assert_eq!(pull_crates_rev(&canonical, &merged), Some(merged));
     }
 }

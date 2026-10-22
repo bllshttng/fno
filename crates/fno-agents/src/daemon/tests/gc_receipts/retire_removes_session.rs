@@ -575,8 +575,9 @@ fn a_planner_fno_stopped_holds_as_unclosed() {
     let _swap = EnvSwap::to(&fake.bin_dir(), &fake.daemon_dir(), home.root(), None);
     let store_dir = home.root().join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
-    let quiet = quiet_transcript(&store_dir, "q.jsonl", 2 * 3600);
-    let summary = production_sweep(&home, quiet);
+    // Inside the idle hour, so the unfinished-plan keep holds.
+    let quiet = quiet_transcript(&store_dir, "q.jsonl", 1800);
+    let summary = production_sweep_aged(&home, quiet, 1800);
 
     assert!(
         summary.retired.is_empty(),

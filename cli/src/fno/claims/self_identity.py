@@ -233,6 +233,11 @@ def _fill_spawn_record(owned):
     marker_families = {h for _m, h, _v in owned.markers_present}
     if marker_families - {harness}:
         return owned
+    if harness == "claude" and not any(
+        h == harness and session_identity_key(v) == session_identity_key(session_id)
+        for _m, h, v in owned.markers_present
+    ):
+        return owned
     return replace(
         owned, harness=harness, session_id=session_id, disposition="spawn_record"
     )

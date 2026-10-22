@@ -182,7 +182,7 @@ fn emit_event(kind: &str, fields: Value) {
 
 /// The resolved self identity, or the two blanks Python's `require_self_identity`
 /// checks. `Some((session_id, harness))` when a single marker resolves.
-fn own_identity() -> Option<(String, String)> {
+pub(crate) fn own_identity() -> Option<(String, String)> {
     let home = AgentsHome::from_env();
     let ident = crate::spawn_context::resolve_self_identity(
         &|name| std::env::var(name).ok(),

@@ -1,11 +1,11 @@
 name: cli-ci
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Main pushes share a group keyed by ref with cancel-in-progress false,
-# so a new main push supersedes only the queued main run and never cancels the
-# running one (concurrency keeps one running and one pending).
+# run. Each main push gets its own group keyed by sha: a group keeps one
+# running and one pending run and drops the older pending one, so a shared
+# main group left the middle merge of a burst untested on main.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || (github.event_name == 'push' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
