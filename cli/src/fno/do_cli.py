@@ -33,7 +33,7 @@ do_app = typer.Typer(
 # keeps only the two Python mounts under the same group.
 do_pr_app = typer.Typer(
     name="pr",
-    help="PR lifecycle operations (native verbs; watch and stub-manifest stay here).",
+    help="PR lifecycle operations (native commands; watch and stub-manifest stay here).",
     no_args_is_help=True,
     add_completion=False,
 )
