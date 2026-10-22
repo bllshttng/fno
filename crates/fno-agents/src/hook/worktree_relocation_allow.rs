@@ -12,6 +12,10 @@
 //! Both paths are canonicalized before the prefix test, so a symlink under
 //! the base cannot point the session elsewhere. Anything else prints `{}`,
 //! which leaves the prompt in place: this hook never denies.
+//!
+//! The base holds every repo's worktrees, yet the allow cannot carry a
+//! session into another repo: Claude Code refuses any path that is not a
+//! registered worktree of the session's own repo, after this hook allows.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
