@@ -8244,6 +8244,18 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: mail_hold_stamped
+    description: "A writer stamped a session's registry row bus-only (DND). The row names the writer, this process's argv and its parent's command line, so a stamp nobody armed traces to its caller."
+    sources: [daemon, agents]
+    data:
+      required: [session_id, writer]
+      properties:
+        session_id: { type: string }
+        writer: { type: string, enum: [conversation_arm, hold_verb] }
+        pid: { type: integer }
+        ppid: { type: integer }
+        argv: { type: array }
+        parent: { type: string }
   - name: session_registered
     description: "A session registered with the agents family."
     sources: [daemon, agents]
