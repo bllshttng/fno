@@ -171,7 +171,7 @@ def render(sites: dict[str, dict[str, list[str]]], meanings: dict[str, str]) -> 
         "",
         "Every env var name either tree reads, one row each. The registry IS this table. `scripts/ci/check_env_registry.py` fails a read with no row, a row with no reader, and a wrong Read by. `--update` regenerates the table and preserves Meaning text.",
         "",
-        "A meaning not derivable from the read site stays `unclear: <file:line>`, never invented. A name read through an UPPER_SNAKE string constant resolves to its value; any other variable stays unseen (scanner limit).",
+        "A meaning not derivable from the read site stays `unclear: <file:line>`, never invented. A name read through an UPPER_SNAKE string constant resolves to its value. Any other variable stays unseen (scanner limit).",
         "",
         "| Name | Read by | Meaning |",
         "|------|---------|---------|",
