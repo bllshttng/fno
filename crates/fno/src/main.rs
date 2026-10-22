@@ -247,6 +247,9 @@ enum Role {
     /// only turned around and exec'd the same binary. The argv passes
     /// through byte-verbatim.
     AgentsStatus(Vec<OsString>),
+    /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
+    /// `fno-agents spawn-overlay roles`, the group options carried along.
+    AgentsRoles(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -483,6 +486,36 @@ fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     classify_agents_verb(args, "status")
+}
+
+/// `fno agents roles <op>`, the deprecated root `fno roles <op>`, and a
+/// root `-J` before either (`agents org roles` arrives here already
+/// rewritten by the agents menu). The group options may precede the op.
+/// Only the ops the Rust door owns are claimed; any other op, and the bare
+/// group's help, still forward.
+fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    let tail = match args.first()?.to_str()? {
+        "agents" if args.get(1)?.to_str()? == "roles" => &args[2..],
+        "roles" => &args[1..],
+        _ => return None,
+    };
+    let mut i = 0;
+    while i < tail.len() {
+        match tail[i].to_str()? {
+            "--json" | "-J" => {}
+            "--root" | "--source" => i += 1,
+            a if a.starts_with("--root=") || a.starts_with("--source=") => {}
+            "ls" => {
+                let json = root_json.then(|| OsString::from("--json"));
+                return Some(json.into_iter().chain(tail.iter().cloned()).collect());
+            }
+            _ => return None,
+        }
+        i += 1;
+    }
+    None
 }
 
 fn classify_group_verb(args: &[OsString], group: &str, verb: &str) -> Option<Vec<OsString>> {
@@ -792,6 +825,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
+    }
+    if let Some(rest) = classify_agents_roles(args) {
+        return Role::AgentsRoles(rest);
     }
     if let Some(role) = classify_mail_show(args) {
         return role;
@@ -1196,6 +1232,11 @@ fn main() {
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
+            &rest,
+        )),
+        Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
+            "fno agents roles",
+            &["spawn-overlay", "roles"],
             &rest,
         )),
         Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
@@ -1699,6 +1740,20 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
+        );
+        // `roles ls` is the Rust door's in every spelling, group options
+        // carried; an op still on Python forwards.
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "--root", "r", "ls", "-J"]), false),
+            Role::AgentsRoles(os(&["--root", "r", "ls", "-J"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["-J", "roles", "--source=plan=p", "ls"]), false),
+            Role::AgentsRoles(os(&["--json", "--source=plan=p", "ls"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "show", "x"]), false),
+            Role::Forward
         );
     }
 

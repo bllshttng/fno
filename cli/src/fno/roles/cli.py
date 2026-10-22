@@ -83,17 +83,6 @@ def _discover(ctx: typer.Context) -> tuple[DiscoveredRoleDefinition, ...]:
         raise typer.BadParameter(str(exc), param_hint="--source") from exc
 
 
-def _row(record: DiscoveredRoleDefinition) -> dict[str, Any]:
-    return {
-        "error": record.error,
-        "function_id": record.role.function_id if record.role is not None else None,
-        "layer": record.layer.value,
-        "role_id": record.role.id if record.role is not None else None,
-        "source": record.source_id,
-        "status": record.status.value,
-    }
-
-
 def _token_parts(token: str) -> tuple[str | None, str]:
     function_id, separator, role_id = token.partition("/")
     if not separator:
@@ -121,31 +110,6 @@ def _matches(
             and (function_id is None or record.role.function_id == function_id)
         )
     )
-
-
-@roles_app.command("ls")
-def list_roles(
-    ctx: typer.Context,
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        "-J",
-        help="Emit stable structured JSON.",
-    ),
-) -> None:
-    """List source-attributed definitions without resolving context."""
-    records = _discover(ctx)
-    rows = [_row(record) for record in records]
-    if _json_requested(ctx, json_output):
-        _emit_json(rows)
-        return
-    for row in rows:
-        role_id = row["role_id"] or "<unavailable>"
-        function_id = row["function_id"] or "<unavailable>"
-        typer.echo(
-            f"{role_id} function={function_id} layer={row['layer']} "
-            f"source={row['source']} status={row['status']}"
-        )
 
 
 def _show_row(

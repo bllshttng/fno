@@ -261,11 +261,13 @@ def _assert_complete_delivery_evidence_passes(role_id: str) -> None:
     assert verdict.aggregate is EvidenceResult.PASSED, (role_id, verdict.diagnostics)
 
 
+@pytest.mark.dev_build
 def test_support_response_scenario(role_root: Path) -> None:
     _assert_resolved_roles_match_every_declared_policy_axis(role_root)
     _assert_complete_delivery_evidence_passes("support-response")
 
 
+@pytest.mark.dev_build
 def test_sales_outreach_scenario(role_root: Path) -> None:
     _assert_resolved_roles_match_every_declared_policy_axis(role_root)
     _assert_complete_delivery_evidence_passes("sales-outreach")

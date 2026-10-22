@@ -473,6 +473,7 @@ pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
 pub mod role_migration;
+pub mod roles;
 pub mod roster_progress;
 pub mod roster_reap;
 pub mod route_capacity;

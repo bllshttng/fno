@@ -25,6 +25,10 @@
 //! - kind `team-rescope`: the role re-scope's team-name effect
 //!   (`team_rescope::resolve`), the promote-side carry that keeps a lead's
 //!   recorded name across an `org promote` scope move.
+//! - kind `roles-discover`: layered business-role discovery
+//!   (`roles::registry::discover_kind`), the records the Python roles
+//!   package reads back. The roles verbs ride the same verb as argv ops,
+//!   `spawn-overlay roles <op>`.
 //!
 //! The `fno config accounts` commands ride the same action as argv ops,
 //! `spawn-overlay accounts <command>` (see `accounts::run`).
@@ -70,6 +74,11 @@ const MODEL_WORD_VENDORS: [(&str, &str); 3] = [
 ];
 
 pub fn run_spawn_overlay(args: &[String]) -> i32 {
+    // The roles verbs nest here as argv ops (crate::roles::cli), so they
+    // add no fno-agents root verb.
+    if args.first().map(String::as_str) == Some("roles") {
+        return crate::roles::cli::run(&args[1..]);
+    }
     // The `fno config accounts` commands nest here as argv ops
     // (crate::accounts::run), so they add no fno-agents root action.
     if args.first().map(String::as_str) == Some("accounts") {
@@ -170,8 +179,9 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rivals") => crate::org_rivals::resolve(&payload),
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
+        Some("roles-discover") => crate::roles::registry::discover_kind(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover"
         )),
     }
 }
