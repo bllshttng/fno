@@ -500,7 +500,7 @@ mod tests {
         let dir = home.root().join("launches").join("claimed");
         std::fs::create_dir_all(&dir).unwrap();
         let record = json!({
-            "harness": "claude", "name": "t-x84e6-glm", "node": "x-84e6", "cwd": "/tmp/proj",
+            "harness": "claude", "name": "t-xaaaa-glm", "node": "x-aaaa", "cwd": "/tmp/proj",
             "launcher_session": "d7031e2c", "launcher_harness": "claude",
             "launched_at_ms": 0, "child_session": sid,
         });
@@ -533,9 +533,9 @@ mod tests {
                     "{}",
                     e.name
                 );
-                assert_eq!(e.node.as_deref(), Some("x-84e6"), "{}", e.name);
+                assert_eq!(e.node.as_deref(), Some("x-aaaa"), "{}", e.name);
             }
-            assert!(registry.entries.iter().any(|e| e.name == "t-x84e6-glm"));
+            assert!(registry.entries.iter().any(|e| e.name == "t-xaaaa-glm"));
         });
     }
 
