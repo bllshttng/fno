@@ -614,7 +614,9 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
         let home = tmp_home("gc-open-do");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
-        let quiet = quiet_transcript(transcripts.path(), "d.jsonl", 2 * 3600);
+        // A held row sits inside the idle hour; past it a spawn row retires.
+        let age = if expect_retired { 2 * 3600 } else { 1800 };
+        let quiet = quiet_transcript(transcripts.path(), "d.jsonl", age);
         state::update_registry(&home.registry_json(), |r| {
             let mut e = ask_row("row-d", None);
             e.short_id = "rowd".into();
@@ -632,7 +634,7 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
             7,
             &move |_| graph.clone(),
             &move |_| Some(vec![quiet.clone()]),
-            &uniform_ages(2 * 3600),
+            &uniform_ages(age),
             &|_| true,
             &|_| crate::daemon::CascadeOutcome::NotApplicable,
             &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -1101,7 +1103,20 @@ fn a_planner_retires_only_on_its_own_closed_assignment() {
         7,
         &crate::gc_sweep::read_graph_entries,
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // The unclosed planner sits inside the idle hour, so its keep holds.
+        &|entries: &[&state::RegistryEntry]| {
+            entries
+                .iter()
+                .map(|e| {
+                    let age = if e.name == "bp-x-4hp-a" {
+                        1800
+                    } else {
+                        2 * 3600
+                    };
+                    (crate::gc::row_handle(e), Some(age))
+                })
+                .collect()
+        },
         &|_| true,
         &|_| CascadeOutcome::Removed,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -1176,7 +1191,8 @@ fn a_planner_whose_plan_file_is_missing_keeps_and_holds() {
         7,
         &crate::gc_sweep::read_graph_entries,
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // Inside the idle hour, so the unfinished-plan keep holds.
+        &uniform_ages(1800),
         &|_| true,
         &|_| CascadeOutcome::Removed,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -2429,6 +2445,7 @@ fn the_commit_gate_drops_an_order_whose_obligation_opened() {
         tree: crate::gc::TreeAction::None,
         worktree: None,
         released: false,
+        idle_hour_past: false,
     };
     let mut to_retire = std::collections::BTreeMap::new();
     to_retire.insert(entry.name.clone(), order);
@@ -2740,6 +2757,7 @@ fn stage_direct(
         None,
         crate::gc_sweep::RetireMode::Apply,
         crate::gc_sweep::StopObservation::Unproven,
+        false,
         false,
         stop,
         kill,

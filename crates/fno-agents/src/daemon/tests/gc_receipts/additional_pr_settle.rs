@@ -187,12 +187,14 @@ fn ac2_a_merged_answer_stamps_and_settles() {
 #[test]
 fn ac2_edge_an_open_or_unreadable_answer_holds() {
     for answer in [Some(gc_sweep::PrState::Open), None] {
-        let (_dir, home, emitter, quiet, _t) = stamp_test_setup("x-stamp");
+        let (_dir, home, emitter, _quiet, t) = stamp_test_setup("x-stamp");
+        // Inside the idle hour, so the open-do-row keep still holds.
+        let recent = quiet_transcript(t.path(), "recent.jsonl", 1800);
         let mut read = |_path: &str, _cwd: &str| answer;
         let summary = settle_staged_then_run(
             &home,
             &emitter,
-            &move |_| Some(vec![quiet.clone()]),
+            &move |_| Some(vec![recent.clone()]),
             &mut read,
         );
 

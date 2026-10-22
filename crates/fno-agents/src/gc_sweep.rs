@@ -517,6 +517,10 @@ pub(crate) struct RetireOrder {
     /// released session's own open do row is the stale record of work that
     /// moved on, not a live assignment.
     pub(crate) released: bool,
+    /// The row is past the origin ruling's idle hour: an open do row on a
+    /// done node is the stale record of finished work and no longer holds
+    /// it. An open do row on a node still open does.
+    pub(crate) idle_hour_past: bool,
     /// A `reap --release` ruling applied to this row: the event
     /// names the release as the remover.
     pub(crate) via_release: bool,
@@ -1439,10 +1443,24 @@ pub fn provenance_verdict(
     }
 }
 
-/// The hold clock: the staged transcript age when the seam
-/// answered, else seconds since the row's `created_at`, else unmeasured -
-/// and an unmeasured hold never escalates, because a wrong number is not a
-/// clock.
+/// The open do row that still obliges a session to stay. Past the idle
+/// hour a do row on a done node is the stale record of finished work; a do
+/// row on a node still open is fresh work, and it holds.
+fn obligation(graph: &GraphRead, sid: &str, idle_hour_past: bool) -> Option<String> {
+    graph
+        .open_do
+        .get(sid)?
+        .iter()
+        .find(|node| {
+            !(idle_hour_past
+                && graph
+                    .statuses
+                    .get(node.as_str())
+                    .is_some_and(|s| s == "done"))
+        })
+        .cloned()
+}
+
 /// The report clock an unresolved transcript ages on: seconds since the
 /// row's last session report, else since the row was created.
 fn report_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
@@ -1453,6 +1471,10 @@ fn report_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
         .map(|at| (now - at as i64).max(0))
 }
 
+/// The hold clock: the staged transcript age when the seam
+/// answered, else seconds since the row's `created_at`, else unmeasured -
+/// and an unmeasured hold never escalates, because a wrong number is not a
+/// clock.
 fn hold_clock(age: Option<i64>, created_at: &str, now: i64) -> (Option<i64>, &'static str) {
     match age {
         Some(a) => (Some(a), "transcript quiet"),
@@ -2682,7 +2704,8 @@ pub(crate) fn run_with_release(
             |entry: &state::RegistryEntry| death.is_some() || release_stop || stop_confirmed(entry);
         // the session-shaped release that let an OPEN-work row
         // retire. The obligation re-checks (stage and commit) yield to it.
-        let released = row.session_released() || crate::gc::past_idle_hour(&row);
+        let released = row.session_released();
+        let idle_hour_past = crate::gc::past_idle_hour(&row);
         // The stop gate's read-only answer, folded here where the evidence
         // lives: harness death state, a stop-family release, or the pane
         // precheck's already-stopped. Staging decides with it, and the
@@ -2704,6 +2727,7 @@ pub(crate) fn run_with_release(
             },
             stop_observation,
             released,
+            idle_hour_past,
             &stop_on_death,
             &crate::pane_stop::run_mux_pane_kill,
             surface_removal,
@@ -2840,12 +2864,14 @@ pub(crate) fn run_with_release(
                         .find(|(_, s)| crate::gc::PLANNING_MOVED_ON_STATUSES.contains(&s.as_str()))
                     {
                         format!("planning finished on {node}: node {moved_status}")
+                    } else if probed.planning_released {
+                        format!("planning finished on {node}: released")
+                    } else if probed.turn_ended {
+                        format!("planning halted on {node}: turn ended with no plan")
                     } else if crate::gc::past_idle_hour(&probed) {
                         format!("idle past the hour on {node} {status}")
-                    } else if probed.planning_released || !probed.turn_ended {
-                        format!("planning finished on {node}: released")
                     } else {
-                        format!("planning halted on {node}: turn ended with no plan")
+                        format!("planning finished on {node}: released")
                     }
                 } else if let Some(peer) = &probed.superseded_by_live_peer {
                     format!("superseded on {node} by live peer {peer}")
@@ -2896,6 +2922,7 @@ pub(crate) fn run_with_release(
                 tree,
                 worktree,
                 released,
+                idle_hour_past,
                 via_release: release_note.is_some(),
                 pr_settled_live: pr_settled,
             },
@@ -3011,6 +3038,7 @@ pub(crate) fn stage_session_retirement(
     mode: RetireMode,
     stop_observation: StopObservation,
     session_released: bool,
+    idle_hour_past: bool,
     stop_confirmed: &dyn Fn(&state::RegistryEntry) -> bool,
     mux_kill: &dyn Fn(&str, u64) -> Result<bool, String>,
     surface_removal: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
@@ -3049,10 +3077,8 @@ pub(crate) fn stage_session_retirement(
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if let Some(nodes) = graph.open_do.get(&sid) {
-            if let Some(node) = nodes.first().cloned() {
-                return Err(RetireRefusal::GraphObligation(node));
-            }
+        if let Some(node) = obligation(&graph, &sid, idle_hour_past) {
+            return Err(RetireRefusal::GraphObligation(node));
         }
     }
     // The record precedes the effects: a receipt that cannot be built or
@@ -3260,18 +3286,14 @@ pub(crate) fn commit_retirements(
                 // stale do row here too, the same yield the stage-time
                 // re-check makes.
                 .filter(|(_, order)| !order.released)
-                .filter_map(|(name, _)| {
+                .filter_map(|(name, order)| {
                     let entry = entries.iter().find(|e| &e.name == name)?;
                     let sid = entry
                         .harness_session_id
                         .as_deref()?
                         .trim()
                         .to_ascii_lowercase();
-                    graph
-                        .open_do
-                        .get(&sid)
-                        .and_then(|nodes| nodes.first().cloned())
-                        .map(|node| (name.clone(), node))
+                    obligation(&graph, &sid, order.idle_hour_past).map(|node| (name.clone(), node))
                 })
                 .collect();
             for (name, node) in held {
