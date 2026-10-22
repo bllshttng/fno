@@ -144,10 +144,11 @@ pub struct GcRow {
     pub registry_terminal: bool,
     /// The open-work window (change 2): how long an OPEN-work row may
     /// sit transcript-quiet before its node stops counting as evidence of a
-    /// live session. Quiet past it, the row falls to the same grace gate a
+    /// live session. Quiet past it, the row falls to the same idle gate a
     /// done row takes; inside it, the keep names the pinning node. Resolved
-    /// from `agents.reap.open_work_retire_s`, defaulting well above the
-    /// ordinary grace.
+    /// from `agents.reap.open_work_retire_s` and bounded below by the
+    /// origin ruling's one idle hour: a configured window may tighten the
+    /// hour, never loosen it.
     pub open_work_retire_s: i64,
     /// A live or suspect work-claim names this session as its holder: the
     /// claim's holder process answered the pid probe. The row is never
@@ -163,12 +164,13 @@ pub struct GcRow {
     /// another session owns the node, so this row must not resume it.
     /// `None` when no such claim was read.
     pub node_held_elsewhere: Option<String>,
-    /// Age of the newest TYPED user turn in the row's transcript, with NO
-    /// window: a person took this session on as a conversation partner.
-    /// `None` reads absence as nothing - the untyped row is the common case
-    /// the sweep must not pay a full-transcript scan for, so the sweep
-    /// resolves this only for a row the policy would otherwise retire.
-    pub typed_turn_age_s: Option<i64>,
+    /// The row is an eval worker (`ev-th-evals-*`) whose attempt the evals
+    /// history reads terminal (`graded` or `unavailable`): the attempt ran
+    /// once, was classified, and the
+    /// roster row is the leftover. Retires ahead of every keep below the
+    /// operator and teamed shields, so the bulk all-clear can remove the
+    /// whole family without naming rows.
+    pub eval_finished: bool,
 }
 
 impl GcRow {
@@ -283,10 +285,10 @@ pub enum KeepReason {
     /// liveness fact the machine holds. The row is never reaped as
     /// unattended while it holds one.
     LiveClaim { detail: String },
-    /// A person typed into this session, whenever that was: the words are
-    /// the one witness a done ledger and a quiet clock never override, the
-    /// same fact the stop door refuses on. Permanent, like an operator row.
-    UserTyped { age_s: i64 },
+    /// The row is fno-started and idle past the 55-minute grace but inside
+    /// the one idle hour: the band between grace and retirement (the
+    /// 2026-10-21 origin ruling). It retires at the hour.
+    Idle { age_s: i64 },
 }
 
 impl KeepReason {
@@ -315,7 +317,7 @@ impl KeepReason {
             KeepReason::OpenPr { .. } => "open pr",
             KeepReason::DeadOpenWork { .. } => "dead open work",
             KeepReason::LiveClaim { .. } => "live claim held",
-            KeepReason::UserTyped { .. } => "user typed into this session",
+            KeepReason::Idle { .. } => "idle, inside the one-hour retire window",
         }
     }
 }
@@ -347,13 +349,19 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     if row.teamed {
         return (GcAction::Keep, Some(KeepReason::Teamed));
     }
-    // A person typed into this session, whenever that was. The words
-    // outrank every gate below - done work, quiet past the grace, a
-    // settled PR - the person is talking to THIS row, and a retirement
-    // here reaps the session (and its worktree) out from under them.
-    // Permanent, like the operator keep above.
-    if let Some(age_s) = row.typed_turn_age_s {
-        return (GcAction::Keep, Some(KeepReason::UserTyped { age_s }));
+    // A terminal eval attempt is finished work by definition: the attempt was
+    // run once (`--once`), classified, and recorded in the evals history.
+    // It still yields to the liveness gates a quiet retire takes - a live
+    // claim or a moving transcript means the process is doing something -
+    // but an UNREADABLE transcript is not a hold here: an eval worker's
+    // transcript may never resolve, and a finished row waiting on one keeps
+    // forever.
+    if row.eval_finished {
+        let v = spawn_idle_gate(row);
+        return match v.1 {
+            Some(KeepReason::TranscriptUnresolved) => (GcAction::Retire, None),
+            _ => v,
+        };
     }
     // Only a row fno itself spawned retires. An `adopted` row (a session the
     // operator took over) or a row with no origin recorded is someone else's
@@ -394,8 +402,14 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // fno never stopped the row. The grace gate supplies the quiet
             // conjunct, so a done-and-quiet row with no node releases, and
             // a row that never reported done keeps exactly as before.
-            if row.turn_ended || row.session_released() {
-                grace_gate(row, grace_secs)
+            // The registry's own terminal stamp is the same kind of
+            // positive marker - a row the sweep watched exit has finished
+            // its story whatever its transcript reported, and an exited
+            // no-node row that never wrote a done report used to keep
+            // forever. It takes the same grace gate a reported-done row
+            // takes.
+            if row.turn_ended || row.session_released() || row.registry_terminal {
+                spawn_idle_gate(row)
             } else {
                 (GcAction::Keep, Some(KeepReason::NoProvenance))
             }
@@ -421,7 +435,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // holds even when the node's status would free a non-planner.
             if let Some(assignments) = &row.planning {
                 if row.planning_released {
-                    return grace_gate(row, PLANNING_IDLE_RETIRE_SECS);
+                    return spawn_idle_gate(row);
                 }
                 // An EMPTY status set fails closed: a lane that fires on a
                 // vacuous all() would retire a row the graph could not
@@ -438,7 +452,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
                         &row.planning_plan_written,
                         row.turn_ended,
                     ) {
-                        None => grace_gate(row, PLANNING_IDLE_RETIRE_SECS),
+                        None => spawn_idle_gate(row),
                         Some((n, s)) => (
                             GcAction::Keep,
                             Some(KeepReason::PlanningUnclosed {
@@ -495,18 +509,19 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // - the node's recorded merge_status already reads merged.
             // Dead pid is change 8 and rides the grace gate itself.
             if row.session_released() {
-                return grace_gate(row, grace_secs);
+                return spawn_idle_gate(row);
             }
             // change 2: open NODE state alone is not evidence a
             // SESSION is alive, and inside this window neither is an open
-            // node plus quiet. A row quiet past the open-work window falls
-            // to the same grace gate a released row takes; a row inside it
-            // keeps, and the keep names the node pinning it, so an operator
-            // can act on the node rather than on the row. An UNRESOLVED
-            // transcript has no clock to age past anything, so it keeps
-            // under the unchanged open-work reason.
+            // node plus quiet. The window is the origin ruling's one idle
+            // hour, bounded below by any tighter configured retire window;
+            // a row inside it keeps, and the keep names the node pinning
+            // it, so an operator can act on the node rather than on the
+            // row. An UNRESOLVED transcript has no clock to age past
+            // anything, so it keeps under the unchanged open-work reason.
+            let open_idle_window = row.open_work_retire_s.min(SPAWN_IDLE_RETIRE_SECS);
             match row.transcript_age_s {
-                Some(age) if age > row.open_work_retire_s => grace_gate(row, grace_secs),
+                Some(age) if age > open_idle_window => spawn_idle_gate(row),
                 Some(_) => (
                     GcAction::Keep,
                     Some(KeepReason::OpenWorkStale {
@@ -523,29 +538,44 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
                 ),
             }
         }
-        WorkState::AllDone { .. } => grace_gate(row, grace_secs),
+        WorkState::AllDone { .. } => spawn_idle_gate(row),
     }
 }
 
-/// The sweep's lazy resolution of the typed-turn fact: the
-/// full-transcript scan is the pass's one unbounded read, so it runs only
-/// when the policy would already retire the row. A typed turn flips the
-/// verdict to the permanent keep before the retirement can land; a row
-/// any cheaper gate keeps never pays the scan.
-pub fn resolve_typed_turn(
-    row: &mut GcRow,
-    verdict: (GcAction, Option<KeepReason>),
-    grace_secs: i64,
-    scan: impl FnOnce() -> Option<i64>,
-) -> (GcAction, Option<KeepReason>) {
-    if verdict.0 != GcAction::Retire {
-        return verdict;
+/// The 2026-10-21 origin ruling: an fno-started row (origin `spawn` - the
+/// spawn lane, a claude bg launched from an fno session, a mux composer
+/// session) retires after one idle hour. The 55 minutes under it are the
+/// grace: a transcript that moved inside the grace reads Active, and a row
+/// between the grace and the hour reads [`KeepReason::Idle`]. A
+/// user-started row (origin `operator`) the reaper never removes.
+pub const SPAWN_IDLE_RETIRE_SECS: i64 = 3_600;
+pub const SPAWN_IDLE_GRACE_SECS: i64 = 3_300;
+
+/// The idle gate the origin ruling gives every fno-started row: the same
+/// shape as [`grace_gate`] (a live claim outranks the clock, an unresolved
+/// transcript keeps) with the ruling's own two numbers. A typed turn is
+/// not a keep of its own under this rule - it is activity, and the idle
+/// clock runs from the last turn of any kind.
+fn spawn_idle_gate(row: &GcRow) -> (GcAction, Option<KeepReason>) {
+    if let Some(detail) = &row.live_claim {
+        return (
+            GcAction::Keep,
+            Some(KeepReason::LiveClaim {
+                detail: detail.clone(),
+            }),
+        );
     }
-    if let Some(age_s) = scan() {
-        row.typed_turn_age_s = Some(age_s);
-        return gc_decide(row, grace_secs);
+    match row.transcript_age_s {
+        None if row.release_quiet => (GcAction::Retire, None),
+        None => (GcAction::Keep, Some(KeepReason::TranscriptUnresolved)),
+        Some(age) if age <= SPAWN_IDLE_GRACE_SECS => {
+            (GcAction::Keep, Some(KeepReason::Active { age_s: age }))
+        }
+        Some(age) if age <= SPAWN_IDLE_RETIRE_SECS => {
+            (GcAction::Keep, Some(KeepReason::Idle { age_s: age }))
+        }
+        Some(_) => (GcAction::Retire, None),
     }
-    verdict
 }
 
 /// The transcript gates shared by every retire-eligible arm: an unresolved
@@ -766,6 +796,7 @@ pub fn gc_sweep_release(
         &crate::claude_roster::read_all_agents,
         &gc_sweep::production_tree_probe,
         &crate::daemon::rm_take_worktree,
+        false,
         Some(release),
     );
     summary.settled_do_rows = settled
@@ -820,6 +851,69 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
     ladder_rows.extend(summary.dead_work_rows.iter().cloned());
     summary.open_pr_nudge = crate::pr_nudge::plan(home, &ladder_rows, grace_secs);
     summary
+}
+
+/// `fno agents registry reap --done`: the bulk all-clear pass. The same
+/// seams and gates as [`gc_sweep`], scoped to rows whose work is done or
+/// whose terminal eval attempt marks the row finished: the merge the user
+/// already did is the all-clear, so the merge's rows leave the roster in
+/// one pass, and every other row is out of scope for that pass -
+/// untouched, unjudged, rendered nowhere.
+pub fn gc_sweep_done_only(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    grace_secs: i64,
+    retain_days: u64,
+) -> gc_sweep::GcSummary {
+    let (settled, mut refused) = gc_sweep::settle_stale_do_rows(home);
+    refused.extend(crate::phase_close::settle_ship_rows(home));
+    let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
+    let mut summary = gc_sweep::run_done_only(
+        home,
+        emitter,
+        grace_secs,
+        false,
+        retain_days,
+        &gc_sweep::read_graph_entries,
+        &|e| store.borrow_mut().matches(e),
+        &probe_entry_ages,
+        &|e| gc_sweep::stop_row_process(home, e),
+        &crate::gc_native::apply_active_surface_removal,
+        &crate::gc_native::apply_mux_member_retirement,
+        &crate::claude_roster::read_all_agents,
+        &gc_sweep::production_tree_probe,
+        &crate::daemon::rm_take_worktree,
+    );
+    summary.settled_do_rows = settled
+        .into_iter()
+        .map(|row| (row.node, row.harness, row.session_id))
+        .collect();
+    summary.settle_refused = refused;
+    summary
+}
+
+/// `fno agents registry reap --done` without `--apply`: the same scoped
+/// pass as [`gc_sweep_done_only`], rehearsed - classify, name every row
+/// under exactly one bucket, mutate nothing.
+pub fn gc_sweep_done_only_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSummary {
+    let emitter = EventEmitter::new(std::path::PathBuf::new(), "daemon");
+    let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
+    gc_sweep::run_done_only(
+        home,
+        &emitter,
+        grace_secs,
+        true,
+        0,
+        &gc_sweep::read_graph_entries,
+        &|e| store.borrow_mut().matches(e),
+        &probe_entry_ages,
+        &|e| gc_sweep::stop_row_process(home, e),
+        &crate::gc_native::apply_active_surface_removal,
+        &crate::gc_native::apply_mux_member_retirement,
+        &crate::claude_roster::read_all_agents,
+        &gc_sweep::production_tree_probe,
+        &crate::daemon::rm_take_worktree,
+    )
 }
 
 // --- the orphan process sweep -----------------------------------------------
@@ -2266,8 +2360,8 @@ mod tests {
     const GRACE: i64 = 900;
 
     /// A spawn-origin, unpromoted row whose work is done everywhere it is
-    /// named and whose transcript has been quiet past the grace: the AC3-HP
-    /// base case.
+    /// named and whose transcript has been quiet past the origin ruling's
+    /// one idle hour: the AC3-HP base case.
     fn retiring() -> GcRow {
         GcRow {
             origin: Some("spawn".into()),
@@ -2275,7 +2369,7 @@ mod tests {
             work: WorkState::AllDone {
                 nodes: vec!["N1".into()],
             },
-            transcript_age_s: Some(GRACE + 1),
+            transcript_age_s: Some(SPAWN_IDLE_RETIRE_SECS + 1),
             owns_worktree: true,
             worktree_clean: Some(true),
             branch_merged: Some(true),
@@ -2299,7 +2393,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
-            typed_turn_age_s: None,
+            eval_finished: false,
         }
     }
 
@@ -2352,71 +2446,220 @@ mod tests {
         );
     }
 
-    /// A person typed into the session, so the row keeps under its
-    /// own permanent reason - past the grace, past done work, past the
-    /// origin classes - exactly where the operator and teamed keeps sit.
+    /// The 2026-10-21 origin ruling, both sides: an fno-started row
+    /// (origin `spawn`) keeps inside the one idle hour - Active in the
+    /// 55-minute grace, `Idle` across the last five minutes of the hour -
+    /// and retires past it. A user-started row (origin `operator`) the
+    /// reaper never removes, whatever its age or work state.
     #[test]
-    fn a_row_the_user_typed_into_keeps_under_a_permanent_reason() {
-        // The incident row: quiet 17 minutes, past the 900 s grace, every
-        // node done - and the person's turn sits in the transcript.
-        let typed = GcRow {
-            typed_turn_age_s: Some(17 * 60),
+    fn the_origin_rule_keeps_each_side() {
+        // fno-started, inside the grace: the hour has not run out.
+        let young = GcRow {
+            transcript_age_s: Some(17 * 60),
             ..retiring()
         };
         assert_eq!(
-            gc_decide(&typed, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::UserTyped { age_s: 17 * 60 })
-            ),
-            "a typed turn outranks every retire-eligible fact"
+            gc_decide(&young, GRACE),
+            (GcAction::Keep, Some(KeepReason::Active { age_s: 17 * 60 })),
+            "an fno-started row inside the grace keeps"
         );
-        // The gate reads only the real fact: the same row without one
-        // retires as before.
-        assert_eq!(gc_decide(&retiring(), GRACE), (GcAction::Retire, None));
-        // The keep precedes the origin classes: a finished adopted row the
-        // person engaged keeps as its own keep, not as a corpse carve-out.
-        let adopted_typed = GcRow {
-            typed_turn_age_s: Some(17 * 60),
-            ..adopted_finished()
+        // fno-started, past the grace but inside the hour: the band.
+        let band = GcRow {
+            transcript_age_s: Some(SPAWN_IDLE_GRACE_SECS + 60),
+            ..retiring()
         };
         assert_eq!(
-            gc_decide(&adopted_typed, GRACE),
+            gc_decide(&band, GRACE),
             (
                 GcAction::Keep,
-                Some(KeepReason::UserTyped { age_s: 17 * 60 })
+                Some(KeepReason::Idle {
+                    age_s: SPAWN_IDLE_GRACE_SECS + 60
+                })
             ),
+            "between the grace and the hour the row reads Idle and keeps"
         );
-        // The sweep resolves the fact lazily: only a verdict that would
-        // retire pays for the read, and a typed answer flips the verdict
-        // before the retirement lands.
-        let mut row = retiring();
+        // fno-started, past the hour: retires.
         assert_eq!(
-            resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || Some(17 * 60)),
-            (
-                GcAction::Keep,
-                Some(KeepReason::UserTyped { age_s: 17 * 60 })
-            ),
-        );
-        // No typed answer: the retire verdict stands.
-        row.typed_turn_age_s = None;
-        assert_eq!(
-            resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || None),
+            gc_decide(&retiring(), GRACE),
             (GcAction::Retire, None),
+            "an fno-started row idle past the hour retires"
         );
-        // A keep never pays the scan: the resolver would panic if called.
-        let mut kept = GcRow {
+        // user-started: never removed, whatever the clock says.
+        let operator = GcRow {
+            origin: Some("operator".into()),
+            transcript_age_s: Some(5 * 24 * 3600),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&operator, GRACE),
+            (GcAction::Keep, Some(KeepReason::Operator)),
+            "a user-started row is never the reaper's to remove"
+        );
+        // A live claim outranks the spent hour on the fno side too.
+        let claimed = GcRow {
+            live_claim: Some("node:N1 (holder s-1)".into()),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&claimed, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::LiveClaim {
+                    detail: "node:N1 (holder s-1)".into()
+                })
+            ),
+        );
+    }
+
+    /// The planner lane retires on the same origin-rule clock: a released
+    /// planner past the idle hour retires, and a typed last turn is not a
+    /// keep of its own - the idle clock runs from the last turn of any
+    /// kind.
+    #[test]
+    fn a_released_planner_retires_after_the_idle_hour() {
+        let planner = GcRow {
+            work: WorkState::Open {
+                node: "x-m2".into(),
+                status: "idea".into(),
+            },
+            planning: Some(vec![("x-m2".to_string(), "idea".to_string())]),
+            planning_released: true,
+            turn_ended: true,
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&planner, GRACE),
+            (GcAction::Retire, None),
+            "a released planner idle past the hour retires"
+        );
+        // Inside the grace the planner keeps like any fno-started row.
+        let young = GcRow {
+            transcript_age_s: Some(4 * 60),
+            ..planner
+        };
+        assert_eq!(
+            gc_decide(&young, GRACE),
+            (GcAction::Keep, Some(KeepReason::Active { age_s: 4 * 60 })),
+        );
+    }
+
+    /// The open-work idle window is the origin ruling's hour: an open-node
+    /// row idle past it retires, one inside it keeps with the node named.
+    #[test]
+    fn an_open_node_row_keeps_inside_the_idle_hour_and_retires_past_it() {
+        let open = GcRow {
+            work: WorkState::Open {
+                node: "N1".into(),
+                status: "in_progress".into(),
+            },
+            ..retiring()
+        };
+        let inside = GcRow {
+            transcript_age_s: Some(30 * 60),
+            ..open.clone()
+        };
+        assert_eq!(
+            gc_decide(&inside, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::OpenWorkStale {
+                    node: "N1".into(),
+                    status: "in_progress".into(),
+                })
+            ),
+            "inside the hour the keep names the pinning node"
+        );
+        assert_eq!(
+            gc_decide(&open, GRACE),
+            (GcAction::Retire, None),
+            "an open-node row idle past the hour retires"
+        );
+    }
+
+    /// A terminal eval row yields to the liveness gates a quiet retire
+    /// takes: a live claim holds, a moving transcript holds as Active,
+    /// and only quiet OR unreadable retires. An unreadable transcript is
+    /// not a hold for an eval row - the worker's transcript may never
+    /// resolve, and a finished row waiting on one keeps forever.
+    #[test]
+    fn a_finished_eval_row_yields_to_liveness_but_not_to_an_unreadable_transcript() {
+        // Live claim: the holder process answered the pid probe.
+        let claimed = GcRow {
+            eval_finished: true,
+            live_claim: Some("node:x-1 (holder s-1)".into()),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&claimed, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::LiveClaim {
+                    detail: "node:x-1 (holder s-1)".into()
+                })
+            ),
+            "a live claim outranks the finished fact"
+        );
+        // Moving transcript: the worker is still writing.
+        let moving = GcRow {
+            eval_finished: true,
             transcript_age_s: Some(4),
             ..retiring()
         };
         assert_eq!(
-            resolve_typed_turn(
-                &mut kept,
-                (GcAction::Keep, Some(KeepReason::Active { age_s: 4 })),
-                GRACE,
-                || panic!("a kept row must never pay the typed-turn scan"),
-            ),
+            gc_decide(&moving, GRACE),
             (GcAction::Keep, Some(KeepReason::Active { age_s: 4 })),
+            "a moving transcript outranks the finished fact"
+        );
+        // Quiet past the idle hour: retires.
+        let quiet = GcRow {
+            eval_finished: true,
+            transcript_age_s: Some(SPAWN_IDLE_RETIRE_SECS + 1),
+            ..retiring()
+        };
+        assert_eq!(gc_decide(&quiet, GRACE), (GcAction::Retire, None));
+        // An unreadable transcript is NOT a hold for a finished row: the
+        // worker's transcript may never resolve.
+        let unresolved = GcRow {
+            eval_finished: true,
+            transcript_age_s: None,
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&unresolved, GRACE),
+            (GcAction::Retire, None),
+            "a finished row waiting on an unreadable transcript keeps forever otherwise"
+        );
+    }
+
+    /// An exited row with no node and no done report used to keep
+    /// forever under NoProvenance; the registry's own terminal stamp now
+    /// takes the origin ruling's idle gate a reported-done row takes.
+    #[test]
+    fn an_exited_no_node_row_releases_after_the_idle_hour() {
+        let exited = GcRow {
+            registry_terminal: true,
+            work: WorkState::NoProvenance,
+            transcript_age_s: Some(SPAWN_IDLE_RETIRE_SECS + 1),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&exited, GRACE),
+            (GcAction::Retire, None),
+            "an exited no-node row idle past the hour retires"
+        );
+        // Inside the window it keeps as Active, like every other row.
+        let young = GcRow {
+            registry_terminal: true,
+            work: WorkState::NoProvenance,
+            transcript_age_s: Some(GRACE - 1),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&young, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::Active { age_s: GRACE - 1 })
+            ),
         );
     }
 
@@ -2824,7 +3067,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
-            typed_turn_age_s: None,
+            eval_finished: false,
         }
     }
 

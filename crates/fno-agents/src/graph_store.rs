@@ -582,6 +582,131 @@ pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
     Ok(RawRead::Entries(list.clone()))
 }
 
+/// The shared archive read both archive consumers ask for: the
+/// reaper's graph read (`gc_sweep::read_graph_rows`) and the backlog get
+/// command's archived tier (`backlog::get_cli`). The migrated `db/` spelling
+/// of the SQLite archive first, then the legacy top-level JSON; every read
+/// is advisory - a missing or unparsable file contributes nothing, so a
+/// broken archive can never blind a consumer to the working graph.
+pub(crate) fn archive_rows(state_dir: &Path) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    // A root mid-migration holds BOTH spellings of the same archive; the
+    // first reading wins per id, so a row never enters the fold twice and
+    // the consumers' mention counts stay single.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for name in ["graph-archive.db", "graph-archive.json"] {
+        push_archive_rows(&mut out, &mut seen, archive_rows_from(state_dir, name));
+    }
+    out
+}
+
+/// One archive NAME's rows, the migrated `db/` spelling first, then the
+/// legacy top-level spelling, deduped per id within the name. The per-name
+/// reader `backlog get`'s archive tier iterates, so a hit serves from the
+/// spelling that actually matched (the legacy JSON root serves the JSON).
+pub(crate) fn archive_rows_from(state_dir: &Path, name: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(row) = crate::state_layout::find(name) {
+        push_archive_rows(
+            &mut out,
+            &mut seen,
+            archive_rows_at(&state_dir.join(&row.new)),
+        );
+    }
+    push_archive_rows(&mut out, &mut seen, archive_rows_at(&state_dir.join(name)));
+    out
+}
+
+/// The file one archive NAME reads: the migrated `db/` spelling when the
+/// layout names it, else the legacy top-level spelling.
+pub(crate) fn archive_file_path(state_dir: &Path, name: &str) -> PathBuf {
+    crate::state_layout::find(name)
+        .map(|row| state_dir.join(&row.new))
+        .unwrap_or_else(|| state_dir.join(name))
+}
+
+/// Extend `out` with `rows` whose id is new; an id already read from an
+/// earlier spelling is dropped. A row without an id keeps - there is
+/// nothing to dedupe it on.
+fn push_archive_rows(
+    out: &mut Vec<Value>,
+    seen: &mut std::collections::HashSet<String>,
+    rows: Vec<Value>,
+) {
+    for row in rows {
+        match row.get("id").and_then(Value::as_str) {
+            Some(id) if seen.insert(id.to_string()) => out.push(row),
+            Some(_) => {}
+            None => out.push(row),
+        }
+    }
+}
+
+/// One archive file's rows, dispatched by suffix: the SQLite archive over
+/// every row shape the store has used, or the JSON `entries` shape. The
+/// open is read-only, with the WAL-twin immutable retry a plain read-only
+/// open needs when the -shm sidecar is gone.
+fn archive_rows_at(path: &Path) -> Vec<Value> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("db") => archive_db_rows(path),
+        _ => std::fs::read(path)
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+            .and_then(|v| v.get("entries").and_then(|e| e.as_array().cloned()))
+            .unwrap_or_default(),
+    }
+}
+
+/// One SQLite archive's rows, in the store's own shape (blob rows as TEXT,
+/// store order). Read-only open with the immutable retry a WAL-mode twin
+/// needs when its -shm sidecar is gone; a file that opens to none of the
+/// store's shapes contributes nothing.
+fn archive_db_rows(path: &Path) -> Vec<Value> {
+    let Some(conn) = open_archive_conn(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    // The store's own read shape: blob rows as TEXT, store order.
+    let Ok(mut stmt) = conn.prepare("SELECT row FROM entries ORDER BY ordinal, id") else {
+        return out;
+    };
+    let Ok(blob_rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
+        return out;
+    };
+    for row in blob_rows {
+        let Ok(body) = row else { continue };
+        if let Ok(v) = serde_json::from_str::<Value>(&body) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// The one read-only archive open both archive readers share: an ordinary
+/// read-only open, then the immutable retry a WAL-mode twin whose -shm
+/// sidecar is gone needs. The URI spelling percent-encodes the path so the
+/// `?immutable=1` query survives reserved characters in the path itself.
+/// `None` when neither opens.
+pub(crate) fn open_archive_conn(path: &Path) -> Option<rusqlite::Connection> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    if let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) {
+        return Some(conn);
+    }
+    let mut encoded = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    let uri = format!("file:{encoded}?immutable=1");
+    let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+    rusqlite::Connection::open_with_flags(uri, uri_flags).ok()
+}
+
 // ---------------------------------------------------------------------------
 // Time helpers matching the Python stamps byte-for-byte
 // ---------------------------------------------------------------------------

@@ -3315,24 +3315,69 @@ fn run_reap(rest: &[String]) -> i32 {
 
     let dry_run = rest.iter().any(|a| a == "--dry-run");
     let no_mux = rest.iter().any(|a| a == "--no-mux");
+    let only_done = rest.iter().any(|a| a == "--done");
+    let apply = rest.iter().any(|a| a == "--apply");
     let extras: Vec<&str> = rest
         .iter()
         .map(String::as_str)
-        .filter(|a| *a != "--json" && *a != "-J" && *a != "--dry-run" && *a != "--no-mux")
+        .filter(|a| {
+            *a != "--json"
+                && *a != "-J"
+                && *a != "--dry-run"
+                && *a != "--no-mux"
+                && *a != "--done"
+                && *a != "--apply"
+        })
         .collect();
     if !extras.is_empty() {
         eprintln!(
-            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux (got: {})",
+            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux/--done/--apply (got: {})",
             extras.join(" ")
+        );
+        return 2;
+    }
+    if apply && !only_done {
+        eprintln!(
+            "fno-agents: reap --apply only rides --done (the bulk all-clear): `reap --done --apply`"
         );
         return 2;
     }
     let home = AgentsHome::from_env();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let grace_secs = fno_agents::agents_config::retire_grace_secs(&cwd) as i64;
-    // Dead teams first, matching the arm's in-arm order.
-    let teams = fno_agents::team_reap::production_sweep(&home, &cwd, !dry_run);
-    let mut summary = if dry_run {
+    // The bulk all-clear: --apply executes the scoped pass; without it the
+    // pass rehearses, whatever --dry-run says.
+    if only_done && apply && dry_run {
+        eprintln!("fno-agents: reap --done takes --apply or --dry-run, not both");
+        return 2;
+    }
+    let effective_dry = if only_done { !apply } else { dry_run };
+    // What this invocation runs: `--done` scopes the whole command to the
+    // done/eval pass. The team sweep and the mux tab sweep touch rows the
+    // scoped pass never judges, so a scoped run runs neither, apply or dry.
+    let plan = reap_plan(only_done);
+    let teams = if plan.teams {
+        // Dead teams first, matching the arm's in-arm order.
+        Some(fno_agents::team_reap::production_sweep(
+            &home,
+            &cwd,
+            !effective_dry,
+        ))
+    } else {
+        None
+    };
+    let mut summary = if only_done {
+        if apply {
+            fno_agents::gc::gc_sweep_done_only(
+                &home,
+                &fno_agents::events::EventEmitter::new(home.events_jsonl(), "daemon"),
+                grace_secs,
+                fno_agents::agents_config::reap_receipt_retain_days(&cwd),
+            )
+        } else {
+            fno_agents::gc::gc_sweep_done_only_dry_run(&home, grace_secs)
+        }
+    } else if dry_run {
         fno_agents::daemon::gc_sweep_dry_run(&home, grace_secs)
     } else {
         // Source "daemon": the manual command is the same operation as the tick.
@@ -3345,13 +3390,13 @@ fn run_reap(rest: &[String]) -> i32 {
         )
     };
     summary.mark_escalated(fno_agents::agents_config::hold_escalate_after(&cwd));
-    summary.teams = Some(teams);
+    summary.teams = teams;
 
     // The dry-run JSON read also carries the census (task 4): who would
     // retire and what was seen, one read. Text dry-runs carry it too now:
     // the text receipt prints the counts beside the judged rows instead of
     // the census living only in the JSON read.
-    let inventory = if dry_run {
+    let inventory = if effective_dry {
         Some(fno_agents::gc_inventory::census(&home))
     } else {
         None
@@ -3360,11 +3405,13 @@ fn run_reap(rest: &[String]) -> i32 {
     // but ghost panes are the surface an operator SEES. The sweep body stays
     // the one prune command (reused, not reimplemented); `--no-mux` skips it.
     // The manual command keeps `--include-used-shells`: closing a human's spent
-    // shells is an attended choice, never the daemon's default.
-    let mux = if no_mux {
+    // shells is an attended choice, never the daemon's default. A scoped
+    // `--done` run skips it entirely: the tabs belong to rows the scoped
+    // pass never judged.
+    let mux = if no_mux || !plan.mux_tabs {
         fno_agents::reap_render::MuxSweep::Skipped
     } else {
-        fno_agents::gc::mux_tab_sweep(None, &cwd, dry_run, true)
+        fno_agents::gc::mux_tab_sweep(None, &cwd, effective_dry, true)
     };
     print!(
         "{}",
@@ -3373,10 +3420,41 @@ fn run_reap(rest: &[String]) -> i32 {
             inventory.as_ref(),
             Some(&mux),
             json_out,
-            dry_run
+            effective_dry
         )
     );
     0
+}
+
+/// What one `reap` invocation runs. `--done` scopes the whole command to the
+/// done/eval pass: the team sweep and the mux tab sweep touch rows the
+/// scoped pass never judges, so a scoped run runs neither, apply or dry.
+struct ReapPlan {
+    teams: bool,
+    mux_tabs: bool,
+}
+
+fn reap_plan(only_done: bool) -> ReapPlan {
+    ReapPlan {
+        teams: !only_done,
+        mux_tabs: !only_done,
+    }
+}
+
+#[cfg(test)]
+mod reap_tests {
+    use super::*;
+
+    /// The scope contract the merge hold names: a scoped `--done` run runs
+    /// the done/eval pass alone. The unscoped run keeps both sidelines.
+    #[test]
+    fn a_done_scoped_reap_runs_neither_sideline_sweep() {
+        let plan = reap_plan(true);
+        assert!(!plan.teams, "a scoped run never sweeps teams");
+        assert!(!plan.mux_tabs, "a scoped run never sweeps mux tabs");
+        let plain = reap_plan(false);
+        assert!(plain.teams && plain.mux_tabs, "the unscoped run keeps both");
+    }
 }
 
 /// `fno-agents roster-reap`: the roster-side sweep (gap one). Dry-run
