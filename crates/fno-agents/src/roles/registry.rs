@@ -13,6 +13,7 @@
 //! the `error` field is what an operator reads to fix the file.
 
 use super::models::{self, RoleLayer, RoleRef};
+use crate::client_verbs::py_repr_str;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -56,32 +57,6 @@ fn source_id(path: &Path, root: &Path) -> String {
     }
 }
 
-/// Python's `repr()` of a str, as an OSError message quotes its filename.
-fn py_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push(quote);
-    for ch in text.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
 /// `f"{type(exc).__name__}: {exc}"` for the OSError Python raised on the
 /// same path.
 fn os_error_text(err: &io::Error, path: &Path) -> String {
@@ -100,7 +75,7 @@ fn os_error_text(err: &io::Error, path: &Path) -> String {
     let message = display.strip_suffix(&suffix).unwrap_or(&display);
     format!(
         "{class}: [Errno {code}] {message}: {}",
-        py_repr(&path.to_string_lossy())
+        py_repr_str(&path.to_string_lossy())
     )
 }
 
@@ -188,15 +163,15 @@ fn read_definition(path: &Path, layer: RoleLayer, root: &Path) -> Discovered {
         if definition.layer != layer {
             return Err(format!(
                 "document layer {} does not match discovery layer {}",
-                py_repr(definition.layer.as_str()),
-                py_repr(layer.as_str())
+                py_repr_str(definition.layer.as_str()),
+                py_repr_str(layer.as_str())
             ));
         }
         if definition.source_id != id {
             return Err(format!(
                 "document source_id {} does not match source truth {}",
-                py_repr(&definition.source_id),
-                py_repr(&id)
+                py_repr_str(&definition.source_id),
+                py_repr_str(&id)
             ));
         }
         Ok(definition)
@@ -277,7 +252,7 @@ fn explicit_paths(
             let choices: Vec<&str> = RoleLayer::ALL.iter().map(|l| l.as_str()).collect();
             DiscoveryInputError(format!(
                 "unknown role layer {}; expected one of {}",
-                py_repr(layer_text),
+                py_repr_str(layer_text),
                 choices.join(", ")
             ))
         })?;

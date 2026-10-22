@@ -180,21 +180,43 @@ fn lax_bool(obj: &Obj, key: &str, default: bool, at: &str) -> Result<bool, Strin
     }
 }
 
-/// Pydantic's lax int with `ge=0`: an int, a bool, a float or a trimmed
-/// numeric string with no fractional part.
+/// Pydantic's int-from-string grammar, as measured: trimmed, an optional
+/// `+`, digits with single `_` separators, and an optional `.0...` tail.
+/// It refuses `1e3`, `1.`, `.0`, `-0`, `inf` and `0x1`.
+fn int_text(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let text = text.strip_prefix('+').unwrap_or(text);
+    let (whole, fraction) = match text.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (text, None),
+    };
+    if fraction.is_some_and(|f| f.is_empty() || f.bytes().any(|b| b != b'0')) {
+        return None;
+    }
+    let digits_ok = whole.split('_').all(|run| !run.is_empty())
+        && whole.bytes().all(|b| b.is_ascii_digit() || b == b'_');
+    if !digits_ok {
+        return None;
+    }
+    whole.replace('_', "").parse::<f64>().ok()
+}
+
+/// Pydantic's lax int with `ge=0`: an int, a bool, a float with no
+/// fractional part inside the i64 range, or an [`int_text`] string.
 fn lax_count(obj: &Obj, key: &str, at: &str) -> Result<f64, String> {
     let at = format!("{at}.{key}");
     let bad = || format!("{at}: input should be a valid integer");
     let number = match present(obj, key) {
         None => return Ok(0.0),
         Some(Value::Bool(b)) => f64::from(u8::from(*b)),
-        Some(Value::Number(n)) => n.as_f64().ok_or_else(bad)?,
-        Some(Value::String(text)) => text.trim().parse::<f64>().map_err(|_| bad())?,
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => n.as_f64().ok_or_else(bad)?,
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(f) if f.is_finite() && f.fract() == 0.0 && f.abs() < 9.2e18 => f,
+            _ => return Err(bad()),
+        },
+        Some(Value::String(text)) => int_text(text).ok_or_else(bad)?,
         Some(_) => return Err(bad()),
     };
-    if !number.is_finite() || number.fract() != 0.0 {
-        return Err(bad());
-    }
     if number < 0.0 {
         return Err(format!("{at}: input should be greater than or equal to 0"));
     }
