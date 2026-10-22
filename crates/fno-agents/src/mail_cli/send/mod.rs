@@ -2371,6 +2371,7 @@ mod ask_anycast_tests {
 #[cfg(test)]
 mod system_arm_inbox_tests {
     use super::*;
+    use crate::claims::EnvVarGuard;
 
     #[test]
     fn a_system_arm_address_maps_to_one_safe_segment_and_other_slashes_stay_refused() {
