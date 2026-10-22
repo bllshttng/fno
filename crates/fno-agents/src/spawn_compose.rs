@@ -1084,15 +1084,28 @@ fn lane_model_pin(stage: &Stage, seam: &mut Seam) {
     {
         return;
     }
-    let s = |key: &str| {
-        candidate
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+    // An inline lane carries its harness as `provider` in its fields, not
+    // on a row; read both so a codex lane's model never pins onto claude.
+    let s = |key: &str, field: &str| {
+        [
+            candidate.get(key),
+            candidate.get("lane_fields").and_then(|f| f.get(field)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_string()
     };
-    let src = format!("lane {}", s("lane"));
-    pin_harness_model(stage, seam, &s("harness"), &s("model"), &src);
+    let src = format!("lane {}", s("lane", "lane"));
+    pin_harness_model(
+        stage,
+        seam,
+        &s("harness", "provider"),
+        &s("model", "model"),
+        &src,
+    );
 }
 
 /// The billing axes (route/account/model, ruling 4) through the one Rust
