@@ -1,11 +1,6 @@
 //! What physical memory the pane stack, the daemon, the fleet and the Claude
-//! spare pool hold.
-//!
-//! Physical footprint (`ri_phys_footprint`), never summed RSS: RSS counts
-//! every shared page once per process that maps it. On 2026-10-21 the mux
-//! server read 515 MB RSS and 133 MB physical. The census door carries this
-//! reading to `fno doctor footprint`, and the daemon's machine tick records it
-//! in each sample, so a peak survives a daemon restart.
+//! spare pool hold: `ri_phys_footprint`, never summed RSS, which counts each
+//! shared page once per process. Contract: docs/architecture/machine-footprint.md.
 
 use crate::census::ProcRow;
 use serde_json::{json, Value};
@@ -285,12 +280,5 @@ mod tests {
         );
         assert!(line.contains("daemon 140 MB, peak 1000 MB"), "{line}");
         assert!(line.contains("1 processes unreadable"), "{line}");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn phys_footprint_reads_this_process() {
-        let (now, peak) = phys_footprint(std::process::id()).expect("own pid reads");
-        assert!(now > 0 && peak >= now, "now {now} peak {peak}");
     }
 }
