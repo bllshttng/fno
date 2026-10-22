@@ -200,7 +200,7 @@ mod agent_hit_tests;
 #[path = "client/tests/paneless_row_tests.rs"]
 mod paneless_row_tests;
 
-fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> SquadMeta {
+pub(super) fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> SquadMeta {
     SquadMeta {
         id,
         name: name.into(),
@@ -360,7 +360,7 @@ fn tab_agent(tab: Option<TabId>, badge: Option<AgentBadge>, exited: bool) -> Age
     }
 }
 
-fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
+pub(super) fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
     Frame {
         rows,
         cols,
@@ -7784,49 +7784,6 @@ fn client_compose_ignores_stale_frames_and_clips_overflow() {
         !view.frames.contains_key(&11),
         "frames for dead panes are dropped at Layout"
     );
-}
-
-#[test]
-fn client_compose_letterboxes_beyond_the_clamped_area() {
-    // AC1-UI: a 29x72 local content area showing a tab clamped to 20x50
-    // - content anchors top-left, everything beyond is dim '·' filler,
-    // and the cursor never enters the filler.
-    let mut view = View::new(
-        (30, 100),
-        "main".into(),
-        LayoutView {
-            squads: vec![meta(1, "footnote", 1, 0)],
-            active_squad: 1,
-            panes: vec![(
-                10,
-                Rect {
-                    x: 0,
-                    y: 0,
-                    rows: 20,
-                    cols: 50,
-                },
-            )],
-            focus: 10,
-            area: (20, 50),
-            agents: vec![],
-            focus_node: None,
-        },
-    );
-    view.frames.insert(10, text_frame(20, 50, 'a'));
-    let frame = view.compose();
-    let cols = frame.cols as usize;
-    // The frame's top-left corner, then the in-area content cell one cell in.
-    assert_eq!(frame.cells[cols + 28].c, '╭');
-    assert_eq!(frame.cells[2 * cols + 29].c, 'a');
-    // One column beyond the area: filler, dim.
-    let beyond_col = &frame.cells[cols + 28 + 50];
-    assert_eq!(beyond_col.c, '·', "beyond-area column must be filler");
-    assert!(beyond_col.flags & cell_flags::DIM != 0);
-    // One row beyond the area (content row 20): filler too.
-    let beyond_row = &frame.cells[(1 + 20) * cols + 28];
-    assert_eq!(beyond_row.c, '·', "beyond-area row must be filler");
-    // Cursor confined to content even against a lying frame cursor.
-    assert!(frame.cursor_row < 1 + 20 && frame.cursor_col < 28 + 50);
 }
 
 #[test]
