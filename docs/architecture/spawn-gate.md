@@ -87,6 +87,8 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 87 gate unavailable. The gate verb is missing, failed, or timed out. Fail closed: never admit on an unreadable gate.
 - 88 blueprint thread cap. More than `agents.profiles.blueprint.max_live` live `bp` threads, or more than one per territory, refuses the spawn and teaches the subagent path.
 - 89 review session. A seed or label that names review causes a permanent refusal. The refusal runs before `--force` and the `FNO_SPAWN_GATE=0` bypass. Run the inline fno review lane.
+- 90 and 91, the fleet-incident check pair (`fleet_incident.rs`).
+- 92 node occupied. Fleet top shows a positively-live worker on the spawn's node, claimed or not. The refusal names the worker. The fn-6206 incident was the hole. fork-6206 held no claim, `claim status` read free, and a second spawn double-seated the node and its PR. The arm sits ahead of `--force` and the human exemption, beside the quota walls. A collision is not busyness. A succession passes: the departing caller's own row is excluded. An unreadable roster refuses closed under the same exit with reason `node_occupancy_unknown`. The refusal names the broken read and the `--force` bypass. The arm runs for node-bearing spawns only, never a plain one. Waiting cannot help a named worker. Retask or reap it.
 
 ## Overriding the learned cap
 

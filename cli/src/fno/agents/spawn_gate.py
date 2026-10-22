@@ -47,6 +47,8 @@ from fno.harness_identity import claude_transport_short_id
 #               admit on an unreadable gate.
 #   88          blueprint thread cap (Rust gate only)
 #   90, 91      Rust fleet-incident check verb (fleet_incident.rs).
+#   92          node-occupancy refusal: a live worker is on the spawn's
+#               node, claimed or not (Rust gate only).
 EXIT_QUEUE_TIMEOUT = 75
 EXIT_NO_WAIT = 76
 EXIT_RAM_REFUSED = 77
@@ -63,6 +65,9 @@ EXIT_STATE_ROOT_UNGRANTED = 84
 EXIT_TERRITORY_CAP = 86
 EXIT_BLUEPRINT_CAP = 88
 EXIT_GATE_UNAVAILABLE = 87
+# Rust gate only (crates/fno-agents/src/spawn_gate.rs): fleet top shows a
+# live worker on the spawn's node.
+EXIT_NODE_OCCUPIED = 92
 
 
 #: The refusal reasons a caller may outlast by retrying (spawn --wait). Owned
