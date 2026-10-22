@@ -717,7 +717,7 @@ def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
     """Refuse a fresh claude thread spawn with no message before any worker launches.
 
     Judges an explicit substrate only: an absent one routes to the Python
-    ``cmd_spawn`` (see :func:`_is_pane_substrate_spawn`), which judges the
+    ``cmd_spawn`` (see :func:`_is_default_substrate_spawn`), which judges the
     resolved substrate with the same helper.
     """
     from fno.agents.spawn_defaults import (
@@ -927,49 +927,31 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn
 
-#: The pane harnesses the binary's own arm answers (codex now; row 8 widens): an explicit `-H <member>` pane spawn routes to Rust.
-_RUST_PANE_HARNESSES = frozenset({"codex"})
-
-
-def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` targeting the ``pane`` substrate (4a-G2).
-
-    The pane substrate is mux-hosted now: the Python back half owns the
-    ``fno mux pane run`` spawn (front-half reuse + registry mux ref), so a
-    pane spawn must never route to the Rust client's daemon RPC (the daemon
-    PTY host retires at G4; a silent fallback there is exactly what AC1-ERR
-    forbids). An ABSENT ``--substrate`` still routes here: the pane back half
-    is Python-owned and its body resolves the built-in default (thread where
-    the harness seats one, else pane). The scan stops at ``--argv`` like the
-    other raw-args scans so a payload
-    token can never masquerade as our flag, and at a bare ``--`` fence for the
-    same reason (: fenced tokens are provider passthrough - a fenced
-    ``-p`` must not flip a pane-default spawn onto the binary route, past
-    every pane guard).
+def _is_default_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
+    """True for a ``spawn`` with no explicit substrate: the Python door
+    resolves the built-in default (thread, with the thread-seatable refusal
+    and the headless spellings, cli.py's ``substrate or ...``), and the
+    keeper thread lanes live behind it. The scan stops at ``--argv`` and a
+    bare ``--`` so a payload or fenced token never reads as our flag. An
+    EXPLICIT ``--as pane`` routes to the binary's pane spine (row 8 seats
+    every harness); an explicit thread/headless spelling keeps its existing
+    lane.
     """
     if verb != "spawn":
         return False
-    substrate = None
+    explicit = False
     it = iter(args)
     for a in it:
         if a == "--argv" or a == "--":
             break
         if a in ("--once", "-o"):
-            # The headless spellings (--once/-o; `--substrate headless` is the
-            # long form): a one-shot, never a pane. Must be honored here or a
-            # headless spawn would route to the pane back half. `-H` (harness)
-            # and `-P` (vendor) are NOT here: they are value flags that do not
-            # pick the lane.
             return False
         if a == "--substrate" or a == "--as":
-            substrate = next(it, "")
+            next(it, "")
+            explicit = True
         elif a.startswith("--substrate=") or a.startswith("--as="):
-            substrate = a.split("=", 1)[1]
-    if substrate is None or substrate != "pane":
-        return substrate is None
-    # An EXPLICIT -H naming the member set routes to the binary's arm; the absent -H keeps the Python leg.
-    return (_spawn_flag_value(args, "--harness", "-H") or "").strip().lower() not in _RUST_PANE_HARNESSES
-
+            explicit = True
+    return not explicit
 
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     """The fno-arg head, stopping at the ``--argv`` provider-payload boundary
@@ -978,8 +960,7 @@ def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     A payload token (e.g. the child command's own ``--resume``/``--role``) and
     a fenced seed token must never be read as one of our routing flags - both
     click and the Rust client treat everything past the fence as prompt text -
-    so every spawn-flag scan operates on this slice. Mirrors the ``--argv``
-    break in :func:`_is_pane_substrate_spawn`.
+    so every spawn-flag scan operates on this slice.
     """
     out: list[str] = []
     for a in args:
@@ -1638,11 +1619,10 @@ def make_agents_group_cls() -> type:
 
                 mode = runtime_mode()
                 py_spawn = (
-                    existing_pane is not None
-                    or _is_role_bearing_spawn(verb, args)
+                    _is_role_bearing_spawn(verb, args)
                     or _is_promotion_bearing_spawn(verb, args)
                     or (_is_route_bearing_spawn(verb, args) and _spawn_flag_value(args, "--account") is not None)
-                    or _is_pane_substrate_spawn(verb, args)
+                    or _is_default_substrate_spawn(verb, args)
                     or _is_retired_axis_spawn(verb, args)
                     or _is_provenance_bearing_spawn(verb, args)
                     or _is_dispatch_account_bearing_spawn(verb, args)

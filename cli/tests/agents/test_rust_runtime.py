@@ -847,29 +847,51 @@ def test_is_resume_bearing_spawn_predicate() -> None:
     assert not rr._is_resume_bearing_spawn("ask", ["ask", "w", "--resume", uuid])
 
 
-def test_is_pane_substrate_spawn_harness_carveout() -> None:
-    # The member-set pane carve-out (the binary's codex arm): an explicit -H
-    # codex pane spawn routes to the binary; an absent -H keeps the Python
-    # pane leg; every other harness keeps Python; headless spellings still
-    # refuse for every harness (the carve-out check runs first, so the -H
-    # codex headless case reads False by the member check, same answer).
-    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "-H", "codex", "--as", "pane"])
-    assert not rr._is_pane_substrate_spawn(
-        "spawn", ["spawn", "w", "-H", "codex", "--substrate", "pane", "--bounded-placement"]
+def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
+    """Every pane harness seats a Rust arm, so an explicit --as pane spawn
+    routes to the binary for any harness. The old member-set carve-out is
+    gone; the Python pane back half answers only FNO_AGENTS_RUNTIME=python.
+    A bare spawn is NOT this shape: its default substrate still resolves in
+    the Python door (see test_default_substrate_spawn_stays_python)."""
+    from fno.cli import app
+
+    binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
+    captured: list = []
+
+    def fake_route(args, **kw):
+        captured.append(list(args))
+        raise SystemExit(99)
+
+    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
+    monkeypatch.setattr(rr, "route_to_rust", fake_route)
+    result = CliRunner().invoke(
+        app,
+        ["agents", "spawn", "--name", "w", "--as", "pane", "-H", "claude", "do x"],
     )
-    assert rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--as", "pane"])
-    assert rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "-H", "claude", "--as", "pane"])
-    # The --as fix: the scan reads --as beside --substrate, so a --as thread
-    # spelling no longer defaults to a pane and route to Python.
-    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--as", "thread"])
-    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--as=thread"])
-    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--substrate", "thread"])
-    assert not rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "--once"])
-    assert not rr._is_pane_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
-    # The carve-out is EXPLICIT-pane only: an absent substrate keeps the
-    # Python pane back half even for a member harness, whose default the
-    # Python body resolves (thread where the harness seats one, else pane).
-    assert rr._is_pane_substrate_spawn("spawn", ["spawn", "w", "-H", "codex"])
+    assert result.exit_code == 99
+    assert captured, "a pane spawn must route to the binary"
+    assert captured[0][0] == "spawn"
+    assert "--as" in captured[0]
+
+
+def test_default_substrate_spawn_stays_python() -> None:
+    """A bare spawn's default substrate (thread, with the thread-seatable
+    refusal and the keeper thread lanes behind it) still resolves in the
+    Python door. Only an explicit --as pane names the shape the binary's
+    pane spine answers; the scan stops at --argv and the -- fence, and the
+    --once headless spelling opts out."""
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "seed"])
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "pane"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as=pane"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "thread"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "headless"])
+    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--once"])
+    # A fenced or payload token is the child's, never fno's routing flag.
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--", "--as", "pane"])
+    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--argv", "--as=pane"])
+    assert not rr._is_default_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
 
 
 def test_is_dispatch_account_bearing_spawn_predicate() -> None:

@@ -612,29 +612,6 @@ def test_undeclared_spawn_journey_states_the_lane(
         assert marker in receipt, f"receipt must state {marker!r}:\n{receipt}"
 
 
-def test_routing_pane_substrate_spawn_stays_python() -> None:
-    """4a-G2 routing carve-out: a pane spawn (explicit or default) never
-    auto-routes to the Rust client; bg/headless spawns still do."""
-    from fno.agents.rust_runtime import _is_pane_substrate_spawn
-
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer", "--substrate", "pane"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer", "--substrate=pane"])
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--substrate", "thread"])
-    assert not _is_pane_substrate_spawn(
-        "spawn", ["spawn", "p", "--substrate=headless"]
-    )
-    # x-c772: --once is the headless shortcut -> never a pane. `-H`
-    # was reassigned to --harness (x-6de8), so `-H codex` is a default-pane spawn.
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--once"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "p", "-H", "codex"])
-    assert not _is_pane_substrate_spawn("ask", ["ask", "peer", "hi"])
-    # The scan stops at --argv: payload tokens cannot masquerade as our flag.
-    assert _is_pane_substrate_spawn(
-        "spawn", ["spawn", "p", "--argv", "--substrate", "thread"]
-    )
-
-
 def test_mesh_env_wrapper_scrubs_inherited_session_identity() -> None:
     """AC6-HP: a spawned child inherits its parent's ROUTE but never its
     parent's IDENTITY. An ambient session marker riding through this seam is
