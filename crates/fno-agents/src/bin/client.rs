@@ -1497,15 +1497,12 @@ async fn run(args: Vec<String>) -> i32 {
             );
             return 2;
         }
-        // 4a-G2: the `pane` substrate (the default) is mux-hosted now, and the
-        // Python back half owns it (fno.agents.mux_spawn: front-half reuse +
-        // `fno mux pane run` + the registry mux ref). The Python front door
-        // already carves pane spawns out of the binary route (rust_runtime),
-        // so this arm is only reached by a DIRECT `fno-agents spawn` call -
-        // re-exec the Python CLI rather than falling through to the daemon
-        // PTY host (retiring at G4; a silent daemon fallback is exactly what
-        // AC1-ERR forbids). FNO_AGENTS_RUNTIME=python stops the front door
-        // routing straight back here.
+        // 4a-G2: the `pane` substrate is mux-hosted, and the pane spine owns
+        // every harness arm (fno.agents.mux_spawn stays the python-mode
+        // twin). An explicit --as pane spawn routes here for every harness;
+        // a bare spawn keeps the Python door, where the default substrate
+        // (thread) and the keeper thread lanes live. FNO_AGENTS_RUNTIME=
+        // python still selects the Python leg.
         let mut substrate = params
             .get("substrate")
             .and_then(|v| v.as_str())
@@ -1530,39 +1527,10 @@ async fn run(args: Vec<String>) -> i32 {
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
         if substrate == "pane" {
-            // The pane spine answers from the binary when a harness arm is
-            // seated; None falls through to the bounce below, which stays the
-            // leg for every harness until its arm lands (the codex arm in PR
-            // 2, claude in the next row).
-            if let Some(code) =
-                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
-            {
-                return code;
-            }
-            use fno_agents::claude_ask::py_repr;
-            // Provider parity with the optional-provider Python resolver: a
-            // MISSING --provider is legal on the pane substrate (the Python
-            // re-exec resolves it from the invoking harness), so let None fall
-            // through. An UNKNOWN provider is still a client-side exit 2 even
-            // where the `fno` front door is absent (CI), matching the resolver's
-            // downstream substrate-aware rejection.
-            match params.get("provider").and_then(|v| v.as_str()) {
-                None => {}
-                Some(p) if !KNOWN_PROVIDERS.contains(&p) => {
-                    eprintln!(
-                        "unknown provider {}; supported: {}",
-                        py_repr(p),
-                        known_providers_csv()
-                    );
-                    return 2;
-                }
-                Some(_) => {}
-            }
-            return bounce_to_python(
-                &args,
-                "substrate 'pane' is mux-hosted via the Python CLI",
-                "Install the fno front door or run `fno agents spawn ...` directly.",
-            );
+            // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
+            // the pane spine answers every harness arm itself - the Python
+            // bounce this branch kept for unseated shapes is deleted.
+            return fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; anything else re-execs Python.
@@ -2731,16 +2699,32 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str, args: &[String
         // JSON events to the log. The spawn returns immediately - the session
         // on the serve IS the worker (steering/mail over the API is a filed
         // follow-up).
-        ("opencode", "bg") => emit!(fno_agents::opencode_serve::dispatch_opencode_serve(
-            home,
-            name,
-            &message,
-            from_name,
-            &cwd,
-            None,
-            None,
-            params.get("node").and_then(|v| v.as_str()),
-        )),
+        ("opencode", "bg") => {
+            // The serve lane carries one harness flag, the model. Any other
+            // token refuses by name: a dropped flag runs a worker that is
+            // not what the spawn asked for.
+            let model = fno_agents::claude_ask::passthrough_model(&harness_args);
+            if let Some(extra) = fno_agents::opencode_serve::uncarried_flag(&harness_args) {
+                eprintln!(
+                    "refused: the opencode thread lane carries only --model; {extra} cannot ride it. \
+                     Spawn on the pane lane (--split) to pass other opencode flags."
+                );
+                if let Some(g) = gate_guard.as_mut() {
+                    g.release();
+                }
+                return Some(2);
+            }
+            emit!(fno_agents::opencode_serve::dispatch_opencode_serve(
+                home,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                model,
+                None,
+                params.get("node").and_then(|v| v.as_str()),
+            ))
+        }
 
         ("agy", "headless") => {
             // agy is stateless (plain text, no session id): a one-shot `agy -p`
@@ -3318,24 +3302,69 @@ fn run_reap(rest: &[String]) -> i32 {
 
     let dry_run = rest.iter().any(|a| a == "--dry-run");
     let no_mux = rest.iter().any(|a| a == "--no-mux");
+    let only_done = rest.iter().any(|a| a == "--done");
+    let apply = rest.iter().any(|a| a == "--apply");
     let extras: Vec<&str> = rest
         .iter()
         .map(String::as_str)
-        .filter(|a| *a != "--json" && *a != "-J" && *a != "--dry-run" && *a != "--no-mux")
+        .filter(|a| {
+            *a != "--json"
+                && *a != "-J"
+                && *a != "--dry-run"
+                && *a != "--no-mux"
+                && *a != "--done"
+                && *a != "--apply"
+        })
         .collect();
     if !extras.is_empty() {
         eprintln!(
-            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux (got: {})",
+            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux/--done/--apply (got: {})",
             extras.join(" ")
+        );
+        return 2;
+    }
+    if apply && !only_done {
+        eprintln!(
+            "fno-agents: reap --apply only rides --done (the bulk all-clear): `reap --done --apply`"
         );
         return 2;
     }
     let home = AgentsHome::from_env();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let grace_secs = fno_agents::agents_config::retire_grace_secs(&cwd) as i64;
-    // Dead teams first, matching the arm's in-arm order.
-    let teams = fno_agents::team_reap::production_sweep(&home, &cwd, !dry_run);
-    let mut summary = if dry_run {
+    // The bulk all-clear: --apply executes the scoped pass; without it the
+    // pass rehearses, whatever --dry-run says.
+    if only_done && apply && dry_run {
+        eprintln!("fno-agents: reap --done takes --apply or --dry-run, not both");
+        return 2;
+    }
+    let effective_dry = if only_done { !apply } else { dry_run };
+    // What this invocation runs: `--done` scopes the whole verb to the
+    // done/eval pass. The team sweep and the mux tab sweep touch rows the
+    // scoped pass never judges, so a scoped run runs neither, apply or dry.
+    let plan = reap_plan(only_done);
+    let teams = if plan.teams {
+        // Dead teams first, matching the arm's in-arm order.
+        Some(fno_agents::team_reap::production_sweep(
+            &home,
+            &cwd,
+            !effective_dry,
+        ))
+    } else {
+        None
+    };
+    let mut summary = if only_done {
+        if apply {
+            fno_agents::gc::gc_sweep_done_only(
+                &home,
+                &fno_agents::events::EventEmitter::new(home.events_jsonl(), "daemon"),
+                grace_secs,
+                fno_agents::agents_config::reap_receipt_retain_days(&cwd),
+            )
+        } else {
+            fno_agents::gc::gc_sweep_done_only_dry_run(&home, grace_secs)
+        }
+    } else if dry_run {
         fno_agents::daemon::gc_sweep_dry_run(&home, grace_secs)
     } else {
         // Source "daemon": the manual verb is the same operation as the tick.
@@ -3348,13 +3377,13 @@ fn run_reap(rest: &[String]) -> i32 {
         )
     };
     summary.mark_escalated(fno_agents::agents_config::hold_escalate_after(&cwd));
-    summary.teams = Some(teams);
+    summary.teams = teams;
 
     // The dry-run JSON read also carries the census (task 4): who would
     // retire and what was seen, one read. Text dry-runs carry it too now:
     // the text receipt prints the counts beside the judged rows instead of
     // the census living only in the JSON read.
-    let inventory = if dry_run {
+    let inventory = if effective_dry {
         Some(fno_agents::gc_inventory::census(&home))
     } else {
         None
@@ -3363,11 +3392,13 @@ fn run_reap(rest: &[String]) -> i32 {
     // but ghost panes are the surface an operator SEES. The sweep body stays
     // the one prune verb (reused, not reimplemented); `--no-mux` skips it.
     // The manual verb keeps `--include-used-shells`: closing a human's spent
-    // shells is an attended choice, never the daemon's default.
-    let mux = if no_mux {
+    // shells is an attended choice, never the daemon's default. A scoped
+    // `--done` run skips it entirely: the tabs belong to rows the scoped
+    // pass never judged.
+    let mux = if no_mux || !plan.mux_tabs {
         fno_agents::reap_render::MuxSweep::Skipped
     } else {
-        fno_agents::gc::mux_tab_sweep(None, &cwd, dry_run, true)
+        fno_agents::gc::mux_tab_sweep(None, &cwd, effective_dry, true)
     };
     print!(
         "{}",
@@ -3376,10 +3407,41 @@ fn run_reap(rest: &[String]) -> i32 {
             inventory.as_ref(),
             Some(&mux),
             json_out,
-            dry_run
+            effective_dry
         )
     );
     0
+}
+
+/// What one `reap` invocation runs. `--done` scopes the whole verb to the
+/// done/eval pass: the team sweep and the mux tab sweep touch rows the
+/// scoped pass never judges, so a scoped run runs neither, apply or dry.
+struct ReapPlan {
+    teams: bool,
+    mux_tabs: bool,
+}
+
+fn reap_plan(only_done: bool) -> ReapPlan {
+    ReapPlan {
+        teams: !only_done,
+        mux_tabs: !only_done,
+    }
+}
+
+#[cfg(test)]
+mod reap_tests {
+    use super::*;
+
+    /// The scope contract the merge hold names: a scoped `--done` run runs
+    /// the done/eval pass alone. The unscoped run keeps both sidelines.
+    #[test]
+    fn a_done_scoped_reap_runs_neither_sideline_sweep() {
+        let plan = reap_plan(true);
+        assert!(!plan.teams, "a scoped run never sweeps teams");
+        assert!(!plan.mux_tabs, "a scoped run never sweeps mux tabs");
+        let plain = reap_plan(false);
+        assert!(plain.teams && plain.mux_tabs, "the unscoped run keeps both");
+    }
 }
 
 /// `fno-agents roster-reap`: the roster-side sweep (gap one). Dry-run
@@ -3657,6 +3719,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--substrate",
         "--workspace",
         "--squad",
+        "--pane",
         "--split",
         "--portal",
         "--tab",
@@ -3779,6 +3842,16 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             }
             "--tab" => {
                 params.insert("tab".into(), str_arg(&mut it, "--tab")?);
+            }
+            "--pane" if verb == "spawn" => {
+                // The existing-pane attach: the spine resolves, checks and
+                // starts inside the named pristine shell.
+                let raw = str_arg(&mut it, "--pane")?;
+                let id: u64 = raw
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| "--pane needs a positive integer pane id".to_string())?;
+                params.insert("pane".into(), Value::from(id));
             }
             "--at" => {
                 params.insert("at".into(), str_arg(&mut it, "--at")?);
@@ -4023,6 +4096,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // Accepted no-op alias: the worker cwd already defaults
                 // to the canonical repo root. Parsed for dispatcher compat.
                 params.insert("fresh".into(), Value::Bool(true));
+            }
+            "--bounded-placement" => {
+                // The dispatchers' automated pane spell (fallback_chain /
+                // spawn_overlay emit it beside `--as pane`): the pane arm
+                // reads it as hold-the-placement-lease-and-`--fit`. Parsed
+                // on every verb like the other placement flags; only the
+                // pane arm consumes it.
+                params.insert("bounded_placement".into(), Value::Bool(true));
             }
             "--here" | "--in-place" => {
                 // Explicit opt-in to the caller's cwd instead of the canonical

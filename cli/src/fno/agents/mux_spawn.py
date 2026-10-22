@@ -463,6 +463,17 @@ def happy_pane_argv(
     return ["happy", *claude_env, *argv[1:]]
 
 
+def passthrough_model(passthrough: Optional[Sequence[str]]) -> Optional[str]:
+    """The model a fenced passthrough names, the last one winning as the CLI reads it."""
+    toks, found = list(passthrough or ()), None
+    for i, tok in enumerate(toks):
+        if tok in ("--model", "-m") and i + 1 < len(toks):
+            found = toks[i + 1]
+        elif tok.startswith("--model="):
+            found = tok.split("=", 1)[1]
+    return found or None
+
+
 def inject_route_model_argv(
     argv: list[str],
     route_env: Optional[Mapping[str, str]],
@@ -3212,6 +3223,9 @@ def dispatch_spawn_pane(
     # in-process caller hands (level, scope) straight to this signature, and a
     # value that skipped validation is written to the SHARED registry. Fail
     # closed before the pane exists, so a refusal leaves no worker behind.
+    # A grid or lane pick with no route rides the fence as `--model`: the row
+    # records it as the request, the same as a route's model.
+    route_model = route_model or passthrough_model(passthrough)
     role_problem = role_validation_error(role_level, role_scope) if role_level is not None or role_scope is not None else None
     if role_problem is not None:
         raise DispatchAskError(role_problem, exit_code=2)

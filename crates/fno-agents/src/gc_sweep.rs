@@ -116,12 +116,14 @@ pub struct GcSummary {
     /// `(id, age_s)`: the transcript was written inside the grace window.
     pub kept_active: Vec<(String, i64)>,
     /// `(id, detail)`: a typed user turn inside the attended window - the
-    /// user is talking to this session; a done ledger never overrides it.
+    /// user is talking to this session right now, so the idle clock that
+    /// decides retirement cannot have run out.
     pub kept_attended: Vec<(String, String)>,
-    /// `(id, detail)`: a typed turn whenever it was written - the
-    /// permanent keep behind the windowed attended hold. The row never
-    /// retires on a sweep, like an operator row.
-    pub kept_user_typed: Vec<(String, String)>,
+    /// `(id, reason)`: the catch-all keep line. No judged row may render
+    /// nowhere: a row whose reason reaches the bucket match's fallback
+    /// lands here under its reason string, so the report's rows always
+    /// account for the total.
+    pub kept_other: Vec<(String, String)>,
     /// `(id, detail)`: the user set a keep mark on this session (`fno
     /// agents reap --keep`); one command lifts it.
     pub kept_marked: Vec<(String, String)>,
@@ -322,7 +324,7 @@ impl GcSummary {
             + self.kept_open_work_stale.len()
             + self.kept_active.len()
             + self.kept_attended.len()
-            + self.kept_user_typed.len()
+            + self.kept_other.len()
             + self.kept_marked.len()
             + self.kept_probe_unread.len()
             + self.kept_transcript_unresolved.len()
@@ -616,19 +618,15 @@ pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
 /// than the store (reading it is not opening graph.json) and stays advisory:
 /// a read failure contributes nothing. The working store failing to read is
 /// `None` and every consumer keeps its rows. A missing store is an empty
-/// graph, matching the Python read seam.
+/// graph, matching the Python read seam. The archive read is the shared
+/// reader (`graph_store::archive_rows`), so an archived node's status reads
+/// from the SQLite archive the import actually maintains, not from a legacy
+/// JSON file that no longer exists.
 pub(crate) fn read_graph_rows(home: &AgentsHome) -> Option<Vec<Value>> {
     let store = crate::backlog::api::Store::new(&graph_path(home));
     let state_root = home.root().parent().unwrap_or(home.root());
     let mut entries = crate::backlog::api::rows(&store).ok()?;
-    // The archive: same shape, advisory. An unparseable archive must not
-    // blind the sweep to the working graph.
-    let archive = std::fs::read(state_root.join("graph-archive.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-        .and_then(|v| v.get("entries").and_then(|e| e.as_array().cloned()))
-        .unwrap_or_default();
-    entries.extend(archive);
+    entries.extend(crate::graph_store::archive_rows(state_root));
     Some(entries)
 }
 
@@ -1503,6 +1501,47 @@ pub(crate) fn run(
         agents_read,
         tree_probe,
         prune_tree,
+        false,
+        None,
+    )
+}
+
+/// [`run`] scoped to done-node rows and terminal eval rows: the bulk
+/// all-clear pass (`fno agents registry reap --done`). The seams are
+/// identical; the scope rides [`run_with_release`]'s `only_done`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_done_only(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    grace_secs: i64,
+    dry_run: bool,
+    retain_days: u64,
+    read_graph: &dyn Fn(&AgentsHome) -> Option<GraphRead>,
+    store_matches: &dyn Fn(&state::RegistryEntry) -> Option<Vec<PathBuf>>,
+    age_many: &dyn Fn(&[&state::RegistryEntry]) -> HashMap<String, Option<i64>>,
+    stop_confirmed: &dyn Fn(&state::RegistryEntry) -> bool,
+    surface_removal: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
+    mux_member: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
+    agents_read: &dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot,
+    tree_probe: &dyn Fn(&state::RegistryEntry) -> (Option<bool>, Option<bool>),
+    prune_tree: &dyn Fn(&state::RegistryEntry) -> Option<crate::daemon::PruneOutcome>,
+) -> GcSummary {
+    run_with_release(
+        home,
+        emitter,
+        grace_secs,
+        dry_run,
+        retain_days,
+        read_graph,
+        store_matches,
+        age_many,
+        stop_confirmed,
+        surface_removal,
+        mux_member,
+        agents_read,
+        tree_probe,
+        prune_tree,
+        true,
         None,
     )
 }
@@ -1533,6 +1572,7 @@ pub(crate) fn run_with_release(
     agents_read: &dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot,
     tree_probe: &dyn Fn(&state::RegistryEntry) -> (Option<bool>, Option<bool>),
     prune_tree: &dyn Fn(&state::RegistryEntry) -> Option<crate::daemon::PruneOutcome>,
+    only_done: bool,
     release: Option<&Release>,
 ) -> GcSummary {
     let mut summary = GcSummary::default();
@@ -1678,6 +1718,9 @@ pub(crate) fn run_with_release(
     };
     let mut staged: Vec<Option<(ProvenanceVerdict, Option<i64>)>> =
         Vec::with_capacity(registry.entries.len());
+    // One evals-history read per pass: the terminal set joins the roster once,
+    // so N eval rows cost one file read, not N.
+    let finished_evals = crate::eval_reap::finished_eval_workers();
     for e in &registry.entries {
         let eligible = e.role_level.is_none()
             && (e.origin.as_deref() == Some("spawn")
@@ -1745,6 +1788,23 @@ pub(crate) fn run_with_release(
     let mut manifest_teams = crate::lead_state::ManifestRoleCache::new();
     for (e, staged_row) in registry.entries.iter().zip(staged.iter()) {
         let id = row_label(e);
+        // The --done scope: a row whose work is neither done nor a terminal
+        // eval attempt is out of scope BEFORE any gate runs, so the scoped
+        // receipt renders only rows the pass actually judged.
+        if only_done {
+            let done_work = matches!(
+                staged_row,
+                Some((verdict, _)) if matches!(verdict.work, WorkState::AllDone { .. })
+            );
+            let finished_eval = crate::eval_reap::is_finished_eval_row(
+                &e.name,
+                e.harness_session_id.as_deref(),
+                finished_evals.as_ref(),
+            );
+            if !done_work && !finished_eval {
+                continue;
+            }
+        }
         if e.origin.as_deref() == Some("operator") {
             summary.kept_operator.push(id);
             continue;
@@ -2124,20 +2184,13 @@ pub(crate) fn run_with_release(
                 .is_some_and(node_route::NodeSource::is_transcript),
             node_held_elsewhere,
             open_work_retire_s,
-            typed_turn_age_s: None,
+            eval_finished: crate::eval_reap::is_finished_eval_row(
+                &e.name,
+                Some(sid),
+                finished_evals.as_ref(),
+            ),
         };
-        let (mut action, mut reason) = {
-            let verdict = gc_decide(&row, grace_secs);
-            crate::gc::resolve_typed_turn(&mut row, verdict, grace_secs, || {
-                crate::attended::typed_turn_age_ever_for_row(
-                    store_matches(e),
-                    home,
-                    sid,
-                    now,
-                    e.spawn_payload.as_deref(),
-                )
-            })
-        };
+        let (mut action, mut reason) = gc_decide(&row, grace_secs);
         // d-81c6da7e: a release matched to the planning hold answers the
         // marker question by ruling. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,
@@ -2184,11 +2237,6 @@ pub(crate) fn run_with_release(
                 Some(KeepReason::Operator) => summary.kept_operator.push(id),
                 Some(KeepReason::Teamed) => summary.kept_teamed.push(id),
                 Some(KeepReason::NotSpawn { origin }) => summary.kept_not_spawn.push((id, origin)),
-                Some(KeepReason::UserTyped { age_s }) => {
-                    summary
-                        .kept_user_typed
-                        .push((id.clone(), format!("typed user turn {age_s}s ago")));
-                }
                 Some(KeepReason::NoProvenance) => {
                     summary.kept_no_provenance.push(id.clone());
                     // The keep gets the same clocked-hold shape every
@@ -2353,8 +2401,15 @@ pub(crate) fn run_with_release(
                     });
                 }
                 // GraphUnreadable / OpenDoRow are decided above, before the
-                // policy ran; they cannot arrive here.
-                _ => {}
+                // policy ran; they cannot arrive here. Anything else that
+                // still arrives renders under its reason string - a judged
+                // row never vanishes from the report.
+                other => {
+                    summary.kept_other.push((
+                        id.clone(),
+                        other.map(|r| r.as_str().to_string()).unwrap_or_default(),
+                    ));
+                }
             }
             continue;
         }

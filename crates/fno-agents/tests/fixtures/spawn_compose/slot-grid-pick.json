@@ -13,7 +13,10 @@
       "spawn",
       "--name",
       "w7",
-      "/fno:target x-5"
+      "/fno:target x-5",
+      "--",
+      "--model",
+      "opus"
     ],
     "exit": 0,
     "journal": {
@@ -41,6 +44,16 @@
             "grid",
             "grid candidate claude/claude-opus capacity=unknown-permitted window=absent",
             "routing"
+          ],
+          [
+            "model",
+            "opus",
+            "difficulty-grid"
+          ],
+          [
+            "grid",
+            "claude/opus",
+            "difficulty-grid"
           ]
         ],
         "suppressed": []
@@ -49,7 +62,7 @@
       "source": "agents"
     },
     "stderr": [
-      "fno agents spawn: applied grid=grid candidate claude/claude-opus capacity=unknown-permitted window=absent (routing)"
+      "fno agents spawn: applied grid=grid candidate claude/claude-opus capacity=unknown-permitted window=absent (routing), model=opus (difficulty-grid), grid=claude/opus (difficulty-grid)"
     ],
     "stdout": null
   },

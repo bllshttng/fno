@@ -2538,6 +2538,12 @@ class TestListIdentityColumn:
         # AC1-HP names doctor as the agreeing witness in the same store.
         doctor = _invoke(["doctor", "-J"], cwd=tmp_path, home=tmp_path)
         assert "slot-identity-drift" in doctor.output
+        # Once the stamp names readyrule, makers is simply off the slot: the
+        # slot serving someone else is expected, so its cell is no fault.
+        managed.stamp_active_slot("claude", "readyrule", root)
+        result = _invoke(["list"], cwd=tmp_path, home=tmp_path)
+        makers_row = next(ln for ln in result.output.splitlines() if " makers " in ln)
+        assert makers_row.endswith("identity=off-slot"), result.output
 
     def test_unprovable_identity_is_named_and_still_exits_zero(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

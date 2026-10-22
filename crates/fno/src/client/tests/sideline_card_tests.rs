@@ -1330,6 +1330,28 @@ fn card_row_1_carries_the_role_and_the_lead_rollup() {
 }
 
 #[test]
+fn a_card_keeps_a_teamed_slug_whole_beside_node_and_pr() {
+    // The demo specimen: worker `scout` under a lead, with a node and
+    // `#412`, read `scou` at the demo width. At every sideline width the
+    // slug stays whole; the node cuts its front or drops instead.
+    let mut agents = lead_and_worker();
+    agents[1].name = "scout".into();
+    agents[1].node = Some("zz-00aa11bb".into());
+    agents[1].pr = Some(412);
+    let mut v = card_view(agents);
+    v.term = (30, 140);
+    for width in 26..=60u16 {
+        v.sideline_width = width;
+        let (agent_i, _) = card_rows_for(&v, "scout");
+        let frame = v.compose();
+        let row = agent_i - v.sideline_offset() + 1; // the strip row owns row 0
+        let line = row_text(&frame, row, v.sideline_paint_w() - 1);
+        assert!(line.contains("scout "), "width {width}: {line:?}");
+        assert!(line.contains("#412"), "width {width}: {line:?}");
+    }
+}
+
+#[test]
 fn a_narrow_card_keeps_the_slug_whole_and_cuts_only_the_role() {
     // The name is the card's most important word: a long role is cut from
     // its end, and a width that fits only the slug shows the slug alone.

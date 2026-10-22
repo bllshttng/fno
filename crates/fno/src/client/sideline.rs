@@ -1251,12 +1251,28 @@ impl View {
         // vanish - the composed contrast test pins this at 3:1).
         let (fill_fg, _, _) = crate::theme::chosen_card_style(&self.theme);
         let on_chosen_fill = agent.pane_id == Some(self.layout.focus) && !agent.exited;
-        if let (Some(node), Some(span)) = (agent.node.as_deref(), spans.node) {
+        // The name matters most: the node may not start before the slug's
+        // end plus one space. It cuts its front, or drops, to fit.
+        let slug = card_line::slug(agent, &self.backlog);
+        let painted: String = line.iter().map(|c| c.c).collect();
+        let keep = painted.find(&slug).map_or(0, |b| {
+            painted[..b].chars().count() + slug.chars().count() + 1
+        });
+        let fitted = agent
+            .node
+            .as_deref()
+            .zip(spans.node)
+            .and_then(|(node, span)| card_line::fit_node(node, span, keep));
+        self.card_node_spans.borrow_mut().insert(
+            agent.name.clone(),
+            fitted.as_ref().map(|(span, _)| span.clone()),
+        );
+        if let (Some(node), Some((span, text))) = (agent.node.as_deref(), fitted.as_ref()) {
             let node_start = span.start;
             // An inferred current binding dims the node: the row's node is
             // a guess (branch, spawn, name, history), not a stamp.
             let inferred = agent.bindings.iter().any(|b| b.node == node && b.inferred);
-            for (cell, ch) in line[span].iter_mut().zip(node.chars()) {
+            for (cell, ch) in line[span.clone()].iter_mut().zip(text.chars()) {
                 cell.c = ch;
                 cell.fg = if on_chosen_fill { fill_fg } else { status_fg };
                 cell.flags = if inferred {
@@ -1265,11 +1281,16 @@ impl View {
                     cell_flags::BOLD
                 };
             }
-            // The name yields before the node: an ellipsis marks the cut
-            // and one space keeps the gap. Under three columns
-            // there is no room for both, so the name side blanks past the
-            // glyph and the node stands alone.
-            if node_start >= 3 {
+            // The text after the slug yields before the node: an ellipsis
+            // marks the cut and one space keeps the gap. The slug itself
+            // never yields: with no room for ` …` past it, the cells
+            // between slug and node just blank. Under three columns the
+            // name side blanks past the glyph and the node stands alone.
+            if keep > 0 && node_start < keep + 2 {
+                for cell in line[keep.saturating_sub(1).max(1)..node_start].iter_mut() {
+                    cell.c = ' ';
+                }
+            } else if node_start >= 3 {
                 if line[node_start - 1].c != ' ' {
                     line[node_start - 1].c = '…';
                 }
@@ -1282,7 +1303,7 @@ impl View {
                 }
             }
         }
-        if let Some(span) = spans.separator {
+        if let Some(span) = spans.separator.filter(|_| fitted.is_some()) {
             for (cell, ch) in line[span].iter_mut().zip(" · ".chars()) {
                 cell.c = ch;
             }

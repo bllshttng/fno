@@ -638,7 +638,10 @@ def bg_create(
         from fno.agents.mux_spawn import refuse_passthrough_collision
 
         refuse_passthrough_collision(passthrough, argv)
-        argv = [*argv, *passthrough]
+        # Harness flags go before the seed's `--`: after it, claude reads
+        # `--model sonnet` as prompt text and runs its default model.
+        cut = argv.index("--") if "--" in argv else len(argv)
+        argv = [*argv[:cut], *passthrough, *argv[cut:]]
 
     # Inject FNO_AGENT_* env vars so nested `fno agents ask` calls
     # from inside the spawned agent attribute back to this parent.

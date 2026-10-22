@@ -323,24 +323,23 @@ class TestProbeFailOpen:
         rec = ProviderRecord(id="primary", name="primary", harness="claude", auth="managed")
         assert usage_mod._claude_bearer_candidates(rec) == ["slot-token"]
 
-    def test_managed_non_occupant_refuses_rather_than_borrowing(
+    def test_managed_non_occupant_never_borrows_the_slot(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # AC2-ERR: a managed record that is NOT the slot occupant has no
-        # attributable credential, so it probes nothing and no snapshot is ever
-        # written under its id carrying another account's numbers.
+        # AC2-ERR: a managed record off the slot never reads the slot's token,
+        # and with no stored copy of its own it probes nothing at all.
+        import fno.adapters.providers.managed as managed_mod
         import fno.adapters.providers.usage as usage_mod
 
         monkeypatch.setenv("HOME", str(tmp_path))
         slot = tmp_path / ".claude"
         slot.mkdir()
-        (slot / ".credentials.json").write_text(
-            json.dumps({"claudeAiOauth": {"accessToken": "slot-token"}})
-        )
+        (slot / ".credentials.json").write_text(_blob("slot-token"))
+        monkeypatch.setattr(managed_mod, "store_root", lambda: tmp_path / "store")
         monkeypatch.setattr(usage_mod, "_is_active_slot_occupant", lambda rec: False)
         rec = ProviderRecord(id="other", name="other", harness="claude", auth="managed")
         assert usage_mod._claude_bearer_candidates(rec) == []
-        assert probe_usage(rec) is None
+        assert probe_usage_detail(rec) == (None, "unattributed")
 
     def test_an_ambient_config_dir_never_redirects_the_slot_read(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -366,22 +365,55 @@ class TestProbeFailOpen:
         rec = ProviderRecord(id="a", name="a", harness="claude", auth="managed")
         assert usage_mod._claude_bearer_candidates(rec) == ["account-a"]
 
-    def test_managed_store_blob_is_not_a_probe_source(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("owner", ["acct-other", "acct-self"])
+    def test_off_slot_stored_copy_is_proven_before_it_is_measured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner: str
     ) -> None:
-        # The blob is a capture-time copy: it goes stale and it can duplicate
-        # across ids (Evidence 2). Reading it would report a dead token's window
-        # or another account's usage, so the probe must not reach for it.
+        # The stored copy can hold another id's login, captured under the wrong
+        # name. Its bearer is proven against the record's bound principal
+        # first: a mismatch requests no usage, and a match reads the inactive
+        # account's own windows instead of unknown forever.
+        import fno.adapters.providers.managed as managed_mod
         import fno.adapters.providers.usage as usage_mod
 
-        root = tmp_path / "providers"
+        root = tmp_path / "store"
         (root / "other").mkdir(parents=True)
-        (root / "other" / "blob").write_text(
-            json.dumps({"claudeAiOauth": {"accessToken": "blob-token"}})
-        )
+        (root / "other" / "blob").write_text(_blob("blob-token"))
+        monkeypatch.setattr(managed_mod, "store_root", lambda: root)
         monkeypatch.setattr(usage_mod, "_is_active_slot_occupant", lambda rec: False)
+        monkeypatch.setattr(usage_mod, "_reconcile_slot_once", lambda rec, now: False)
+        principal = {"account_uuid": "acct-self", "organization_uuid": "org"}
+        monkeypatch.setattr(managed_mod, "record_principal", lambda rid, root=None: principal)
+        monkeypatch.setattr(
+            managed_mod,
+            "principal_of_bearer",
+            lambda bearer: ({"account_uuid": owner, "organization_uuid": "org"}, None),
+        )
+        requested: list[str] = []
+
+        class _Resp:
+            def __enter__(self):  # noqa: ANN001
+                return self
+
+            def __exit__(self, *a):  # noqa: ANN001
+                return False
+
+            def read(self):  # noqa: ANN001
+                window = {"utilization": 7.0, "resets_at": "2026-07-12T02:00:00+00:00"}
+                return json.dumps({"five_hour": window}).encode()
+
+        def _fetch(req, timeout):  # noqa: ANN001
+            requested.append(req.headers.get("Authorization", ""))
+            return _Resp()
+
+        monkeypatch.setattr(usage_mod.urllib.request, "urlopen", _fetch)
         rec = ProviderRecord(id="other", name="other", harness="claude", auth="managed")
-        assert usage_mod._claude_bearer_candidates(rec) == []
+        assert usage_mod._claude_bearer_candidates(rec) == ["blob-token"]
+        snap, reason = probe_usage_detail(rec, now=1000.0)
+        if owner == "acct-other":
+            assert (snap, reason, requested) == (None, "unattributed", [])
+        else:
+            assert snap is not None and snap.windows[0].used_pct == 7.0
 
     def test_codex_probe_parses_real_shape(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

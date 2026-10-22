@@ -1,14 +1,16 @@
 //! The pane spine: the harness-neutral half of the Python pane back half
 //! (`dispatch_spawn_bounded_pane` + `dispatch_spawn_pane`,
-//! `cli/src/fno/agents/mux_spawn.py`), ported so a bounded/codex pane spawn
-//! can run without the Rust -> Python -> Rust round trip the bounce pays
-//! today.
+//! `cli/src/fno/agents/mux_spawn.py`), ported so every pane spawn is answered
+//! here - one arm per harness, no client bounce, no Python round trip.
 //!
 //! Split shape: this module is PR 1 of the pane-port split - the spine plus
-//! its goldens, wired into the client door behind a no-op arm table. PR 2
-//! seats the codex arm (argv, daemon bind wait, seed, late bind) in a
-//! `codex` submodule and narrows the Python carve-out; the following row
-//! seats the claude arm here and deletes the bounce.
+//! its goldens behind a no-op arm table. PR 2 seated the codex arm in a
+//! `codex` submodule; the following row seated the claude arm (`claude`):
+//! argv, session pin, billing guard, monitor/route/happy legs. The client
+//! bounce is deleted with the claude arm, and the routing seam no longer
+//! carves any explicit-pane shape to Python; a bare spawn's default
+//! substrate still resolves in the Python door (thread, with the seatable
+//! refusal and the keeper lanes).
 //!
 //! Ordering is the Python leg's ordering, because the contract it enforces is
 //! the contract reviewers will hold this module to: refusals before the
@@ -23,6 +25,13 @@
 //! ambient values through and synthesizes the Python defaults when absent;
 //! a custom config value rides only if the caller exported it. That bridge
 //! lands with the Rust settings reader, not here.
+pub mod claude;
+pub mod codex;
+mod env_wrap;
+pub mod placement;
+pub mod readiness;
+pub mod simple;
+
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -63,6 +72,12 @@ const PLACEMENT_LEASE_TTL_MS: i64 = 60_000;
 const AGENT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 /// Python `_pane_group_max`'s fail-safe default.
 const DEFAULT_PANE_GROUP_MAX: &str = "4";
+
+/// The group cap as a number for the tab-fit arithmetic (the transport arg
+/// carries the same value as a string).
+fn pane_group_max() -> u64 {
+    DEFAULT_PANE_GROUP_MAX.parse().unwrap_or(4)
+}
 /// Python `_process_admission_max`'s fail-safe default.
 const DEFAULT_PROCESS_ADMISSION_MAX: &str = "400";
 
@@ -80,15 +95,34 @@ pub struct PaneContext {
     pub session: Option<String>,
     /// `--bounded-placement`: hold the placement lease and pass `--fit`.
     pub bounded_placement: bool,
-    /// Geometry flags. The row-7 arms decline every explicit geometry (the
-    /// caller falls back to the Python bounce); they parse here so the spine
-    /// builder stays byte-faithful for row 8 and the golden capture.
+    /// Geometry flags. The arms answer explicit geometry themselves (the
+    /// goldens pin the split, group-move and attach shapes); they parse here
+    /// so the spine builder stays byte-faithful to the Python leg.
     pub squad: Option<String>,
     pub split: Option<String>,
     pub tab: Option<String>,
     pub at: Option<String>,
     /// The bounded lane's stable `id:<n>` tab token.
     pub tab_id: Option<String>,
+    /// A `--pane <id>` attach: start the worker inside this already-placed,
+    /// confirmed-pristine pane instead of running a new one.
+    pub pane: Option<u64>,
+    /// The worker's registry name: the codex identity leaf renders from it
+    /// (`mux_spawn.py:3506`).
+    pub worker_name: String,
+    /// A `--node` dispatch target: makes the seed a code payload for the
+    /// git-grant gate however the message is spelled (`rust_runtime.py:632`).
+    pub node: Option<String>,
+    /// Provider passthrough: the fenced spawn tail and `--harness-arg`, which
+    /// the client door folds into one list. The arms append it where the
+    /// Python leg appends `passthrough` (`mux_spawn.py:970`).
+    pub passthrough: Vec<String>,
+    /// The `--monitor` value (PR 3661): the one supported monitor, resolved
+    /// by the owning arm. Absent means "no monitor requested".
+    pub monitor: Option<String>,
+    /// The `--route` target (`provider,model` or a declared lane name): the
+    /// owning arm resolves it to the routed env the wrapper carries.
+    pub route: Option<String>,
 }
 
 impl PaneContext {
@@ -107,11 +141,17 @@ impl PaneContext {
             tab: None,
             at: None,
             tab_id: None,
+            pane: None,
+            worker_name: String::new(),
+            node: None,
+            passthrough: Vec::new(),
+            monitor: None,
+            route: None,
         }
     }
 
-    /// None when the params are not a pane spawn this spine owns; the caller
-    /// falls back to the bounce.
+    /// None when the params are not a pane spawn; the door pre-gates the
+    /// substrate, so this is an internal-invariant miss, not a lane.
     pub fn from_params(params: &Value) -> Option<Self> {
         let substrate = params
             .get("substrate")
@@ -153,6 +193,31 @@ impl PaneContext {
             tab: opt_str("tab"),
             at: opt_str("at"),
             tab_id: opt_str("tab_id"),
+            pane: params.get("pane").and_then(Value::as_u64),
+            worker_name: params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            node: opt_str("node"),
+            passthrough: params
+                .get("harness_args")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|token| token.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            monitor: params
+                .get("monitor")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            route: params
+                .get("route")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
     }
 
@@ -186,6 +251,12 @@ pub enum ArmBind {
         session_id: String,
     },
     Unbound {
+        reason: String,
+    },
+    /// The pane was confirmed dead before any id bound (the arm's death
+    /// oracle saw it absent from a non-empty listing): the row records the
+    /// failure the Python leg records, never a still-spawning pane.
+    Died {
         reason: String,
     },
     /// The harness binds no session at all (gemini, agy): a receipt with
@@ -239,32 +310,125 @@ pub trait PaneArm {
     }
 }
 
-/// The arm table. PR 1 seats no arm: every pane spawn falls through and the
-/// client door keeps the Python bounce, byte-identical to main. PR 2 adds the
-/// codex entry here (and only for the plain/bounded lanes - explicit geometry
-/// stays on the Python leg).
-pub fn pane_arm_for(_ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
-    None
+/// The arm table: one arm per harness, the codex arm checked first (its
+/// daemon bind wait and late bind set it apart), every other provider seated
+/// through the simple table. A provider with no arm is the caller's refusal,
+/// not a fall-through.
+pub fn pane_arm_for(ctx: &PaneContext) -> Option<&'static dyn PaneArm> {
+    if codex::CodexArm::owns(ctx) {
+        return Some(&codex::CODEX_ARM);
+    }
+    let arm: &dyn PaneArm = match ctx.provider.as_str() {
+        "claude" => &claude::CLAUDE_ARM,
+        "opencode" => &simple::OPENCODE_ARM,
+        "pi" => &simple::PI_ARM,
+        "cursor-agent" => &simple::CURSOR_ARM,
+        "grok" => &simple::GROK_ARM,
+        "agy" => &simple::AGY_ARM,
+        "footnote" => &simple::FOOTNOTE_ARM,
+        _ => return None,
+    };
+    Some(arm)
 }
 
-/// The binary door's pane entry. `Some(code)` means this process answered the
-/// spawn (receipt or refusal printed); `None` means no arm owns this shape
-/// and the caller keeps its Python bounce.
-pub fn run_pane_spawn(
-    home: &AgentsHome,
-    params: &Value,
-    name: &str,
-    _args: &[String],
-) -> Option<i32> {
-    let ctx = PaneContext::from_params(params)?;
-    let arm = pane_arm_for(&ctx)?;
-    Some(spawn_pane(home, &ctx, name, arm))
+/// The retired pane harnesses refuse in the spine with a named line
+/// (AC4-ERR): the Gemini CLI was deprecated 2026-07-27 and no arm seats it.
+pub fn pane_refusal_for(provider: &str) -> Option<String> {
+    (provider == "gemini").then(|| {
+        "gemini has no pane arm: the Gemini CLI was deprecated 2026-07-27 (Google's successor is Antigravity); spawn agy instead"
+            .to_string()
+    })
+}
+
+/// The binary door's pane entry: the spine answers every explicit-pane shape
+/// (receipt or refusal printed). The provider default (dispatch_flags
+/// `resolve_dispatch_harness`: explicit flag > invoking-harness inference >
+/// builtin claude) resolves here, where the deleted client bounce used to
+/// re-exec Python to get it. Narrowing, recorded: the front door scrubs the
+/// ambient identity markers before the exec, so the inference half can only
+/// fire on a DIRECT binary call; a routed explicit-pane spawn without -H
+/// resolves to claude. Pass -H when the invoking seat is not claude.
+pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[String]) -> i32 {
+    let mut params = params.clone();
+    let provider = params
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if provider.trim().is_empty() {
+        let ident = crate::spawn_context::resolve_self_identity(
+            &|key| std::env::var(key).ok(),
+            None,
+            None,
+            home,
+        );
+        let inferred = ident
+            .harness
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "claude".to_string());
+        params["provider"] = Value::String(inferred);
+    } else if !crate::provider::KNOWN_PROVIDERS.contains(&provider) {
+        eprintln!(
+            "unknown provider {}; supported: {}",
+            crate::claude_ask::py_repr(provider),
+            crate::provider::known_providers_csv()
+        );
+        return EXIT_REFUSAL;
+    }
+    let ctx = match PaneContext::from_params(&params) {
+        Some(ctx) => ctx,
+        None => {
+            eprintln!("run_pane_spawn reached with a non-pane substrate");
+            return EXIT_REFUSAL;
+        }
+    };
+    if let Some(line) = pane_refusal_for(&ctx.provider) {
+        eprintln!("{line}");
+        return EXIT_REFUSAL;
+    }
+    let arm = match pane_arm_for(&ctx) {
+        Some(arm) => arm,
+        None => {
+            eprintln!(
+                "{} has no pane arm",
+                crate::claude_ask::py_repr(&ctx.provider)
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+    spawn_pane(home, &ctx, name, arm)
 }
 
 /// The spine's whole lane: lease, prepare, lock, collision, pane run, parse
 /// (or reconcile), child pid, bind, row, late-bind, receipt. Every failure
 /// path prints its named line and returns the Python leg's exit code.
 fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneArm) -> i32 {
+    // The group-tab + split/at combination refuses before the lease, byte
+    // equal to the Python leg (AC3-ERR).
+    if let Some(tab) = ctx.tab.as_deref() {
+        let (_selector, group) = placement::resolve_group_tab(tab);
+        if group.is_some() && (ctx.split.is_some() || ctx.at.is_some()) {
+            return refuse(&PaneRefusal {
+                line: placement::group_tab_conflict_line(tab),
+                exit_code: EXIT_REFUSAL,
+                after_pane: None,
+            });
+        }
+    }
+    if let Some(line) = placement::pane_placement_conflict(
+        ctx.pane,
+        ctx.squad.as_deref(),
+        ctx.split.as_deref(),
+        ctx.at.as_deref(),
+        ctx.tab.as_deref(),
+        ctx.tab_id.as_deref(),
+        ctx.bounded_placement,
+    ) {
+        return refuse(&PaneRefusal {
+            line,
+            exit_code: EXIT_REFUSAL,
+            after_pane: None,
+        });
+    }
     let session = resolve_mux_session(ctx.session.as_deref());
     // The bounded wrapper holds the lease around everything below and drops
     // it after; a held lease refuses before any pane or row exists.
@@ -339,38 +503,96 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
     // leaking into the pane shell, where the child would inherit the "I am a
     // machine dispatch" mark.
     let spawn_trigger = capture_spawn_trigger();
-    let run_args = pane_run_args(ctx, &session, name, &plan);
-    let run_env = pane_run_env();
-    let proc = match FsMux.run(&run_args, &run_env) {
-        Ok(proc) => proc,
-        Err(exc) => {
-            // `_run_mux`'s FileNotFoundError/OSError arms: the front door
-            // never ran, so no pane exists and the line names the binary.
-            let (line, code) = spawn_exec_failure_line(&exc);
+    // The attach lane: an existing-pane spawn never runs `pane run`. The
+    // target is checked (found, unoccupied, a confirmed pristine idle
+    // shell), the worker start text is sent with `--guarded`, and the pane
+    // id is the caller's. Checks run on the fresh listing, never a stale
+    // context field.
+    let attach = match ctx.pane {
+        Some(target) => {
+            let (rows, detail) = pane_ls_detailed(&session, &FsMux);
+            let rows = rows.unwrap_or_default();
+            if rows.is_empty() && !detail.is_empty() {
+                return refuse(&PaneRefusal {
+                    line: format!("pane listing failed: {detail}"),
+                    exit_code: EXIT_SPAWN_FAILED,
+                    after_pane: None,
+                });
+            }
+            if let Err(refusal) = placement::resolve_existing_pane(&session, target, &rows) {
+                return refuse(&refusal);
+            }
+            Some(target)
+        }
+        None => None,
+    };
+    let pane_id = if let Some(target) = attach {
+        if let Err(line) =
+            placement::start_existing_pane(&session, target, &ctx.cwd, &plan.wrapped, &FsMux)
+        {
             return refuse(&PaneRefusal {
                 line,
-                exit_code: code,
-                after_pane: None,
-            });
-        }
-    };
-    let pane_id = match parse_pane_run(&proc, json_receipt(ctx), &session) {
-        Ok(PaneRunOutcome::Created { pane_id }) => pane_id,
-        Ok(PaneRunOutcome::ControlUnanswered) => {
-            match reconcile_unanswered_run(&session, &ctx.cwd, spawn_started_ms, &registry, &FsMux)
-            {
-                Ok(pane_id) => pane_id,
-                Err(refusal) => return refuse(&refusal),
-            }
-        }
-        Err(detail) => {
-            return refuse(&PaneRefusal {
-                line: pane_run_failure_line(&session, &detail),
                 exit_code: EXIT_SPAWN_FAILED,
                 after_pane: None,
             });
         }
+        target
+    } else {
+        let run_args = pane_run_args(ctx, &session, name, &plan);
+        let run_env = pane_run_env();
+        let proc = match FsMux.run(&run_args, &run_env) {
+            Ok(proc) => proc,
+            Err(exc) => {
+                // `_run_mux`'s FileNotFoundError/OSError arms: the front door
+                // never ran, so no pane exists and the line names the binary.
+                let (line, code) = spawn_exec_failure_line(&exc);
+                return refuse(&PaneRefusal {
+                    line,
+                    exit_code: code,
+                    after_pane: None,
+                });
+            }
+        };
+        match parse_pane_run(&proc, json_receipt(ctx), &session) {
+            Ok(PaneRunOutcome::Created { pane_id }) => pane_id,
+            Ok(PaneRunOutcome::ControlUnanswered) => {
+                match reconcile_unanswered_run(
+                    &session,
+                    &ctx.cwd,
+                    spawn_started_ms,
+                    &registry,
+                    &FsMux,
+                ) {
+                    Ok(pane_id) => pane_id,
+                    Err(refusal) => return refuse(&refusal),
+                }
+            }
+            Err(detail) => {
+                return refuse(&PaneRefusal {
+                    line: pane_run_failure_line(&session, &detail),
+                    exit_code: EXIT_SPAWN_FAILED,
+                    after_pane: None,
+                });
+            }
+        }
     };
+    // The group-tab move lands between the parse and the bind: cosmetic by
+    // the Python leg's own account (the seed already rode in and the worker
+    // may be live), so a failure prints its named line and keeps the pane.
+    let group = ctx
+        .tab
+        .as_deref()
+        .map(placement::resolve_group_tab)
+        .and_then(|t| t.1);
+    if let Some(group) = group {
+        if let Err(detail) =
+            placement::place_pane_in_group_tab(&session, pane_id, &group, pane_group_max(), &FsMux)
+        {
+            eprintln!(
+                "fno agents spawn: pane {pane_id} left in its own tab; grouping into {group:?} failed: {detail}"
+            );
+        }
+    }
     let child_pid = lookup_child_pid(&session, pane_id, &FsMux);
     let pane = PaneFacts {
         session: session.clone(),
@@ -596,7 +818,13 @@ pub fn pane_run_args(ctx: &PaneContext, session: &str, name: &str, plan: &ArmPla
         args.extend(["split".to_string(), split.clone()]);
     }
     if let Some(tab) = &ctx.tab {
-        args.extend(["--tab".to_string(), tab.clone()]);
+        // A bare name is a pane GROUP: no tab rides the transport; the pane
+        // lands in its own tab and joins the group after the run (the
+        // act-then-place contract). A selector rides verbatim.
+        let (selector, _group) = placement::resolve_group_tab(tab);
+        if let Some(selector) = selector {
+            args.extend(["--tab".to_string(), selector]);
+        }
     }
     if let Some(at) = &ctx.at {
         // Forwarded verbatim; the mux CLI resolves `current` from FNO_PANE so
@@ -951,6 +1179,7 @@ pub fn write_pane_row(
     let (status, session_id) = match bind {
         ArmBind::Bound { session_id } => (AgentStatus::Live, Some(session_id.clone())),
         ArmBind::Unbound { .. } => (AgentStatus::Spawning, None),
+        ArmBind::Died { .. } => (AgentStatus::Failed, None),
         ArmBind::NotApplicable => (AgentStatus::Live, None),
     };
     let pid_start_time = pane.child_pid.and_then(process_start_time);
@@ -1202,6 +1431,7 @@ impl PaneReceipt {
                 match bind {
                     ArmBind::Bound { .. } | ArmBind::NotApplicable => "live",
                     ArmBind::Unbound { .. } => "spawning",
+                    ArmBind::Died { .. } => "failed",
                 }
                 .to_string(),
             ),
@@ -1218,6 +1448,7 @@ impl PaneReceipt {
             match bind {
                 ArmBind::Bound { .. } => Value::Bool(true),
                 ArmBind::Unbound { .. } => Value::Bool(false),
+                ArmBind::Died { .. } => Value::Bool(false),
                 ArmBind::NotApplicable => Value::Null,
             },
         );
@@ -1235,6 +1466,10 @@ impl PaneReceipt {
             }
             ArmBind::Unbound { reason } => {
                 obj.insert("pane_alive".into(), Value::Bool(true));
+                obj.insert("unbound_reason".into(), Value::String(reason.clone()));
+            }
+            ArmBind::Died { reason } => {
+                obj.insert("pane_alive".into(), Value::Bool(false));
                 obj.insert("unbound_reason".into(), Value::String(reason.clone()));
             }
             ArmBind::NotApplicable => {}
@@ -1257,3 +1492,7 @@ impl PaneReceipt {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "row8_tests.rs"]
+mod row8_tests;

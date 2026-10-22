@@ -3,17 +3,17 @@
 //! can read a live transcript quiet (an account store the probe misses, a
 //! resumed session id); the turn record itself is the witness that cannot
 //! miss, classified by the same provenance rules `fno-agents intel` folds
-//! with. A done ledger never overrides an attended session.
+//! with. Retirement itself is the origin rule in `gc.rs`: an fno-started
+//! row retires after one idle hour and a user-started row never does;
+//! these reads are the stop verb's and the sweep's short-window witnesses.
 
 use crate::provenance::{
     classify_turn, is_user_turn, turn_text, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
 };
 use crate::state::RegistryEntry;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 /// How recent a typed turn must be to hold a session: 15 minutes.
 pub(crate) const WINDOW_SECS: i64 = 15 * 60;
@@ -82,7 +82,9 @@ fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
 
 /// The newest typed turn in ONE transcript, as an age in seconds; `None`
 /// when the file holds none. A row without a parseable timestamp cannot
-/// testify; a future stamp reads as now.
+/// testify; a future stamp reads as now. This is the RECENCY read the
+/// 15-minute window hold and the stop refusal use: a person spoke a
+/// moment ago, whatever machine turn followed.
 fn typed_age_in_file(
     path: &PathBuf,
     bus: &BusIndex,
@@ -152,72 +154,6 @@ pub(crate) fn newest_typed_turn_age_s(
     newest
 }
 
-/// The same read with NO window and NO mtime skip: the newest typed turn
-/// whenever it was written. This is the fact the retirement policy reads,
-/// and the mtime short-circuit cannot answer it - the incident row sat
-/// quiet 17 minutes when the sweep retired it, past every window here.
-/// The all-time read's one process-lifetime memo, keyed by the file's stat
-/// trio (path, len, mtime secs) PLUS the recorded seed the read exempts by:
-/// two rows can resolve to one transcript with different payloads, and a
-/// memo keyed without it would answer one row with another row's
-/// exemption. An appended transcript misses (new len or mtime) and
-/// rescans; an unchanged one never pays the full read twice in this
-/// process - without it, a kept-forever row's transcript is read
-/// end-to-end on every sweep pass.
-fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>> {
-    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>>> =
-        OnceLock::new();
-    MEMO.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn newest_typed_turn_age_ever(
-    paths: &[PathBuf],
-    bus: &BusIndex,
-    session: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<i64> {
-    let mut newest: Option<i64> = None;
-    for path in paths {
-        // A file that cannot stat cannot form a key: it reads fresh and
-        // answers None on the open failure, never from a stale entry.
-        let stat = std::fs::metadata(path).and_then(|m| {
-            m.modified().map(|t| {
-                (
-                    m.len(),
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0) as i64,
-                )
-            })
-        });
-        let Ok((len, mtime)) = stat else {
-            continue;
-        };
-        let key = (path.clone(), len, mtime, spawn_payload.map(str::to_string));
-        if let Some(hit) = scan_memo()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-        {
-            if let Some(h) = *hit {
-                newest = Some(newest.map_or(h, |n| n.min(h)));
-            }
-            continue;
-        }
-        let age = typed_age_in_file(path, bus, session, now, spawn_payload);
-        let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
-        if memo.len() >= 1024 {
-            memo.clear();
-        }
-        memo.insert(key, age);
-        if let Some(age) = age {
-            newest = Some(newest.map_or(age, |n| n.min(age)));
-        }
-    }
-    newest
-}
-
 /// The sweep's one-row gate: `Some(hold)` when the row's transcript
 /// carries a typed turn inside the window. A row the age seam already
 /// reads fresh (`quiet`) skips the read - `kept_active` holds it.
@@ -245,21 +181,6 @@ pub(crate) fn sweep_hold(
         age_basis: hold_age_basis,
         escalated: false,
     })
-}
-
-/// The all-time read a retirement sweep pays for: the row's store-resolved
-/// transcripts, keyed on the row's harness session id. `None` answers
-/// "no typed turn" AND "store unresolved" alike - the sweep treats both as
-/// no witness, and an unresolved store never invented quiet either.
-pub(crate) fn typed_turn_age_ever_for_row(
-    hits: Option<Vec<PathBuf>>,
-    home: &crate::paths::AgentsHome,
-    sid: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<i64> {
-    let hits = hits?;
-    newest_typed_turn_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
 }
 
 /// The stop-verb refusal: `Some(why)` when the row's store-resolved

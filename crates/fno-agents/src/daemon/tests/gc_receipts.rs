@@ -181,15 +181,18 @@ fn staged_sweep(
 /// done node and owns a clean linked worktree: it retires with its basis,
 /// its tree is pruned, and the branch-shaped protections (transcript on
 /// disk, no graph mutation) hold. Row B is named on one done and one
-/// open node: kept, naming the open node. Row C is named nowhere: kept,
-/// no provenance.
+/// open node: kept, naming the open node. Row C is named nowhere and
+/// exited: the registry's terminal stamp is its finished marker, so it
+/// retires past the idle hour like a reported-done row.
 #[test]
 fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let home = tmp_home("gc-ac4");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let a_path = quiet_transcript(transcripts.path(), "a.jsonl", 2 * 3600);
-    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 2 * 3600);
+    // B is kept as open-work stale: its age must sit inside the origin
+    // ruling's one idle hour, not merely past the old grace.
+    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 1800);
     let c_path = quiet_transcript(transcripts.path(), "c.jsonl", 2 * 3600);
     state::update_registry(&home.registry_json(), |r| {
         let mut a = ask_row("row-a", None);
@@ -245,10 +248,13 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
 
     assert_eq!(
         summary.retired,
-        vec![(
-            "rowa".to_string(),
-            "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
-        )],
+        vec![
+            (
+                "rowa".to_string(),
+                "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
+            ),
+            ("rowc".to_string(), "done".to_string()),
+        ],
         "{:?}",
         summary.retired
     );
@@ -262,7 +268,11 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
             "sessions".to_string()
         )]
     );
-    assert_eq!(summary.kept_no_provenance, vec!["rowc".to_string()]);
+    assert!(
+        summary.kept_no_provenance.is_empty(),
+        "{:?}",
+        summary.kept_no_provenance
+    );
     // The retired vocabulary: none of the exit-stamp words appears.
     let rendered = format!("{summary:?}");
     for word in [
@@ -279,7 +289,7 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let reg = state::load_registry(&home.registry_json()).unwrap();
     assert!(reg.entries.iter().all(|e| e.name != "row-a"));
     assert!(reg.entries.iter().any(|e| e.name == "row-b"));
-    assert!(reg.entries.iter().any(|e| e.name == "row-c"));
+    assert!(reg.entries.iter().all(|e| e.name != "row-c"));
     let receipts = home.root().join("reap-receipts");
     assert!(
         receipts.join("claude-sess-a.json").exists(),
@@ -427,7 +437,17 @@ fn a_shared_worktree_survives_while_the_other_row_is_live() {
         7,
         &move |_| graph.clone(),
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // The ruling's hour splits the pair: the done row is past it, the
+        // live row sits inside it, so only the done row retires.
+        &|entries| {
+            entries
+                .iter()
+                .map(|e| {
+                    let age = if e.short_id == "rowy" { 1800 } else { 2 * 3600 };
+                    (crate::gc::row_handle(e), Some(age))
+                })
+                .collect()
+        },
         &|_| true,
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,

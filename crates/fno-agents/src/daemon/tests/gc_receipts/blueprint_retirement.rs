@@ -6,6 +6,10 @@ use super::*;
 use super::{no_agents, quiet_transcript, stage_graph, staged_graph_home, uniform_ages};
 use crate::gc_sweep::{self, GcSummary};
 
+/// The classify-pass age: past the origin ruling's one idle hour, so the
+/// row reads would-retire and the apply-time re-read is what holds it.
+const CLASSIFY_AGE_S: i64 = crate::gc::SPAWN_IDLE_RETIRE_SECS + 100;
+
 /// The team specimen (2026-09-14): a do-phase claude row whose transcript
 /// ends mid-Edit with the badge still `working` and live. A fresh working
 /// report is a turn plausibly in flight, so it blocks the tick retirement
@@ -31,7 +35,7 @@ fn a_live_working_report_blocks_the_tick_retirement() {
         entries
             .iter()
             .map(|e| {
-                let age = if n == 0 { Some(1500i64) } else { None };
+                let age = if n == 0 { Some(CLASSIFY_AGE_S) } else { None };
                 (crate::gc::row_handle(e), age)
             })
             .collect()
@@ -79,7 +83,7 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
         entries
             .iter()
             .map(|e| {
-                let age = if n == 0 { Some(1500i64) } else { None };
+                let age = if n == 0 { Some(CLASSIFY_AGE_S) } else { None };
                 (crate::gc::row_handle(e), age)
             })
             .collect()

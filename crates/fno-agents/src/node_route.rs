@@ -282,6 +282,27 @@ pub(crate) fn name_route(name: &str, ids: &HashSet<String>) -> Option<String> {
             return Some(joined);
         }
     }
+    // Compact tokens: a live worker name carries the id's
+    // dash-less spelling (`t-xbbbb-w6` names x-bbbb). The backlog
+    // resolver's dash variants are the one vocabulary: token -> dash
+    // variants of known ids, matched exactly. Same guard as the bare-hex
+    // pass: every token before it must be shorter than 4 characters, so a
+    // hex-looking slug word never reads as an id. Two matching ids answer
+    // nothing, like an ambiguous bare hex.
+    for (n, token) in tokens.iter().enumerate().skip(1) {
+        let matches: Vec<&String> = ids
+            .iter()
+            .filter(|id| crate::backlog::node_ref::dash_variants(id).contains(&token.to_string()))
+            .collect();
+        if matches.len() > 1 {
+            return None;
+        }
+        if let Some(id) = matches.first() {
+            if tokens[1..n].iter().all(|t| t.len() < 4) {
+                return Some((*id).clone());
+            }
+        }
+    }
     let mut hex_index: HashMap<&str, &str> = HashMap::new();
     let mut ambiguous: HashSet<&str> = HashSet::new();
     for id in ids {
@@ -769,4 +790,24 @@ mod tests {
 
     // The cap is the valve for a transcript that names nothing: the walk
     // stops at the bound instead of reading the whole file.
+
+    // The compact token a live worker name carries (the id's
+    // dash-less spelling) routes, under the bare-hex pass's guards.
+    #[test]
+    fn a_compact_token_in_a_worker_name_routes() {
+        let ids = ids_of(&[("x-aaaa", "done")]);
+        assert_eq!(
+            name_route("t-xaaaa-route", &ids),
+            Some("x-aaaa".to_string()),
+            "the dash-less token names the id"
+        );
+        // Ambiguous across two ids that share the dash-less form: answer
+        // nothing, like an ambiguous bare hex.
+        let ids = ids_of(&[("x-bbbb", "done"), ("xb-bbb", "done")]);
+        assert_eq!(name_route("t-xbbbb-route", &ids), None);
+        // A slug word behind real words never reads as an id: the guard
+        // requires every token before the match to be shorter than 4.
+        let ids = ids_of(&[("x-cccc", "done")]);
+        assert_eq!(name_route("k-t-lane-xcccc-timeout", &ids), None);
+    }
 }

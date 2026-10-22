@@ -76,6 +76,11 @@ def base_env(root: Path) -> dict:
     env.pop("FNO_SESSION", None)
     env.pop("FNO_SPAWN_TRIGGER", None)
     env.pop("FNO_WORKER_ADD_DIRS", None)
+    # Operator-set values that would season the golden with the capturing
+    # shell: the claude block cap has an fno default the leg must show, and a
+    # gh delegate reroutes the wrapper's PATH pair.
+    env.pop("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", None)
+    env.pop("FNO_REAL_GH", None)
     # The capturing session's own ambient identity must not season the
     # golden: provenance stamps, mail ids and agent-self marks are properties
     # of whoever runs the capture, not of the leg.
@@ -328,5 +333,289 @@ def main() -> None:
         print(f"  {label}: {flag}")
 
 
+# ---------------------------------------------------------------------------
+# Row 8 (x-6f0d): the remaining pane harnesses.
+#
+# Same contract as the codex capture above: the Python leg runs against a
+# fake runner, a temp FNO_AGENTS_HOME/FNO_CLAIMS_ROOT, and patched seams for
+# the one external mint (cursor-agent create-chat) and pi's create-settle
+# wait. The frozen bytes are the contract the row-8 arms play back:
+# build_pane_argv output per harness, the wrapped `pane run` transport with
+# its env(1) wrapper, the group-tab refusal, and the --pane attach path.
+# ---------------------------------------------------------------------------
+
+ROW8_HARNESSES = ("claude", "opencode", "pi", "cursor-agent", "grok", "agy", "footnote")
+
+
+def _row8_argv_cases(per_harness: dict) -> None:
+    """Pure build_pane_argv captures, collected per harness into
+    <harness>_python_leg.json by the caller.
+
+    Runs under base_env(root) so the computed writable-dir grants resolve
+    under the temp root and normalize to <ROOT> - unlike the codex argv
+    cases above, these harnesses keep their grants (only codex strips them
+    on --remote). The footnote case carries its model in the passthrough
+    fence, the way every live footnote pane spawn names it.
+    """
+    sys.path.insert(0, str(CLI_SRC))
+    from fno.agents.mux_spawn import build_pane_argv
+
+    root = Path(tempfile.mkdtemp(prefix="fnopanecap"))
+    saved_env = dict(os.environ)
+    try:
+        os.environ.update(base_env(root))
+        repo = root / "repo"
+        repo.mkdir(exist_ok=True)
+        for harness in ROW8_HARNESSES:
+            passthrough = ["-m", "zai/glm-5.3"] if harness == "footnote" else None
+            entry: dict = {}
+            entry["plain"] = build_pane_argv(
+                harness, "do x", repo, None, name="w", passthrough=passthrough
+            )
+            if harness in ("claude", "opencode", "pi"):
+                # The argv-seeded harnesses: claude fences, opencode fuses,
+                # pi takes a bare positional. A leading-flag seed exercises
+                # the fence/fuse/positional shape each one picked.
+                entry["seed_leading_flag"] = build_pane_argv(
+                    harness,
+                    "--model opus do x",
+                    repo,
+                    None,
+                    name="w",
+                    passthrough=passthrough,
+                )
+            if harness in ("claude", "pi", "footnote", "cursor-agent"):
+                # The preassigned-binding harnesses: the identity render
+                # carries the session flag only when the caller pins one.
+                passthrough_sid = (
+                    ["-m", "zai/glm-5.3"] if harness == "footnote" else None
+                )
+                entry["pinned_session"] = build_pane_argv(
+                    harness,
+                    "do x",
+                    repo,
+                    SID,
+                    name="w",
+                    passthrough=passthrough_sid,
+                )
+            if harness == "footnote":
+                # No model named in the fence is the footnote refusal.
+                try:
+                    build_pane_argv("footnote", "do x", repo, None, name="w")
+                    entry["no_model"] = {"argv": [], "refused": False}
+                except Exception as exc:
+                    entry["no_model"] = {
+                        "refused": True,
+                        "exit": getattr(exc, "exit_code", 1),
+                        "line": normalize(str(exc), root),
+                    }
+            per_harness[harness]["argv"] = entry
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+class _Row8Runner(FakeRunner):
+    """FakeRunner plus: a pristine idle shell at pane 5 for the attach
+    case, `tab ls`/`tab join`/`tab rename` answers for the group move, and
+    last-command capture for the attach send."""
+
+    def __init__(self, attach_pane: int | None = None) -> None:
+        super().__init__()
+        self.attach_pane = attach_pane
+        self.last_send: list[str] | None = None
+
+    def __call__(self, cmd, **kwargs):
+        self.commands.append(list(cmd))
+        self.envs.append(kwargs.get("env"))
+        joined = " ".join(cmd)
+        if " pane run " in f" {joined} ":
+            if self.attach_pane is not None:
+                # The attach case never runs `pane run`; a run here is a bug
+                # the capture must name, not answer.
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="3\n", stderr="")
+        if " pane ls " in f" {joined} ":
+            rows = [
+                {
+                    "pane_id": 3,
+                    "cwd": "/x",
+                    "child_pid": WORKER_PID,
+                    "tab_id": "id:12",
+                    "squad_id": 4,
+                }
+            ]
+            if self.attach_pane is not None:
+                rows.append(
+                    {
+                        "pane_id": self.attach_pane,
+                        "cwd": "/x",
+                        "child_pid": WORKER_PID + 1,
+                        "pristine_idle_shell": True,
+                        "tab_id": "id:13",
+                        "squad_id": 4,
+                    }
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(rows), stderr="")
+        if " pane send " in f" {joined} ":
+            self.last_send = list(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if " tab ls " in f" {joined} ":
+            return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+        if " tab rename " in f" {joined} ":
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if " tab join " in f" {joined} ":
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def pane_run_argv(self) -> list[str] | None:
+        for cmd in self.commands:
+            if "run" in cmd and "pane" in cmd:
+                return cmd
+        return None
+
+
+def _row8_full_leg(per_harness: dict, spine: dict) -> None:
+    """One plain pane per harness under fakes, plus the geometry, group-tab
+    and attach shapes on opencode (a row-8 arm)."""
+    sys.path.insert(0, str(CLI_SRC))
+    from dataclasses import asdict
+
+    from fno.agents import mux_spawn
+
+    full_leg_specs: list[tuple[str, str, dict, str]] = [
+        *[(h, f"w-{h}", dict(provider=h, message="do x"), h) for h in ROW8_HARNESSES],
+        (
+            "geometry_split",
+            "w-geom",
+            dict(provider="opencode", message="do x", split="h"),
+            "opencode",
+        ),
+        (
+            "group_tab_move",
+            "w-group",
+            dict(provider="opencode", message="do x", tab="delivery"),
+            "opencode",
+        ),
+        (
+            "attach_pane",
+            "w-attach",
+            dict(provider="opencode", message="do x", pane=5),
+            "opencode",
+        ),
+    ]
+    for label, name, kwargs, harness in full_leg_specs:
+        root = Path(tempfile.mkdtemp(prefix="fnopanecap"))
+        try:
+            os.environ.update(base_env(root))
+            repo = root / "repo"
+            repo.mkdir(exist_ok=True)
+            runner = _Row8Runner(attach_pane=5 if "pane" in kwargs else None)
+            kwargs["runner"] = runner
+            if harness == "cursor-agent":
+                # The create-chat mint shells the cursor-agent binary; the
+                # capture pins the UUID it feeds the declared form.
+                from fno.agents.harnesses import cursor_agent as _cursor
+
+                _cursor.create_chat = lambda cwd, _sid=SID: _sid
+            if harness == "pi":
+                # The create-settle wait reads pi's own store on disk and
+                # sleeps out its bound; the capture pins the confirmed arm.
+                from fno.agents.harnesses import pi as _pi
+
+                class _Lookup:
+                    state = "one"
+                    reason = ""
+
+                _pi.create_decision = lambda *a, **k: contextlib.nullcontext()
+                _pi.await_session_created = lambda *a, **k: _Lookup()
+            if harness == "footnote":
+                kwargs["passthrough"] = ["-m", "zai/glm-5.3"]
+            dispatch = mux_spawn.dispatch_spawn_pane
+            result = dispatch(name=name, cwd=repo, session="main", **kwargs)
+            case = {
+                "pane_run_argv": normalize(runner.pane_run_argv(), root),
+                "attach_send": normalize(runner.last_send, root),
+                "pane_run_env_bridges": {
+                    k: ((runner.pane_run_env() or {}).get(k))
+                    for k in [
+                        "FNO_MUX_SHELL_INTEGRATION",
+                        "FNO_PROCESS_ADMISSION_MAX",
+                        "FNO_MUX_PANE_GROUP_MAX",
+                    ]
+                },
+                "result": normalize(asdict(result), root),
+                "row": load_row(root, name),
+            }
+            if label in ("geometry_split", "group_tab_move", "attach_pane"):
+                spine[label] = case
+            else:
+                per_harness[harness][label] = case
+        except Exception as exc:
+            case = {"error": f"{type(exc).__name__}: {exc}"}
+            if label in ("geometry_split", "group_tab_move", "attach_pane"):
+                spine[label] = case
+            else:
+                per_harness[harness][label] = case
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # The group-tab refusal (AC3): byte-equal, exit 2, before any pane.
+    root = Path(tempfile.mkdtemp(prefix="fnopanecap"))
+    try:
+        os.environ.update(base_env(root))
+        repo = root / "repo"
+        repo.mkdir(exist_ok=True)
+        try:
+            mux_spawn.dispatch_spawn_pane(
+                name="w-group",
+                message="do x",
+                provider="opencode",
+                cwd=repo,
+                session="main",
+                tab="delivery",
+                split="h",
+                runner=_Row8Runner(),
+            )
+            spine["group_tab_refusal"] = {"exit": 0, "line": None}
+        except Exception as exc:
+            spine["group_tab_refusal"] = {
+                "exit": getattr(exc, "exit_code", 1),
+                "line": normalize(str(exc), root),
+            }
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def main_row8() -> None:
+    GOLDEN.mkdir(parents=True, exist_ok=True)
+    per_harness: dict = {h: {} for h in ROW8_HARNESSES}
+    spine: dict = {}
+    _row8_argv_cases(per_harness)
+    _row8_full_leg(per_harness, spine)
+    for harness, cases in per_harness.items():
+        out = GOLDEN / f"{harness}_python_leg.json"
+        out.write_text(
+            json.dumps({"captured_at": "2026-10-21", "cases": cases}, indent=1) + "\n"
+        )
+        print(f"goldens written to {out}")
+    out = GOLDEN / "spine_python_leg.json"
+    out.write_text(json.dumps({"captured_at": "2026-10-21", "cases": spine}, indent=1) + "\n")
+    print(f"goldens written to {out}")
+    for harness, cases in per_harness.items():
+        flags = ", ".join(
+            f"{label}: {'error' if 'error' in case else 'ok'}"
+            for label, case in cases.items()
+        )
+        print(f"  {harness}: {flags}")
+    for label, case in spine.items():
+        flag = "error" if "error" in case else "ok"
+        print(f"  spine/{label}: {flag}")
+
+
 if __name__ == "__main__":
-    main()
+    if "--row8" in sys.argv:
+        main_row8()
+    else:
+        main()

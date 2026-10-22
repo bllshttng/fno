@@ -136,56 +136,55 @@ def test_passthrough_fence_tokens_are_not_prompt_positionals():
     assert out[4:] == ["--", "--name", "reviewer"]
 
 
-# --- x-b80d: a node-driven spawn mints t-<node>-<slug>-<model> ----------------
+# --- a node-driven or /target spawn mints t-<short slug> --------------------
 
-def test_node_spawn_mints_provenance_name():
-    # The registry row's NAME is the only node carrier, so the mint must put
-    # the node and slug there: t-x919-sentinel-glm.
-    out = _norm(
-        ["spawn", "--node", "x919", "--slug", "sentinel-arms", "--model", "glm-5.2", "go"]
-    )
-    assert out[1:3] == ["--name", "t-x919-sentinel-glm"]
-    assert out[3:] == ["--node", "x919", "--slug", "sentinel-arms", "--model", "glm-5.2", "go"]
+def _stub_worker_name(monkeypatch, answer):
+    import fno.agents.naming as naming
 
+    calls = []
 
-def test_node_spawn_re_spawn_suffixes_the_taken_name():
-    # The mint is deterministic; a name already held by a live worker gets a
-    # numeric suffix instead of a dispatcher refusal (a re-spawn on one node
-    # is the two-worker implement+review shape).
-    argv = ["spawn", "--node", "x919", "--slug", "arms", "--model", "glm-5.2", "go"]
-    first = _norm(argv, existing_names=set())
-    assert first[2] == "t-x919-arms-glm"
-    second = _norm(argv, existing_names={"t-x919-arms-glm"})
-    assert second[2] == "t-x919-arms-glm-2"
-    third = _norm(argv, existing_names={"t-x919-arms-glm", "t-x919-arms-glm-2"})
-    assert third[2] == "t-x919-arms-glm-3"
+    def fake(node=None, *, seed=None, slug=None):
+        calls.append((node, seed, slug))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(naming, "worker_name", fake)
+    return calls
 
 
-def test_graph_read_failure_falls_back_to_adjective_noun(monkeypatch):
-    # A spawn must never die on a naming lookup: the graph read raising falls
-    # back to the plain adjective-noun mint, not a refusal, not a t-<node>
-    # name built on an unresolved identity.
-    import fno.graph.store as gl
+def test_target_seed_spawn_is_named_for_its_node_and_suffixes_a_taken_name(monkeypatch):
+    # The seed names the node; no model token rides the name, and a name a
+    # live worker holds gets a numeric suffix instead of a refusal.
+    calls = _stub_worker_name(monkeypatch, "t-visual-approval-gate")
+    argv = ["spawn", "/fno:target x-f850"]
+    assert _norm(argv)[1:3] == ["--name", "t-visual-approval-gate"]
+    assert calls[0] == (None, "/fno:target x-f850", None)
+    taken = {"t-visual-approval-gate", "t-visual-approval-gate-2"}
+    assert _norm(argv, existing_names=taken)[2] == "t-visual-approval-gate-3"
 
-    def _raise(*args):
-        raise RuntimeError("graph unreadable")
 
-    monkeypatch.setattr(gl, "read_nodes_by_ids", _raise)
-    out = _norm(["spawn", "--node", "x919", "--slug", "arms", "go"])
+def test_node_flag_and_slug_reach_the_mint(monkeypatch):
+    calls = _stub_worker_name(monkeypatch, "t-sentinel-arms")
+    out = _norm(["spawn", "--node", "x919", "--slug", "sentinel-arms", "go"])
+    assert out[1:3] == ["--name", "t-sentinel-arms"]
+    assert calls == [("x919", "go", "sentinel-arms")]
+
+
+def test_mint_failure_falls_back_to_adjective_noun(monkeypatch):
+    # A spawn must never die on a naming lookup.
     from fno.agents import spawn_defaults as sd
+    from fno.agents.naming import AgentNameError
 
+    _stub_worker_name(monkeypatch, AgentNameError("no node slug"))
+    out = _norm(["spawn", "--node", "x919", "go"])
     assert out[2] in {f"{a}-{n}" for a in sd._SLUG_ADJ for n in sd._SLUG_NOUN}
 
 
-def test_graph_read_supplies_the_slug_when_flag_absent(monkeypatch):
-    # --slug omitted: the best-effort graph read fills id + slug, and a slug
-    # input normalizes to the canonical id.
-    import fno.graph.store as gl
-
-    monkeypatch.setattr(
-        gl,
-        "read_nodes_by_ids",
-        lambda path, tokens: {"entries": [{"id": "x-919abcd", "slug": "sentinel-arms", "plan_path": None}], "missing": []},
-    )
-    out = _norm(["spawn", "--node", "x-919abcd", "--model", "glm-5.2", "go"])
-    assert out[2] == "t-919abcd-sentinel-glm"
+def test_head_model_flag_is_shorthand_for_the_fenced_harness_flag():
+    # Spawn allows every harness flag: `-m` before the fence moves behind it,
+    # where the harness reads it, and a prompt-less spawn keeps MESSAGE empty.
+    out = _norm(["spawn", "--name", "w", "-m", "sonnet", "go", "--", "--verbose"])
+    assert out == ["spawn", "--name", "w", "go", "--", "--model", "sonnet", "--verbose"]
+    bare = _norm(["spawn", "--name", "w", "--model=haiku"])
+    assert bare == ["spawn", "--name", "w", "", "--", "--model", "haiku"]

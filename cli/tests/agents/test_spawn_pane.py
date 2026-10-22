@@ -612,29 +612,6 @@ def test_undeclared_spawn_journey_states_the_lane(
         assert marker in receipt, f"receipt must state {marker!r}:\n{receipt}"
 
 
-def test_routing_pane_substrate_spawn_stays_python() -> None:
-    """4a-G2 routing carve-out: a pane spawn (explicit or default) never
-    auto-routes to the Rust client; bg/headless spawns still do."""
-    from fno.agents.rust_runtime import _is_pane_substrate_spawn
-
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer", "--substrate", "pane"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer", "--substrate=pane"])
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--substrate", "thread"])
-    assert not _is_pane_substrate_spawn(
-        "spawn", ["spawn", "p", "--substrate=headless"]
-    )
-    # x-c772: --once is the headless shortcut -> never a pane. `-H`
-    # was reassigned to --harness (x-6de8), so `-H codex` is a default-pane spawn.
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--once"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "p", "-H", "codex"])
-    assert not _is_pane_substrate_spawn("ask", ["ask", "peer", "hi"])
-    # The scan stops at --argv: payload tokens cannot masquerade as our flag.
-    assert _is_pane_substrate_spawn(
-        "spawn", ["spawn", "p", "--argv", "--substrate", "thread"]
-    )
-
-
 def test_mesh_env_wrapper_scrubs_inherited_session_identity() -> None:
     """AC6-HP: a spawned child inherits its parent's ROUTE but never its
     parent's IDENTITY. An ambient session marker riding through this seam is
@@ -2353,40 +2330,18 @@ def test_a_timed_out_submit_keeps_the_row_and_never_retries(
     assert len(rows) == 1, "a worker that may be running must keep its row"
 
 
-def test_cmd_spawn_explicit_happy_monitor_refuses_separate_model_override(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("provider", ["claude", "codex", "agy", "opencode", "pi"])
+def test_a_fenced_model_lands_on_the_row_for_every_harness(
+    tmp_path: Path, monkeypatch, provider: str
 ) -> None:
-    from typer.testing import CliRunner
+    """A grid pick with no route rides the fence as `--model`. The row records
+    it as the request, or it reads null while the harness runs that model."""
+    from fno.agents.registry import load_registry
 
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
+    _spawn(monkeypatch, tmp_path, provider=provider, passthrough=["--model", "m-low"])
 
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    monkeypatch.setattr(
-        mux_spawn,
-        "dispatch_spawn_pane",
-        lambda **kwargs: pytest.fail("pane dispatch called"),
-    )
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        [
-            "spawn",
-            "--harness",
-            "claude",
-            "--route",
-            "zai/glm-5.2",
-            "--model",
-            "claude-opus-4-1",
-            "--monitor",
-            "happy",
-            "hello",
-        ],
-    )
-
-    assert result.exit_code == 2, result.output
-    assert "--model is retired" in result.output
+    (row,) = load_registry()
+    assert (row.model, row.model_basis, row.requested_model) == ("m-low", "requested", "m-low")
 
 
 def test_explicit_happy_monitor_refuses_separate_model_before_runner(

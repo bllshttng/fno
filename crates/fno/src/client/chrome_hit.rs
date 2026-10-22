@@ -136,7 +136,13 @@ impl View {
         let DisplayRow::Agent(a) = rows.get(i)? else {
             return None;
         };
-        let span = card_line::node_span(a, self.sideline_paint_w().checked_sub(1)?)?;
+        // The span the last paint drew: a node cut or dropped beside a long
+        // name must not answer a tap on the name.
+        let painted = self.card_node_spans.borrow().get(&a.name).cloned();
+        let span = match painted {
+            Some(span) => span?,
+            None => card_line::node_span(a, self.sideline_paint_w().checked_sub(1)?)?,
+        };
         span.contains(&(col as usize))
             .then(|| a.node.clone())
             .flatten()

@@ -282,9 +282,9 @@ The line reads `kept {id} (active: transcript written {age}s ago)`. The transcri
 
 The line reads `kept {id} (attended: typed user turn {age}s ago)`. The transcript holds a typed user turn inside the 15-minute window (`attended.rs` `WINDOW_SECS`). The classifier is the one `fno-agents intel` folds with, so keepalive pings, mail envelopes, and command machinery never count. The age instrument read the file quiet while a person was working in the session. The turn record is the witness that cannot miss. A done ledger never overrides an attended session, and the stop verb refuses it the same way. A row the age seam already reads fresh skips this read. A transcript quiet past the window costs one stat. Append-only JSONL cannot hide an in-window turn in an aged file. Wait for the typing to stop. The row retires on a later pass.
 
-### user typed
+### idle
 
-The line reads `kept {id} (user typed: typed user turn {age}s ago)`. The transcript holds a typed user turn with no window on it, and the keep is permanent, like an operator row (`gc.rs` `KeepReason::UserTyped`). The attended hold above is the early gate. This one is the policy's own. It reads only a row the verdict is about to retire. A never-typed row pays no transcript scan. The read is memoized by the file's stat trio, so an unchanged transcript is read end-to-end once per process and an append misses and rescans. A person took this session on as a conversation partner. A retirement here reaps the session, and its worktree, out from under them.
+The line reads `kept {id} (idle, inside the one-hour retire window)`. The row sits in the `kept_other` bucket. The origin rule decides every fno-started row (origin `spawn`): it retires after one idle hour (`gc.rs` `SPAWN_IDLE_RETIRE_SECS`). The first 55 minutes are the grace, and a row inside them reads `active`. A row between the grace and the hour reads `idle`. A user-started row (origin `operator`) the reaper never removes. A typed turn is no longer a keep of its own. It is activity, and the idle clock runs from the last turn of any kind. The `attended` hold above still keeps a row while a person types inside its 15-minute window.
 
 ### live claim
 
@@ -366,7 +366,7 @@ Every top-level key of `fno agents registry reap --json`, one row each. The dry 
 | `kept_planning_unclosed` | `kept {id} (planning assignment not finished by this session: {node})` | [planning assignment not finished by this session](#planning-assignment-not-finished-by-this-session) |
 | `kept_active` | `kept {id} (active: transcript written {age}s ago)` | [active](#active) |
 | `kept_attended` | `kept {id} (attended: typed user turn {age}s ago)` | [attended](#attended) |
-| `kept_user_typed` | `kept {id} (user typed: typed user turn {age}s ago)` | [user typed](#user-typed) |
+| `kept_other` | `kept {id} ({reason})` | [idle](#idle) |
 | `kept_marked` | `kept {id} (keep mark: set {time} by {who})` | [Rows no sweep can take](#rows-no-sweep-can-take) |
 | `kept_live_claim` | `kept {id} (live claim held: {detail})` | [live claim](#live-claim) |
 | `kept_probe_unread` | `kept {id} (probe unread: {detail})` | [probe unread](#probe-unread) |
