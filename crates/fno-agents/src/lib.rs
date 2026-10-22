@@ -1598,6 +1598,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "codex_turn_error",
     "quiet_worker_nudge",
     "quiet_worker_recovery",
+    // Who stamped a row bus-only (mail_hold.rs record_stamp).
+    "mail_hold_stamped",
     "quiet_worker_error",
     "agent_create_no_session",
     "agent_orphan_reaped",

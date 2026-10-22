@@ -142,6 +142,33 @@ fn set_policy(session_id: &str, policy: Option<&str>) -> Option<String> {
     matched
 }
 
+/// One `mail_hold_stamped` row naming who stamped `session_id` bus-only:
+/// the writer, this process's argv, and its parent's command line. Neither
+/// writer left a trace before, so a stamp nobody armed could not be traced
+/// to its caller. Best effort: an emit failure never blocks the stamp.
+pub(crate) fn record_stamp(writer: &str, session_id: &str) {
+    let clip = |s: &str| s.chars().take(300).collect::<String>();
+    let argv: Vec<String> = std::env::args().take(16).map(|a| clip(&a)).collect();
+    let ppid = std::os::unix::process::parent_id();
+    let parent = Command::new("ps")
+        .args(["-o", "command=", "-p", &ppid.to_string()])
+        .output()
+        .ok()
+        .map(|o| clip(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_default();
+    let _ = crate::events::EventEmitter::new(AgentsHome::from_env().events_jsonl(), "agents").emit(
+        "mail_hold_stamped",
+        &serde_json::json!({
+            "session_id": session_id,
+            "writer": writer,
+            "pid": std::process::id(),
+            "ppid": ppid,
+            "argv": argv,
+            "parent": parent,
+        }),
+    );
+}
+
 /// The matched row's (session id, delivery policy), read-only. The guard
 /// needs the policy to tell a hold the user set on purpose from a
 /// conversation clock.
@@ -533,6 +560,9 @@ fn arm_row(
         // The row raced out between the read and the stamp; the clock on
         // disk is inert without the flag.
         return (ArmOutcome::RowRaced, Some(handle));
+    }
+    if policy.as_deref() != Some("bus-only") {
+        record_stamp("conversation_arm", session_id);
     }
     ensure_clock(&handle, now);
     if !prior_live_conversation {
@@ -1703,6 +1733,19 @@ pub(crate) mod tests {
             assert_eq!(status["clock_live"], true);
             assert_eq!(status["delivery_policy"], "bus-only");
             assert_eq!(status["conversation"], true);
+            // The stamp names its writer, so a phantom DND traces to a caller.
+            let journal =
+                crate::event_store::journal_text(&dir.join("events.jsonl"), &["mail_hold_stamped"]);
+            let stamp: serde_json::Value = journal
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .find(|v: &serde_json::Value| v["type"] == "mail_hold_stamped")
+                .expect("the arm journals a mail_hold_stamped row");
+            assert_eq!(stamp["data"]["writer"], "conversation_arm");
+            assert_eq!(stamp["data"]["session_id"], SID);
+            assert!(stamp["data"]["argv"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()));
             // The check-in label rides the same fact: the conversation leg
             // of the shared helper, at its live integration point.
             assert_eq!(

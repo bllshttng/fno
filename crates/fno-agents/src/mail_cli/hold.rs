@@ -157,6 +157,7 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("hold: {exc}");
         return 1;
     }
+    crate::mail_hold::record_stamp("hold_verb", &session_id);
 
     let mut arm = vec![
         "--arm".to_string(),
