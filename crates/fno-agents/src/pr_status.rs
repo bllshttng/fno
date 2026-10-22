@@ -241,10 +241,24 @@ pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> Re
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
-    let fallback = lines
-        .first()
+    // The proxy's admit banner rides ahead of gh's own stderr, and a Python
+    // traceback opens with a header that names nothing: its cause is the
+    // last line.
+    let meaningful: Vec<&str> = lines
+        .iter()
         .copied()
-        .unwrap_or("gh api failed with no message");
+        .filter(|l| !crate::authorized_merge::is_proxy_noise_line(l))
+        .collect();
+    let fallback = match meaningful.first() {
+        Some(first) if first.starts_with("Traceback ") => {
+            meaningful.last().copied().unwrap_or(first)
+        }
+        Some(first) => first,
+        None => lines
+            .first()
+            .copied()
+            .unwrap_or("gh api failed with no message"),
+    };
     let text = lines.join(" ");
     let matched = |pred: &dyn Fn(&str) -> bool| -> String {
         lines
