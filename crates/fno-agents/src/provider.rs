@@ -1922,6 +1922,23 @@ pub const KNOWN_HARNESSES: &[&str] = &[
     "footnote",
 ];
 
+/// Infer the dispatch provider when `--provider` is absent, mirroring Python
+/// `infer_invoking_harness`: resolve when the present markers name exactly one
+/// *distinct* harness. Multiple markers for the same harness (Codex's thread id
+/// plus its legacy session id) agree; markers naming different harnesses, or
+/// none, fall through to the builtin `claude`. Never guesses. `lookup` is
+/// injectable so tests don't touch process-global env.
+pub fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'static str {
+    match crate::claims::resolve_harness_from(lookup).as_deref() {
+        Some("claude") => "claude",
+        Some("codex") => "codex",
+        Some("gemini") => "gemini",
+        Some("opencode") => "opencode",
+        Some("agy") => "agy",
+        _ => "claude",
+    }
+}
+
 /// NAMING SKEW (Discretion 4 — commented, not lockstep-renamed, to keep
 /// the diff small): this 5-name list mirrors Python's `READABLE_PROVIDERS` (the
 /// spawn/pane read-tolerance roster), NOT Python's narrower 3-name
