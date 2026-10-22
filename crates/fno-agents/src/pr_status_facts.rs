@@ -783,21 +783,34 @@ pub(crate) fn zero_job_scan<P: GhProbe>(
         let Some(id) = run.get("id").and_then(Value::as_u64) else {
             continue;
         };
-        let path = format!("repos/{slug}/check-runs/{id}/annotations");
-        let timeout = probes
-            .run_gh(
-                cwd,
-                &[
-                    "api".to_string(),
-                    "--paginate".to_string(),
-                    "--slurp".to_string(),
-                    path,
-                ],
-            )
-            .ok()
-            .and_then(|(ok, stdout, _stderr)| ok.then_some(stdout))
-            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok())
-            .and_then(|annotations| timeout_annotation(&annotations));
+        // A cancelled run is finished, so its annotations never change: one
+        // read per run, not one per status refresh. A failed read is not kept.
+        let memo = format!("{}-{id}", slug.replace('/', "--"));
+        let kind = crate::pr_status::memo::RUN_ANNOTATIONS;
+        let timeout = match crate::pr_status::memo::read(cwd, kind, &memo) {
+            Some(kept) => kept.as_str().map(str::to_string),
+            None => {
+                let path = format!("repos/{slug}/check-runs/{id}/annotations");
+                let read = probes
+                    .run_gh(
+                        cwd,
+                        &[
+                            "api".to_string(),
+                            "--paginate".to_string(),
+                            "--slurp".to_string(),
+                            path,
+                        ],
+                    )
+                    .ok()
+                    .and_then(|(ok, stdout, _stderr)| ok.then_some(stdout))
+                    .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok())
+                    .map(|annotations| timeout_annotation(&annotations));
+                if let Some(timeout) = &read {
+                    crate::pr_status::memo::write(cwd, kind, &memo, &json!(timeout), None);
+                }
+                read.flatten()
+            }
+        };
         if let (Some(timeout), Some(run)) = (timeout, run.as_object_mut()) {
             run.insert("conclusion".to_string(), json!("timed_out"));
             run.insert("timeout".to_string(), json!(timeout));
