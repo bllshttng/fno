@@ -46,8 +46,6 @@ pub(crate) const PROXY_IMPORT_LINE: &str = "from fno.pr.gh_proxy import main";
 /// A wrapper generator may pad the shim with extra lines; the read is
 /// bounded, not gated on total size.
 const SHIM_SCAN_BYTES: usize = 65536;
-/// The delegate refuses its own re-entry with this exit code.
-const REFUSE_EXIT: i32 = 2;
 
 /// The proxy cannot work out which directories its own shims live in.
 #[derive(Debug)]

@@ -319,7 +319,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
 | `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
 | `TARGET_INPUT` | py | unclear: cli/src/fno/target_cli.py:1369 |
-| `TARGET_MISSION_ID` | py | Presence marks the post-merge ritual as an autonomous run. |
 | `TARGET_NO_MERGE` | py+rs | unclear: cli/src/fno/agents/harness_map.py:215 |
 | `TARGET_PLAN_PATH` | py | unclear: cli/src/fno/target_cli.py:1369 |
 | `TARGET_SESSION_ID` | py+rs | Run id a driver pre-assigns its workers; init adopts it verbatim as session id and claim owner, and the decide door matches it against a live claim's `target-session:<id>` holder to say whether this caller holds the node. |
