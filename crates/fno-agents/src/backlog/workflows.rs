@@ -17,7 +17,7 @@ use super::merge_evidence::{
 use super::node_ref::has_node_id_prefix;
 use super::promise::resolve_promise_evidence;
 use super::settings;
-use super::supersession::normalize_surface;
+use super::supersession::{coverage_clause, normalize_surface};
 use crate::backlog::mutate_single_row;
 use crate::graph_store;
 use crate::graph_store::{has_own_plan_work, reopen_outranks_stamps};
@@ -2489,8 +2489,13 @@ fn split_flag_values(tail: &[String]) -> Vec<String> {
 /// transport (the defer pattern), so the receipt names what the store
 /// committed and the wheel only repaints plans.
 pub fn run_supersede(tail: &[String]) -> i32 {
-    if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
-        return forward_to_python("supersede", tail);
+    if tail.is_empty() {
+        eprintln!("{SUPERSEDE_HELP}");
+        return 2;
+    }
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{SUPERSEDE_HELP}");
+        return 0;
     }
     let parsed = match parse_supersede_args(&split_flag_values(tail)) {
         Some(p) => p,
@@ -2508,11 +2513,40 @@ struct SupersedeArgs {
     cause: Option<String>,
     surfaces: Vec<String>,
     reason: Option<String>,
+    covers: Option<String>,
+    marker_ok: Option<String>,
+    leftover: Option<String>,
     force: bool,
 }
 
 const SUPERSEDE_EXAMPLE: &str = "fno backlog supersede <new> --replaces <old> \
-     --cause \"<what the old node was for>\" --surface <path/it/owned>";
+     --cause \"<what the old node was for>\" --surface <path/it/owned> \
+     --reason \"<why new replaces old>\" --covers \"<how new's done condition covers old's>\"";
+
+const SUPERSEDE_HELP: &str = "Usage: fno backlog supersede [OPTIONS] NEW_ID
+
+  Record that NEW_ID replaces the node named by --replaces.
+
+  The old node reads superseded from the edge alone. Its record stays
+  unverified until a merged PR covers every --surface. A successor that
+  covers only part of the old node's work is a split, not a supersede: file
+  the scope it leaves out first and name that node with --leftover. The door
+  refuses --covers alone when the successor's own text scopes work out.
+
+Options:
+  --replaces TEXT    REQUIRED. The old node id being superseded.
+  --cause TEXT       REQUIRED. What the old node was for.
+  --surface TEXT     REQUIRED, repeatable. A repo-relative path the old node
+                     owned.
+  -R, --reason TEXT  REQUIRED. Why NEW_ID replaces the old node.
+  --covers TEXT      How NEW_ID's done condition covers the old node's.
+  --leftover TEXT    A filed, live node that holds the scope NEW_ID leaves
+                     out. One of --covers or --leftover is required.
+  --marker-ok TEXT   Why NEW_ID's scope-out text does not touch the old
+                     node's work. Lets --covers stand without --leftover.
+  -F, --force        Supersede even if the old node has live children (their
+                     parent is cleared).
+  -h, --help         Show this message and exit.";
 
 fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
     let mut new_id: Option<String> = None;
@@ -2520,6 +2554,9 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
     let mut cause: Option<String> = None;
     let mut surfaces: Vec<String> = Vec::new();
     let mut reason: Option<String> = None;
+    let mut covers: Option<String> = None;
+    let mut marker_ok: Option<String> = None;
+    let mut leftover: Option<String> = None;
     let mut force = false;
     let mut iter = tail.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -2531,6 +2568,9 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
                 None => return None,
             },
             "--reason" | "-R" => reason = iter.next().cloned(),
+            "--covers" => covers = iter.next().cloned(),
+            "--marker-ok" => marker_ok = iter.next().cloned(),
+            "--leftover" => leftover = iter.next().cloned(),
             "--force" | "-F" => force = true,
             other => {
                 if other.starts_with('-') {
@@ -2553,6 +2593,9 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
         cause,
         surfaces,
         reason,
+        covers,
+        marker_ok,
+        leftover,
         force,
     })
 }
@@ -2678,6 +2721,53 @@ fn supersede_write(graph: &Path, args: &SupersedeArgs) -> i32 {
                 );
                 return Ok(false);
             }
+            // Reason and coverage refuse after the chain guards above, so a
+            // supersede that can never land names that first.
+            let Some(reason) = args
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+            else {
+                exit_code.replace(1);
+                eprintln!(
+                    "Error: --reason is required and cannot be blank. Say why {} \
+                     replaces {}; a superseded node with no reason is scope nobody \
+                     can audit.\n  {}",
+                    args.new_id, args.old_id, SUPERSEDE_EXAMPLE
+                );
+                return Ok(false);
+            };
+            let leftover = match args.leftover.as_deref() {
+                None => None,
+                Some(id) => match find_node(working, id) {
+                    Some(row) => Some(row),
+                    None => {
+                        exit_code.replace(1);
+                        eprintln!(
+                            "Error: --leftover node {id} not found. File the scope \
+                             first: fno backlog idea \"...\""
+                        );
+                        return Ok(false);
+                    }
+                },
+            };
+            let clause = match coverage_clause(
+                new_node,
+                &new_canon,
+                &old_canon,
+                args.covers.as_deref(),
+                args.marker_ok.as_deref(),
+                leftover,
+            ) {
+                Ok(clause) => clause,
+                Err(message) => {
+                    exit_code.replace(1);
+                    eprintln!("{message}");
+                    return Ok(false);
+                }
+            };
+            let stored_reason = format!("{reason}; {clause}");
             // The canonical edge: supersedes on the new row, superseded_by on
             // the old row, both by canonical id (the stored abbreviation
             // would survive unsupersede as a stale forward edge).
@@ -2712,11 +2802,7 @@ fn supersede_write(graph: &Path, args: &SupersedeArgs) -> i32 {
                     json!({
                         "successor": new_canon,
                         "cause": cleaned_cause,
-                        "reason": args
-                            .reason
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|r| !r.is_empty()),
+                        "reason": stored_reason,
                         "surfaces": normalized,
                         "verified_at": Value::Null,
                         "evidence_pr": Value::Null,

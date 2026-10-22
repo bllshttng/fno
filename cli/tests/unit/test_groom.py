@@ -14,7 +14,7 @@ SKILL = Path(__file__).resolve().parents[3] / "skills" / "groom" / "SKILL.md"
 
 # (command, flags the brief teaches for it), each bound to the real CLI below.
 LEVERS = [
-    ("supersede", ("--replaces", "--reason")),
+    ("supersede", ("--replaces", "--reason", "--covers", "--leftover")),
     ("defer", ("--reason",)),
     ("undefer", ()),
     ("update", ("priority=",)),

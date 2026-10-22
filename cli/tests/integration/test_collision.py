@@ -393,6 +393,7 @@ def test_supersede_records_pending_evidence_and_terminals_status(tmp_graph, tmp_
     result = _native_supersede(
         tmp_graph, "ab-new", "--replaces", "ab-old",
         "--cause", "old implementation replaced", "--surface", "src/old.py",
+        "--reason", "rewritten", "--covers", "ab-new replaces src/old.py whole",
     )
 
     assert result.exit_code == 0, result.output
@@ -402,10 +403,10 @@ def test_supersede_records_pending_evidence_and_terminals_status(tmp_graph, tmp_
     assert old["supersession"] == {
         "successor": "ab-new",
         "cause": "old implementation replaced",
+        "reason": "rewritten; covers: ab-new replaces src/old.py whole",
         "surfaces": ["src/old.py"],
         "matched_surfaces": [],
     }
-    assert old["supersession"].get("reason") is None
     assert old["supersession"].get("verified_at") is None
     assert old["supersession"].get("evidence_pr") is None
     assert old.get("deferred_at") is None
@@ -494,7 +495,8 @@ def test_supersede_force_orphans_live_children(tmp_graph, tmp_path):
     seed_graph(tmp_graph, json.dumps({"entries": entries}, indent=2))
 
     res = _native_supersede(
-        tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "fold", "--surface", "x.py", "--force"
+        tmp_graph, "ab-new", "--replaces", "ab-old", "--cause", "fold", "--surface", "x.py", "--force",
+        "--reason", "folded", "--covers", "ab-new carries ab-old whole",
     )
     assert res.exit_code == 0, res.output
     assert "Cleared parent" in res.output and "ab-k1" in res.output
