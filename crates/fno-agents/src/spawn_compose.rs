@@ -1037,8 +1037,8 @@ fn grid_inject(stage: &mut Stage, seam: &mut Seam) {
     if route.is_empty() && !stage.scan.explicit_route {
         applied_any |= pin_harness_model(stage, seam, &harness, &model, &src);
     }
-    // The receipt names only a pick that applied.
-    if applied_any {
+    // The receipt names a pick that applied, and always an operator pin row.
+    if applied_any || !pin_row.is_empty() {
         seam.applied
             .push(json!(["grid", format!("{harness}/{model}"), src]));
     }
