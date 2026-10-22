@@ -406,6 +406,23 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
 /// shares the published bins, so the newest of them is the last green rev.
 /// Candidates are HEAD, then the commit before each crates/ change.
 pub(crate) fn last_green_rev(repo: &Path, published: &str) -> Result<String, String> {
+    let off_line = || {
+        format!(
+            "the newest published build {} is not on this checkout's first-parent line within the last 50 crates/ changes",
+            &published[..published.len().min(12)]
+        )
+    };
+    // One ancestry read refuses an off-line build before the walk's 50 reads.
+    let on_line = crate::process_admission::std_command("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-base", "--is-ancestor", published, "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !on_line {
+        return Err(off_line());
+    }
     let changes = git_in(
         repo,
         &[
@@ -430,10 +447,7 @@ pub(crate) fn last_green_rev(repo: &Path, published: &str) -> Result<String, Str
                 .ok_or_else(|| format!("cannot resolve {candidate}"));
         }
     }
-    Err(format!(
-        "the newest published build {} is not on this checkout's first-parent line within the last 50 crates/ changes",
-        &published[..published.len().min(12)]
-    ))
+    Err(off_line())
 }
 
 /// `--last-green`: Some((rev, crates_rev)) when the source's crates/ rev has
