@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn groom_flags_a_shipped_successor_whose_coverage_is_unproven() {
+    fn the_probe_counts_a_recordless_and_an_uncovered_supersession() {
         let mut entries = vec![
             json!({"id": "x-succ", "completed_at": "2026-10-02T00:00:00Z", "pr_number": 9}),
             json!({"id": "x-open", "superseded_by": "x-live"}),
