@@ -97,6 +97,10 @@ READ_ALLOWLIST = (
     # store-file prose as its init twin; its reads route through
     # target_init::graph_rows like the module they were ported from.
     "crates/fno-agents/src/target_start.rs",
+    # The layout table's anchor accessor: the one place the frozen anchor
+    # name is spelled for path building. It never opens the store.
+    "crates/fno-agents/src/state_layout.rs",
+    "crates/fno/src/state_layout.rs",
 )
 
 # Known-positive controls (task 4.2 / AC9): verbs the census must FIND in the
