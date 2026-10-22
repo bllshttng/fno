@@ -77,6 +77,11 @@ pub const EXIT_STATE_ROOT_UNGRANTED: i32 = 84;
 /// to the per-territory team cap, which landed first; the gate-unavailable
 /// number moved to the next free slot.
 pub const EXIT_GATE_UNAVAILABLE: i32 = 87;
+/// The node-occupancy refusal: fleet top shows a positively-live worker on
+/// the spawn's node, claimed or not (fn-6206, 2026-10-21). A collision is
+/// not busyness, so no bypass excuses the named-worker refusal; the
+/// roster-down variant names the broken read and yields to `--force`.
+pub const EXIT_NODE_OCCUPIED: i32 = 92;
 
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
@@ -663,6 +668,75 @@ pub(crate) fn territory_of_node(
         })
         .collect();
     Some((format!("loose:{project}"), loose, true))
+}
+
+/// The node-occupancy arm: the fleet-top read
+/// ([`crate::backlog::worked::reachable_workers_by_node_excluding`]) applied
+/// at spawn admission. A node's claim lockfile only sees workers that
+/// claimed; fn-6206 (2026-10-21) went through that hole - fork-6206 worked
+/// the node with no claim, `claim status` read free, and a second spawn
+/// double-seated the node and its PR. Like the quota locks, the arm sits
+/// ahead of the force branch and the human exemption: a collision is not
+/// busyness, and the refusal names the live worker either way. The arm runs
+/// for node-bearing spawns only, never a plain one. An unreadable roster
+/// refuses closed - never read "no worker" off a blind instrument - and the
+/// refusal names the broken read and the `--force` bypass, the escape the
+/// 2026-10-20 CPU-instrument outage wanted. A named worker is not bypassable:
+/// waiting cannot seat two workers on one node.
+fn check_node_occupancy(
+    node: &str,
+    caller_session: Option<&str>,
+    force: bool,
+) -> Result<(), Refusal> {
+    match crate::backlog::worked::reachable_workers_by_node_excluding(caller_session) {
+        Ok(map) => match map.get(node) {
+            // The read only inserts non-empty name lists, so a hit is a
+            // live worker.
+            Some(names) => Err(node_occupied_refusal(node, names)),
+            None => Ok(()),
+        },
+        Err(reason) => {
+            if force {
+                eprintln!(
+                    "spawn-gate note: the fleet roster is unreadable ({reason}); \
+                     --force passed the node-occupancy read"
+                );
+                return Ok(());
+            }
+            Err(Refusal::with_receipt(
+                EXIT_NODE_OCCUPIED,
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": "node_occupancy_unknown",
+                    "node": node,
+                    "detail": reason,
+                    "remedy": format!(
+                        "the fleet roster is unreadable, so node occupancy cannot be read ({reason}); repair the roster read, or pass --force to bypass this refusal"
+                    ),
+                }),
+            )
+            .ev("reason", serde_json::json!("node_occupancy_unknown"))
+            .ev("axis", serde_json::json!("occupancy")))
+        }
+    }
+}
+
+fn node_occupied_refusal(node: &str, names: &[String]) -> Refusal {
+    let peek = names.first().map(String::as_str).unwrap_or("");
+    Refusal::with_receipt(
+        EXIT_NODE_OCCUPIED,
+        serde_json::json!({
+            "status": "refused",
+            "reason": "node_occupied",
+            "node": node,
+            "workers": names.join(", "),
+            "remedy": format!(
+                "a live worker holds this node; peek it with `fno agents peek {peek}` and retask or reap it before spawning here"
+            ),
+        }),
+    )
+    .ev("reason", serde_json::json!("node_occupied"))
+    .ev("axis", serde_json::json!("occupancy"))
 }
 
 /// The per-territory team cap. `Err` carries the refusal receipt the
@@ -1378,6 +1452,17 @@ fn decide_gate(
         }
     }
 
+    // The node-occupancy arm, beside the quota walls above: fleet top's
+    // live-worker read against the spawn's own node. The claim lockfile only
+    // sees workers that claimed, so a claimless live worker (fn-6206) read
+    // free and the second spawn double-seated the node. A queued spawn
+    // re-reads this at dequeue, where the schema and the RAM floor do. A
+    // blind roster refuses closed unless --force speaks; a plain spawn (no
+    // node) never reads the roster at all.
+    if let Some(node) = admitted_node.as_deref() {
+        check_node_occupancy(node, input.caller_session.as_deref(), flags.force)?;
+    }
+
     // A caller with no worker identity is the human's own typed command: no
     // capacity gate below may refuse or hold it. The slot acquire stays
     // best-effort so the spawned worker still joins the roster accounting.
@@ -1871,6 +1956,18 @@ fn decide_gate(
                                 )
                                 .inspect_err(|_| guard.release())?;
                                 axes_read.insert("lead_share".into(), serde_json::json!("ok"));
+                            }
+                            // The occupancy read again, where the schema and the
+                            // RAM floor re-read: a spawn that queued past
+                            // QUEUE_POLL must not dispatch onto a node that
+                            // gained a live worker while it waited.
+                            if let Some(node) = admitted_node.as_deref() {
+                                check_node_occupancy(
+                                    node,
+                                    input.caller_session.as_deref(),
+                                    flags.force,
+                                )
+                                .inspect_err(|_| guard.release())?;
                             }
                             // The per-territory team cap: beside the machine cap,
                             // never instead of it. Refuses (never queues) - waiting cannot
@@ -3854,3 +3951,7 @@ mod spawn_gate_blind_tests;
 #[cfg(test)]
 #[path = "spawn_gate_territory_tests.rs"]
 mod spawn_gate_territory_tests;
+
+#[cfg(test)]
+#[path = "spawn_gate_occupancy_tests.rs"]
+mod spawn_gate_occupancy_tests;
