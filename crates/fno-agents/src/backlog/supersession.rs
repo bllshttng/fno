@@ -191,16 +191,16 @@ pub(crate) fn coverage_clause(
     })
 }
 
-/// One line per superseded node whose successor shipped while its coverage
-/// stays unproven: no record at all (nothing was written about why), or a
-/// record whose surfaces the successor's PR never touched.
-pub(crate) fn shipped_successor_unproven(entries: &[Value]) -> Vec<String> {
-    let by_id: BTreeMap<&str, &Value> = entries
+/// Superseded candidates whose successor (looked up in `all`) shipped with a
+/// PR while coverage stays unproven: no record at all, so nothing was ever
+/// written about why, or a record whose surfaces that PR never touched.
+pub(crate) fn shipped_successor_unproven(candidates: &[Value], all: &[Value]) -> Vec<Value> {
+    let by_id: BTreeMap<&str, &Value> = all
         .iter()
         .filter_map(|e| e.get("id").and_then(Value::as_str).map(|id| (id, e)))
         .collect();
-    let mut lines = Vec::new();
-    for entry in entries {
+    let mut rows = Vec::new();
+    for entry in candidates {
         let Some(successor_id) = entry
             .get("superseded_by")
             .and_then(Value::as_str)
@@ -208,52 +208,39 @@ pub(crate) fn shipped_successor_unproven(entries: &[Value]) -> Vec<String> {
         else {
             continue;
         };
-        if is_set(entry, "completed_at") {
-            continue;
-        }
         let Some(successor) = by_id.get(successor_id) else {
             continue;
         };
-        if !is_set(successor, "completed_at") {
-            continue;
-        }
         let record = entry.get("supersession").filter(|r| r.is_object());
-        if record.is_some_and(|r| is_set(r, "verified_at")) {
+        if is_set(entry, "completed_at")
+            || !is_set(successor, "completed_at")
+            || successor.get("pr_number").and_then(Value::as_i64).is_none()
+            || record.is_some_and(|r| is_set(r, "verified_at"))
+        {
             continue;
         }
-        let id = entry.get("id").and_then(Value::as_str).unwrap_or("?");
-        let why = match record {
-            None => "no reason or coverage was ever recorded".to_string(),
-            Some(r) => {
-                let list = |key: &str| -> Vec<String> {
-                    r.get(key)
-                        .and_then(Value::as_array)
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(Value::as_str)
-                                .map(String::from)
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                };
-                let matched = list("matched_surfaces");
-                let uncovered: Vec<String> = list("surfaces")
-                    .into_iter()
-                    .filter(|s| !matched.contains(s))
-                    .collect();
-                let reason = r
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or("no reason recorded");
-                format!(
-                    "surfaces its PR never touched: {}; reason: {reason}",
-                    uncovered.join(", ")
-                )
-            }
+        let list = |key: &str| -> Vec<Value> {
+            record
+                .and_then(|r| r.get(key))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
         };
-        lines.push(format!("{id} (successor {successor_id} shipped; {why})"));
+        let matched = list("matched_surfaces");
+        let uncovered: Vec<Value> = list("surfaces")
+            .into_iter()
+            .filter(|s| !matched.contains(s))
+            .collect();
+        rows.push(json!({
+            "predecessor": entry.get("id"),
+            "successor": successor_id,
+            "evidence_pr": successor.get("pr_number"),
+            "uncovered_surfaces": uncovered,
+            "reason": record.and_then(|r| r.get("reason")),
+            "recorded": record.is_some(),
+        }));
     }
-    lines
+    rows
 }
 
 /// Successor id -> successor node (cloned), for pending predecessors
@@ -431,14 +418,15 @@ mod tests {
             pred("x-ok", &["src/a.rs"], true),
         ];
         entries[4]["supersession"]["matched_surfaces"] = json!(["src/a.rs"]);
+        let row = |id: &str, uncovered: Value, recorded: bool| {
+            json!({"predecessor": id, "successor": "x-succ", "evidence_pr": 9,
+                   "uncovered_surfaces": uncovered, "reason": null, "recorded": recorded})
+        };
         assert_eq!(
-            shipped_successor_unproven(&entries),
+            shipped_successor_unproven(&entries, &entries),
             vec![
-                "x-bare (successor x-succ shipped; no reason or coverage was ever recorded)"
-                    .to_string(),
-                "x-pre (successor x-succ shipped; surfaces its PR never touched: src/b.rs; \
-                 reason: no reason recorded)"
-                    .to_string(),
+                row("x-bare", json!([]), false),
+                row("x-pre", json!(["src/b.rs"]), true)
             ]
         );
     }

@@ -227,9 +227,27 @@ fn brief(day: &str, mechanical: Option<&[(String, String)]>, unproven: &[String]
 /// supersession a merged PR proved. An unreadable store flags nothing: the
 /// brief still dispatches and the worker reads the graph itself.
 fn unproven_supersessions() -> Vec<String> {
-    crate::graph_store::read_rows(&settings::graph_path())
-        .map(|rows| super::supersession::shipped_successor_unproven(&rows))
-        .unwrap_or_default()
+    let rows = crate::graph_store::read_rows(&settings::graph_path()).unwrap_or_default();
+    let text = |row: &Value, key: &str| row[key].as_str().unwrap_or("?").to_string();
+    super::supersession::shipped_successor_unproven(&rows, &rows)
+        .iter()
+        .map(|row| {
+            let why = if row["recorded"] == json!(true) {
+                format!(
+                    "reason: {}; uncovered: {}",
+                    text(row, "reason"),
+                    row["uncovered_surfaces"]
+                )
+            } else {
+                "no reason or coverage was ever recorded".to_string()
+            };
+            format!(
+                "{} (successor {} shipped; {why})",
+                text(row, "predecessor"),
+                text(row, "successor")
+            )
+        })
+        .collect()
 }
 
 /// The mechanical pass, in dependency order. `relatedness build` runs LAST
