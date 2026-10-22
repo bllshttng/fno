@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from fno.company.contracts import FunctionRef, RoleRef
@@ -18,6 +19,9 @@ from fno.roles import (
     RoleLayer,
     RoleManifest,
 )
+
+# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+pytestmark = pytest.mark.dev_build
 
 
 runner = CliRunner()
@@ -82,7 +86,7 @@ def _assert_pretty_sorted_json(output: str) -> Any:
     return parsed
 
 
-def test_ac_r7_ui_ls_and_show_are_stable_and_keep_invalid_sources_visible(
+def test_ac_r7_ui_show_is_stable_and_keeps_invalid_sources_visible(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -113,28 +117,7 @@ def test_ac_r7_ui_ls_and_show_are_stable_and_keep_invalid_sources_visible(
     monkeypatch.setenv("FNO_SKIP_MIGRATION", "1")
     before_roles = _snapshot_tree(roles_root)
 
-    first = _invoke("agents", "roles", "ls")
-    second = _invoke("agents", "roles", "ls")
-    assert first.exit_code == second.exit_code == 0
-    assert first.output == second.output
-    assert first.output == (
-        "owner function=marketing layer=built-in "
-        "source=built-in/owner.json status=valid\n"
-        "broken function=support layer=project "
-        "source=project/broken.json status=invalid\n"
-    )
-
-    local_json = _invoke("agents", "roles", "ls", "-J")
-    root_json = _invoke("-J", "agents", "roles", "ls")
-    assert local_json.exit_code == root_json.exit_code == 0
-    assert local_json.output == root_json.output
-    rows = _assert_pretty_sorted_json(local_json.output)
-    assert [(row["role_id"], row["status"]) for row in rows] == [
-        ("owner", "valid"),
-        ("broken", "invalid"),
-    ]
-
-    shown = _invoke("agents", "roles", "show", "broken", "-J")
+    shown =_invoke("agents", "roles", "show", "broken", "-J")
     assert shown.exit_code == 0
     definitions = _assert_pretty_sorted_json(shown.output)
     assert len(definitions) == 1
@@ -301,17 +284,7 @@ def test_resolve_fails_closed_when_an_unchecked_source_has_no_role_identity(
     assert blocked["source_id"] == expected_source
     assert blocked["detail"]
 
-    listed = _invoke("agents", "roles", *source_args, "ls", "-J")
-    assert listed.exit_code == 0
-    rows = _assert_pretty_sorted_json(listed.output)
-    assert any(
-        row["source"] == expected_source
-        and row["role_id"] is None
-        and row["status"] in {"invalid", "unreadable"}
-        for row in rows
-    )
-
-    shown = _invoke("agents", "roles", *source_args, "show", "owner", "-J")
+    shown =_invoke("agents", "roles", *source_args, "show", "owner", "-J")
     assert shown.exit_code == 0
     shown_rows = _assert_pretty_sorted_json(shown.output)
     assert any(row["source"] == expected_source for row in shown_rows)

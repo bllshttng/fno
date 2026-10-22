@@ -55,6 +55,8 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "verb-collapse-flags.txt"
 NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
+    "agents roles ls",
+    "roles ls",
     "backlog advance",
     "backlog album",
     "backlog archive",
