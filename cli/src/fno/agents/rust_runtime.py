@@ -970,21 +970,6 @@ def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     return out
 
 
-def _is_anycast_ask(command: str, args: Sequence[str]) -> bool:
-    """True for an ``ask`` carrying ``--to-project``.
-
-    The Rust client has no ``--to-project`` flag, so a verbatim route exits
-    ``unknown flag``. Anycast resolves to one live peer in Python (a
-    registry read, ``resolve_to_project``) and then execs the binary with a
-    resolved name; detecting the flag here is what sends that invocation to
-    ``cmd_ask`` first. ``--any`` rides along: it only means something
-    together with ``--to-project``.
-    """
-    if command != "ask":
-        return False
-    return _has_flag(args, longs=("--to-project", "--any"))
-
-
 def _is_role_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--role``.
 
@@ -1597,7 +1582,6 @@ def make_agents_group_cls() -> type:
                     or _is_default_substrate_spawn(command, args)
                     or _is_retired_axis_spawn(command, args)
                     or _is_dispatch_account_bearing_spawn(command, args)
-                    or _is_anycast_ask(command, args)
                 )
                 if mode == "rust" and not py_spawn:
                     _pin = _worktree_policy_pin_at_seam(args)
