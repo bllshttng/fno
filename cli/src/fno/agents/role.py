@@ -804,7 +804,7 @@ def spawn_team_write(op: str, **payload: Any) -> dict:
     from fno.agents.spawn_overlay_client import spawn_overlay_call
 
     answer = spawn_overlay_call({"kind": "spawn-team", "op": op, **payload,
-                                 "events": str(paths.state_dir() / "events.jsonl"),
+                                 "events": str(paths.global_events_json()),
                                  "registry": str(paths.agents_registry_path())})
     for note in answer.get("notices", []):
         print(note, file=sys.stderr)
