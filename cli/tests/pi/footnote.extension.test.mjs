@@ -23,6 +23,9 @@ case "\$1" in
   state)
     if [ -n "\$STUB_STATE_PATH" ]; then echo "\$STUB_STATE_PATH"; fi
     ;;
+  hook)
+    if [ -n "\$STUB_STDIN_LOG" ]; then cat >> "\$STUB_STDIN_LOG"; echo >> "\$STUB_STDIN_LOG"; fi
+    ;;
   loop-check)
     if [ -n "\$STUB_LOOPCHECK_SLEEP" ]; then sleep "\$STUB_LOOPCHECK_SLEEP"; fi
     if [ -f "\$STUB_LOOPCHECK_REPLY" ]; then cat "\$STUB_LOOPCHECK_REPLY"; fi
@@ -265,6 +268,46 @@ test("AC11-ERR: discovery with no plugin-root pointer returns empty, prints one 
     if (saved === undefined) delete process.env.FNO_HOME
     else process.env.FNO_HOME = saved
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("per-turn state: turn start, tool call and settle each push through the session-state entry", async () => {
+  const stdinLog = join(tmpdir(), `fno-pi-stdin-${process.pid}-${Date.now()}.log`)
+  writeFileSync(stdinLog, "")
+  const world = makeWorld({ env: { STUB_STDIN_LOG: stdinLog } })
+  try {
+    const ctx = {
+      sessionManager: { getSessionId: () => "s-1", buildContextEntries: () => [] },
+      model: { id: "glm-5.3", provider: "zai" },
+      isIdle: () => true,
+    }
+    await world.handlers["before_agent_start"]({}, ctx)
+    await world.handlers["tool_call"]({ toolName: "read", input: {} }, ctx)
+    await world.settle(ctx)
+    // The push is fire-and-forget, so wait for all three payloads to land.
+    const end = Date.now() + 3000
+    const payloads = () => readFileSync(stdinLog, "utf8").split("\n").filter(Boolean)
+    while (Date.now() < end && payloads().length < 3) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    const events = world
+      .log()
+      .split("\n")
+      .filter((l) => l.startsWith("hook session-state --harness pi "))
+      .map((l) => l.split(" ").pop())
+      .sort()
+    assert.deepEqual(events, ["PreToolUse", "Stop", "UserPromptSubmit"])
+    // The settle also feeds the rules entry on the same stdin log; keep the
+    // session-state payloads, which alone carry hook_event_name.
+    const parsed = payloads()
+      .map((l) => JSON.parse(l))
+      .filter((p) => p.hook_event_name)
+    assert.equal(parsed.length, 3)
+    assert.ok(parsed.every((p) => p.session_id === "s-1" && p.model === "zai/glm-5.3"))
+    assert.equal(parsed.find((p) => p.hook_event_name === "PreToolUse").tool_name, "read")
+  } finally {
+    world.cleanup()
+    rmSync(stdinLog, { force: true })
   }
 })
 

@@ -166,6 +166,53 @@ function reportCreated(io, dir, sid) {
     .catch((e) => console.error(`[footnote] session report failed: ${e}`))
 }
 
+// Per-turn session-state push: working, blocked and done reach the daemon row
+// through `fno-agents hook session-state --harness opencode <Event>`, the
+// same entry claude and codex use, so the row reads inside-leg state and a
+// verified model instead of the screen scrape. The payload is claude-shaped;
+// hook/adapter/opencode.rs reads it. Fire-and-forget: a missing binary or a
+// failed run costs the push, never the turn.
+const STATE_PUSH_TIMEOUT_MS = 3000
+
+// The served model per session, as opencode's own `provider/model` spelling.
+// Only chat.message names it, so the later tool and idle fires reuse it.
+const servedModel = new Map()
+
+function modelName(m) {
+  if (typeof m === "string") return m
+  const id = m?.modelID ?? m?.id
+  if (!id) return ""
+  const provider = m?.providerID ?? m?.provider
+  return provider ? `${provider}/${id}` : String(id)
+}
+
+function pushState(runProc, dir, event, sid, extra = {}) {
+  if (!sid || typeof runProc !== "function") return
+  const payload = JSON.stringify({
+    hook_event_name: event,
+    cwd: dir,
+    session_id: sid,
+    ...(servedModel.has(sid) ? { model: servedModel.get(sid) } : {}),
+    ...extra,
+  })
+  const bin = (process.env.FNO_AGENTS_BIN || "fno-agents").replace(/'/g, `'\\''`)
+  Promise.resolve(
+    runProc(`'${bin}' hook session-state --harness opencode ${event}`, payload, STATE_PUSH_TIMEOUT_MS),
+  ).catch(() => {})
+}
+
+function pushPrompt(runProc, dir, sid, model) {
+  const name = modelName(model)
+  if (name) servedModel.set(sid, name)
+  pushState(runProc, dir, "UserPromptSubmit", sid)
+}
+
+// A permission prompt blocks the turn until the operator answers; the next
+// tool call or the idle event clears it.
+function pushPermission(runProc, dir, sid, prompt) {
+  pushState(runProc, dir, "Notification", sid, { message: prompt?.title ?? "permission requested" })
+}
+
 // The one gate body. Both arms adapt their version's I/O into `io` and hand
 // it here; neither holds a second copy of anything below (AC2-SHARED).
 function makeHandler(io, dir) {
@@ -772,11 +819,16 @@ async function server({ directory, worktree, client, $ }) {
         eventLog("session.compacted", event.properties?.sessionID)
         return runPostCompactReinject(event.properties?.sessionID)
       }
+      if (event?.type === "permission.updated" || event?.type === "permission.asked") {
+        return pushPermission(runProcSh, dir, event.properties?.sessionID, event.properties)
+      }
       if (event?.type !== "session.idle") return
+      pushState(runProcSh, dir, "Stop", event.properties?.sessionID)
       return handle("idle", event.properties?.sessionID)
     },
     "tool.execute.before": async (input, output) => {
       eventLog("tool.execute.before", input?.sessionID)
+      pushState(runProcSh, dir, "PreToolUse", input?.sessionID, { tool_name: toClaudeTool(input.tool) })
       await runPreToolUse(root, dir, runProcSh, {
         tool: input.tool,
         args: output.args,
@@ -792,6 +844,7 @@ async function server({ directory, worktree, client, $ }) {
     },
     "chat.message": async (input) => {
       eventLog("chat.message", input?.sessionID)
+      pushPrompt(runProcSh, dir, input?.sessionID, input?.model)
       const prompt = (input.message?.parts || [])
         .filter((p) => p?.type === "text" && typeof p.text === "string")
         .map((p) => p.text)
@@ -888,12 +941,14 @@ async function setup(ctx) {
   const runIdleOnce = (sid) => {
     if (!sid || idleArmed.has(sid)) return
     idleArmed.add(sid)
+    pushState(runProc, dir, "Stop", sid)
     handle("idle", sid)
   }
   const missing = []
   // A deny throws, which 2.x surfaces as the tool failing (same as 1.x).
   await ctx.tool.hook("execute.before", async (event) => {
     eventLog("tool.execute.before", event.sessionID)
+    pushState(runProc, dir, "PreToolUse", event.sessionID, { tool_name: toClaudeTool(event.tool) })
     await runPreToolUse(root, dir, runProc, {
       tool: event.tool,
       args: event.input,
@@ -919,6 +974,7 @@ async function setup(ctx) {
     const sid = event.sessionID
     eventLog("chat.message", sid)
     idleArmed.delete(sid) // a fresh prompt re-arms this turn's idle gate
+    pushPrompt(runProc, dir, sid, event.model)
     const texts = await runUserPromptSubmit(root, dir, runProc, {
       sessionID: sid,
       prompt: event.prompt?.text ?? "",
@@ -965,6 +1021,8 @@ async function setup(ctx) {
           // after a failed execution fires this without a prompt hook, so the
           // eventual succeeded twin gates instead of being latched out.
           idleArmed.delete(event.data?.sessionID)
+        } else if (event?.type === "permission.asked" || event?.type === "permission.updated") {
+          pushPermission(runProc, dir, event.data?.sessionID, event.data)
         } else if (event?.type === "session.idle") {
           eventLog("idle via session.idle", event.data?.sessionID)
           runIdleOnce(event.data?.sessionID)

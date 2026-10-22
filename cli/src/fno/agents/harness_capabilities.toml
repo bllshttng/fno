@@ -2004,10 +2004,7 @@ via = ["crates/fno-agents/src/footnote_harness/mod.rs"]
 # shims (agy-session-state-pre-invocation.sh, agy-session-state-stop.sh)
 # feed the entry, so the row reads inside-leg state instead of the screen
 # scrape. agy exposes no permission-prompt event, so blocked stays "none"
-# and the screen backstop keeps the row. opencode and pi push presence
-# only: one `fno-agents report --kind session` at session start, so the
-# registry knows the session id and transcript, and their rows still read
-# their turn state from the screen scrape.
+# and the screen backstop keeps the row.
 [harness.agy.hooks.session_state]
 state = "supported"
 via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/adapter/agy.rs", "crates/fno-agents/src/hook/session_state.rs"]
@@ -2020,15 +2017,34 @@ via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh
 events = { PreInvocation = "working", Stop = "done" }
 blocked = "none"
 
+# opencode and pi push per-turn state too: each plugin builds a claude-shaped
+# payload from its native events and pipes it to the session-state entry, so
+# hook/adapter/{opencode,pi}.rs reads the row's served `provider/model`
+# instead of leaving it to the screen scrape. The plugins keep the
+# session-start `report --kind session` beside it (presence and transcript).
 [harness.opencode.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/opencode/footnote.js"]
-reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/hook/adapter/opencode.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# chat.message / the 2.x prompt hook is the turn start, tool.execute.before
+# keeps a long turn working, and the idle event ends it. A permission prompt
+# (1.x permission.updated, 2.x permission.asked) is sent as a Notification so
+# the row reads blocked with the prompt's title. opencode names no effort or
+# posture field.
+[harness.opencode.hooks.session_state.wiring]
+events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
+blocked = "Notification"
 
 [harness.pi.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts"]
-reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/hook/adapter/pi.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# before_agent_start is pi's turn start, tool_call keeps a long turn working,
+# and agent_settled ends it. pi exposes no permission-prompt event, so
+# blocked stays "none" and the screen backstop keeps the row.
+[harness.pi.hooks.session_state.wiring]
+events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
+blocked = "none"
 
 [harness.gemini.hooks.session_state]
 state = "missing"

@@ -9,6 +9,8 @@
 pub mod agy;
 pub mod claude;
 pub mod codex;
+pub mod opencode;
+pub mod pi;
 
 /// One normalized hook fire: the fields every harness payload carries once the
 /// adapter is done with it. Empty string = the payload did not carry the field;
@@ -44,6 +46,8 @@ pub fn normalize(harness: &str, event: &str, payload: &serde_json::Value) -> Hoo
         "agy" => agy::normalize(event, payload),
         "claude" => claude::normalize(event, payload),
         "codex" => codex::normalize(event, payload),
+        "opencode" => opencode::normalize(event, payload),
+        "pi" => pi::normalize(event, payload),
         _ => HookEvent {
             harness: harness.to_string(),
             event: event.to_string(),

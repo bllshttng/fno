@@ -403,14 +403,15 @@ describe("opencode native stop-hook bridge", () => {
     }
     const hooks = await FootnotePlugin({ directory: dir, client, $ })
     const first = hooks.event({ event: idleEvent })
-    await new Promise((r) => setTimeout(r, 5))
+    // The gate spawns the rules entry first, a real process, so wait for the
+    // gate call itself rather than a fixed sleep.
+    await until(() => gateCalls === 1)
     await hooks.event({ event: idleEvent }) // concurrent same-session idle -> rerun marker
     expect(gateCalls).toBe(1)
     release()
     await first
     // The pending recheck runs once after the running gate finishes.
-    await new Promise((r) => setTimeout(r, 10))
-    expect(gateCalls).toBe(2)
+    await until(() => gateCalls === 2)
     expect(client.prompts.length).toBe(2)
     rmSync(dir, { recursive: true, force: true })
   })
@@ -707,7 +708,7 @@ describe("opencode 2 setup arm", () => {
     await withEnv({ FNO_AGENTS_BIN: bin }, async () => {
       const cleanup = await setupV2(ctx)
       stream.push(V2_IDLE("ses_fail"))
-      await new Promise((r) => setTimeout(r, 80))
+      await until(() => errors.some((e) => e.includes("readAssistantTexts")))
       cleanup()
       console.error = orig
       expect(prompts.length).toBe(0) // no re-drive, no fabricated termination
@@ -917,6 +918,63 @@ describe("opencode hooks.json host", () => {
       await hooks.event({ event: { type: "session.created", properties: { sessionID: "ses_A" } } })
       expect(client.logs.some((l) => l.startsWith("session.created"))).toBe(true)
     })
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe("opencode per-turn session-state push", () => {
+  // The stub logs argv and the stdin payload of every `hook session-state`
+  // fire, so the test asserts on the real subprocess the plugin spawns.
+  const PUSH_STUB = `if [ "$1" = "hook" ]; then echo "ARGS: $*" >> "$FNO_STUB_LOG"; cat >> "$FNO_STUB_LOG"; echo >> "$FNO_STUB_LOG"; fi`
+  const fires = (log) =>
+    readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("ARGS: hook session-state"))
+
+  test("1.x: prompt, tool, permission and idle each push their state with the served model", async () => {
+    const dir = makeProject()
+    const log = join(dir, "push.log")
+    writeFileSync(log, "")
+    const bin = stubBin(PUSH_STUB)
+    await withEnv(
+      { FNO_AGENTS_BIN: bin, FNO_STUB_LOG: log, FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
+      async () => {
+        const hooks = await FootnotePlugin({ directory: dir, client: fakeClient([]), $: fakeShell().shell })
+        await hooks["chat.message"]({
+          sessionID: "ses_P",
+          model: { providerID: "zai", modelID: "glm-5.3" },
+          message: { parts: [] },
+        })
+        await hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_P" }, { args: { command: "ls" } })
+        await hooks.event({
+          event: { type: "permission.updated", properties: { sessionID: "ses_P", title: "Run rm -rf build" } },
+        })
+        await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_P" } } })
+        // The stub echoes argv before it reads stdin, so wait on the payloads.
+        await until(() => (readFileSync(log, "utf8").match(/"hook_event_name"/g) || []).length >= 4)
+      },
+    )
+    const text = readFileSync(log, "utf8")
+    const events = fires(log).map((l) => l.split(" ").pop()).sort()
+    expect(events).toEqual(["Notification", "PreToolUse", "Stop", "UserPromptSubmit"])
+    expect(text).toContain('"model":"zai/glm-5.3"')
+    expect(text).toContain('"message":"Run rm -rf build"')
+    expect(text).toContain('"tool_name":"Bash"')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("1.x: a missing binary costs the push, never the turn", async () => {
+    const dir = makeProject()
+    await withEnv(
+      { FNO_AGENTS_BIN: "/nonexistent/fno-agents", FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
+      async () => {
+        const hooks = await FootnotePlugin({ directory: dir, client: fakeClient([]), $: fakeShell().shell })
+        await hooks["chat.message"]({
+          sessionID: "ses_Q",
+          model: { providerID: "zai", modelID: "glm-5.3" },
+          message: { parts: [] },
+        })
+        await hooks["tool.execute.before"]({ tool: "read", sessionID: "ses_Q" }, { args: {} })
+      },
+    )
     rmSync(dir, { recursive: true, force: true })
   })
 })
