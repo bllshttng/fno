@@ -1174,6 +1174,13 @@ pub(crate) fn tidy_lapsed_holds(home: &AgentsHome, now: chrono::DateTime<chrono:
         spawn_release_timer(&handle);
     }
     for (name, sid) in orphan_stamp_rows(&registry, now) {
+        // A conversation arm may have written a clock since the pick.
+        if gate_clock_addresses(&sid, &sid)
+            .iter()
+            .any(|h| read_clock(h).is_some())
+        {
+            continue;
+        }
         if set_policy(&sid, None).is_some() {
             eprintln!("mail-hold: cleared orphan bus-only stamp on {name} ({sid})");
         }
@@ -1898,23 +1905,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn tidy_lapsed_keeps_the_clock_when_the_unstamp_cannot_land() {
+    fn tidy_lapsed_unstamps_the_row_then_drops_the_clock() {
         with_hold_env(|dir| {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             let handle = identity_key(SID);
             let lapsed = chrono::Utc::now() - chrono::Duration::seconds(120);
             write_clock(&handle, Some(lapsed), 60, "wall", None, None).unwrap();
-            // An unreadable registry cannot take the unstamp: the clock is
-            // the only record the sweep finds the stamp by, so it stays.
-            crate::registry_store::seed_raw(&dir.join("registry.json"), "{not json".to_string());
-            tidy_lapsed(&handle);
-            assert!(clock_path(dir, SID).exists());
-            // A readable registry takes the unstamp, then the clock goes.
-            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             tidy_lapsed(&handle);
             assert!(!clock_path(dir, SID).exists());
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
             assert!(registry.entries[0].delivery_policy.is_none());
+            // A handle no row carries has no stamp to orphan: its lapsed
+            // clock still goes.
+            let stray = "eeeeeeee-1111-2222-3333-444455556666";
+            write_clock(&identity_key(stray), Some(lapsed), 60, "wall", None, None).unwrap();
+            tidy_lapsed(&identity_key(stray));
+            assert!(!clock_path(dir, stray).exists());
         });
     }
 
