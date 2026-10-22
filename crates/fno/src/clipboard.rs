@@ -162,6 +162,10 @@ fn base64(input: &[u8]) -> String {
 /// Read-only: it inspects PATH entries and never execs a tool ("touches
 /// nothing").
 pub fn available_tool() -> Option<&'static str> {
+    // Over ssh [`deliver`] skips the host tools, so none counts as available.
+    if crate::link::is_remote_session() {
+        return None;
+    }
     available_tool_with(on_path)
 }
 
