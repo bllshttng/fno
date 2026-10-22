@@ -2017,20 +2017,13 @@ via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh
 events = { PreInvocation = "working", Stop = "done" }
 blocked = "none"
 
-# opencode and pi push per-turn state too: each plugin builds a claude-shaped
-# payload from its native events and pipes it to the session-state entry, so
-# hook/adapter/{opencode,pi}.rs reads the row's served `provider/model`
-# instead of leaving it to the screen scrape. The plugins keep the
-# session-start `report --kind session` beside it (presence and transcript).
+# opencode and pi plugins pipe a claude-shaped payload per turn, so the row
+# reads inside-leg state and a verified `provider/model`, not the scrape.
 [harness.opencode.hooks.session_state]
 state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/hook/adapter/opencode.rs", "crates/fno-agents/src/hook/session_state.rs"]
 
-# chat.message / the 2.x prompt hook is the turn start, tool.execute.before
-# keeps a long turn working, and the idle event ends it. A permission prompt
-# (1.x permission.updated, 2.x permission.asked) is sent as a Notification so
-# the row reads blocked with the prompt's title. opencode names no effort or
-# posture field.
+# A permission prompt rides as a Notification, so the row reads blocked.
 [harness.opencode.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "Notification"
@@ -2039,9 +2032,7 @@ blocked = "Notification"
 state = "supported"
 via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/hook/adapter/pi.rs", "crates/fno-agents/src/hook/session_state.rs"]
 
-# before_agent_start is pi's turn start, tool_call keeps a long turn working,
-# and agent_settled ends it. pi exposes no permission-prompt event, so
-# blocked stays "none" and the screen backstop keeps the row.
+# pi exposes no permission-prompt event, so blocked stays "none".
 [harness.pi.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "none"

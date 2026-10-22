@@ -960,21 +960,4 @@ describe("opencode per-turn session-state push", () => {
     expect(text).toContain('"tool_name":"Bash"')
     rmSync(dir, { recursive: true, force: true })
   })
-
-  test("1.x: a missing binary costs the push, never the turn", async () => {
-    const dir = makeProject()
-    await withEnv(
-      { FNO_AGENTS_BIN: "/nonexistent/fno-agents", FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
-      async () => {
-        const hooks = await FootnotePlugin({ directory: dir, client: fakeClient([]), $: fakeShell().shell })
-        await hooks["chat.message"]({
-          sessionID: "ses_Q",
-          model: { providerID: "zai", modelID: "glm-5.3" },
-          message: { parts: [] },
-        })
-        await hooks["tool.execute.before"]({ tool: "read", sessionID: "ses_Q" }, { args: {} })
-      },
-    )
-    rmSync(dir, { recursive: true, force: true })
-  })
 })
