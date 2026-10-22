@@ -163,27 +163,13 @@ impl Core {
                     format!("COLORFGBG={}", osc_reply::colorfgbg(&theme)),
                     format!("FNO_AGENT_SELF={worker}"),
                 ];
+                // A lead's own `fno agents spawn` runs inside this pane: the
+                // env carries the claude theme to the `claude --bg` it starts.
+                if let Some(name) = crate::theme::claude_theme(&theme) {
+                    wrapped.push(format!("FNO_CLAUDE_THEME={name}"));
+                }
                 wrapped.extend(spawn_argv);
                 spawn_argv = wrapped;
-            }
-        }
-        // A claude pane launches with the plugin's shipped theme that matches
-        // the mux theme (`theme::claude_theme`): the OSC 11 answer resolves
-        // `auto` to the theme's ground, and the custom theme sets the user
-        // message band that `band_remap` gives readable text. `--settings` is
-        // per-session; settings.json is never touched. Skipped when the argv
-        // already names a settings file - a duplicate flag would let the theme
-        // blob win and drop the user's file (parsers take the last
-        // occurrence). Appended last: claude's parser takes flags after any
-        // positional, and the spawn argv is never a shell string.
-        if argv_runs_claude(&spawn_argv)
-            && !spawn_argv
-                .iter()
-                .any(|a| a == "--settings" || a.starts_with("--settings="))
-        {
-            if let Some(name) = crate::theme::claude_theme(&theme) {
-                spawn_argv.push("--settings".to_string());
-                spawn_argv.push(format!("{{\"theme\":\"{name}\"}}"));
             }
         }
         // Every spawned pane takes the keeper road in production, worker or

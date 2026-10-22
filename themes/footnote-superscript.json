@@ -3,6 +3,7 @@
   "base": "dark",
   "overrides": {
     "userMessageBackground": "#ffffff",
-    "userMessageBackgroundHover": "#e6e6e6"
+    "userMessageBackgroundHover": "#e6e6e6",
+    "permission": "#9cc49c"
   }
 }
