@@ -492,6 +492,29 @@ fn ask_rows() {
     )
     .unwrap();
     assert_eq!(p2["cwd"], "/a=b");
+    // The anycast ask names a project, so every positional is the message and
+    // the peer name resolves later in main. --any alone breaks no tie.
+    let (method, p3) = build_request(
+        "ask",
+        &[
+            "--to-project=fno".to_string(),
+            "hi".to_string(),
+            "there".to_string(),
+            "--any".to_string(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(method, "agent.ask");
+    assert_eq!(p3["to_project"], "fno");
+    assert_eq!(p3["message"], "hi there");
+    assert_eq!(p3["any"], Value::Bool(true));
+    assert!(p3.get("name").is_none());
+    let err = build_request(
+        "ask",
+        &["a".to_string(), "m".to_string(), "--any".to_string()],
+    )
+    .unwrap_err();
+    assert!(err.contains("--to-project"), "{err}");
     // AC3 (Rust path, equals form): the retired --provider spelling is a
     // tombstone in both syntaxes - it must NOT silently route.
     let err = build_request(

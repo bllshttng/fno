@@ -1329,6 +1329,26 @@ async fn run(args: Vec<String>) -> i32 {
         }
     };
 
+    // The anycast ask resolves its one live peer before any lane reads the
+    // name: 16 for no live peer, 17 for an untied many, 12 for a bad registry.
+    if method == "agent.ask" {
+        if let Some(obj) = params.as_object_mut() {
+            if let Some(project) = obj.remove("to_project") {
+                let any = obj.remove("any").is_some();
+                let project = project.as_str().unwrap_or_default().to_string();
+                match fno_agents::mail_cli::send::resolve_ask_recipient(&project, any) {
+                    Ok(name) => {
+                        obj.insert("name".into(), Value::String(name));
+                    }
+                    Err((msg, code)) => {
+                        eprintln!("{msg}");
+                        return code;
+                    }
+                }
+            }
+        }
+    }
+
     // Resolve the agent name from the PARSED params, not args.get(1): build_request
     // strips leading flags (and their values) when collecting positionals, so
     // `fno agents stop --force worker-A` yields name="worker-A". Reading args.get(1)
@@ -3731,6 +3751,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--status",
         "--progress",
         "--from-name",
+        "--to-project",
         "--answer",
         "--timeout",
         "--model",
@@ -4129,6 +4150,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // default: extend WIP right here.
                 params.insert("here".into(), Value::Bool(true));
             }
+            // The anycast ask. main resolves the peer after the parse, where a
+            // refusal can carry its own exit code.
+            "--to-project" if verb == "ask" => {
+                params.insert("to_project".into(), str_arg(&mut it, "--to-project")?);
+            }
+            "--any" if verb == "ask" => {
+                params.insert("any".into(), Value::Bool(true));
+            }
             "--timeout" | "-t" => {
                 let val = str_arg(&mut it, "--timeout")?;
                 let secs: u64 = val
@@ -4292,10 +4321,23 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "agent.spawn"
         }
         "ask" => {
-            let name = positional.first().ok_or("ask needs a <name>")?;
-            params.insert("name".into(), Value::String(name.clone()));
-            if !params.contains_key("message") && positional.len() > 1 {
-                params.insert("message".into(), Value::String(positional[1..].join(" ")));
+            if params.contains_key("to_project") {
+                // A project names no peer, so every positional is the message.
+                if !params.contains_key("message") {
+                    if positional.is_empty() {
+                        return Err("usage: ask --to-project <project> <message>".into());
+                    }
+                    params.insert("message".into(), Value::String(positional.join(" ")));
+                }
+            } else {
+                if params.contains_key("any") {
+                    return Err("--any only breaks a --to-project tie".into());
+                }
+                let name = positional.first().ok_or("ask needs a <name>")?;
+                params.insert("name".into(), Value::String(name.clone()));
+                if !params.contains_key("message") && positional.len() > 1 {
+                    params.insert("message".into(), Value::String(positional[1..].join(" ")));
+                }
             }
             "agent.ask"
         }

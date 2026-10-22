@@ -56,6 +56,27 @@ const NOT_LANDED_EXIT: i32 = crate::mail_receipt::NOT_LANDED_EXIT;
 
 const DEFAULT_LOCK_TIMEOUT: f64 = 30.0;
 
+/// `ask --to-project`: the one live peer that answers. Ask waits for a
+/// reply, so the no-live-peer outcome `mail send` queues durable refuses here.
+pub fn resolve_ask_recipient(project: &str, any_flag: bool) -> Result<String, (String, i32)> {
+    let (recipient, _candidates, _durable) = engine::resolve_to_project(project, any_flag)?;
+    ask_recipient_or_refuse(project, recipient)
+}
+
+fn ask_recipient_or_refuse(
+    project: &str,
+    recipient: Option<String>,
+) -> Result<String, (String, i32)> {
+    recipient.ok_or_else(|| {
+        (
+            format!(
+                "no live peer working on project {project:?} to ask; use `fno agents mail send --to-project {project} ...` to queue durable."
+            ),
+            UNKNOWN_AGENT_EXIT,
+        )
+    })
+}
+
 /// Python cmd_send's lock-timeout pop: the machine-mail lane's internal
 /// dispatch (machine_mail.rs) shortens the recipient lock to prove the lane
 /// stays internal. Pop semantics: a normal caller never sees the var again.
@@ -2306,5 +2327,46 @@ mod style_gate_tests {
         assert_eq!(vet_body(&"x".repeat(6000), None), Err(1));
         let _warn_only = EnvVarGuard::set("FNO_MAIL_BODY_REFUSE", "0");
         assert_eq!(vet_body(&"x".repeat(6000), None), Ok(()));
+    }
+}
+
+// Ported from cli/tests/agents/test_rust_runtime.py when the anycast ask
+// moved off the Python seam: the no-live-peer refusal is ask's contract, not
+// the durable queue mail send falls back to.
+#[cfg(test)]
+mod ask_anycast_tests {
+    use super::*;
+
+    #[test]
+    fn an_anycast_ask_with_no_live_peer_refuses_with_exit_16() {
+        let (msg, code) = ask_recipient_or_refuse("no-such-project", None).unwrap_err();
+        assert_eq!(code, UNKNOWN_AGENT_EXIT);
+        assert!(msg.contains("no live peer"), "{msg}");
+        assert!(
+            msg.contains("mail send --to-project no-such-project"),
+            "{msg}"
+        );
+        assert_eq!(
+            ask_recipient_or_refuse("p", Some("alpha".to_string())),
+            Ok("alpha".to_string())
+        );
+    }
+
+    /// A peer named under inbox.peers with a project serves it from any cwd;
+    /// a block with no project adds nothing. The walk reads the nearest config.
+    #[test]
+    fn the_inbox_peer_hint_adds_a_project_from_the_nearest_config() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".fno")).unwrap();
+        std::fs::write(
+            root.path().join(".fno/config.toml"),
+            "[inbox.peers.alpha]\nproject = \"web\"\n\n[inbox.peers.beta]\nsurfaces = [\"api\"]\n",
+        )
+        .unwrap();
+        let nested = root.path().join("sub/dir");
+        std::fs::create_dir_all(&nested).unwrap();
+        let hints = engine::peer_project_hints(&nested);
+        assert_eq!(hints.get("alpha").map(String::as_str), Some("web"));
+        assert!(!hints.contains_key("beta"));
     }
 }
