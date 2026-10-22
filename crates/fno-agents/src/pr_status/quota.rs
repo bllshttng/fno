@@ -174,7 +174,10 @@ pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyId
 /// shim and deadlock under the flock. (The `_quota.resolve_real_gh` port.)
 pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
     let proxy_dirs = proxy_dirs()?;
-    if let Some(configured) = non_empty_env("FNO_REAL_GH") {
+    if let Some(configured) = std::env::var("FNO_REAL_GH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
         let candidate = PathBuf::from(&configured);
         let is_shim = is_proxy_shim(&candidate);
         let parent_in_proxy = candidate
