@@ -36,19 +36,7 @@ missed operator turn costs the failure this queue exists to close.
 
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-
-from typing import Optional
-
 import typer
-
-#: Ack outcomes: ``nothing``, or ``<kind>:<ref>`` naming what the turn made.
-#: The kinds (law, capture, node, answer) are validated by the Rust write.
-class OperatorCaptureError(Exception):
-    """A resolution or validation refusal, surfaced as a non-zero exit."""
-
 
 operator_app = typer.Typer(
     name="user",
@@ -63,78 +51,6 @@ operator_app = typer.Typer(
 )
 
 
-def _capture_dir() -> Path:
-    override = os.environ.get("FNO_OPERATOR_CAPTURE_DIR")
-    if override:
-        return Path(override)
-    from fno.paths import state_dir
-
-    return state_dir() / "operator-capture"
-
-
-def _resolve_session(require_transcript: bool = True) -> tuple[str, Optional[Path]]:
-    """``(session_id, transcript_path)``, named on failure, never an empty queue.
-
-    The ambient identity is not role-gated: the queue depth is state the
-    code derives for itself. ``require_transcript=False`` (the ack ledger)
-    needs only the session id - the ledger outlives transcripts.
-    """
-    sid = os.environ.get("FNO_OPERATOR_SESSION_ID", "").strip()
-    harness = os.environ.get("FNO_OPERATOR_HARNESS") or "claude"
-    transcript: Optional[Path] = (
-        Path(os.environ["FNO_OPERATOR_TRANSCRIPT"])
-        if os.environ.get("FNO_OPERATOR_TRANSCRIPT")
-        else None
-    )
-    if not sid:
-        from fno.claims.self_identity import resolve_self_identity
-
-        ident = resolve_self_identity()
-        sid = (ident.session_id or "").strip()
-        if not sid:
-            raise OperatorCaptureError(
-                "no resolvable session identity (FNO_OPERATOR_SESSION_ID or "
-                "a harness session)"
-            )
-        harness = ident.harness or harness
-    if not require_transcript:
-        return sid, None
-    if transcript is None:
-        from fno.provenance.observed import resolve_transcript_path
-
-        transcript = resolve_transcript_path(harness, sid, os.getcwd())
-    if transcript is None or not transcript.is_file():
-        raise OperatorCaptureError(
-            f"no readable transcript for session {sid} ({harness}); "
-            f"resolved to {transcript or 'nothing'} - set FNO_OPERATOR_TRANSCRIPT"
-        )
-    return sid, transcript
-
-
-def _ledger_path(session_id: str) -> Path:
-    return _capture_dir() / f"{session_id}.jsonl"
-
-
-def ack_turn(session_id: str, turn_id: str, outcome: str, why: str) -> dict:
-    """Append one ack row; the file is the receipt and the watermark at once."""
-    from fno.rust_binary import call_binary_json
-
-    args = ["ack", "--session", session_id, "--turn", turn_id, "--outcome", outcome]
-    args += ["--why", why, "--capture-dir", str(_capture_dir())]
-    err, payload = call_binary_json("compaction", args)
-    if err is not None or not isinstance(payload, dict):
-        raise OperatorCaptureError(f"the ack write failed: {err or 'no JSON object'}")
-    return payload
-
-
-def _resolve_or_fail(require_transcript: bool = True) -> tuple[str, Optional[Path]]:
-    try:
-        return _resolve_session(require_transcript)
-    except OperatorCaptureError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=1)
-
-
 @operator_app.command("list")
 def list_forward(
     limit: int = typer.Option(None, "--limit", "-L", min=1, help="Max turns to show."),
@@ -142,11 +58,11 @@ def list_forward(
 ) -> None:
     """Undispositioned user turns, oldest first."""
     extra = (["--limit", str(limit)] if limit is not None else []) + (["--json"] if json_output else [])
-    _forward_render("list", extra)
+    _forward(["operator-turns", "--render", "list", *extra])
 
 
 @operator_app.command("ack")
-def cmd_ack(
+def ack_forward(
     turn_id: str = typer.Argument(..., help="The user turn id to dispose."),
     outcome: str = typer.Option(
         ...,
@@ -156,13 +72,7 @@ def cmd_ack(
     why: str = typer.Option(None, "--why", help="One-line reason, kept in the ledger."),
 ) -> None:
     """Dispose one user turn, naming what it produced."""
-    sid, _ = _resolve_or_fail(require_transcript=False)
-    try:
-        row = ack_turn(sid, turn_id, outcome, why or "")
-    except OperatorCaptureError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=1)
-    typer.echo(json.dumps(row))
+    _forward(["ack", turn_id, "--outcome", outcome, *(["--why", why] if why else [])])
 
 
 @operator_app.command("status")
@@ -170,11 +80,11 @@ def status_forward(
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit the depth payload."),
 ) -> None:
     """Queue depth for this session - the number the capture hook reads."""
-    _forward_render("status", ["--json"] if json_output else [])
+    _forward(["operator-turns", "--render", "status", *(["--json"] if json_output else [])])
 
 
-def _forward_render(mode: str, extra: list[str]) -> None:
-    """Exec the native render; the binary owns the output and the exit code."""
+def _forward(tail: list[str]) -> None:
+    """Exec the native action; the binary owns the output and the exit code."""
     import subprocess
 
     from fno.rust_binary import resolve_binary
@@ -183,5 +93,5 @@ def _forward_render(mode: str, extra: list[str]) -> None:
     if binary is None:
         typer.echo("error: the fno-agents binary was not found", err=True)
         raise typer.Exit(code=127)
-    argv = [str(binary), "compaction", "operator-turns", "--render", mode, *extra]
+    argv = [str(binary), "compaction", *tail]
     raise typer.Exit(code=subprocess.run(argv).returncode)

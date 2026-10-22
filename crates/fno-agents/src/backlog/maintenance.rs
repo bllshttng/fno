@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[path = "maintenance_validity.rs"]
-mod validity;
+pub(crate) mod validity;
 
 use crate::backlog_ready::{days_between, get_str, parse_iso_ms, truthy};
 use crate::graph_store::StoreError;

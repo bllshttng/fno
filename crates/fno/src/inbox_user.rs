@@ -3,9 +3,9 @@
 //!
 //! The queue reader lives in the runtime crate as `fno-agents compaction
 //! operator-turns`, so the front classifies the verb and execs that action:
-//! the Stop hook's status read costs one native process and no Python. A verb
-//! not yet native, any `--help`, and any flag the Python verb would refuse
-//! forward to the Python `fno inbox` group.
+//! the Stop hook's status read costs one native process and no Python. Any
+//! `--help` and any flag the Python verb would refuse forward to the Python
+//! `fno inbox` group.
 
 use std::ffi::OsString;
 
@@ -27,6 +27,9 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     let verb = args[2].to_str()?;
+    if verb == "ack" {
+        return classify_ack(&args[3..]);
+    }
     let (_, switches, valued) = NATIVE_USER_VERBS.iter().find(|(name, ..)| *name == verb)?;
     let rest = &args[3..];
     let mut i = 0;
@@ -52,6 +55,36 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
+/// `ack <turn> --outcome <o> [--why <w>]`, in any order: one turn word and
+/// a non-empty `--outcome`. Any other shape forwards to Python.
+fn classify_ack(rest: &[OsString]) -> Option<Vec<OsString>> {
+    let (mut turn, mut outcome) = (false, false);
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].to_str()? {
+            flag @ ("--outcome" | "--why") => {
+                let value = rest.get(i + 1)?.to_str()?;
+                if value.is_empty() || value.starts_with('-') {
+                    return None;
+                }
+                outcome |= flag == "--outcome";
+                i += 2;
+            }
+            word if !word.starts_with('-') && !turn => {
+                turn = true;
+                i += 1;
+            }
+            _ => return None,
+        }
+    }
+    if !(turn && outcome) {
+        return None;
+    }
+    let mut argv = vec![OsString::from("ack")];
+    argv.extend_from_slice(rest);
+    Some(argv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn status_and_list_run_native_and_everything_else_forwards() {
+    fn the_user_verbs_run_native_and_everything_else_forwards() {
         for group in ["user", "operator"] {
             assert_eq!(
                 classify_inbox_user(&mk(&["inbox", group, "status", "--json"])),
@@ -84,7 +117,21 @@ mod tests {
             assert!(
                 classify_inbox_user(&mk(&["inbox", group, "status", "--limit", "1"])).is_none()
             );
+            assert_eq!(
+                classify_inbox_user(&mk(&["inbox", group, "ack", "u-1", "--outcome", "nothing"])),
+                Some(mk(&["ack", "u-1", "--outcome", "nothing"]))
+            );
             assert!(classify_inbox_user(&mk(&["inbox", group, "ack", "u-1"])).is_none());
+            assert!(classify_inbox_user(&mk(&[
+                "inbox",
+                group,
+                "ack",
+                "u-1",
+                "u-2",
+                "--outcome",
+                "nothing"
+            ]))
+            .is_none());
             assert!(classify_inbox_user(&mk(&["inbox", group])).is_none());
         }
         assert!(classify_inbox_user(&mk(&["inbox", "law", "status"])).is_none());
