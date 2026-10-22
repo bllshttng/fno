@@ -168,6 +168,7 @@ fn enabled(overrides: &std::collections::HashMap<String, bool>, row: &Row) -> bo
 
 /// What one engine run reads and answers against.
 struct Ctx<'a> {
+    cwd: &'a Path,
     journal: &'a Path,
     home: &'a crate::paths::AgentsHome,
     /// The firing session's canonical (head-8) handle.
@@ -235,6 +236,7 @@ pub fn eval_stop_in(
     };
     let matched_event = format!("stop:{session}:{turn_key}");
     let ctx = Ctx {
+        cwd,
         journal,
         home,
         session,
@@ -521,8 +523,61 @@ fn numbered_options(text: &str) -> usize {
 
 /// The journal already holds something this session filed or routed since
 /// the turn began: an `operator_question` it asked, or a `decision_span`
-/// route span it acted on. That is the ask the chat message points at.
+/// route span it acted on. That is the ask the chat message points at. A
+/// message that names a question still open on the board points at a filed
+/// ask too, whoever filed it: a successor lead relays its predecessor's.
 fn turn_filed_question(ctx: &Ctx) -> bool {
+    names_open_question(ctx) || session_filed_this_turn(ctx)
+}
+
+/// The `q-xxxxxxxx` ids the text names.
+fn named_qids(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    for (i, _) in text.match_indices("q-") {
+        let boundary = |b: Option<&u8>| !b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-');
+        let id = text.get(i..i + 10).unwrap_or_default();
+        if id.len() == 10
+            && id[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            && boundary(i.checked_sub(1).and_then(|j| bytes.get(j)))
+            && boundary(bytes.get(i + 10))
+        {
+            out.push(id);
+        }
+    }
+    out
+}
+
+fn names_open_question(ctx: &Ctx) -> bool {
+    let qids = named_qids(&ctx.last_message);
+    if qids.is_empty() {
+        return false;
+    }
+    let fno_dir = ctx
+        .home
+        .root()
+        .parent()
+        .map_or_else(|| std::path::PathBuf::from(".fno"), Path::to_path_buf);
+    let mut journals = vec![ctx.journal.to_path_buf()];
+    // Resolving the space dir can panic with no hermetic state root; the
+    // Stop path fails open to the journals it can read.
+    if let Ok(family) =
+        std::panic::catch_unwind(|| crate::needs::question_journals(&fno_dir, ctx.cwd))
+    {
+        journals.extend(family);
+    }
+    let mut asked = std::collections::HashSet::new();
+    let mut closed = std::collections::HashSet::new();
+    for journal in &journals {
+        let (a, c) = crate::question_intake::question_rows(journal);
+        asked.extend(a.keys().cloned());
+        closed.extend(c);
+    }
+    qids.iter()
+        .any(|q| asked.contains(*q) && !closed.contains(*q))
+}
+
+fn session_filed_this_turn(ctx: &Ctx) -> bool {
     let query = crate::event_store::EventQuery {
         since_ms: Some(ctx.window_ms),
         ..crate::event_store::EventQuery::of_types(&["operator_question", "decision_span"])
@@ -992,7 +1047,42 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_status_report_is_not_a_decision_ask() {
+    fn relayed_open_question_counts_as_filed() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let rig = Rig::new(true);
+        // A predecessor lead filed q-1f456994; this session only relays it.
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "operator_question",
+            "source": "test",
+            "data": {"question_id": "q-1f456994", "question": "which lane?", "asker": "b46c5135"},
+        }));
+        let relay = "Waiting on you in q-1f456994: 1. merge 2. hold. Your call?";
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(relay));
+        assert!(
+            !fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
+            "an inherited open qid counts as filed"
+        );
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": crate::needs::QUESTION_TYPES[1],
+            "source": "test",
+            "data": {"question_id": "q-1f456994"},
+        }));
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(relay));
+        assert!(
+            fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
+            "a closed qid files nothing"
+        );
+        assert_eq!(
+            named_qids("see q-1f456994, not q-1f4569941 or xq-1f456994"),
+            ["q-1f456994"]
+        );
+    }
+
+    #[test]
+    fn status_reports_are_not_decision_asks() {
         // 2026-10-12: the ASK marker "confirm" substring-matched "confirmed",
         // so a numbered status report blocked Stop as an unfiled ask. The
         // confirm asks that remain are the pointed ones.
@@ -1001,10 +1091,13 @@ mod tests {
         assert!(!decision_ask(status));
         let ask = "Please confirm the pick.\n1. merge now\n2. hold";
         assert!(decision_ask(ask));
-    }
-
-    #[test]
-    fn status_reports_with_no_question_are_not_decision_asks() {
+        // A bare "reply " cue matched every sentence that mentioned a reply.
+        let reply = "The reply from codex landed.\n1. PR 3376 open\n2. CI green";
+        assert!(
+            !decision_ask(reply),
+            "mentioning a reply is not a reply ask"
+        );
+        assert!(decision_ask("Reply 1 or 2.\n1. merge\n2. hold"));
         let table = "| node | state |\n|---|---|\n| x-1 | ? |\n1. PR open\n2. CI pending";
         assert!(!decision_ask(table));
         let next = "1. merged\n2. reconciled\nNext: nothing from you.";
