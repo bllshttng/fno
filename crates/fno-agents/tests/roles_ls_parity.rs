@@ -146,6 +146,7 @@ fn roles_ls_matches_the_python_goldens() {
             .args(["spawn-overlay", "roles"])
             .args(&argv)
             .env_remove("FNO_ROLES_ROOT")
+            .envs(fno_agents::test_run::self_owner_env())
             .output()
             .unwrap();
         let code = out.status.code();
