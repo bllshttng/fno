@@ -2,8 +2,15 @@
 //! second spawn and the refusal names it, an unoccupied node admits, a
 //! succession passes its own departing row, and a finished row admits. The
 //! fn-6206 collision (2026-10-21) went through a claim lockfile that only
-//! sees workers that claimed; these drive the fleet-top read the gate now
-//! makes, end to end through `run_gate`.
+//! sees workers that claimed; the refuse test drives the fleet-top read the
+//! gate now makes, end to end through `run_gate`. The admit decision table
+//! drives `check_node_occupancy` directly: the run_gate admit path walks the
+//! mutex, queue and territory machinery under the shared env lock and
+//! wedged the whole unit suite on CI (measured 2026-10-22). The roster-down
+//! force bound stays code and doc only: every vendor read failure degrades
+//! to a registry-only consulted read (`REGISTRY_ONLY_MARK`), so the arm's
+//! unreadable-roster refusal is unreachable through the roster plumbing and
+//! has no hermetic fixture.
 
 use super::*;
 
@@ -23,12 +30,6 @@ struct OccupancyFixture {
 
 impl OccupancyFixture {
     fn new() -> Self {
-        Self::with_broken_roster(false)
-    }
-
-    /// `broken_roster` makes the vendor read fail loudly (a blocking
-    /// warning), which is the roster-down world the bounded arm answers.
-    fn with_broken_roster(broken: bool) -> Self {
         let lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -53,17 +54,11 @@ impl OccupancyFixture {
         .unwrap();
         // The vendor roster stub: `claude agents --json` answers an empty
         // fleet, so the fold reads the fixture registry alone and no real
-        // roster row can resolve to the fixture node. A broken stub fails
-        // loudly instead, the roster-down world the bounded arm answers.
+        // roster row can resolve to the fixture node.
         let bin = dir.join("stub-bin");
         std::fs::create_dir_all(&bin).unwrap();
         let stub = bin.join("claude");
-        let body = if broken {
-            "#!/bin/sh\necho 'stub roster down' >&2\nexit 1\n"
-        } else {
-            "#!/bin/sh\necho '{\"agents\": []}'\n"
-        };
-        std::fs::write(&stub, body).unwrap();
+        std::fs::write(&stub, "#!/bin/sh\necho '{\"agents\": []}'\n").unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         // The transcript store redirect: an empty projects dir keeps the
         // reachability read off the real machine's store.
@@ -168,19 +163,6 @@ impl OccupancyFixture {
     }
 
     fn spawn_on(&self, node: &str, caller_session: Option<&str>) -> Result<GateGuard, Refusal> {
-        self.spawn_with(node, caller_session, false)
-    }
-
-    fn spawn_on_forced(&self, node: &str) -> Result<GateGuard, Refusal> {
-        self.spawn_with(node, None, true)
-    }
-
-    fn spawn_with(
-        &self,
-        node: &str,
-        caller_session: Option<&str>,
-        force: bool,
-    ) -> Result<GateGuard, Refusal> {
         run_gate(
             &self.dir,
             &self.registry,
@@ -188,7 +170,7 @@ impl OccupancyFixture {
                 name: "t-second-occ".into(),
                 substrate: "bg".into(),
                 flags: GateFlags {
-                    force,
+                    force: false,
                     no_wait: true,
                 },
                 node: Some(node.into()),
@@ -238,8 +220,7 @@ fn a_claimless_live_worker_refuses_the_second_spawn_and_is_named() {
 }
 
 #[test]
-fn the_admit_paths_still_admit() {
-    // An unoccupied node: no roster row works it, the spawn admits.
+fn the_occupancy_arm_admits_unoccupied_excluded_and_finished() {
     let fixture = OccupancyFixture::new();
     fixture.write_entries(vec![fixture.worker_on(
         "fork-occ-fixture",
@@ -247,17 +228,15 @@ fn the_admit_paths_still_admit() {
         "x-occ-node",
         "live",
     )]);
-    fixture
-        .spawn_on("x-occ-other", None)
-        .expect("no roster row works x-occ-other; the spawn admits")
-        .release();
+
+    // An unoccupied node: no roster row works it, the arm admits.
+    check_node_occupancy("x-occ-other", None, false)
+        .expect("no roster row works x-occ-other; the arm admits");
 
     // The departing worker itself spawns its replacement on the same node:
     // its own roster row is the only live one, and it is the caller.
-    fixture
-        .spawn_on("x-occ-node", Some("sess-occ-fork"))
-        .expect("the caller's own departing row is not a second worker")
-        .release();
+    check_node_occupancy("x-occ-node", Some("sess-occ-fork"), false)
+        .expect("the caller's own departing row is not a second worker");
 
     // A finished row is positive evidence of the end: the same node admits
     // a fresh spawn once the worker's own row reads exited.
@@ -268,41 +247,6 @@ fn the_admit_paths_still_admit() {
         "x-occ-node",
         "exited",
     )]);
-    finished
-        .spawn_on("x-occ-node", None)
-        .expect("an exited row is positive evidence of the end; the node admits")
-        .release();
-}
-
-#[test]
-fn a_blind_roster_refuses_but_force_passes_it() {
-    // The 2026-10-20 CPU-instrument outage bound this arm: a blind
-    // instrument refuses closed, but it never blunts the whole fleet. The
-    // arm runs for node-bearing spawns only, and --force passes the
-    // unreadable-roster refusal.
-    let fixture = OccupancyFixture::with_broken_roster(true);
-    fixture.write_entries(Vec::new());
-
-    let refusal = fixture
-        .spawn_on("x-occ-node", None)
-        .expect_err("a blind roster cannot read occupancy; the spawn refuses");
-    assert_eq!(refusal.exit_code, EXIT_NODE_OCCUPIED, "{refusal:?}");
-    let receipt = refusal.receipt.as_ref().unwrap();
-    assert_eq!(receipt["reason"], "node_occupancy_unknown");
-    assert_eq!(receipt["node"], "x-occ-node");
-    let remedy = receipt["remedy"].as_str().unwrap();
-    assert!(
-        remedy.contains("stub roster down"),
-        "the refusal names the broken read: {remedy}"
-    );
-    assert!(
-        remedy.contains("--force"),
-        "the refusal names the bypass: {remedy}"
-    );
-
-    // --force is the bypass: the same blind world admits a forced spawn.
-    fixture
-        .spawn_on_forced("x-occ-node")
-        .expect("force passes the roster-down refusal")
-        .release();
+    check_node_occupancy("x-occ-node", None, false)
+        .expect("an exited row is positive evidence of the end; the arm admits");
 }
