@@ -533,11 +533,11 @@ mod binding_display_tests {
     fn fit_node_cuts_the_node_front_before_the_name() {
         // `scout` ends at column 7 with one space after it, so the node may
         // start at 8. The specimen cut the name to `scou` instead.
-        let node = "ab-0e630a0a";
+        let node = "zz-00aa11bb";
         assert_eq!(fit_node(node, 10..21, 8), Some((10..21, node.into())));
         assert_eq!(
             fit_node(node, 6..17, 8),
-            Some((8..17, "\u{2026}0e630a0a".into()))
+            Some((8..17, "\u{2026}00aa11bb".into()))
         );
         assert_eq!(fit_node(node, 6..17, 14), None, "under 3 node chars drops");
     }
