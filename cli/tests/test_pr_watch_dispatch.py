@@ -132,17 +132,9 @@ def _make_candidate(
     )
 
 
-def _rest_ok(stdout: str):
-    """fno.pr._proc.run result shape for a successful REST read."""
-    from fno.pr._proc import Result
-
-    return Result(returncode=0, stdout=stdout, stderr="")
-
-
-def _rest_fail(stderr: str):
-    from fno.pr._proc import Result
-
-    return Result(returncode=1, stdout="", stderr=stderr)
+def _listing_rows(rows: list[dict]):
+    """The status-pr-list op answer shape for a successful sweep read."""
+    return {"rows": rows, "error": None}
 
 
 # ---------------------------------------------------------------------------
@@ -153,31 +145,33 @@ def _rest_fail(stderr: str):
 class TestTrackedStateBatch:
     """The production sweep reads each repository once and fails closed.
 
-    x-c12c: the sweep runs on REST (``gh api repos/<slug>/pulls``) with the
-    ``fno.pr._proc.run`` runner contract; untracked-but-open PRs still
-    surface, and a repo failure counts into the sweep_failures return."""
+    x-c12c: the sweep runs one REST listing per repository through the
+    ``status-pr-list`` op on the authorized-merge door (pr port 7 retired the
+    subprocess runner transport); untracked-but-open PRs still surface, and
+    a repo failure counts into the sweep_failures return."""
 
-    def test_reads_all_requested_states_one_call_per_repo(self):
+    def test_reads_all_requested_states_one_call_per_repo(self, monkeypatch):
         from fno.pr_watch._discover import read_tracked_pr_states
 
-        calls = []
+        slugs: list[str] = []
 
-        def runner(cmd, **_kwargs):
-            calls.append(list(cmd))
+        def _door(verb, payload, timeout=None):
+            assert verb == "authorized-merge" and payload.get("op") == "status-pr-list"
             # owner/one: tracked #1 open plus untracked open #99; tracked #2
             # is absent from the open listing (NOT_OPEN). owner/two: tracked
             # #3 absent too.
-            open_rows = {
-                "owner/one": [{"number": 1, "state": "open", "merged": False},
-                              {"number": 99, "state": "open", "merged": False}],
+            rows_by_repo = {
+                "owner/one": [{"number": 1, "state": "OPEN"},
+                              {"number": 99, "state": "OPEN"}],
                 "owner/two": [],
             }
-            path = cmd[2]
-            repo = path[len("repos/"): path.index("/pulls?")]
-            return _rest_ok(json.dumps(open_rows[repo]))
+            slug = payload["slug"]
+            slugs.append(slug)
+            return _listing_rows(rows_by_repo[slug])
 
+        monkeypatch.setattr("fno.rust_binary.verb_call", _door)
         states, sweep_failures = read_tracked_pr_states(
-            {"owner/one#1", "owner/one#2", "owner/two#3"}, runner=runner
+            {"owner/one#1", "owner/one#2", "owner/two#3"}
         )
 
         assert states == {
@@ -187,21 +181,32 @@ class TestTrackedStateBatch:
             "owner/two#3": "NOT_OPEN",
         }
         assert sweep_failures == 0
-        # One open listing per repository: no closed listing, no exact reads.
-        assert len(calls) == 2
+        # One listing op per repository: no closed listing, no exact reads.
+        assert sorted(slugs) == ["owner/one", "owner/two"]
 
-    def test_repo_read_failure_returns_unknown_for_each_requested_key(self):
+    def test_repo_read_failure_returns_unknown_for_each_requested_key(
+        self, monkeypatch
+    ):
+        from fno.rust_binary import VerbUnavailable
+
         from fno.pr_watch._discover import read_tracked_pr_states
 
-        def runner(cmd, **_kwargs):
-            return _rest_fail("network down")
+        def _door(verb, payload, timeout=None):
+            raise VerbUnavailable("network down")
 
+        monkeypatch.setattr("fno.rust_binary.verb_call", _door)
         states, sweep_failures = read_tracked_pr_states(
-            {"owner/repo#1", "owner/repo#2"}, runner=runner
+            {"owner/repo#1", "owner/repo#2"}
         )
 
         assert states == {"owner/repo#1": "UNKNOWN", "owner/repo#2": "UNKNOWN"}
         assert sweep_failures == 1
+
+
+# ---------------------------------------------------------------------------
+# State module tests
+# ---------------------------------------------------------------------------
+
 
     def test_not_open_batch_keys_drop_without_a_closed_read(self, tmp_path):
         """x-c79d: absence from a successful open listing is the terminal

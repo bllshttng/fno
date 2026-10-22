@@ -300,6 +300,9 @@ enum Role {
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
+    /// `fno agents mail lint|migrate-bus|rebuild-render`: retired with the
+    /// markdown render readers, refused by name.
+    MailRetired(String),
     /// A reader-shaped guess (`read`, `open`, `fetch`, `cat`) at the mail
     /// tree: refused by name, pointing at the reader, before the Python
     /// fallback answers with typer's near-miss guess.
@@ -314,6 +317,10 @@ enum Role {
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
     Backlog,
+    /// `fno do pr ...` (except watch and stub-manifest): the whole pr
+    /// namespace execs the sibling Rust binary's pr dispatcher. The argv
+    /// passes through byte-verbatim, the backlog namespace's contract.
+    DoPr,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -745,6 +752,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .collect(),
         )),
         "view" => Some(Role::MailViewRenamed),
+        "lint" | "migrate-bus" | "rebuild-render" => Some(Role::MailRetired(verb.to_string())),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
     }
@@ -853,6 +861,32 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if args.first().and_then(|a| a.to_str()) == Some("backlog") {
         return Role::Backlog;
+    }
+    // The pr namespace claims itself lexically, like backlog: the sibling
+    // dispatcher owns the 29 spellings and the handover stays byte-verbatim
+    // (pr port 7). The two carve-outs stay with the Python wheel: `watch`
+    // and `stub-manifest` are the watcher's own surface, and do_cli.py keeps
+    // their mounts answering under `fno do pr`. Bare `fno do pr` claims too:
+    // the grouped help is native once the Python pr_app is gone.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(2).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
+    }
+    // The bare `fno pr` legacy spelling claims natively too: the wheel's
+    // hidden lazy entry points at the deleted Python pr_app, so a claim here
+    // keeps the muscle-memory spelling answering instead of a traceback.
+    if args.first().and_then(|a| a.to_str()) == Some("pr")
+        && !matches!(
+            args.get(1).and_then(|a| a.to_str()),
+            Some("watch") | Some("stub-manifest")
+        )
+    {
+        return Role::DoPr;
     }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
@@ -1101,6 +1135,7 @@ fn main() {
     match decide_role(&args, is_tty) {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
+        Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -1329,6 +1364,13 @@ fn main() {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
             std::process::exit(2);
         }
+        Role::MailRetired(name) => {
+            eprintln!(
+                "fno agents mail {name} is retired: the bus log is the mail record and \
+                 the markdown render is a derived view. Read mail with `fno agents mail unread`"
+            );
+            std::process::exit(2);
+        }
         Role::MailWrongVerb(verb) => {
             eprintln!(
                 "no mail verb {verb:?}. An `fmail-<id>` header in a delivered turn is read \
@@ -1457,6 +1499,36 @@ mod tests {
     }
 
     #[test]
+    fn do_pr_claims_the_namespace_and_leaves_the_mounts_to_python() {
+        assert_eq!(
+            decide_role(&os(&["do", "pr", "status", "41"]), false),
+            Role::DoPr
+        );
+        assert_eq!(decide_role(&os(&["do", "pr", "--help"]), false), Role::DoPr);
+        // Bare `fno do pr` claims too: the grouped help is native.
+        assert_eq!(decide_role(&os(&["do", "pr"]), false), Role::DoPr);
+        // The bare `fno pr` legacy spelling claims natively as well: the
+        // wheel's hidden lazy entry died with the Python pr_app.
+        assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
+        assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
+        // The two Python mounts stay unclaimed: they forward to the wheel.
+        assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
+        assert_ne!(
+            decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false),
+            Role::DoPr
+        );
+        // A non-pr `do` tree stays with its owners.
+        assert_ne!(
+            decide_role(&os(&["do", "wizard", "--json"]), false),
+            Role::DoPr
+        );
+        assert_ne!(
+            decide_role(&os(&["do", "review", "--help"]), false),
+            Role::DoPr
+        );
+    }
+
+    #[test]
     fn agents_history_claims_only_forwarded_graph_requests() {
         let forwarded = os(&[
             "agents",
@@ -1502,6 +1574,13 @@ mod tests {
             decide_role(&os(&["mail", "cat", "fmail-x"]), false),
             Role::MailWrongVerb(_)
         ));
+        // The markdown-render admin verbs are retired and refused by name.
+        for verb in ["lint", "migrate-bus", "rebuild-render"] {
+            assert_eq!(
+                decide_role(&os(&["agents", "mail", verb]), false),
+                Role::MailRetired(verb.to_string())
+            );
+        }
         // The hidden `fno mail <verb>` mount claims and refuses alike.
         assert_eq!(
             decide_role(&os(&["mail", "show", "fmail-x"]), false),

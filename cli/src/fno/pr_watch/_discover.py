@@ -34,8 +34,6 @@ from fno.graph._reconcile import (
     query_pr_merge_state,
     repo_slug_from_url,
 )
-from fno.pr._proc import ToolMissing
-from fno.pr._proc import run as _rest_run
 from fno.rust_binary import verb_call
 
 log = logging.getLogger(__name__)
@@ -334,7 +332,7 @@ def read_pr_state(
 def read_tracked_pr_states(
     keys: set[str],
     *,
-    runner: Callable[..., Any] = _rest_run,
+    runner: Callable[..., Any] | None = None,
     timeout_s: float = 30.0,
 ) -> tuple[dict[str, str], int]:
     """Read tracked states and discover all currently open PRs in those repos.
@@ -355,8 +353,8 @@ def read_tracked_pr_states(
 
     Returns ``(states, sweep_failures)``.
     """
-    from fno.pr._rest import list_prs_rest
     from fno.pr_watch._state import make_watermark_key, parse_watermark_key
+    from fno.rust_binary import VerbUnavailable, verb_call
 
     grouped: dict[str, set[int]] = defaultdict(set)
     states: dict[str, str] = {}
@@ -372,8 +370,19 @@ def read_tracked_pr_states(
     sweep_failures = 0
     for repo, requested in sorted(grouped.items()):
         try:
-            rows, reason = list_prs_rest(repo, state="open", runner=runner, timeout=timeout_s)
-        except (subprocess.TimeoutExpired, OSError, ToolMissing) as exc:
+            answer = verb_call(
+                "authorized-merge",
+                {
+                    "op": "status-pr-list",
+                    "slug": repo,
+                    "state": "open",
+                    "cwd": os.getcwd(),
+                    "timeout_s": timeout_s,
+                },
+                timeout=timeout_s + 30,
+            )
+            rows, reason = answer.get("rows"), answer.get("error")
+        except (VerbUnavailable, OSError, subprocess.TimeoutExpired) as exc:
             rows, reason = None, str(exc)
         if rows is None:
             log.warning("pr-watch: tracked-state sweep failed for %s: %s", repo, reason)
@@ -391,7 +400,7 @@ def read_tracked_pr_states(
 
         for number in sorted(requested - returned):
             # Absence means not open only because the open listing pages to a
-            # short page: list_prs_rest warns loudly at its 20-page ceiling
+            # short page: status-pr-list marks a ceiling-cut listing truncated
             # (2000 open PRs per repo, against 14 measured for footnote).
             states[make_watermark_key(repo_slug=repo, pr_number=number)] = "NOT_OPEN"
 

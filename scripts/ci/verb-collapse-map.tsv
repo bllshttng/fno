@@ -64,12 +64,9 @@ agents mail drain	T1	agents mail drain	10
 agents mail drain-self	T1	agents mail drain-self	6
 agents mail hold	T1	agents mail hold	0
 agents mail hold-release	T1	agents mail hold-release	1
-agents mail lint	T1	agents mail lint	1
 agents mail list	T1	agents mail list	15
 agents mail-teach	T1	agents mail-teach	0
-agents mail migrate-bus	T1	agents mail migrate-bus	0
 agents mail pane-prepare	T1	agents mail pane-prepare	0
-agents mail rebuild-render	T1	agents mail rebuild-render	1
 agents mail reply	T1	agents mail reply	18
 agents mail seed-provenance	T1	agents mail seed-provenance	0
 agents mail send	T1	agents mail send	184
@@ -390,11 +387,8 @@ mail drain	T1	mail drain	10
 mail drain-self	T1	mail drain-self	6
 mail hold	T1	mail hold	0
 mail hold-release	T1	mail hold-release	1
-mail lint	T1	mail lint	1
 mail list	T1	mail list	15
-mail migrate-bus	T1	mail migrate-bus	0
 mail pane-prepare	T1	mail pane-prepare	0
-mail rebuild-render	T1	mail rebuild-render	1
 mail reply	T1	mail reply	18
 mail seed-provenance	T1	mail seed-provenance	0
 mail send	KEEP	mail send	184	deliberate readability slack for a high-traffic distinct operation
@@ -429,37 +423,7 @@ plugins deactivate	T1	plugins deactivate	1
 plugins inspect	T1	plugins inspect	1
 plugins ls	T1	plugins ls	2
 plugins verify	T1	plugins verify	4
-pr attestation retract	T1	pr attestation retract	0
-pr base-check	T1	pr base-check	0
-pr base-lineage-check	T1	pr base-lineage-check	6
-pr bind-created	T1	pr bind-created	0
-pr closure-trailer	T1	pr closure-trailer	0
-pr coverage-check	T1	pr coverage-check	1
-pr coverage-waive	T1	pr coverage-waive	8
-pr create	T1	pr create	3
 do pr create	T1	do pr create	3
-pr coverage-publish	T1	pr coverage-publish	0
-pr evidence-check	T1	pr evidence-check	1
-pr evidence-required	T1	pr evidence-required	1
-pr global-receipt-events-path	T1	pr global-receipt-events-path	0
-pr graphql-exec	T1	pr graphql-exec	1
-pr heal	T1	pr heal	2
-pr hold-check	T1	pr hold-check	0
-pr info	T1	pr info	10
-pr list	T1	pr list	3
-pr logs	T1	pr logs	1
-pr merge	KEEP	pr merge	55	deliberate readability slack for a high-traffic distinct operation
-pr merge-result-check	T1	pr merge-result-check	0
-pr next-receipt-generation	T1	pr next-receipt-generation	0
-pr publish-review	T1	pr publish-review	4
-pr push	T1	pr push	7
-pr rebase	T1	pr rebase	21
-pr review-hold	T1	pr review-hold	0
-pr ritual	T1	pr ritual	24
-pr status	T1	pr status	19
-pr sync-canonical	T1	pr sync-canonical	2
-pr verify	T1	pr verify	13
-pr wait	T1	pr wait	0
 pr-watch heal	T1	pr-watch heal	3
 pr-watch install	T1	pr-watch install	3
 pr-watch refresh	T1	pr-watch refresh	1

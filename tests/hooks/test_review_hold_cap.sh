@@ -9,12 +9,15 @@
 # Fixture: a real git repo on a FEATURE branch (the hook rightly ignores the
 # protected branch) whose journal carries two spent rounds with the real
 # base sha, so the interdiff carveout measures real patches; the hook runs
-# for real with FNO pointed at a wrapper that execs the checkout's own CLI
-# (fno-py: the deployed cargo shim shadows the source `fno` on PATH).
+# for real with FNO pointed at a wrapper that serves the two verbs the hook
+# drives: the review-hold door answers natively now (the worker binary; the
+# Python front no longer carries the surface), and every other argv still
+# rides the checkout CLI (fno-py: the deployed cargo shim shadows the source
+# `fno` on PATH).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fno-cap-gate.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -26,6 +29,17 @@ export FNO_SPACES_DIR="$WORK/spaces"
 CLI_DIR="$REPO/cli"
 cat > "$WORK/fno-wrapper" <<WRAPPER
 #!/usr/bin/env bash
+AGENTS="\${FNO_AGENTS_BIN:-}"
+if [ -z "\$AGENTS" ]; then
+  for c in "$REPO/crates/fno-agents/target/release/fno-agents" \
+           "$REPO/crates/fno-agents/target/debug/fno-agents"; do
+    [ -x "\$c" ] && AGENTS="\$c" && break
+  done
+fi
+if [ "\$1 \$2 \$3" = "do pr review-hold" ] && [ -n "\$AGENTS" ] && [ -x "\$AGENTS" ]; then
+  shift 3
+  exec "\$AGENTS" do pr review-hold "\$@"
+fi
 exec uv run --quiet --project "$CLI_DIR" fno-py "\$@"
 WRAPPER
 chmod +x "$WORK/fno-wrapper"

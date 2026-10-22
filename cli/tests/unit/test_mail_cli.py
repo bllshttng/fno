@@ -1,8 +1,8 @@
 """Integration tests for the `fno agents mail` CLI surface (ab-cee91152).
 
 Messaging is one namespace over the jsonl-canon bus log: `mail send` publishes
-a durable envelope; `mail unread`/`ack` are the per-recipient cursor consume;
-`mail rebuild-render` regenerates the derived markdown from the log. The old
+a durable envelope; `mail unread`/`ack` are the per-recipient cursor consume.
+The old
 `fno inbox` namespace (mail's alias for `mail unread`) was retired clean (no
 pointer, no shim). x-afa6 later minted a real `fno inbox` root for an
 unrelated purpose (approvals/notify/outstanding/the lead board); mail's old
@@ -11,7 +11,6 @@ unrelated purpose (approvals/notify/outstanding/the lead board); mail's old
 from __future__ import annotations
 
 import json
-import re
 
 import pytest
 from typer.testing import CliRunner
@@ -258,29 +257,6 @@ def test_handle_question_and_fyi_are_refused_before_any_write(runner, mailbox, k
     assert "add --to-project <project>" in result.stderr
     assert list(iter_messages()) == []
     assert list(mailbox.glob("**/*.md")) == []
-
-
-# ---------------------------------------------------------------------------
-# AC1-EDGE: a deleted render is regenerated from the log, no message lost
-# ---------------------------------------------------------------------------
-
-def test_rebuild_render_regenerates_from_log(runner, mailbox):
-    from fno.inbox.store import inbox_dir_for
-
-    runner.invoke(
-        app, ["mail", "send", "--to-project", "web", "--kind", "fyi",
-              "--from-name", "etl", "--body", "durable note"],
-    )
-    inbox = inbox_dir_for("web")
-    for p in inbox.glob("*.md"):
-        p.unlink()
-    assert list(inbox.glob("*.md")) == []
-
-    res = runner.invoke(app, ["agents", "mail", "rebuild-render", "web", "--json"])
-    assert res.exit_code == 0, res.output
-    payload = json.loads(res.stdout.strip().splitlines()[-1])
-    assert payload["threads"] == 1
-    assert list(inbox.glob("*.md"))  # render regenerated from the canonical log
 
 
 # ---------------------------------------------------------------------------

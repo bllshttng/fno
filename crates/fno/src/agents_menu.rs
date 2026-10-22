@@ -98,10 +98,7 @@ const MAIL_ADMIN: &[Node] = &[
     verb("drain-self", &["mail", "drain-self"], "Drain this session's own cross-harness inbox."),
     verb("hold", &["mail", "hold"], "Busy mode: hold incoming mail and drain it on a timer."),
     verb("hold-release", &["mail", "hold-release"], "Sleep until a hold expires, then release it."),
-    verb("lint", &["mail", "lint"], "Check thread files for malformed shape."),
-    verb("migrate-bus", &["mail", "migrate-bus"], "Backfill pre-bus markdown threads into the bus log."),
     verb("pane-prepare", &["mail", "pane-prepare"], "The pane-send renderer in the fno-agents binary."),
-    verb("rebuild-render", &["mail", "rebuild-render"], "Regenerate a recipient's markdown render from the bus log."),
     verb("seed-provenance", &["mail", "seed-provenance"], "The seed-provenance verb in the fno-agents binary."),
     verb("sent", &["mail", "sent"], "List mail this session sent, with claim state."),
     verb("team", &["mail", "team"], "Announce one body to a fleet scope as one bus line."),
@@ -123,7 +120,7 @@ const MAIL: &[Node] = &[
     verb("triage", &["mail", "triage"], "LLM triage of a heads-up thread into a JSON action plan."),
     verb("ask", &["ask"], "Send a follow-up message to a registered agent."),
     verb("announce", &["announce"], "Fleet announcements on one scope."),
-    group("admin", "Mailbox upkeep: holds, renders, migrations, lessons.", MAIL_ADMIN),
+    group("admin", "Mailbox upkeep: holds, sends, retractions, lessons.", MAIL_ADMIN),
 ];
 
 #[rustfmt::skip]
