@@ -936,7 +936,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         )
     } else {
         let reviews_input = reviews::optional_reviews(probe, cwd, pr, slug);
-        let lane = reviews::review_lane(cwd, pr);
+        let lane = reviews::review_lane(cwd, pr, Some(&head_sha));
         let coverage = reviews::read_review_coverage(cwd, pr, Some(&head_sha), lane, false);
         // The cache layer passes the probe it already ran for the key
         // material; a degraded path (no slug, no cache dir) probes here.
@@ -1273,6 +1273,7 @@ pub(crate) fn status_ci_rows<P: GhProbe>(
 pub(crate) mod cache;
 pub(crate) mod compose;
 pub(crate) mod logs;
+pub(crate) mod memo;
 pub(crate) mod reviews;
 pub(crate) mod seams;
 #[cfg(test)]

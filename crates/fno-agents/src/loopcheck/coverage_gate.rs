@@ -567,7 +567,7 @@ fn ordinary_verdict<P: Probes>(
     // A stock install with no review lane configured opts out of coverage
     // entirely. Checked FIRST so neither the head fetch nor the events read
     // runs for a PR nobody configured review for.
-    if !review_lane(cwd, pr) {
+    if !review_lane(cwd, pr, None) {
         return none(GateState::Covered, NO_LANE_NOTE);
     }
     // The head fetch is an instrument, and it can fail. A missing head is
@@ -610,7 +610,7 @@ fn ordinary_verdict<P: Probes>(
                 inputs.author_harness.as_deref(),
                 inputs.author_harness_pinned_none,
             )
-            && crate::pr_status::reviews::payload_is_code(cwd, pr));
+            && crate::pr_status::reviews::payload_is_code(cwd, pr, Some(&head)));
     let row_value = read_review_coverage(cwd, pr, Some(&head), recompute, recompute);
     let (covered, failed) = covered_conjuncts(&row_value, &head, code_review_required);
     let recomputed = row_value.get("recompute").and_then(Value::as_str) == Some("recomputed");

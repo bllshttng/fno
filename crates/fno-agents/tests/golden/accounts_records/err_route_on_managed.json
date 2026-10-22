@@ -1,0 +1,1 @@
+{"op": "load", "files": {"global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\nroute = \"zai/glm\"\n"}, "expect": {"error": "invalid provider record 'a': auth_strategy_mismatch"}}

@@ -4105,6 +4105,15 @@ fn reap_state_files_with_roots(
         apply,
         &mut summary.pr_status_cache,
     );
+    for kind in crate::pr_status::memo::KINDS {
+        reap_pr_status_rows(
+            &roots.state_root,
+            &roots.pr_status_dir.join(kind),
+            config.pr_status_cache_retain_days,
+            apply,
+            &mut summary.pr_status_cache,
+        );
+    }
     reap_lock_family(
         &roots.state_root,
         &roots.pr_status_dir,

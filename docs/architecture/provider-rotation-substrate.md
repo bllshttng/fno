@@ -115,7 +115,7 @@ Coverage is split between in-package pytest (logic correctness) and out-of-packa
 
 | Test | Scope | Lines covered |
 |------|-------|---------------|
-| `cli/src/fno/adapters/providers/test_model.py` | Pydantic field validation, conditional auth, regex constraints | model.py |
+| `crates/fno-agents/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, combos, quota, effective active (goldens captured from the Python leg) | model.py, loader.py read side |
 | `cli/src/fno/adapters/providers/test_loader.py` | config.toml parse, project-local override, save round-trip, corrupt-file refusal | loader.py |
 | `cli/src/fno/adapters/providers/test_cli.py` | Typer CliRunner: list/show/add/test/use/remove + 5 ACs | cli.py |
 | `cli/src/fno/adapters/providers/test_staging.py` | symlink ops, idempotency, error paths | staging.py |

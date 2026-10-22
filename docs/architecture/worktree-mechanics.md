@@ -62,6 +62,12 @@ Two facts agents keep getting wrong. The refusal's mention of the redirect is ge
 
 The sanctioned escapes, in order. Read env with `printenv VAR` instead of `echo "$VAR"`. Wait on CI or a review with `fno do pr wait <N> --until settled|review` instead of a hand-rolled poll loop. An inline `while`/`$(...)` watcher is refused, so no fno surface can instruct one. For a genuinely complex one-liner, put it in a file and run `bash <file>`.
 
+## The EnterWorktree relocation prompt
+
+Claude Code asks before EnterWorktree moves a session to a path outside `<repo>/.claude/worktrees`. The dialog names a "permission-root relocation". The ask is a safety check marked not classifier-approvable, so auto mode cannot clear it, and an `EnterWorktree` allow rule is never read for it. Only bypassPermissions and a `PermissionRequest` hook get past it. A worker launches from the repo root, because Claude groups its agents view by launch dir. It then enters a worktree under `paths.worktrees_base`. Without the hook, every auto-mode worker stops at this dialog.
+
+The plugin ships that hook. `hooks/hooks.json` registers `hooks/worktree-relocation-allow.sh` on `PermissionRequest` with matcher `EnterWorktree`. It runs `fno-agents hook worktree-relocation-allow`. If the realpath of `tool_input.path` sits strictly under the realpath of the resolved `paths.worktrees_base` (default `<state_dir>/worktrees`), the hook allows the call. Every other path, and an installed `fno-agents` too old to carry this hook entry, prints `{}` and the dialog stays. The hook never denies. Measured on Claude Code 2.1.296: a plugin hook receives `PermissionRequest`. The hook clears the ask on the headless `-p` lane and on the interactive pane dialog. When managed settings set `allowManagedHooksOnly: true`, plugin hooks do not run, so the hook must then live in managed settings.
+
 
 
 A harness or Codex substrate with no native worktree transition degrades to the Footnote-owned `<state_dir>/worktrees` fallback, normally `~/.fno/worktrees`. That fallback is Footnote's own allocation. It does not inherit an external allocator configured by `worktrees_base`, so a repo that sets the base still lands there under `harness-native`. For that reason `fno agents workspace worktree ensure` requires `--harness` and never guesses the substrate.

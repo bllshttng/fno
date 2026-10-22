@@ -1,0 +1,1 @@
+{"op": "quota", "files": {"global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"}, "expect": {"ok": {"observe": false, "defer_dispatch": false, "defer_threshold_pct": 90.0, "probe_ttl_seconds": 300, "defer_horizon_minutes": 60, "pick_on_launch": false}}}

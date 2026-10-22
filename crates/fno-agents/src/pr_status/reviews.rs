@@ -766,7 +766,8 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
 
 /// Whether review is required for this PR: a configured lane, OR the
 /// self-review floor for a code payload on a stock install. Fail-closed.
-pub(crate) fn review_lane(cwd: &Path, pr: u64) -> bool {
+/// `head` keys the payload memo. None accepts a memo kept for any head.
+pub(crate) fn review_lane(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
     if inputs.lane_configured || inputs.code_review_configured {
         return true;
@@ -775,7 +776,7 @@ pub(crate) fn review_lane(cwd: &Path, pr: u64) -> bool {
         inputs.author_harness.as_deref(),
         inputs.author_harness_pinned_none,
     );
-    inputs.self_review_floor_on && floor_applies && payload_is_code(cwd, pr)
+    inputs.self_review_floor_on && floor_applies && payload_is_code(cwd, pr, head)
 }
 
 /// The lane answer for the `lane` op. With `code_payload` set it answers for
@@ -784,7 +785,7 @@ pub(crate) fn review_lane(cwd: &Path, pr: u64) -> bool {
 /// (the doctor pair check) needs.
 pub(crate) fn lane_answer(cwd: &Path, code_payload: bool) -> bool {
     if !code_payload {
-        return review_lane(cwd, 0);
+        return review_lane(cwd, 0, None);
     }
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
     if inputs.lane_configured || inputs.code_review_configured {
@@ -801,14 +802,34 @@ pub(crate) fn lane_answer(cwd: &Path, code_payload: bool) -> bool {
 /// is not documentation. Fails closed: a failed read classifies as code, so
 /// a degraded probe cannot bypass the floor. An empty surfaced diff is not
 /// code: nothing to review, no gate.
-pub(crate) fn payload_is_code(cwd: &Path, pr: u64) -> bool {
+///
+/// The read stops at the first page that names a code file. With `head`
+/// set, a CODE answer is kept per head, so the next refresh at that head
+/// spends nothing. A docs answer is never kept: a push between the head read
+/// and the file read could file docs under a code head and lift the floor.
+pub(crate) fn payload_is_code(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let Some(url) = git_origin_url(cwd) else {
         return true;
     };
     let Some(slug) = crate::merge_gates::repo_slug_from_origin(&url) else {
         return true;
     };
-    let mut names: Vec<String> = Vec::new();
+    // `@` cannot occur in a GitHub owner or repo name, so PR 7 of `o/r`
+    // never shares a prefix with PR 1 of `o/r-7`.
+    let prefix = format!("{}@{pr}@", slug.replace('/', "--"));
+    let memo = head
+        .filter(|h| !h.is_empty())
+        .map(|h| format!("{prefix}{h}"));
+    // With no head, a code answer kept for any head of this PR serves. It can
+    // only err toward code (a push that removed every code file), which
+    // fails closed, the same way a failed read does.
+    let kept = match &memo {
+        Some(name) => super::memo::read(cwd, PAYLOAD_MEMO, name) == Some(Value::Bool(true)),
+        None => super::memo::any_true(cwd, PAYLOAD_MEMO, &prefix),
+    };
+    if kept {
+        return true;
+    }
     for page in 1..=10 {
         let mut cmd = std::process::Command::new("gh");
         cmd.args([
@@ -829,20 +850,24 @@ pub(crate) fn payload_is_code(cwd: &Path, pr: u64) -> bool {
         let Some(list) = rows.as_array() else {
             return true;
         };
-        names.extend(
-            list.iter()
-                .filter_map(|r| r.get("filename").and_then(Value::as_str))
-                .map(str::to_string),
-        );
+        let code = list
+            .iter()
+            .filter_map(|r| r.get("filename").and_then(Value::as_str))
+            .any(|p| !crate::loopcheck::is_documentation_path(p));
+        if code {
+            if let Some(name) = &memo {
+                super::memo::write(cwd, PAYLOAD_MEMO, name, &Value::Bool(true), Some(&prefix));
+            }
+            return true;
+        }
         if list.len() < 100 {
             break;
         }
     }
-    !names.is_empty()
-        && names
-            .iter()
-            .any(|p| !crate::loopcheck::is_documentation_path(p))
+    false
 }
+
+const PAYLOAD_MEMO: &str = super::memo::PAYLOAD_CODE;
 
 pub(crate) fn git_origin_url(cwd: &Path) -> Option<String> {
     let out = std::process::Command::new("git")

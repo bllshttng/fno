@@ -285,7 +285,6 @@ cli/src/fno/adapters/providers/test_dispatch.py
 cli/src/fno/adapters/providers/test_failover.py
 cli/src/fno/adapters/providers/test_loader.py
 cli/src/fno/adapters/providers/test_managed.py
-cli/src/fno/adapters/providers/test_model.py
 cli/src/fno/adapters/providers/test_rotation.py
 cli/src/fno/adapters/providers/test_staging.py
 cli/src/fno/adapters/providers/test_usage.py

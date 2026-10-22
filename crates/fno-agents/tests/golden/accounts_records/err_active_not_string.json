@@ -1,0 +1,1 @@
+{"op": "load", "files": {"global": "[accounts]\nactive = 5\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"}, "expect": {"error": "invalid providers config"}}
