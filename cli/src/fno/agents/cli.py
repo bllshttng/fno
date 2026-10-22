@@ -918,7 +918,7 @@ def cmd_spawn(
         raise typer.Exit(code=2)
 
     # --promote <scope>... : the operator names the TERRITORY, the ladder altitude
-    # derives from it (role.derive_role_level), and the grantor is stamped
+    # derives from it (role.resolve_role), and the grantor is stamped
     # ambiently from this session - never a value the child could forge. The role
     # needs a session that outlives the grant, so `headless` (one answer, then
     # exit) is refused; `pane` and `bg` both qualify. A bg holder loses only the

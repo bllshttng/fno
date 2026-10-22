@@ -105,10 +105,11 @@
 #      per-config-dir accounts. It constructs and reads no path from the value.
 #      test_usage.py is its test, which builds a fake slot under tmp_path.
 #      binding.py is the shared effective-account read those callers now go
-#      through, and test_account_binding.py is its test: it builds a canonical
-#      ~/.claude and an alt dir under tmp_path to prove that two roots sharing
-#      a transcript folder keep distinct credential identity. Fixture paths
-#      under tmp_path; footnote stores nothing under either.
+#      through, and accounts/binding.rs is its Rust port: both read the
+#      shared ~/.claude slot's credential file to prove who it serves.
+#      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
+#      under a temp root to prove two roots keep distinct credential
+#      identity. Read-only; footnote stores nothing under either.
 #      managed.py resolves the same canonical path for the same reason, in
 #      reconcile-slot: an identity read must not follow an ambient
 #      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
@@ -279,7 +280,6 @@ cli/src/fno/adapters/_shared.py
 cli/src/fno/adapters/providers/dispatch.py
 cli/src/fno/adapters/providers/managed.py
 cli/src/fno/adapters/providers/staging.py
-cli/src/fno/adapters/providers/test_account_binding.py
 cli/src/fno/adapters/providers/test_cli.py
 cli/src/fno/adapters/providers/test_dispatch.py
 cli/src/fno/adapters/providers/test_failover.py
@@ -311,6 +311,7 @@ crates/fno/src/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
+crates/fno-agents/src/accounts/binding.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs

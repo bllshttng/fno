@@ -11,7 +11,7 @@ THE LADDER IS THREE RUNGS, EACH A FACT ABOUT THE SCOPE:
 
 No rung for an implementer: a non-epic node is work, not territory, so a role
 aimed at one is REFUSED - which is why no caller passes a level;
-``derive_role_level`` reads the rung off the scope, and a scope naming no
+``resolve_role`` reads the rung off the scope, and a scope naming no
 territory has none to read. Callers hand-type no altitude (the old surface let a
 backwards ladder - 0 is the TOP - silently mint wrong authority).
 
@@ -236,98 +236,34 @@ def _canonical_project(name: str) -> Optional[str]:
         return None
 
 
-def _epic_or_refuse(raw: str, *, graph_entry=None) -> str:
-    """``raw`` as a backlog epic id, or the refusal that names why not.
-
-    One message set for the single-epic and epic-set paths alike: a member of
-    a set that is a typo or a non-epic node gets the same named remedy it
-    would get alone. ``graph_entry`` lets a set-resolving caller pass one
-    ``_graph_index`` read so members do not pay a full graph parse apiece.
-    """
-    entry = (graph_entry or _graph_entry)(raw)
-    if entry is None:
-        raise RoleScopeError(
-            f"{raw!r} is neither a configured project nor a backlog node; "
-            "nothing to term over (check for a typo)"
-        )
-    if entry.get("type") != "epic":
-        raise RoleScopeError(
-            f"{raw!r} is a {entry.get('type') or 'node'}, not an epic. "
-            "Implementers get no roles - a single node is work, not a territory. "
-            f"If {raw} IS meant to be an epic: fno backlog update {raw} type=epic. "
-            "Otherwise role the epic above it, or its project."
-        )
-    return raw
-
-
-def _member_rung(raw: str, canon: Optional[str], *, graph_entry=None) -> str:
-    """One scope member spelled with its rung, for a mixed-rung refusal."""
-    if canon:
-        return f"{canon} (a project)"
-    entry = (graph_entry or _graph_entry)(raw)
-    if entry is not None and entry.get("type") == "epic":
-        return f"{raw} (an epic)"
-    if entry is not None:
-        return f"{raw} (a {entry.get('type') or 'node'}, not an epic)"
-    return f"{raw} (not a configured project or a known node)"
-
-
 def resolve_role(scopes: list[str], *, graph_entry=None) -> "tuple[int, str]":
-    """``scopes`` -> the (rung, stored scope) they imply, both derived together.
-
-    ONE call rather than a derive-then-encode pair, because the two answers must
-    agree and a caller holding them separately can mismatch them: the rung is
-    counted over CANONICAL project names, so a scope encoded from the raw
-    spelling would be a different territory than the one that was counted.
+    """``scopes`` -> the (rung, stored scope) they imply, derived together by the
+    Rust ladder (``territory::resolve_role``). This shim sends its own alias map
+    and member rows, so the answer reads the sources this module reads.
 
     Raises :class:`RoleScopeError` when the scopes name no territory - the
-    refusal that keeps implementers unpromoted. Mixed scopes are refused rather
-    than coerced: a portfolio is projects and rung 2 is a set of epics, so
-    naming a project and an epic together is a mistake about what is being
-    ruled, not a role over both.
+    refusal that keeps implementers unpromoted - or when the resolver cannot
+    answer.
     """
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
     members = split_scope(canonical_scope(scopes))
-    if not members:
-        raise RoleScopeError("a role needs a scope: name an epic or a project")
-
-    # Resolve aliases FIRST, then dedupe: `-k alpha -k a` is one project spelled
-    # twice, not a two-project portfolio.
-    resolved = [(m, _canonical_project(m)) for m in members]
-    projects = [canon for _, canon in resolved if canon]
-    non_projects = [raw for raw, canon in resolved if not canon]
-
-    if len(members) > 1:
-        if not non_projects:
-            scope = canonical_scope(projects)
-            # One project named twice collapses to one project, not a portfolio.
-            return (0 if len(split_scope(scope)) > 1 else 1), scope
-        # ONE graph parse serves every per-member refusal below; a graph this
-        # rung could not read answers None, and the per-call fallback keeps
-        # the single-read behavior for that machine.
-        by_id = None if graph_entry else _graph_index()
-        entry_of = graph_entry or (_graph_entry if by_id is None else by_id.get)
-        if not projects:
-            # Rung 2 rules a SET of epics, stored with the same separator: a
-            # lead over two epics at once is one role, not a failed portfolio.
-            return 2, canonical_scope(
-                [_epic_or_refuse(raw, graph_entry=entry_of) for raw in non_projects]
-            )
-        raise RoleScopeError(
-            "a multi-scope role rules PROJECTS or EPICS, never both at once: "
-            f"{', '.join(_member_rung(raw, canon, graph_entry=entry_of) for raw, canon in resolved)}. "
-            "Name projects only (a portfolio) or epics only (a set)."
+    projects = {m: canon for m in members if (canon := _canonical_project(m))}
+    by_id = None if graph_entry or len(members) == len(projects) else _graph_index()
+    entry_of = graph_entry or (by_id.get if by_id is not None else (lambda _id: None))
+    rows = [row for m in members if m not in projects and (row := entry_of(m)) is not None]
+    try:
+        answer = spawn_overlay_call(
+            {"kind": "role-resolve", "scopes": members, "projects": projects, "entries": rows}
         )
-
-    raw = members[0]
-    if projects:
-        return 1, projects[0]
-    return 2, _epic_or_refuse(raw, graph_entry=graph_entry)
-
-
-def derive_role_level(scopes: list[str]) -> int:
-    """The rung alone. Thin wrapper over :func:`resolve_role` for callers that
-    only need the altitude."""
-    return resolve_role(scopes)[0]
+    except SpawnOverlayUnavailable as exc:
+        raise RoleScopeError(f"the ladder resolver did not answer: {exc}") from exc
+    if answer.get("refusal"):
+        raise RoleScopeError(answer["refusal"])
+    try:
+        return int(answer["level"]), str(answer["scope"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RoleScopeError(f"the ladder resolver answered malformed JSON: {answer!r}") from exc
 
 
 def scope_contains(
