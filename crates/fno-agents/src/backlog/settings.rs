@@ -197,7 +197,7 @@ pub fn state_dir() -> Option<PathBuf> {
 /// resolved through the layout table so a migrated root reads the `db/` twin.
 pub fn graph_path() -> PathBuf {
     match state_dir() {
-        Some(d) => crate::state_layout::place(&d, "graph.json"),
+        Some(d) => crate::state_layout::graph_anchor(&d),
         None => crate::state_layout::place(&PathBuf::from(".fno"), "graph.json"),
     }
 }

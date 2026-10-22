@@ -1624,7 +1624,7 @@ pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    crate::state_layout::place(&root, "graph.json")
+    crate::state_layout::graph_anchor(&root)
 }
 
 /// The agents journal's text filtered to `types`, bounded by the CLI's

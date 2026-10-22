@@ -1235,7 +1235,7 @@ pub fn run_cli(args: &[String]) -> i32 {
             let paths = SweepPaths {
                 jobs_dir,
                 journal: fno_state_root().join("events.jsonl"),
-                graph: fno_state_root().join("graph.json"),
+                graph: crate::state_layout::graph_anchor(&fno_state_root()),
                 repo_root,
                 fixtures_dir: fixtures,
             };

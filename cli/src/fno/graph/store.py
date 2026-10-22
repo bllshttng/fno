@@ -1056,22 +1056,6 @@ def _read_json(path: Path) -> list[dict]:
     return _read_snapshot(_client_for(Path(path)))[1]
 
 
-def _graph_lock_path(path: Path) -> Path:
-    """The keeper's lockfile for a graph file: ``<canonical path>.lock``.
-
-    Mirrors `graph_store.rs graph_lock_path` (a path formula, not store
-    logic): resolved so two spellings of one graph share one inode, and a
-    resolve failure (a symlink loop, a hostile tree) degrades to the raw
-    spelling rather than raising.
-    """
-    path = Path(path)
-    try:
-        base = path.resolve()
-    except (OSError, RuntimeError):
-        base = path
-    return base.with_name(base.name + ".lock")
-
-
 # ---------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------

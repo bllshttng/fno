@@ -57,12 +57,15 @@ cat > "$TMP/bin/gh" <<'SH'
 for arg in "$@"; do
   if [[ "$arg" == "nameWithOwner" ]]; then echo "smoke/repo"; exit 0; fi
 done
-if [[ " $* " == *" api repos/"*"/pulls/99 "* ]]; then
-  printf '{"number":99,"state":"closed","merged":true,"html_url":"https://github.com/smoke/repo/pull/99","merged_at":"2026-04-22T18:00:00Z","head":{"sha":"deadbeef","ref":"feature/smoke"},"base":{"ref":"main"}}\n'
-  exit 0
-fi
+# A gh proxy some machines wrap gh in may inject flags ahead of the path, so
+# match on the path substring, never on the whole argv. The files read is the
+# more specific path and must win first.
 if [[ "$*" == *"/pulls/99/files?per_page=100"* ]]; then
   printf '[]\n'
+  exit 0
+fi
+if [[ "$*" == *" repos/"*"/pulls/99"* ]]; then
+  printf '{"number":99,"state":"closed","merged":true,"html_url":"https://github.com/smoke/repo/pull/99","merged_at":"2026-04-22T18:00:00Z","head":{"sha":"deadbeef","ref":"feature/smoke"},"base":{"ref":"main"}}\n'
   exit 0
 fi
 printf '{"number":99,"state":"MERGED","url":"https://github.com/smoke/repo/pull/99","mergedAt":"2026-04-22T18:00:00Z","mergeCommit":{"oid":"deadbeef"}}\n'
@@ -140,7 +143,7 @@ cat > "$TMP/.fno/ledger.json" <<JSON
   ]
 }
 JSON
-uv run fno-py done ab-smoke0002 --pr 99 >/dev/null 2>&1 || true
+done_out="$(uv run fno-py done ab-smoke0002 --pr 99 2>&1 || true)"
 rollup=$(uv run python -c "
 from fno.graph.store import read_graph_strict
 e = next(x for x in read_graph_strict('$TMP/.fno/graph.json') if x['id'] == 'ab-smoke0002')
@@ -148,6 +151,8 @@ print(e.get('session_id'), e.get('cost_usd'), e.get('points'), len(e.get('cost_s
 ")
 if [[ "$rollup" != "smoke-sess-1 4.25 5 1" ]]; then
   echo "FAIL: rollup fields not filled. got: $rollup"
+  echo "done output was:"
+  echo "$done_out"
   exit 1
 fi
 

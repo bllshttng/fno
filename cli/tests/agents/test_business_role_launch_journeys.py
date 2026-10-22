@@ -22,6 +22,9 @@ from fno.roles import (
     RoutingHint,
 )
 
+# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+pytestmark = pytest.mark.dev_build
+
 
 OPENAI_PROVIDER = {
     "oai": {

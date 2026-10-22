@@ -1777,8 +1777,6 @@ mod tests {
             "--name",
             "Maya",
         ]));
-        drop(guard);
-        clear_hermetic(&root, saved);
         assert_ne!(ok.exit, 2, "{:?}", ok.stderr);
         assert!(
             !ok.stderr.iter().any(|line| line.contains(front_door_line)),
@@ -1834,6 +1832,10 @@ mod tests {
             "name eaten: {:?}",
             eaten.argv
         );
+        // Held to the end: every compose above reads the process env, which
+        // the sibling test rewrites the moment the lock frees.
+        drop(guard);
+        clear_hermetic(&root, saved);
     }
 
     /// A take-over reason in the environment is a forgery or a stale

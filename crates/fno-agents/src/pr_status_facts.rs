@@ -113,6 +113,9 @@ pub fn run_op(op: &str, payload: &Value) -> String {
         "status-cache-key" => status_cache_key(payload).to_string(),
         "status-branch-history" => branch_history_op(&RealGhProbe, payload).to_string(),
         "status-pr-info" => crate::pr_info::run_op(payload).to_string(),
+        "status-pr-files" => crate::pr_status::lists::files_op(payload).to_string(),
+        "status-pr-list" => crate::pr_status::lists::list_op(payload),
+        "status-quota-graphql" => quota_graphql_op(payload).to_string(),
         other => json!({"error": format!("unknown op {other}")}).to_string(),
     }
 }
@@ -548,6 +551,20 @@ fn rest_get_op<P: GhProbe>(
         }
         Err(err) => json!({"eligible": true, "ok": false, "stdout": "", "stderr": err}),
     }
+}
+
+/// The `status-quota-graphql` op: the shared GraphQL bucket's remaining and
+/// reset, off the exempt `rate_limit` read (the `_rest.graphql_remaining`
+/// port). Both None on any failure; the caller reads None as unknown, never
+/// as zero.
+fn quota_graphql_op(payload: &Value) -> Value {
+    let cwd = PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
+    let probe = RealGhProbe;
+    let (remaining, reset_iso) = crate::pr_status::lists::graphql_remaining(&probe, &cwd);
+    json!({
+        "remaining": remaining,
+        "reset_iso": reset_iso,
+    })
 }
 
 /// The `status-pr-activity` op: the pr-watch reviews leg, in Rust beside its

@@ -50,18 +50,12 @@ def _reset_project_resolve_cache():
 def _quiet_gh_budget(monkeypatch):
     """Keep every test off the real fleet GitHub request ledger.
 
-    `execute_graphql` and the gh proxy admit through `fno-agents gh-budget`
-    before each call, and a CI wheel bundles the binary - so an unstubbed test
-    run charges the machine-wide budget hundreds of times inside the 60s
-    window, trips the 450-point cap mid-shard, and every later test degrades
-    to its unknown arm (measured: smoke-pytest shard 8). Autouse, like the
-    decision-index sandbox: the write happens layers below any test that
-    triggers it. The budget's own tests re-stub `_quota._gh_budget` and restore
-    the real functions from import-time captures.
+    The quota broker admits and records inside the fno-agents binary, so a
+    CI wheel run cannot reach the Python-side seam this fixture once stubbed
+    (pr port 7 retired it). The gate still answers from the binary's own
+    ledger through the ops door; a test that would trip it stubs
+    `fno.rust_binary.command_call` itself.
     """
-    monkeypatch.setattr("fno.pr._quota.admit", lambda argv: None)
-    monkeypatch.setattr("fno.pr._quota.record_refusal", lambda stderr: None)
-    monkeypatch.setattr("fno.pr._quota.backoff_live", lambda: False)
 
 
 @pytest.fixture(autouse=True)
@@ -680,31 +674,37 @@ def _hermetic_fleet_incident_home(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def _hermetic_authorized_merge(monkeypatch):
-    """Default the authorized-merge owner to "authorized, then merged".
+    """Default the authorized-merge door to "authorized, then merged".
 
     The owner lives in the fno-agents binary, which is absent on a CI runner
     and answers ``unknown`` there, so every merge test would read ``held``; and
     its probes are live reads - the PR over REST, the review hold's worktree
     layer shelling ``git`` against whatever checkout the suite runs in, which
-    inside an active /target worktree is legitimately dirty.
+    inside an active /target worktree is legitimately dirty. Since pr port 7
+    the Python callers reach the owner through ``command_call("authorized-merge",
+    {"op": "merge", ...})``, so the default stubs that one op.
 
     Cleared at the reader. The decision itself is under test in
     ``crates/fno-agents/src/authorized_merge.rs``; the tests that exercise this
     seam override the fixture with the receipt they want rendered.
     """
-    import fno.pr._merge as merge
+    import fno.rust_binary as rust_binary
 
-    def _authorized(pr_number, repo, *, effect, approved, source, **kwargs):
-        head = kwargs.get("covered_head") or "deadbee"
-        if kwargs.get("decide_only"):
-            return {"outcome": "authorized", "detail": head, "head": head}
-        return {
-            "outcome": "armed" if effect == "arm" else "merged",
-            "detail": head,
-            "head": head,
-        }
+    real_command_call = rust_binary.command_call
 
-    monkeypatch.setattr(merge, "_authorized_merge", _authorized)
+    def _merged_receipt(command, payload, unavailable=rust_binary.CommandUnavailable, **kwargs):
+        if command == "authorized-merge" and isinstance(payload, dict) and payload.get("op") == "merge":
+            head = payload.get("covered_head") or "deadbee"
+            return {
+                "exit": 0,
+                "outcome": "merged",
+                "detail": head,
+                "head": head,
+                "reason": "",
+            }
+        return real_command_call(command, payload, unavailable=unavailable, **kwargs)
+
+    monkeypatch.setattr(rust_binary, "command_call", _merged_receipt)
 
 
 # ---------------------------------------------------------------------------
@@ -1418,8 +1418,9 @@ def _unbake_constants_facade():
 def _no_status_ci_door(monkeypatch):
     """Hermetic default for the status door transports.
 
-    `_verify._failing_required`, `_internal_gh._checks` and the merge flake
-    probe read their facts through `fno.rust_binary.command_call` status ops.
+    The verify gate, the checks read and the merge flake probe read their
+    facts through `fno.rust_binary.command_call` status ops (their Python
+    transports retired with pr port 7; the ops stay).
     In the test environment the resolver finds no dev binary or a stale
     installed one, so an unstubbbed call is a real network read or a
     wrong-shape answer. The default answers an empty row set for status-ci
@@ -1459,12 +1460,6 @@ def _no_status_ci_door(monkeypatch):
                 return {"rounds_used": 0, "max_rounds": 2, "last": None}
             if op == "lane":
                 return {"lane": False}
-        if command == "authorized-merge" and op == "pr-head":
-            from fno.pr import _merge
-            from fno.pr._rest import fetch_pr_info_rest
-
-            info, _ = fetch_pr_info_rest(str(payload["pr"]), cwd=payload["cwd"], runner=_merge.run)
-            return {"head": info.get("head_sha") if info else None}
         return real_command_call(command, payload, unavailable=unavailable, **kwargs)
 
     monkeypatch.setattr(rust_binary, "command_call", _fake_command_call)

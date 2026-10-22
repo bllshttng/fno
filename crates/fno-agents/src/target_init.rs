@@ -245,11 +245,12 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
             .unwrap_or(false)
             || args.plan_path.is_some())
     {
-        return Err(refuse(
+        return Err(refuse(&format!(
             "fno do target init: dispatch-hold-invalid: backlog graph is \
              unreadable; refusing to assume unheld. Nothing was claimed. Fix or \
-             restore graph.json and retry.",
-        ));
+             restore {} and retry.",
+            graph_store_label(&cwd)
+        )));
     }
 
     // 7. Dispatch-node resolution (exact ids only). The review-capability,
@@ -756,6 +757,13 @@ fn warn_if_authority_not_granted(cwd: &Path) {
 
 /// The shared graph rows read. One loader, both consumers: this module's
 /// dispatch-node resolution and the orient report's node and boundary lines.
+/// The store a person can open when the backlog graph will not read.
+pub(crate) fn graph_store_label(cwd: &Path) -> String {
+    crate::backlog::database_path(&crate::org_board::scope::graph_json_path(cwd))
+        .display()
+        .to_string()
+}
+
 pub(crate) fn graph_rows(cwd: &Path) -> Option<Vec<serde_json::Value>> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = crate::backlog::api::Store::new(&graph_path);

@@ -1871,6 +1871,17 @@ def _preserve_claim_door(root: Path, env: dict[str, str]) -> None:
     preserved = preserved_dir / "fno-agents"
     shutil.copyfile(source, preserved)
     preserved.chmod(source.stat().st_mode & 0o777)
+    # The stop gate resolves its gh adapter beside the binary, so a lone
+    # preserved copy strands every judged fire in advisory mode. Carry the
+    # sibling family across when the source directory has it (a cargo build
+    # does; a stub or an earlier preserved copy does not, and skipping is
+    # then correct).
+    for helper in ("fno-gh-loopcheck", "fno-gh-proxy", "fno-gh-coverage"):
+        sibling = source.parent / helper
+        if sibling.is_file() and os.access(sibling, os.X_OK):
+            copied = preserved_dir / helper
+            shutil.copyfile(sibling, copied)
+            copied.chmod(sibling.stat().st_mode & 0o777)
     # The scrub unlinks the target/ copies this function may have been handed,
     # so a BIN inherited from the job env goes dead at exactly the moment the
     # claim consumers run. Re-point it at the preserved copy.

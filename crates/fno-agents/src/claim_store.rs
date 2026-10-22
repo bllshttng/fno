@@ -168,7 +168,7 @@ pub(crate) fn database_path_from_directory(dir: &Path) -> Result<PathBuf, String
     let state = dir
         .parent()
         .ok_or_else(|| format!("{} has no state root", dir.display()))?;
-    Ok(crate::state_layout::place(state, "graph.json").with_extension("db"))
+    Ok(crate::state_layout::graph_anchor(state).with_extension("db"))
 }
 
 fn open_for_key(key: &str, root: Option<&Path>) -> Result<Db, String> {

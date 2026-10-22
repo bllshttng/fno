@@ -202,3 +202,85 @@ fn the_golden_replay_pins_every_captured_case() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// post-merge remote delete: the queue-merge finisher's owner
+// ---------------------------------------------------------------------------
+
+fn tsv(fields: &str) -> Option<Run> {
+    ok(format!("{fields}\n"))
+}
+
+#[test]
+fn same_repo_head_deletes_from_the_base_repo_once() {
+    let deletes = std::cell::RefCell::new(Vec::new());
+    let probe = |args: &[&str], _dir: &Path| -> Option<Run> {
+        if args.contains(&"--jq") {
+            return tsv("feature/x\towner/repo\towner/repo");
+        }
+        deletes
+            .borrow_mut()
+            .push(args.last().map(|s| s.to_string()).unwrap_or_default());
+        ok(String::new())
+    };
+    let mut err: Vec<u8> = Vec::new();
+    remote_delete_cleanup(7, Path::new("/nonexistent-fno-tmp"), &probe, &mut err);
+    let deletes = deletes.borrow();
+    assert_eq!(deletes.len(), 1, "one ref delete: {deletes:?}");
+    assert_eq!(
+        deletes[0], "repos/owner/repo/git/refs/heads/feature/x",
+        "the delete names the base repo's ref"
+    );
+    assert!(
+        err.is_empty(),
+        "a clean cleanup names no failure: {:?}",
+        String::from_utf8_lossy(&err)
+    );
+}
+
+#[test]
+fn a_fork_head_is_never_deleted_from_the_base_repo() {
+    let deletes = std::cell::RefCell::new(Vec::new());
+    let probe = |args: &[&str], _dir: &Path| -> Option<Run> {
+        if args.contains(&"--jq") {
+            return tsv("feature/x\tcontributor/repo\towner/repo");
+        }
+        deletes
+            .borrow_mut()
+            .push(args.last().map(|s| s.to_string()).unwrap_or_default());
+        ok(String::new())
+    };
+    let mut err: Vec<u8> = Vec::new();
+    remote_delete_cleanup(7, Path::new("/nonexistent-fno-tmp"), &probe, &mut err);
+    assert!(
+        deletes.borrow().is_empty(),
+        "a fork's branch is the fork's to delete"
+    );
+    assert!(
+        err.is_empty(),
+        "a fork skip is a silent terminal, never a failure: {:?}",
+        String::from_utf8_lossy(&err)
+    );
+}
+
+#[test]
+fn a_failed_delete_names_the_failure_without_raising() {
+    let probe = |args: &[&str], _dir: &Path| -> Option<Run> {
+        if args.contains(&"--jq") {
+            return tsv("feature/x\towner/repo\towner/repo");
+        }
+        Some(Run {
+            ok: false,
+            code: Some(1),
+            stdout: String::new(),
+            stderr: "denied\n".into(),
+        })
+    };
+    let mut err: Vec<u8> = Vec::new();
+    remote_delete_cleanup(7, Path::new("/nonexistent-fno-tmp"), &probe, &mut err);
+    assert!(
+        String::from_utf8_lossy(&err).contains("cleanup failed"),
+        "the failure is named, warn-only: {:?}",
+        String::from_utf8_lossy(&err)
+    );
+}

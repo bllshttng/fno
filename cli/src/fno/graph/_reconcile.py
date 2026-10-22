@@ -1137,47 +1137,41 @@ def query_pr_merge_state(
 ) -> PrMergeState:
     """Read merge state and complete changed-file evidence through REST.
 
-    ``info_reader`` and ``files_reader`` are the production seams. ``runner``
-    remains a compatibility seam for callers that inject ``subprocess.run``;
-    it is adapted to the same in-process REST readers and never emits
-    the old GraphQL PR-state argv.
+    ``info_reader`` and ``files_reader`` are the production seams: they
+    default to the native op-door readers (the deleted `fno.pr._rest` legs'
+    owner). ``runner`` and ``timeout_s`` stay accepted for callers that
+    inject them and no longer change the transport: the read is native.
     """
-    from fno.pr import _rest
-    from fno.pr._proc import Result
+    def _op_reader(op: str, number: int, *, repo: str | None = None, cwd: str | None = None):
+        """One op-door REST read, the default readers' native home (the
+        deleted `fno.pr._rest` legs): `(payload, "")` or `(None, reason)`."""
+        from fno.rust_binary import CommandUnavailable, command_call
 
-    def rest_runner(cmd, *, cwd=None, timeout=None):
-        effective_timeout = timeout if timeout is not None else timeout_s
+        ask: dict = {"op": op, "cwd": cwd or os.getcwd()}
+        if op == "status-pr-files" and repo:
+            ask["slug"] = repo
+        elif repo:
+            ask["repo"] = repo
+        ask["pr"] = int(number)
         try:
-            if runner is None:
-                return _rest.run(cmd, cwd=cwd, timeout=effective_timeout)
-            result = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=effective_timeout,
-                cwd=cwd,
-            )
-        except subprocess.TimeoutExpired:
-            return Result(124, "", f"gh REST request timed out after {timeout_s}s")
-        except OSError as exc:
-            return Result(127, "", f"gh subprocess failed to launch: {exc}")
-        return Result(
-            int(getattr(result, "returncode", 1)),
-            getattr(result, "stdout", "") or "",
-            getattr(result, "stderr", "") or "",
-        )
+            out = command_call("authorized-merge", ask, timeout=120)
+        except CommandUnavailable as exc:
+            return None, str(exc)
+        if out.get("error"):
+            return None, out["error"]
+        return out, ""
 
-    info_reader = info_reader or (
-        lambda number, *, repo=None, cwd=None: _rest.fetch_pr_info_rest(
-            str(number), cwd=cwd, runner=rest_runner, repo=repo
-        )
-    )
-    files_reader = files_reader or (
-        lambda number, *, repo=None, cwd=None: _rest.fetch_pr_file_paths_rest(
-            str(number), cwd=cwd, runner=rest_runner, repo=repo
-        )
-    )
+    def _op_pr_info(number, *, repo=None, cwd=None):
+        return _op_reader("status-pr-info", number, repo=repo, cwd=cwd)
+
+    def _op_pr_files(number, *, repo=None, cwd=None):
+        payload, reason = _op_reader("status-pr-files", number, repo=repo, cwd=cwd)
+        if payload is None:
+            return None, reason
+        return payload.get("paths"), ""
+
+    info_reader = info_reader or _op_pr_info
+    files_reader = files_reader or _op_pr_files
 
     # Merged-PR facts never change: serve the permanent gh-cache row; injected readers bypass.
     cached = None

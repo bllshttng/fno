@@ -120,7 +120,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "pr": ("fno.pr:pr_app", "PR utilities (wraps scripts/lib/pr-*.sh)", {"hidden": True}),
     "stub-manifest": (
         "fno.stub_manifest:stub_manifest_app",
         "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
@@ -307,7 +306,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "paths": set(),
     "plan": set(),
     "plugins": set(),
-    "pr": {"merge"},
     "pr-watch": set(),
     "resume": set(),
     "retro": set(),

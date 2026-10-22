@@ -42,7 +42,19 @@ pub fn deliver<F>(text: &str, emit: F) -> CopyOutcome
 where
     F: FnOnce(&[u8]) -> std::io::Result<()>,
 {
-    deliver_with(copy_via_tool, text, emit)
+    // Over ssh a host tool would fill the mux host's clipboard, not the
+    // user's: go straight to OSC 52 so their terminal takes the text.
+    deliver_in(crate::link::is_remote_session(), copy_via_tool, text, emit)
+}
+
+/// [`deliver_with`] gated on the attach: a remote session never tries the
+/// local tools.
+fn deliver_in<L, F>(remote: bool, local: L, text: &str, emit: F) -> CopyOutcome
+where
+    L: FnOnce(&str) -> Option<&'static str>,
+    F: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    deliver_with(|t| if remote { None } else { local(t) }, text, emit)
 }
 
 /// The delivery decision with the local-tool attempt injected, so tests can
@@ -150,6 +162,10 @@ fn base64(input: &[u8]) -> String {
 /// Read-only: it inspects PATH entries and never execs a tool ("touches
 /// nothing").
 pub fn available_tool() -> Option<&'static str> {
+    // Over ssh [`deliver`] skips the host tools, so none counts as available.
+    if crate::link::is_remote_session() {
+        return None;
+    }
     available_tool_with(on_path)
 }
 
@@ -253,6 +269,19 @@ mod tests {
         );
         assert_eq!(outcome, CopyOutcome::Osc52 { truncated: false });
         assert!(captured.starts_with(b"\x1b]52;c;"));
+    }
+
+    #[test]
+    fn ssh_attach_skips_the_host_tool_for_osc52() {
+        let out = deliver_in(
+            true,
+            |_| panic!("host clipboard tool must not run over ssh"),
+            "hi",
+            |_| Ok(()),
+        );
+        assert_eq!(out, CopyOutcome::Osc52 { truncated: false });
+        let out = deliver_in(false, |_| Some("pbcopy"), "hi", |_| Ok(()));
+        assert_eq!(out, CopyOutcome::Local("pbcopy"));
     }
 
     #[test]

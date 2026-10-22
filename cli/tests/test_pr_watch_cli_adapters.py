@@ -9,7 +9,6 @@ then make them green.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,7 +75,6 @@ def test_real_tick_composition_survives_route_metadata_and_records_live_sweep(
     from types import SimpleNamespace
 
     from fno.adapters.providers.loader import load_providers
-    from fno.pr._proc import Result
     from fno.pr_watch._dispatch import DispatchResult, tick
     from fno.pr_watch._discover import PrCandidate, PrObservation, read_tracked_pr_states
     from fno.pr_watch._state import WatermarkStore
@@ -120,15 +118,15 @@ route = "zai/glm-5.3[1m]"
         repo_slug="owner/repo",
     )
 
-    def rest_runner(cmd, **_kwargs):
-        path = cmd[2]
-        if "state=open" in path:
-            return Result(returncode=0, stdout=json.dumps([
-                {"number": 1134, "state": "open", "merged": False}
-            ]), stderr="")
-        # x-c79d: the stale key is absent from the open listing, which is the
-        # whole answer now - no closed read backs it up.
-        raise AssertionError(f"unexpected closed or exact read: {cmd}")
+    # x-c79d: the stale key is absent from the open listing, which is the
+    # whole answer now - no closed read backs it up. The listing rides the
+    # status-pr-list op on the authorized-merge door.
+    def _listing_door(command, payload, timeout=None):
+        assert command == "authorized-merge" and payload.get("op") == "status-pr-list"
+        assert payload["slug"] == "owner/repo"
+        return {"rows": [{"number": 1134, "state": "OPEN"}], "error": None}
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _listing_door)
 
     events_path = tmp_path / "events.jsonl"
 
@@ -158,9 +156,7 @@ route = "zai/glm-5.3[1m]"
             latest_review_ts=None,
             opened_at="2026-08-23T00:00:00Z",
         ),
-        read_tracked_states_fn=lambda keys: read_tracked_pr_states(
-            keys, runner=rest_runner
-        ),
+        read_tracked_states_fn=lambda keys: read_tracked_pr_states(keys),
         fire_skill_fn=lambda *_args, **_kwargs: DispatchResult(
             ok=True, rc=0, is_error=False, raw="{}"
         ),

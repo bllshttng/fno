@@ -1603,10 +1603,33 @@ def refresh() -> None:
     flags on ``fno-agents pr-watch refresh`` itself; a new flag is a new
     command and belongs in crates.
     """
-    from fno.pr.cli import _forward_to_binary
-
     argv = ["refresh", "--fno-binary", _resolve_fno_binary(), "--caller", "refresh"]
     _forward_to_binary("pr-watch", argv)
+
+
+def _forward_to_binary(command: str, args: list[str]) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct. The shared
+    body of the pr-watch binary commands (refresh, heal); the pr-front-door
+    copy this once was died with pr/cli.py (pr port 7)."""
+    import subprocess
+
+    import typer
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            f"fno pr watch {command.replace('pr-', '')}: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    result = subprocess.run([str(binary), command, *args], check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 # Single-flight window for the SessionStart self-heal: long enough to cover the
@@ -1623,8 +1646,6 @@ def heal() -> None:
     Command-level flags (--caller, --fno-binary) belong to the command itself; a
     new flag is a new command and belongs in crates.
     """
-    from fno.pr.cli import _forward_to_binary
-
     argv = ["heal", "--fno-binary", _resolve_fno_binary(), "--caller", "heal"]
     _forward_to_binary("pr-watch", argv)
 
