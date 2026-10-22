@@ -29,6 +29,14 @@ There is no notify cursor: `SessionStart` and `UserPromptSubmit` race on the one
 - **Inbound:** unread envelopes addressed to the canonical session handle -> complete bodies, ids, and reply guidance inside a hook-owned `<system-reminder>` frame, followed by acknowledgement after flush.
 - **Sent-unclaimed:** no longer part of the boundary path. The status command still computes it (hosted and durable sends not yet proven `landed`, aged past `config.inbox.unclaimed_ttl`, default 1800s) and reports `sent unclaimed: N`. Stat-only; advances no recipient cursor. Porting the scan back into the boundary render is open follow-up work.
 
+## Tool-boundary delivery
+
+A worker busy in one long turn reaches no prompt boundary, so its mail can wait an hour. The Claude `PreToolUse` hook, `hooks/inject-control-drain-tool-boundary.sh`, lands control mail at the next tool call. Set `inbox.tool_boundary_ordinary = true` and it lands ordinary mail there too. The default is false, so ordinary mail waits for the prompt boundary.
+
+If a control flag exists, or the bus log is newer than the session's stamp (`bus/tool-boundary/<session>.stamp`), the hook runs `fno-agents mail-inject --control-drain`. That check is a bash `-nt` test, so a clean tool call forks nothing. After each pass the command sets the stamp to the bus mtime it read before the scan. A row appended during the scan therefore trips the next call. With the key off, or with a live hold, the command sets the stamp 5 minutes ahead instead. An off session then pays one command run per 5 minutes at most, and it still sees a later key change.
+
+The ordinary lane uses the same renderer, cursor and transcript dedup as `mail-notify-self`. It writes one `PreToolUse` payload: the bodies go in `additionalContext`, and the person sees one `systemMessage` line, `mail: N message(s) from <senders>`. The cursor moves only after the payload is flushed. A control row that lands in the same pass is not rendered twice. The tool boundary reads a hold without re-arming it, because a tool call is not a prompt. Codex and the other harnesses keep prompt-boundary delivery.
+
 ## Failure posture
 
 Every path degrades to silence, never to a blocked turn: no harness identity -> no-op; `fno-agents` missing -> hook no-op; a recipient name rejected by the cursor path guard is skipped instead of crashing the command.

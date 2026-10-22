@@ -35,6 +35,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `project.vision` | str (optional) | _(none)_ | always | One-paragraph statement of what this codebase is and why. |
 | `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`). |
 | `inbox.landed_abandon_ttl` | int | `21600` | advanced | Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again. |
+| `inbox.tool_boundary_ordinary` | bool | `false` | advanced | true lands ordinary mail at the next tool call (Claude PreToolUse), so a worker busy in one long turn reads it without waiting for its next prompt. Default false: ordinary mail waits for the prompt boundary; control mail lands at the tool call either way. |
 | `user.name` | str | `` | always | What fno calls you. Empty falls back to `git config user.name`. |
 | `sandbox.on_unavailable` | typing.Literal['refuse', 'warn'] | `refuse` | advanced | When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined. |
 | `blueprint.max_prs_per_epic` | int | `4` | advanced | Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it. |
