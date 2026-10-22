@@ -22,6 +22,8 @@ const MAX_HOPS: usize = 8;
 struct Seen {
     first_seen_ms: i64,
     notified: bool,
+    /// The recipients a send reached, so a retry mails only the rest.
+    told: Vec<String>,
 }
 
 /// One worker waiting on a prompt now.
@@ -34,6 +36,7 @@ pub(crate) struct Waiting {
     pub waiting_for: String,
     pub since_ms: i64,
     notified: bool,
+    told: Vec<String>,
 }
 
 impl Waiting {
@@ -113,6 +116,7 @@ pub(crate) fn observe(
             waiting_for: row.waiting_for.clone().unwrap_or_default(),
             since_ms: seen.first_seen_ms,
             notified: seen.notified,
+            told: seen.told,
         });
     }
     if snapshot.is_known() && snapshot.warning_text().is_empty() {
@@ -209,34 +213,32 @@ fn run_pass_with(
             .as_deref()
             .map(|sid| recipients(home, &registry, sid))
             .unwrap_or_default();
+        let mut told = w.told.clone();
         // With no spawner on record, one fleet task reaches the operator.
-        let results: Vec<Result<(), String>> = if to.is_empty() {
+        let notified = if to.is_empty() {
             let run = format!("claude attach {}", w.short_id);
             let store = crate::provider_cap::questions_path(home);
             let key = format!("prompt wait {}", w.short_id);
-            vec![crate::fleet_task::file_once(
-                &store,
-                SENDER,
-                &key,
-                &w.cwd,
-                &text,
-                Some(&run),
-                None,
-            )
-            .map(|_| ())]
+            crate::fleet_task::file_once(&store, SENDER, &key, &w.cwd, &text, Some(&run), None)
+                .map_err(|e| first_error.get_or_insert(e).clone())
+                .is_ok()
         } else {
-            let mut send =
-                |sid: &String| crate::first_check::send_mail(&mut *runner, SENDER, sid, &text);
-            to.iter().map(&mut send).collect()
+            let pending: Vec<String> = to.iter().filter(|s| !told.contains(*s)).cloned().collect();
+            for sid in pending {
+                match crate::first_check::send_mail(&mut *runner, SENDER, &sid, &text) {
+                    Ok(()) => told.push(sid),
+                    Err(e) => {
+                        first_error.get_or_insert(e);
+                    }
+                }
+            }
+            to.iter().all(|sid| told.contains(sid))
         };
-        let reached = results.iter().any(Result::is_ok);
-        if let Some(Err(e)) = results.into_iter().find(Result::is_err) {
-            first_error.get_or_insert(e);
-        }
-        if reached {
+        if notified || told != w.told {
             let seen = Seen {
                 first_seen_ms: w.since_ms,
-                notified: true,
+                notified,
+                told,
             };
             let path = dir(home).join(format!("{}.json", w.short_id));
             state::write_json_atomic(&path, &seen).map_err(|e| e.to_string())?;
@@ -289,11 +291,19 @@ mod tests {
         run_pass_with(&home, t0, &snap, &mut deliver).unwrap();
         run_pass_with(&home, t0 + PARK_AFTER_MS - 1, &snap, &mut deliver).unwrap();
         assert!(sent.borrow().is_empty(), "a fresh prompt is no news");
+        let mut lead_down = |argv: &[String], _: &str| {
+            if argv[8] == lead {
+                (1, String::new(), "transport unavailable".to_string())
+            } else {
+                deliver(argv, "")
+            }
+        };
+        assert!(run_pass_with(&home, t0 + PARK_AFTER_MS, &snap, &mut lead_down).is_err());
         run_pass_with(&home, t0 + PARK_AFTER_MS, &snap, &mut deliver).unwrap();
         {
             let sent = sent.borrow();
             let to: Vec<&str> = sent.iter().map(|(to, _)| to.as_str()).collect();
-            assert_eq!(to, vec![mid, lead], "spawner, then the nearest lead");
+            assert_eq!(to, vec![mid, lead], "spawner, then the lead, each once");
             assert!(
                 sent[0].1.contains("claude attach 30d6ff6a"),
                 "{}",
