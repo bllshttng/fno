@@ -2422,9 +2422,11 @@ fn maybe_run_spawn(
         })
         .unwrap_or_default();
     // The claude-only bundle, resolved once for both claude lanes.
-    // The retired tier-3 bundle (add-dir/agent/tools/deny-tools) can no
-    // longer arrive: the parser refuses the spellings at the door. The
-    // builders keep their parameters; the call sites pass neutrals.
+    // The old tier-3 bundle (add-dir/agent/tools/deny-tools) no longer
+    // arrives as typed fields: --add-dir/--agent/--tools ride the fenced
+    // passthrough with every other harness flag, and --deny-tools refuses at
+    // the door. The builders keep their parameters; the call sites pass
+    // neutrals.
     let claude_flags = fno_agents::claude_ask::HarnessFlags {
         add_dir: None,
         state_dirs: &state_dirs,
@@ -3959,10 +3961,23 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // instead of queueing for a free slot. Client-side only.
                 params.insert("no_wait".into(), Value::Bool(true));
             }
-            "--model" | "-m" => {
-                // Spawn refuses this axis at scan; the arm dies here so a
-                // direct call on another verb cannot revive the spelling.
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--model"));
+            // The harness's own flags, typed before the fence, are shorthand
+            // for the same flag behind it. They join the fenced tail in
+            // harness_args, so every lane that carries a fenced flag carries
+            // these, and a lane that cannot refuses by name.
+            "--model" | "-m" | "--effort" | "--permission-mode" | "--add-dir" | "--agent"
+            | "--tools"
+                if verb == "spawn" =>
+            {
+                let flag = if a == "-m" { "--model" } else { a.as_str() };
+                let value = str_arg(&mut it, flag)?;
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String(flag.to_string()));
+                    list.push(value);
+                }
             }
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
@@ -3997,26 +4012,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 }
                 params.insert("defaults_applied".into(), Value::String(v.into()));
             }
-            "--permission-mode" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
-                    "--permission-mode",
-                ));
-            }
-            "--effort" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--effort"));
-            }
-            // Tier-3 harness-native passthrough died with the axes: the
-            // harness's own flags ride --argv/--harness-arg now, and these
-            // spellings refuse by name instead of feeding the spawn bundle.
-            "--add-dir" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--add-dir"));
-            }
-            "--agent" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--agent"));
-            }
-            "--tools" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--tools"));
-            }
+            // fno's own spelling of claude's --disallowedTools: it refuses by
+            // name, since forwarding it would hand claude a flag it lacks.
             "--deny-tools" => {
                 return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
                     "--deny-tools",
