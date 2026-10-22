@@ -1,18 +1,1 @@
-{
-  "op": "combos",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"alpha\"]\nsticky_limit = 0\n"
-  },
-  "expect": {
-    "ok": {
-      "main": {
-        "name": "main",
-        "strategy": "fallback",
-        "sticky_limit": 1,
-        "providers": [
-          "alpha"
-        ]
-      }
-    }
-  }
-}
+{"op": "combos", "files": {"global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"alpha\"]\nsticky_limit = 0\n"}, "expect": {"ok": {"main": {"name": "main", "strategy": "fallback", "sticky_limit": 1, "providers": ["alpha"]}}}}

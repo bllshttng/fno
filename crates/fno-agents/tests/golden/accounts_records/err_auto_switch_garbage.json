@@ -1,9 +1,1 @@
-{
-  "op": "load",
-  "files": {
-    "global": "[accounts]\nauto_switch = \"garbage\"\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"
-  },
-  "expect": {
-    "error": "invalid providers config"
-  }
-}
+{"op": "load", "files": {"global": "[accounts]\nauto_switch = \"garbage\"\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"}, "expect": {"error": "invalid providers config"}}

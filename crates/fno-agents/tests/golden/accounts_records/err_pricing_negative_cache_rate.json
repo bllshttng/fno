@@ -1,9 +1,1 @@
-{
-  "op": "load",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.records.pricing]\ninput_per_million_usd = 1\noutput_per_million_usd = 1\ncache_read_per_million_usd = -1\n"
-  },
-  "expect": {
-    "error": "invalid provider record 'a'"
-  }
-}
+{"op": "load", "files": {"global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.records.pricing]\ninput_per_million_usd = 1\noutput_per_million_usd = 1\ncache_read_per_million_usd = -1\n"}, "expect": {"error": "invalid provider record 'a'"}}

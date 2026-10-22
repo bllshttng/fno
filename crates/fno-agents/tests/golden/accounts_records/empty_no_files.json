@@ -1,13 +1,1 @@
-{
-  "op": "load",
-  "files": {},
-  "expect": {
-    "ok": {
-      "records": [],
-      "active": null,
-      "failover": null,
-      "auto_switch": false,
-      "agents": {}
-    }
-  }
-}
+{"op": "load", "files": {}, "expect": {"ok": {"records": [], "active": null, "failover": null, "auto_switch": false, "agents": {}}}}

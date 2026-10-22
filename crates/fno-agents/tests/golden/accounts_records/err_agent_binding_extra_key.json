@@ -1,9 +1,1 @@
-{
-  "op": "load",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[agents.reviewer]\nprovider = \"alpha\"\nmodel = \"x\"\n"
-  },
-  "expect": {
-    "error": "invalid agent binding for 'reviewer'"
-  }
-}
+{"op": "load", "files": {"global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[agents.reviewer]\nprovider = \"alpha\"\nmodel = \"x\"\n"}, "expect": {"error": "invalid agent binding for 'reviewer'"}}

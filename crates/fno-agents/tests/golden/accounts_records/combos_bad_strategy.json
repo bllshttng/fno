@@ -1,9 +1,1 @@
-{
-  "op": "combos",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"alpha\"]\nstrategy = \"random\"\n"
-  },
-  "expect": {
-    "error": "Combo 'main' has invalid strategy 'random'; valid: ('fallback', 'round_robin')"
-  }
-}
+{"op": "combos", "files": {"global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"alpha\"]\nstrategy = \"random\"\n"}, "expect": {"error": "Combo 'main' has invalid strategy 'random'; valid: ('fallback', 'round_robin')"}}

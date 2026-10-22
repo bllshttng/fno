@@ -1,9 +1,1 @@
-{
-  "op": "load",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\npriority = 1.5\n"
-  },
-  "expect": {
-    "error": "invalid provider record 'a'"
-  }
-}
+{"op": "load", "files": {"global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\npriority = 1.5\n"}, "expect": {"error": "invalid provider record 'a'"}}

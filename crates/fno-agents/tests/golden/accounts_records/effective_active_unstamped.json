@@ -1,9 +1,1 @@
-{
-  "op": "effective_active",
-  "files": {
-    "global": "[accounts]\nactive = \"alpha\"\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"
-  },
-  "expect": {
-    "ok": null
-  }
-}
+{"op": "effective_active", "files": {"global": "[accounts]\nactive = \"alpha\"\n[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n"}, "expect": {"ok": null}}

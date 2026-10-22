@@ -1,9 +1,1 @@
-{
-  "op": "load",
-  "files": {
-    "global": "[accounts]\nrecords = [\"x\"]\n"
-  },
-  "expect": {
-    "error": "provider record must be a mapping, got str"
-  }
-}
+{"op": "load", "files": {"global": "[accounts]\nrecords = [\"x\"]\n"}, "expect": {"error": "provider record must be a mapping, got str"}}

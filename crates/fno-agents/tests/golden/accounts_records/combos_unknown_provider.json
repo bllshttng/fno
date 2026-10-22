@@ -1,9 +1,1 @@
-{
-  "op": "combos",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"ghost\"]\n"
-  },
-  "expect": {
-    "error": "combo 'main' references unknown provider id 'ghost' (not in config.providers.records)"
-  }
-}
+{"op": "combos", "files": {"global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[accounts.combos.main]\nproviders = [\"ghost\"]\n"}, "expect": {"error": "combo 'main' references unknown provider id 'ghost' (not in config.providers.records)"}}

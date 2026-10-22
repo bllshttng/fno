@@ -465,9 +465,7 @@ def main() -> int:
             os.chdir(cwd)
         text = json.dumps(expect).replace(str(tmp), "<TMP>")
         case = {"op": op, "files": files, **extra, "expect": json.loads(text)}
-        (GOLDEN / f"{name}.json").write_text(
-            json.dumps(case, indent=2) + "\n", encoding="utf-8"
-        )
+        (GOLDEN / f"{name}.json").write_text(json.dumps(case) + "\n", encoding="utf-8")
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"wrote {len(CASES)} cases to {GOLDEN}")
     return 0

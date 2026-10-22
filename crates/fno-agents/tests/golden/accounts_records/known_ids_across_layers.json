@@ -1,14 +1,1 @@
-{
-  "op": "known_ids",
-  "files": {
-    "global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"Bad-id\"\nname = \"BAD-ID\"\nharness = \"claude\"\nauth = \"managed\"\n",
-    "project": "[[accounts.records]]\nid = \"beta\"\nname = \"BETA\"\nharness = \"codex\"\nauth = \"managed\"\n"
-  },
-  "expect": {
-    "ok": [
-      "Bad-id",
-      "alpha",
-      "beta"
-    ]
-  }
-}
+{"op": "known_ids", "files": {"global": "[[accounts.records]]\nid = \"alpha\"\nname = \"ALPHA\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"Bad-id\"\nname = \"BAD-ID\"\nharness = \"claude\"\nauth = \"managed\"\n", "project": "[[accounts.records]]\nid = \"beta\"\nname = \"BETA\"\nharness = \"codex\"\nauth = \"managed\"\n"}, "expect": {"ok": ["Bad-id", "alpha", "beta"]}}

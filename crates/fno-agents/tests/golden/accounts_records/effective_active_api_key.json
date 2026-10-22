@@ -1,12 +1,1 @@
-{
-  "op": "effective_active",
-  "files": {
-    "global": "[accounts]\nactive = \"k\"\n[[accounts.records]]\nid = \"k\"\nname = \"K\"\nharness = \"claude\"\nauth = \"api_key\"\nroute = \"zai/glm\"\n"
-  },
-  "stamps": {
-    "claude": "other"
-  },
-  "expect": {
-    "ok": "k"
-  }
-}
+{"op": "effective_active", "files": {"global": "[accounts]\nactive = \"k\"\n[[accounts.records]]\nid = \"k\"\nname = \"K\"\nharness = \"claude\"\nauth = \"api_key\"\nroute = \"zai/glm\"\n"}, "stamps": {"claude": "other"}, "expect": {"ok": "k"}}
