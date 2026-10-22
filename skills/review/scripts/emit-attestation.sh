@@ -398,7 +398,17 @@ fi
 review_round=""
 if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
   review_round="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
-  [[ "$review_round" =~ ^[0-9]+$ ]] || review_round=""
+else
+  # An ordinary pass spends the next round; record it so the posted summary
+  # names a round instead of "unscoped".
+  review_round="$("${FNO:-fno}" do pr review-hold round --fresh --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
+fi
+[[ "$review_round" =~ ^[0-9]+$ ]] || review_round=""
+# A bare or diff-sized run leaves the hold without a level; resolve the one the
+# lane sized from the diff so the attestation never says "unset".
+if [[ "$review_level" == "unset" ]]; then
+  sized_level="$("${FNO:-fno}" do review resolve-level 2>/dev/null | jq -r '.level // empty' 2>/dev/null || true)"
+  [[ -n "$sized_level" ]] && review_level="$sized_level"
 fi
 review_model_family=""
 if [[ -n "$session_id" ]]; then
