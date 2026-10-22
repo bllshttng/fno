@@ -392,7 +392,7 @@ def role_scope_matches(held: Optional[str], requested: Optional[str]) -> bool:
     with the ladder, while the readers answer a string question
     (``leads/{role_scope}.md`` built verbatim; ``done`` refuses on
     ``own != scope``), so a project role does NOT satisfy an epic manifest.
-    A first cut reused ``scope_contains`` and silenced exactly the state the
+    A first cut reused the containment rule and silenced exactly the state the
     warning exists to make loud. Reuse the rule that matches the QUESTION.
     A blank scope on either side answers False.
     """
@@ -405,7 +405,7 @@ def role_answers_to(held: Optional[str], requested: Optional[str]) -> bool:
     """Does a live role over ``held`` answer when ``requested`` is addressed?
 
     Territory equality, plus one widening: a rung-2 epic set answers for any
-    subset of its members. Not ``scope_contains``: a project or portfolio role
+    subset of its members. Not containment (``territory::scope_contains``): a project or portfolio role
     never answers for a narrower scope, because its team may hold that role.
     """
     if role_scope_matches(held, requested):
