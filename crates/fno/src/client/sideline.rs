@@ -1281,11 +1281,16 @@ impl View {
                     cell_flags::BOLD
                 };
             }
-            // The name yields before the node: an ellipsis marks the cut
-            // and one space keeps the gap. Under three columns
-            // there is no room for both, so the name side blanks past the
-            // glyph and the node stands alone.
-            if node_start >= 3 {
+            // The text after the slug yields before the node: an ellipsis
+            // marks the cut and one space keeps the gap. The slug itself
+            // never yields: with no room for ` …` past it, the cells
+            // between slug and node just blank. Under three columns the
+            // name side blanks past the glyph and the node stands alone.
+            if keep > 0 && node_start < keep + 2 {
+                for cell in line[keep.saturating_sub(1).max(1)..node_start].iter_mut() {
+                    cell.c = ' ';
+                }
+            } else if node_start >= 3 {
                 if line[node_start - 1].c != ' ' {
                     line[node_start - 1].c = '…';
                 }
