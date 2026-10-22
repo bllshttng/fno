@@ -1523,12 +1523,14 @@ async fn run(args: Vec<String>) -> i32 {
             // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
             // the pane spine answers every harness arm itself - the Python
             // bounce this branch kept for unseated shapes is deleted.
-            return fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+            return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
+                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
+            });
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; anything else re-execs Python.
         if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args, &mut spawn_hold) {
-            fno_agents::spawn_guard::settle(&mut spawn_hold, code);
+            fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
             if code == 0 {
                 // A placement failure never recolors the spawn verdict: the
                 // receipt is the truth, the worker is live, and a nonzero here
@@ -1691,7 +1693,7 @@ async fn run(args: Vec<String>) -> i32 {
     };
     drop(daemon_spawn_gate);
     if matches!(&call_result, Ok(resp) if matches!(resp.payload, ResponsePayload::Ok(_))) {
-        fno_agents::spawn_guard::settle(&mut spawn_hold, 0);
+        fno_agents::spawn_guard::settle(&mut spawn_hold, 0, &agent_name);
     }
     match call_result {
         Ok(resp) => match resp.payload {
@@ -2475,6 +2477,10 @@ fn maybe_run_spawn(
                 route_provider: fno_agents::claude_adopt::gate_route_provider(&params),
                 account: params
                     .get("account")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                session_phase: params
+                    .get("session_phase")
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 ..Default::default()
@@ -3720,6 +3726,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--node",
         "--slug",
         "--plan",
+        "--session-phase",
         "--session-id",
         "--status",
         "--progress",
@@ -3895,8 +3902,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--name" => {
                 params.insert("name".into(), str_arg(&mut it, "--name")?);
             }
-            "--node" | "--slug" | "--plan" => {
-                params.insert(a[2..].to_string(), str_arg(&mut it, &a)?);
+            "--node" | "--slug" | "--plan" | "--session-phase" => {
+                params.insert(a[2..].replace('-', "_"), str_arg(&mut it, &a)?);
             }
             // The seam's node-reason receipt, set only when the seed
             // named a node the seam could not resolve. Forwarded so the mint

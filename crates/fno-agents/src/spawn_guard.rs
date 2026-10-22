@@ -1,17 +1,17 @@
 //! The family-2 pre-birth guard for a node-bearing spawn: the one leg of the
 //! `node dispatch refused:` decision, the `dispatch:<id>` reservation and the
-//! `node:<id>` handover claim (ported from `cli.py` `_spawn_guard_decision`).
+//! `node:<id>` handover claim. The Python door reaches it through the
+//! `spawn-guard` op of `backlog advance --stdin`.
 //!
 //! Four steps, in this order: read the verdict (`observe_node_claim`), try
 //! recovery on a suspect node claim, take the reservation under the
 //! dispatcher's own holder, then take the node claim under the worker's
-//! handover holder. A refusal is a JSON object, the same shape the Python
-//! guard returned, so the stderr line and the `spawn-guard` JSON stay one
-//! vocabulary.
+//! handover holder. A refusal is a JSON object, so the stderr line and the
+//! `spawn-guard` JSON stay one vocabulary.
 //!
 //! Recovery reuses the reaper's judge. Its roster-backed abandonment arms
 //! have no Rust leg yet and degrade fail-closed, so a suspect
-//! `target-session:` claim the Python guard could prove finished now keeps
+//! `target-session:` claim the roster could prove finished still keeps
 //! refusing as `suspect-claim` with its remedy line. A wedge is never
 //! cleared on an unmeasured holder.
 
@@ -58,6 +58,10 @@ pub struct GuardRequest<'a> {
     pub cwd: Option<&'a str>,
     pub handover_holder: Option<&'a str>,
     pub root: Option<&'a Path>,
+    /// The spawning process the keys name; `None` names this one. A caller
+    /// that runs the guard in a subprocess passes its own pid, or the keys
+    /// would name a process that exits the moment the guard answers.
+    pub pid: Option<u32>,
 }
 
 /// The verdict object and its exit code. Exit 0 for every answered verdict,
@@ -373,6 +377,7 @@ pub fn reserve_and_hand_over(req: &GuardRequest) -> (Value, i32) {
 
 fn opts(req: &GuardRequest, ttl_ms: i64, reason: String) -> AcquireOpts {
     AcquireOpts {
+        pid: req.pid,
         ttl_ms: Some(ttl_ms),
         reason: Some(reason),
         root: req.root.map(Path::to_path_buf),
@@ -558,23 +563,18 @@ pub fn release_claims(claims: &[(String, String)], root: Option<&Path>) {
     }
 }
 
-/// The keys one node-bearing launch holds. Dropped before [`launched`] it
-/// releases them, so every exit between the guard and a proven launch hands
-/// them back: the gate's refusal, a lane failure, an early return.
-///
-/// [`launched`]: SpawnHold::launched
+/// The keys one node-bearing launch holds, and the facts its stamps need.
+/// Dropped before [`settle`] marks a launch it releases the keys, so every
+/// exit between the guard and a proven launch hands them back: the gate's
+/// refusal, a lane failure, an early return.
 pub struct SpawnHold {
     claims: Vec<(String, String)>,
     root: Option<PathBuf>,
     launched: bool,
-}
-
-impl SpawnHold {
-    /// The worker launched: the reservation runs out its TTL and the worker's
-    /// own init takes over the node claim.
-    pub fn launched(&mut self) {
-        self.launched = true;
-    }
+    node: String,
+    phase: String,
+    message: String,
+    one_shot: bool,
 }
 
 impl Drop for SpawnHold {
@@ -585,13 +585,176 @@ impl Drop for SpawnHold {
     }
 }
 
-/// Mark the hold launched when `exit` is a success.
-pub fn settle(hold: &mut Option<SpawnHold>, exit: i32) {
-    if exit == 0 {
-        if let Some(hold) = hold.as_mut() {
-            hold.launched();
+/// Settle the hold on the spawn's exit. A launch opens the node's sessions
+/// row and stamps its launch edge. A thread keeps its keys: the reservation
+/// runs out its TTL and the worker's own init takes over the node claim. A
+/// one-shot hands them back, because its worker has already exited and
+/// nobody inherits them.
+pub fn settle(hold: &mut Option<SpawnHold>, exit: i32, name: &str) {
+    let Some(hold) = hold.as_mut() else {
+        return;
+    };
+    if exit != 0 {
+        return;
+    }
+    let graph = crate::backlog::settings::graph_path();
+    open_session_row(&graph, hold, name);
+    stamp_launch_edge(&graph, &hold.node);
+    hold.launched = !hold.one_shot;
+}
+
+/// Open the node's sessions row for the spawned worker. Its identity is the
+/// worker's own harness session id from the registry row. A thread binds that
+/// id after the row exists, so the owed row parks on the registry row and
+/// opens at the worker's first SessionStart. A provenance miss never fails
+/// the spawn.
+fn open_session_row(graph: &Path, hold: &SpawnHold, name: &str) {
+    let node = hold.node.as_str();
+    let grant = (hold.phase == "execute").then(|| merge_grant(&hold.message));
+    let registry = crate::paths::AgentsHome::from_env().registry_json();
+    let row = crate::state::load_registry(&registry)
+        .ok()
+        .and_then(|r| r.find(name).cloned());
+    let harness = row
+        .as_ref()
+        .map(|r| r.harness_name().to_string())
+        .unwrap_or_default();
+    let session = row
+        .as_ref()
+        .and_then(|r| r.harness_session_id.clone())
+        .filter(|s| !s.is_empty() && !harness.is_empty());
+    let Some(session) = session else {
+        let payload = json!({"name": name, "phase": hold.phase, "merge_grant": grant});
+        if let Err(e) = crate::pending_session_row::park(&payload) {
+            eprintln!("spawn: park skipped for {node}: {e}");
+        }
+        return;
+    };
+    let effort = row.as_ref().and_then(|r| r.effort.clone());
+    let started = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let store = crate::backlog::api::Store::new(graph);
+    match crate::backlog::api::session_open_parked(
+        &store,
+        node,
+        &hold.phase,
+        &harness,
+        &session,
+        effort.as_deref(),
+        grant,
+        &started,
+    ) {
+        Ok(true) => {}
+        Ok(false) => eprintln!(
+            "spawn: session row open skipped for {node} (node not in graph); the row was \
+             not written. Skipped."
+        ),
+        Err(e) => eprintln!("spawn: session row open skipped for {node}: {}", e.0),
+    }
+}
+
+/// The spawner's own merge-grant verdict for an execute-phase worker: the
+/// explicit refusal first, then the standing config. The false is recorded
+/// too, so an absent grant reads as "nobody resolved", never as a grant.
+fn merge_grant(message: &str) -> Value {
+    let recorded_by = std::env::var("FNO_AGENT_SELF")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "spawn".to_string());
+    let recorded_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let (approved, source) = if crate::merge_posture::message_carries_no_merge(message) {
+        (false, "no-merge-flag")
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let granted = crate::agents_config::auto_merge_enabled(&cwd)
+            && crate::agents_config::auto_merge_grant_dispatches(&cwd);
+        (granted, if granted { "config" } else { "none" })
+    };
+    json!({
+        "approved": approved,
+        "source": source,
+        "recorded_by": recorded_by,
+        "recorded_at": recorded_at,
+    })
+}
+
+/// Record who launched the node's worker, on the node itself. No proven
+/// parent session, no write. The spawn seam scrubs the ambient identity
+/// before it execs this client, so the usual producer of the edge is the
+/// launch record the parent's own hook writes and the child's SessionStart
+/// claims; this stamp covers a client that still sees its parent.
+fn stamp_launch_edge(graph: &Path, node: &str) {
+    let (session, harness, cwd) = crate::claims::ambient_parent_edge();
+    let Some(session) = session else {
+        return;
+    };
+    if let Err(e) =
+        crate::launch_record::stamp_node(graph, node, &session, harness.as_deref(), cwd.as_deref())
+    {
+        eprintln!("spawn: launch edge not recorded on {node}: {e}");
+    }
+}
+
+/// The provenance this process exported for its spawn. A pane child inherits
+/// the mux server's env, never this one's, so the pane wrapper reads it here.
+static EXPORTED: std::sync::Mutex<Vec<(&'static str, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// The `(key, value)` pairs the last guarded spawn in this process exported.
+pub fn exported_provenance() -> Vec<(&'static str, String)> {
+    EXPORTED.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// The session phases a node's sessions row may name (`SESSION_PHASES`).
+const SESSION_PHASES: [&str; 5] = ["blueprint", "execute", "review", "ship", "think"];
+
+/// The phase a node spawn binds its worker under: the explicit
+/// `--session-phase` (with the retired `do` alias), else the seed verb's.
+fn spawn_phase(params: &Value, node: &str) -> Result<String, i32> {
+    let listed = format!("{:?}", SESSION_PHASES).replace('"', "'");
+    if let Some(given) = params.get("session_phase").and_then(Value::as_str) {
+        let phase = if given == "do" { "execute" } else { given };
+        if !SESSION_PHASES.contains(&phase) {
+            eprintln!(
+                "--session-phase must be one of {listed} (got {})",
+                crate::claude_ask::py_repr(phase)
+            );
+            return Err(2);
+        }
+        return Ok(phase.to_string());
+    }
+    let message = params.get("message").and_then(Value::as_str).unwrap_or("");
+    match crate::spawn_phase::seed_phase(message) {
+        Some(phase) => Ok(phase.to_string()),
+        None => {
+            eprintln!(
+                "refusing --node {node}: the message verb names no session phase, so no \
+                 worker would be bound to the node. Pass --session-phase <one of {listed}>. \
+                 No worker launched."
+            );
+            Err(2)
         }
     }
+}
+
+/// The pane door: the same guard around the pane launch, judged from the
+/// launch dir the pane spine will resolve (an explicit `--cwd`, else the
+/// node's project).
+pub fn run_guarded_pane(params: &Value, name: &str, launch: impl FnOnce() -> i32) -> i32 {
+    let caller = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = match params.get("cwd").and_then(Value::as_str) {
+        Some(explicit) => PathBuf::from(explicit),
+        None => match crate::node_seed::spawn_node_cwd(params, &caller) {
+            crate::node_seed::SpawnNodeCwd::Project(project) => project,
+            _ => caller,
+        },
+    };
+    let mut hold = match guard_client_spawn(params, name, &cwd) {
+        Ok(hold) => hold,
+        Err(code) => return code,
+    };
+    let code = launch();
+    settle(&mut hold, code, name);
+    code
 }
 
 /// `FNO_NODE`/`FNO_SLUG`/`FNO_PLAN` for a node spawn (`mux_spawn.resolve_provenance`).
@@ -649,7 +812,7 @@ pub fn resolve_provenance(
 /// The node's row by id first; the whole table only when the id read finds
 /// nothing, which is the slug case.
 fn read_node_rows(node: &str) -> Result<Vec<Value>, String> {
-    let graph = crate::graph_get::default_graph_path();
+    let graph = crate::backlog::settings::graph_path();
     let read = |id_in: Option<Vec<String>>| {
         crate::graph_store::read_rows_where_strict(
             &graph,
@@ -691,6 +854,9 @@ pub fn guard_client_spawn(
     for key in PROVENANCE_KEYS {
         std::env::remove_var(key);
     }
+    if let Ok(mut exported) = EXPORTED.lock() {
+        exported.clear();
+    }
     let param = |k: &str| {
         params
             .get(k)
@@ -704,6 +870,7 @@ pub fn guard_client_spawn(
         return Ok(None);
     };
     let node = raw_node.trim();
+    let phase = spawn_phase(params, node)?;
     let provenance = if node.is_empty() {
         Vec::new()
     } else {
@@ -739,6 +906,7 @@ pub fn guard_client_spawn(
         cwd: Some(cwd.as_str()),
         handover_holder: Some(handover.as_str()),
         root: None,
+        pid: None,
     });
     if verdict.get("verdict").and_then(Value::as_str) != Some("dispatchable") {
         eprintln!("{}", refusal_line(&guarded, &verdict));
@@ -752,6 +920,14 @@ pub fn guard_client_spawn(
         claims: Vec::new(),
         root: None,
         launched: false,
+        node: guarded.clone(),
+        phase,
+        message: params
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        one_shot: params.get("substrate").and_then(Value::as_str) == Some("headless"),
     };
     if let (Some(key), Some(holder)) = (text("reservation_key"), text("reservation_holder")) {
         hold.claims.push((key, holder));
@@ -767,8 +943,11 @@ pub fn guard_client_spawn(
             "note: node:{guarded} claim not taken at dispatch ({error}); the worker claims it at init"
         );
     }
-    for (key, value) in env {
+    for (key, value) in &env {
         std::env::set_var(key, value);
+    }
+    if let Ok(mut exported) = EXPORTED.lock() {
+        *exported = env;
     }
     Ok(Some(hold))
 }
@@ -786,6 +965,7 @@ mod tests {
             cwd: None,
             handover_holder: handover,
             root: Some(root),
+            pid: None,
         }
     }
 
