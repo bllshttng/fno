@@ -1,0 +1,1 @@
+{"op": "load", "files": {"global": "[[accounts.records]]\nid = \"a\"\nname = \"A\"\nharness = \"claude\"\nauth = \"api_key\"\nroute = \"zai glm\"\n"}, "expect": {"error": "invalid provider record 'a'"}}
