@@ -1,0 +1,12 @@
+None function=None layer=project source=project/bad.json status=invalid disposition=unchecked
+  error: <ERROR>
+  raw: null
+broken function=support layer=project source=project/broken.json status=invalid disposition=unchecked
+  error: <ERROR>
+  raw: {"layer":"project","manifest":{"mission":"missing required manifest fields"},"role":{"function_id":"support","id":"broken"},"snapshot_revision":"snapshot-1","source_id":"project/broken.json","status":"valid"}
+None function=None layer=plan source=<FIXTURE>/extra/missing.json status=unreadable disposition=unchecked
+  error: FileNotFoundError: [Errno 2] No such file or directory: '<FIXTURE>/extra/missing.json'
+  raw: null
+None function=None layer=plan source=plan status=invalid disposition=unchecked
+  error: <ERROR>
+  raw: null

@@ -513,7 +513,7 @@ fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
             "--json" | "-J" => {}
             "--root" | "--source" => i += 1,
             a if a.starts_with("--root=") || a.starts_with("--source=") => {}
-            "ls" => {
+            "ls" | "show" => {
                 let json = root_json.then(|| OsString::from("--json"));
                 return Some(json.into_iter().chain(tail.iter().cloned()).collect());
             }
@@ -1813,8 +1813,8 @@ mod tests {
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
         );
-        // `roles ls` is the Rust door's in every spelling, group options
-        // carried; an op still on Python forwards.
+        // `roles ls` and `roles show` are the Rust door's in every
+        // spelling, group options carried; an op still on Python forwards.
         assert_eq!(
             decide_role(&os(&["agents", "roles", "--root", "r", "ls", "-J"]), false),
             Role::AgentsRoles(os(&["--root", "r", "ls", "-J"]))
@@ -1824,7 +1824,11 @@ mod tests {
             Role::AgentsRoles(os(&["--json", "--source=plan=p", "ls"]))
         );
         assert_eq!(
-            decide_role(&os(&["agents", "roles", "show", "x"]), false),
+            decide_role(&os(&["agents", "roles", "-J", "show", "x"]), false),
+            Role::AgentsRoles(os(&["-J", "show", "x"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "resolve", "x"]), false),
             Role::Forward
         );
     }
