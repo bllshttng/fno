@@ -944,7 +944,7 @@ def test_ac3_hp_reports_both_thresholds_and_exits_zero(
     # The census door is the only exec left: the roster count reads the
     # registry in process, so there is no second shell-out to budget.
     assert [call for call in calls] == [
-        ["census", "--ps"],
+        ["census", "--ps", "--memory"],
     ]
 
 
@@ -1112,7 +1112,7 @@ def test_gap_reading_prints_the_measurement_and_admits_on_the_upper_bound(monkey
         measured_cpu_cores=0.02,
     )
     monkeypatch.setattr(
-        doctor_footprint, "cause_reading", lambda: (reading, None)
+        doctor_footprint, "cause_reading", lambda **_kw: (reading, None)
     )
     _pin_load(monkeypatch, status="within", load_15m=2.0)
     _pin_admission(monkeypatch)

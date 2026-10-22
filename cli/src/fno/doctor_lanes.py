@@ -317,7 +317,7 @@ def _fleet_snapshot() -> tuple[Any, Optional[list], Optional[str], int]:
     from fno.doctor_footprint import cause_reading, live_registry_rows
 
     started = time.monotonic()
-    reading, error = cause_reading()
+    reading, error = cause_reading(memory=True)
     rows, rows_error = live_registry_rows()
     read_ms = int((time.monotonic() - started) * 1000)
     return (None if error is not None else reading), rows, rows_error, read_ms

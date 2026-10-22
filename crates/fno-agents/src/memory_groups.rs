@@ -182,14 +182,18 @@ pub fn group_reading(
 
 /// The live reading: the fleet is every pid a live registry session owns.
 pub fn reading(home: &crate::paths::AgentsHome, rows: &[ProcRow]) -> Value {
+    reading_for(rows, &crate::session_cost::session_roots(home, rows))
+}
+
+/// The same reading over roots the caller already resolved.
+pub fn reading_for(rows: &[ProcRow], roots: &[crate::session_cost::SessionRoot]) -> Value {
     if !cfg!(target_os = "macos") {
         return json!({
             "basis": "unavailable",
             "line": "memory: unavailable (physical footprint is read on macOS only)",
         });
     }
-    let roots = crate::session_cost::session_roots(home, rows);
-    let fleet = crate::session_cost::owned_pids(rows, &roots);
+    let fleet = crate::session_cost::owned_pids(rows, roots);
     group_reading(rows, &fleet, phys_footprint)
 }
 

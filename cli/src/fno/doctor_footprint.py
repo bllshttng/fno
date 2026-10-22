@@ -646,7 +646,7 @@ def _unparsed_sample_evidence(reading: Footprint) -> str:
     return "; " + "; ".join(parts)
 
 
-def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None]:
+def cause_reading(*, timeout: float = 5.0, memory: bool = False) -> tuple[Footprint | None, str | None]:
     """One CPU-only fleet reading shared by `--cause-only` and the spawn gate.
 
     The single producer for the cause pipeline: both the verb and the gate's
@@ -657,7 +657,7 @@ def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None
     """
     deadline = time.monotonic() + timeout
     snapshot_at = time.time()
-    ps_output, error = _read_ps(timeout=timeout)
+    ps_output, error = _read_ps(timeout=timeout, memory=memory)
     if error is not None or ps_output is None:
         return None, error or "footprint unavailable: ps returned no output"
     snapshot_pids = _snapshot_pids(ps_output)
@@ -716,7 +716,7 @@ def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None
     return reading._replace(memory=_LAST_MEMORY), None
 
 
-def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS) -> tuple[str | None, str | None]:
+def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS, memory: bool = False) -> tuple[str | None, str | None]:
     """The process table over the Rust door: `fno-agents census --ps` keeps
     the table in memory, so a seatbelt that refuses the setuid `ps` exec
     still gets a reading, and a read-only sandbox needs no temp file."""
@@ -725,7 +725,7 @@ def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS) -> tuple[str | None, str | 
     # stash resets before the read, so a dead census door cannot print a
     # stale pid as live.
     _LAST_SCCACHE, _LAST_MEMORY = (None, None), None
-    error, payload = call_binary_json("census", ["--ps"], timeout=timeout)
+    error, payload = call_binary_json("census", ["--ps", "--memory"] if memory else ["--ps"], timeout=timeout)
     if error is not None or not isinstance(payload, dict):
         return None, f"process table unavailable: {error or 'census --ps returned no table'}"
     table = payload.get("ps")
@@ -1178,7 +1178,7 @@ def footprint_command(
     ),
 ) -> None:
     """Measure fno CPU and process cost without using load average."""
-    reading, cause_error = cause_reading()
+    reading, cause_error = cause_reading(memory=not cause_only)
     if cause_error is not None or reading is None:
         _emit_failure(cause_error or "footprint unavailable", json_output=json_output)
         raise typer.Exit(code=4)

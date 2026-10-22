@@ -440,7 +440,13 @@ pub fn price(home: &crate::paths::AgentsHome, table: &[ProcRow]) -> Result<Value
     let test_pids = test_pids();
     let queued = queued_test_pids();
     let out = attribute(table, &roots, &phases, &test_pids, &queued);
-    Ok(json!({ "sessions": out.sessions, "unresolved": out.unresolved, "top_rss": out.top_rss }))
+    let memory = crate::memory_groups::reading_for(table, &roots);
+    Ok(json!({
+        "sessions": out.sessions,
+        "unresolved": out.unresolved,
+        "top_rss": out.top_rss,
+        "memory": memory,
+    }))
 }
 
 /// The test feed the spawn-gate probe serves: which managed sessions run or

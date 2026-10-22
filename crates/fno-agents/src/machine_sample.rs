@@ -346,7 +346,7 @@ pub fn read(
         top_parents: None,
         sessions_error: None,
         mux_issues: Some(mux_issues),
-        memory: Some(crate::memory_groups::reading(home, &procs)),
+        memory: None,
         procs,
         top_cpu: Vec::new(),
         throttle_minutes: 60,
