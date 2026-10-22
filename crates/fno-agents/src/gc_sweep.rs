@@ -614,7 +614,7 @@ pub(crate) struct CommitReport {
 /// store API (plus the advisory archive file beside it).
 pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
     let state_root = home.root().parent().unwrap_or(home.root());
-    crate::state_layout::place(state_root, "graph.json")
+    crate::state_layout::graph_anchor(state_root)
 }
 
 /// Read the working graph plus the archive. The working graph asks the store

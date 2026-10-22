@@ -543,9 +543,8 @@ pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
             ));
         }
     };
-    let text = String::from_utf8(raw).map_err(|e| {
-        StoreError::Unreadable(store_label(path), format!("not UTF-8: {e}"))
-    })?;
+    let text = String::from_utf8(raw)
+        .map_err(|e| StoreError::Unreadable(store_label(path), format!("not UTF-8: {e}")))?;
     if text.trim().is_empty() {
         return Err(StoreError::Unreadable(
             store_label(path),
@@ -3510,7 +3509,9 @@ mod tests {
                 "{spelling}"
             );
             assert_eq!(
-                graph_lock_path(&root.join(spelling)).parent().map(|p| p.ends_with("db")),
+                graph_lock_path(&root.join(spelling))
+                    .parent()
+                    .map(|p| p.ends_with("db")),
                 Some(true),
                 "{spelling}"
             );

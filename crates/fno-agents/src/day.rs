@@ -508,7 +508,7 @@ fn graph_path(home: &crate::paths::AgentsHome) -> PathBuf {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    crate::state_layout::place(&root, "graph.json")
+    crate::state_layout::graph_anchor(&root)
 }
 
 pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {

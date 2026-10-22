@@ -14,7 +14,7 @@ pub fn database_path(path: &Path) -> Option<PathBuf> {
     } else {
         home
     };
-    Some(crate::state_layout::place(root, "graph.json").with_extension("db"))
+    Some(crate::state_layout::graph_anchor(root).with_extension("db"))
 }
 
 /// Whether the registry table owns `path`: the fence directory stands there,

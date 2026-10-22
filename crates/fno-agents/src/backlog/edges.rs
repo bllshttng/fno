@@ -148,7 +148,7 @@ pub(crate) fn record_spawn(
         .parent()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let graph = crate::state_layout::place(&root, "graph.json");
+    let graph = crate::state_layout::graph_anchor(&root);
     let connection = super::open(&graph)?;
     append(
         &connection,

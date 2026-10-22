@@ -380,7 +380,7 @@ fn graph_lock(path: &Path) -> Result<crate::graph_store::BoundedLock, StateError
     } else {
         home
     };
-    let json = crate::state_layout::place(root, "graph.json");
+    let json = crate::state_layout::graph_anchor(root);
     crate::graph_store::BoundedLock::acquire(&json, crate::graph_store::DEFAULT_LOCK_TIMEOUT)
         .map_err(|e| failure(path, e))
 }
