@@ -95,8 +95,20 @@ pub fn plan(
         eprintln!("{ONE_SHOT_REFUSAL}");
         return Err(2);
     }
-    let resolved =
-        crate::territory::resolve_role_kind(&json!({"scopes": scopes})).map_err(|e| refuse(&e))?;
+    // One graph and project-map read serves the resolve and the grant check.
+    // An empty graph or an unreadable map is left for the resolve to read and
+    // name itself.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let entries = crate::territory::graph_entries(&cwd).unwrap_or_default();
+    let projects = crate::org_board::project_map(&cwd);
+    let mut ask = json!({"scopes": scopes});
+    if !entries.is_empty() {
+        ask["entries"] = json!(entries);
+    }
+    if let Ok(map) = &projects {
+        ask["projects"] = json!(map);
+    }
+    let resolved = crate::territory::resolve_role_kind(&ask).map_err(|e| refuse(&e))?;
     if let Some(refusal) = resolved["refusal"].as_str() {
         return Err(refuse(refusal));
     }
@@ -115,12 +127,10 @@ pub fn plan(
     } else {
         String::new()
     };
-    let cwd = std::env::current_dir().unwrap_or_default();
     let check = crate::territory::role_grant_kind(&json!({
         "op": "check", "requested": scope, "caller": caller,
         "allow_terminal_recovery": true, "allow_succession": hand_off, "stray_agent_self": stray,
-        "projects": crate::org_board::project_map(&cwd).unwrap_or_default(),
-        "entries": crate::territory::graph_entries(&cwd).unwrap_or_default(),
+        "projects": projects.unwrap_or_default(), "entries": entries,
     }))
     .map_err(|e| {
         refuse(&format!(

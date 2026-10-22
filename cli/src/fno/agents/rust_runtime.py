@@ -370,7 +370,7 @@ PYTHON_AGENT_VERBS: frozenset[str] = frozenset({
     # P1: internal helper the Rust `list` render path shells out to
     # for the discovered-live-sessions lane. Pure Python (reads
     # ~/.claude/sessions via fno.agents.discover); no Rust port, so it
-    # must never auto-route — Rust invokes it with FNO_AGENTS_RUNTIME=python.
+    # must never auto-route - Rust invokes it with FNO_AGENTS_RUNTIME=python.
     "discovered-json",
     #: the shared bg-dispatch guard verb. Pure-Python orchestration of
     # `fno agents claim` (Guard 1 node-claim probe + Guard 2 dispatch:<id> reservation)
@@ -401,9 +401,9 @@ PYTHON_AGENT_VERBS: frozenset[str] = frozenset({
     #: the registry-miss healer the Rust lifecycle verbs shell out to.
     # Pure Python (fno.agents.store_fallback); no Rust port. Staying out of
     # RUST_CLIENT_VERBS is the recursion guard for that shellout, so listing it
-    # here is documentary — AUTO_ROUTE_VERBS already excludes it.
+    # here is documentary - AUTO_ROUTE_VERBS already excludes it.
     "heal-token",
-    #: "what is MY registered mesh name?" — reads FNO_AGENT_SELF + the
+    #: "what is MY registered mesh name?" - reads FNO_AGENT_SELF + the
     # registry, read-only. Pure Python (fno.agents.whoami); there is NO
     # `whoami` on the Rust client, so it must never auto-route to the daemon.
     # Listing it here is defensive/documentary: whoami is not in
@@ -1476,7 +1476,7 @@ def make_agents_group_cls() -> type:
     """Build the TyperGroup subclass that short-circuits to the Rust binary.
 
     Returned (not module-level) so importing this module never imports
-    ``typer.core`` unless the agents sub-app is actually constructed — keeps the
+    ``typer.core`` unless the agents sub-app is actually constructed - keeps the
     lazy-import startup budget intact.
     """
     from fno._lazy_group import LazyTypeGroup, _LazyStub

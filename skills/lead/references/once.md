@@ -44,7 +44,7 @@ Two rules keep the org from growing:
 State your level, altitude, and scope in your own opening line, so the transcript records what you believed you were authorized to do.
 
 **The role is stamped by a grantor, never self-declared.**
-Grant it at spawn: `fno agents spawn ... --promote <scope>` (short form `-k`), repeating the flag for a portfolio or a set of epics.
+Grant it at spawn: `fno agents spawn ... --promote <scope>`, repeating the flag for a portfolio or a set of epics.
 
 When a human promotes an already-running session, the target first runs `fno agents registry register`. The human then runs `fno agents org promote <printed-handle> --scope <scope>` from another attended terminal. When its own role strictly contains the scope, a live lead can run this path too, to re-scope a subordinate. The registry records the actual grantor, either the attended `human` or the granting lead. It preserves the target's transcript and placement and never performs succession.
 You never pass a level.
