@@ -327,7 +327,7 @@ pub fn run_compaction(args: &[String]) -> i32 {
         Some((action, rest)) if action == "ack" => crate::operator_turns::run_ack(rest),
         _ => {
             eprintln!(
-                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns --session <id> --transcript <path> --capture-dir <dir> | ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir>"
+                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status [--json]] | ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir>"
             );
             2
         }
