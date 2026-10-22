@@ -607,19 +607,43 @@ fn render_status(payload: &QueuePayload, json_out: bool) {
     }
 }
 
+/// `fno inbox user list`: the pending turns, oldest first, cut to `limit`.
+fn render_list(payload: &QueuePayload, json_out: bool, limit: Option<usize>, now_epoch: f64) {
+    if let Some(report) = skip_report(&payload.skipped) {
+        eprintln!("{report}");
+    }
+    let turns = &payload.turns[..limit.map_or(payload.turns.len(), |n| n.min(payload.turns.len()))];
+    if json_out {
+        println!("{}", python_json(&turns));
+        return;
+    }
+    if turns.is_empty() {
+        println!("no undispositioned user turns");
+        return;
+    }
+    for turn in turns {
+        let age = turn
+            .ts_epoch
+            .map(|ts| format!("{}s", (now_epoch - ts) as i64))
+            .unwrap_or_else(|| "age-unknown".to_string());
+        let marker = if turn.stand_down { "[stand-down] " } else { "" };
+        println!("{}\t{age}\t{marker}{}", turn.turn_id, turn.excerpt);
+    }
+}
+
 /// CLI entry: `fno-agents compaction operator-turns [--session <id>]
-/// [--transcript <path>] [--capture-dir <dir>] [--render status [--json]]`.
-/// A missing flag resolves like its `FNO_OPERATOR_*` pin, then from the
-/// ambient identity. Without `--render` stdout is the raw queue payload;
-/// `--render status` prints the `fno inbox user status` answer the front
+/// [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json]
+/// [--limit <n>]]`. A missing flag resolves like its `FNO_OPERATOR_*` pin,
+/// then from the ambient identity. Without `--render` stdout is the raw
+/// queue payload; `--render` prints the `fno inbox user` answer the front
 /// door execs this for.
 pub fn run(args: &[String]) -> i32 {
-    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status [--json]]";
+    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]]";
     let mut json_out = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--session" | "--transcript" | "--capture-dir" | "--render" => {
+            "--session" | "--transcript" | "--capture-dir" | "--render" | "--limit" | "-L" => {
                 it.next();
             }
             "--json" | "-J" => json_out = true,
@@ -631,10 +655,23 @@ pub fn run(args: &[String]) -> i32 {
     }
     let flag = |name: &str| crate::compaction::flag_value(args, name);
     let render = flag("--render");
-    if render.as_deref().is_some_and(|mode| mode != "status") {
+    if render
+        .as_deref()
+        .is_some_and(|mode| mode != "status" && mode != "list")
+    {
         eprintln!("{USAGE}");
         return 2;
     }
+    let limit = match flag("--limit").or_else(|| flag("-L")) {
+        None => None,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) if n >= 1 => Some(n),
+            _ => {
+                eprintln!("{USAGE}");
+                return 2;
+            }
+        },
+    };
     let get = |key: &str| {
         let pinned = match key {
             "FNO_OPERATOR_SESSION_ID" => flag("--session"),
@@ -663,11 +700,12 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("compaction operator-turns: --session must be a bare id (no '/', '\\', '..'): {session}");
         return 2;
     }
+    let now_epoch = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
     let outcome = match read_queue(
         &session,
         &resolved.transcript,
         &resolved.capture_dir,
-        chrono::Utc::now().timestamp() as f64,
+        now_epoch,
     ) {
         Ok(outcome) => outcome,
         Err(e) if render.is_some() => {
@@ -692,7 +730,11 @@ pub fn run(args: &[String]) -> i32 {
     if let Some(error) = outcome.payload.cursor_error.as_deref() {
         eprintln!("warning: scan cursor not saved: {error}");
     }
-    render_status(&outcome.payload, json_out);
+    if render.as_deref() == Some("list") {
+        render_list(&outcome.payload, json_out, limit, now_epoch);
+    } else {
+        render_status(&outcome.payload, json_out);
+    }
     0
 }
 
