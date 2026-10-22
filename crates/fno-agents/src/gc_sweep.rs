@@ -2611,9 +2611,20 @@ pub(crate) fn run_with_release(
         } else {
             None
         };
+        // A claude thread the roster no longer lists: the real stop confirms
+        // on that same read without acting, so the rehearsal may promise it.
+        let claude_stop_proven = dry_run
+            && death.is_none()
+            && crate::gc_native::stop_precedes_removal(e)
+            && crate::gc_claude_stop::already_gone(e);
         // The 2026-09-08 shape (dry promised nine, real retired zero): a dry
         // run never promises a claude stop it holds no evidence for.
-        if dry_run && death.is_none() && e.harness_name() == "claude" && !release_stop {
+        if dry_run
+            && death.is_none()
+            && e.harness_name() == "claude"
+            && !release_stop
+            && !claude_stop_proven
+        {
             let detail = "no terminal roster state and no dead pid; a dry run does not \
                  promise a stop it cannot prove"
                 .to_string();
@@ -2720,11 +2731,12 @@ pub(crate) fn run_with_release(
         // precheck's already-stopped. Staging decides with it, and the
         // rehearsal never has to fire the stop to learn what this already
         // knows.
-        let stop_observation = if death.is_some() || release_stop || pane_stop_proven {
-            StopObservation::Proven
-        } else {
-            StopObservation::Unproven
-        };
+        let stop_observation =
+            if death.is_some() || release_stop || pane_stop_proven || claude_stop_proven {
+                StopObservation::Proven
+            } else {
+                StopObservation::Unproven
+            };
         let staged = match stage_session_retirement(
             home,
             e,
