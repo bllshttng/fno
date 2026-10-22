@@ -215,9 +215,9 @@ esac"#
 }
 
 /// Every runtime-assertable reachable row produces a coverage event when its
-/// path runs. The Python rows (merge/status) are exercised end-to-end by
-/// cli/tests/unit/test_pr_merge.py and test_pr_status.py; the source scan
-/// below pins their call sites to this table.
+/// path runs. The merge and status rows are native now: their end-to-end
+/// proofs live in the parity goldens (merge_verb_parity.rs) and the composer
+/// suites; the source scan below pins their call sites to this table.
 #[test]
 fn every_reachable_path_produces_an_event() {
     let table = path_table();
@@ -314,7 +314,8 @@ fn every_reachable_path_produces_an_event() {
                     }
                     python_row => {
                         // fno do pr merge / fno do pr status: their end-to-end proof
-                        // lives in the Python suites; here we only acknowledge
+                        // lives in the native parity goldens and the composer
+                        // suites; here we only acknowledge
                         // the row so adding a table row without a runtime arm
                         // in THIS test fails the coverage counter below.
                         assert!(
@@ -362,55 +363,61 @@ fn new_reader_sites_must_join_the_table() {
         }
     }
 
-    // Python readers: the pr package is the consumer surface. Every file that
-    // reads the event must be a table row, and the two gate rows must route
-    // through the shared recompute helper (the verb invocation), not around it.
-    let pr_dir = repo_root.join("cli/src/fno/pr");
+    // Python readers: the pr package retired with its port, so the sweep
+    // walks the whole Python tree with NO allowlist - any surviving reader
+    // of the event is a NEW path by definition and must join the table here
+    // (and get a producer or a safe-direction reason).
     let mut reader_files: Vec<String> = Vec::new();
-    for entry in fs::read_dir(&pr_dir).unwrap() {
-        let entry = entry.unwrap();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".py") {
+    let mut stack = vec![repo_root.join("cli/src/fno")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
             continue;
-        }
-        let text = fs::read_to_string(entry.path()).unwrap();
-        if text.contains("review_coverage_for_head(")
-            // The no-recompute surface reads the row and its pinned-input note
-            // in one scan. A separate needle, not a paren-less prefix: the
-            // parens are what keep a prose mention out of the reader table.
-            || text.contains("review_coverage_for_head_row(")
-            || text.contains("latest_review_coverage(")
-            || text.contains("latest_review_coverage_row(")
-            || text.contains("read_review_coverage(")
-            || text.contains("_scan_coverage(")
-        {
-            reader_files.push(name);
-        }
-    }
-    // _reviews.py owns the last Python reader surface (the sidecar log and
-    // graph reads). The gates are native: the merge decision reads the
-    // verdict in process (merge_gates::coverage_gate) and the coverage-check
-    // verb forwards to the native operand, so this scan sweeps Python only
-    // for NEW readers. Anything else reading the event is a NEW path: it
-    // must join the table here (and get a producer or a safe-direction
-    // reason).
-    for name in &reader_files {
-        let known = match name.as_str() {
-            "_reviews.py" => true, // the shared reader/helper itself
-            _ => false,
         };
-        assert!(
-            known,
-            "{name} reads review_coverage but has no row in the x-3a3f path table"
-        );
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_some_and(|ext| ext == "py") {
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                if text.contains("review_coverage_for_head(")
+                    // The no-recompute surface reads the row and its
+                    // pinned-input note in one scan. A separate needle, not a
+                    // paren-less prefix: the parens are what keep a prose
+                    // mention out of the reader table.
+                    || text.contains("review_coverage_for_head_row(")
+                    || text.contains("latest_review_coverage(")
+                    || text.contains("latest_review_coverage_row(")
+                    || text.contains("read_review_coverage(")
+                    || text.contains("_scan_coverage(")
+                {
+                    reader_files.push(
+                        path.strip_prefix(&repo_root)
+                            .unwrap_or(&path)
+                            .display()
+                            .to_string(),
+                    );
+                }
+            }
+        }
     }
-
-    let adapter = fs::read_to_string(pr_dir.join("_internal_gh.py")).unwrap();
     assert!(
-        adapter.contains("_coverage_reviews")
-            && adapter.contains("/pulls/{number}/reviews")
-            && adapter.contains("/issues/{number}/comments"),
-        "coverage producer no longer composes both REST evidence surfaces"
+        reader_files.is_empty(),
+        "new Python reader(s) of review_coverage need a row in the x-3a3f \
+         path table: {reader_files:?}"
+    );
+
+    // The producer's evidence composition is native now: the coverage read
+    // requests reviews and comments in one shape (the quota's funded shapes
+    // name both), so the pin rides the read site instead of the retired
+    // Python adapter.
+    let pr_read = fs::read_to_string(manifest_dir.join("src/loopcheck/pr_read.rs")).unwrap();
+    assert!(
+        pr_read.contains("\"reviews,comments\""),
+        "coverage producer no longer requests both evidence surfaces in one read"
     );
     let finalize = fs::read_to_string(manifest_dir.join("src/finalize.rs")).unwrap();
     assert!(
@@ -432,11 +439,7 @@ fn new_reader_sites_must_join_the_table() {
 #[test]
 fn every_table_row_names_a_path_that_exists() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("crate sits at <repo>/crates/fno-agents");
-    let cli = fs::read_to_string(repo_root.join("cli/src/fno/pr/cli.py")).unwrap();
+    let front = fs::read_to_string(manifest_dir.join("src/pr_front.rs")).unwrap();
     let rust_srcs: Vec<String> = vec![
         loopcheck_source(manifest_dir),
         fs::read_to_string(manifest_dir.join("src/finalize.rs")).unwrap(),
@@ -446,8 +449,8 @@ fn every_table_row_names_a_path_that_exists() {
         if let Some(rest) = path_name.strip_prefix("fno do pr ") {
             let verb = rest.split_whitespace().next().unwrap_or("");
             assert!(
-                !verb.is_empty() && cli.contains(&format!("\"{verb}\"")),
-                "row '{path_name}' names verb '{verb}' that cli/src/fno/pr/cli.py does not register"
+                !verb.is_empty() && front.contains(&format!("\"{verb}\"")),
+                "row '{path_name}' names verb '{verb}' that the native do pr door does not register"
             );
             continue;
         }

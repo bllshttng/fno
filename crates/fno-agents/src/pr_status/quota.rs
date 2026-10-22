@@ -248,7 +248,7 @@ pub(crate) fn coverage_read(args: &[String]) -> bool {
     {
         return false;
     }
-    let fields_arg = match args.iter().position(|a| a == "--json") {
+    let fields_arg = match args.iter().position(|a| crate::json_output::is_flag(a)) {
         Some(index) => args.get(index + 1).cloned().unwrap_or_default(),
         None => args
             .iter()
