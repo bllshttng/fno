@@ -39,14 +39,21 @@ fn self_identity_or_exit() -> Option<(String, String)> {
     }
 }
 
-/// `hold` (alias `dnd`): stamp bus-only on the self row and arm the clock.
-pub fn run_hold(args: &[String]) -> i32 {
-    let Some((session_id, harness)) = self_identity_or_exit() else {
-        return 3;
-    };
-    let handle = crate::identity::canonical_handle(&session_id);
-    let clock_key = identity_key(&session_id);
+const HOLD_USAGE: &str =
+    "usage: fno agents mail admin hold (--for <minutes> | --minutes <minutes> | --off | --status)
+  --for N      do-not-disturb for N wall-clock minutes
+  --minutes N  do-not-disturb until N quiet minutes pass
+  --off        lift do-not-disturb and deliver what it held
+  --status     say whether do-not-disturb is on";
 
+/// `hold` (alias `dnd`): stamp bus-only on the self row and arm the clock.
+/// A bare call prints usage and writes nothing: an arm is always a choice
+/// the caller names, never a default a stray call falls into.
+pub fn run_hold(args: &[String]) -> i32 {
+    if args.is_empty() {
+        eprintln!("{HOLD_USAGE}");
+        return 2;
+    }
     let mut minutes: Option<i64> = None;
     let mut for_minutes: Option<i64> = None;
     let mut status = false;
@@ -68,6 +75,10 @@ pub fn run_hold(args: &[String]) -> i32 {
                     return 2;
                 }
             },
+            "-h" | "--help" => {
+                println!("{HOLD_USAGE}");
+                return 0;
+            }
             "--status" => status = true,
             "--off" => off = true,
             other => {
@@ -80,6 +91,11 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("error: --minutes and --for are mutually exclusive");
         return 2;
     }
+    let Some((session_id, harness)) = self_identity_or_exit() else {
+        return 3;
+    };
+    let handle = crate::identity::canonical_handle(&session_id);
+    let clock_key = identity_key(&session_id);
 
     if status {
         let policy = entry_for(&session_id)
@@ -94,6 +110,11 @@ pub fn run_hold(args: &[String]) -> i32 {
     }
 
     if off {
+        let was_on = entry_for(&session_id)
+            .and_then(|e| e.delivery_policy)
+            .as_deref()
+            == Some("bus-only")
+            || read_clock(&clock_key).is_some();
         let result = release(&clock_key, 0);
         if result.get("policy_cleared").and_then(Value::as_bool) != Some(true) {
             eprintln!("hold NOT off: the registry write failed, so {handle} still reads bus-only and mail is still held. Retry, or check `fno agents list` for the row.");
@@ -112,17 +133,18 @@ pub fn run_hold(args: &[String]) -> i32 {
                     .unwrap_or(0),
                 result.get("outcome").and_then(Value::as_str).unwrap_or(""),
             );
+        } else if was_on {
+            println!("hold off: do-not-disturb cleared for {handle}; no mail was waiting");
         } else {
-            println!("hold off: nothing was held");
+            println!("hold off: do-not-disturb was not on for {handle}; nothing to clear");
         }
         return 0;
     }
 
     let wall = for_minutes.is_some();
-    let window = if wall {
-        for_minutes.unwrap()
-    } else {
-        minutes.unwrap_or(5)
+    let Some(window) = for_minutes.or(minutes) else {
+        eprintln!("{HOLD_USAGE}");
+        return 2;
     };
     if window < 1 {
         eprintln!(
@@ -135,6 +157,7 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("hold: {exc}");
         return 1;
     }
+    crate::mail_hold::record_stamp("hold_verb", &session_id); // verb-wording: allow (event writer enum value)
 
     let mut arm = vec![
         "--arm".to_string(),

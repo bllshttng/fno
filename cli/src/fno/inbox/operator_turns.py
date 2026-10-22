@@ -220,24 +220,17 @@ def cmd_ack(
 
 
 @operator_app.command("status")
-def cmd_status(
+def status_forward(
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit the depth payload."),
 ) -> None:
     """Queue depth for this session - the number the capture hook reads."""
-    sid, path = _resolve_with_transcript()
-    depth = _read_queue(sid, path)
-    depth.pop("turns", None)
-    if json_output:
-        typer.echo(json.dumps(depth, indent=2))
-        return
-    report = format_skip_report(depth.get("skipped") or {})
-    if report:
-        typer.echo(report, err=True)
-    if depth["depth"] == 0:
-        typer.echo("user queue: 0")
-        return
-    age = depth["oldest_age_s"]
-    age_text = f", oldest {age}s old" if age is not None else ""
-    typer.echo(f"user queue: {depth['depth']} undispositioned turn(s){age_text}")
-    if depth["oldest_excerpt"]:
-        typer.echo(f"  oldest: {depth['oldest_excerpt']}")
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("error: the fno-agents binary was not found", err=True)
+        raise typer.Exit(code=127)
+    argv = [str(binary), "compaction", "operator-turns", "--render", "status"]
+    raise typer.Exit(code=subprocess.run(argv + (["--json"] if json_output else [])).returncode)

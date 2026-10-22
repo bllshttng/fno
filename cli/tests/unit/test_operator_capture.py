@@ -9,7 +9,6 @@ from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -108,19 +107,6 @@ def test_invalid_outcome_refused_naming_legal_values(tmp_path, tmp_ledger, monke
     assert "law:" in ack.output and "capture:" in ack.output and "node:" in ack.output
 
 
-def test_status_without_session_refuses(tmp_path, tmp_ledger, monkeypatch):
-    """AC: no resolvable session exits non-zero and names what it read, never depth 0."""
-    monkeypatch.delenv("FNO_OPERATOR_SESSION_ID", raising=False)
-    monkeypatch.delenv("FNO_OPERATOR_TRANSCRIPT", raising=False)
-    monkeypatch.setattr(
-        "fno.claims.self_identity.resolve_self_identity",
-        lambda *a, **k: SimpleNamespace(session_id=None, harness=None, disposition="empty"),
-    )
-    result = runner.invoke(app, ["inbox", "user", "status", "--json"])
-    assert result.exit_code != 0
-    assert "session" in result.output
-
-
 # -- the source_kind writer surface --
 
 
@@ -169,10 +155,9 @@ def test_operator_request_refuses_unreadable_queue(
 
 
 def test_queue_commands_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkeypatch):
-    """AC: both queue commands hand the resolved ids and paths to the Rust reader door,
-    status prints the payload without `turns`, list prints the turns, a set
-    `cursor_error` warns on stderr, and a door error exits 1 naming the reader
-    instead of ever reading as depth 0."""
+    """AC: list hands the resolved ids and paths to the Rust reader door, prints
+    the turns, a set `cursor_error` warns on stderr, and a door error exits 1
+    naming the reader instead of ever reading as an empty queue."""
     import fno.rust_binary as rb
 
     captured: dict = {}
@@ -198,27 +183,19 @@ def test_queue_commands_delegate_to_the_rust_reader(tmp_path, tmp_ledger, monkey
     monkeypatch.setattr(rb, "call_binary_json", stub)
     _pin(monkeypatch, tmp_path, [_user_row("old spelling", "u-alias-1")])
 
-    status = runner.invoke(app, ["inbox", "user", "status", "--json"])
-    assert status.exit_code == 0, status.output
+    listed = runner.invoke(app, ["inbox", "user", "list", "--json"])
+    assert listed.exit_code == 0, listed.output
     assert captured["verb"] == "compaction"
     assert captured["args"][:2] == ["operator-turns", "--session"]
     assert "s-test" in captured["args"]
     assert str(tmp_path / "transcript.jsonl") in captured["args"]
     assert str(tmp_ledger) in captured["args"]
-    payload = json.loads(status.stdout)
-    assert payload["depth"] == 1
-    assert "turns" not in payload
-    assert payload["cursor_error"] == "/ro/scan.json: permission denied"
-    assert "scan cursor not saved" in status.output
-
-    listed = runner.invoke(app, ["inbox", "user", "list", "--json"])
-    assert listed.exit_code == 0, listed.output
     rows = json.loads(listed.stdout)
     assert [r["turn_id"] for r in rows] == ["u-1"]
     assert rows[0]["excerpt"] == "hello"
     assert "scan cursor not saved" in listed.output
 
     monkeypatch.setattr(rb, "call_binary_json", lambda command, args=(): ("reader gone", None))
-    failed = runner.invoke(app, ["inbox", "user", "status", "--json"])
+    failed = runner.invoke(app, ["inbox", "user", "list", "--json"])
     assert failed.exit_code == 1
     assert "operator turn reader" in failed.output

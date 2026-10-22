@@ -142,6 +142,33 @@ fn set_policy(session_id: &str, policy: Option<&str>) -> Option<String> {
     matched
 }
 
+/// One `mail_hold_stamped` row naming who stamped `session_id` bus-only:
+/// the writer, this process's argv, and its parent's command line. Neither
+/// writer left a trace before, so a stamp nobody armed could not be traced
+/// to its caller. Best effort: an emit failure never blocks the stamp.
+pub(crate) fn record_stamp(writer: &str, session_id: &str) {
+    let clip = |s: &str| s.chars().take(300).collect::<String>();
+    let argv: Vec<String> = std::env::args().take(16).map(|a| clip(&a)).collect();
+    let ppid = std::os::unix::process::parent_id();
+    let parent = Command::new("ps")
+        .args(["-o", "command=", "-p", &ppid.to_string()])
+        .output()
+        .ok()
+        .map(|o| clip(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_default();
+    let _ = crate::events::EventEmitter::new(AgentsHome::from_env().events_jsonl(), "rust").emit(
+        "mail_hold_stamped",
+        &serde_json::json!({
+            "session_id": session_id,
+            "writer": writer,
+            "pid": std::process::id(),
+            "ppid": ppid,
+            "argv": argv,
+            "parent": parent,
+        }),
+    );
+}
+
 /// The matched row's (session id, delivery policy), read-only. The guard
 /// needs the policy to tell a hold the user set on purpose from a
 /// conversation clock.
@@ -533,6 +560,9 @@ fn arm_row(
         // The row raced out between the read and the stamp; the clock on
         // disk is inert without the flag.
         return (ArmOutcome::RowRaced, Some(handle));
+    }
+    if policy.as_deref() != Some("bus-only") {
+        record_stamp("conversation_arm", session_id);
     }
     ensure_clock(&handle, now);
     if !prior_live_conversation {
@@ -1187,17 +1217,20 @@ pub(crate) fn tidy_lapsed_holds(home: &AgentsHome, now: chrono::DateTime<chrono:
     }
 }
 
-/// How old a spawned worker's row must be before a clock-less `bus-only`
-/// stamp on it counts as an orphan: the conversation backstop, so no live
-/// answering window can still own it.
+/// How old a row must be before a clock-less `bus-only` stamp on it counts
+/// as an orphan: the conversation backstop, so no live answering window can
+/// still own it.
 const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
 
-/// The (name, session id) of every spawned worker row stamped `bus-only`
-/// with no clock file, older than [`ORPHAN_STAMP_AGE_S`]. Only `origin ==
-/// "spawn"` rows qualify: `fno agents register --delivery-policy bus-only`
-/// stamps an operator row with no clock on purpose, and a row with no
-/// `origin` or no readable `created_at` has no proof of age or source. Pure
-/// so the pick is testable without a registry write.
+/// The (name, session id) of every non-operator row stamped `bus-only` with
+/// no clock file, older than [`ORPHAN_STAMP_AGE_S`]. An `origin ==
+/// "operator"` row never qualifies: `fno agents register --delivery-policy
+/// bus-only` is the one door that stamps with no clock on purpose, and it
+/// writes `operator` over an adopted or unmarked origin. Spawned, adopted
+/// and unmarked rows are stamped only by a clocked arm, so a missing clock
+/// there is the lapsed-tidy orphan. A row with no readable `created_at` has
+/// no proof of age and stays. Pure so the pick is testable without a
+/// registry write.
 pub(crate) fn orphan_stamp_rows(
     registry: &crate::state::Registry,
     now: chrono::DateTime<chrono::Utc>,
@@ -1206,7 +1239,7 @@ pub(crate) fn orphan_stamp_rows(
         .entries
         .iter()
         .filter(|e| e.delivery_policy.as_deref() == Some("bus-only"))
-        .filter(|e| e.origin.as_deref() == Some("spawn"))
+        .filter(|e| e.origin.as_deref() != Some("operator"))
         .filter_map(|e| {
             let sid = e.harness_session_id.as_deref()?;
             let born = chrono::DateTime::parse_from_rfc3339(&e.created_at).ok()?;
@@ -1700,6 +1733,19 @@ pub(crate) mod tests {
             assert_eq!(status["clock_live"], true);
             assert_eq!(status["delivery_policy"], "bus-only");
             assert_eq!(status["conversation"], true);
+            // The stamp names its writer, so a phantom DND traces to a caller.
+            let journal =
+                crate::event_store::journal_text(&dir.join("events.jsonl"), &["mail_hold_stamped"]);
+            let stamp: serde_json::Value = journal
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .find(|v: &serde_json::Value| v["type"] == "mail_hold_stamped")
+                .expect("the arm journals a mail_hold_stamped row");
+            assert_eq!(stamp["data"]["writer"], "conversation_arm");
+            assert_eq!(stamp["data"]["session_id"], SID);
+            assert!(stamp["data"]["argv"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()));
             // The check-in label rides the same fact: the conversation leg
             // of the shared helper, at its live integration point.
             assert_eq!(
@@ -2213,7 +2259,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn orphan_sweep_picks_only_old_clockless_spawn_stamps() {
+    fn orphan_sweep_picks_old_clockless_non_operator_stamps() {
         with_hold_env(|dir| {
             let now = chrono::Utc::now();
             let old = (now - chrono::Duration::seconds(ORPHAN_STAMP_AGE_S + 60))
@@ -2239,6 +2285,8 @@ pub(crate) mod tests {
                     row("registered", 3, Some("operator"), &old),
                     row("unmarked", 4, None, &old),
                     row("clocked", 5, Some("spawn"), &old),
+                    row("adopted", 6, Some("adopted"), &old),
+                    row("young-adopted", 7, Some("adopted"), &young),
                 ]),
             );
             write_clock(
@@ -2253,8 +2301,12 @@ pub(crate) mod tests {
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
             assert_eq!(
                 orphan_stamp_rows(&registry, now),
-                vec![("orphan".to_string(), sid(1))],
-                "only the old clock-less spawn stamp is an orphan"
+                vec![
+                    ("orphan".to_string(), sid(1)),
+                    ("unmarked".to_string(), sid(4)),
+                    ("adopted".to_string(), sid(6)),
+                ],
+                "an old clock-less stamp is an orphan unless an operator set it"
             );
         });
     }
