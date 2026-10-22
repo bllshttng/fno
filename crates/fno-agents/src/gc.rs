@@ -317,7 +317,7 @@ impl KeepReason {
             KeepReason::Active { .. } => "active",
             KeepReason::TranscriptUnresolved => "transcript unresolved",
             KeepReason::GraphUnreadable => "graph unreadable",
-            KeepReason::OpenDoRow { .. } => "open do row on done node",
+            KeepReason::OpenDoRow { .. } => "open do row",
             KeepReason::OpenPr { .. } => "open pr",
             KeepReason::DeadOpenWork { .. } => "dead open work",
             KeepReason::LiveClaim { .. } => "live claim held",

@@ -107,7 +107,7 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
     for (id, reason, basis) in [
         ("confrow", "sources disagree", "transcript quiet"),
         ("turow", "transcript unresolved", "row created"),
-        ("odrrow", "open do row on done node", "transcript quiet"),
+        ("odrrow", "open do row", "transcript quiet"),
         ("nlsrow", "needs live stop", "transcript quiet"),
     ] {
         let h = find_hold(&summary, id);
