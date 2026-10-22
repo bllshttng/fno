@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/mail/hold_cli.py
 //!
-//! Characterization harness for the `mail hold` / `mail hold-release` front port. The goldens were captured from the Python hold front while it still ran its own body: the three arm receipts (idle default, explicit minutes, wall deadline), the argument refusals, both status lines, the three hold-off outcomes (nothing held, failed stamp, delivery missed), and both release endings (quiet without a clock, expired on a planted clock). Captured with `FNO_CAPTURE_GOLDEN=1` through an `fno` shim while the oracle existed; in normal mode the frozen bytes are the contract and the Python leg never runs.
+//! Characterization harness for the `mail hold` / `mail hold-release` front port. The goldens were captured from the Python hold front while it still ran its own body: the arm receipts (explicit minutes, wall deadline), the argument refusals (a bare call now prints usage and arms nothing), both status lines, the three hold-off outcomes (cleared with no mail waiting, failed stamp, delivery missed), and both release endings (quiet without a clock, expired on a planted clock). Captured with `FNO_CAPTURE_GOLDEN=1` through an `fno` shim while the oracle existed; in normal mode the frozen bytes are the contract and the Python leg never runs.
 //!
 //! One sanctioned divergence: the Rust receipt names do-not-disturb where the oracle said "busy mode on for" (the port's rename). The arm cases assert the DND wording on the raw stdout first, then translate it back so the frozen oracle bytes stay the compare contract; the DND wording itself is pinned by that assertion and by the help text in mail_cli.
 //!
@@ -211,16 +211,16 @@ struct Case {
     label: &'static str,
     args: &'static [&'static str],
     setups: &'static [Setup],
-    /// The three arm-success cases: pin the sanctioned DND naming on the raw receipt before the translate hides it from the byte compare.
+    /// The arm-success cases: pin the sanctioned DND naming on the raw receipt before the translate hides it from the byte compare.
     dnd_receipt: bool,
 }
 
 const CASES: &[Case] = &[
     Case {
-        label: "busy idle default",
+        label: "bare hold refuses",
         args: &["hold"],
         setups: &[],
-        dnd_receipt: true,
+        dnd_receipt: false,
     },
     Case {
         label: "idle minutes 12",

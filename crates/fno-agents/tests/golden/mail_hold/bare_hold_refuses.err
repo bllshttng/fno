@@ -1,0 +1,5 @@
+usage: fno agents mail admin hold (--for <minutes> | --minutes <minutes> | --off | --status)
+  --for N      do-not-disturb for N wall-clock minutes
+  --minutes N  do-not-disturb until N quiet minutes pass
+  --off        lift do-not-disturb and deliver what it held
+  --status     say whether do-not-disturb is on
