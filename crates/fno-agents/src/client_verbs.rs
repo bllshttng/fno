@@ -1866,7 +1866,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             .and_then(Value::as_str)
             .unwrap_or("");
         if matches!(&route, ResumeRoute::ClientResume) && acct != recorded {
-            if let Err(reason) = crate::reentry::shell_account_binding(acct) {
+            if let Err(reason) = crate::reentry::account_binding(acct) {
                 eprintln!(
                     "fno agents resume: --account {acct:?} does not resolve: {reason}. \
                      --account never re-binds an existing row; re-spawn the worker under the account you want."

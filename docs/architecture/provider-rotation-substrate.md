@@ -117,9 +117,10 @@ Coverage is split between in-package pytest (logic correctness) and out-of-packa
 |------|-------|---------------|
 | `crates/fno-agents/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, combos, quota, effective active (goldens captured from the Python leg) | model.py, loader.py read side |
 | `cli/src/fno/adapters/providers/test_loader.py` | config.toml parse, project-local override, save round-trip, corrupt-file refusal | loader.py |
-| `cli/src/fno/adapters/providers/test_cli.py` | Typer CliRunner: list/show/add/test/use/remove + 5 ACs | cli.py |
+| `cli/src/fno/adapters/providers/test_cli.py` | Typer CliRunner: list/add/test/use/remove + 5 ACs | cli.py |
+| `crates/fno-agents/tests/accounts_show_parity.rs` | `show` text and `--print-binding` (goldens captured from the deleted Python verb) | crates/fno-agents/src/accounts/show.rs |
 | `cli/src/fno/adapters/providers/test_staging.py` | symlink ops, idempotency, error paths | staging.py |
-| `cli/src/fno/adapters/providers/test_dispatch.py` | env resolution, concurrency (ThreadPoolExecutor), keychain mocking | dispatch.py |
+| `crates/fno-agents/tests/accounts_env_parity.rs` | Launch env per auth arm, env references, staging check, identity refusal, the `--account` overlay lanes (goldens captured from the Python leg) | dispatch.py, staging.py verify_staged, account_env.py overlay |
 | `cli/src/fno/test_cost.py` | tagged write, untagged write, mixed-schema ledger, concurrent atomic write | cost.py |
 | `tests/test_register_task_provider_attribution.sh` | register-task.py reads target-state.md, propagates fields | register-task.py |
 | `tests/test_provider_substrate_e2e.sh` | full add → list → stage → use → dispatch → cost-write → remove cycle | end-to-end |

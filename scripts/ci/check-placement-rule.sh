@@ -110,6 +110,10 @@
 #      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
 #      under a temp root to prove two roots keep distinct credential
 #      identity. Read-only; footnote stores nothing under either.
+#      accounts/staging.rs and accounts/env.rs port staging.py, dispatch.py
+#      and the account_env.py overlay: they name a staged account's
+#      `<id>/.claude` dir and pin the shared ~/.claude slot for the active
+#      managed account. They build env values and write nothing there.
 #      managed.py resolves the same canonical path for the same reason, in
 #      reconcile-slot: an identity read must not follow an ambient
 #      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
@@ -281,7 +285,6 @@ cli/src/fno/adapters/providers/dispatch.py
 cli/src/fno/adapters/providers/managed.py
 cli/src/fno/adapters/providers/staging.py
 cli/src/fno/adapters/providers/test_cli.py
-cli/src/fno/adapters/providers/test_dispatch.py
 cli/src/fno/adapters/providers/test_failover.py
 cli/src/fno/adapters/providers/test_loader.py
 cli/src/fno/adapters/providers/test_managed.py
@@ -312,6 +315,8 @@ crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/accounts/binding.rs
+crates/fno-agents/src/accounts/env.rs
+crates/fno-agents/src/accounts/staging.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs

@@ -306,6 +306,7 @@ enum Role {
     /// paths verbs still forward to Python (one verb per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    AccountsCli(Vec<OsString>),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -734,6 +735,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(rest) = fno::accounts_route::classify(args) {
+        return Role::AccountsCli(rest);
+    }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
     }
@@ -1117,6 +1121,9 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::AccountsCli(rest) => {
+            std::process::exit(fno_agents_exec("fno config accounts", &["accounts"], &rest))
+        }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),

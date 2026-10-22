@@ -1094,7 +1094,7 @@ pub(crate) fn check_account_login(
     check_account_login_with(
         route_provider,
         account,
-        crate::reentry::shell_account_binding,
+        crate::reentry::account_binding,
         crate::claude_login::probe_config_dir,
         crate::claude_login::record_verdict_ambient,
         warnings,
