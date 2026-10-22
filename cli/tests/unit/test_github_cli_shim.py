@@ -34,3 +34,17 @@ def test_an_old_helper_shim_is_rewritten_to_exec_fno_agents(tmp_path, monkeypatc
     monkeypatch.setattr(github_cli, "_in_temp", lambda path: path == agents)
     durable = github_cli.ensure_proxy(directory=tmp_path / "durable", real_gh=real_gh)
     assert durable.proxy == real_gh and not (tmp_path / "durable" / "gh").exists()
+
+
+def test_a_worker_refreshes_an_inherited_old_shim_in_place(tmp_path, monkeypatch):
+    root = tmp_path / "github-cli"
+    agents = _exe(tmp_path / "bin" / "fno-agents", "#!/bin/sh\nexit 0\n")
+    real_gh = _exe(tmp_path / "real" / "gh", "#!/bin/sh\nexit 0\n")
+    _exe(root / "gh", '#!/bin/sh\nexec fno-gh-proxy "$@"\n')
+    monkeypatch.setattr(github_cli, "resolve_binary", lambda: agents)
+    path = f"{root}:{real_gh.parent}"
+
+    env = github_cli.worker_environment({"PATH": path, "FNO_GH_PROXY_DIR": str(root)})
+
+    assert env["FNO_GH_PROXY_DIR"] == str(root.resolve())
+    assert (root / "gh").read_text() == f"#!/bin/sh\nexec {agents} gh \"$@\"\n"

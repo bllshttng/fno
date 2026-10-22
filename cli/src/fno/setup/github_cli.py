@@ -44,6 +44,17 @@ def _wrapper(binary: Path) -> str:
     return f'#!/bin/sh\nexec {shlex.quote(str(binary))} gh "$@"\n'
 
 
+def _shim_binary() -> Optional[Path]:
+    """The fno-agents a shim names. A cargo build dir is swept with its
+    worktree, so an installed copy on PATH wins over it."""
+    binary = resolve_binary()
+    if binary is not None and binary.parent.parent.name == "target":
+        installed = _WHICH("fno-agents")
+        if installed:
+            return Path(installed)
+    return binary
+
+
 def _in_temp(path: Path) -> bool:
     temp = os.path.realpath(tempfile.gettempdir())
     return os.path.realpath(path).startswith(temp + os.sep)
@@ -80,7 +91,7 @@ def ensure_proxy(
     resolved = real_gh or (Path(found) if (found := which("gh")) else None)
     if resolved is None:
         raise FileNotFoundError("real gh executable not found on PATH")
-    binary = resolve_binary()
+    binary = _shim_binary()
     if binary is None:
         # No fno-agents to exec, so the shim would strand every gh call.
         # Degrade: leave the real gh unswrapped and let the quota policy
@@ -174,6 +185,16 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
             except Exception:
                 keep = True
         if keep:
+            # An older shim may exec a helper a reinstall removed: refresh it
+            # in place. On failure the shim stays as it was.
+            outside = os.pathsep.join(
+                p for p in env.get("PATH", "").split(os.pathsep)
+                if p and Path(p).resolve() != parent
+            )
+            try:
+                ensure_proxy(directory=parent, which=lambda name: _WHICH(name, path=outside))
+            except Exception:
+                pass
             env[_PROXY_DIR_ENV] = str(parent)
             env.pop("FNO_REAL_GH", None)
             return env
