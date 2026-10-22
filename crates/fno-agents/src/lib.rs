@@ -320,6 +320,7 @@ pub mod main_ci_proof;
 pub mod main_ci_transition;
 pub mod manifest;
 pub mod manifest_lookup;
+pub mod memory_groups;
 pub mod merge_close;
 pub mod merge_command;
 pub mod merge_freeze;

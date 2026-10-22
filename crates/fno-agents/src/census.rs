@@ -1066,6 +1066,13 @@ pub async fn run_command(args: &[String]) -> i32 {
                 "sccache_restarts_1h": crate::machine_watch::sccache_restarts_1h(),
                 "daemon_cpu": cpu,
                 "daemon_cpu_reason": cpu_reason,
+                // Opt-in like the CPU window: the spawn gate's probe never
+                // reads memory and must not pay the registry walk for it.
+                "memory": if args.iter().any(|arg| arg == "--memory") {
+                    crate::memory_groups::reading(&crate::paths::AgentsHome::from_env(), &rows)
+                } else {
+                    Value::Null
+                },
             })
         );
         return 0;

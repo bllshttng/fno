@@ -25,7 +25,6 @@ def _reading(
         direct_process_count=0,
         transient_call_count=0,
         process_count=0,
-        rss_gb=0.0,
         measured_cpu_cores=measured,
         top=top or [],
         unparsed_lines=0,
