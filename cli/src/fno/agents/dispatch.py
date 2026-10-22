@@ -7356,14 +7356,13 @@ def resolve_to_project(
     on a missing/malformed config, so resolution always works off the registry
     alone (AC6-FR).
     """
+    # A malformed block reads as {} natively; this guard catches a failed run.
     try:
-        from fno.inbox.settings import read_peer_projects
-
-        # read_peer_projects already degrades to {} on a malformed config shape
-        # (with its own stderr warning), so this outer guard only catches an
-        # UNEXPECTED error in the hint path - log it rather than silently
-        # masking a real bug as "no hints".
-        peer_projects = read_peer_projects()
+        from fno.rust_binary import resolve_binary
+        argv = [str(resolve_binary()), "compaction", "inbox-peers", "--json"]
+        proc = subprocess.run(argv, capture_output=True, text=True, check=True)
+        sys.stderr.write(proc.stderr)
+        peer_projects = json.loads(proc.stdout)["projects"]
     except Exception as exc:  # noqa: BLE001 - the hint is best-effort; never fatal
         print(
             f"warning: --to-project peer hint unavailable ({type(exc).__name__}: "

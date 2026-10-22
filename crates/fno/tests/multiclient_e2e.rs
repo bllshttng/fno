@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{spawn_server, Absorbed, ClientHarness, FakeClient};
-use fno::proto::Command;
+use fno::proto::{
+    read_msg_sync, write_msg_sync, ClientMsg, Command, ControlVerb, ServerMsg, BUILD_VERSION,
+    PROTO_VERSION,
+};
 use fno::tree::Dir;
 
 struct Scratch(PathBuf);
@@ -41,6 +44,14 @@ fn sh_server(scratch: &Scratch) -> common::ServerProc {
     spawn_server(&scratch.sock(), &[("SHELL", "/bin/sh")])
 }
 
+/// The pre-`latest` behaviour: the tab takes the smallest viewer's size.
+fn sh_server_smallest(scratch: &Scratch) -> common::ServerProc {
+    spawn_server(
+        &scratch.sock(),
+        &[("SHELL", "/bin/sh"), ("FNO_MUX_WINDOW_SIZE", "smallest")],
+    )
+}
+
 /// Run the real `fno` binary with `FNO_MUX_DIR` pointed at this scratch (no
 /// TTY - the mux verbs are plain subprocess surfaces). FNO_AGENTS_HOME rides
 /// along so a store-touching verb (workspace prune) writes the SAME isolated
@@ -60,7 +71,7 @@ fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
 #[test]
 fn multiclient_clamp_letterbox_area_and_regrow_on_abrupt_death() {
     let scratch = Scratch::new("clamp");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -106,7 +117,7 @@ fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
     // the tree at min pane size - no panic, no overlap, exact recovery when
     // the tiny client leaves.
     let scratch = Scratch::new("tiny");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
@@ -152,7 +163,7 @@ fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
 #[test]
 fn multiclient_coviewed_tui_repaints_and_redraw_binding_nudges() {
     let scratch = Scratch::new("repaint");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -252,6 +263,158 @@ while :; do sleep 0.2; done\n",
         Some(c.notices.iter().any(|n| n.contains("repaint requested")))
     });
     b.wait_pane_text(15, pane, |t| count(t) > before.max(0));
+}
+
+/// Deliver bytes to one pane through a control connection, the way the mail
+/// pane lane does (`fno mux pane send --stdin --raw`): a `Control` first
+/// message never registers a client, so it can neither resize nor count as
+/// activity.
+fn control_pane_send(sock: &Path, pane: u64, bytes: &[u8]) {
+    let mut stream = common::connect_with_retry(sock);
+    write_msg_sync(
+        &mut stream,
+        &ClientMsg::Control {
+            proto: PROTO_VERSION,
+            build: BUILD_VERSION.to_string(),
+            verb: ControlVerb::PaneSend {
+                pane,
+                bytes: bytes.to_vec(),
+                guarded: false,
+                expected_identity: None,
+                hold_pass: false,
+            },
+        },
+    )
+    .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    match read_msg_sync::<_, ServerMsg>(&mut stream) {
+        Ok(ServerMsg::Ok) => {}
+        other => panic!("pane send failed: {other:?}"),
+    }
+}
+
+/// (x-27c7) One mail delivery - a bracketed paste, then a separate Enter -
+/// must resize no pane and change no client's area, with two clients of
+/// different sizes attached. Both panes run the WINCH-counting painter, so
+/// a stray winsize write on the receiver or its tab neighbour moves a count.
+#[test]
+fn multiclient_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailresize");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    std::fs::write(
+        cwd.join("winchpaint.sh"),
+        "#!/bin/sh\n\
+tag=$1\n\
+n=0\n\
+paint() {\n\
+  n=$((n+1))\n\
+  printf '%s' \"$n\" > \"cnt.$tag\"\n\
+}\n\
+trap 'paint' WINCH\n\
+paint\n\
+while :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 30, 100, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| l.area == (30, 100));
+    a.cmd(Command::SplitDir(Dir::Right));
+    let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
+    // Each painter counts its WINCHes in a file: the pasted body scrolls the
+    // screen, so a count painted on screen would not survive the delivery.
+    for (pane, tag) in [(receiver, "r"), (neighbour, "n")] {
+        let cmd = format!("sh ./winchpaint.sh {tag}\r");
+        control_pane_send(&scratch.sock(), pane, cmd.as_bytes());
+    }
+    let count = |tag: &str| -> i32 {
+        std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(-1)
+    };
+    let started = std::time::Instant::now();
+    while count("r") < 1 || count("n") < 1 {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "painters never ran"
+        );
+        a.pump(Duration::from_millis(200));
+    }
+    // Let the split's own nudges drain before the baseline: the delivery is
+    // the only event inside the measured window.
+    a.pump(Duration::from_millis(2500));
+    let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    let baseline = [count("r"), count("n")];
+
+    let mut paste = b"\x1b[200~".to_vec();
+    for line in 0..60 {
+        paste.extend_from_slice(
+            format!("line {line:02} of a long mail body {}\n", "x".repeat(40)).as_bytes(),
+        );
+    }
+    paste.extend_from_slice(b"\x1b[201~");
+    control_pane_send(&scratch.sock(), receiver, &paste);
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // Past NUDGE_DELAY (300 ms) plus the 1 s nudge tick.
+    a.pump(Duration::from_millis(2500));
+    b.pump(Duration::from_millis(100));
+
+    for ((pane, tag), before) in [(receiver, "r"), (neighbour, "n")]
+        .into_iter()
+        .zip(baseline)
+    {
+        assert_eq!(
+            count(tag),
+            before,
+            "mail delivery sent a SIGWINCH to pane {pane}"
+        );
+    }
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
+            Some((settled.area, settled.panes.clone())),
+            "mail delivery changed client {who}'s layout"
+        );
+    }
+}
+
+/// The default `latest` policy: the tab takes the size of the client that
+/// last attached, typed or resized, so a big window is not letterboxed by a
+/// small one it is not using.
+#[test]
+fn multiclient_window_size_latest_follows_the_active_client() {
+    let scratch = Scratch::new("latest");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane);
+    // B attached last, so B owns the size.
+    let mut b = FakeClient::attach(&scratch.sock(), 20, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "a follows b", |l| l.area == (20, 80));
+    b.wait_layout(10, "b owns the size", |l| l.area == (20, 80));
+
+    // A types: the tab follows A, and the shell's kernel winsize with it.
+    a.input(b"echo sz=$(stty size)#\r");
+    a.wait_layout(10, "a owns the size", |l| l.area == (40, 120));
+    b.wait_layout(10, "b follows a", |l| l.area == (40, 120));
+    a.wait_pane_text(15, pane, |t| t.contains("sz=38 118#"));
+
+    // B resizes its window: B is the latest client again.
+    b.resize(22, 90);
+    a.wait_layout(10, "a follows b's resize", |l| l.area == (22, 90));
+    b.wait_layout(10, "b owns its resized size", |l| l.area == (22, 90));
+    b.input(b"echo sz2=$(stty size)#\r");
+    b.wait_pane_text(15, pane, |t| t.contains("sz2=20 88#"));
 }
 
 // -- AC2: two clients, different views --------------------------------------
@@ -383,7 +546,7 @@ fn multiclient_resize_storm_while_coviewing_settles_on_final_clamp() {
     // (The strict SIGWINCH count bound is covered structurally by the
     // no-op-tail rule in push_layout plus per-client channel coalescing.)
     let scratch = Scratch::new("storm");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());

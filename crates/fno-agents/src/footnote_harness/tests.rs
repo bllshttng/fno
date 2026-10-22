@@ -129,7 +129,7 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     assert!(
         missing
             .stderr
-            .contains("cargo install --locked --path ~/code/footnote/fnh"),
+            .contains("cargo install --locked --path <your fnh checkout>"),
         "{}",
         missing.stderr
     );

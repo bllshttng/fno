@@ -657,9 +657,11 @@ The `no-collision-check` positional modifier (and `--no-collision-check` flag) s
 After the plan file is written and any collision check has resolved, but BEFORE auto-intake, scan the plan's Files-to-Modify table for paths that match a peer-owned surface. Mechanical resolution, not LLM judgment. Skip the whole step silently when no `peers` block exists (opt-in by design).
 
 ```python
-from fno.inbox.settings import read_peer_surfaces, read_surface_patterns
-peers = read_peer_surfaces()           # {peer: [surface_name, ...]}
-patterns = read_surface_patterns()     # {surface_name: [glob, ...]}
+import json, subprocess
+maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
+                                 capture_output=True, text=True, check=True).stdout)
+peers = maps["peers"]                  # {peer: [surface_name, ...]}
+patterns = maps["surface_patterns"]    # {surface_name: [glob, ...]}
 ```
 
 For each peer, union the glob patterns of every surface that peer owns,

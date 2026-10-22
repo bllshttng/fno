@@ -2,6 +2,7 @@
 # Shoot the mux for a public page without one byte of a real session in it.
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
+#       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -20,12 +21,22 @@ PANES=()
 
 # The shot runs from $ROOT/code/checkout, so a relative --out would land in
 # the throwaway root and die with it. Absolutize against the caller's cwd.
+# --window-size and --no-fit are this script's own: the first sets the demo
+# server's mux.window_size policy by env (the server inherits it), the second
+# shoots as a passive observer so the shot crops instead of resizing the tab.
 ARGS=()
+FIT=(--fit)
 PREV=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
     ARGS+=("$(cd "$(dirname -- "$a")" && pwd -P)/$(basename -- "$a")")
+  elif [ "$PREV" = "--window-size" ]; then
+    export FNO_MUX_WINDOW_SIZE="$a"
+  elif [ "$a" = "--window-size" ]; then
+    :
+  elif [ "$a" = "--no-fit" ]; then
+    FIT=()
   else
     ARGS+=("$a")
   fi
@@ -443,4 +454,4 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout "$@"
+"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"

@@ -524,7 +524,7 @@ fn tab_close_rows() {
     assert_eq!(result.1, vec![pane]);
     assert_eq!(result.2, RemoveOutcome::SessionEmpty);
     assert!(!core.panes.contains_key(&pane));
-    assert!(!core.tab_areas.contains_key(&5));
+    assert!(!core.sizing.areas.contains_key(&5));
 }
 
 #[test]
@@ -1183,7 +1183,7 @@ fn place_rows() {
     core.session
         .add_squad(1, vec!["/a".into()], None, leaf_tab(5, 1));
     // 8 cols cannot hold two MIN_COLS(8)-wide halves -> horizontal refusal.
-    core.tab_areas.insert(5, (40, 8));
+    core.sizing.areas.insert(5, (40, 8));
     let before = core.session.squad(1).unwrap().tabs[0].root.clone();
 
     let (_sid, tid, fell_back) = core
@@ -1272,8 +1272,8 @@ fn two_tab_core() -> Core {
         root: Node::Leaf(3),
         focus: 3,
     });
-    core.tab_areas.insert(10, (24, 80));
-    core.tab_areas.insert(20, (24, 80));
+    core.sizing.areas.insert(10, (24, 80));
+    core.sizing.areas.insert(20, (24, 80));
     core.next_pane_id = 100;
     core
 }
@@ -1297,7 +1297,7 @@ fn template_core() -> (Core, u64) {
     let p = core.spawn_pane(24, 80, "/a").unwrap();
     core.session
         .add_squad(1, vec!["/a".into()], Some("sq".into()), leaf_tab(5, p));
-    core.tab_areas.insert(5, (24, 80));
+    core.sizing.areas.insert(5, (24, 80));
     (core, p)
 }
 
@@ -1390,7 +1390,7 @@ fn template_rows() {
     core.agents = vec![bound_agent("S1", p1)];
     // A second, empty target tab to apply into.
     let tid = core.create_tab_in(1, Some("grid".into())).unwrap();
-    core.tab_areas.insert(tid, (24, 80));
+    core.sizing.areas.insert(tid, (24, 80));
 
     let spec = LayoutSpec {
         template: TemplateName::MainLeft,
@@ -1514,7 +1514,7 @@ fn template_refusal_rows() {
     // AC6: a tab too small to tile grid-2x2 -> TEMPLATE_UNFITTABLE, tab
     // unchanged (the pre-mutation atomic refuse).
     let (mut core, _p) = template_core();
-    core.tab_areas.insert(5, (3, 8)); // far too small for four tiles
+    core.sizing.areas.insert(5, (3, 8)); // far too small for four tiles
     let before = core
         .session
         .squad(1)
@@ -2467,7 +2467,7 @@ fn graft_rows() {
     // A second tab holding the anchor; squad tabs are now [5, anchor_tid],
     // so the Fno pane's tab 5 is EARLIER than the anchor's.
     let anchor_tid = core.create_tab_in(1, Some("anchor-tab".into())).unwrap();
-    core.tab_areas.insert(anchor_tid, (24, 80));
+    core.sizing.areas.insert(anchor_tid, (24, 80));
     let anchor_pane = core
         .session
         .squad(1)
@@ -2785,7 +2785,7 @@ fn move_join_rows() {
     core.command(7, Command::BreakPane { pane: 1 });
     let brk = core.client_view(7).unwrap().1; // the new tab holding [1]
                                               // Now cram the anchor tab so a join back would breach min-size.
-    core.tab_areas.insert(20, (40, 8));
+    core.sizing.areas.insert(20, (40, 8));
     let before_brk = core
         .session
         .squad(1)
@@ -7811,7 +7811,7 @@ fn break_of_a_member_pane_refreshes_the_stored_tab_name() {
         }],
     );
     core.attached.insert("c19cd2c3".into(), 100);
-    core.tab_areas.insert(7, (24, 80));
+    core.sizing.areas.insert(7, (24, 80));
     core.persist_squad(7);
 
     core.pane_break(100, Some("solo".into()))
@@ -7875,8 +7875,8 @@ fn join_of_a_member_tab_refreshes_the_stored_tab_name() {
         }],
     );
     core.attached.insert("c19cd2c3".into(), 100);
-    core.tab_areas.insert(7, (24, 80));
-    core.tab_areas.insert(20, (24, 80));
+    core.sizing.areas.insert(7, (24, 80));
+    core.sizing.areas.insert(20, (24, 80));
     core.persist_squad(7);
 
     core.tab_join(&TabSel::Id(7), 200, Dir::Right)
@@ -8131,7 +8131,7 @@ pub(super) fn empty_core() -> Core {
         clients: Vec::new(),
         next_pane_id: 1,
         next_squad_id: 1,
-        tab_areas: HashMap::new(),
+        sizing: TabSizing::with_policy(window_size::WindowSize::Smallest),
         session_name: "test".into(),
         shells: Vec::new(),
         out_tx,
@@ -8273,7 +8273,7 @@ fn pane_placement_resolves_named_and_stale_targets_before_spawn() {
 #[test]
 fn pane_placement_splits_on_requested_side_and_focuses_new_pane() {
     let mut core = placement_core();
-    core.tab_areas.insert(11, (24, 80));
+    core.sizing.areas.insert(11, (24, 80));
     let landed = core
         .place_spawned_pane(Some(7), "/repo/child", 2, Some(Dir::Left))
         .unwrap();
@@ -8288,7 +8288,7 @@ fn pane_placement_split_refusal_falls_back_to_new_tab() {
     // AC3-FR (x-9f75): a split refused at min-size no longer reaps and dead-ends - the pane lands as a
     // NEW TAB in the same squad, the original tab is untouched, and the caller is told to notice.
     let mut core = placement_core();
-    core.tab_areas.insert(11, (24, 16));
+    core.sizing.areas.insert(11, (24, 16));
     core.claim_eligible.insert(2);
     let before = core.session.squad(7).unwrap().tabs[0].clone();
     let (sid, tid, fell_back) = core
@@ -8431,7 +8431,7 @@ fn observer_attach_sole_viewer_keeps_last_or_default() {
         (vt::DEFAULT_ROWS, vt::DEFAULT_COLS),
         "sole observer -> VT defaults, never its own dims"
     );
-    core.tab_areas.insert(5, (40, 120));
+    core.sizing.areas.insert(5, (40, 120));
     assert_eq!(
         core.tab_area(5),
         (40, 120),
