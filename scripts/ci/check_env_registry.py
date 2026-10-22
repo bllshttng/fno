@@ -119,39 +119,29 @@ def scan(root: Path) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
                 file_defs[side][rel].setdefault(m.group(1), set()).add(value)
 
     # Pass 2: literal reads, then const reads resolved to their value.
+    def record_const(side: str, rel: Path, lineno: int, const: str) -> None:
+        values = file_defs[side].get(rel, {}).get(const) or tree_defs[side].get(const)
+        if values and len(values) == 1:
+            sites[next(iter(values))][side].append(f"{rel}:{lineno}")
+        else:
+            refusals.append(
+                f"{rel}:{lineno}: env read through {const} resolves to "
+                f"{len(values or ())} values; use a literal or one const"
+            )
+
     for rel, text in texts["py"]:
         harvest(PY_READ_RE, text, rel, "py")
         for m in PY_CONST_READ_RE.finditer(text):
             lineno = text.count("\n", 0, m.start()) + 1
             const = next(g for g in m.groups() if g)
-            _record_const(sites, refusals, file_defs["py"], tree_defs["py"], "py", rel, lineno, const)
+            record_const("py", rel, lineno, const)
     for rel, text in texts["rs"]:
         harvest(RS_READ_RE, text, rel, "rs")
         for m in RS_CONST_READ_RE.finditer(text):
             lineno = text.count("\n", 0, m.start()) + 1
             const = next(g for g in m.groups() if g)
-            _record_const(sites, refusals, file_defs["rs"], tree_defs["rs"], "rs", rel, lineno, const)
+            record_const("rs", rel, lineno, const)
     return sites, refusals
-
-
-def _record_const(
-    sites: dict[str, dict[str, list[str]]],
-    refusals: list[str],
-    file_defs: dict[Path, dict[str, set[str]]],
-    tree_defs: dict[str, set[str]],
-    side: str,
-    rel: Path,
-    lineno: int,
-    const: str,
-) -> None:
-    values = file_defs.get(rel, {}).get(const) or tree_defs.get(const)
-    if values and len(values) == 1:
-        sites[next(iter(values))][side].append(f"{rel}:{lineno}")
-    else:
-        refusals.append(
-            f"{rel}:{lineno}: env read through {const} resolves to "
-            f"{len(values or ())} values; use a literal or one const"
-        )
 
 
 def read_doc(root: Path) -> dict[str, tuple[str, str]]:
@@ -333,6 +323,14 @@ def selftest() -> int:
         (py / "g.py").write_text("import os\nz = os.environ.get(AMBIG)\n", encoding="utf-8")
         if run(root) != 1:
             print("selftest: ambiguous const did not fail", file=sys.stderr)
+            return 2
+
+        # A constant read with no definition anywhere is a refusal too.
+        (py / "e.py").write_text("")
+        (py / "f.py").write_text("")
+        (py / "h.py").write_text("import os\nw = os.environ.get(UNDEFINED_C)\n", encoding="utf-8")
+        if run(root) != 1:
+            print("selftest: undefined const did not fail", file=sys.stderr)
             return 2
     print("selftest: ok")
     return 0
