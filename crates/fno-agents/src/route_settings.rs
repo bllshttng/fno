@@ -94,7 +94,7 @@ fn payload_bytes(env: &Map<String, Value>, sandbox: Option<&Value>) -> Vec<u8> {
 /// claude daemon and the attached view renders with the theme the session
 /// launched with, so its settings file must carry it. `claude attach` itself
 /// ignores `--settings`.
-fn claude_theme_env() -> Option<String> {
+pub(crate) fn claude_theme_env() -> Option<String> {
     let v = std::env::var("FNO_CLAUDE_THEME").ok()?;
     let ok = !v.is_empty()
         && v.chars()
