@@ -133,7 +133,7 @@ def test_marker_breached_ceiling_caps_threads_at_one(tmp_path, monkeypatch, caps
         ),
     )
     monkeypatch.setattr(lanes, "read_memory_pressure", lambda **kw: (0.5, None))
-    monkeypatch.setattr(footprint, "cause_reading", lambda: (None, "test: no footprint"))
+    monkeypatch.setattr(footprint, "cause_reading", lambda **_kw: (None, "test: no footprint"))
     monkeypatch.setattr(footprint, "live_registry_rows", lambda: ([], None))
 
     assert test_cmd._run_rust([]) == 0

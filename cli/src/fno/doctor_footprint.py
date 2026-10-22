@@ -32,6 +32,7 @@ PS_TIMEOUT_SECONDS = 5.0
 #: refreshed by _read_ps - the census door answers table and fields in one
 #: call. The verb reads it at emit time; the cause-only lane never does.
 _LAST_SCCACHE: tuple[int | None, int | None] = (None, None)
+_LAST_MEMORY: dict | None = None
 _NO_LOAD_SNAPSHOT = object()
 #: Exit codes. A capacity breach keeps 3 (existing readers depend on it); the
 #: leak alarm gets its own code so ``echo $?`` answers WHICH alarm fired. The
@@ -645,7 +646,7 @@ def _unparsed_sample_evidence(reading: Footprint) -> str:
     return "; " + "; ".join(parts)
 
 
-def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None]:
+def cause_reading(*, timeout: float = 5.0, memory: bool = False) -> tuple[Footprint | None, str | None]:
     """One CPU-only fleet reading shared by `--cause-only` and the spawn gate.
 
     The single producer for the cause pipeline: both the verb and the gate's
@@ -656,7 +657,7 @@ def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None
     """
     deadline = time.monotonic() + timeout
     snapshot_at = time.time()
-    ps_output, error = _read_ps(timeout=timeout)
+    ps_output, error = _read_ps(timeout=timeout, memory=memory)
     if error is not None or ps_output is None:
         return None, error or "footprint unavailable: ps returned no output"
     snapshot_pids = _snapshot_pids(ps_output)
@@ -712,19 +713,19 @@ def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None
         attribution_gap = "; ".join(text for text in (attribution_gap, serve_gap) if text)
     if attribution_gap is not None:
         reading = reading._replace(attribution_gap=attribution_gap)
-    return reading, None
+    return reading._replace(memory=_LAST_MEMORY), None
 
 
-def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS) -> tuple[str | None, str | None]:
+def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS, memory: bool = False) -> tuple[str | None, str | None]:
     """The process table over the Rust door: `fno-agents census --ps` keeps
     the table in memory, so a seatbelt that refuses the setuid `ps` exec
     still gets a reading, and a read-only sandbox needs no temp file."""
-    global _LAST_SCCACHE
+    global _LAST_SCCACHE, _LAST_MEMORY
     # A failed fetch answers "unknown" below, never yesterday's server: the
     # stash resets before the read, so a dead census door cannot print a
     # stale pid as live.
-    _LAST_SCCACHE = (None, None)
-    error, payload = call_binary_json("census", ["--ps"], timeout=timeout)
+    _LAST_SCCACHE, _LAST_MEMORY = (None, None), None
+    error, payload = call_binary_json("census", ["--ps", "--memory"] if memory else ["--ps"], timeout=timeout)
     if error is not None or not isinstance(payload, dict):
         return None, f"process table unavailable: {error or 'census --ps returned no table'}"
     table = payload.get("ps")
@@ -732,6 +733,7 @@ def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS) -> tuple[str | None, str | 
         return None, "process table unavailable: census --ps returned no table"
     pid, restarts = payload.get("sccache_server_pid"), payload.get("sccache_restarts_1h")
     _LAST_SCCACHE = (pid if isinstance(pid, int) else None, restarts if isinstance(restarts, int) else None)
+    _LAST_MEMORY = payload.get("memory") if isinstance(payload.get("memory"), dict) else None
     return table, None
 
 
@@ -965,7 +967,7 @@ def _payload(
         "direct_process_count_threshold": process_threshold,
         "descendant_process_count": reading.descendant_process_count,
         "direct_process_count": reading.direct_process_count,
-        "rss_gb": reading.rss_gb,
+        "memory": reading.memory,
         "cpu_capacity_cores": cpu_capacity,
         "fleet_percent_capacity": reading.fleet_cpu_cores / cpu_capacity * 100,
         "fleet_percent_measured_cpu": measured_share,
@@ -985,7 +987,6 @@ def _payload(
         # every fno spawn.
         "spare_pool_process_count": reading.spare_pool_process_count,
         "spare_pool_cpu_cores": reading.spare_pool_cpu_cores,
-        "spare_pool_rss_gb": reading.spare_pool_rss_gb,
         "top": [
             {
                 "cpu_percent": cpu_percent,
@@ -1106,10 +1107,11 @@ def _emit_result(
         if reading.spare_pool_process_count:
             typer.echo(
                 f"claude spare pool: {reading.spare_pool_process_count} processes, "
-                f"{reading.spare_pool_cpu_cores:.2f} cores, "
-                f"{reading.spare_pool_rss_gb:.1f}GB (idle pre-warm, not fleet; "
+                f"{reading.spare_pool_cpu_cores:.2f} cores (idle pre-warm, not fleet; "
                 "never sweep it - a bg spawn is claimed from it)"
             )
+        if reading.memory:
+            typer.echo(reading.memory.get("line"))
         if reading.attribution_gap is not None:
             typer.echo(
                 f"attribution gap: {reading.attribution_gap} "
@@ -1176,7 +1178,7 @@ def footprint_command(
     ),
 ) -> None:
     """Measure fno CPU and process cost without using load average."""
-    reading, cause_error = cause_reading()
+    reading, cause_error = cause_reading(memory=not cause_only)
     if cause_error is not None or reading is None:
         _emit_failure(cause_error or "footprint unavailable", json_output=json_output)
         raise typer.Exit(code=4)

@@ -40,7 +40,7 @@ def _footprint(*, tests: int = 3, gap: str | None = None, top=()):
     """A footprint reading stand-in: only the fields the census reads."""
     return SimpleNamespace(
         fleet_cpu_cores=0.5,
-        rss_gb=1.9,
+        memory={"fleet": {"mb": 1945.6, "procs": 4}},
         test_process_count=tests,
         attribution_gap=gap,
         top=list(top),
