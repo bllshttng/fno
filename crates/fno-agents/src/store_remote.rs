@@ -370,23 +370,39 @@ impl Remote {
     /// have reached the primary, so it is never sent to a second address.
     fn connect(&self) -> Result<TcpStream, String> {
         let mut failures = Vec::new();
-        let resolved: Vec<SocketAddr> = match (self.host.as_str(), self.port).to_socket_addrs() {
-            Ok(addrs) => addrs.collect(),
-            Err(e) => {
-                failures.push(format!("resolve {}: {e}", self.host));
-                Vec::new()
-            }
-        };
-        if resolved.is_empty() && failures.is_empty() {
-            failures.push(format!("resolve {}: no address", self.host));
-        }
-        for address in resolved.iter().chain(&self.fallbacks) {
+        let resolved = self.resolve().unwrap_or_else(|error| {
+            failures.push(format!("resolve {}: {error}", self.host));
+            Vec::new()
+        });
+        let fallbacks = self.fallbacks.iter().filter(|a| !resolved.contains(a));
+        for address in resolved.iter().chain(fallbacks) {
             match TcpStream::connect_timeout(address, CONNECT_WAIT) {
                 Ok(stream) => return Ok(stream),
                 Err(e) => failures.push(format!("connect {address}: {e}")),
             }
         }
         Err(failures.join("; "))
+    }
+
+    /// The host name's addresses. The system resolver takes no timeout, and
+    /// a dead MagicDNS server can hold it for its whole retry schedule, so
+    /// the lookup runs on its own thread and waits at most CONNECT_WAIT.
+    fn resolve(&self) -> Result<Vec<SocketAddr>, String> {
+        let (host, port) = (self.host.clone(), self.port);
+        let (send, receive) = std::sync::mpsc::channel::<std::io::Result<Vec<SocketAddr>>>();
+        std::thread::spawn(move || {
+            let _ = send.send(
+                (host.as_str(), port)
+                    .to_socket_addrs()
+                    .map(Iterator::collect),
+            );
+        });
+        match receive.recv_timeout(CONNECT_WAIT) {
+            Ok(Ok(addrs)) if addrs.is_empty() => Err("no address".into()),
+            Ok(Ok(addrs)) => Ok(addrs),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err(format!("no answer in {}s", CONNECT_WAIT.as_secs())),
+        }
     }
 
     fn post(&self, route: &str, body: &str) -> Result<String, String> {
