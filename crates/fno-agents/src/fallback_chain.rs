@@ -367,7 +367,7 @@ fn canonicalize_link(raw: &Value) -> Result<Map<String, Value>, String> {
     Ok(fields)
 }
 
-fn type_name(v: &Value) -> &'static str {
+pub(crate) fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Null => "NoneType",
         Value::Bool(_) => "bool",

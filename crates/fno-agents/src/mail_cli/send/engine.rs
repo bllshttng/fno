@@ -1764,7 +1764,7 @@ pub(super) fn resolve_to_project(
         Err(exc) => return Err((format!("registry read failed: {exc}"), 12)),
     };
     let hints = std::env::current_dir()
-        .map(|cwd| peer_project_hints(&cwd))
+        .map(|cwd| crate::inbox_peers::read(&cwd).projects)
         .unwrap_or_default();
     let mut live_names: Vec<String> = Vec::new();
     let mut live_rows: Vec<Value> = Vec::new();
@@ -1774,7 +1774,7 @@ pub(super) fn resolve_to_project(
         }
         let hinted = hints
             .get(str_field(row, "name"))
-            .is_some_and(|p| p == project);
+            .is_some_and(|p| p.as_str() == Some(project));
         if hinted || project_serves(row, project) {
             live_names.push(str_field(row, "name").to_string());
             live_rows.push(row.clone());
@@ -1806,45 +1806,6 @@ pub(super) fn resolve_to_project(
     }
     let winner = best.map(|(_, name)| name).unwrap_or_default();
     Ok((Some(winner), live_names, false))
-}
-
-/// Python `read_peer_projects`: `inbox.peers.<name>.project` from the first
-/// `.fno` config at or above `start`. A hint only adds a peer to a project,
-/// and a missing or malformed block adds nothing.
-pub(super) fn peer_project_hints(start: &Path) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    let mut search = start.to_path_buf();
-    loop {
-        let fno = search.join(".fno");
-        let found = [fno.join("config.toml"), fno.join("settings.yaml")]
-            .into_iter()
-            .find(|p| p.is_file());
-        if let Some(path) = found {
-            let doc = std::fs::read_to_string(&path).ok().and_then(|text| {
-                toml::from_str::<toml::Value>(&text)
-                    .ok()
-                    .and_then(|v| serde_json::to_value(v).ok())
-                    .or_else(|| serde_yaml_ng::from_str::<Value>(&text).ok())
-            });
-            let peers = doc.as_ref().and_then(|d| {
-                d.get("config")
-                    .and_then(|c| c.get("inbox"))
-                    .or_else(|| d.get("inbox"))
-                    .and_then(|i| i.get("peers"))
-                    .and_then(Value::as_object)
-            });
-            for (name, block) in peers.into_iter().flatten() {
-                let project = block.get("project").and_then(Value::as_str);
-                if let Some(p) = project.filter(|p| !p.is_empty()) {
-                    out.insert(name.clone(), p.to_string());
-                }
-            }
-            return out;
-        }
-        if !search.pop() {
-            return out;
-        }
-    }
 }
 
 /// Python `_entry_projects`' cwd leg: the registry mapping resolves through

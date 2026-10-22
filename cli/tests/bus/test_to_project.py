@@ -94,6 +94,7 @@ def test_ac6_fr_malformed_peers_hint_degrades_to_registry(env, tmp_path, monkeyp
     assert res.recipient == "alpha"  # registry mapping still works
 
 
+@pytest.mark.dev_build
 def test_peers_hint_does_not_hide_peer_from_its_cwd_project(env, tmp_path, monkeypatch):
     # codex P2: a hint must ADD an association, never replace the cwd mapping.
     # alpha's cwd resolves to "elsewhere" and a hint also serves "projA"; alpha
