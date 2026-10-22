@@ -785,7 +785,7 @@ mod tests {
                 "actionable": 2,
                 "queues": [
                     {"name": "unplanned", "status": "ok", "actionable": true,
-                     "verb": "/fno:blueprint", "rows": [
+                     "verb": "/fno:blueprint", "rows": [ // verb-wording: allow
                         {"id": "x-1", "difficulty": "low"},
                         {"id": "x-2", "difficulty": "medium"},
                     ]},
@@ -815,9 +815,9 @@ mod tests {
                 "actionable": 2,
                 "queues": [
                     {"name": "undispatched", "status": "ok", "actionable": true,
-                     "verb": "/fno:target", "rows": [{"id": "x-1"}]},
+                     "verb": "/fno:target", "rows": [{"id": "x-1"}]}, // verb-wording: allow
                     {"name": "unplanned", "status": "ok", "actionable": true,
-                     "verb": "/fno:blueprint", "rows": [{"id": "x-2", "difficulty": "high"}]},
+                     "verb": "/fno:blueprint", "rows": [{"id": "x-2", "difficulty": "high"}]}, // verb-wording: allow
                 ],
             }),
             crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
