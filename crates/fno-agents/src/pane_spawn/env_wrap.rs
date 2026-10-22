@@ -294,13 +294,13 @@ pub fn normalize_command(command: &str, harness: &str) -> String {
     let Some(first_word) = cmd.split_whitespace().next() else {
         return command.to_string();
     };
-    let Some((verb, namespaced)) = crate::provider::parse_verb_token(first_word) else {
+    let Some((command_word, namespaced)) = crate::provider::parse_verb_token(first_word) else {
         return command.to_string();
     };
     let tail = &cmd[first_word.len()..];
     let prefix = if harness == "opencode" { "fno:" } else { "" };
     if namespaced || first_word.starts_with('/') {
-        return format!("/{prefix}{verb}{tail}");
+        return format!("/{prefix}{command_word}{tail}");
     }
     command.to_string()
 }

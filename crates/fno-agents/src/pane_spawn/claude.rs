@@ -146,10 +146,7 @@ fn resolve_route(ctx: &PaneContext) -> Result<Option<ResolvedRoute>, PaneRefusal
     // resolve_explicit_route: a blank provider or model resolves nothing.
     let pname = provider.trim().to_lowercase();
     if pname.is_empty() || model.trim().is_empty() {
-        return Err(route_refused(
-            route,
-            "provider unknown, non-anthropic, or keyless",
-        ));
+        return Err(route_refused(route, crate::spawn_route::ROUTE_KEYLESS));
     }
     let mut env = match claude_route(
         &ctx.cwd,
@@ -161,7 +158,7 @@ fn resolve_route(ctx: &PaneContext) -> Result<Option<ResolvedRoute>, PaneRefusal
         ClaudeRoute::Routed { env, .. } => env,
         ClaudeRoute::Skipped { notices } => {
             let reason = if notices.is_empty() {
-                "provider unknown, non-anthropic, or keyless".to_string()
+                crate::spawn_route::ROUTE_KEYLESS.to_string()
             } else {
                 notices.join("; ")
             };
