@@ -97,13 +97,10 @@ def _helper_resolvable() -> bool:
     return _resolve_helper(github_cli_proxy_dir()) is not None
 
 
-def _link_helper(root: Path) -> bool:
-    """Point ``root/fno-gh-proxy`` at the current helper. True when the link
+def _link_helper(root: Path, helper: Path) -> bool:
+    """Point ``root/fno-gh-proxy`` at ``helper``. True when the link
     changed. A link left on an old target outlives the install it named, so
     a mismatch is replaced, never kept."""
-    helper = _resolve_helper(root)
-    if helper is None:
-        return False
     link = root / "fno-gh-proxy"
     if link.is_symlink() and os.path.realpath(link) == os.path.realpath(helper):
         return False
@@ -133,13 +130,14 @@ def ensure_proxy(
         raise FileNotFoundError("real gh executable not found on PATH")
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
-    if _resolve_helper(root) is None:
+    helper = _resolve_helper(root)
+    if helper is None:
         # Nothing provides the name the wrapper execs, so the install would
         # strand every gh call behind a not-found exec. Degrade: leave the
         # real gh unswrapped and let the quota policy stand down for this
         # process tree.
         return InstallResult(proxy=resolved, delegate=resolved, changed=False)
-    relinked = _link_helper(root)
+    relinked = _link_helper(root, helper)
     proxy = root / "gh"
     resolved = resolved.resolve()
     if resolved == proxy.resolve():
@@ -220,8 +218,10 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
             except Exception:
                 keep = True
         if keep:
-            with suppress(OSError):
-                _link_helper(parent)
+            helper = _resolve_helper(parent)
+            if helper is not None:
+                with suppress(OSError):
+                    _link_helper(parent, helper)
             env[_PROXY_DIR_ENV] = str(parent)
             env.pop("FNO_REAL_GH", None)
             return env
