@@ -9,8 +9,13 @@
 
 use std::ffi::OsString;
 
-/// The verbs answered natively, each with the flags it accepts.
-const NATIVE_USER_VERBS: &[(&str, &[&str])] = &[("status", &["--json", "-J"])];
+/// The verbs answered natively: each with its switches and its value flags.
+/// A value flag carries a positive count; any other value forwards, so the
+/// Python verb's own refusal answers it.
+const NATIVE_USER_VERBS: &[(&str, &[&str], &[&str])] = &[
+    ("status", &["--json", "-J"], &[]),
+    ("list", &["--json", "-J"], &["--limit", "-L"]),
+];
 
 /// Classify `fno inbox user|operator <verb> ...`: `Some(argv)` is the argv
 /// tail for `fno-agents compaction`, `None` forwards to Python.
@@ -22,13 +27,22 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     let verb = args[2].to_str()?;
-    let (_, flags) = NATIVE_USER_VERBS.iter().find(|(name, _)| *name == verb)?;
+    let (_, switches, valued) = NATIVE_USER_VERBS.iter().find(|(name, ..)| *name == verb)?;
     let rest = &args[3..];
-    if !rest
-        .iter()
-        .all(|arg| arg.to_str().is_some_and(|a| flags.contains(&a)))
-    {
-        return None;
+    let mut i = 0;
+    while i < rest.len() {
+        let arg = rest[i].to_str()?;
+        if valued.contains(&arg) {
+            let count = rest.get(i + 1)?.to_str()?.parse::<usize>().ok()?;
+            if count == 0 {
+                return None;
+            }
+            i += 2;
+        } else if switches.contains(&arg) {
+            i += 1;
+        } else {
+            return None;
+        }
     }
     let mut argv: Vec<OsString> = ["operator-turns", "--render", verb]
         .iter()
@@ -59,7 +73,7 @@ mod tests {
     }
 
     #[test]
-    fn status_runs_native_and_everything_else_forwards() {
+    fn status_and_list_run_native_and_everything_else_forwards() {
         for group in ["user", "operator"] {
             assert_eq!(
                 classify_inbox_user(&mk(&["inbox", group, "status", "--json"])),
@@ -73,7 +87,16 @@ mod tests {
             assert!(
                 classify_inbox_user(&mk(&["inbox", group, "status", "--session", "s"])).is_none()
             );
-            assert!(classify_inbox_user(&mk(&["inbox", group, "list"])).is_none());
+            assert_eq!(
+                classify_inbox_user(&mk(&["inbox", group, "list", "-L", "2", "-J"])),
+                Some(mk(&["operator-turns", "--render", "list", "-L", "2", "-J"]))
+            );
+            assert!(classify_inbox_user(&mk(&["inbox", group, "list", "--limit", "0"])).is_none());
+            assert!(classify_inbox_user(&mk(&["inbox", group, "list", "--limit"])).is_none());
+            assert!(
+                classify_inbox_user(&mk(&["inbox", group, "status", "--limit", "1"])).is_none()
+            );
+            assert!(classify_inbox_user(&mk(&["inbox", group, "ack", "u-1"])).is_none());
             assert!(classify_inbox_user(&mk(&["inbox", group])).is_none());
         }
         assert!(classify_inbox_user(&mk(&["inbox", "law", "status"])).is_none());
