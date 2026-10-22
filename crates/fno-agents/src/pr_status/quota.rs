@@ -9,7 +9,6 @@ use std::io::Read as _;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::pr_status::gh_run::{run, RunError, RunResult};
@@ -458,37 +457,6 @@ pub(crate) fn iso_utc(epoch_secs: i64) -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if month <= 2 { y + 1 } else { y };
     format!("{year:04}-{month:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-/// The most recent fleet-budget status answer: set only when `backoff_live`
-/// ran, so a `--refresh` read (which never asks) prints no budget text.
-static LAST_BUDGET_SEEN: AtomicI64 = AtomicI64::new(0);
-static LAST_BUDGET_POINTS: AtomicI64 = AtomicI64::new(0);
-static LAST_BUDGET_CAP: AtomicI64 = AtomicI64::new(0);
-
-/// `, fleet budget X of Y points in the last 60s`, or "" when the ledger
-/// never answered this process. (The `_quota.budget_note` port.)
-pub(crate) fn budget_note() -> String {
-    if LAST_BUDGET_SEEN.load(Ordering::Relaxed) == 0 {
-        return String::new();
-    }
-    format!(
-        ", fleet budget {} of {} points in the last 60s",
-        LAST_BUDGET_POINTS.load(Ordering::Relaxed),
-        LAST_BUDGET_CAP.load(Ordering::Relaxed)
-    )
-}
-
-/// Whether the fleet ledger holds a live GitHub-refusal backoff. (The
-/// `_quota.backoff_live` port.)
-pub(crate) fn backoff_live() -> bool {
-    let now = crate::gh_budget::now_ms();
-    let snapshot = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now);
-    let live = snapshot.backoff_remaining_s > 0;
-    LAST_BUDGET_SEEN.store(if live { 1 } else { 0 }, Ordering::Relaxed);
-    LAST_BUDGET_POINTS.store(snapshot.points_60s, Ordering::Relaxed);
-    LAST_BUDGET_CAP.store(snapshot.cap as i64, Ordering::Relaxed);
-    live
 }
 
 /// Record GitHub's refusal in the fleet ledger, opening its backoff. Only
