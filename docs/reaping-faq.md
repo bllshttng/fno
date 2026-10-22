@@ -258,7 +258,7 @@ A spawn row does not keep here forever. Its unresolved transcript ages on the re
 
 ### no provenance
 
-The line reads `kept {id} (no provenance: no source resolved a node (sessions, registry, name, transcript))`. No declared source resolved a node (`gc.rs` `gc_decide`). The sessions join answered nothing, the registry node field is empty, the name carries no node token, and the transcript mentions none. An escalated hold takes `fno agents registry reap --release <id>`: the ruling answers the node question, and the row retires on its quiet clock. The verb exits 2 whenever the released row did not retire.
+The line reads `kept {id} (no provenance: no source resolved a node (sessions, registry, name, transcript))`. No declared source resolved a node (`gc.rs` `gc_decide`). The sessions join answered nothing, the registry node field is empty, the name carries no node token, and the transcript mentions none. An escalated hold takes `fno agents registry reap --release <id>`: the ruling answers the node question, and the row retires on its quiet clock. When the released row did not retire, the command exits 2.
 
 The keep is no longer forever. When its inside-leg report reads done and fno never stopped the row, the row takes the quiet gate. Quiet past the grace retires it. A row still working, blocked, or stopped by fno keeps. Every kept row now carries a hold with an age, so `fno agents registry reap --release` and the escalation clock reach it.
 
