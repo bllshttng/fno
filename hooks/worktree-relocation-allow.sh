@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # fno hook: PermissionRequest - allow EnterWorktree under paths.worktrees_base
-# Claude Code asks before EnterWorktree relocates a session outside
-# <repo>/.claude/worktrees, and auto mode cannot approve that ask (policy:
-# crates/fno-agents/src/hook/worktree_relocation_allow.rs). Never exec a
+# Claude Code asks before EnterWorktree relocates a session outside its own
+# managed worktree dir in the repo, and auto mode cannot approve that ask
+# (policy: crates/fno-agents/src/hook/worktree_relocation_allow.rs). Never exec a
 # candidate: an old build answers "unknown entry". Run each, deployed binary
 # first; relay only exit 0. With no answer, print {} and the prompt stays.
 stdin=$(cat)

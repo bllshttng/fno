@@ -2,8 +2,8 @@
 //! resolved `paths.worktrees_base`.
 //!
 //! Claude Code asks before EnterWorktree moves the session to a path outside
-//! `<repo>/.claude/worktrees` ("permission-root relocation"). The ask is a
-//! safety check the auto-mode classifier may not approve, and an allow rule
+//! its own managed worktree dir in the repo ("permission-root relocation").
+//! The ask is a safety check the auto-mode classifier may not approve, and an allow rule
 //! is never read for it, so an auto-mode worker that launches from the repo
 //! root stops at the prompt. A PermissionRequest hook is the one answer short
 //! of bypassPermissions. Allowing only the fno base keeps the ask for every
