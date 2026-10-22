@@ -2,7 +2,9 @@
 //! Python front door carried, routed to their existing owners in this
 //! binary, byte-verbatim where the Python leg forwarded (pr port 7). The
 //! front door (crates/fno) claims `do pr` lexically and execs this binary
-//! with the argv intact; watch and stub-manifest stay Python mounts.
+//! with the argv intact; watch and stub-manifest stay Python mounts. The
+//! bare `pr` spelling lands here too, so the muscle-memory form survives
+//! the wheel's pr_app deletion.
 
 use serde_json::json;
 use std::path::PathBuf;
