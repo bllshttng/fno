@@ -65,6 +65,7 @@ mod agy_transcript_tests;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;
+pub mod ask_project;
 pub mod attach;
 pub(crate) mod attended;
 pub mod attention;

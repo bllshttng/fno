@@ -1329,6 +1329,15 @@ async fn run(args: Vec<String>) -> i32 {
         }
     };
 
+    // An anycast ask swaps its project for the one live peer before any
+    // lane reads the name.
+    if method == "agent.ask" {
+        if let Err((msg, code)) = fno_agents::ask_project::resolve(&mut params) {
+            eprintln!("{msg}");
+            return code;
+        }
+    }
+
     // Resolve the agent name from the PARSED params, not args.get(1): build_request
     // strips leading flags (and their values) when collecting positionals, so
     // `fno agents stop --force worker-A` yields name="worker-A". Reading args.get(1)
@@ -1342,36 +1351,16 @@ async fn run(args: Vec<String>) -> i32 {
         .unwrap_or_default();
 
     let home = AgentsHome::from_env();
-    // (AC20): the codex-thread-target lookup moved INTO the agent.ask
-    // block below, derived from the registry read already performed there. The
-    // old spot loaded the registry for EVERY client verb and swallowed read
-    // failures at `.ok()`.
 
-    // Claude `ask` is handled entirely client-side: claude is a
-    // `claude --bg` shellout, not a daemon-PTY agent, so it bypasses the daemon
-    // RPC. Only claude targets take this path; codex/gemini ask still routes to
-    // the daemon below. Resolution: an existing registry row's provider, else
-    // the `--provider` flag on first contact.
+    // `ask` runs client-side for every harness: each lane below takes the
+    // rows it owns, and only a codex thread target reaches the daemon.
     if method == "agent.ask" {
-        // Task 1.3a: ask never creates. Pre-check the registry before provider
-        // resolution: if no row exists for the name, surface the unknown-agent
-        // error (exit 16) regardless of --provider. This mirrors Python's
-        // dispatch_ask after Task 1.1 (unknown-name check precedes provider
-        // selection). Provider-mismatch logic (inside maybe_run_claude_ask) still
-        // applies for existing rows.
-        // (AC20): ONE registry read for the whole ask path. The
-        // codex-thread-target lookup below derives from THIS read - the old
-        // second load ran for EVERY client verb and swallowed failures at
-        // `.ok()`.
+        // Ask never creates: an unknown name exits 16 whatever --harness
+        // says. One registry read serves the whole ask path.
         use fno_agents::claude_ask::{emit_event, py_repr};
         use fno_agents::state::load_registry;
-        // A corrupt/unreadable registry must surface as exit 12 ("registry
-        // read failed"), NOT degrade to an empty registry where every name
-        // looks unknown (exit 16 + a forensically wrong unknown-name
-        // event). Python parity: dispatch_ask raises exit 12 on
-        // (OSError, ValueError, RegistryVersionError); the lib dispatch
-        // fns do the same. A MISSING file is not an error (load_registry
-        // returns the default). Sigma-review finding, this PR.
+        // An unreadable registry exits 12, never an empty registry where every
+        // name looks unknown. A MISSING file is not an error.
         let registry = match load_registry(&home.registry_json()) {
             Ok(r) => r,
             Err(e) => {
@@ -3733,6 +3722,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--status",
         "--progress",
         "--from-name",
+        "--to-project",
         "--answer",
         "--timeout",
         "--model",
@@ -4126,6 +4116,9 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // default: extend WIP right here.
                 params.insert("here".into(), Value::Bool(true));
             }
+            "--to-project" | "--any" if verb == "ask" => {
+                fno_agents::ask_project::take_flag(&a, &mut it, &mut params)?;
+            }
             "--timeout" | "-t" => {
                 let val = str_arg(&mut it, "--timeout")?;
                 let secs: u64 = val
@@ -4289,11 +4282,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "agent.spawn"
         }
         "ask" => {
-            let name = positional.first().ok_or("ask needs a <name>")?;
-            params.insert("name".into(), Value::String(name.clone()));
-            if !params.contains_key("message") && positional.len() > 1 {
-                params.insert("message".into(), Value::String(positional[1..].join(" ")));
-            }
+            fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
         // `host`/`promote` (interactive daemon PTY hosting) were retired at G4
