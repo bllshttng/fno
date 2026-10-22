@@ -36,3 +36,11 @@ fno doctor event find spawn_first_turn --field substrate=thread --since 7d
 ```
 
 A watch with no first turn after 2 hours closes. A closed watch file prunes after 24 hours.
+
+## After the first turn: a prompt with nobody to answer it
+
+A first turn proves the launch, not the run. On 2026-10-22 a thread worker waited 11 hours on an EnterWorktree permission prompt, with nobody near the host. A thread worker has no mux pane, so the lead check-in's pane scrape never saw it. The daemon arm `crates/fno-agents/src/prompt_wait.rs` covers that gap. It ticks every 60 seconds on every host, beside this watch.
+
+Each pass reads `claude agents --json --all` under every claude account root. A row with a live process and a `waitingFor` that names a permission prompt is waiting. The listing gives no start time for the wait. So the first sighting is written to `<agents home>/prompt-wait/<short id>.json`. A clean listing without the row deletes that file, so the next prompt counts from its own start. A partial or failed listing deletes nothing.
+
+Five minutes after the first sighting, the arm mails once, from `fno/prompt-wait`. The spawner hears it, then the nearest ancestor that holds a lead role. The worker row names the spawner. With no row, this watch's file names it. The mail names the host and the remedy: `claude attach <short id>`, then pick an option. With no spawner on record, the arm files one fleet task instead. The lead check-in reads the same files and prints one `WAITING ON APPROVAL` line per overdue worker.

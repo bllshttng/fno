@@ -704,7 +704,41 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             break;
         }
     }
+    prune_salvage_refs(&registry, &dir, now)?;
     Ok(())
+}
+
+/// Salvage refs are checked against git at most once an hour: every check
+/// reads each stray path, too much to pay on every daemon tick.
+const SALVAGE_PRUNE_INTERVAL_SECS: i64 = 3600;
+
+fn prune_salvage_refs(
+    registry: &crate::state::Registry,
+    dir: &Path,
+    now: i64,
+) -> Result<(), String> {
+    let stamp = dir.join("salvage-prune.epoch");
+    let last = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|text| text.trim().parse::<i64>().ok());
+    if matches!(last, Some(t) if now - t < SALVAGE_PRUNE_INTERVAL_SECS) {
+        return Ok(());
+    }
+    let repos: std::collections::BTreeSet<&str> =
+        registry.entries.iter().map(|e| e.cwd.as_str()).collect();
+    for repo in repos {
+        let pruned = match super::salvage_prune::prune(Path::new(repo), "origin/main", now) {
+            Ok(pruned) => pruned,
+            Err(error) => {
+                eprintln!("salvage prune skipped {repo}: {error}");
+                continue;
+            }
+        };
+        for p in pruned {
+            eprintln!("salvage ref pruned {}: {}", p.refname, p.sha);
+        }
+    }
+    std::fs::write(&stamp, now.to_string()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

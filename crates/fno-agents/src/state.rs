@@ -2828,7 +2828,7 @@ fn project_identity(registry_path: &Path, before: &[RegistryEntry], entries: &[R
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| format!("{} has no state root", registry_path.display()))?;
-        let graph = crate::state_layout::place(state_root, "graph.json");
+        let graph = crate::state_layout::graph_anchor(state_root);
         let connection = crate::backlog::open(&graph)?;
         for entry in changed {
             let Some(session_id) = entry.harness_session_id.as_deref() else {

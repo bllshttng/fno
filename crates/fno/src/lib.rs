@@ -47,6 +47,7 @@ pub mod footnote_transcript;
 pub mod frame_ansi;
 pub mod frame_html;
 pub mod git_paths;
+pub mod inbox_user;
 pub mod join_marker;
 pub mod keys;
 pub mod lane_colors_panel;

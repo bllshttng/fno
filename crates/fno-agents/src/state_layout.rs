@@ -202,6 +202,17 @@ const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks",
 /// and this pass removes the empty shell.
 const DRAIN_ONLY_FOLDERS: &[&str] = &["route-settings"];
 
+/// The anchor's file name. Frozen: the lock, its queue, the keeper socket and
+/// the note journal all derive from it, so an older binary and a newer one
+/// share them. A message a person reads names the `.db` store instead.
+const GRAPH_ANCHOR: &str = "graph.json";
+
+/// The graph store's anchor under `root`, through the layout ladder. Every
+/// production resolver calls this, so the literal lives in one place.
+pub fn graph_anchor(root: &Path) -> PathBuf {
+    place(root, GRAPH_ANCHOR)
+}
+
 /// The anchor probe: a `graph.json`-shaped path exists when its `.db`
 /// sibling does - the journal anchor is virtual, the store is the file.
 fn db_twin(p: &Path) -> PathBuf {

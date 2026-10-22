@@ -614,7 +614,7 @@ pub(crate) struct CommitReport {
 /// store API (plus the advisory archive file beside it).
 pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
     let state_root = home.root().parent().unwrap_or(home.root());
-    crate::state_layout::place(state_root, "graph.json")
+    crate::state_layout::graph_anchor(state_root)
 }
 
 /// Read the working graph plus the archive. The working graph asks the store
@@ -4105,6 +4105,15 @@ fn reap_state_files_with_roots(
         apply,
         &mut summary.pr_status_cache,
     );
+    for kind in crate::pr_status::memo::KINDS {
+        reap_pr_status_rows(
+            &roots.state_root,
+            &roots.pr_status_dir.join(kind),
+            config.pr_status_cache_retain_days,
+            apply,
+            &mut summary.pr_status_cache,
+        );
+    }
     reap_lock_family(
         &roots.state_root,
         &roots.pr_status_dir,

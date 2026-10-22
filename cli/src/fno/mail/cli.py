@@ -2192,7 +2192,7 @@ def cmd_hold(
         None,
         "--minutes",
         "-m",
-        help="Idle minutes before the hold lifts by itself (default 5). The "
+        help="Idle minutes before the hold lifts by itself. The "
         "quiet window restarts every prompt and ends at 2x the requested window.",
     ),
     for_minutes: int = typer.Option(

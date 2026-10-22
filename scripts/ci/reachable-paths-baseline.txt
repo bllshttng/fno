@@ -320,6 +320,7 @@ A	shipped (pr #{pr}, awaiting merge)	py=cli/src/fno/target/orient.py;rs=crates/f
 A	single_flight_join_budget_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	single_flight_ttl_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	skills-dir; no `claude plugin update`	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs|crates/fno/src/setup_autowire_tests.rs	# CLASSIFY protocol|msg-twin|data
+A	skipped {total} machine turn(s): {detail}	py=cli/src/fno/inbox/operator_turns.py;rs=crates/fno-agents/src/operator_turns.rs	# msg-twin: the Python user list verb still prints the skip report until the ack port deletes format_skip_report
 A	stale >30d, drained by maintain	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-quarantine (guard)	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/maintenance.rs|crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-verdict-fresher-event	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data
@@ -476,3 +477,5 @@ A	pane frame blank, seed submission not attempted	py=cli/src/fno/agents/mux_spaw
 A	pane frame unreadable, seed submission not attempted	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/readiness.rs	# CLASSIFY protocol|msg-twin|data: the pane spine ports the python line verbatim; the python leg stays until the dispatch_spawn port
 A	provider exited before readiness	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/readiness.rs	# CLASSIFY protocol|msg-twin|data: the pane spine ports the python line verbatim; the python leg stays until the dispatch_spawn port
 A	ready marker not observed: screen is unpainted	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/readiness.rs	# CLASSIFY protocol|msg-twin|data: the pane spine ports the python line verbatim; the python leg stays until the dispatch_spawn port
+A	fno_claude_session_recency_seconds	py=cli/src/fno/agents/discover.py;rs=crates/fno-agents/src/claude_supervisor.rs	# env name twin: the rs side only classifies the key as machine-wide for the supervisor; the py side reads it
+A	fno_law_door_timeout_seconds	py=cli/src/fno/rust_binary.py;rs=crates/fno-agents/src/claude_supervisor.rs	# env name twin: the rs side only classifies the key as machine-wide for the supervisor; the py side reads it
