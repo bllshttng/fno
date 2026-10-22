@@ -10,7 +10,7 @@ Several windows can attach to one mux. One pty has one size, so every window tha
 
 ## Set it
 
-Add `window_size` under `[mux]` in `config.toml`. The client reads it when it starts a server and passes it as `FNO_MUX_WINDOW_SIZE`. The server never reads config. A change needs `fno mux kill-server`. An unknown value reads `latest` and logs one line.
+Add `window_size` under `[mux]` in `config.toml`. At server start, the client reads it and passes it as `FNO_MUX_WINDOW_SIZE`. The server never reads config. A change needs `fno mux kill-server`. An unknown value reads `latest` and logs one line.
 
 ```toml
 [mux]
@@ -21,7 +21,7 @@ The key has no Python registry row yet, so `fno config set mux.window_size` refu
 
 ## What counts as activity
 
-Under `latest`, a window becomes the size owner when it attaches, when it sends a resize with new dimensions, or when it sends input, a command, a mouse event, a search, a block action, an answer, a dispatch or an agent launch. Read-only observers never count. The peek refresh timer sends a command with no person behind it, so it never counts. A control connection (`fno mux pane send`, which the mail pane lane uses) is not a window, so a mail delivery cannot move the size.
+Under `latest`, three events make a window the size owner. It attaches. It resizes to new dimensions. It sends input, a command, a mouse event, a search, a block action, an answer, a dispatch or an agent launch. Read-only observers never count. The peek refresh timer sends a command with no person behind it, so it never counts. A control connection (`fno mux pane send`, which the mail pane lane uses) is not a window, so a mail delivery cannot move the size.
 
 ## A smaller window crops
 
