@@ -3204,10 +3204,12 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = write_index(
             dir.path(),
+            // The blueprint stage keeps the old keyword to match the law
+            // corpus's old wording, so this row keeps it.
             &[stage_row(
-                "d-commands0001",
-                "top-level-commands",
-                "The root menu caps top-level commands.",
+                "d-verbs0001",                         // verb-wording: allow
+                "top-level-verbs",                     // verb-wording: allow
+                "The root menu caps top-level verbs.", // verb-wording: allow
             )],
         );
         let hook = serde_json::json!({
@@ -3231,7 +3233,7 @@ pub(crate) mod tests {
             .as_str()
             .expect("context present");
         assert!(
-            ctx.contains("- d-commands0001 (top-level-commands, project:fno):"),
+            ctx.contains("- d-verbs0001 (top-level-verbs, project:fno):"), // verb-wording: allow
             "{ctx}"
         );
     }
