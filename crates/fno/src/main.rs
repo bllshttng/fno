@@ -1198,9 +1198,11 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
-        Role::AccountsCli(rest) => {
-            std::process::exit(fno_agents_exec("fno config accounts", &["spawn-overlay", "accounts"], &rest))
-        }
+        Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
+            "fno config accounts",
+            &["spawn-overlay", "accounts"],
+            &rest,
+        )),
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
