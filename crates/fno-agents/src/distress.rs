@@ -481,7 +481,7 @@ pub(crate) fn scan_and_emit(
 }
 
 /// Emit the `blocked` event natively, route it, and push it to the
-/// parent handle. The push leg and the emit-CLI auto-push shipped with zero
+/// parent handle when the route goes off-session. The push leg and the emit-CLI auto-push shipped with zero
 /// emitters (the advisory `--emit-boundary blocked` instruction demonstrably
 /// never fires, so a lead got swept on a timeout instead of being told). The
 /// stop hook is the one surface that mechanically reads every session's
@@ -534,7 +534,15 @@ pub(crate) fn emit_help_distress_blocked(
             evidence: distress.evidence.as_deref().unwrap_or(&distress.reason),
         },
     );
-    push_blocked_to_parent(cwd, run, node, &distress.reason);
+    // Only an off-session route reaches the parent. An in-session block or a
+    // timer wait keeps its events.jsonl row and nothing more, so a wait-class
+    // help no longer mails the lead on every turn.
+    if matches!(
+        crate::help_router::route(distress.class, rung),
+        crate::help_router::Route::OffSession { .. }
+    ) {
+        push_blocked_to_parent(cwd, run, node, &distress.reason);
+    }
     crate::help_router::route_emitted_distress(
         cwd,
         run,
@@ -1150,6 +1158,72 @@ mod tests {
             calls,
             "no exec once the fno is undeclared"
         );
+    }
+
+    #[test]
+    fn wait_class_help_skips_the_parent_push_and_question_still_pushes() {
+        // A wait-class help appends its row at rung 0 and rung 3 with no
+        // parent push; a question-class help routes off-session and pushes.
+        let _env_guard = fno_bin_env_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let var = "FNO_LOOPCHECK_FNO_BIN";
+        let prior = std::env::var(var).ok();
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("calls.log");
+        let body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 1\n",
+            log.to_string_lossy()
+        );
+        let stub = write_exec(tmp.path(), "fno", &body);
+        std::env::set_var(var, stub.to_str().unwrap());
+        let project = tmp.path().join("events.jsonl");
+        let global = tmp.path().join("global.jsonl");
+        let emit = |class: HelpClass, turn: &str| {
+            let d = HelpDistress {
+                reason: "stop-gate read failed".to_string(),
+                evidence: None,
+                kind: DistressKind::Help,
+                class,
+            };
+            emit_help_distress_blocked(
+                &project,
+                &global,
+                tmp.path(),
+                "run-w",
+                None,
+                None,
+                &d,
+                turn,
+                None,
+            )
+        };
+        assert_eq!(emit(HelpClass::Wait, "turn-0"), Some(0));
+        for (i, turn) in ["turn-1", "turn-2", "turn-3"].iter().enumerate() {
+            assert_eq!(emit(HelpClass::Wait, *turn), Some(i as u64 + 1));
+        }
+        let after_waits = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            !after_waits.contains("push-parent"),
+            "wait-class helps must not push to the parent: {after_waits}"
+        );
+        assert_eq!(emit(HelpClass::Question, "turn-q"), Some(0));
+        match prior {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            calls.contains(
+                "doctor event push-parent --type blocked --run run-w --reason stop-gate read failed"
+            ),
+            "a question-class help must still push: {calls}"
+        );
+        let rows = crate::events::committed_journal_text(&project)
+            .lines()
+            .filter(|l| l.contains("\"type\":\"blocked\""))
+            .count();
+        assert_eq!(rows, 5, "every help keeps its events.jsonl row");
     }
 
     #[test]
