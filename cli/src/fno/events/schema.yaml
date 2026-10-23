@@ -3137,7 +3137,7 @@ event_types:
       One local test run through `fno doctor test`. A started row lands at
       spawn and a finished row at exit, joined by run_id. A started row with
       no finished row names a killed runner. A refused run writes nothing.
-    sources: [agents]
+    sources: [daemon]
     data:
       required: [run_id, stage]
       properties:

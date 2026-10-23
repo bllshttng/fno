@@ -81,7 +81,7 @@ fn append(run: &Run<'_>, stage: &str, extra: Value) {
     if let (Some(fields), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
         fields.extend(extra.clone());
     }
-    let _ = EventEmitter::new(events_path(), "agents").emit("test_run", &data);
+    let _ = EventEmitter::new(events_path(), "daemon").emit("test_run", &data);
 }
 
 pub(crate) fn record_started(run: &Run<'_>, pid: u32) {
