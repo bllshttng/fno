@@ -40,6 +40,8 @@ A row that a peer changed first refuses the whole batch, and the primary writes 
 
 The take-back is not silent. It keeps the refused batch in the replica's `backlog_refused` table, exactly as the flush sent it, so a retry or an inspection can read what this machine tried to write. It also prints one notice naming each node and the columns the take-back reverted, and records the same facts as a `backlog_refused_flush` event in the space's `events.jsonl`. A refusal that lands while the writer is between turns still reaches an operator who reads the journal: without it, an update that printed `Updated` can revert minutes later, and nothing says so until a human notices the node back at `idea`.
 
+A clash on a rowid key is not a take-back. Each replica mints a key such as `decisions.seq` as its own highest value plus one. So two machines that write before they sync can mint the same key. The flush then gives the refused insert a key past the primary's, the replica's and the batch's highest values. The local row moves to that key, and the batch goes again in the same flush. No row refers to a rowid key, so the new value loses nothing. stderr names the old key and the new key.
+
 If the primary cannot be reached, backlog writes still land in the replica and wait in the outbox. The next flush that reaches the primary sends them, and a peer's newer change refuses them then. Reads keep working from the replica. To work alone for good, unset `store.share_backlog`.
 
 ## Start sharing
