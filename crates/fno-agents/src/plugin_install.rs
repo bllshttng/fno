@@ -452,7 +452,7 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         differing_count: differing.len(),
         missing_count: missing.len(),
         sample: combined.into_iter().take(10).collect(),
-        remedy: format!("cd {source_root} && fno config plugin install claude"),
+        remedy: format!("fno config plugin install claude --source {source_root}"),
         detail: None,
     }
 }
@@ -868,14 +868,6 @@ fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
         }
         Err(e) => Err(e),
     }
-}
-
-fn install_opencode() -> Result<String, String> {
-    let receipt = crate::opencode_install::install(&std::env::current_dir().unwrap_or_default())?;
-    Ok(format!(
-        "{} (footnote {} -> {})",
-        receipt.status, receipt.version, receipt.config_dir
-    ))
 }
 
 /// A value fno wrote: under a `.fno` state dir, or the exact value this
@@ -2102,7 +2094,6 @@ fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<Stri
     let (stage, _) = build_stage(&root, &parent)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
-        "opencode" => install_opencode()?,
         "agy" => install_agy(&stage, force)?,
         "grok" => install_grok(&stage, force)?,
         "zcode" => install_zcode(&stage, force)?,

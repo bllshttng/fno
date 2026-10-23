@@ -11,7 +11,7 @@ The plugin installs from the filtered stage of your checkout: git-tracked files 
 fno config plugin install codex
 ```
 
-The release channel is `codex plugin marketplace add bllshttng/fno@stable` (see [install](../install.md)). When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout.
+The release channel is `codex plugin marketplace add bllshttng/fno@stable` (see [install](../install.md)). When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
 
 Codex caches plugins by version, so local edits at the same manifest version require an explicit refresh.
 `--force` removes and re-adds the copy through Codex, which deterministically rebuilds its cache.
