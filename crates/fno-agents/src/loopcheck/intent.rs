@@ -104,28 +104,28 @@ pub(crate) fn declared_recovery_hold(text: &str) -> Option<String> {
 }
 
 /// Reads `attr="value"`. A model that writes the tag with typographic quotes
-/// (`attr=\u{201c}value\u{201d}`) or single quotes still parses: the opening
-/// quote picks a family, and any quote of that family closes the value.
+/// (`attr=\u{201c}value\u{201d}`) or single quotes still parses. An ASCII
+/// opening quote closes only on the same ASCII quote, so prose quotes inside
+/// the value survive. A typographic opening quote closes on any quote of its
+/// family, since models mix the two forms.
 pub(crate) fn parse_xml_attr(tag_text: &str, attr: &str) -> Option<String> {
-    const DOUBLE: &[char] = &['"', '\u{201c}', '\u{201d}'];
-    const SINGLE: &[char] = &['\'', '\u{2018}', '\u{2019}'];
     let pattern = format!("{attr}=");
     let mut from = 0usize;
     while let Some(rel) = tag_text[from..].find(&pattern) {
         let value_at = from + rel + pattern.len();
-        let Some(open) = tag_text[value_at..].chars().next() else {
-            return None;
-        };
-        let family = if DOUBLE.contains(&open) {
-            DOUBLE
-        } else if SINGLE.contains(&open) {
-            SINGLE
-        } else {
-            from = value_at;
-            continue;
+        let open = tag_text[value_at..].chars().next()?;
+        let closers: &[char] = match open {
+            '"' => &['"'],
+            '\'' => &['\''],
+            '\u{201c}' | '\u{201d}' => &['\u{201c}', '\u{201d}', '"'],
+            '\u{2018}' | '\u{2019}' => &['\u{2018}', '\u{2019}', '\''],
+            _ => {
+                from = value_at;
+                continue;
+            }
         };
         let start = value_at + open.len_utf8();
-        let end = tag_text[start..].find(family)?;
+        let end = tag_text[start..].find(closers)?;
         return Some(tag_text[start..start + end].to_string());
     }
     None

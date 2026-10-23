@@ -842,6 +842,9 @@ mod tests {
             assert_eq!(d.reason, "quota", "{tag}");
             assert_eq!(d.evidence.as_deref(), Some("rate limit"), "{tag}");
         }
+        // Prose quotes inside an ASCII-quoted value do not end it.
+        let inner = extract_help_distress("<help reason=\"the \u{201c}x\u{201d} gate\">").unwrap();
+        assert_eq!(inner.reason, "the \u{201c}x\u{201d} gate");
         // A longer tag name sharing the prefix must NOT match.
         assert_eq!(extract_help_distress("use <helper> here"), None);
         // Absence stays absence.
