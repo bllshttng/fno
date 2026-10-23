@@ -394,6 +394,10 @@ fn claim_holder() -> String {
 /// naming it; `redraw` forces a fresh draw. Every draw is consumed: it
 /// appends to the history and takes the `name:` claim before anyone
 /// launches with it.
+///
+/// `outgoing` names the holders this succession replaces. An outgoing name
+/// is already used when its row sits in this machine's registry; naming it
+/// here keeps the rule when the outgoing lead lived on a peer machine.
 pub fn draw_successor_name(
     store_path: &Path,
     registry_path: &Path,
@@ -401,33 +405,7 @@ pub fn draw_successor_name(
     proposed: Option<&str>,
     redraw: bool,
     claims_root: Option<&Path>,
-) -> Result<String, String> {
-    draw_from(
-        NAME_POOL,
-        &[],
-        store_path,
-        registry_path,
-        scope,
-        proposed,
-        redraw,
-        claims_root,
-    )
-}
-
-/// [`draw_successor_name`] over an explicit pool, minus `outgoing` (the
-/// holders this succession replaces). An outgoing name is already used when
-/// its row sits in this machine's registry; naming it here keeps the rule
-/// when the outgoing lead lived on a peer machine.
-#[allow(clippy::too_many_arguments)]
-fn draw_from(
-    name_pool: &[&str],
     outgoing: &[String],
-    store_path: &Path,
-    registry_path: &Path,
-    scope: &str,
-    proposed: Option<&str>,
-    redraw: bool,
-    claims_root: Option<&Path>,
 ) -> Result<String, String> {
     let canon = crate::territory::canonical_scope(scope);
     let pending = crate::team_names::pending_draw(store_path, scope)?;
@@ -466,7 +444,7 @@ fn draw_from(
     let drawn = (|| -> Result<String, String> {
         let mut used = crate::team_names::used_names(store_path, registry_path)?;
         used.extend(outgoing.iter().map(|n| n.to_ascii_lowercase()));
-        let pool: Vec<&str> = name_pool
+        let pool: Vec<&str> = NAME_POOL
             .iter()
             .copied()
             .filter(|n| !used.contains(&n.to_ascii_lowercase()))
@@ -542,9 +520,7 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
                 .collect()
         })
         .unwrap_or_default();
-    match draw_from(
-        NAME_POOL,
-        &outgoing,
+    match draw_successor_name(
         store,
         &registry,
         payload.get("scope").and_then(Value::as_str).unwrap_or(""),
@@ -557,6 +533,7 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
             .and_then(Value::as_bool)
             .unwrap_or(false),
         claims_root.as_deref(),
+        &outgoing,
     ) {
         Ok(drawn) => answer["draw"] = json!({"name": drawn}),
         Err(refusal) => {
@@ -589,6 +566,7 @@ mod tests {
             Some("imogen"),
             false,
             Some(tmp.path()),
+            &[],
         )
         .unwrap_err();
         assert!(
@@ -597,8 +575,16 @@ mod tests {
         );
         assert!(err.contains("--name redraw"), "{err}");
         // The drawn name is accepted; anything else refuses.
-        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
-            .unwrap();
+        let drawn = draw_successor_name(
+            &store,
+            &registry,
+            "x-aaaa",
+            None,
+            false,
+            Some(tmp.path()),
+            &[],
+        )
+        .unwrap();
         let ok = draw_successor_name(
             &store,
             &registry,
@@ -606,6 +592,7 @@ mod tests {
             Some(drawn.trim()),
             false,
             Some(tmp.path()),
+            &[],
         )
         .unwrap();
         assert_eq!(ok, drawn);
@@ -616,39 +603,45 @@ mod tests {
             Some("someone-else"),
             false,
             Some(tmp.path()),
+            &[],
         )
         .unwrap_err();
         assert!(err.contains("Accept it"), "{err}");
         // A redraw never returns the consumed draw.
-        let second =
-            draw_successor_name(&store, &registry, "x-aaaa", None, true, Some(tmp.path())).unwrap();
-        assert_ne!(drawn, second);
-    }
-
-    /// The successor of Anouk never draws Anouk, even when Anouk's row lives
-    /// on a peer machine and this registry has never seen it.
-    #[test]
-    fn the_draw_never_returns_the_outgoing_holder() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("team_names.json");
-        let registry = tmp.path().join("registry.json");
-        crate::registry_store::seed_raw(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
-                .to_string(),
-        );
-        let drawn = draw_from(
-            &["anouk", "zelda"],
-            &["Anouk".to_string()],
+        let second = draw_successor_name(
             &store,
             &registry,
             "x-aaaa",
             None,
-            false,
+            true,
             Some(tmp.path()),
+            &[],
         )
         .unwrap();
-        assert_eq!(drawn, "Zelda");
+        assert_ne!(drawn, second);
+    }
+
+    /// The successor never draws an outgoing holder's name, even when that
+    /// holder's row lives on a peer machine this registry never saw: every
+    /// pool name but one is outgoing, so the draw has one answer.
+    #[test]
+    fn the_draw_never_returns_an_outgoing_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("team_names.json");
+        crate::registry_store::seed_raw(
+            &tmp.path().join("registry.json"),
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        let holders: Vec<&str> = NAME_POOL
+            .iter()
+            .copied()
+            .filter(|n| *n != "zelda")
+            .collect();
+        let mut answer = json!({"outcome": "succeeded", "holders": holders});
+        let payload = json!({"succession": true, "scope": "x-aaaa", "claims_root": tmp.path()});
+        settle_draw(&payload, &mut answer, &store);
+        assert_eq!(answer["draw"]["name"], "Zelda", "{answer}");
     }
 
     #[test]
@@ -664,8 +657,16 @@ mod tests {
         // A pending draw exists, so the hand-typed mismatch names the
         // machine-draw contract; with no pending draw the same input gets
         // the no-draw arm instead.
-        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
-            .unwrap();
+        let drawn = draw_successor_name(
+            &store,
+            &registry,
+            "x-aaaa",
+            None,
+            false,
+            Some(tmp.path()),
+            &[],
+        )
+        .unwrap();
         let mut answer = json!({"outcome": "succeeded"});
         let payload = json!({
             "succession": true, "scope": "x-aaaa",
