@@ -127,7 +127,7 @@ pub(crate) struct Summary {
 
 /// Fold `test_run` journal lines into per-key durations. A started row with
 /// no finished row counts as unfinished and never as a duration.
-pub(crate) fn summarize(text: &str, since_ms: Option<i64>) -> Summary {
+pub(crate) fn summarize(text: &str) -> Summary {
     let mut started: HashSet<String> = HashSet::new();
     let mut finished: HashMap<String, (String, u64)> = HashMap::new();
     for line in text.lines() {
@@ -136,16 +136,6 @@ pub(crate) fn summarize(text: &str, since_ms: Option<i64>) -> Summary {
         };
         if event.get("type").and_then(Value::as_str) != Some("test_run") {
             continue;
-        }
-        if let Some(cutoff) = since_ms {
-            let ts = event
-                .get("ts")
-                .and_then(Value::as_str)
-                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.timestamp_millis());
-            if !ts.is_some_and(|t| t >= cutoff) {
-                continue;
-            }
         }
         let data = &event["data"];
         let Some(run_id) = data.get("run_id").and_then(Value::as_str) else {
@@ -194,33 +184,14 @@ pub(crate) fn render(summary: &Summary) -> String {
     out
 }
 
-/// `test-run stats [--since DAYS]`: median and p90 per command key.
+/// `test-run stats`: median and p90 per command key.
 pub(crate) fn run_stats(args: &[String]) -> i32 {
-    let mut since_days: Option<f64> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--since" => match args.get(i + 1).and_then(|v| v.parse::<f64>().ok()) {
-                Some(d) => {
-                    since_days = Some(d);
-                    i += 1;
-                }
-                None => {
-                    eprintln!("fno-agents test-run stats: --since needs a number of days");
-                    return 2;
-                }
-            },
-            other => {
-                eprintln!("fno-agents test-run stats: unknown argument {other}");
-                return 2;
-            }
-        }
-        i += 1;
+    if let Some(extra) = args.first() {
+        eprintln!("fno-agents test-run stats: unknown argument {extra}");
+        return 2;
     }
-    let since_ms =
-        since_days.map(|d| chrono::Utc::now().timestamp_millis() - (d * 86_400_000.0) as i64);
     let text = crate::event_store::journal_text(&events_path(), &["test_run"]);
-    print!("{}", render(&summarize(&text, since_ms)));
+    print!("{}", render(&summarize(&text)));
     0
 }
 
@@ -273,7 +244,7 @@ mod tests {
             .map(|n| line(&format!("r{n}"), "finished", "pytest", Some(n * 1000)))
             .collect::<Vec<_>>()
             .join("\n");
-        let out = render(&summarize(&text, None));
+        let out = render(&summarize(&text));
         assert!(out.contains("pytest  n=10  median=5.5s  p90=9.1s"), "{out}");
     }
 
@@ -285,17 +256,8 @@ mod tests {
             line("b", "finished", "pytest", Some(2000)),
         ]
         .join("\n");
-        let summary = summarize(&text, None);
+        let summary = summarize(&text);
         assert_eq!(summary.unfinished, 1);
         assert_eq!(summary.durations_ms["pytest"], vec![2000]);
-    }
-
-    #[test]
-    fn since_cutoff_drops_older_rows() {
-        let text = line("a", "finished", "pytest", Some(1000));
-        let after = chrono::DateTime::parse_from_rfc3339("2026-10-23T00:00:00Z")
-            .unwrap()
-            .timestamp_millis();
-        assert!(summarize(&text, Some(after)).durations_ms.is_empty());
     }
 }
