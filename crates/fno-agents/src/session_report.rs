@@ -1478,27 +1478,27 @@ mod tests {
     }
 
     /// A headless one-shot child reports with `no_row`: it joins, but no row
-    /// mints, so no sidebar entry outlives a run nothing can resume.
+    /// mints, and an older row under the same name (a verifier name repeats
+    /// per session) is left as it was, so it never reads live again.
     #[test]
     fn a_no_row_child_joins_but_mints_no_row() {
         let (_d, home) = temp_home("no_row");
         let sid = "0197ffff-1234-7abc-9def-0123456789ab";
-        let report = |extra: Value| {
-            let params = report_params("claude", sid, extra);
-            response_json(&handle_session_report(&home, &emitter(&home), &req(params)))
-        };
-        let quiet = json!({"agent_self": "verifier-advise-1", "no_row": true});
-        assert_eq!(report(quiet.clone())["result"]["dropped"], "no_row");
-        assert!(read_rows(&home).is_empty());
-        assert!(crate::join_marker::is_joined(home.root(), "claude", sid));
-        // An older row under the same name is left as it was.
         seed_registry(
             &home,
             json!({"name": "verifier-advise-1", "cwd": "/repo",
             "status": "exited", "created_at": "2026-10-22T00:00:00Z", "harness": "claude"}),
         );
-        assert_eq!(report(quiet)["result"]["dropped"], "no_row");
+        let params = report_params(
+            "claude",
+            sid,
+            json!({"agent_self": "verifier-advise-1", "no_row": true}),
+        );
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["dropped"], "no_row");
+        assert!(crate::join_marker::is_joined(home.root(), "claude", sid));
         let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1, "no row minted");
         assert_eq!(rows[0].harness_session_id, None);
         assert_eq!(rows[0].last_report_at, None);
     }
