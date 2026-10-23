@@ -5075,6 +5075,21 @@ event_types:
           description: "How many panes the server held at exit."
     consumers: [operator]
 
+  - name: mux_session_healed
+    retention: durable
+    description: "A mux reader (ls, the picker, doctor, the workspace sweep) found a dead server's leftover session files and removed them: every connect was refused, no starter held the startup marker, and the pid sidecar named no live process. One row per healed session, so a SIGKILLed server's cleanup is visible without a user step."
+    sources: [daemon]
+    data:
+      required: [mux_session, path]
+      properties:
+        mux_session:
+          type: string
+          description: "The dead session's name."
+        path:
+          type: string
+          description: "The socket path that was removed with its sidecars."
+    consumers: [operator]
+
   - name: portal_opened
     retention: durable
     description: "A portal index entered the mux server's portals map: a reach open, a reseat, or a restore re-arm. A retune emits a closed-and-open pair for the same index (the channel moved, the window stayed), so the journal answers which door opened a portal and when."
