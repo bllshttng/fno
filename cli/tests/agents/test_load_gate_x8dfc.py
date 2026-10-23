@@ -4,7 +4,7 @@ shared read, while genuine corruption still raises. Capability (can THIS fno
 dispatch the row?) moves to the spawn/ask seam.
 
 The Rust half of the cross-language parity (AC1-FR) is
-``client_verbs.rs::load_registry_gate_shape_check_x8dfc``: both readers accept
+``client_commands.rs::load_registry_gate_shape_check_x8dfc``: both readers accept
 the same alien-harness fixture and refuse the same corrupt fixture.
 """
 

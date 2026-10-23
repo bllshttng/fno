@@ -1,4 +1,4 @@
-"""The machine-lane channel shim: one ``verb_call("fleet-task", ...)``.
+"""The machine-lane channel shim: one ``command_call("fleet-task", ...)``.
 
 The reconcile fold for the machine writers (heal, pr-nudge, the watchdog
 lanes) lives in ``crates/fno-agents/src/fleet_task.rs``; Python sends one
@@ -86,11 +86,11 @@ def reconcile_channel(
     Rust fleet-task door: same key is a duplicate, a changed set supersedes,
     an empty set closes. ``question``/``ask`` are callables taking the
     dedupe ``key``; outcome in ``none | duplicate | asked | closed``. A
-    failed transport raises the ``verb_call`` refusal and writes nothing."""
-    from fno.rust_binary import verb_call
+    failed transport raises the ``command_call`` refusal and writes nothing."""
+    from fno.rust_binary import command_call
 
     key = dedupe_key(identities)
-    answer = verb_call(
+    answer = command_call(
         "fleet-task",
         {
             "op": "reconcile",

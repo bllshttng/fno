@@ -765,7 +765,7 @@ def bg_create(
     exit_code = result.returncode
 
     if exit_code != 0:
-        stderr += " Run `fno doctor update`." if "unknown verb: claude-birth-exec" in stderr else ""
+        stderr += " Run `fno doctor update`." if "unknown command: claude-birth-exec" in stderr else ""
         raise ProviderSubprocessError(exit_code=exit_code, stderr=stderr)
 
     short_id = parse_short_id(stdout)
@@ -1313,10 +1313,10 @@ def claude_agents_json(
 
 # ---------------------------------------------------------------------------
 # US4-lifecycle shellouts: claude stop / rm / attach + reconcile reachability
-# probe. Each helper is a thin wrapper around ``claude <verb> <short_id>``
+# probe. Each helper is a thin wrapper around ``claude <command> <short_id>``
 # with a timeout. They live here so the fno ``dispatch`` layer can stay
 # provider-agnostic and so the per-provider quirks (capture vs inherit-stdio
-# for the interactive attach verb) sit alongside the ``claude_agents_json``
+# for the interactive attach command) sit alongside the ``claude_agents_json``
 # adapter.
 # ---------------------------------------------------------------------------
 

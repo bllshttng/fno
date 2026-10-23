@@ -2,7 +2,7 @@
 
 A sender could see that mail was stranded and could do nothing about it: the
 count in `mail status` and the every-prompt nudge named a number and no ids, and
-no verb retracted anything. `mail ack` only advances an INBOUND read cursor.
+no command retracted anything. `mail ack` only advances an INBOUND read cursor.
 
 The withdrawal is a tombstone because the bus log is append-only and read state
 is a per-consumer cursor. Deleting the line is impossible and advancing the
@@ -64,7 +64,7 @@ def _send(
 
 def _tombstone(msg_id: str, from_: str = MY_HANDLE, to: str = PEER) -> None:
     """The tombstone the withdraw leaf writes, appended directly: these tests
-    pin the readers' contract with that line, not the verb that produces it."""
+    pin the readers' contract with that line, not the command that produces it."""
     from fno.bus.log import WITHDRAW_KIND, Envelope, append
 
     append(
@@ -103,7 +103,7 @@ def test_reader_2_sent_unclaimed_stops_counting_it(env):
     """The nag reads iter_messages directly and bypasses scan_unread. A
     withdrawal that did not reach here would leave the every-prompt line firing
     forever on a message the sender already retracted -- the exact symptom this
-    verb exists to end."""
+    command exists to end."""
     from fno.config import load_settings
     from fno.mail.landed import _sent_unclaimed
 
@@ -137,9 +137,9 @@ def test_withdraw_does_not_advance_the_recipient_cursor(env):
 
 
 def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
-    """The sender check lives at the READ side as well as in the verb. The verb
+    """The sender check lives at the READ side as well as in the command. The command
     is one reachable path; a hand-appended or replayed line is another, and a
-    tombstone that only the verb validated would let one appear."""
+    tombstone that only the command validated would let one appear."""
     from fno.bus.cursor import scan_unread
     from fno.bus.log import WITHDRAW_KIND, Envelope, append
 

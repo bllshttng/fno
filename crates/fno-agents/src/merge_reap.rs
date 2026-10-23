@@ -227,7 +227,7 @@ pub(crate) fn merge_cleanup_requested(home: &AgentsHome, repo: &str) -> bool {
 
 // ---------------------------------------------------------------------------
 // The mint side (fno.agents.events' five helpers, ported). `pr-watch
-// merge-cleanup-mint` is its transport door; the merge verb and the ritual
+// merge-cleanup-mint` is its transport door; the merge command and the ritual
 // are the two callers, one fold key for both.
 // ---------------------------------------------------------------------------
 

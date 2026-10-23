@@ -202,7 +202,7 @@ fn refuse_without_git_grant(ctx: &PaneContext) -> Result<(), PaneRefusal> {
 }
 
 /// `_is_codex_code_payload`'s prefix leg (`rust_runtime.py:627`): the seed's
-/// first whitespace word names a fno verb.
+/// first whitespace word names a fno command.
 fn is_code_payload(message: &str) -> bool {
     message
         .split_whitespace()

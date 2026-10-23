@@ -1,8 +1,8 @@
-//! Arg parsers for the `logs` and `trace` verbs. Extracted beside
-//! `resume_args` for the same reason: client_verbs is over the line budget
+//! Arg parsers for the `logs` and `trace` commands. Extracted beside
+//! `resume_args` for the same reason: client_commands is over the line budget
 //! and shrink-only, and a flag's grammar belongs beside the parser that
 //! produced it.
-use crate::client_verbs::{echo_extra, expand_eq};
+use crate::client_commands::{echo_extra, expand_eq};
 
 /// Parsed `trace` flags.
 pub(crate) struct TraceArgs {
@@ -25,7 +25,7 @@ pub(crate) fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
         since: None,
         // The store heal's project-confinement refusal prescribes
         // --cross-project; accept it so the taught remedy is a form this
-        // verb takes.
+        // command takes.
         cross_project: false,
     };
     let rest = expand_eq(rest);
@@ -81,7 +81,7 @@ pub(crate) fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)
     let mut follow = false;
     let mut json_out = false;
     // The store heal's project-confinement refusal prescribes --cross-project;
-    // accept it so the taught remedy is a form this verb takes.
+    // accept it so the taught remedy is a form this command takes.
     let mut cross_project = false;
     let rest = expand_eq(rest);
     let mut it = rest.iter().cloned().peekable();

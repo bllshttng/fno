@@ -3,7 +3,7 @@
 //!
 //! Characterization for the plans-path port: the Rust chain
 //! (`plans_path`, reached through the `fno-agents state plan-path` client
-//! verb) is pinned by the frozen goldens under tests/golden/plans-path/.
+//! command) is pinned by the frozen goldens under tests/golden/plans-path/.
 //! While the Python leg lived, this file ran as a LIVE differential: both
 //! implementations answered the same fixture with the same env pins and the
 //! run asserted byte-identity across all nine chain-step cases before the
@@ -14,7 +14,7 @@
 //! pydoor forwards; they are not the oracle - the oracle is the deleted
 //! renderer.
 //! (`plans_path`, reached through the `fno-agents state plan-path` client
-//! verb) and the Python leg (`fno.paths.plan_doc_filename` /
+//! command) and the Python leg (`fno.paths.plan_doc_filename` /
 //! `plan_doc_path`) answer the same fixture with the same env pins, and the
 //! two answers must match byte for byte. Under `FNO_CAPTURE_GOLDEN=1` the
 //! Python leg still runs; the helper asserts Rust==Python and freezes the
@@ -87,7 +87,7 @@ fn masked(text: String, fx: &Fixture) -> String {
 }
 
 /// Run the Rust leg through the built binary: the exact surface the Python
-/// verb forwards to.
+/// command forwards to.
 fn rust_plan_path(fx: &Fixture, pins: &[(String, String)]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .args(["state", "plan-path", "--slug", "s", "--node", "x-aaeb"])

@@ -69,13 +69,13 @@ def hold_path(handle: str) -> Path:
 def _hold_transport(argv: list[str]) -> str:
     """One mail-hold write through the native door (the receipts pattern:
     Python keeps transports, the clock assembly lives in Rust). A door
-    failure raises VerbUnavailable - the verb is the single writer, so there
+    failure raises CommandUnavailable - the command is the single writer, so there
     is no Python fallback to drift from it."""
-    from fno.rust_binary import VerbUnavailable, resolve_binary
+    from fno.rust_binary import CommandUnavailable, resolve_binary
 
     binary = resolve_binary()
     if binary is None:
-        raise VerbUnavailable("fno-agents binary not found; run `fno doctor update`")
+        raise CommandUnavailable("fno-agents binary not found; run `fno doctor update`")
     proc = subprocess.run(
         [str(binary), "mail-hold", *argv],
         capture_output=True,
@@ -83,14 +83,14 @@ def _hold_transport(argv: list[str]) -> str:
         timeout=10,
     )
     if proc.returncode != 0:
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             (proc.stderr or "fno-agents mail-hold failed").strip()[:200]
         )
     return proc.stdout.rstrip("\n")
 
 
 def _hold_query(argv: list[str]) -> Optional[dict]:
-    """The verb's one-line JSON state, or None when it printed nothing
+    """The command's one-line JSON state, or None when it printed nothing
     (no clock, a permanent policy, or a lapsed one)."""
     stdout = _hold_transport(argv)
     return json.loads(stdout) if stdout else None
@@ -121,7 +121,7 @@ def _parse(stamp: str) -> Optional[datetime]:
 def _hold_from_state(handle: str, state: dict) -> Hold:
     """The Hold a ``--read``/``--read-first`` state dict describes.
 
-    ``handle`` is the candidate the caller asked about: the verb's JSON does
+    ``handle`` is the candidate the caller asked about: the command's JSON does
     not echo which key carried the clock, and no reader consumes the field.
     """
     until = state.get("until")
@@ -142,12 +142,12 @@ def read(handle: str) -> Optional[Hold]:
     """This handle's clock, or None when there is no readable one.
 
     A corrupt or unparseable file reads as None, the same as an absent one:
-    the verb answers an empty stdout for both. Both mean "no clock", and
+    the command answers an empty stdout for both. Both mean "no clock", and
     neither is evidence that a hold is running.
 
     Never raises. The catch is deliberately broad because this read runs on
     the status path, where a missing binary or a failed transport must
-    degrade to "no clock", never break the verb answering.
+    degrade to "no clock", never break the command answering.
     """
     try:
         state = _hold_query(["--read", handle])
@@ -168,7 +168,7 @@ def lapsed(handle) -> bool:
     and surfaces at the next SessionStart or turn boundary, so a lost clock
     costs a stall bounded by the operator's next prompt, never a lost message.
     Auto-expire stays real through carriers that do not depend on this file
-    surviving: the detached release timer, and the Rust verb's
+    surviving: the detached release timer, and the Rust command's
     turn-boundary tidy of lapsed clocks.
 
     Pure read. It never mutates the registry, so it cannot deadlock a caller
@@ -205,7 +205,7 @@ def read_any(target) -> Optional[Hold]:
     """The clock for ``target`` under whichever of its keys carries one.
 
     One door read over the whole candidate sweep: the sweep itself stays in
-    Python because it needs the registry entry, the FIND moves to the verb.
+    Python because it needs the registry entry, the FIND moves to the command.
     """
     keys = candidate_keys(target)
     try:

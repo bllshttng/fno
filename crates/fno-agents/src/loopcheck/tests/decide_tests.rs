@@ -183,7 +183,7 @@ fn unknown_coverage_names_the_read_remedy_not_a_ci_failure() {
         reason.contains("coverage read unavailable"),
         "got: {reason}"
     );
-    assert!(reason.contains("retry the review verb"), "got: {reason}");
+    assert!(reason.contains("retry the review command"), "got: {reason}");
     assert!(!reason.contains("CI red"), "got: {reason}");
     assert!(!reason.contains("failed"), "got: {reason}");
     assert!(!reason.contains("Read the failing log"), "got: {reason}");
@@ -204,7 +204,7 @@ fn unwatched_async_nudge_ci_pending_teaches_arm_and_tag() {
     let reason = build_block_reason(&pr, "abc", true, true);
     assert!(reason.contains("<watching"), "got: {reason}");
     assert!(reason.contains("timeout"), "got: {reason}");
-    // The taught watcher is the sanctioned REST wait verb, never the
+    // The taught watcher is the sanctioned REST wait command, never the
     // GraphQL `gh pr checks --watch` and never an inline loop (which a
     // worktree session's Bash isolation refuses as too complex).
     assert!(reason.contains("fno do pr wait"), "got: {reason}");
@@ -671,7 +671,7 @@ fn unwatched_async_nudge_review_uses_review_aware_watcher() {
     // codex P2: the review-wait watcher must poll REVIEW state, not
     // checks. It must also poll on REST - the GraphQL
     // reviews read is part of what exhausts the shared quota. The recipes
-    // are the sanctioned `fno do pr wait` verb, one plain command: an
+    // are the sanctioned `fno do pr wait` command, one plain command: an
     // inline `while`/`$(...)` loop is refused by Claude Code's worktree
     // Bash isolation, so a worktree session cannot arm the watcher at all.
     let hint = arm_watch_hint(404, "review");

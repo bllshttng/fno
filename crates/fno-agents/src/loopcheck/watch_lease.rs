@@ -314,7 +314,7 @@ pub(super) fn renew_cause(
             if rec
                 .expires_at
                 .is_some_and(|expires| expires <= crate::claims::now_ms())
-                || crate::claim_verbs::status_verdict(&rec).0 == crate::claims::ClaimState::Stale
+                || crate::claim_commands::status_verdict(&rec).0 == crate::claims::ClaimState::Stale
             {
                 RenewCause::Stale
             } else {
@@ -504,7 +504,7 @@ mod tests {
         .unwrap();
 
         let live_rec = crate::claims::read_claim_file(&path).unwrap();
-        let (state, basis) = crate::claim_verbs::status_verdict(&live_rec);
+        let (state, basis) = crate::claim_commands::status_verdict(&live_rec);
         assert_eq!(
             state,
             crate::claims::ClaimState::Live,

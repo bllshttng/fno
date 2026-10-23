@@ -7,7 +7,7 @@ tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "Skill"]
 disallowedTools: ["Task", "WebSearch", "WebFetch", "NotebookEdit"]
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 You are **frontend-executor** — the full /impeccable pipeline executor. Your
 job is to synthesize a shape brief from the design doc and per-task AC list,
 select the appropriate /impeccable stages for this task, run them iteratively

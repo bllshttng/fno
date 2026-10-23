@@ -1,7 +1,7 @@
 ---
 name: mail
 description: Read, send, reply to, and manage Footnote agent mail from any session.
-argument-hint: "<verb> [args]  |  send <name> \"<body>\"  |  reply <msg-id> \"<body>\"  |  hold [minutes|off|status]  |  dnd [off|cancel]  |  unread|list|status [name]"
+argument-hint: "<command> [args]  |  send <name> \"<body>\"  |  reply <msg-id> \"<body>\"  |  hold [minutes|off|status]  |  dnd [off|cancel]  |  unread|list|status [name]"
 metadata:
   internal: false
   requires:
@@ -22,12 +22,12 @@ messaging surface. `fno agents mail send|reply|unread|...` needs exact shell quo
 a phone has no `!` local-command runner, so a typed command either splits on bad
 smart quotes or never executes at all. This skill fixes that the same way
 `/agent` does: **you (the agent) are the runner.** You read the messy input,
-route it to the right `fno agents mail` verb, normalize it, run the **genuine** command
+route it to the right `fno agents mail` command, normalize it, run the **genuine** command
 via your Bash tool, and report the **real** captured receipt.
 
 `/agent` is agent **lifecycle** (spawn / watch / stop). `/mail` is **messaging**.
 Two skills, two concerns. This skill REUSES the shipped `fno agents mail` primitives -
-it does not reimplement the bus, the cursor, or the render. Its value is verb
+it does not reimplement the bus, the cursor, or the render. Its value is command
 routing + input normalization + honest reporting for surfaces that cannot run a
 local command.
 
@@ -46,9 +46,9 @@ happens when that misses, and it is recovery, not delivery.**
 
 - `msg-<id> delivered (hosted)` - the live inject was accepted. It does not prove the recipient read it.
 - `msg-<id> queued (durable)` - live delivery was not confirmed. This is durable fallback, not delivery.
-- the receipt ends `landed (...)` or a `NOT LANDED` block - the send verb re-checked the recipient after a settle window, and NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
+- the receipt ends `landed (...)` or a `NOT LANDED` block - the send command re-checked the recipient after a settle window, and NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
 
-The recipient's own `unread` / `ack` / `drain-self` verbs exist to consume that
+The recipient's own `unread` / `ack` / `drain-self` commands exist to consume that
 fallback queue, which is why they read like a mailbox. They are the recovery
 path, not the main one.
 
@@ -74,7 +74,7 @@ No probe is proof a peer is dead. `peek`, discovery, a status token, and a claim
 
 ## Command router
 
-The first whitespace token of the argument is the **verb**. Route on it, then run
+The first whitespace token of the argument is the **command**. Route on it, then run
 the matching section. Messaging is free, so **nothing here confirms** (contrast
 `/agent`, where `chat`/`stop` confirm).
 
@@ -92,15 +92,15 @@ the matching section. Messaging is free, so **nothing here confirms** (contrast
 | `hold [minutes\|off\|status]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | natural-language duration | free |
 | `dnd [off\|cancel]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | no | free |
 
-An unrecognized leading token is an error - tell the user the verb set above; do
-NOT guess a send. (Unlike `/agent`, a bare non-verb is not a default action here,
+An unrecognized leading token is an error - tell the user the command set above; do
+NOT guess a send. (Unlike `/agent`, a bare non-command is not a default action here,
 because a misrouted `send` could publish a malformed message.)
 
 ---
 
 ## `send <name> "<body>"` - publish to a peer or a project
 
-The core verb (US4). Strip the leading `send`; the rest is `<recipient> <body>`
+The core command (US4). Strip the leading `send`; the rest is `<recipient> <body>`
 (name mode) or `project <X> <body>` / `--to-project <X> <body>` (broadcast mode).
 
 ### Flow: NORMALIZE -> RUN -> REPORT (no confirm: free lane)
@@ -110,13 +110,13 @@ The core verb (US4). Strip the leading `send`; the rest is `<recipient> <body>`
 Run the normalizer with everything after the `send` command as ONE `--input`:
 
 ```bash
-bash "${SKILL_DIR}/scripts/normalize.sh" --verb send --input "<recipient/project + body>"
+bash "${SKILL_DIR}/scripts/normalize.sh" --command send --input "<recipient/project + body>"
 ```
 
 It strips smart quotes, splits the recipient (or detects a `project`/`to-project`
 broadcast keyword) from the body, strips one wrapping quote pair off the body,
 and **refuses an empty or whitespace-only recipient or body**. Read its
-`key=value` output; never `eval` it. Fields: `status`, `error`, `verb`,
+`key=value` output; never `eval` it. Fields: `status`, `error`, `command`,
 `recipient`, `to_project`, `body`. `body` is emitted **last** and may span
 multiple lines (a pasted multiline message is preserved intact), so capture
 **everything after the `body=` marker** to end of output as the body - do not
@@ -178,7 +178,7 @@ Strip the leading `reply`; the rest is `<msg-id> <body>`.
 
 ### Flow: NORMALIZE -> RUN -> REPORT (no confirm)
 
-1. **NORMALIZE.** `bash "${SKILL_DIR}/scripts/normalize.sh" --verb reply --input "<msg-id + body>"`.
+1. **NORMALIZE.** `bash "${SKILL_DIR}/scripts/normalize.sh" --command reply --input "<msg-id + body>"`.
    It refuses an empty msg-id or empty body. On `status=error`, STOP and report the
    `error=` line. Capture `msg_id` and `body`.
 2. **RUN.** The id is always a flag. The body goes in exactly once, as `--body` (canonical), a bare positional, or `--body-file`:
@@ -207,7 +207,7 @@ fno agents mail status                 # one-screen inbox health snapshot
 
 `unread`/`ack` take the inbox name as the `-n/--name` **option** (default
 `footnote`), NOT a positional - pass `-n "<name>"` when the user names a specific
-inbox. If the raw verb errors, relay the real error; do not invent output.
+inbox. If the raw command errors, relay the real error; do not invent output.
 
 ---
 
@@ -288,7 +288,7 @@ A target carrying `@host` reaches a peer on another machine: `fno agents mail se
    (`peek` / `resume` + re-send / `attach`). Waiting on a drain is the last
    resort, never the advice you lead with.
 5. **Do not reinvent the bus.** Addressed delivery, the cursor, the render, and
-   rotation all live in `fno agents mail`. This skill routes verbs, normalizes input, and
+   rotation all live in `fno agents mail`. This skill routes commands, normalizes input, and
    reports honestly; it never duplicates that machinery.
 6. **Use the genuine CLI shapes.** `send <name> <body>` and `--to-project <X>` are positional/flag. `reply` takes `--to <id>` plus the body exactly once (`--body`, a positional, or `--body-file` - two forms is a refusal). `unread`/`ack` name is `-n`.
 

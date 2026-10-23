@@ -33,9 +33,9 @@ pub struct OutcomeFeeds<'a> {
     pub review_fails_by_pr: Option<&'a HashMap<i64, u64>>,
 }
 
-/// The verb part of `kind`: every execute/target session ran the delivery
+/// The command part of `kind`: every execute/target session ran the delivery
 /// pipeline, so `target/<difficulty>` is the only slice-1 kind.
-const TARGET_VERB: &str = "target";
+const TARGET_COMMAND: &str = "target";
 
 /// `host/owner/repo` from a GitHub PR URL, the same lowercase identity shape
 /// `finalize::repo_identity_from_git_remote` produces for the origin remote:
@@ -435,7 +435,7 @@ pub fn build_records(
         };
         records.push(json!({
             "id": id,
-            "kind": format!("{TARGET_VERB}/{}",
+            "kind": format!("{TARGET_COMMAND}/{}",
                 node.get("difficulty").and_then(Value::as_str).unwrap_or("unknown")),
             "harness": harness,
             "provider": provider,
@@ -566,7 +566,7 @@ fn repo_root(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
 
 /// The (commit type, surface) parts per PR behind the second kind part: the
 /// same repo discovery and merged-line walk the fix-of-fix feed uses, read
-/// once per fold when the kind runs deeper than `verb/difficulty`. `None`
+/// once per fold when the kind runs deeper than `command/difficulty`. `None`
 /// on a non-repo cwd or a failed walk - the kinds then keep their depth-1
 /// shape after the caller prints why, never a guessed type.
 pub fn kind_parts_by_pr(
@@ -583,7 +583,7 @@ pub fn kind_parts_by_pr(
     }
     let Some(repo) = repo_root(cwd) else {
         eprintln!(
-            "fno backlog calibration: no git repo above {}; the kind stays at its verb/difficulty depth",
+            "fno backlog calibration: no git repo above {}; the kind stays at its command/difficulty depth",
             cwd.display()
         );
         return None;
@@ -600,7 +600,7 @@ pub fn kind_parts_by_pr(
         Err(err) => {
             eprintln!(
                 "fno backlog calibration: could not walk the merged line ({err}); \
-the kind stays at its verb/difficulty depth rather than a guessed type."
+the kind stays at its command/difficulty depth rather than a guessed type."
             );
             None
         }

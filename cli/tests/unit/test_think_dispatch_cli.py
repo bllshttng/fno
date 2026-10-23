@@ -1,6 +1,6 @@
 """CLI tests for `fno do think dispatch` (x-0a9c, Wave C).
 
-The verb is thin glue over dispatch_conversational; these cover the glue's real
+The command is thin glue over dispatch_conversational; these cover the glue's real
 logic: live-session-id resolution, node resolution, exit codes, and that the
 LIVE (session_id, cwd) pointer is what flows into the dispatch core.
 """
@@ -35,7 +35,7 @@ def _clear_harness_markers(monkeypatch):
 @pytest.fixture
 def graph(monkeypatch, tmp_path):
     """A one-node graph + a captured dispatch seam. Returns the capture dict."""
-    entries = [{"id": "x-0a9c", "slug": "conv-think", "title": "conversational verb",
+    entries = [{"id": "x-0a9c", "slug": "conv-think", "title": "conversational command",
                 "source_session_id": "stored", "source_cwd": "/birth"}]
     monkeypatch.setattr("fno.graph.api.wire_rows", lambda path=None, **k: entries)
     monkeypatch.setattr("fno.graph.cli._graph_path", lambda: tmp_path / "graph.json")
@@ -81,7 +81,7 @@ def test_happy_path_passes_live_pointer(graph, monkeypatch):
 
 
 def test_empty_model_rejected_exits_2(graph, monkeypatch):
-    """AC2-ERR at this verb: an empty --model is a usage error, nothing dispatches."""
+    """AC2-ERR at this command: an empty --model is a usage error, nothing dispatches."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
     r = runner.invoke(think_cli.think_app,
                       ["dispatch", "x-0a9c", "--model", "   "])
@@ -98,7 +98,7 @@ def _subprocess_journey(tmp_path: Path, monkeypatch):
                     {
                         "id": "x-0a9c",
                         "slug": "conv-think",
-                        "title": "conversational verb",
+                        "title": "conversational command",
                         "cwd": str(tmp_path),
                     }
                 ]

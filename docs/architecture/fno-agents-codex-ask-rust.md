@@ -1,12 +1,12 @@
 # Rust client handles codex `ask` (byte-parity reply extraction)
 
-`ask` was the last `fno agents` verb without a client-side port. As of the auto-routing follow-up to the claude port, the Rust `fno-agents` client handles codex `ask` directly via a one-shot `codex exec --json` subprocess. It holds byte-parity against Python's `cli/src/fno/agents/harnesses/codex.py` and bypasses the fno daemon entirely.
+`ask` was the last `fno agents` command without a client-side port. As of the auto-routing follow-up to the claude port, the Rust `fno-agents` client handles codex `ask` directly via a one-shot `codex exec --json` subprocess. It holds byte-parity against Python's `cli/src/fno/agents/harnesses/codex.py` and bypasses the fno daemon entirely.
 
 This document explains the architecture, the provider-conditional routing that drives it, and the deferred follow-ups.
 
 ## Why client-side, not daemon
 
-The fno daemon PTY-supervises codex and gemini for resident-agent interaction (`drive`, `attach`, long-lived `spawn`). Its `handle_ask` returns the whole rendered `TerminalGrid` screen of that resident worker. That is fundamentally different from what the `ask` verb wants:
+The fno daemon PTY-supervises codex and gemini for resident-agent interaction (`drive`, `attach`, long-lived `spawn`). Its `handle_ask` returns the whole rendered `TerminalGrid` screen of that resident worker. That is fundamentally different from what the `ask` command wants:
 
 - Python `harnesses/codex.py` invokes `codex exec --json` as a one-shot subprocess. It parses the JSONL event stream (`thread.started` → session_id, `item.completed`/`agent_message` → reply text, `turn.completed` → end-of-turn).
 - The daemon's rendered-screen output cannot reach byte-parity with the parsed-JSON reply Python returns.
@@ -20,7 +20,7 @@ The Rust binary's entry point sequence (`crates/fno-agents/src/bin/client.rs::ru
 1. Parse the agents-namespace arg list.
 2. Try `maybe_run_claude_ask(home, &params, &name)` — returns `Some(exit_code)` if the target resolves to a claude agent, else `None`.
 3. Try `maybe_run_codex_ask(home, &params, &name)` — same contract for codex (new in this PR).
-4. Fall through to `build_request` and the daemon RPC for all other verbs.
+4. Fall through to `build_request` and the daemon RPC for all other commands.
 
 `maybe_run_codex_ask` resolves the target's provider from `--provider` (create) or the registry row keyed by name (followup). When the provider is `codex`, it dispatches via `dispatch_codex_ask` and prints the result; otherwise it returns `None` and the daemon path handles it.
 
@@ -63,10 +63,10 @@ The watchdog runs on a side thread that does `recv_timeout(d)` on a channel the 
 
 ## Provider-conditional routing (the flip)
 
-`ask` could not simply leave `PYTHON_AGENT_VERBS`: gemini still has no Rust port, and an unconditional route would send gemini asks to the (wrong-shape) daemon. Instead, a new conditional branch in `cli/src/fno/agents/rust_runtime.py::make_context` routes `ask` to the Rust client *only* when the resolved provider is in `RUST_CLIENT_ASK_PROVIDERS = {"claude", "codex"}`:
+`ask` could not simply leave `PYTHON_AGENT_COMMANDS`: gemini still has no Rust port, and an unconditional route would send gemini asks to the (wrong-shape) daemon. Instead, a new conditional branch in `cli/src/fno/agents/rust_runtime.py::make_context` routes `ask` to the Rust client *only* when the resolved provider is in `RUST_CLIENT_ASK_PROVIDERS = {"claude", "codex"}`:
 
 ```python
-elif mode == "auto" and verb == "ask":
+elif mode == "auto" and command == "ask":
     provider = _resolve_ask_provider(args)
     if provider in RUST_CLIENT_ASK_PROVIDERS:
         binary = resolve_installed_binary()
@@ -76,7 +76,7 @@ elif mode == "auto" and verb == "ask":
 
 `_resolve_ask_provider` scans args for `--provider` (or `--provider=`), else looks up the first positional non-flag token in `~/.fno/agents/registry.json`'s top-level `agents` list. Value-carrying flags (`--cwd`, `--timeout`, `--from-name`, `--message`) consume their value token so they don't get mistaken for the agent name. Any failure (no provider, missing registry, corrupt JSON, unresolvable name) returns `None`, and the Python dispatch handles it with its mature actionable error.
 
-`ask` deliberately stays in `PYTHON_AGENT_VERBS`, so the `AUTO_ROUTE_VERBS = RUST_CLIENT_VERBS - PYTHON_AGENT_VERBS` identity contract test remains the routing-drift tripwire. The conditional routing lives on a separate code path. The `RUST_CLIENT_ASK_PROVIDERS` membership carries its own contract test, which flips red the moment gemini is added without porting `harnesses/gemini.py`.
+`ask` deliberately stays in `PYTHON_AGENT_COMMANDS`, so the `AUTO_ROUTE_COMMANDS = RUST_CLIENT_COMMANDS - PYTHON_AGENT_COMMANDS` identity contract test remains the routing-drift tripwire. The conditional routing lives on a separate code path. The `RUST_CLIENT_ASK_PROVIDERS` membership carries its own contract test, which flips red the moment gemini is added without porting `harnesses/gemini.py`.
 
 ## End-to-end differential
 

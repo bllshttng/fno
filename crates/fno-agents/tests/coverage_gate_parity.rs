@@ -309,7 +309,7 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
 /// Compare the folded stub-call journals against the golden `.calls`. Only
 /// the doors that survive the port compare: the `agents` and `gh` folds are
 /// the topology the port legitimately absorbed (the Python gate shelled the
-/// producer verb and the REST pre-read; the native verdict reads the row and
+/// producer command and the REST pre-read; the native verdict reads the row and
 /// the PR facts in process), so their rows differ by design, while the law
 /// doors (`front`, `law_subjects`) are behavior the native leg must
 /// reproduce in the same order.

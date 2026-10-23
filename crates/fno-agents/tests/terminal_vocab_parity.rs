@@ -7,7 +7,7 @@
 //! The Python leg (`DELIVERED_TERMINALS` in cli/src/fno/terminals.py) was the
 //! frozenset the ledger promotion gate, the scoreboard fold, and the classify
 //! wire all read. The port made `TerminationReason::is_delivered`
-//! (loopcheck.rs) the one owner and the `fno-agents terminals` verb the read
+//! (loopcheck.rs) the one owner and the `fno-agents terminals` command the read
 //! door; the golden below is the sorted set the Python leg answered at
 //! capture time. In capture mode (`FNO_CAPTURE_GOLDEN=1`, while the leg still
 //! existed) the helper ran `python3` on the same question, asserted

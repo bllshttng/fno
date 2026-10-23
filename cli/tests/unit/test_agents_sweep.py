@@ -97,7 +97,7 @@ class TestSilencePredicate:
 
 
 class TestNeverActs:
-    def test_the_module_calls_no_lifecycle_verb(self):
+    def test_the_module_calls_no_lifecycle_command(self):
         # A guard on the shape rather than on one call site: the constraint is
         # that NO path here stops, spawns, or unclaims, and a reader adding one
         # later should trip this rather than discover it in production.

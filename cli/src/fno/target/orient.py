@@ -584,24 +584,24 @@ def _local_review_gates(review: Any) -> List[str]:
 
 
 def _self_review_clause(project_root: Optional[Path] = None) -> str:
-    """The inline self-review verb and refusal remedy, or "".
+    """The inline self-review command and refusal remedy, or "".
 
-    Names this harness's inline review verb, sized from the branch diff when
+    Names this harness's inline review command, sized from the branch diff when
     available. A refusal stays visible; it never routes a review command through
     the mail bus. Never raises."""
     try:
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
         argv = ["review-level", "capability", "invocation"]
         if project_root is not None:
             argv += ["--root", str(project_root)]
-        answer = verb_call(argv, {})
-        verb = answer["invocation"]
+        answer = command_call(argv, {})
+        command = answer["invocation"]
         harness = answer["harness"]
     except Exception:  # noqa: BLE001 - advisory; the stop gate is the backstop
         return ""
     clause = (
-        f"self-review required for code ({harness}): run `{verb}` (the lane "
+        f"self-review required for code ({harness}): run `{command}` (the lane "
         "emits its own attestation; `bash skills/review/scripts/"
         "emit-attestation.sh code-review` is the recovery path when emission fails)"
     )
@@ -668,7 +668,7 @@ def _done_when_line(manifest_raw: Optional[Dict[str, Any]], project_root: Path) 
         if optional:
             line += f" (optional if present: [{', '.join(optional)}])"
         # Self-review floor: when the obligation is on and no local lane is
-        # configured, name this harness's verb and the --to-self fallback so a
+        # configured, name this harness's command and the --to-self fallback so a
         # session serves itself instead of asking an epic leader. A configured
         # local lane already names the reviewer in the line above.
         if not local and getattr(review, "self_review_required", True):

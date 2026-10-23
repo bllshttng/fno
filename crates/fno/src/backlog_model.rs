@@ -1657,7 +1657,7 @@ fn gather_blocking(
 // ---------------------------------------------------------------------------
 
 /// What a session row can DO, derived from the joined registry row - never
-/// a fixed verb. The refusal half carries the reason the row renders dim.
+/// a fixed command. The refusal half carries the reason the row renders dim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SessionAction {
     /// A live pane here: focus it. A paneless attachable row: attach.
@@ -1670,7 +1670,7 @@ pub(crate) enum SessionAction {
 }
 
 /// Derive the row's action from the joined `AgentRow`. Absent row: no
-/// registry row. Present: pane or attach id wins (the reach verbs), then
+/// registry row. Present: pane or attach id wins (the reach commands), then
 /// the resume form - but never on a row the registry reports Working or
 /// Done, which the resume door refuses anyway; saying so here is the whole
 /// point of the state-aware cell.
@@ -1708,11 +1708,11 @@ pub(crate) enum OpenSession {
     Dim(String),
 }
 
-/// The shell line that reaches a session by id: `fno agents <verb> <sid>
+/// The shell line that reaches a session by id: `fno agents <command> <sid>
 /// --cross-project`, pinned to `cwd` when the caller knows one. The ONE
 /// spelling both [`SessionView`] and [`open_session`] print.
-fn session_command(verb: &str, sid: &str, cwd: Option<&str>) -> String {
-    let mut cmd = format!("fno agents {verb} {sid} --cross-project");
+fn session_command(command: &str, sid: &str, cwd: Option<&str>) -> String {
+    let mut cmd = format!("fno agents {command} {sid} --cross-project");
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
         cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
     }

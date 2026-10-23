@@ -79,7 +79,7 @@ def test_an_unreadable_leaf_refuses_never_admits(monkeypatch):
     a refusal, so no harness is waved through on a broken door."""
     import fno.rust_binary
 
-    def _missing(verb, args, **kwargs):
+    def _missing(command, args, **kwargs):
         return ("fno-agents binary not found", None)
 
     monkeypatch.setattr(fno.rust_binary, "call_binary_json", _missing)

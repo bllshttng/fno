@@ -185,7 +185,7 @@ def _codex_daemon_threads_raw(*, env: Optional[dict[str, str]] = None) -> Option
     """Raw ``threads`` rows the app-server daemon reports, or None.
 
     The transport is ``fno-agents list --json --no-discovered --harness codex``:
-    the answer rides the ``codex_loaded`` block of an existing verb instead of
+    the answer rides the ``codex_loaded`` block of an existing command instead of
     its own. ``--no-discovered`` is load-bearing - without it the Rust list
     shells back into this Python discovery and recurses.
 
@@ -917,7 +917,7 @@ def _discover_from_registry(
     is the registry map's one entry). For
     claude the row carries the FULL session uuid when known so it dedups against
     the roster/disk rows for the same session; ``short_id`` stays the 8-hex jobId
-    the inject verb addresses."""
+    the inject command addresses."""
     from fno.agents.registry import load_registry
     from fno.harness_names import known_providers
 

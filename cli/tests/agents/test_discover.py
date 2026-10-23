@@ -999,7 +999,7 @@ def test_daemon_probe_shapes_valid_rows_and_skips_bad_entries(monkeypatch):
     ]
 
 
-def test_daemon_probe_argv_rides_list_not_a_hidden_verb(monkeypatch):
+def test_daemon_probe_argv_rides_list_not_a_hidden_command(monkeypatch):
     from fno import rust_binary
 
     seen: dict = {}

@@ -12,35 +12,35 @@ uv tool install /path/to/fno/cli
 fno --version
 fno --help
 
-# Walk the backlog via the unified Rust loop (the old `fno loop` verb is removed)
+# Walk the backlog via the unified Rust loop (the old `fno loop` command is removed)
 fno-agents loop run --driver megawalk
 ```
 
 Released wheels also bundle the `fno-agents` Rust supervisor binary, which is the
-**default** `fno agents` runtime when installed: the daemon-native verbs plus four of the
-five shared verbs (`list`/`stop`/`rm`/`reconcile`, which reached flag + stdout parity in
+**default** `fno agents` runtime when installed: the daemon-native commands plus four of the
+five shared commands (`list`/`stop`/`rm`/`reconcile`, which reached flag + stdout parity in
 `ab-544c544e`) auto-route to it. `ask` stays on Python — the daemon only PTY-manages
 codex/gemini (claude is a shellout) and returns the whole settled screen rather than the
 extracted reply, so routing `ask` would regress claude and reply output. (`=python` pins
-everything to Python, `=rust` forces the binary for every verb, `ask` included.) See
+everything to Python, `=rust` forces the binary for every command, `ask` included.) See
 [`docs/distribution.md`](../docs/distribution.md) for the runtime-selection table, the
 artifacts, the wheel binary-bundling mechanism, and the gated publish runbook.
 
 ## Install channels
 
-> **`fno` vs `fno-py`.** The Rust mux front door owns the `fno` name. Bare `fno` launches the mux. `fno mux <verb>` runs natively. Other verbs forward to the Python CLI. That CLI ships as **`fno-py`**, the forward target rather than a typed command. Today, the **cargo** channel installs the `fno` front door. Manual `cargo install --path crates/fno` and `fno doctor update` do the same. PyPI/uv, brew, and fno.sh install `fno-py` plus the `fno-agents*` binaries. A follow-up tracks mux-binary delivery through those channels. Run `fno doctor` to inspect front-door activation or Python shadowing. In the py-wheel rows below, "the `fno` CLI" means "the `fno-py` CLI".
+> **`fno` vs `fno-py`.** The Rust mux front door owns the `fno` name. Bare `fno` launches the mux. `fno mux <command>` runs natively. Other commands forward to the Python CLI. That CLI ships as **`fno-py`**, the forward target rather than a typed command. Today, the **cargo** channel installs the `fno` front door. Manual `cargo install --path crates/fno` and `fno doctor update` do the same. PyPI/uv, brew, and fno.sh install `fno-py` plus the `fno-agents*` binaries. A follow-up tracks mux-binary delivery through those channels. Run `fno doctor` to inspect front-door activation or Python shadowing. In the py-wheel rows below, "the `fno` CLI" means "the `fno-py` CLI".
 
 A channel is a complete front door - you pick one, never "install both". What each delivers:
 
 | Channel | Command | You get |
 |---|---|---|
-| **PyPI / uv** | `uv tool install fno` or `pip install fno` | The `fno` CLI, all three Rust binaries (`fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) on PATH, and the internalized verbs (`fno plan`, `fno notify`, `fno phase kill-check`, ...). `fno target` and `fno doctor bundle` need the plugin clone - on a bare install they exit non-zero with an "install the plugin" message rather than a traceback. |
+| **PyPI / uv** | `uv tool install fno` or `pip install fno` | The `fno` CLI, all three Rust binaries (`fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) on PATH, and the internalized commands (`fno plan`, `fno notify`, `fno phase kill-check`, ...). `fno target` and `fno doctor bundle` need the plugin clone - on a bare install they exit non-zero with an "install the plugin" message rather than a traceback. |
 | **Plugin clone** | `claude plugin install footnote`, or clone + `claude --plugin-dir /path/to/footnote` | The full think -> plan -> do -> review -> ship pipeline (skills + hooks), plus a binary-complete `fno`: the installer the plugin runs at its first session prefers the published PyPI platform wheel (binaries included), falling back to a source build of `cli/` (Python-only; run `fno doctor update --rust` for the binaries) when the wheel is unavailable. |
 | **cargo** | `cargo install fno` | The `fno` CLI plus all three Rust binaries on PATH, via a lazy first-run bootstrap (`ab-4040eee8`). `cargo install fno` compiles a tiny shim; the first `fno` run provisions uv (downloading the standalone uv if absent), runs `uv tool install fno` (the same PyPI wheel, binaries bundled), verifies the installed package is this project's, then forwards by absolute path. The provision is a one-time multi-second step; later runs forward instantly via a sentinel. The `fno-agents` crate is published only for name-reservation and to back the bootstrapper; `cargo install fno-agents` (no Python CLI) is not a supported front door. |
 | **fno.sh** | `curl -fsSL fno.sh \| sh` | The no-prerequisite front door (`ab-f49b54c1`): the only channel that needs nothing but `curl` (or `wget`) to start. The script ensures `uv` is present (chaining to Astral's standalone installer when absent, reusing an existing `uv` when present), runs `uv tool install fno` (the same PyPI wheel, binaries bundled), and verifies the installed package is this project's before reporting success. `uv` provisions its own Python, so a bare machine with no Python and no `uv` reaches a working `fno`. Pin a release by passing the variable to the shell that runs the script (not to `curl`): `curl -fsSL fno.sh \| FNO_VERSION=1.2.3 sh`. The script is repo-sourced (`scripts/install/fno.sh`), served verbatim over HTTPS, and inspectable in a browser. |
 | **brew** | `brew install <owner>/fno/fno` | A Homebrew own-tap formula (`ab-d59d219a`) that installs the same PyPI platform wheel into a brew-managed venv: brew provides Python (`depends_on "python@3.13"`), the wheel provides the `fno` CLI plus all three Rust binaries, and the formula symlinks the binaries onto PATH. `brew upgrade`/`brew uninstall` manage the venv cleanly. Launch-gated on the PyPI publish + tap creation (see below). |
 
-The PyPI/uv channel is binary-complete as of `ab-18563bcc`: the release wheel carries all three Rust binaries, so daemon-backed verbs work with no second install. Publishing the real `fno` package to PyPI (over the reserved `0.0.0` placeholder) is the remaining launch step. Until then, `uv tool install fno` by name resolves the placeholder. The plugin installer's version guard then falls back to the source build. See [`docs/distribution.md`](../docs/distribution.md) for the gated publish runbook.
+The PyPI/uv channel is binary-complete as of `ab-18563bcc`: the release wheel carries all three Rust binaries, so daemon-backed commands work with no second install. Publishing the real `fno` package to PyPI (over the reserved `0.0.0` placeholder) is the remaining launch step. Until then, `uv tool install fno` by name resolves the placeholder. The plugin installer's version guard then falls back to the source build. See [`docs/distribution.md`](../docs/distribution.md) for the gated publish runbook.
 
 The cargo channel shares that PyPI gate and adds a crates.io publish (the reserved `fno` and `fno-agents` crates over their `0.0.0` placeholders). Until both land, `cargo install fno` by name resolves the crates.io placeholder and the first run's `uv tool install fno` resolves the PyPI placeholder; the channel's clean-machine smoke (`cli/tests/smoke/cargo_bootstrap_smoke.sh`, run on the release-wheels matrix) proves the bootstrap against the freshly built wheel today, and the by-name `cargo install fno` variant becomes a required check once both publishes are live.
 
@@ -114,7 +114,7 @@ What remains is vestigial:
   back to v1 with a stderr note otherwise. Nothing writes that path.
 - `config.v2_enabled` is still parseable in settings but no longer gates
   a live code path (the `fno loop --v2` enable path was removed with the
-  `fno loop` verb).
+  `fno loop` command).
 
 Do not treat v2 as a layout you can opt into; use the canonical
 `.fno/target-state.md` manifest.
@@ -196,7 +196,7 @@ their own inbox at the top of every megawalk iteration, and ack each message aft
 Set `project: <name>` in your `.fno/config.toml` to identify the
 sender. Without this field, `fno agents mail` errors with the fix string.
 
-### Verbs
+### Commands
 
 - `fno agents mail send --to-project <project> --kind <kind> --body "..."` - send a message
 - `fno agents mail unread [--json]` - list unread messages in own inbox
@@ -237,7 +237,7 @@ own operating context. Distinct from `fno agents mail` (cross-agent messaging) a
 from `fno agents` (the dispatch mesh); these are `man self` for the agent in
 its current operating layer. (Formerly `fno agent whoami` / `fno agent status`;
 the `fno agent` singular namespace was retired in ab-12dd2a5d when the
-never-auto-invoked `suggest` / `capabilities` verbs were trimmed.)
+never-auto-invoked `suggest` / `capabilities` commands were trimmed.)
 
 They detect three layers independently and report on all that are present:
 

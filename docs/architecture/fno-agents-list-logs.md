@@ -1,6 +1,6 @@
 # fno agents — list + logs read surface
 
-Two read verbs sit on top of the registry substrate: `fno agents session list` (registry roster + live status) and `fno agents session logs <name>` (per-agent transcript tail). The `fno-agents` Rust client serves both. `list` comes from the daemon's `agent.list` projection, and `render_list_table` in `crates/fno-agents/src/bin/client.rs` draws the table. `logs` is `run_logs` in `crates/fno-agents/src/client_verbs.rs`: claude passthrough, codex tee tail, and `logs --follow` over the daemon's WebSocket `agent.logs` transport. The MODEL and PR cells come from `crates/fno-agents/src/list_row.rs`. The Python list lane is deleted, and the Python logs leg is deleted too. On a checkout with no installed `fno-agents` binary the verb refuses with exit 127 instead of a second Python answer. Both verbs are pure-read and never mutate the registry. This doc covers the design. The how-to lives in the [list/logs user guide](../guides/fno-agents-list-logs.md).
+Two read commands sit on top of the registry substrate: `fno agents session list` (registry roster + live status) and `fno agents session logs <name>` (per-agent transcript tail). The `fno-agents` Rust client serves both. `list` comes from the daemon's `agent.list` projection, and `render_list_table` in `crates/fno-agents/src/bin/client.rs` draws the table. `logs` is `run_logs` in `crates/fno-agents/src/client_commands.rs`: claude passthrough, codex tee tail, and `logs --follow` over the daemon's WebSocket `agent.logs` transport. The MODEL and PR cells come from `crates/fno-agents/src/list_row.rs`. The Python list lane is deleted, and the Python logs leg is deleted too. On a checkout with no installed `fno-agents` binary the command refuses with exit 127 instead of a second Python answer. Both commands are pure-read and never mutate the registry. This doc covers the design. The how-to lives in the [list/logs user guide](../guides/fno-agents-list-logs.md).
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). Sibling: [fno-agents-followup.md](fno-agents-followup.md).
 
@@ -12,13 +12,13 @@ The primary caller is an LLM orchestrator. `list --json` returns the fleet shape
 
 ```
 cli/src/fno/agents/
-├── cli.py                  ← Typer wiring; the `logs` verb is a refusal body
+├── cli.py                  ← Typer wiring; the `logs` command is a refusal body
 ├── format.py               ← serialize_entry (row shape for the field-coverage lint)
 └── harnesses/
     └── claude.py           ← claude_agents_json shellout
 ```
 
-`format.py` stays a pure-read module: it never mutates the registry, never flips `status` based on inferred live state, never emits events. Status mutations belong to the dedicated write verbs (`stop`, `rm`, `reconcile`). The logs read has one owner: `run_logs` in `crates/fno-agents/src/client_verbs.rs`.
+`format.py` stays a pure-read module: it never mutates the registry, never flips `status` based on inferred live state, never emits events. Status mutations belong to the dedicated write commands (`stop`, `rm`, `reconcile`). The logs read has one owner: `run_logs` in `crates/fno-agents/src/client_commands.rs`.
 
 ## Three axes, two views
 
@@ -39,7 +39,7 @@ Both fields appear on every JSON entry. `live_status` is `null` for non-Claude e
 ## Logs branch by provider
 
 ```
-run_logs(rest, home)                        crates/fno-agents/src/client_verbs.rs
+run_logs(rest, home)                        crates/fno-agents/src/client_commands.rs
    │
    ├─ read_registry_entries(); resolve_entry_with_heal (session-id-first)
    │    └─ unresolved → accepted-forms message, exit 13
@@ -127,8 +127,8 @@ The `KNOWN_LIVE_STATUSES` allowlist in `harnesses/claude.py` catches the orthogo
 
 ## Known gaps
 
-- `logs --json` for Claude entries would require parsing claude's log format; the verb currently emits a `WARN:`-prefixed gap message and continues with raw passthrough.
-- codex / gemini `logs` paths need the tee'd JSONL files their create paths write. Where the file is absent, the verb prints the honest "no log file at" message and exits 13.
+- `logs --json` for Claude entries would require parsing claude's log format; the command currently emits a `WARN:`-prefixed gap message and continues with raw passthrough.
+- codex / gemini `logs` paths need the tee'd JSONL files their create paths write. Where the file is absent, the command prints the honest "no log file at" message and exits 13.
 
 ## Test surface
 

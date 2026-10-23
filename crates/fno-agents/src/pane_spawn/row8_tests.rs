@@ -348,8 +348,8 @@ fn attach_send_on_pristine_pane() {
 }
 
 #[test]
-fn normalize_command_and_verb_seed() {
-    use super::env_wrap::{is_verb_seed, normalize_command};
+fn normalize_command_and_command_seed() {
+    use super::env_wrap::{is_command_seed, normalize_command};
     assert_eq!(normalize_command("/fno:target x", "claude"), "/target x");
     assert_eq!(normalize_command("/target x", "opencode"), "/fno:target x");
     assert_eq!(normalize_command("hello", "opencode"), "hello");
@@ -357,8 +357,8 @@ fn normalize_command_and_verb_seed() {
         normalize_command("/usr/bin/script", "claude"),
         "/usr/bin/script"
     );
-    assert!(is_verb_seed("/target x"));
-    assert!(!is_verb_seed("hello"));
+    assert!(is_command_seed("/target x"));
+    assert!(!is_command_seed("hello"));
 }
 
 #[test]

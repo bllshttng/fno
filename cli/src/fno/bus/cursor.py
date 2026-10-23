@@ -85,7 +85,7 @@ def write_cursor(name: str, msg_id: str) -> None:
         raise
 
 
-# advance_cursor is the verb the drain/ack paths call; write_cursor is the
+# advance_cursor is the command the drain/ack paths call; write_cursor is the
 # mechanism. Kept as a named alias so call sites read intentionally.
 def advance_cursor(name: str, msg_id: str) -> bool:
     """Advance ``name``'s read cursor to ``msg_id`` (ack). Forward-only.

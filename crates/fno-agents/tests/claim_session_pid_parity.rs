@@ -5,7 +5,7 @@
 //! Characterization harness for the `claim session-pid` leaf port (wave 7 of
 //! the claims-port epic). The Python body is retired and the surviving
 //! Python leaf is a pure forward, so there is no second leg to differ from:
-//! capture freezes the native verb's own bytes, and the frozen goldens are
+//! capture freezes the native command's own bytes, and the frozen goldens are
 //! the contract. Every behavioral case pins `--from-pid` or an env stamp, so
 //! no assertion depends on the test process's own ancestry (the default
 //! start pid is getppid).
@@ -106,7 +106,7 @@ impl Drop for KeptChild {
     }
 }
 
-/// The verb reads a fresh census per invocation; settle until THIS process's
+/// The command reads a fresh census per invocation; settle until THIS process's
 /// census names the child (5s budget, 25ms interval).
 fn wait_in_census(pid: u32) {
     let start = std::time::Instant::now();

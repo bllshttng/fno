@@ -111,7 +111,7 @@ pub fn detect(root: &Path, scan: Option<&[PathBuf]>) -> Value {
 
 /// Every harness the auto-wire pass knows, and whether its binary is on
 /// PATH with a readable `--version` first line. Detection only looks;
-/// the wiring verb still owns every write.
+/// the wiring command still owns every write.
 fn detect_harnesses() -> Value {
     Value::Array(
         crate::setup_autowire::HARNESS_LIST
@@ -209,7 +209,7 @@ fn detect_gh() -> Value {
 
 /// Configured provider-account rows, counted from the global config file
 /// (an `[[accounts]]` array of tables, or `accounts.<n>` flattened rows).
-/// A count, never the records: the accounts verb owns reading those.
+/// A count, never the records: the accounts command owns reading those.
 fn detect_accounts() -> Value {
     let path = crate::config_defaults::global_config_path();
     match crate::config_defaults::read_flat(&path) {

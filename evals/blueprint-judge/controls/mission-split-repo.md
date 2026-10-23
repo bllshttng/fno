@@ -9,7 +9,7 @@ kind: quick-plan
 ## Five questions
 
 1. Persona: plugin users who install faster from a smaller repo.
-2. Surface fit: a release-script change, no new verb.
+2. Surface fit: a release-script change, no new command.
 3. Uncovered case: a plugin release cut while the split is mid-flight.
 4. Deletable: the mirror CI; one pipeline is enough.
 5. Duplication: none; git subtree already exists and is declined.

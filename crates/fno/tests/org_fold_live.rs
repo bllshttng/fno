@@ -1,7 +1,7 @@
 //! (x-3cb3) The org fold against a real `fno` on PATH.
 //!
 //! The parse tests pin the payload shape; this pins the one thing only a real
-//! subprocess can prove, which is that the fold reaches a live verb at all.
+//! subprocess can prove, which is that the fold reaches a live command at all.
 //! The deliberate-break half lives in `org_fold_degrade.rs`, in its own
 //! binary, because it mutates process-global `FNO_BIN`.
 

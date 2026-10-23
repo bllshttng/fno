@@ -121,7 +121,7 @@ fn probe_all(roots: &[PathBuf]) -> Vec<PathBuf> {
 /// One anchored probe: the plans dir the chain names for `root`.
 fn probe(root: &Path) -> Option<PathBuf> {
     let dir = crate::plans_path::plans_content_dir(root)?;
-    // Same shape the old verb probe enforced: absolute, never the root.
+    // Same shape the old command probe enforced: absolute, never the root.
     if !dir.is_absolute() || dir.parent().is_none() {
         return None;
     }

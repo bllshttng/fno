@@ -23,7 +23,7 @@ pub fn canonicalize_cwd(c: &str) -> std::path::PathBuf {
 /// Read the `fresh` / `here` booleans a caller set via `--fresh` /
 /// `--here`(`--in-place`). Both default to false: `--fresh` is an opt-in
 /// mechanism, never on by default at the client layer (the policy layer decides
-/// when to pass it -- AC3 keeps non-target verbs on caller cwd unless asked).
+/// when to pass it -- AC3 keeps non-target commands on caller cwd unless asked).
 pub fn fresh_here_flags(params: &Value) -> (bool, bool) {
     let fresh = params
         .get("fresh")

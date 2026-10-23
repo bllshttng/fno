@@ -1,5 +1,5 @@
 //! The codex transcript-store helpers : where codex lives on disk
-//! and what names a rollout file. Moved out of client_verbs.rs, which is
+//! and what names a rollout file. Moved out of client_commands.rs, which is
 //! shrink-only; the re-export there keeps every existing caller.
 
 /// The codex home the way codex itself resolves it: `$CODEX_HOME` when set,
@@ -72,7 +72,7 @@ pub(crate) fn codex_rollout_index(root: Option<&std::path::Path>) -> Option<Vec<
 pub(crate) fn codex_rollout_fresh(index: &[(String, u64)], session_id: &str, now: u64) -> bool {
     index.iter().any(|(name, mtime)| {
         codex_rollout_matches(name, session_id)
-            && now.saturating_sub(*mtime) <= crate::client_verbs::CODEX_ROLLOUT_FRESH_SECS
+            && now.saturating_sub(*mtime) <= crate::client_commands::CODEX_ROLLOUT_FRESH_SECS
     })
 }
 

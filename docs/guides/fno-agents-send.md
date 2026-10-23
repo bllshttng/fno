@@ -35,9 +35,9 @@ or
 msg-3a7f1c2e queued (durable) [not-confirmed]
 ```
 
-The bracketed reason on a durable line is the live lane's own cause. A claude row with no pane ref is always tried live, and the daemon roster decides. A refusal from that roster reads `not-injectable`. When the transcript veto skips a pane row or another harness, the reason reads `transcript-stalled` or `transcript-done`. One token is the exception. `agent-lock-timeout` means another verb on the same agent held the per-agent lock past the wait. `send`, `ask`, `spawn`, `stop` and `rm` all take that flock. So the holder can be a peer sender, or the `stop` that just killed the recipient. No live attempt was made. The token says nothing about the recipient in either direction. Run `fno agents session peek <name>` before you act on it. Withdraw the queued copy before you re-send, or the recipient gets it twice.
+The bracketed reason on a durable line is the live lane's own cause. A claude row with no pane ref is always tried live, and the daemon roster decides. A refusal from that roster reads `not-injectable`. When the transcript veto skips a pane row or another harness, the reason reads `transcript-stalled` or `transcript-done`. One token is the exception. `agent-lock-timeout` means another command on the same agent held the per-agent lock past the wait. `send`, `ask`, `spawn`, `stop` and `rm` all take that flock. So the holder can be a peer sender, or the `stop` that just killed the recipient. No live attempt was made. The token says nothing about the recipient in either direction. Run `fno agents session peek <name>` before you act on it. Withdraw the queued copy before you re-send, or the recipient gets it twice.
 
-`delivered (hosted)` means live PTY injection (codex/gemini) or the `control.sock` inject succeeded (claude, via the `fno-agents mail-inject` verb, which pastes and submits a wire-level CR).
+`delivered (hosted)` means live PTY injection (codex/gemini) or the `control.sock` inject succeeded (claude, via the `fno-agents mail-inject` command, which pastes and submits a wire-level CR).
 `queued (durable)` means the message is in the recipient's inbox store, waiting for their next drain.
 Both are exit 0.
 The `msg-<8hex>` id is stable and appears in the live `<fno_mail>` envelope, but it exists in the bus log only for a `queued (durable)` send.
@@ -105,7 +105,7 @@ The body cap (1 MiB) is enforced BEFORE any inbox store write, so a rejected ove
 
 ## The injection gate
 
-The per-provider injection gate guarded the daemon PTY-inject lane. That lane was deleted when agent panes moved to the mux, and its `fno agents gate` verb went with it. There is no gate to probe or record.
+The per-provider injection gate guarded the daemon PTY-inject lane. That lane was deleted when agent panes moved to the mux, and its `fno agents gate` command went with it. There is no gate to probe or record.
 
 ## See also
 

@@ -147,7 +147,7 @@ fn classify_group_dep(
 
 /// Strip any `#fragment` from an epic plan_path to get the base doc path.
 /// An epic with no plan_path cannot address group fragments; the remedy
-/// names the folding verb.
+/// names the folding command.
 fn plan_base(plan_path: Option<&str>) -> Result<String, DecomposeErr> {
     match plan_path {
         Some(pp) if !pp.is_empty() => Ok(pp.split('#').next().unwrap_or(pp).to_string()),
@@ -1331,7 +1331,7 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<DecomposeErr> {
     Some(DecomposeErr::new(
         format!(
             "{context} resolves to {owner_id}, which {how}; {containment}, so stamping \
-             containment here would leave every adoptee undispatchable with no verb to \
+             containment here would leave every adoptee undispatchable with no command to \
              free it. {remedy}"
         ),
         2,
@@ -2594,7 +2594,7 @@ fn decompose_post_steps(
 /// the seed prompt (origin pointer + transcribed why + the /blueprint chain
 /// instruction), named per the dispatcher's provenance naming. The wheel
 /// resolved harness/model through resolve_dispatch/node_model before
-/// spawning; the port leaves both to the spawn verb's own defaults (that
+/// spawning; the port leaves both to the spawn command's own defaults (that
 /// resolution ladder is not decompose-owned).
 fn fanout_spawn_think(child: &Value, why_digest: &str, lane: &'static str) -> FanoutRow {
     let node_id = text_at(child, "id").unwrap_or("?").to_string();

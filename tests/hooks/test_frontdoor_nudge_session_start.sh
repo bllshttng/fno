@@ -3,7 +3,7 @@
 #
 # Verifies hooks/frontdoor-nudge-session-start.sh (x-40c4, consent rewritten by
 # x-0143): the SessionStart notice about the missing `fno` front door. It must
-# go SILENT when `fno` on PATH answers a mux-only verb (the Rust front door is
+# go SILENT when `fno` on PATH answers a mux-only command (the Rust front door is
 # active), print the one-line PATH hint for a proven door off PATH, and for a
 # genuinely missing door print the consent notice - what the install does, and
 # the one command that runs it - while starting NOTHING: no installer child,
@@ -61,10 +61,10 @@ out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null)
 [[ -z "$out" ]] || fail "active front door must be silent, got: $out"
 pass "active front door -> silent"
 
-# --- Case 2: fno-py only (fno exists but has no `mux` verb) -> CONSENT NOTICE --
+# --- Case 2: fno-py only (fno exists but has no `mux` command) -> CONSENT NOTICE --
 cat > "$FAKEBIN/fno" <<'FAKE'
 #!/usr/bin/env bash
-# Mimics the Python `fno-py`: any mux verb is "No such command".
+# Mimics the Python `fno-py`: any mux command is "No such command".
 echo "No such command 'mux'." >&2
 exit 2
 FAKE
@@ -107,14 +107,14 @@ FAKE
 chmod +x "$EMPTY_HOME/.cargo/bin/fno"
 out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null)
 grep -q "Ask the user first" <<<"$out" || fail "known-dir non-door fno must fall through to the notice, got: $out"
-pass "fno in ~/.cargo/bin without a mux verb -> consent notice"
+pass "fno in ~/.cargo/bin without a mux command -> consent notice"
 rm -rf "$EMPTY_HOME/.cargo"
 
 # --- Case 4: wedged mux socket -> BOUNDED and SILENT --------------------------
 # This hook probes a socket at SessionStart, so an unbounded probe stalls every
 # session start. On a host with no coreutils timeout(1) it had no bound at all.
 # A wedged socket also PROVES the Rust front door is present (fno-py has no
-# `mux` verb and fails fast), so the correct behavior is silence, not a notice
+# `mux` command and fails fast), so the correct behavior is silence, not a notice
 # telling the user to install what they already have.
 cat > "$FAKEBIN/fno" <<'FAKE'
 #!/usr/bin/env bash

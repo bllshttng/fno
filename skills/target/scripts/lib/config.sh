@@ -67,7 +67,7 @@ LEGACY_CONFIG="${LEGACY_CONFIG:-.fno/config.yaml}"
 # The plans-dir keys (plans.focused_path, plans.full_path) answer from the Rust
 # plans_path chain, not a bash tier walk: `fno do plan path` renders one probe
 # path through that chain (plansDirectory -> plans_dir, the single owner of
-# where plans live - see hooks/helpers/plans-dir.sh, which rides the same verb)
+# where plans live - see hooks/helpers/plans-dir.sh, which rides the same command)
 # and we take its dirname. Both keys name the one dir the chain resolves; the
 # flat/full split is a legacy spelling. Prints nothing and returns non-zero
 # when fno is absent or the chain cannot answer, so the caller falls back to

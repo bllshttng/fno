@@ -42,7 +42,7 @@ def _invoke(runner: CliRunner, *args: str):
 def test_ac3_kind_send_projectless_error_names_real_flags(isolated, runner) -> None:
     """AC3: a --kind send from a project-less repo (no ``project`` key) fails
     naming ``--from-name``/``--from-self``, the flags ``mail send`` actually
-    has -- never the bare ``--from`` (which lives only on the inbox verbs)."""
+    has -- never the bare ``--from`` (which lives only on the inbox commands)."""
     scratch = isolated / "no-project"
     scratch.mkdir()
     # --to-project reaches the sender-identity resolution this AC tests; a bare

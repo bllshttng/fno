@@ -2,10 +2,10 @@
 
 ``guarded=True`` rides the server-side turn-taken interlock (EXIT_TARGET_NOT_IDLE,
 15): a mid-turn recipient refuses before any byte is written. It is kept as a
-real capability of the underlying ``fno mux pane send --guarded`` verb (the
+real capability of the underlying ``fno mux pane send --guarded`` command (the
 rerun caller still wants it -- refusing mid-turn is the conservative call for a
 rerun, unlike mail) but no mail-delivery caller opts into it any more: the
-guard was ``rerun_allowed``, borrowed from the rerun verb, and a busy claude
+guard was ``rerun_allowed``, borrowed from the rerun command, and a busy claude
 session actually enqueues an injected paste rather than corrupting its composer
 (measured, not inferred; see ``crates/fno/src/server.rs``), so refusing before
 any byte was written vetoed exactly the delivery this transport can make.
@@ -111,7 +111,7 @@ def _entry(session_id="me-session", harness="claude"):
 
 
 def _install_fake_run(monkeypatch, exit_codes):
-    """Stub ``subprocess.run`` to pop one exit code per ``fno mux pane`` verb and
+    """Stub ``subprocess.run`` to pop one exit code per ``fno mux pane`` command and
     record every argv. Also no-ops the paste->CR settle sleep."""
     calls: list[list[str]] = []
     # Captured before the patch below replaces subprocess.run process-wide: the
@@ -138,12 +138,12 @@ def _install_fake_run(monkeypatch, exit_codes):
 
 
 def _paste_call(calls):
-    """The stdin paste verb: ``... pane send <id> --stdin [...]``."""
+    """The stdin paste command: ``... pane send <id> --stdin [...]``."""
     return next(c for c in calls if "send" in c and "--stdin" in c)
 
 
-def _verbs(calls):
-    """The pane verb of each MUX pane call (argv[3]); non-mux subprocess calls
+def _commands(calls):
+    """The pane command of each MUX pane call (argv[3]); non-mux subprocess calls
     (git state-dir lookups, etc.) are ignored."""
     return [c[3] for c in calls if len(c) > 3 and c[1:3] == ["mux", "pane"]]
 
@@ -166,7 +166,7 @@ def test_unguarded_follow_up_omits_the_flag_and_holds_claim(monkeypatch):
     calls = _install_fake_run(monkeypatch, [0, 0, 0, 0])
     assert dispatch._mux_pane_send(_entry(), "hi", guarded=False) is True
     assert "--guarded" not in _paste_call(calls)
-    assert _verbs(calls) == ["claim", "send", "send", "release"]
+    assert _commands(calls) == ["claim", "send", "send", "release"]
 
 
 def test_mail_delivery_bytes_written_without_confirming_content_reports_false(
@@ -265,4 +265,4 @@ def test_non_claude_recipient_refuses_unpinned_submit_contract(monkeypatch):
 
     entry = _entry(harness="opencode")
     assert dispatch._mux_pane_send(entry, "hi", guarded=False, confirm=True) is False
-    assert _verbs(calls) == []
+    assert _commands(calls) == []

@@ -1226,13 +1226,13 @@ def release_task_claim_at_boundary(node: str, task: str, outcome: str) -> bool:
     the give-back would release a finished task's claim mid-flight. Non-fatal
     by the same contract as the emit itself: one stderr note and False on any
     failure, never an exception. A give-back by a caller that is not the
-    holder is refused (exit 3) by the verb; that refusal lands here as the
+    holder is refused (exit 3) by the command; that refusal lands here as the
     same non-fatal note.
     """
     if outcome in _TERMINAL_OUTCOMES:
-        status_verb = "done"
+        status_command = "done"
     elif outcome in _GIVEBACK_OUTCOMES:
-        status_verb = "pending"
+        status_command = "pending"
     else:
         print(
             f"orchestrator: note: unknown task outcome {outcome!r}; task claim "
@@ -1240,7 +1240,7 @@ def release_task_claim_at_boundary(node: str, task: str, outcome: str) -> bool:
             file=sys.stderr,
         )
         return False
-    argv = ["fno", "backlog", "task", "update", node, task, "--status", status_verb]
+    argv = ["fno", "backlog", "task", "update", node, task, "--status", status_command]
     return _shell_fno(argv, "task claim settle")
 
 
@@ -1810,7 +1810,7 @@ if __name__ == "__main__":
             state_path = sys.argv[state_idx + 1]
             completed_tasks = get_completed_tasks_from_state(state_path)
             # --ready prints one JSON object on stdout; the informational
-            # lines stay on the human-facing verbs only.
+            # lines stay on the human-facing commands only.
             if "--ready" not in sys.argv:
                 print(f"Completed tasks from state: {completed_tasks}")
                 print()

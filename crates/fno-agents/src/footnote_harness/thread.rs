@@ -468,7 +468,7 @@ pub fn dispatch_thread(
         cmd.env_remove(var);
     }
     // SAFETY: setsid is async-signal-safe; it runs between fork and exec. The
-    // host leads its own group, which the stop verb signals.
+    // host leads its own group, which the stop command signals.
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();

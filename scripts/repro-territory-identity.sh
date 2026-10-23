@@ -68,9 +68,9 @@ export FNO_CONFIG="$FIXTURE/.fno/config.toml"
 # reader from load_settings); redirect it too so the real machine's workspace
 # map cannot leak into the fixture.
 export FNO_GLOBAL_SETTINGS_PATH="$FIXTURE/.fno/settings.yaml"
-# The binary the feed verbs run through, built from this tree. Pin it for the
+# The binary the feed commands run through, built from this tree. Pin it for the
 # Python passthroughs too: resolve_binary() would otherwise find the deployed
-# binary, which predates the territory verbs and answers "unknown verb".
+# binary, which predates the territory commands and answers "unknown command".
 AGENTS_BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
 [ -x "$AGENTS_BIN" ] || AGENTS_BIN=$(command -v fno-agents) || fail "fno-agents binary required (cargo build -p fno-agents)"
 export FNO_AGENTS_BIN="$AGENTS_BIN"
@@ -170,7 +170,7 @@ print("fixture claims written under", root)
 PYEOF
 
 echo "== 1. resolver =="
-RESOLVER=$( (cd "$FIXTURE" && "$AGENTS_BIN" active-backlog-receipt) ) || fail "resolver verb"
+RESOLVER=$( (cd "$FIXTURE" && "$AGENTS_BIN" active-backlog-receipt) ) || fail "resolver command"
 echo "$RESOLVER" | python3 -c '
 import json, sys
 reading = json.load(sys.stdin)

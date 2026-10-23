@@ -2,7 +2,7 @@
 
 A merged PR is closing evidence for an ARTIFACT, not for a PLAN. ``resolve_promise_evidence``
 adds one condition to the existing close gate - "did the plan's declared work
-all ship" - consulted by all three close verbs (``cmd_done``,
+all ship" - consulted by all three close commands (``cmd_done``,
 ``cmd_reconcile``, ``fno done``) so a node can never close through a second,
 ungated path.
 
@@ -14,9 +14,9 @@ structure and would false-positive identically to a half-ship, parking every
 such node on autonomous /target. A gate that only fires on an explicit promise
 cannot false-positive.
 
-The load-bearing test is the three-verb assertion: a guard landed on only one
+The load-bearing test is the three-command assertion: a guard landed on only one
 of the three close paths is the exact decorative-guard defect this feature
-exists to end, so the refusal is exercised against each verb independently.
+exists to end, so the refusal is exercised against each command independently.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def _node(g: Path, node_id: str) -> dict:
 
 
 def _merged(monkeypatch, *, target="both"):
-    """Point both done verbs' gh seams at MERGED."""
+    """Point both done commands' gh seams at MERGED."""
     from fno.graph._reconcile import PrMergeState
     import fno.graph.cli as graph_cli
     import fno.done.cli as done_cli
@@ -281,7 +281,7 @@ def test_condition_d_only_the_closing_nodes_rows_count(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # condition E - open prove-it FAIL on the node's plan artifacts
 # ---------------------------------------------------------------------------
-# The verdict_reader seam returns the verb's payload ({read_at, rows,
+# The verdict_reader seam returns the command's payload ({read_at, rows,
 # unreadable}); the real reader shells fno-agents prove-it-verdicts, which the
 # module-wide hermetic fixture pins empty.
 
@@ -467,7 +467,7 @@ def test_condition_c_nonretryable_read_refuses(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# THE THREE-VERB ASSERTION: a declared shortfall refuses on each close path
+# THE THREE-COMMAND ASSERTION: a declared shortfall refuses on each close path
 # ---------------------------------------------------------------------------
 
 
@@ -556,14 +556,14 @@ def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, mon
 
 
 # ---------------------------------------------------------------------------
-# condition D through the verbs (carve-out ledger) + --force bypass
+# condition D through the commands (carve-out ledger) + --force bypass
 # ---------------------------------------------------------------------------
 
 
 def test_condition_D_refuses_on_done_and_the_door(routed, tmp_path, monkeypatch):
     """A deferred carve-out holds the node open on every close path - the
     one-of-N decorative-guard shape this feature exists to end (a gate on a
-    single verb would let a second path close around it)."""
+    single command would let a second path close around it)."""
     import fno.graph._reconcile as rec
 
     plan = _write_plan(tmp_path / "one-wave.md", waves=1)
@@ -605,7 +605,7 @@ def test_condition_D_refuses_on_done_and_the_door(routed, tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# --force bypass + ship count (condition C) through the verbs
+# --force bypass + ship count (condition C) through the commands
 # ---------------------------------------------------------------------------
 
 

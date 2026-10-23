@@ -1,4 +1,4 @@
-"""Thin binding to the fno-agents binary's name verbs (vocabulary owner:
+"""Thin binding to the fno-agents binary's name commands (vocabulary owner:
 crates/fno-agents/src/naming.rs). Argv marshalling and result parsing only."""
 
 import json
@@ -8,7 +8,7 @@ import subprocess
 from collections import namedtuple
 from functools import lru_cache
 
-from fno.config._dispatch_verbs import parse_verb_token
+from fno.config._dispatch_commands import parse_command_token
 
 MAX_LEN = 64
 SLUG_CAP = 30
@@ -19,21 +19,21 @@ class AgentNameError(ValueError):
 class BridgeUsageError(ValueError):
     pass
 
-DispatchName = namedtuple("DispatchName", "name source verb node tail")
+DispatchName = namedtuple("DispatchName", "name source command node tail")
 
-def _run(verb, args, stdin=None):
+def _run(command, args, stdin=None):
     from fno import rust_binary
 
     binary = rust_binary.resolve_binary()
     if binary is None:
         raise AgentNameError("no fno-agents binary found; run `fno doctor update`")
     proc = subprocess.run(
-        [str(binary), verb, *args], input=stdin, capture_output=True, text=True,
+        [str(binary), command, *args], input=stdin, capture_output=True, text=True,
         timeout=30, env={**os.environ, "FNO_AGENTS_RUNTIME": "rust"},
     )
     if proc.returncode:
         msg = (proc.stderr or "binary failed").strip().removeprefix("error: ")
-        if verb != "name-mint" or proc.returncode == 3:
+        if command != "name-mint" or proc.returncode == 3:
             raise AgentNameError(msg)
         raise BridgeUsageError(msg)
     return proc.stdout
@@ -52,17 +52,17 @@ def _codes():
         raw = json.loads(_run("name-codes", ["--json"]))
     except json.JSONDecodeError as exc:
         raise AgentNameError(f"name-codes payload unparsable: the fno-agents binary is stale ({exc})")
-    return (frozenset(raw["sources"]), frozenset(raw["verbs"]), dict(raw["word_codes"]),
-            tuple((r["site"], r["source"], r["verb"]) for r in raw["provenance"]))
+    return (frozenset(raw["sources"]), frozenset(raw["verbs"]), dict(raw["word_codes"]),  # verb-wording: allow
+            tuple((r["site"], r["source"], r["verb"]) for r in raw["provenance"]))  # verb-wording: allow
 
 def dispatch_sources():
     return _codes()[0]
 
-def dispatch_verbs():
+def dispatch_commands():
     return _codes()[1]
 
-def accepted_verb_words():
-    """The work-verb words the name mint resolves (naming-codes.yaml)."""
+def accepted_command_words():
+    """The work-command words the name mint resolves (naming-codes.yaml)."""
     return sorted(_codes()[2])
 
 def provenance_rows():
@@ -86,16 +86,16 @@ def agent_name(prefix, node_id, *, slug=None, qualifier=None, discriminator=None
     return _mint(prefix, node_id, *_flags(("--slug", slug), ("--qualifier", qualifier),
                                           ("--discriminator", discriminator), ("--model", model)))
 
-def verb_code_for(word):
+def command_code_for(word):
     w = (word or "").strip()
-    parsed = parse_verb_token(w) if w else None
+    parsed = parse_command_token(w) if w else None
     v = (parsed[0] if parsed else w) or "target"
     code = _codes()[2].get(v)
     if not code:
-        raise AgentNameError(f"unknown dispatch verb {word!r}")
+        raise AgentNameError(f"unknown dispatch command {word!r}")
     return code
 
-def dispatch_agent_name(source, verb, identity, *, slug=None, qualifier=None, discriminator=None, model=None):
+def dispatch_agent_name(source, command, identity, *, slug=None, qualifier=None, discriminator=None, model=None):
     # An identity longer than the runtime contract can never fit: refuse in
     # process, before any subprocess is spent on a guaranteed refusal.
     if len((identity or "").strip()) > MAX_LEN:
@@ -103,9 +103,9 @@ def dispatch_agent_name(source, verb, identity, *, slug=None, qualifier=None, di
             f"required agent-name identity is {len((identity or '').strip())} chars, "
             f"over the {MAX_LEN}-char runtime limit"
         )
-    if (verb or "").strip() not in dispatch_verbs():
-        raise AgentNameError(f"unknown dispatch verb {verb!r}")
-    return _mint(*(_opt_pos(source, "--source")), "--verb", verb, identity,
+    if (command or "").strip() not in dispatch_commands():
+        raise AgentNameError(f"unknown dispatch command {command!r}")
+    return _mint(*(_opt_pos(source, "--source")), "--command", command, identity,
                  *_flags(("--slug", slug), ("--qualifier", qualifier), ("--discriminator", discriminator),
                          ("--model", model)))
 
@@ -113,22 +113,22 @@ def worker_name(node=None, *, seed=None, slug=None):
     """``t-<short slug>``, a target worker's default name; an empty node reads a ``/target`` seed."""
     return _mint("--worker", node or "", *_flags(("--seed", seed), ("--slug", slug)))
 
-def mint_or_none(source, verb, identity, **kwargs):
+def mint_or_none(source, command, identity, **kwargs):
     """The mint for degradable seams: a stale/missing binary reads as None."""
     try:
-        return dispatch_agent_name(source, verb, identity, **kwargs)
+        return dispatch_agent_name(source, command, identity, **kwargs)
     except (AgentNameError, BridgeUsageError):
         return None
 
 def bridge_name(prefix, node_id, *, slug=None, qualifier=None, discriminator=None,
-                source=None, verb=None, model=None):
-    # Usage refusals (both forms, missing verb/prefix) are the binary's texts:
+                source=None, command=None, model=None):
+    # Usage refusals (both forms, missing command/prefix) are the binary's texts:
     # _mint maps its exit 2 to BridgeUsageError, exit 3 to AgentNameError. A
-    # missing --verb is forwarded as absent so the binary names the refusal.
-    if verb or source:
+    # missing --command is forwarded as absent so the binary names the refusal.
+    if command or source:
         args = list(_opt_pos(source, "--source"))
-        if verb:
-            args += ["--verb", verb if verb in dispatch_verbs() else verb_code_for(verb)]
+        if command:
+            args += ["--command", command if command in dispatch_commands() else command_code_for(command)]
         # A positional prefix rides too: the binary refuses the both-forms pair.
         pos = [prefix, node_id] if (prefix or "").strip() else [node_id]
         return _mint(*args, *pos,

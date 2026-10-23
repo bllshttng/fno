@@ -57,7 +57,7 @@ done
 [ -n "$FNO_PYTHON" ] || { fail "no interpreter can import fno.cli (cd cli && uv sync)"; exit 1; }
 # The vocabulary lives in the fno-agents binary; the sandbox stub below pins
 # FNO_AGENTS_BIN, so capture the REAL binary now for the stub to delegate the
-# naming verbs to (naming is the contract under test, not a scenario input).
+# naming commands to (naming is the contract under test, not a scenario input).
 # PATH is stripped for the resolution so a stale PATH-installed binary cannot
 # shadow the repo's own cargo build.
 REAL_AGENTS_BIN="$(env PATH='/usr/bin:/bin' PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.resolve_binary(); print(b or "")')"
@@ -115,7 +115,7 @@ acquire_claim('node:${NODE_ID}', holder='target-session:${SID}',
 # requires before it emits delegated.
 cat > "${BIN_DIR}/fno" <<ABIEOF
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "\${1:-} \${2:-}" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
 esac

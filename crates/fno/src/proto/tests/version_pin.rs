@@ -46,9 +46,9 @@ fn thread_pane_placement_field_is_additive() {
     // placement and behaves exactly as v65 did. The default round-trips
     // absent, so the wire shape of every existing caller is unchanged.
     let pre_v66 = r#"{"ThreadPane":{"name":"w2","portal":1}}"#;
-    let verb: ControlVerb = serde_json::from_str(pre_v66).unwrap();
-    match verb {
-        ControlVerb::ThreadPane {
+    let command: ControlCommand = serde_json::from_str(pre_v66).unwrap();
+    match command {
+        ControlCommand::ThreadPane {
             name,
             portal,
             placement,
@@ -60,7 +60,7 @@ fn thread_pane_placement_field_is_additive() {
         other => panic!("wrong variant: {other:?}"),
     }
     // The new field round-trips when present.
-    let verb = ControlVerb::ThreadPane {
+    let command = ControlCommand::ThreadPane {
         name: "w2".into(),
         portal: Some(1),
         placement: PanePlacement {
@@ -69,29 +69,31 @@ fn thread_pane_placement_field_is_additive() {
             ..Default::default()
         },
     };
-    let back: ControlVerb = serde_json::from_str(&serde_json::to_string(&verb).unwrap()).unwrap();
-    assert_eq!(verb, back);
+    let back: ControlCommand =
+        serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
+    assert_eq!(command, back);
 }
 
 #[test]
-fn thread_reseat_verb_decodes_both_portal_forms() {
-    // (v72) A pre-v72 client never sends ThreadReseat; the verb is NEW, so
+fn thread_reseat_command_decodes_both_portal_forms() {
+    // (v72) A pre-v72 client never sends ThreadReseat; the command is NEW, so
     // the pin is its wire shape: the bare pane form (portal defaults) and
     // the explicit index form must both decode and round-trip.
-    let bare: ControlVerb = serde_json::from_str(r#"{"ThreadReseat":{"pane":42}}"#).unwrap();
+    let bare: ControlCommand = serde_json::from_str(r#"{"ThreadReseat":{"pane":42}}"#).unwrap();
     match bare {
-        ControlVerb::ThreadReseat { pane, portal } => {
+        ControlCommand::ThreadReseat { pane, portal } => {
             assert_eq!(pane, 42);
             assert_eq!(portal, None, "an absent index takes the next free portal");
         }
         other => panic!("wrong variant: {other:?}"),
     }
-    let verb = ControlVerb::ThreadReseat {
+    let command = ControlCommand::ThreadReseat {
         pane: 42,
         portal: Some(3),
     };
-    let back: ControlVerb = serde_json::from_str(&serde_json::to_string(&verb).unwrap()).unwrap();
-    assert_eq!(verb, back);
+    let back: ControlCommand =
+        serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();
+    assert_eq!(command, back);
 }
 
 #[test]

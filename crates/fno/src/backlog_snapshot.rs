@@ -18,7 +18,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-/// The `fno board-render` verb: read the request from stdin
+/// The `fno board-render` command: read the request from stdin
 /// (`{"targets": [{"path", "scope"}], "vault"}`), gather once, write every
 /// target, print a JSON receipt. Exit 0 only when every target wrote; a
 /// failed target exits 1 so the keeper's render pass withholds its
@@ -296,7 +296,7 @@ fn render_one(
     let ids: Vec<String> = flat.iter().map(|c| c.id.clone()).collect();
     // A BTreeMap, not a HashMap: serde walks a HashMap in its randomized
     // order, so two renders of the same graph would embed the node views in
-    // different orders and the publish verb's unchanged check would never
+    // different orders and the publish command's unchanged check would never
     // fire. Sorted by id, unchanged rows give byte-identical pages.
     let mut nodes: BTreeMap<String, Value> = BTreeMap::new();
     for id in &ids {
@@ -386,7 +386,7 @@ fn agents_from_registry(raw: &str, now: u64) -> Vec<crate::proto::AgentRow> {
 
 /// The payload's top-level fields the public page may carry. `vault` is
 /// private-mode only, and `generated_at` is dropped so unchanged rows give
-/// byte-identical pages (the publish verb's unchanged check compares file
+/// byte-identical pages (the publish command's unchanged check compares file
 /// bytes).
 const PUBLIC_PAYLOAD_FIELDS: &[&str] = &[
     "schema", "public", "backend", "scope", "flow", "facets", "columns", "cards", "nodes",
@@ -765,7 +765,7 @@ fn percent_encode(text: &str, safe: &str) -> String {
 }
 
 /// `fno board-render` claims its name lexically, beside the other native
-/// front verbs: the argv `board-render ...` never forwards to Python.
+/// front commands: the argv `board-render ...` never forwards to Python.
 pub fn classify(args: &[std::ffi::OsString]) -> Option<Vec<String>> {
     if args.first()?.to_str()? != "board-render" {
         return None;
@@ -932,7 +932,7 @@ mod tests {
         assert!(agents_from_registry("not json at all", 1000).is_empty());
     }
 
-    /// The lexical classifier: the verb name claims itself, every other
+    /// The lexical classifier: the command name claims itself, every other
     /// first word forwards.
     #[test]
     fn board_render_claims_its_name() {

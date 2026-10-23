@@ -1,6 +1,6 @@
 //! How a pane relaunch carries its identity : the `mux pane run`
 //! argv builder and the `env(1)` assignment run that names the relaunched
-//! worker. Extracted from client_verbs (over the file budget, shrink-only):
+//! worker. Extracted from client_commands (over the file budget, shrink-only):
 //! the code the identity change touched moved here with the change.
 
 /// The `env(1)` assignment run that carries a row's mesh identity into a
@@ -59,7 +59,7 @@ fn worker_token(name: &str) -> Option<&str> {
 /// Build the `mux pane run` argv (everything after the `fno` binary) that
 /// relaunches `claude_argv` on a new pane in `session` at `cwd`. The `--` fence
 /// keeps a `--resume <uuid>` (or any flag-shaped inner arg) out of the mux
-/// parser, so the resumed command is transported verbatim - the one-verb form
+/// parser, so the resumed command is transported verbatim - the one-command form
 /// of the manual `fno mux pane run 'cd <wt> && exec claude --resume <uuid>'`
 /// recovery recipe (D3). `identity` rides as an `env(1)` assignment
 /// run INSIDE the fence (W1): the server's `agent_self_from_argv`
@@ -103,7 +103,7 @@ pub(crate) fn mux_pane_run_argv(
 use std::path::Path;
 use std::time::Duration;
 
-use crate::client_verbs::shlex_quote;
+use crate::client_commands::shlex_quote;
 
 /// How long a relaunched keeper gets to prove the worker stayed up (mirrors
 /// `_BINDING_WINDOW_S` in mux_spawn.py). It fits inside the watchdog's 180s
@@ -120,7 +120,7 @@ pub(crate) const PANE_PROOF_WINDOW: Duration = Duration::from_secs(8);
 /// the form, then fails to render it: a malformed token template.
 ///
 /// The grant and the directory pin ride ONE `cwd` here, which is what the CLI
-/// verb lane wants (it validates the cwd exists before launching). The mux
+/// command lane wants (it validates the cwd exists before launching). The mux
 /// gesture needs them SPLIT: the grant follows the directory the worker will
 /// actually get, while `--cd` must not pin a fallback directory (AC3-GONE),
 /// so it calls [`build_resume_argv_split`] directly.
@@ -221,7 +221,7 @@ pub(crate) fn build_resume_argv_tokens_split(
             // worker from a yolo one, and an unconditional bypass would resume
             // every bounded worker with approvals off. See the Python twin.
             // Right after the grant, so the token order matches the Python
-            // twin exactly. `test_rust_verb_parity` compares the two argvs
+            // twin exactly. `test_rust_command_parity` compares the two argvs
             // element for element, so "both are globals" is not enough here.
             // The split caller (the mux gesture) omits `--cd` when it passes
             // `pin_cd == false`: the worker lands on a fallback directory and
@@ -276,8 +276,8 @@ pub(crate) fn print_relaunch_command(
     }
 }
 
-/// The `fno-agents resume-argv` verb: render one harness's
-/// interactive-resume argv through the ONE builder the CLI verb lane uses,
+/// The `fno-agents resume-argv` command: render one harness's
+/// interactive-resume argv through the ONE builder the CLI command lane uses,
 /// so the mux gesture consumes the same argv instead of re-deriving the
 /// declared form and losing the codex writable-roots grant. `--cwd` supplies
 /// the grant (and the `--cd` value); `--cd` pins the directory separately,
@@ -318,7 +318,7 @@ pub fn run_resume_argv(rest: &[String]) -> i32 {
     }
     let harness = positional[0];
     let session_id = positional[1];
-    // this verb's stdout is a recipe the mux gesture pastes into a
+    // this command's stdout is a recipe the mux gesture pastes into a
     // pane, and a pane spawn has no secret-free channel for a route's key
     // (the claude verdict prefix puts `env K=V` on the argv, visible in ps).
     // A routed codex row therefore refuses here by name instead of printing
@@ -327,7 +327,8 @@ pub fn run_resume_argv(rest: &[String]) -> i32 {
     // nothing.
     if harness == "codex" {
         if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
-            let entries = match crate::client_verbs::read_registry_entries(&home.registry_json()) {
+            let entries = match crate::client_commands::read_registry_entries(&home.registry_json())
+            {
                 Ok(e) => e,
                 Err(_) => Vec::new(),
             };
@@ -392,7 +393,7 @@ mod tests {
 
     #[test]
     fn mux_pane_run_argv_fences_the_resumed_command() {
-        // D3 + W1: the one-verb form of the manual recovery now
+        // D3 + W1: the one-command form of the manual recovery now
         // carries the row's identity past the fence, in the same `env(1)`
         // assignment-run shape `_mesh_env_wrapper` writes at spawn and
         // `agent_self_from_argv` reads for the pane title. The `--` fence

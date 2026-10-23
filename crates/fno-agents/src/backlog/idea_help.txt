@@ -55,5 +55,5 @@ Options:
                           the flag.
   --help                  Show this message and exit.
 
-  Paired verb: `fno backlog remove <id>` deletes it (hidden; run its own
+  Paired command: `fno backlog remove <id>` deletes it (hidden; run its own
   --help).

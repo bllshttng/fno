@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// a second vote from the same voter. The voter is the record's own
 /// `voter_key`, else its `session_id`. Returns `{appended, error, reason}`
 /// with reason missing, duplicate or unidentified: the keeper op, the
-/// native verb and the creation vote all answer from this one body.
+/// native command and the creation vote all answer from this one body.
 pub(crate) fn append_refusing_duplicate(
     entries: &mut [Value],
     node_id: &str,

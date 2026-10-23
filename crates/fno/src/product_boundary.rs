@@ -18,7 +18,7 @@ pub const FNO_BIN: &str = "fno";
 pub const AGENT_RUNTIME_BIN: &str = "fno-agents";
 pub const AGENT_DAEMON_BIN: &str = "fno-agents-daemon";
 pub const GRAPH_WORKER_BIN: &str = "fno-agents-worker";
-/// The Python porcelain the native mux forwards delivery verbs to.
+/// The Python porcelain the native mux forwards delivery commands to.
 pub const PYTHON_CLI: &str = "python3 (fno cli)";
 
 /// How an optional component presented itself when observed.
@@ -57,7 +57,7 @@ pub enum Surface {
     /// Attach-time overlays (digest, feed, org, needs) and the agent
     /// lifecycle views: shell out to the runtime binary.
     AgentLifecycle,
-    /// Keeper-backed graph operations and the verbs the native mux forwards
+    /// Keeper-backed graph operations and the commands the native mux forwards
     /// to the Python porcelain.
     DeliveryBackedView,
 }
@@ -203,7 +203,7 @@ pub(crate) fn graph_worker_observation_at(now: u64) -> Observation {
     }
 }
 
-/// The Python backend is deliberately UNMEASURED: native workspace verbs
+/// The Python backend is deliberately UNMEASURED: native workspace commands
 /// never invoke it, and probing an interpreter from a read-only diagnostic
 /// would spend exactly the kind of execution this module exists to avoid.
 pub fn python_cli_observation() -> Observation {
@@ -215,7 +215,7 @@ pub(crate) fn python_cli_observation_at(now: u64) -> Observation {
         component: PYTHON_CLI,
         requirement: "the non-backlog porcelain the mux still forwards (delivery, config, the do namespace); the backlog namespace is Rust-only",
         availability: Availability::Unmeasured,
-        reason: "native workspace verbs never invoke it; not probed".into(),
+        reason: "native workspace commands never invoke it; not probed".into(),
         observed_at: now,
     }
 }

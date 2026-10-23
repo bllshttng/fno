@@ -1,6 +1,6 @@
 //! One classifier answers "can this persisted squad member come
 //! back?", shared by the startup restore loop and the `workspace restore`
-//! verb so both paths can never disagree about who is a corpse.
+//! command so both paths can never disagree about who is a corpse.
 
 use std::collections::{HashMap, HashSet};
 

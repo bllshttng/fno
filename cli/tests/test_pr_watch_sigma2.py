@@ -79,8 +79,8 @@ def _make_tick_deps(
             return obs_map[candidate.pr_number]
         return _make_obs(pr_number=candidate.pr_number)
 
-    def fake_fire_skill(verb, pr_number, repo_dir, *, runner=None, model=None, env_seam=None):
-        fired.append({"verb": verb, "pr": pr_number})
+    def fake_fire_skill(command, pr_number, repo_dir, *, runner=None, model=None, env_seam=None):
+        fired.append({"verb": command, "pr": pr_number})
         if fire_ok:
             return DispatchResult(ok=True, rc=0, is_error=False, raw='{"is_error":false}')
         return DispatchResult(ok=False, rc=1, is_error=True, raw='{"is_error":true}')

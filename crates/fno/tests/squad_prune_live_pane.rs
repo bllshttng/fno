@@ -19,7 +19,7 @@ mod common;
 use common::{spawn_server, FakeClient, Scratch};
 
 /// `YYYY-MM-DDThh:mm:ssZ` for now, so a fixture can land INSIDE the one-hour
-/// grace window against a wall clock the CLI reads for itself. The verb takes no
+/// grace window against a wall clock the CLI reads for itself. The command takes no
 /// clock injection, so the stamp has to be real.
 fn now_stamp() -> String {
     let out = std::process::Command::new("date")

@@ -3,7 +3,7 @@
 //! `_force_release`) and the do-row close/rollback it drives
 //! (`core._stamp_do_on_release`, `core._rollback_do_on_release`).
 //!
-//! One command, three modes that were three verbs: the default releases a
+//! One command, three modes that were three commands: the default releases a
 //! claim we hold, `--lane <id>` releases a lane slot, `--force` drops a claim
 //! regardless of owner. Output contract: human lines by default, `--json`
 //! for the operator receipt `{"key", "released"}`. The engine leg

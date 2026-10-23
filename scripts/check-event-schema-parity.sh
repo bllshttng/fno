@@ -413,12 +413,12 @@ dual_owner_kinds = {
     # Rust known-kind table carries it so the daemon accepts the row, the way
     # the evals pair above does.
     "merge_cleanup_skipped",
-    # lead_checkin: the Rust emit_row is the one writer (the verb's beat plus
+    # lead_checkin: the Rust emit_row is the one writer (the command's beat plus
     # the lead stop hook's missed-beat row); the Python hand leg
     # (`fno doctor event emit`) still writes rows until its port, and
     # schema.yaml validates both spellings.
     "lead_checkin",
-    # lead_term: the Rust lead-shape/loop-check verbs are the one writer
+    # lead_term: the Rust lead-shape/loop-check commands are the one writer
     # (declare/extend and the Stop-hook gate's reached/unreadable reading);
     # the Python hand leg (`fno doctor event emit`) can still write a row,
     # the same generic-emit shape as lead_checkin above.
@@ -472,7 +472,7 @@ dual_owner_kinds = {
     "reconcile_done",
     "startup_reconcile_done",
     # agent_mail_drained: the prompt-submit drain boundary moved from the
-    # Python mail-notify verb to the Rust mail-notify-self verb; both
+    # Python mail-notify command to the Rust mail-notify-self command; both
     # emitters run until the Python leg retires.
     "agent_mail_drained",
     # review_invocation + review_attestation: the review send/verdict family.

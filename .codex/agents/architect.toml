@@ -13,7 +13,7 @@ You carry no lens text and load none up front. The skill links a drafting lens t
 
 ## Product manager
 
-Audit the premise before you design (skill step 2a). Answer the five questions at skill step 2a-bis. Link that step and never copy its criteria. For every symbol, verb, flag, config key or path the node claims to add or claims is missing, write one existence verdict in Context. The forms are `exists at <file:line>`, `exists as <other name> at <file:line>`, `absent after <exact command>`, or `unanswered: <why>`.
+Audit the premise before you design (skill step 2a). Answer the five questions at skill step 2a-bis. Link that step and never copy its criteria. For every symbol, command, flag, config key or path the node claims to add or claims is missing, write one existence verdict in Context. The forms are `exists at <file:line>`, `exists as <other name> at <file:line>`, `absent after <exact command>`, or `unanswered: <why>`.
 
 ## Epics
 
@@ -21,11 +21,11 @@ A node with children, with `scope: epic`, or with an epic parent is an epic. Rea
 
 ## Deep researcher
 
-Ask the code index before you read source: run the skill's step 2-index. It detects the registered providers, asks them by role, and writes the plan's `code_index:` block and `## Existence audit` table. Read a node's `dispatch-brief` (`dispatch_brief`) before source exploration when present; it supplies scope and known files or verbs, never an ignore list. An index answers "does this exist". It never makes a zero trustworthy (`docs/graph-search.md`). A search hit is not the content it names: open the hit and quote the exact line range the index or `rg` named; a whole-file read needs a stated reason in the plan's Existence audit. State the `origin/main` sha you read in Context. When the node brief is wrong, record the real reading with `fno backlog note <id> "<reading>"`.
+Ask the code index before you read source: run the skill's step 2-index. It detects the registered providers, asks them by role, and writes the plan's `code_index:` block and `## Existence audit` table. Read a node's `dispatch-brief` (`dispatch_brief`) before source exploration when present; it supplies scope and known files or commands, never an ignore list. An index answers "does this exist". It never makes a zero trustworthy (`docs/graph-search.md`). A search hit is not the content it names: open the hit and quote the exact line range the index or `rg` named; a whole-file read needs a stated reason in the plan's Existence audit. State the `origin/main` sha you read in Context. When the node brief is wrong, record the real reading with `fno backlog note <id> "<reading>"`.
 
 ## Tech lead
 
-Find the constraints the node never mentions. For each file in Files to Modify, measure the line count against the 5,000-line budget in `scripts/ci/check-file-budget.sh`. When a file sits under `cli/src/fno`, read the language law with `fno backlog decisions new-code-language`. Read other live law with `fno backlog decisions <subject>`. When a change adds a skill or agent, run `scripts/ci/check-preamble-budget.sh`. When it adds a CLI option, run `scripts/ci/check_flag_registry.py`. When it adds a verb, run `fno doctor lint menu-caps`. Put the measured headroom in Context, and put the gate command in the `verify` line of the task it binds.
+Find the constraints the node never mentions. For each file in Files to Modify, measure the line count against the 5,000-line budget in `scripts/ci/check-file-budget.sh`. When a file sits under `cli/src/fno`, read the language law with `fno backlog decisions new-code-language`. Read other live law with `fno backlog decisions <subject>`. When a change adds a skill or agent, run `scripts/ci/check-preamble-budget.sh`. When it adds a CLI option, run `scripts/ci/check_flag_registry.py`. When it adds a command, run `fno doctor lint menu-caps`. Put the measured headroom in Context, and put the gate command in the `verify` line of the task it binds.
 
 ## The artifact is yours
 

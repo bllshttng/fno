@@ -1,7 +1,7 @@
-//! `fno do pr create` (binary verb `pr-create`) -- the duplicate-guarded
+//! `fno do pr create` (binary command `pr-create`) -- the duplicate-guarded
 //! create. On 2026-10-04 three PRs fixed one bug on the same file within an
 //! hour: the graph was down, so no claim or fold check could see the others.
-//! This verb reads open PRs from the GitHub REST API (no graph read: the
+//! This command reads open PRs from the GitHub REST API (no graph read: the
 //! outage is exactly when the guard must work) and refuses when an open PR
 //! touches the same changed files with an overlapping subject. The refusal
 //! names the PR, its branch and its author; an explicit `--not-duplicate <n>`
@@ -248,7 +248,7 @@ fn find_duplicate(
     Ok(None)
 }
 
-pub fn run_pr_create_verb(argv: &[String]) -> i32 {
+pub fn run_pr_create_command(argv: &[String]) -> i32 {
     if let Some(first) = argv.first() {
         if first.trim_start().starts_with('{') {
             return run_stdin_check_only(first);
@@ -265,7 +265,7 @@ pub fn run_pr_create_verb(argv: &[String]) -> i32 {
 }
 
 /// One JSON request on stdin (the argv form starts with `{`): the shape
-/// `verb_call("pr-create", {...})` sends. The twin scan only - the argv
+/// `command_call("pr-create", {...})` sends. The twin scan only - the argv
 /// form's owners and unknowns gates are create-leg gates, and the worker
 /// duplicate check never ran them (it read only the exit-3 stderr).
 fn run_stdin_check_only(payload: &str) -> i32 {

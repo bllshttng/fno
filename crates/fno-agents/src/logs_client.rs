@@ -51,7 +51,7 @@ pub async fn follow(
         return 1;
     }
     // The ACK is bounded like every other client read (review): a
-    // wedged daemon accepts into the backlog and never answers, and this verb
+    // wedged daemon accepts into the backlog and never answers, and this command
     // must fail inside the window rather than hang - the STREAM below the ack
     // stays unbounded by design, it is the follow itself.
     let deadline = crate::client::response_deadline();

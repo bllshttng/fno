@@ -52,5 +52,5 @@ pub const RESTORE_NOT_RUN: u32 = 15;
 pub const TARGET_DND: u32 = 16;
 /// (v75) `RetireSession`'s durable half failed: the store write
 /// did not land, so the retirement is NOT durable and the caller retries
-/// the whole verb.
+/// the whole command.
 pub const STORE_WRITE_FAILED: u32 = 17;

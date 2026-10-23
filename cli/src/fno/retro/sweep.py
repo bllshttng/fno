@@ -12,7 +12,7 @@ sweep over the whole ledger, keyed off nothing but the ledger itself.
 
 Three dispositions, and the split between them is the whole feature. Filing one
 node per carve-out is WORSE than not harvesting: a ledger whose items are
-already tracked turns into a pile of duplicates that no verb can delete.
+already tracked turns into a pile of duplicates that no command can delete.
 
 ``resolve``
     An EXACT match proves the carve-out is already tracked: its cv-id appears
@@ -40,9 +40,9 @@ exists to prevent.
 
 Applying is MANUAL on purpose, though not for the reason this docstring used to
 give. It said there is no ``fno backlog delete`` so every node filed here is
-permanent. That was false: the verb is ``fno backlog remove`` and it has always
+permanent. That was false: the command is ``fno backlog remove`` and it has always
 existed. The claim appeared in three places and was repeated to an operator as
-fact, which is why the lifecycle-pairs gate now requires a correction verb to
+fact, which is why the lifecycle-pairs gate now requires a correction command to
 name itself where a caller reads.
 
 The manual default survives on narrower grounds: a background SessionStart hook
@@ -463,13 +463,13 @@ def render_sweep(report: SweepReport) -> list[str]:
             "carve-out sweep: FAILED to read the ledger; no count is available "
             "(this is NOT an empty ledger)"
         ]
-    verb = "applied" if report.applied else "dry run"
+    command = "applied" if report.applied else "dry run"
     counts = {
         d: len(report.by_disposition(d))
         for d in (DISPOSITION_FILE, DISPOSITION_RESOLVE, DISPOSITION_REVIEW)
     }
     lines.append(
-        f"carve-out sweep ({verb}): {len(report.items)} unharvested "
+        f"carve-out sweep ({command}): {len(report.items)} unharvested "
         f"-> {counts[DISPOSITION_FILE]} file, "
         f"{counts[DISPOSITION_RESOLVE]} already tracked, "
         f"{counts[DISPOSITION_REVIEW]} need a human look"

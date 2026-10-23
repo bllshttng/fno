@@ -19,8 +19,8 @@
 # that gets recorded.
 #
 # NEVER gate this on a team. `hooks/lead-postcompact-reinject.sh` gated on
-# `team_level`, a field a different verb writes, and exited 0 silently for
-# every lead in the fleet. The queue depth here is state the verb derives
+# `team_level`, a field a different command writes, and exited 0 silently for
+# every lead in the fleet. The queue depth here is state the command derives
 # for itself; a session with an empty queue is the steady state.
 #
 # Hook contract: stdout is appended to the session prompt; exit 0 always.
@@ -52,7 +52,7 @@ hook_overloaded && exit 0
 # skipped or expired under load serves the stale copy rather than nothing.
 # The window is one minute because an ack must retire the nag promptly:
 # depth a minute old is inside this hook's resolution - it reports a count,
-# never a verdict. No fingerprint: the verb resolves its own inputs.
+# never a verdict. No fingerprint: the command resolves its own inputs.
 session="$(cat 2>/dev/null | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 rc=0
 # Role audience: a worker session reads as no queue. Inside
@@ -93,7 +93,7 @@ import sys
 raw = sys.stdin.read()
 
 # Take the first object that LOOKS LIKE THIS PAYLOAD, not the first that
-# merely parses: the verb shares stdout with whatever preamble the deployed
+# merely parses: the command shares stdout with whatever preamble the deployed
 # fno prints, and a preamble can carry a brace. "depth" present is the
 # marker; an unreadable payload is a REPORT, never silence.
 payload = None

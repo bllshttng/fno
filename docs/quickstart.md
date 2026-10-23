@@ -58,4 +58,4 @@ When you want to approve the design and the plan before any code:
 
 ## Next
 
-[Workflows](workflows.md) maps each daily task to its verb.
+[Workflows](workflows.md) maps each daily task to its command.

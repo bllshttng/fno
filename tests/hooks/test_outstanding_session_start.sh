@@ -133,7 +133,7 @@ Never open an interactive question (AskUserQuestion) from a background or thread
 rm_cache
 set_fold "" 2
 out="$(run_hook)"
-check "an old deployed verb stays silent" "" "$out"
+check "an old deployed command stays silent" "" "$out"
 
 echo
 echo "Results: $pass passed, $fail failed"

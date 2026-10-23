@@ -13,7 +13,7 @@ A provider is one TOML file. Every key the detection reader consumes is one line
 ```toml
 schema = 1
 name = "codegraph"                  # ^[a-z0-9][a-z0-9-]*$; a later directory's file with the same name wins
-roles = ["symbol"]                  # open vocabulary; v1 uses symbol (symbols, verbs, flags, paths) and semantic (docs, prior art)
+roles = ["symbol"]                  # open vocabulary; v1 uses symbol (symbols, commands, flags, paths) and semantic (docs, prior art)
 detect = ".codegraph"               # repo-relative path; present means the index exists
 requires = "codegraph"              # executable on PATH; missing means present but unavailable
 ask = ["codegraph", "query", "--json", "-l", "5", "{term}"]
@@ -39,6 +39,6 @@ Detection reads three directories in order, and a later file with the same `name
 2. `~/.fno/code-index/providers/`
 3. `<repo>/.fno/code-index/providers/`
 
-Drop a file in one of the last two to add or override a provider. No config key, no verb, no restart. The next detection reads it.
+Drop a file in one of the last two to add or override a provider. No config key, no command, no restart. The next detection reads it.
 
 `refresh` is documentation for humans. fno never runs it. Keeping the index current is the provider's job and yours. Run `codegraph sync`, `graphify update .`, or install graphify's git hook. A plan states the freshness it read. A stale `absent` verdict is confirmed with a plain search before it is trusted.

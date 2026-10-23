@@ -4,7 +4,7 @@
     "spawn",
     "--name",
     "w4",
-    "/fno:nosuchverb x"
+    "/fno:nosuchcommand x"
   ],
   "config_toml": "",
   "env_node": null,
@@ -13,12 +13,12 @@
       "spawn",
       "--name",
       "w4",
-      "/fno:nosuchverb x"
+      "/fno:nosuchcommand x"
     ],
     "exit": 2,
     "journal": null,
     "stderr": [
-      "fno agents spawn: seed '/fno:nosuchverb x' names verb-shaped token 'nosuchverb' but no shipped footnote verb or configured profile answers it",
+      "fno agents spawn: seed '/fno:nosuchcommand x' names command-shaped token 'nosuchcommand' but no shipped footnote command or configured profile answers it",
       "fno agents spawn: refusing; no worker launched"
     ],
     "stdout": null
@@ -29,7 +29,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,
@@ -47,13 +47,13 @@
     "positional_present": true,
     "role": null,
     "route_value": null,
-    "seed": "/fno:nosuchverb x",
+    "seed": "/fno:nosuchcommand x",
     "seed_form": "positional",
     "seed_index": 3,
     "spawn_tokens": [
       "--name",
       "w4",
-      "/fno:nosuchverb x"
+      "/fno:nosuchcommand x"
     ],
     "tab_flag_present": false
   }

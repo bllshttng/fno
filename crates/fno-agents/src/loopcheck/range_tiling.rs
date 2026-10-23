@@ -247,7 +247,7 @@ pub fn compute_range_tiling(
     }
 
     // Name each maximal uncovered run `parent-of-first..last` so the remedy
-    // is a range to review, never the head-loops "run the review verb at
+    // is a range to review, never the head-loops "run the review command at
     // HEAD" that produced six rounds on one PR.
     let mut i = 0usize;
     while i < covered.len() {

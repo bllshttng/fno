@@ -213,13 +213,13 @@ def _stub_runner_ok_merge_state(*args, **kwargs) -> subprocess.CompletedProcess:
 
 def test_ac1_err_read_pr_state_raises_reconcile_error_on_gh_failure(monkeypatch):
     """AC1-ERR: an op error answer raises ReconcileError; a missing binary or
-    a timeout raises the same exception through verb_call."""
+    a timeout raises the same exception through command_call."""
     cand = _make_candidate()
 
-    def fake_verb_call(verb, payload, unavailable=None, timeout=30):
+    def fake_command_call(command, payload, unavailable=None, timeout=30):
         return {"error": "repos/owner/repo/pulls/42/reviews failed: HTTP 404: Not Found"}
 
-    monkeypatch.setattr("fno.pr_watch._discover.verb_call", fake_verb_call)
+    monkeypatch.setattr("fno.pr_watch._discover.command_call", fake_command_call)
     with pytest.raises(ReconcileError):
         read_pr_state(cand, reviewers=["codex"], runner=_stub_runner_ok_merge_state)
 

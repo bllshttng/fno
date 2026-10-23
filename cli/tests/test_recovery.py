@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 def _naming_real(cmd, **kw):
-    """The name verbs execute in the fno-agents binary: a blanket stub would
+    """The name commands execute in the fno-agents binary: a blanket stub would
     answer the mint with a spawn-shaped SimpleNamespace lacking .stdout. Ride
     the real binary for them; _REAL_RUN is captured at module import, before
     any test patches the subprocess module."""
@@ -813,7 +813,7 @@ class TestRedispatch:
 
     def test_pane_refusal_runs_the_named_pane_kill_then_rotates(self, monkeypatch):
         # The daemon refuses `agents stop` on a pane row and NAMES the pane-kill
-        # verb with the row's own ref. The printed `main:10` selector is the
+        # command with the row's own ref. The printed `main:10` selector is the
         # mux parser's own grammar, so a human can paste it as-is; the failover
         # still translates it to the flag form, which predates the selector and
         # parses identically. Treating the refusal as "may still be live" would
@@ -831,7 +831,7 @@ class TestRedispatch:
         kill = self._index_of(
             calls, ["fno-py", "mux", "pane", "kill", "--server", "main", "10"]
         )
-        assert kill is not None, "the named pane-kill verb ran"
+        assert kill is not None, "the named pane-kill command ran"
         fr = self._index_of(calls, ["fno-py", "agents", "claim", "release", "--force"])
         spawn = self._index_of(calls, ["fno-py", "agents", "spawn"])
         assert fr is not None and spawn is not None

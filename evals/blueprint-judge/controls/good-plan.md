@@ -13,7 +13,7 @@ Since the 2026-08-14 dispatch change, overnight groom runs re-acquire the groom 
 ## Five questions
 
 1. Persona: the operator, who reads groom reports each morning. Each run wastes 30 s of wall clock they wait on. Source: groom-2026-08-20 run log.
-2. Surface fit: extends `fno agents claim`'s existing `--wait` flag. No new verb.
+2. Surface fit: extends `fno agents claim`'s existing `--wait` flag. No new command.
 3. Uncovered case: a claim holder whose pid died between acquire and check - handled by reusing claim's existing liveness probe.
 4. Deletable: the second `claim acquire` call in groom.py:280. The first already holds the lock.
 5. Duplication: extends the existing claim lockfile reader in `fno/agents/claim.py` rather than adding one.

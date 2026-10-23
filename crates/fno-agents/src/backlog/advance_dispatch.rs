@@ -36,8 +36,8 @@ pub struct NodeSpawnArgs {
     pub permission_mode: String,
     pub agent_name: String,
     pub vendor: Option<String>,
-    pub verb: String,
-    pub verb_source: String,
+    pub command_name: String,
+    pub command_source: String,
     pub session_phase: Option<String>,
     pub grid_reason: Option<String>,
     /// The grid pick's lane NAME - the dispatcher's spelling: the spawn door
@@ -282,7 +282,7 @@ pub fn node_model(
 
 /// The `fno agents spawn` flags for resolved args: ONE builder for every
 /// node-dispatching caller, so the claude-only gates cannot drift. The
-/// caller prepends the binary + verb; `cwd` rides before the model axis.
+/// caller prepends the binary + command; `cwd` rides before the model axis.
 pub fn node_spawn_argv(
     args: &NodeSpawnArgs,
     cwd: Option<&str>,
@@ -303,7 +303,7 @@ pub fn node_spawn_argv(
         // dispatch-time vendor pin outranks it and is never replaced.
         cmd.extend(["--route".to_string(), route.clone()]);
     } else if let (Some(route), true) = (&args.resolved_route, args.resolved_harness == "claude") {
-        // No grid pick: the stage table's verb lane route, or a routed claude
+        // No grid pick: the stage table's command lane route, or a routed claude
         // model dies on the default endpoint at first inference.
         cmd.extend(["--route".to_string(), route.clone()]);
     }
@@ -339,8 +339,8 @@ pub fn node_spawn_argv(
         cmd.extend(["--slug".to_string(), slug.clone()]);
     }
     if let Some(phase) = &args.session_phase {
-        // A registry verb's declared phase. The spawn door refuses an
-        // unlabeled --node spawn, so an outside verb must carry its label.
+        // A registry command's declared phase. The spawn door refuses an
+        // unlabeled --node spawn, so an outside command must carry its label.
         cmd.extend(["--session-phase".to_string(), phase.clone()]);
     }
     cmd.push("--name".to_string());
@@ -359,7 +359,7 @@ pub fn spawn_worker(
     model: Option<&str>,
     provider: Option<&str>,
     harness: Option<&str>,
-    verb: Option<&str>,
+    command: Option<&str>,
     brief: Option<&str>,
     _dispatch_account: Option<&str>,
     dispatch_reservation: Option<(&str, &str)>,
@@ -375,7 +375,7 @@ pub fn spawn_worker(
         model,
         provider,
         harness,
-        verb,
+        command,
         brief,
         source,
     )
@@ -410,14 +410,14 @@ pub fn launch_resolved(
         "account": "",
         "substrate": args.substrate.clone(),
         "command": args.command.clone(),
-        "verb": args.verb.clone(),
-        "verb_source": args.verb_source.clone(),
+        "verb": args.command_name.clone(),
+        "verb_source": args.command_source.clone(),
         "cwd": args.node_cwd.clone().unwrap_or_default(),
         "caller": caller,
         "grid": args.grid_reason.clone().unwrap_or_default(),
         "decision": args.decision.join("; "),
     });
-    if !args.is_reconcile && args.verb.trim_start_matches('/') == "blueprint" {
+    if !args.is_reconcile && args.command_name.trim_start_matches('/') == "blueprint" {
         match reuse_planner(node_id, &args, &mut row, dispatch_reservation, events_path) {
             Ok(Some(identity)) => return Ok((identity, row)),
             Ok(None) => {}
@@ -598,10 +598,10 @@ fn unsafe_short_address(token: &str, harness: Option<&str>) -> bool {
         .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
-/// The lifecycle table's answer for the node row: the effective verb plus
+/// The lifecycle table's answer for the node row: the effective command plus
 /// its note, with the blueprint floor read from the node's own config (the
 /// lean default when unreadable).
-fn verb_answer_for(node: &Value, cfg_root: &str) -> Result<(Option<String>, String), String> {
+fn command_answer_for(node: &Value, cfg_root: &str) -> Result<(Option<String>, String), String> {
     let floor = crate::agents_config::config_lookup(
         std::path::Path::new(cfg_root),
         &["dispatch", "blueprint_floor"],
@@ -610,7 +610,7 @@ fn verb_answer_for(node: &Value, cfg_root: &str) -> Result<(Option<String>, Stri
     .map(|s| s.trim().to_string())
     .filter(|s| !s.is_empty())
     .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
-    crate::backlog_ready::effective_verb_with_floor(node, &floor)
+    crate::backlog_ready::effective_command_with_floor(node, &floor)
 }
 
 /// The shared project id lane ids derive from: config project.id, else the
@@ -739,12 +739,12 @@ pub fn resolve_node_spawn(
     model: Option<&str>,
     provider: Option<&str>,
     harness: Option<&str>,
-    verb: Option<&str>,
+    command: Option<&str>,
     brief: Option<&str>,
     source: Option<&str>,
 ) -> Result<NodeSpawnArgs, SpawnFailure> {
     resolve_node_spawn_inner(
-        node_id, node_cwd, node_slug, node, model, provider, harness, verb, brief, source, None,
+        node_id, node_cwd, node_slug, node, model, provider, harness, command, brief, source, None,
     )
 }
 
@@ -757,7 +757,7 @@ fn resolve_node_spawn_inner(
     model: Option<&str>,
     provider: Option<&str>,
     harness: Option<&str>,
-    verb: Option<&str>,
+    command_name: Option<&str>,
     brief: Option<&str>,
     source: Option<&str>,
     command: Option<&str>,
@@ -766,15 +766,15 @@ fn resolve_node_spawn_inner(
     let node_obj = node.as_object().ok_or_else(|| {
         general(format!(
             "refusing to dispatch {node_id}: this caller passed no node dict; \
-             the builtin path has no verb evidence."
+             the builtin path has no command evidence."
         ))
     })?;
-    // The node dict IS the verb evidence. A dict without the key is a lossy
+    // The node dict IS the command evidence. A dict without the key is a lossy
     // projection: REFUSE before anything is spent.
-    if !node_obj.contains_key("dispatch_verb") {
+    if !node_obj.contains_key("dispatch_command") {
         return Err(general(format!(
             "refusing to dispatch {node_id}: the node dict this caller passed \
-             carries no dispatch_verb key; the projection feeding this \
+             carries no dispatch_command key; the projection feeding this \
              dispatcher is lossy; fix the projection, not the node."
         )));
     }
@@ -784,12 +784,12 @@ fn resolve_node_spawn_inner(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     };
-    let node_verb = verb
+    let node_command = command_name
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let declared_verb = text_field(node_obj.get("dispatch_verb"));
-    let verb_source = if declared_verb.is_some() {
+    let declared_command = text_field(node_obj.get("dispatch_command"));
+    let command_source = if declared_command.is_some() {
         "declared"
     } else {
         "none-declared"
@@ -807,14 +807,14 @@ fn resolve_node_spawn_inner(
     let lifecycle = if command.is_some() {
         (Some("/target".into()), "reconcile".into())
     } else {
-        verb_answer_for(node, &cfg_root).map_err(general)?
+        command_answer_for(node, &cfg_root).map_err(general)?
     };
-    let effective_verb = lifecycle.0.clone();
-    let verb_code = crate::naming::verb_code_for(
-        effective_verb
+    let effective_command = lifecycle.0.clone();
+    let command_code = crate::naming::command_code_for(
+        effective_command
             .as_deref()
-            .or(node_verb.as_deref())
-            .or(declared_verb.as_deref()),
+            .or(node_command.as_deref())
+            .or(declared_command.as_deref()),
     )
     .map_err(|e| general(e.to_string()))?;
     let mut model_v = model
@@ -835,7 +835,7 @@ fn resolve_node_spawn_inner(
             Some(node),
             model_v.as_deref(),
             provider,
-            effective_verb.as_deref(),
+            effective_command.as_deref(),
         );
         grid_why = pick.decline;
         if let Some(gh) = pick.harness {
@@ -863,7 +863,7 @@ fn resolve_node_spawn_inner(
     // so it carries the model tag, riding the receipt.
     let agent_name = crate::naming::dispatch_agent_name(
         source,
-        &verb_code,
+        &command_code,
         node_id,
         node_slug,
         None,
@@ -875,30 +875,30 @@ fn resolve_node_spawn_inner(
     // One axis: `provider` is the harness under an older spelling, so it
     // must reach the resolver too, or the command follows the stage table.
     let launch_axis = launch_harness_axis(launch.unwrap_or(""), node_cwd);
-    let mut receipt_verb = effective_verb
+    let mut receipt_command = effective_command
         .clone()
-        .or_else(|| node_verb.clone())
-        .or_else(|| declared_verb.clone())
+        .or_else(|| node_command.clone())
+        .or_else(|| declared_command.clone())
         .unwrap_or_else(|| "builtin".to_string());
-    if crate::provider::parse_verb_token(&receipt_verb).is_some() {
-        receipt_verb = crate::backlog::fields::canonical_verb_key(&receipt_verb);
+    if crate::provider::parse_command_token(&receipt_command).is_some() {
+        receipt_command = crate::backlog::fields::canonical_command_key(&receipt_command);
     }
-    let stage_verb = effective_verb
+    let stage_command = effective_command
         .as_deref()
-        .or(node_verb.as_deref())
-        .or(declared_verb.as_deref())
+        .or(node_command.as_deref())
+        .or(declared_command.as_deref())
         .unwrap_or("target");
-    let cfg = super::dispatch_resolve::dispatch_cfg_for(node_cwd, stage_verb);
-    // A registry verb's declared phase rides the argv; a config read failure
+    let cfg = super::dispatch_resolve::dispatch_cfg_for(node_cwd, stage_command);
+    // A registry command's declared phase rides the argv; a config read failure
     // degrades to None - that refusal with its remedy, never a guessed label.
     let descriptor_phase = {
-        let key = crate::backlog::fields::canonical_verb_key(
-            effective_verb
+        let key = crate::backlog::fields::canonical_command_key(
+            effective_command
                 .as_deref()
-                .or(node_verb.as_deref())
+                .or(node_command.as_deref())
                 .unwrap_or(""),
         );
-        cfg.verb_registry
+        cfg.command_registry
             .get(&key)
             .map(|d| d.session_phase.trim().to_string())
             .filter(|p| !p.is_empty())
@@ -912,10 +912,10 @@ fn resolve_node_spawn_inner(
         substrate: None,
         node_id: Some(node_id),
         command,
-        verb: if command.is_some() {
+        command_name: if command.is_some() {
             None
         } else {
-            node_verb.as_deref().or(declared_verb.as_deref())
+            node_command.as_deref().or(declared_command.as_deref())
         },
         lifecycle: if command.is_some() {
             None
@@ -986,8 +986,8 @@ fn resolve_node_spawn_inner(
         permission_mode: mode,
         agent_name,
         vendor: None,
-        verb: receipt_verb,
-        verb_source: verb_source.to_string(),
+        command_name: receipt_command,
+        command_source: command_source.to_string(),
         session_phase: descriptor_phase,
         grid_reason: grid_why,
         lane: grid_lane,

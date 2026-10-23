@@ -22,10 +22,10 @@ from typing import Any, List, Literal, Optional
 import typer
 
 from fno.tombstones import tombstone_group_cls
-# the external-backend verb classification lives beside its data
-from fno.graph._verb_classification import (
+# the external-backend command classification lives beside its data
+from fno.graph._command_classification import (
     _NO_GRAIN_ON_EXTERNAL_BACKEND,
-    classify_backlog_verbs,
+    classify_backlog_commands,
 )
 from fno.graph.api import wire_rows  # noqa: F401 - re-export for lazy importers
 from fno.graph.node_builder import (  # noqa: F401 - re-export for lazy importers
@@ -50,17 +50,17 @@ cli = typer.Typer(
     name="graph",
     help="Feature graph management",
     no_args_is_help=True,
-    # Removed verbs under `backlog` refuse by name and say what replaced them,
+    # Removed commands under `backlog` refuse by name and say what replaced them,
     # instead of failing with the same message a typo gets.
     cls=tombstone_group_cls("backlog"),
     # The curated menu below is nouns; this line is the answer to "can I take
     # that back". It sits on the group help because that is the surface someone
-    # deciding what is possible actually reads - a correction verb nobody can
+    # deciding what is possible actually reads - a correction command nobody can
     # find is, for decision-making purposes, a correction that does not exist.
     epilog=(
         "Corrections: reopen (undo done) | remove (hard delete) | unarchive | "
         "undefer | unqueue | unsupersede | unclaim. All hidden; "
-        "`fno help backlog --all` lists every verb."
+        "`fno help backlog --all` lists every command."
     ),
 )
 
@@ -70,7 +70,7 @@ from fno.graph.triage_forward import register_triage_forward  # noqa: E402
 register_triage_forward(cli)
 from fno.graph.native_forward import register_native_forward  # noqa: E402
 
-# The create/epic verbs whose bodies ported to the dispatcher; the wheel
+# The create/epic commands whose bodies ported to the dispatcher; the wheel
 # keeps the route (hidden, whole-argv forward) so this wheel still serves them.
 register_native_forward(cli, "intake")
 register_native_forward(cli, "decompose")
@@ -85,7 +85,7 @@ cli.command("worked", hidden=True)(_cmd_worked)
 # Node-lifecycle sub-apps folded under backlog (unit 6 of the  reorg):
 # annotate findings, carve-out records, and the retro harvest are all node
 # metadata operations. The old top-level spellings stay one-release shims
-# (fno.verb_moves); the mounts below are the canonical homes.
+# (fno.command_moves); the mounts below are the canonical homes.
 from fno.annotate.cli import annotate_app as _annotate_app  # noqa: E402
 from fno.carveout.cli import carveout_app as _carveout_app  # noqa: E402
 from fno.retro.cli import retro_app as _retro_app  # noqa: E402
@@ -105,7 +105,7 @@ from fno.graph.statuses import live_claimed_node_ids as _live_claimed_node_ids  
 
 def _has_unmerged_open_pr(e: dict) -> bool:
     """True when a node already carries a PR but is not yet closed (done) -
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     if e.get("completed_at"):
         return False  # already done; status derivation bucketed it out of ready
@@ -143,7 +143,7 @@ def _needs_design(e: dict) -> bool:
 
 def _container_ids(entries: list[dict]) -> set[str]:
     """Ids of nodes that are some other node's ``parent`` - i.e. epics/containers.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     return {
         p
@@ -217,7 +217,7 @@ GRAPH_UNREADABLE_EXIT = 3
 
 
 def _resolve_entries_or_exit(id: str):
-    """Read the graph strictly for a resolution verb.
+    """Read the graph strictly for a resolution command.
 
     Returns the entries on a clean read (populated or empty). On an unreadable
     graph, prints a message that names the read failure and the path -- never
@@ -239,7 +239,7 @@ def _resolve_entries_or_exit(id: str):
 def _live_worker(node_id: str) -> Optional[str]:
     """The holder of a live/suspect ``node:<id>`` claim, else None.
 
-    Retained for the decompose surface's adopt guard; the contain verb's
+    Retained for the decompose surface's adopt guard; the contain command's
     probe moved to the native leg, which reads the same lockfiles.
     """
     from fno.claims.core import claim_status
@@ -289,7 +289,7 @@ def _resolve_asserted_id(
 
 
 def _refuse_create_on_external_backend() -> None:
-    """Refuse node-creation verbs on a non-default backend.
+    """Refuse node-creation commands on a non-default backend.
 
     On an external backend, item creation lives in the tracker (GitHub Issues,
     Linear, ...); minting an ab- entry in graph.json would create a phantom item
@@ -297,7 +297,7 @@ def _refuse_create_on_external_backend() -> None:
     point (cmd_tree, and the native decompose/intake doors; add, idea and the new word
     answer natively and carry their own guard) so the guard is not decorative. A guard on only some reachable
     paths is the pitfall this exists to prevent; the parametrized test exercises
-    each path so a future creation verb that bypasses it fails loudly.
+    each path so a future creation command that bypasses it fails loudly.
     """
     from fno.tracker import active_backend_name
 
@@ -347,7 +347,7 @@ def _validate_priority_or_exit(priority: str, *, blocks_everything: bool = False
 
 
 def _require_node_id(task_id: str) -> None:
-    """The shared node-id gate: one refusal text for every verb that takes one."""
+    """The shared node-id gate: one refusal text for every command that takes one."""
     from fno.graph._constants import has_node_id_prefix
 
     if has_node_id_prefix(task_id):
@@ -359,7 +359,7 @@ def _require_node_id(task_id: str) -> None:
 
 
 def _require_nodes(entries: "list[dict]", ids: "list[str]") -> None:
-    """The shared missing-node gate for the multi-id verbs."""
+    """The shared missing-node gate for the multi-id commands."""
     from fno.graph._intake import _find_node
 
     missing = [tid for tid in ids if _find_node(entries, tid) is None]
@@ -420,7 +420,7 @@ class _ExternalSelectionError(RuntimeError):
 
 def _joined_open_candidates() -> list[dict]:
     """The transient joined selection model: the Rust snapshot exactly once.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.tracker import get_tracker
 
@@ -442,7 +442,7 @@ def _dispatch_node_summary(e) -> dict:
     `next` and `ready` both feed autonomous dispatch, so the two summaries
     are one thing spelled twice: the union of every field either surface
     carried, no filtering, no ordering. A key dropped here is dropped from
-    every dispatch decision - the silent `dispatch_verb` loss this exists
+    every dispatch decision - the silent `dispatch_command` loss this exists
     to prevent. Consumers read by key, so additions are safe.
     """
     return {
@@ -465,9 +465,9 @@ def _dispatch_node_summary(e) -> dict:
         # prefer it over cfg.model.
         "model": e.get("model"),
         # The per-node dispatch overrides must ride so the resolver's
-        # verb/brief routing fires for real graph nodes, not only for
+        # command/brief routing fires for real graph nodes, not only for
         # tests that inject them.
-        "dispatch_verb": e.get("dispatch_verb"),
+        "dispatch_command": e.get("dispatch_command"),
         "dispatch_brief": e.get("dispatch_brief"),
         "mission_id": e.get("mission_id"),
         "mission_wave": e.get("mission_wave"),
@@ -640,9 +640,9 @@ def cmd_next(
     ) -> list[dict]:
         by_id = {entry.get("id"): entry for entry in source_entries}
         container_ids = _container_ids(source_entries)
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
-        guards = verb_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": source_entries})["guards"]
+        guards = command_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": source_entries})["guards"]
         safe_rows = []
         for row in current_observer["rows"]:
             entry = by_id.get(row.get("id"))
@@ -718,7 +718,7 @@ def cmd_next(
     # failure never breaks dispatch. Under an external backend the receipts
     # explain the ACTUAL joined denominator, never the local graph.
     try:
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
         recv_entries = pre_entries or []
         scope_ids = (
@@ -733,7 +733,7 @@ def cmd_next(
             scope_ids,
             selection_claimed[0],
             datetime.now(timezone.utc),
-            verb_call(["backlog", "advance", "--stdin"], {"op": "staleness"})["days"],
+            command_call(["backlog", "advance", "--stdin"], {"op": "staleness"})["days"],
             mission=mission,
             roadmap_id=roadmap_id,
         )
@@ -1254,7 +1254,7 @@ def cmd_provenance(
             lines.append(f"    transcript: (unresolved - {reason})")
 
     _fmt_edge("node-birth", birth_result, birth_session, birth_harness)
-    # Rendered even when null: an omitted line reads as "this verb does not
+    # Rendered even when null: an omitted line reads as "this command does not
     # report origins", which is how the field stayed invisible for a month.
     lines.append(f"  origin: {_titled(origin_id) if origin_id else '(none)'}")
     if e.get("source_plan_path"):
@@ -1308,7 +1308,7 @@ def cmd_provenance(
     typer.echo("\n".join(lines))
 
 
-# Session lifecycle verbs (add/open/close/backfill/reap-open) went native:
+# Session lifecycle commands (add/open/close/backfill/reap-open) went native:
 # crates/fno-agents/src/backlog/session_cli.rs answers `fno backlog session`
 # at the door, and the Python surface no longer mounts a twin.
 
@@ -1321,7 +1321,7 @@ def cmd_provenance(
 
 def _expand_valid_ids(task_ids: list[str]) -> list[str]:
     """Expand one-or-many id args; refuse an empty set and non-node ids
-    (the shared prologue of every batch-mutating verb)."""
+    (the shared prologue of every batch-mutating command)."""
 
     ids = _expand_id_args(task_ids)
     if not ids:
@@ -1376,7 +1376,7 @@ def cmd_queued(
 @cli.command(
     "queue",
     hidden=True,
-    epilog="Paired verb: `fno backlog unqueue <id>...` reverses this (hidden; run its own --help).",
+    epilog="Paired command: `fno backlog unqueue <id>...` reverses this (hidden; run its own --help).",
 )
 def cmd_queue(
     task_ids: List[str] = typer.Argument(
@@ -1435,7 +1435,7 @@ def cmd_unqueue(
 @cli.command(
     "contain",
     hidden=True,
-    epilog="Inverse: `fno backlog update <id> parent=null` un-contains a node - a verb the native binary serves after the python update leg retired.",
+    epilog="Inverse: `fno backlog update <id> parent=null` un-contains a node - a command the native binary serves after the python update leg retired.",
 )
 def cmd_contain(
     ctx: typer.Context,
@@ -1554,7 +1554,7 @@ def _cascade_close_parents(
     entries: list[dict], node_id: str, held: Optional[dict] = None
 ) -> list[str]:
     """Close ancestor epics whose children are now all complete .
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
 
     ``held`` carries pre-lock close-gate verdicts: a plan-having parent
     with an unmet or unwarmed verdict holds, and absent ``held`` reads
@@ -1671,7 +1671,7 @@ def _stamp_and_graduate_plan(
     session_id: Optional[str] = None,
 ) -> bool:
     """Best-effort: stamp a plan ``shipped`` (when a ship URL is known) then graduate.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.plan._project import plan_docs
 
@@ -1698,7 +1698,7 @@ SetExpectedStatus = Literal["ok", "skipped", "failed"]
 
 def _set_expected_count(plan_path: str, count: int) -> tuple[SetExpectedStatus, str]:
     """Authoritatively write expected_url_count=count onto a plan's frontmatter.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.plan._project import plan_docs
 
@@ -1973,9 +1973,9 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
 
 @cli.command(
     "done",
-    epilog="Paired verb: `fno backlog reopen <id> --reason ...` reverses this "
+    epilog="Paired command: `fno backlog reopen <id> --reason ...` reverses this "
     "(hidden; run its own --help). Related: `fno backlog reconcile` closes nodes "
-    "whose PR merged outside the gate (hidden). Correction is reopen, a verb "
+    "whose PR merged outside the gate (hidden). Correction is reopen, a command "
     "the native binary serves after the python leg retired.",
 )
 def cmd_done(
@@ -2044,7 +2044,7 @@ def cmd_done(
     ),
 ) -> None:
     """Mark a node complete.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.graph._constants import has_node_id_prefix
 
@@ -2184,7 +2184,7 @@ def _canonical_post_close(
 
 # -- reconcile (close merged-PR drift) --
 # `done` and `reopen` are a deliberate gate inversion (`done` refuses when no
-# referenced PR is merged, `reopen` refuses when one IS); both verbs are
+# referenced PR is merged, `reopen` refuses when one IS); both commands are
 # native now, owned by the door's lifecycle module.
 
 
@@ -2307,36 +2307,36 @@ def _exec_liveness(state: str) -> str:
     }.get(state, "")
 
 
-# -- the external-backend verb classification (the sets are imported at the
-# top of this module from _verb_classification.py, beside the data)
+# -- the external-backend command classification (the sets are imported at the
+# top of this module from _command_classification.py, beside the data)
 
 
 def _refuse_tracker_owned_on_external_backend(label: str) -> None:
-    """The shared external-backend refusal for a tracker-owned backlog verb.
+    """The shared external-backend refusal for a tracker-owned backlog command.
 
     One guard at every reachable tracker-owned entry point (the wrapper below
     installs it on the registered callback), firing before any graph read or
-    write. The message names the verb and the backend."""
+    write. The message names the command and the backend."""
     from fno.tracker import active_backend_name
 
     backend = active_backend_name()
     if backend != "graph":
         typer.echo(
-            f"fno backlog {label}: this verb owns graph state; under the "
+            f"fno backlog {label}: this command owns graph state; under the "
             f"{backend} tracker backend it is refused. Track the item in the "
             f"tracker by its id.",
             err=True,
         )
         if label in _NO_GRAIN_ON_EXTERNAL_BACKEND:
-            # Exit 6: the shared no-task-grain shape (the native task verb
+            # Exit 6: the shared no-task-grain shape (the native task command
             # answers with the same code).
             raise typer.Exit(code=6)
         raise typer.Exit(code=1)
 
 
 def iter_backlog_registry():
-    """The (group-label, typer-app) pairs carrying every backlog verb.
-    The ONE structural list: the verb classifier, the census, and the
+    """The (group-label, typer-app) pairs carrying every backlog command.
+    The ONE structural list: the command classifier, the census, and the
     classification tests all walk it; register a new sub-app beside its
     add_typer call.
     """
@@ -2347,9 +2347,9 @@ def iter_backlog_registry():
 
 from fno.graph import note_cli  # noqa: E402,F401
 
-# The node-lifecycle reversal verbs (defer, undefer, retract, unsupersede)
+# The node-lifecycle reversal commands (defer, undefer, retract, unsupersede)
 # answer natively from the grouped dispatcher; the Python registration
 # retired with their bodies.
 
 # The root loader runs this before Click builds the tree.
-_fno_pre_dispatch = classify_backlog_verbs
+_fno_pre_dispatch = classify_backlog_commands

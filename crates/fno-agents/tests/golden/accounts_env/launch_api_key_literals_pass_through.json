@@ -1,0 +1,1 @@
+{"op": "launch_env", "id": "k", "config": "[[accounts.records]]\nid = \"k\"\nname = \"k\"\nharness = \"openclaw\"\nauth = \"api_key\"\n[accounts.records.env]\nANTHROPIC_API_KEY = \"${just-a-value}\"\nB = \"plain\"\nC = \"${OTHER:x}\"\nD = \"${open\"\n", "expect": {"env": {"ANTHROPIC_API_KEY": "just-a-value", "B": "plain", "C": "OTHER:x", "D": "${open"}}}

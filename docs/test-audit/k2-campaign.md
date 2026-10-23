@@ -14,9 +14,9 @@ The rerun read the 33 tests that this pass had cut and main had kept, 21 Python 
 | unit/test_spawn_think.py | `test_assemble_seed_chain_blueprint_appends_chain` | `test_forced_decompose_child_bypasses_design_warranting_gate` asserts the chain seed |
 | unit/test_spawn_think.py | `test_attended_spawn_optin_dispatches` | `test_dispatch_forces_spawn_when_gate_off_and_attended` |
 | unit/test_spawn_think.py | `test_resolved_seed_carries_transcript_pointer` | `test_dispatch_conversational_carries_live_pointer` asserts the node id and chain |
-| unit/test_thread_identity_from_spawn_record.py | `test_two_thread_workers_resolve_two_different_ids` | `test_resolve_owned_identity_verb_stamps_the_spawn_record` resolves both workers |
+| unit/test_thread_identity_from_spawn_record.py | `test_two_thread_workers_resolve_two_different_ids` | `test_resolve_owned_identity_command_stamps_the_spawn_record` resolves both workers |
 | pane_stop.rs | `ac1_stale_kills_the_pane_found_by_child_pid_never_the_stored_id` | `ac1_hp_kills_pane_found_by_child_pid_and_confirms_on_esrch`, the same seams and row |
-| spawn_gate_verb.rs | `refuse_with_emits_gate_verdict_when_no_measurement_row_refuses` | `probe_registry_schema_refusal_names_its_reason_row` asserts the threshold too |
+| spawn_gate_command.rs | `refuse_with_emits_gate_verdict_when_no_measurement_row_refuses` | `probe_registry_schema_refusal_names_its_reason_row` asserts the threshold too |
 
 No test ran locally. CI is the first run of every edit in this rerun.
 
@@ -83,7 +83,7 @@ These were found and not fixed, because each one reaches past this campaign's fi
 
 ### Overlap with the unit A-L and agents campaigns
 
-Two campaigns merged during review and cut files this ledger lists further. The unit A-L campaign cut nine. Five are dispatch tests: barrier, mux send, no-merge env, settings path and verb registry. The rest are the two footprint files, the inbox thread tests and launch pick. The agents campaign cut 48 spawn and dispatch files under `cli/tests/agents`.
+Two campaigns merged during review and cut files this ledger lists further. The unit A-L campaign cut nine. Five are dispatch tests: barrier, mux send, no-merge env, settings path and command registry. The rest are the two footprint files, the inbox thread tests and launch pick. The agents campaign cut 48 spawn and dispatch files under `cli/tests/agents`.
 
 The merges took those campaigns' cuts. Where this pass cut a test that a campaign kept, the test stays as that campaign's keeper. Assertions this pass folded into shared tests stay, because they only add checks. Parametrize folds this pass wrote were dropped where the campaign had already chosen its keepers.
 
@@ -110,14 +110,14 @@ One row per K2 file. Deleted files read 0 after.
 | `cli/tests/agents/test_dispatch.py` | 12 | 6 | `which` hit, select_provider: registered, mismatch refusal, new agent needs provider, unknown refused, retired gemini row skipped. |
 | `cli/tests/agents/test_dispatch_attribution.py` | 2 | 2 | Env-corrupting name refused (one row per branch), spawn create events share request_id and from_name. |
 | `cli/tests/agents/test_dispatch_codex.py` | 19 | 12 | Create registers row and effort, identity collision exit 12 detaches the lock, provider exit code propagates, timeout 15, yolo in events, claude yolo maps to bypassPermissions, from_name validator, assign-project argv and fail-open, thread spawn forwards `--node`, sealed spawn refuses a stale binary. |
-| `cli/tests/agents/test_dispatch_harness_stage_table.py` | 13 | 9 | Agreeing keys give no note, unset is None, verb picks profile, the door's stage table, losing-key note, legacy-only key, route, empty route, both doors agree. |
+| `cli/tests/agents/test_dispatch_harness_stage_table.py` | 13 | 9 | Agreeing keys give no note, unset is None, command picks profile, the door's stage table, losing-key note, legacy-only key, route, empty route, both doors agree. |
 | `cli/tests/agents/test_dispatch_lifecycle.py` | 36 | 31 | Reconcile: every claude and codex pane arm (pending, unconfirmed, liveness unknown, incarnation unreadable, dead pane orphans, heal, in-pass duplicate, under-lock race, terminal rows), logs probe flip, backfill, CLI missing, probe error, codex index errors, key schema. |
 | `cli/tests/agents/test_dispatch_lifecycle_polish.py` | 3 | 1 | Reconcile apply keeps a concurrent `last_message_at`. |
 | `cli/tests/agents/test_dispatch_spawn.py` | 33 | 27 | Once teardown, plugin-command normalization, collision refusal, teardown failure, claude receipt bytes and cwd escaping, codex no-runtime 87, unknown harness 2, vendor-axis hint, pi, agy and keeper lanes, carrier demotion, absent-stance refusal, opencode serve lane and refusals, spawn-trigger scrub. |
 | `cli/tests/agents/test_dispatch_workdir.py` | 8 | 6 | `--cwd` wins, default goes to canonical with a note, `--here`, empty cwd is absent, caller-is-canonical no-op, resolution failure falls back. |
 | `cli/tests/agents/test_gate_escape_spawn_cap.py` | 9 | 3 | Distinct dedup keys count separately, fail-open on an unwritable log, placeholder pr normalized. The parity row went with `should_emit_spawn_cap`. |
 | `cli/tests/agents/test_grok_spawn_journey.py` | 1 | 1 | Unchanged: live journey. |
-| `cli/tests/agents/test_harness_map_dispatch_command.py` | 54 | 28 | Builtin command per surface, gemini refusal at both doors, config and explicit rungs, `/fno:` canonicalization, missing `{id}`, autonomous pane rules, thread lane and retired `bg`, codex verb rewrite, auto_merge `is True` identity, lifecycle doors, stage-table profile. |
+| `cli/tests/agents/test_harness_map_dispatch_command.py` | 54 | 28 | Builtin command per surface, gemini refusal at both doors, config and explicit rungs, `/fno:` canonicalization, missing `{id}`, autonomous pane rules, thread lane and retired `bg`, codex command rewrite, auto_merge `is True` identity, lifecycle doors, stage-table profile. |
 | `cli/tests/agents/test_keeper_thread_routing.py` | 6 | 5 | Roster matches the capability table, grok diverts, glued `-Hgrok`, non-diverting cases, fenced tokens. |
 | `cli/tests/agents/test_lane_b_thread_spawn.py` | 28 | 22 | Agy keeper seat, gemini thread refusal, lane A refused, pi and grok argv, socket and symlinked home, collision, exit 13 and 12, Identify mismatch, real keeper journey, cursor-agent and agy mint rules, frame decoder, modal before the marker. |
 | `cli/tests/agents/test_mux_inject.py` | 23 | 13 | Undeclared harness paste plus CR, guarded paste shape, unguarded claim sequence, claim fail-open, held claim waited and demoted, held-claim marker pin, submit delay, unpinned submit refused, five codex read-back outcomes, control.sock delay, no own audit row, mux tried before the daemon RPC. |
@@ -138,9 +138,9 @@ One row per K2 file. Deleted files read 0 after.
 | `cli/tests/agents/test_spawn_gate_agreement.py` | 5 | 0 | Deleted. It held the Python census slot count equal to the Rust gate (principle 9). The Python leg is retired; the Rust test reads the fixture alone. |
 | `cli/tests/agents/test_spawn_gate_refusal_events.py` | 6 | 3 | `_refuse` merges the receipt into the journal event, receipt None still emits, an unwritable journal never changes the refusal. |
 | `cli/tests/agents/test_spawn_gate_wiring.py` | 8 | 6 | Thread spawn gates as `bg` and releases, `--once` gates as headless, flags reach the gate, refusal exit propagates, sandbox refusal comes before the gate, pane gates as pane. |
-| `cli/tests/agents/test_spawn_lost_verb.py` | 6 | 5 | Real-shell rows (bash colon, zsh dropped letter, mid-sentence), message names verb and fix, intact rows, target family with an empty roster, refusal before the Rust route. |
+| `cli/tests/agents/test_spawn_lost_command.py` | 6 | 5 | Real-shell rows (bash colon, zsh dropped letter, mid-sentence), message names command and fix, intact rows, target family with an empty roster, refusal before the Rust route. |
 | `cli/tests/agents/test_spawn_model_substitution.py` | 3 | 3 | Unchanged: substitution named, no-sample labels the request, a match stays quiet. |
-| `cli/tests/agents/test_spawn_node_seed.py` | 30 | 20 | Node seed carries verb and brief, unencoded node refused before any pane, message plus node, `--mux-session`, account stamp, worktree ensure and its hold, seam unavailability exits 2, derive arm, refused spawn reaches no lane. |
+| `cli/tests/agents/test_spawn_node_seed.py` | 30 | 20 | Node seed carries command and brief, unencoded node refused before any pane, message plus node, `--mux-session`, account stamp, worktree ensure and its hold, seam unavailability exits 2, derive arm, refused spawn reaches no lane. |
 | `cli/tests/agents/test_spawn_normalize.py` | 52 | 33 | Pass-through cases, autogen collisions, `-r` widening, five resume and substrate refusals, positional rules, AST pin of `_SPAWN_VALUE_FLAGS`, `extract_existing_pane`, fence handling, node mint. |
 | `cli/tests/agents/test_spawn_opencode_session_capture.py` | 11 | 6 | Banner lines are not ids, exact directory and time SQL with escaping, ambiguity gives None, bounded retry, OSError never raises, clean-empty vs failure. |
 | `cli/tests/agents/test_spawn_pane.py` | 174 | 142 | Opencode capture and racing panes, codex binding backfill, claude happy path, mux failure leaves no row, collision before any pane, `-p` billing guard, argv builder per provider, undeclared-harness refusals and journey, env identity scrub, placement (fit, max-panes, tab id, lease loser, overflow, group failure), readiness, permission prompts, reap paths, happy monitor branches, seed outcomes, six unanswered `pane run` branches. |
@@ -161,8 +161,8 @@ One row per K2 file. Deleted files read 0 after.
 | `cli/tests/agents/test_spawn_route_override.py` | 43 | 31 | Codex thread lane argv and overlay, codex `--resume` refused, non-claude refusal names `--route`, pane and bg receipts carry three axes, `route_on_pane` fail-closed, `--print` transport, axis-name refusals, one composition across seams (the account token loses). |
 | `cli/tests/agents/test_spawn_seed_receipt.py` | 4 | 3 | Empty intent names the state path, receipt reads live once the prompt is recorded, unrecorded prompt reads unverified. |
 | `cli/tests/agents/test_spawn_seedless_refusal.py` | 6 | 5 | Seed or role not refused, only claude thread judged, seam refuses an explicit thread, `--resume` left alone, unreadable row refuses before dispatch. |
-| `cli/tests/agents/test_spawn_session_row.py` | 26 | 18 | Review label refuses 89, prose plus node composes, duplicate stamp keeps one row, pending row, unlabelable verb fails closed, phase rules, roster order, reap-open, merge grant rows, think row. |
-| `cli/tests/agents/test_spawn_unfireable_verb.py` | 15 | 12 | Wrong-channel refusal, absolute path never judged, unreadable codex state fails open, marker rows, seam refusal, render_seed, receipt fields, unresolvable word names the nearest, unreadable graph fails open. |
+| `cli/tests/agents/test_spawn_session_row.py` | 26 | 18 | Review label refuses 89, prose plus node composes, duplicate stamp keeps one row, pending row, unlabelable command fails closed, phase rules, roster order, reap-open, merge grant rows, think row. |
+| `cli/tests/agents/test_spawn_unfireable_command.py` | 15 | 12 | Wrong-channel refusal, absolute path never judged, unreadable codex state fails open, marker rows, seam refusal, render_seed, receipt fields, unresolvable word names the nearest, unreadable graph fails open. |
 | `cli/tests/agents/test_spawn_uuid_capture.py` | 7 | 6 | Retry sleeps only between probes, bounded exhaustion, resolver raise gives None, empty short-id never probed, CLI persists the uuid, a miss still launches. |
 | `cli/tests/agents/test_spawn_wait.py` | 5 | 4 | Waitable reason retries, other reasons exit at once, `--wait` with `--no-wait` refused, duration parsing. |
 | `cli/tests/agents/test_thread_keeper_journey.py` | 1 | 1 | Unchanged: live journey. |
@@ -178,35 +178,35 @@ One row per K2 file. Deleted files read 0 after.
 | `cli/tests/unit/test_agent_spawned_log.py` | 9 | 5 | Daemon log path, envelope shape, resume coordinates, spawn_failed row, pane birth joins death on pid. |
 | `cli/tests/unit/test_config_process_admission.py` | 2 | 2 | Unchanged: default 400 independent of `agents.max_live`, bad values coerce to the default. |
 | `cli/tests/unit/test_dispatch_barrier.py` | 37 | 32 | One dispatchable when two run at once, peer seen after acquire, no-reserve, ordering, the full handover set, early exits ahead of the guard, once releases and pane holds, release warning. |
-| `cli/tests/unit/test_dispatch_mux_send.py` | 19 | 17 | Envelope wrap and id, raw send verbatim and never reads the pane, prompt, detector and OSError refusals, undeclared-harness note, no double wrap, `--raw` verbs, rebound thread, confirm through Rust mail-inject. |
+| `cli/tests/unit/test_dispatch_mux_send.py` | 19 | 17 | Envelope wrap and id, raw send verbatim and never reads the pane, prompt, detector and OSError refusals, undeclared-harness note, no double wrap, `--raw` commands, rebound thread, confirm through Rust mail-inject. |
 | `cli/tests/unit/test_dispatch_no_merge_env.py` | 17 | 16 | All four `apply_merge_posture_env` branches, guard-flag boundary, resolver posture rows (no-merge, namespaced, present, prose, allow, config, unknown value refused). |
 | `cli/tests/unit/test_dispatch_settings_path.py` | 6 | 0 | Deleted. It tested `_default_settings_path`, retired with `spawn_with_provider_snapshot`. test_route_survival.py covers the restore path. |
 | `cli/tests/unit/test_dispatch_undeclared_repo.py` | 11 | 10 | Foreign-repo pin, target's own policy, own worktree, outside git, env override, pane wrapper set and clear, seam pin, silent seam, exec export, ambient override. |
-| `cli/tests/unit/test_dispatch_verb_registry.py` | 15 | 11 | Config parse, builtins dropped, native spelling, fno-qualified form, undeclared harness refused, scalar invocation, missing skill refused, probe argv, bare allowlist, neither-surface refusal, takes_node_id false. |
+| `cli/tests/unit/test_dispatch_command_registry.py` | 15 | 11 | Config parse, builtins dropped, native spelling, fno-qualified form, undeclared harness refused, scalar invocation, missing skill refused, probe argv, bare allowlist, neither-surface refusal, takes_node_id false. |
 | `cli/tests/unit/test_footprint.py` | 31 | 18 | Transitive attribution, detached and excluded roots, pid 1 root, legacy format, python plus fno-py arm, `is_test_runner` table, `top_consumers`, spare-pool decoys, bad-row reasons, masking and caps. |
-| `cli/tests/unit/test_footprint_verb.py` | 100 | 74 | Each fail-closed branch of `_live_root_pids`, each gap branch, codex and opencode serve oracles, `cause_reading` refusal arms, exit precedence 3 over 5 then 4, roster degrade, bounded output, masking, capacity axes, shared Rust and Python admission fixture, census counts. |
+| `cli/tests/unit/test_footprint_command.py` | 100 | 74 | Each fail-closed branch of `_live_root_pids`, each gap branch, codex and opencode serve oracles, `cause_reading` refusal arms, exit precedence 3 over 5 then 4, roster degrade, bounded output, masking, capacity axes, shared Rust and Python admission fixture, census counts. |
 | `cli/tests/unit/test_inbox_store_threads.py` | 23 | 16 | Thread write and append, slug and date rules, find by reply id, unread filter, optional fields round trip, `inbox_dir_for` refusals, read_at reset, concurrent writers, best-effort render, Kind and deprecated-kind pins, resolve_project. |
 | `cli/tests/unit/test_lane_experiment_contract.py` | 4 | 4 | Unchanged. |
-| `cli/tests/unit/test_launch_pick.py` | 19 | 17 | Headroom pick with receipt, every seam, routed and role skips, quota death, verb parity, defer. |
+| `cli/tests/unit/test_launch_pick.py` | 19 | 17 | Headroom pick with receipt, every seam, routed and role skips, quota death, command parity, defer. |
 | `cli/tests/unit/test_mail_name_lane_reply.py` | 20 | 18 | Every routing and refusal branch. |
 | `cli/tests/unit/test_managed_slot_blob.py` | 12 | 6 | Residue is not a login, refresh token alone is, top-level access token, empty is not, default slot falls through scoped residue, alternate dir never falls to the default. |
 | `cli/tests/unit/test_mission_not_dispatchable.py` | 1 | 1 | Unchanged. |
 | `cli/tests/unit/test_mux_pane_guarded.py` | 16 | 12 | Reap refusals and recycled-pid confirm, not-idle paste stalls, Rust confirm lane, not-delivered reasons, timeout never retries, claim timeout releases, no transcript fails closed, occupant mismatch refuses, `--fno-id`, non-claude confirm verdict. |
 | `cli/tests/unit/test_org_spelling_dispatch.py` | 2 | 2 | Unchanged. |
-| `cli/tests/unit/test_pane_prepare_bridge.py` | 3 | 2 | Bridge verb and flags declared by the Python forward, conditional `--style-exception`. |
+| `cli/tests/unit/test_pane_prepare_bridge.py` | 3 | 2 | Bridge command and flags declared by the Python forward, conditional `--style-exception`. |
 | `cli/tests/unit/test_spawn_account_provenance.py` | 9 | 9 | Unchanged: bg sources, pane and bg receipts, pane row decider, Rust carrier byte pin. |
-| `cli/tests/unit/test_spawn_defaults.py` | 14 | 13 | `claim_store_writable` tri-state, `is_verb_seed`, `canonical_verb_key`, lane vendor `argv_head`, transport pass-through, scan projection, exit 78 payload, events, composed argv, degrade open. |
-| `cli/tests/unit/test_spawn_phase.py` | 5 | 3 | Verb table mapping, unlabeled branches, `_stage_profile` canonical key. |
+| `cli/tests/unit/test_spawn_defaults.py` | 14 | 13 | `claim_store_writable` tri-state, `is_command_seed`, `canonical_command_key`, lane vendor `argv_head`, transport pass-through, scan projection, exit 78 payload, events, composed argv, degrade open. |
+| `cli/tests/unit/test_spawn_phase.py` | 5 | 3 | Command table mapping, unlabeled branches, `_stage_profile` canonical key. |
 | `cli/tests/unit/test_spawn_sandbox_settings.py` | 3 | 3 | Unchanged. |
 | `cli/tests/unit/test_spawn_think.py` | 101 | 61 | `dispatch_conversational` pointer, forced spawn, no-origin skip, dedup; spawn-tail failures; daily cap; bulk-intake skip; one sole guard per still-reachable `maybe_spawn_think` branch; presence precedence; output-path reuse order; substrate; pane and headless receipts; `on_node_born` gate and door argv; naming; config coercion; `_parse_short_id`. |
 | `cli/tests/unit/test_think_dispatch_cli.py` | 14 | 11 | No live session exit 2, node not found, empty `--model`, non-claude provider refused, ambient codex posture, live pointer and cwd, overlays, skipped exits 1, real spawn journey. |
-| `cli/tests/unit/test_thread_identity_from_spawn_record.py` | 22 | 15 | Sibling cwd row, duplicate cwd refuses, exited rows own nothing, remote codex row, unidentified rows never answer, absent and unreadable registry give None, symlinked worktree, proven identity short-circuits, contradiction stays ambiguous, cross-family markers fail closed, verb end to end. |
+| `cli/tests/unit/test_thread_identity_from_spawn_record.py` | 22 | 15 | Sibling cwd row, duplicate cwd refuses, exited rows own nothing, remote codex row, unidentified rows never answer, absent and unreadable registry give None, symlinked worktree, proven identity short-circuits, contradiction stays ambiguous, cross-family markers fail closed, command end to end. |
 | `crates/fno-agents/src/agy_launch.rs` | 6 | 6 | Unchanged. |
 | `crates/fno-agents/src/bounded_spawn.rs` | 5 | 3 | Classifier, no unretried `.spawn()` static guard, stable error ends the retries. |
 | `crates/fno-agents/src/daemon/tests/codex_thread_lane.rs` | 45 | 35 | One `plan_reconcile` table (one row per branch), entry posture stamps, pane-row ask refusal, gone-cwd refusal, five thread-spawn refusals, unmapped stop and unsettled interrupt, switchboard acks, episode gate, recovery config, launch cwd and both ensure refusals. |
 | `crates/fno-agents/src/lane_heal.rs` | 8 | 8 | Unchanged: one test per verdict branch. |
 | `crates/fno-agents/src/lanes.rs` | 6 | 6 | Unchanged: one test per branch. |
-| `crates/fno-agents/src/launch_workdir.rs` | 5 | 5 | Unchanged: the only real guards, Python mocks this verb. |
+| `crates/fno-agents/src/launch_workdir.rs` | 5 | 5 | Unchanged: the only real guards, Python mocks this command. |
 | `crates/fno-agents/src/loop_dispatch.rs` | 16 | 9 | ETXTBSY retry bound, pick declined by env and ambient export, clear-list as empty values, last stderr line, unparseable output declined, fixed wrapper binaries. |
 | `crates/fno-agents/src/pane_keeper.rs` | 9 | 8 | Frame codec, NeedMore, unknown tag is a Violation, ring cap, escape cut, session_id_from_argv, full-UUID rule. |
 | `crates/fno-agents/src/pane_relaunch.rs` | 4 | 4 | Unchanged. |
@@ -228,7 +228,7 @@ One row per K2 file. Deleted files read 0 after.
 | `crates/fno-agents/src/spawn_gate_reservations.rs` | 3 | 3 | Unchanged. |
 | `crates/fno-agents/src/spawn_gate_slot_tests.rs` | 19 | 14 | Succession admits and plain spawn refuses, `caller_not_sole_holder`, `no_caller`, cap+1, ambiguity, lead row takes no slot, learned cap, burst, release remedy, dead holder frees, live holder keeps. |
 | `crates/fno-agents/src/spawn_gate_territory_tests.rs` | 1 | 1 | Unchanged: unreadable claims refuse as territory_unknown. |
-| `crates/fno-agents/src/spawn_gate_verb.rs` | 22 | 18 | Probe mirrors schema refusal, walled lane, slot rows, fleet stop, reservations, lead share, burst cap; `hold: false` releases; missing holder pid refuses; review seed refuses before the bypass; reserve rules. |
+| `crates/fno-agents/src/spawn_gate_command.rs` | 22 | 18 | Probe mirrors schema refusal, walled lane, slot rows, fleet stop, reservations, lead share, burst cap; `hold: false` releases; missing holder pid refuses; review seed refuses before the bypass; reserve rules. |
 | `crates/fno-agents/src/spawn_overlay.rs` | 10 | 10 | Unchanged: already per-surface tables plus distinct print branches. |
 | `crates/fno-agents/src/spawn_payload.rs` | 4 | 3 | Empty and idempotent, incidental marker appends, cross-language fixture pin. |
 | `crates/fno-agents/src/spawn_phase.rs` | 2 | 2 | Unchanged. |
@@ -236,7 +236,7 @@ One row per K2 file. Deleted files read 0 after.
 | `crates/fno-agents/src/team_spawn.rs` | 4 | 4 | Unchanged. |
 | `crates/fno-agents/src/wake_name.rs` | 4 | 4 | Unchanged. |
 | `crates/fno-agents/tests/claude_ask_dispatch.rs` | 18 | 15 | Validation table, unknown name 16 creates nothing, seed-unverified receipt, Python-readable row, identity never guessed, yolo mapping, socket follow-up and null 13, poll timeout 15, flock, missing CLI 14, corrupt registry 12, short-id refusal. |
-| `crates/fno-agents/tests/codex_ask_dispatch.rs` | 24 | 14 | Verb normalization, once-path journey, resume carries effort and stamps the row, exit 11 check order, empty ids fail closed, validate_inputs, soft-error promotion, mid-stream read error, timeout 15. |
+| `crates/fno-agents/tests/codex_ask_dispatch.rs` | 24 | 14 | Command normalization, once-path journey, resume carries effort and stamps the row, exit 11 check order, empty ids fail closed, validate_inputs, soft-error promotion, mid-stream read error, timeout 15. |
 | `crates/fno-agents/tests/convert_pane_to_thread.rs` | 4 | 2 | Strategy coherence, keeper rebind refuses without a keeper. |
 | `crates/fno-agents/tests/lane_fill_rss_guard.rs` | 1 | 1 | Unchanged: sole RSS bound. |
 | `crates/fno-agents/tests/loop_dispatch_census.rs` | 4 | 2 | Fixture titles count as zero, real from iteration 2, malformed lines skipped. |
@@ -245,5 +245,5 @@ One row per K2 file. Deleted files read 0 after.
 | `crates/fno-agents/tests/spawn_compose_parity.rs` | 1 | 1 | Unchanged golden. |
 | `crates/fno-agents/tests/spawn_contract_journey.rs` | 6 | 5 | Accepted before birth, origin refusal has zero effects, launch failure releases everything, RecoveryRequired, admission refusal before the backend. |
 | `crates/fno-agents/tests/spawn_lane_journey.rs` | 5 | 2 | Routed-lane table, refusal table. |
-| `crates/fno-agents/tests/spawn_phase_table.rs` | 2 | 1 | Valid phase keys, no duplicate verb. The copy check lives in cli-ci.yml. |
+| `crates/fno-agents/tests/spawn_phase_table.rs` | 2 | 1 | Valid phase keys, no duplicate command. The copy check lives in cli-ci.yml. |
 | `crates/fno-agents/tests/spawn_routing.rs` | 32 | 23 | Unknown-name exits, bg receipt key order, collisions exit 2, headless timeout 124, permission-mode refusals, headless and thread lanes, daemon-owned receipt, first-worker bootstrap, retired `host` pointer. |

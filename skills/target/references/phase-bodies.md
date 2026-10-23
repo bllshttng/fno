@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Phase Bodies
 
 **Load when:** about to execute the clean, review, or direction-alignment phase. Each phase has a small body of rules around when it runs and what counts as success.

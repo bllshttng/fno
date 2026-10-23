@@ -41,7 +41,7 @@ make_repo() {
 }
 
 # Hermetic fno: the CI runner has no fno on PATH, and the cap depends on it
-# (shell-stub for the latch dir, policy for the never gate). Stub both verbs;
+# (shell-stub for the latch dir, policy for the never gate). Stub both commands;
 # the stub's state file points the latch at the tmp state dir.
 export HOME="$TMP_BASE/home"
 mkdir -p "$HOME"

@@ -71,7 +71,7 @@ if [[ "${FNO_SESSION_ROLE:-}" == "worker" ]]; then
 fi
 
 # Fallback: the full fold. A non-zero exit is NOT silence: collapsing a failed
-# read into an empty string is the absence-as-success trap this verb exists to
+# read into an empty string is the absence-as-success trap this command exists to
 # close. But exit 2 is Typer's "no such command", which a DEPLOYED fno older
 # than this feature returns on EVERY session until someone runs
 # `fno doctor update`. Nagging forever is noise, so the loud path is reserved

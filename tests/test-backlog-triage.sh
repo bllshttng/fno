@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-backlog-triage.sh - end-to-end exercise of fno backlog triage verbs.
+# test-backlog-triage.sh - end-to-end exercise of fno backlog triage commands.
 #
 # Covers ab-67de1b86 Phase 05 Task 5.3 scenarios:
 #   1. triage context on empty project returns candidates: []

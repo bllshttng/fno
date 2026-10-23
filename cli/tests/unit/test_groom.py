@@ -18,7 +18,7 @@ LEVERS = [
     ("defer", ("--reason",)),
     ("undefer", ()),
     ("update", ("priority=",)),
-    # rank left this table when it became the operator's pin: the verb refuses
+    # rank left this table when it became the operator's pin: the command refuses
     # a groom worker, so teaching it here would teach a refusal. The vote it
     # was replaced by is the lever below.
     ("encounter", ("--evidence",)),

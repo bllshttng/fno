@@ -3,7 +3,7 @@
 //! `fno_agents::fleet_task::reconcile`; the Python leg it freezes against was
 //! the fold inside `cli/src/fno/agents/stale_escalate.py`
 //! (`reconcile_channel` + `answered_question`/`reset_answered`), whose body
-//! became one `verb_call` in the same change that froze these goldens.
+//! became one `command_call` in the same change that froze these goldens.
 //!
 //! The two legs file DIFFERENT row families (operator_question vs
 //! fleet_task), so the frozen contract is the normalized projection, not

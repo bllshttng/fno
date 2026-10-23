@@ -65,7 +65,7 @@ class _FakeLockHandle:
 
 
 def test_create_codex_routes_to_provider_and_registers(workdir, fake_codex_create):
-    """Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn verb)."""
+    """Repointed at _codex_create_path (create contract moved from dispatch_ask to spawn command)."""
     from fno.agents.dispatch import _codex_create_path
 
     result = _codex_create_path(

@@ -326,7 +326,7 @@ pub fn run(payload: &Value, config_cwd: &Path, now_unix: u64) -> SettleOutcome {
     let status_budget_s = crate::bounded_cmd::load_scaled_budget_s(STATUS_READ_BUDGET_S, 150);
     let mut status = |cwd: &Path, pr: i64| -> Result<Value, String> {
         let pr_arg = pr.to_string();
-        let out = crate::provider_cap_verbs::run_fno_output(
+        let out = crate::provider_cap_commands::run_fno_output(
             &["do", "pr", "status", pr_arg.as_str()],
             Some(cwd),
             std::time::Duration::from_secs(status_budget_s),

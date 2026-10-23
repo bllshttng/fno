@@ -13,7 +13,7 @@ whether or not the flag is real, so the row-level checks at the bottom read
 the live command tree instead.
 
 Those checks force ``FNO_AGENTS_RUNTIME=python``. Under the default ``auto``
-runtime an ``agents`` verb can exec the fno-agents Rust front, and an exec
+runtime an ``agents`` command can exec the fno-agents Rust front, and an exec
 replaces the pytest worker rather than failing a test.
 """
 from __future__ import annotations
@@ -57,7 +57,7 @@ _SHORT_BESIDE_LONG = re.compile(
 )
 
 
-# Under the default `auto` runtime some `agents` verbs exec the fno-agents Rust
+# Under the default `auto` runtime some `agents` commands exec the fno-agents Rust
 # front, which replaces this process: the pytest worker dies mid-run instead of
 # a test failing. Forcing the python runtime keeps the mature Python dispatch
 # in-process, so every legend row can be read the same way.
@@ -94,7 +94,7 @@ def test_backlog_done_row_matches_the_command() -> None:
 
 def _resolves(path: str) -> None:
     """Assert a legend row resolves somewhere real: the Python tree, or the
-    native dispatcher for a verb the port moved into the binary (the Python
+    native dispatcher for a command the port moved into the binary (the Python
     leg is deleted, so the in-process app refuses it with "No such command")."""
     result = runner.invoke(app, [*path.split(), "--help"], env=_IN_PROCESS)
     if result.exit_code == 0:

@@ -7,8 +7,8 @@
 # mail at the next tool call instead, and ordinary mail too when
 # `inbox.tool_boundary_ordinary` is on. The shell layer is a cheap gate only:
 # three stat calls against the sender-stamped control flags, plus one builtin
-# `-nt` test of the bus log against this session's stamp, which the verb sets
-# after each pass. Then the fno-agents verb owns config, scan, cursors, dedup,
+# `-nt` test of the bus log against this session's stamp, which the command sets
+# after each pass. Then the fno-agents command owns config, scan, cursors, dedup,
 # and rendering. A config-redirected bus degrades to prompt-boundary
 # delivery, never a loss.
 
@@ -39,7 +39,7 @@ fi
 
 command -v fno-agents >/dev/null 2>&1 || exit 0
 
-# Stdout of the verb IS the hook payload: it streams through fd 3 untouched,
+# Stdout of the command IS the hook payload: it streams through fd 3 untouched,
 # byte-for-byte (same discipline as inject-mail-notify.sh). A miss never
 # blocks the tool call it rode in on.
 exec 3>&1

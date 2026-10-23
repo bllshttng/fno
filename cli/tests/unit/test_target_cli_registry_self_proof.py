@@ -1,17 +1,17 @@
-"""The resolve-owned-identity verb resolves through claims.self_identity (x-0992).
+"""The resolve-owned-identity command resolves through claims.self_identity (x-0992).
 
 History this file used to pin: x-a0cd measured a daemon-hosted codex thread
 under seatbelt where only self's ppid is readable, so every walk inside init's
-script chain returned None and the verb fell to collision-elimination, which
+script chain returned None and the command fell to collision-elimination, which
 rejected the worker's OWN spawn-minted row. The launcher stamp
 (FNO_SESSION_HARNESS/FNO_SESSION_PID, exported by the `fno do target init` CLI
 while ITS ppid read is still permitted) fixed the walk half. x-0992 measured
 the other half: a PANE-spawned codex worker carries no FNO_HARNESS_SESSION_ID
 at all (the pane row is written after the child starts), so its stamp is
-name_only and the verb's former private own_binding construction - gated on a
-COMPLETE stamp - was always None. The verb now routes through
+name_only and the command's former private own_binding construction - gated on a
+COMPLETE stamp - was always None. The command now routes through
 resolve_self_identity, the one owned-identity implementation, and these tests
-pin the verb-level contract the hook parses."""
+pin the command-level contract the hook parses."""
 
 from typer.testing import CliRunner
 
@@ -104,7 +104,7 @@ def test_name_only_foreign_row_with_other_witness_fails_closed(tmp_path, monkeyp
 # when the pid is dead, ignored for an unknown harness) moved with the walk
 # into the native resolver; they are pinned Rust-side by
 # fno-agents' session_identity_ambient stamp tests. The Python module is a
-# shim over that verb and carries no stamp logic to test here.
+# shim over that command and carries no stamp logic to test here.
 
 
 def _silent_walk_claude_proof(monkeypatch, attested_id: str):

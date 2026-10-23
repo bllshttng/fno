@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Block ${REPO_ROOT}/scripts/ references in any skills/*.md file.
 # Skills must call ${SKILL_DIR}/scripts/X (preferred for portability) or
-# `fno <verb>` (when the polished CLI surface is the right abstraction).
+# `fno <command>` (when the polished CLI surface is the right abstraction).
 #
 # Reason: ${REPO_ROOT}/scripts/X resolves only inside the fno repo
 # itself. In any other project where the fno plugin is installed,
 # the path is missing and skills silently no-op (or fail). Bundles live
-# alongside the skill and ship with the plugin; CLI verbs resolve via PATH.
+# alongside the skill and ship with the plugin; CLI commands resolve via PATH.
 #
 # See: skill-bundles.yaml, scripts/generate-skill-bundles.sh, and
 # feedback memory feedback_skill_scripts_must_live_in_skill_bundle.md.
@@ -45,7 +45,7 @@ HITS="$(grep -rEn '\$\{?REPO_ROOT\}?/scripts/' "$REPO_ROOT/skills/" --include='*
 
 if [[ -n "$HITS" ]]; then
   echo "ERROR: skills must not reference \${REPO_ROOT}/scripts/." >&2
-  echo "Use \${SKILL_DIR}/scripts/ (preferred) or fno CLI verbs." >&2
+  echo "Use \${SKILL_DIR}/scripts/ (preferred) or fno CLI commands." >&2
   echo "" >&2
   echo "$HITS" >&2
   exit 1

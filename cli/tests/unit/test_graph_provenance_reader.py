@@ -69,7 +69,7 @@ def graph(tmp_path, monkeypatch):
 def test_ac1_ui_null_origin_renders_explicitly(graph):
     """A missing origin says so rather than dropping the line.
 
-    An omitted line reads as "this verb does not report origins", which is
+    An omitted line reads as "this command does not report origins", which is
     precisely how the field stayed invisible for a month.
     """
     graph([_node("x-aaaa")])
