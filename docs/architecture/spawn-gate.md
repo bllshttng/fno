@@ -92,7 +92,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 
 ## Overriding the learned cap
 
-`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
+`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. The loop reads the fleet CPU share the spawn gate reads, so the two never read the machine two ways. A share over `[agents.capacity] cut_fleet_share` (default 0.75) for 600 seconds cuts the cap by 25 percent. A share under `raise_fleet_share` (default 0.35) adds one slot per 900 seconds. An unreadable share moves no streak and no cap. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
 
 Only a measured cut binds below the ceiling. An older first run stamped a cap it guessed from the machine budget (`seeded from machine budget`), and a cap can sit at an older and lower ceiling. The reader treats both as no measurement, so `agents.max_live = 32` with no floor reads an effective cap of 32 at once, not 24. The next tick writes the same answer to the file.
 

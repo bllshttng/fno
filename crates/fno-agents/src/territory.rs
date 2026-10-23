@@ -14,6 +14,7 @@
 //! source, never an empty territory list and never a silently-drained scope.
 
 use crate::agents_config::config_lookup;
+use crate::loop_lead::{canonical_members, same_territory};
 use crate::org_board::{graph_json_path, project_map};
 use crate::paths::AgentsHome;
 use crate::state::{load_registry, Registry, RegistryEntry};
@@ -245,6 +246,223 @@ pub(crate) fn resolve_role_kind(payload: &Value) -> Result<Value, String> {
             Err(refusal) => json!({"refusal": refusal}),
         },
     )
+}
+
+/// Does a team over `outer` strictly contain one over `inner`? A project sits
+/// in a portfolio by name, an epic carries its project, and an epic set is
+/// contained when every member is. An equal scope is a peer, never contained.
+/// The graph stores a node's project raw (the alias it was filed under), so the
+/// row's project resolves through `projects` before the comparison.
+pub(crate) fn scope_contains<'a>(
+    outer: &str,
+    inner: &str,
+    entry_of: &dyn Fn(&str) -> Option<&'a Value>,
+    projects: &HashMap<String, String>,
+) -> bool {
+    use crate::org_board::s_str;
+    let outer_members = canonical_members(outer, projects);
+    let inner_members = canonical_members(inner, projects);
+    if outer_members.is_empty() || inner_members.is_empty() || inner_members == outer_members {
+        return false;
+    }
+    if inner_members.len() > 1 {
+        // A portfolio inside a wider portfolio, else an epic set: epic ids never
+        // equal project names, so the set is placed member by member.
+        return inner_members.is_subset(&outer_members)
+            || inner
+                .split(',')
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .all(|m| scope_contains(outer, m, entry_of, projects));
+    }
+    let name = inner_members.iter().next().expect("one member");
+    if outer_members.contains(name) {
+        return true;
+    }
+    match entry_of(name.as_str()).and_then(|e| s_str(e, "project")) {
+        Some(raw) if !raw.is_empty() => {
+            outer_members.contains(projects.get(raw).map(String::as_str).unwrap_or(raw))
+        }
+        _ => false,
+    }
+}
+
+/// Why this caller may not grant a team over `requested`, or `None`: you
+/// cannot hand down authority you do not hold. An attended human may grant
+/// anything. An agent must hold a live team that strictly contains the
+/// request; an equal scope is a transfer, legal only with succession intent. A
+/// caller this check cannot place (unreadable registry, unregistered agent,
+/// terminal grantor) fails closed. `allow_terminal_recovery` admits only the
+/// same territory a terminal holder already holds.
+fn grant_refusal<'a>(
+    payload: &Value,
+    entry_of: &dyn Fn(&str) -> Option<&'a Value>,
+    projects: &HashMap<String, String>,
+) -> Option<String> {
+    let text = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or("");
+    let flag = |key: &str| payload.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let caller = payload.get("caller").cloned().unwrap_or(Value::Null);
+    let field = |key: &str| caller.get(key).and_then(Value::as_str).unwrap_or("");
+    let requested = text("requested");
+    match field("kind") {
+        "human" => None,
+        "unreadable" => Some(match text("stray_agent_self") {
+            "" => "cannot verify the grantor's authority: the agent registry could not \
+                   be read, so this session is treated as an agent whose authority is \
+                   unknown, not as an attended human. A role may not be granted when \
+                   the grantor cannot be checked; retry, or spawn from an attended shell."
+                .to_string(),
+            stray => format!(
+                "cannot verify the grantor's authority: this shell carries \
+                 FNO_AGENT_SELF={stray} with no harness session, so it reads \
+                 as an agent fno cannot resolve, not an attended human. A \
+                 shell that once hosted a worker keeps that variable. If you \
+                 are the human at this shell, rerun as: \
+                 env -u FNO_AGENT_SELF fno agents org promote <args>."
+            ),
+        }),
+        "unregistered" => Some(
+            "cannot verify the grantor's authority: this session carries an agent \
+             identity but has no registry row (it spawned before its row landed, \
+             or has not run /fno-me), so it is an agent with no verified authority, \
+             not an attended human. Run /fno-me to join or wait for the row, then \
+             retry; or spawn from an attended shell."
+                .to_string(),
+        ),
+        "agent" => {
+            let status = field("status");
+            let held = field("role_scope");
+            if crate::announce::TERMINAL_STATUSES.contains(&status) {
+                if flag("allow_terminal_recovery") && same_territory(held, requested, projects) {
+                    return None;
+                }
+                return Some(format!(
+                    "cannot verify the grantor's authority: its STORED status is \
+                     '{status}', which is terminal, so it cannot grant a role. \
+                     Re-register the grantor in its live session or use an attended shell."
+                ));
+            }
+            if held.is_empty() {
+                return Some(format!(
+                    "a role is handed DOWN, and this session holds none: an unpromoted \
+                     agent cannot grant one. Ask a lead whose scope contains \
+                     '{requested}', or spawn from an attended shell."
+                ));
+            }
+            if same_territory(held, requested, projects) {
+                if flag("allow_succession") {
+                    return None;
+                }
+                return Some(format!(
+                    "this session already holds its own role over '{requested}'; \
+                     a same-scope spawn is a transfer, not a grant. Re-run with \
+                     `--hand-off`, or choose a different scope so this session keeps its role."
+                ));
+            }
+            if !scope_contains(held, requested, entry_of, projects) {
+                return Some(format!(
+                    "this session's role over '{held}' neither contains nor equals \
+                     '{requested}', so it cannot grant it. A grant must be a \
+                     strict subset of what the grantor holds; an equal scope is allowed \
+                     only as succession, which hands YOUR scope to a successor."
+                ));
+            }
+            None
+        }
+        other => Some(format!(
+            "cannot verify the grantor's authority: unknown caller kind {other:?}"
+        )),
+    }
+}
+
+/// Live rows whose team the vacated scope contained and the new one does not:
+/// advisory receipt data about a re-scope. `[]` when no territory left the new
+/// scope, `None` when the graph could not be read, which is not `[]`. A single
+/// member that is neither a known node nor a project is listed: its containment
+/// is unknowable, and one stale row must not silence every determinate answer.
+fn stranded_rows<'a>(
+    payload: &Value,
+    entry_of: &dyn Fn(&str) -> Option<&'a Value>,
+    graph_read: bool,
+    projects: &HashMap<String, String>,
+) -> Option<Vec<String>> {
+    use crate::org_board::s_str;
+    let new_scope = payload
+        .get("new_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let Some(vacated) = payload.get("vacated").and_then(Value::as_str) else {
+        return Some(Vec::new());
+    };
+    if same_territory(vacated, new_scope, projects) {
+        return Some(Vec::new());
+    }
+    if !graph_read {
+        return None;
+    }
+    let target = payload
+        .get("target_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let rows = payload
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut stranded = Vec::new();
+    for row in &rows {
+        let name = s_str(row, "name").unwrap_or("");
+        let status = s_str(row, "status").unwrap_or("");
+        if name == target || crate::announce::TERMINAL_STATUSES.contains(&status) {
+            continue;
+        }
+        let scope = s_str(row, "role_scope").unwrap_or("");
+        let members: Vec<&str> = scope
+            .split(',')
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .collect();
+        let unresolvable = members.len() == 1
+            && entry_of(members[0]).is_none()
+            && !projects.contains_key(members[0]);
+        if unresolvable
+            || (scope_contains(vacated, scope, entry_of, projects)
+                && !scope_contains(new_scope, scope, entry_of, projects))
+        {
+            stranded.push(name.to_string());
+        }
+    }
+    Some(stranded)
+}
+
+/// The `role-grant` spawn-overlay kind: the grant decision (`op: check`) and
+/// the re-scope strand scan (`op: stranded`), served to Python. The payload
+/// carries the alias map and the member rows the caller read; `entries: null`
+/// means the graph could not be read. Answers `{"refusal"}` or `{"stranded"}`.
+pub(crate) fn role_grant_kind(payload: &Value) -> Result<Value, String> {
+    use crate::org_board::s_str;
+    let projects: HashMap<String, String> = payload
+        .get("projects")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_str().map(|c| (k.clone(), c.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let entries = payload.get("entries").and_then(Value::as_array);
+    let graph_read = entries.is_some();
+    let rows: Vec<Value> = entries.cloned().unwrap_or_default();
+    let entry_of = |id: &str| rows.iter().find(|e| s_str(e, "id") == Some(id));
+    match payload.get("op").and_then(Value::as_str) {
+        Some("check") => Ok(json!({"refusal": grant_refusal(payload, &entry_of, &projects)})),
+        Some("stranded") => Ok(json!({
+            "stranded": stranded_rows(payload, &entry_of, graph_read, &projects)
+        })),
+        other => Err(format!(
+            "role-grant: unknown op {other:?}; expected check|stranded"
+        )),
+    }
 }
 
 /// The canonical comma-joined form of a raw scope spelling: members split on
@@ -1370,5 +1588,109 @@ max_concurrent = 0
         // And with no root to resolve at all: unavailable, not zero.
         let error = live_node_claims_from(None).unwrap_err();
         assert!(error.0.contains("claims path unavailable"), "{error:?}");
+    }
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn projects() -> HashMap<String, String> {
+        [("alpha", "alpha"), ("a", "alpha"), ("beta", "beta")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn graph() -> Vec<Value> {
+        vec![
+            json!({"id": "e-1", "type": "epic", "project": "alpha"}),
+            json!({"id": "e-2", "type": "epic", "project": "a"}),
+            json!({"id": "e-3", "type": "epic", "project": "beta"}),
+        ]
+    }
+
+    fn contains(outer: &str, inner: &str) -> bool {
+        let rows = graph();
+        let entry_of = |id: &str| rows.iter().find(|e| e["id"] == id);
+        scope_contains(outer, inner, &entry_of, &projects())
+    }
+
+    #[test]
+    fn containment_holds_across_the_ladder_and_through_aliases() {
+        assert!(contains("alpha,beta", "alpha")); // project in portfolio
+        assert!(contains("alpha", "e-1")); // epic in its project
+        assert!(contains("alpha", "e-2")); // epic filed under the alias
+        assert!(contains("alpha,beta", "e-3"));
+        assert!(!contains("beta", "e-1")); // epic of another project
+        assert!(!contains("alpha", "alpha")); // a peer, not below
+        assert!(contains("a,beta", "alpha")); // aliases normalize
+        assert!(contains("e-1,e-2", "e-1")); // a set holds each member
+        assert!(!contains("e-2,e-1", "e-1,e-2")); // a peer set
+        assert!(!contains("e-1", "e-1,e-2")); // narrower holds less
+        assert!(contains("alpha", "e-1,e-2")); // every member in alpha
+        assert!(!contains("alpha", "e-1,e-3")); // spans two projects
+        assert!(!contains("alpha", "e-ghost")); // unknown node
+    }
+
+    fn check(caller: Value, requested: &str, succession: bool) -> Option<String> {
+        let answer = role_grant_kind(&json!({
+            "op": "check", "requested": requested, "caller": caller,
+            "allow_succession": succession, "allow_terminal_recovery": false,
+            "projects": projects(), "entries": graph(),
+        }))
+        .unwrap();
+        answer["refusal"].as_str().map(str::to_string)
+    }
+
+    #[test]
+    fn the_grant_check_admits_only_what_the_grantor_holds() {
+        let agent = |status: &str, scope: &str| json!({"kind": "agent", "status": status, "role_scope": scope});
+        assert_eq!(check(json!({"kind": "human"}), "anything", false), None);
+        assert_eq!(check(agent("busy", "alpha,beta"), "e-1", false), None);
+        let outside = check(agent("busy", "beta"), "e-1", false).unwrap();
+        assert!(outside.contains("neither contains nor equals"), "{outside}");
+        let peer = check(agent("busy", "a"), "alpha", false).unwrap();
+        assert!(peer.contains("`--hand-off`"), "{peer}");
+        assert_eq!(check(agent("busy", "a"), "alpha", true), None);
+        let unpromoted = check(agent("idle", ""), "e-1", false).unwrap();
+        assert!(unpromoted.contains("holds none"), "{unpromoted}");
+        let dead = check(agent("exited", "alpha"), "e-1", false).unwrap();
+        assert!(dead.contains("'exited', which is terminal"), "{dead}");
+        for kind in ["unreadable", "unregistered", "bogus"] {
+            let refused = check(json!({"kind": kind}), "e-1", false).unwrap();
+            assert!(
+                refused.starts_with("cannot verify the grantor's authority"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_strand_scan_lists_roles_the_move_left_behind() {
+        let rows = json!([
+            {"name": "mover", "status": "busy", "role_scope": "beta"},
+            {"name": "sub-1", "status": "busy", "role_scope": "e-1"},
+            {"name": "sub-3", "status": "busy", "role_scope": "e-3"},
+            {"name": "gone", "status": "exited", "role_scope": "e-1"},
+            {"name": "stale", "status": "busy", "role_scope": "e-ghost"},
+        ]);
+        let scan = |vacated: Value, entries: Value| {
+            role_grant_kind(&json!({
+                "op": "stranded", "vacated": vacated, "new_scope": "beta",
+                "target_name": "mover", "rows": rows, "projects": projects(),
+                "entries": entries,
+            }))
+            .unwrap()["stranded"]
+                .clone()
+        };
+        assert_eq!(
+            scan(json!("alpha"), json!(graph())),
+            json!(["sub-1", "stale"])
+        );
+        assert_eq!(scan(json!("alpha"), Value::Null), Value::Null);
+        assert_eq!(scan(Value::Null, Value::Null), json!([]));
+        assert_eq!(scan(json!("beta"), Value::Null), json!([]));
     }
 }

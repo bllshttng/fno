@@ -31,7 +31,11 @@
 # the slice-5 re-pin: merged main carries the lane-account seat-form fix
 # (PR 3660), so the eval runner reaches the zai trial lane, and the pin
 # diff is empty again at this branch head and runs pass the gate.
-bank_rev: ca8a544fc1fc2d7522da783f476c76ba9d428f76
+#
+# Re-pinned for the first stored climb: a renamed hello task and a
+# lane-blueprint edit had moved the bank since the slice-5 pin, so runs
+# were refused until the pin named current main.
+bank_rev: 98955860bcee6fd542eaeeb8cb5ccf3999047805
 
 train:
   - capability-lane-blueprint
