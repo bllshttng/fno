@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Mapping, Optional, Sequence, Tuple
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 @dataclass(frozen=True)
@@ -126,15 +126,9 @@ class DispatchBlock(BaseModel):
     command: str = ""
     # Registered commands from outside fno (unioned with allowed_commands at resolve;
     # a shipped or allowlisted spelling cannot be redefined here).
-    # Both keys read their pre-rename spelling too, so an existing config.toml loads.
-    command_registry: dict[str, DispatchCommandDescriptor] = Field(
-        default_factory=dict, validation_alias=AliasChoices("command_registry", "verb_registry")  # verb-wording: allow
-    )
+    command_registry: dict[str, DispatchCommandDescriptor] = Field(default_factory=dict)
     # US3 command allowlist: a node dispatch_command must match or the resolver refuses.
-    allowed_commands: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_DISPATCH_COMMANDS),
-        validation_alias=AliasChoices("allowed_commands", "allowed_verbs"),  # verb-wording: allow
-    )
+    allowed_commands: list[str] = Field(default_factory=lambda: list(DEFAULT_DISPATCH_COMMANDS))
     # DEPRECATED: reads as `auto_merge.grant` for one release; no consumer reads it.
     auto_merge: bool = False
     # defer (default, byte-identical to today) or fail over to the next

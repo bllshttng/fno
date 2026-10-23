@@ -94,15 +94,6 @@ pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
             cwd,
             &["dispatch", "command_registry"],
         )
-        .or_else(|| {
-            crate::agents_config::config_value_deep(
-                cwd,
-                &[
-                    "dispatch",
-                    crate::backlog::settings::LEGACY_COMMAND_REGISTRY_KEY,
-                ],
-            )
-        })
         .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new())),
         env_node,
         facts: ask.get("facts").cloned().unwrap_or_else(|| json!({})),
