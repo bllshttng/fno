@@ -566,13 +566,8 @@ pub fn parse_isolated_config_dirs(
     let Ok(table) = toml_body.parse::<toml::Table>() else {
         return Vec::new();
     };
-    let records = table
-        .get("accounts")
-        .or_else(|| table.get("providers"))
-        .and_then(|section| section.get("records"))
-        .and_then(|records| records.as_array());
     let mut out = Vec::new();
-    for record in records.into_iter().flatten() {
+    for record in crate::accounts::records::block_records(&table) {
         let (Some(id), Some(dir)) = (
             record.get("id").and_then(|v| v.as_str()),
             record.get("config_dir").and_then(|v| v.as_str()),

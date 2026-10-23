@@ -192,36 +192,21 @@ pub fn territory_stamp(node_id: &str) -> (Option<Value>, Option<Value>) {
 /// RECORD (ccm/ccr) is a real binary but not a harness, so it answers
 /// through its registry row; an answer the resolver cannot honor is as
 /// unverifiable as no answer and degrades the same way.
-pub fn launch_harness_axis(launch: &str, node_cwd: Option<&str>) -> Option<String> {
+pub fn launch_harness_axis(launch: &str) -> Option<String> {
     if launch.trim().is_empty() {
         return None;
     }
     if crate::provider::KNOWN_PROVIDERS.contains(&launch) {
         return Some(launch.to_string());
     }
-    record_harness(launch, node_cwd)
-        .filter(|rec| crate::provider::KNOWN_PROVIDERS.contains(&rec.as_str()))
+    record_harness(launch).filter(|rec| crate::provider::KNOWN_PROVIDERS.contains(&rec.as_str()))
 }
 
-/// The harness an account record names, or None. Reads the accounts records
-/// block through the shared config lookup; a failure answers None (pins
-/// nothing).
-fn record_harness(launch: &str, _node_cwd: Option<&str>) -> Option<String> {
+/// The harness an account record names, or None (`loader.record_harness`):
+/// a missing record or a config that does not load pins nothing.
+fn record_harness(launch: &str) -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
-    let records = crate::agents_config::config_lookup(&cwd, &["accounts", "records"])?
-        .as_array()?
-        .clone();
-    for rec in records {
-        let id = rec.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        if id == launch {
-            return rec
-                .get("cli")
-                .and_then(|v| v.as_str())
-                .filter(|c| !c.is_empty())
-                .map(str::to_string);
-        }
-    }
-    None
+    crate::accounts::records::record_harness(launch, None, &cwd)
 }
 
 /// Concrete `--model` for a node at the spawn seam, or None for default.
@@ -874,7 +859,7 @@ fn resolve_node_spawn_inner(
     // Only the literal "dispatch" grant reads true.
     // One axis: `provider` is the harness under an older spelling, so it
     // must reach the resolver too, or the command follows the stage table.
-    let launch_axis = launch_harness_axis(launch.unwrap_or(""), node_cwd);
+    let launch_axis = launch_harness_axis(launch.unwrap_or(""));
     let mut receipt_command = effective_command
         .clone()
         .or_else(|| node_command.clone())

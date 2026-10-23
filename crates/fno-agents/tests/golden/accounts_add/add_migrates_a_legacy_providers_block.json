@@ -1,0 +1,42 @@
+{
+  "global": "[providers]\nactive = \"old\"\n\n[[providers.records]]\nid = \"old\"\nname = \"old\"\ncli = \"codex\"\nauth = \"managed\"\n\n[providers.failover]\nmax_swaps_per_phase = 3\n",
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "managed"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'alpha' added (scope=global).\n",
+    "stderr": "config.providers is the pre-rename name for config.accounts; the next account write migrates it\n",
+    "global": {
+      "accounts": {
+        "active": "old",
+        "records": [
+          {
+            "id": "old",
+            "name": "old",
+            "harness": "codex",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "old"
+          },
+          {
+            "id": "alpha",
+            "name": "alpha",
+            "harness": "claude",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "alpha"
+          }
+        ],
+        "failover": {
+          "max_swaps_per_phase": 3
+        }
+      }
+    },
+    "project": null
+  }
+}

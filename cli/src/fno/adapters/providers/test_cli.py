@@ -4,7 +4,6 @@ Run: cd cli && uv run pytest src/fno/adapters/providers/test_cli.py -v
 """
 from __future__ import annotations
 
-import stat
 from pathlib import Path
 
 import pytest
@@ -48,6 +47,17 @@ def _write_settings(path: Path, content: dict) -> None:
     """Write a flat config.toml at path (lifts any legacy config: wrapper)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tomli_w.dumps(_strip_none(_flatten(content))), encoding="utf-8")
+
+
+def _seed_records(home: Path, *ids: str) -> None:
+    """Global oauth_dir records under HOME, as `accounts add` writes them."""
+    creds = home / ".claude"
+    creds.mkdir(exist_ok=True)
+    records = [
+        {"id": pid, "name": pid, "harness": "claude", "auth": "oauth_dir", "credentials_source": str(creds)}
+        for pid in ids
+    ]
+    _write_settings(home / ".fno" / "config.toml", {"accounts": {"records": records}})
 
 
 def _invoke(args: list[str], cwd: Path, home: Path):
@@ -350,178 +360,6 @@ class TestListDisarmedFooter:
 # ---------------------------------------------------------------------------
 # AC02.1-HP + AC02.2-ERR: Add
 # ---------------------------------------------------------------------------
-
-class TestAdd:
-    def test_add_valid_oauth_record(self, tmp_path: Path):
-        """AC02.1-HP: add with valid oauth_dir args creates a record loadable via load_providers."""
-        from fno.adapters.providers.loader import load_providers
-
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-
-        result = _invoke(
-            [
-                "add", "claude-secondary",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
-        assert result.exit_code == 0, f"stdout: {result.output}\nstderr: {result.stderr}"
-
-        # Verify via load_providers targeting tmp_path
-        config = load_providers(repo_root=tmp_path)
-        assert any(r.id == "claude-secondary" for r in config.records)
-
-    def test_add_round_trip_use_list(self, tmp_path: Path):
-        """AC02.1-HP: add + use + list shows active correctly."""
-        from fno.adapters.providers.loader import load_providers
-
-        creds = tmp_path / ".claude-secondary"
-        creds.mkdir()
-
-        _invoke(
-            [
-                "add", "claude-max-secondary",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
-        _invoke(["use", "claude-max-secondary", "--scope", "global"], cwd=tmp_path, home=tmp_path)
-
-        list_result = _invoke(["list"], cwd=tmp_path, home=tmp_path)
-        assert result_has_active(list_result.output, "claude-max-secondary")
-
-        config = load_providers(repo_root=tmp_path)
-        assert config.active == "claude-max-secondary"
-
-    def test_add_missing_credentials_source_for_oauth(self, tmp_path: Path):
-        """AC02.2-ERR: add with oauth_dir but no --credentials-source exits non-zero with auth_strategy_mismatch."""
-        result = _invoke(
-            ["add", "bad-provider", "--harness", "claude", "--auth", "oauth_dir"],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
-        assert result.exit_code != 0
-        err_text = result.stderr + result.output
-        assert "auth_strategy_mismatch" in err_text
-        assert "bad-provider" in err_text
-
-    def test_add_route_backed_account_without_secret(self, tmp_path: Path):
-        """AC1-HP: add stores the route string and no resolved token."""
-        from fno.adapters.providers.loader import load_providers
-
-        result = _invoke(
-            [
-                "add", "zai",
-                "--harness", "claude",
-                "--auth", "api_key",
-                "--route", "zai/glm-5.3[1m]",
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
-
-        assert result.exit_code == 0, result.output
-        record = load_providers(repo_root=tmp_path).by_id["zai"]
-        assert record.route == "zai/glm-5.3[1m]"
-        assert record.env is None
-        assert "ANTHROPIC_AUTH_TOKEN" not in (record.model_dump(mode="json") or {})
-
-    def test_add_duplicate_refuses_without_force(self, tmp_path: Path):
-        """add with existing id refuses without --force."""
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        args = [
-            "add", "my-provider",
-            "--harness", "claude",
-            "--auth", "oauth_dir",
-            "--credentials-source", str(creds),
-            "--scope", "global",
-        ]
-        _invoke(args, cwd=tmp_path, home=tmp_path)
-        result = _invoke(args, cwd=tmp_path, home=tmp_path)
-        assert result.exit_code != 0
-
-    def test_add_duplicate_with_force_succeeds(self, tmp_path: Path):
-        """add with existing id and --force overwrites successfully."""
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        args = [
-            "add", "my-provider",
-            "--harness", "claude",
-            "--auth", "oauth_dir",
-            "--credentials-source", str(creds),
-            "--scope", "global",
-        ]
-        _invoke(args, cwd=tmp_path, home=tmp_path)
-        result = _invoke(args + ["--force"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code == 0
-
-    def test_add_invalid_env_pair_exits_nonzero(self, tmp_path: Path):
-        """add with malformed --env entry (no =) exits non-zero."""
-        result = _invoke(
-            [
-                "add", "api-provider",
-                "--harness", "claude",
-                "--auth", "api_key",
-                "--env", "BADKEY",  # missing =VALUE
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
-        assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# AC02.5-FR: Atomic write failure
-# ---------------------------------------------------------------------------
-
-class TestAtomicWrite:
-    def test_add_readonly_settings_exits_nonzero(self, tmp_path: Path):
-        """AC02.5-FR: add with read-only settings.yaml exits non-zero; file unchanged."""
-        # Create a pre-existing settings.yaml and make the .fno dir read-only
-        fno_dir = tmp_path / ".fno"
-        fno_dir.mkdir(parents=True)
-        settings = fno_dir / "config.toml"
-        settings.write_text("v2_enabled = false\n", encoding="utf-8")
-        original_content = settings.read_text(encoding="utf-8")
-
-        # Make the parent directory read-only so atomic_write can't create a temp file
-        fno_dir.chmod(stat.S_IRUSR | stat.S_IXUSR)  # r-x: can list, can't write
-        try:
-            creds = tmp_path / ".claude"
-            creds.mkdir()
-            result = _invoke(
-                [
-                    "add", "fail-provider",
-                    "--harness", "claude",
-                    "--auth", "oauth_dir",
-                    "--credentials-source", str(creds),
-                    "--scope", "global",
-                ],
-                cwd=tmp_path,
-                home=tmp_path,
-            )
-            assert result.exit_code != 0
-            # Content must be unchanged
-            fno_dir.chmod(stat.S_IRWXU)  # restore to read
-            assert settings.read_text(encoding="utf-8") == original_content
-        finally:
-            # Always restore permissions so pytest can clean up tmp_path
-            fno_dir.chmod(stat.S_IRWXU)
-
-
-# ---------------------------------------------------------------------------
 # Test command
 # ---------------------------------------------------------------------------
 
@@ -619,19 +457,7 @@ class TestUse:
         """AC02.1-HP: fno providers use <id> updates config.providers.active."""
         from fno.adapters.providers.loader import load_providers
 
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        _invoke(
-            [
-                "add", "my-provider",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
+        _seed_records(tmp_path, "my-provider")
         result = _invoke(["use", "my-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
         assert result.exit_code == 0
 
@@ -653,21 +479,7 @@ class TestRemove:
         """fno providers remove <id> succeeds for non-active records."""
         from fno.adapters.providers.loader import load_providers
 
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        # Add two records, set first as active
-        for pid in ["provider-a", "provider-b"]:
-            _invoke(
-                [
-                    "add", pid,
-                    "--harness", "claude",
-                    "--auth", "oauth_dir",
-                    "--credentials-source", str(creds),
-                    "--scope", "global",
-                ],
-                cwd=tmp_path,
-                home=tmp_path,
-            )
+        _seed_records(tmp_path, "provider-a", "provider-b")
         _invoke(["use", "provider-a", "--scope", "global"], cwd=tmp_path, home=tmp_path)
 
         result = _invoke(["remove", "provider-b", "--scope", "global"], cwd=tmp_path, home=tmp_path)
@@ -678,19 +490,7 @@ class TestRemove:
 
     def test_remove_active_without_force_exits_nonzero(self, tmp_path: Path):
         """AC02.4-EDGE: remove active record without --force exits non-zero."""
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        _invoke(
-            [
-                "add", "active-provider",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
+        _seed_records(tmp_path, "active-provider")
         _invoke(["use", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
 
         result = _invoke(["remove", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
@@ -698,19 +498,7 @@ class TestRemove:
 
     def test_remove_active_stderr_mentions_force(self, tmp_path: Path):
         """AC02.4-EDGE: stderr explains --force requirement when removing active."""
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        _invoke(
-            [
-                "add", "active-provider",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
+        _seed_records(tmp_path, "active-provider")
         _invoke(["use", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
 
         result = _invoke(["remove", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
@@ -721,19 +509,7 @@ class TestRemove:
         """fno providers remove --force removes even the active record."""
         from fno.adapters.providers.loader import load_providers
 
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        _invoke(
-            [
-                "add", "active-provider",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
+        _seed_records(tmp_path, "active-provider")
         _invoke(["use", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
 
         result = _invoke(
@@ -750,19 +526,7 @@ class TestRemove:
         """AC02.4-EDGE: record remains in settings.yaml when remove fails."""
         from fno.adapters.providers.loader import load_providers
 
-        creds = tmp_path / ".claude"
-        creds.mkdir()
-        _invoke(
-            [
-                "add", "active-provider",
-                "--harness", "claude",
-                "--auth", "oauth_dir",
-                "--credentials-source", str(creds),
-                "--scope", "global",
-            ],
-            cwd=tmp_path,
-            home=tmp_path,
-        )
+        _seed_records(tmp_path, "active-provider")
         _invoke(["use", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
         _invoke(["remove", "active-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)  # no --force
 
@@ -1754,51 +1518,6 @@ class TestReconcileSlot:
         root = tmp_path / ".fno" / "providers"
         root.mkdir(parents=True, exist_ok=True)
         return tmp_path
-
-    def test_success_names_the_matched_record_and_no_credential(
-        self, store: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """AC1-HP: a non-secret receipt naming the record reconciliation proved."""
-        from fno.adapters.providers import managed
-
-        monkeypatch.setattr(
-            managed, "reconcile_slot",
-            lambda cli, **kw: managed.ReconcileResult(
-                "matched", record_id="readyrule",
-                detail="the live claude slot belongs to 'readyrule'; taint cleared",
-            ),
-        )
-        result = _invoke(["reconcile-slot", "claude"], cwd=store, home=store)
-        assert result.exit_code == 0, result.output
-        assert "readyrule" in result.output
-        assert "token" not in result.output.lower()
-
-    @pytest.mark.parametrize(
-        "outcome",
-        ["profile-unavailable", "malformed-profile", "zero-match",
-         "ambiguous-match", "lock-timeout", "no-slot-credential"],
-    )
-    def test_every_refusal_exits_nonzero_and_names_its_type(
-        self, store: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
-    ) -> None:
-        """AC3-ERR: US3 - an outage must be loud, and say which way it failed."""
-        from fno.adapters.providers import managed
-
-        monkeypatch.setattr(
-            managed, "reconcile_slot",
-            lambda cli, **kw: managed.ReconcileResult(outcome, detail="why it refused"),
-        )
-        result = _invoke(["reconcile-slot", "claude"], cwd=store, home=store)
-        assert result.exit_code != 0, result.output
-        assert outcome in result.output
-        assert "why it refused" in result.output
-
-    def test_unknown_harness_refuses_without_touching_the_store(
-        self, store: Path
-    ) -> None:
-        result = _invoke(["reconcile-slot", "gemini"], cwd=store, home=store)
-        assert result.exit_code != 0
-        assert "claude" in result.output
 
     def test_doctor_names_the_repair_command_for_a_tainted_slot(
         self, store: Path
