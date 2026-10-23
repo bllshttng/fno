@@ -513,7 +513,6 @@ K4	cli/src/fno/adapters/providers/test_account_binding.py	py	16
 K4	cli/src/fno/adapters/providers/test_benchmarks.py	py	13
 K4	cli/src/fno/adapters/providers/test_cli.py	py	113
 K4	cli/src/fno/adapters/providers/test_error_taxonomy.py	py	69
-K4	cli/src/fno/adapters/providers/test_failover.py	py	32
 K4	cli/src/fno/adapters/providers/test_loader.py	py	63
 K4	cli/src/fno/adapters/providers/test_managed.py	py	149
 K4	cli/src/fno/adapters/providers/test_model.py	py	42
@@ -524,8 +523,6 @@ K4	cli/src/fno/adapters/providers/test_runtime_state.py	py	91
 K4	cli/src/fno/adapters/providers/test_staging.py	py	11
 K4	cli/src/fno/adapters/providers/test_usage.py	py	80
 K4	cli/src/fno/adapters/providers/test_usage_false_green.py	py	16
-K4	cli/src/fno/adapters/test_adapter_types.py	py	5
-K4	cli/src/fno/adapters/test_hermes.py	py	52
 K4	cli/src/fno/agents/test_account_env.py	py	23
 K4	cli/src/fno/agents/test_harness_map.py	py	80
 K4	cli/tests/agents/test_claude_parse_short_id.py	py	3

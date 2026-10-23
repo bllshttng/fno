@@ -31,7 +31,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLI` | rs | unclear: crates/fno-agents/src/loop_dispatch.rs:198 |
 | `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
 | `CODEX_HOME` | py+rs | unclear: cli/src/fno/adapters/providers/managed.py:211 |
-| `CODEX_SESSION_ID` | py+rs | unclear: cli/src/fno/adapters/hermes.py:142 |
+| `CODEX_SESSION_ID` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:654 |
 | `CODEX_THREAD_ID` | py+rs | The codex thread id: codex sets it per thread in child tool env (the root session keeps CODEX_SESSION_ID), never in its own process env. The rollout witness matches it against a daemon row at this cwd to complete a name_only pane's own identity. |
 | `COLORFGBG` | rs | The rxvt-style `fg;bg` terminal color report; a background field of 7 or 15 reads as a light terminal, which picks the `footnote-paper` mux theme default, and anything else keeps `footnote-superscript`. |
 | `COLORTERM` | rs | unclear: crates/fno/src/mux_cli.rs:1508 |
@@ -294,7 +294,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `GROK_SESSION_ID` | rs | fallback session id when a grok Stop payload omits sessionId: crates/fno-agents/src/hook/stop.rs:150 |
 | `HANDOFFS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:1495 |
 | `HELP_ROUTING_BLESS` | rs | Setting it to 1 rewrites the generated routing page from its renderer; the page-compare test blesses with it. |
-| `HERMES_SESSION_ID` | py | unclear: cli/src/fno/adapters/hermes.py:143 |
 | `HOME` | py+rs | The user's home directory. |
 | `HOST` | rs | This machine's name for the join profile header: an agent session names itself through it when set; the hostname fallback follows. |
 | `INVOCATION_ID` | py | unclear: cli/src/fno/agents/context.py:94 |
