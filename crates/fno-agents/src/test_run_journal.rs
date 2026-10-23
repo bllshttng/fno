@@ -1,11 +1,9 @@
 //! Durable `test_run` rows for the `fno doctor test` door, and the reader
 //! that turns them into a median and p90 per normalized command.
 //!
-//! `run_test_run` is the one place that knows a run's exit code and
-//! duration, so it is the one writer: a `started` row when the child spawns
-//! and a `finished` row when it ends, joined by `run_id`. A refused run
-//! spawns nothing and writes nothing. A journal write that fails never
-//! changes the run's exit code.
+//! `run_test_run` knows a run's exit code and duration, so it writes the
+//! pair: `started` at spawn, `finished` at exit, joined by `run_id`. A
+//! failed journal write never changes the run's exit code.
 
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -225,13 +223,7 @@ mod tests {
             ),
             "cargo test fno-agents --lib"
         );
-        assert_eq!(
-            command_key(
-                &argv(&["cargo", "test", "--manifest-path", "crates/fno/Cargo.toml"]),
-                true
-            ),
-            "cargo test fno (whole)"
-        );
+        assert_eq!(command_key(&argv(&["pytest"]), true), "pytest (whole)");
     }
 
     #[test]

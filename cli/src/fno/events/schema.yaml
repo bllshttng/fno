@@ -3134,30 +3134,24 @@ event_types:
   - name: test_run
     retention: durable
     description: >
-      One local test run through the `fno doctor test` door, written by
-      `fno-agents test-run`. A started row lands when the child spawns and a
-      finished row when it ends; both carry the same run_id. A started row
-      with no finished row names a runner that was killed, never a duration.
-      A refused run spawns nothing and writes no row.
+      One local test run through `fno doctor test`. A started row lands at
+      spawn and a finished row at exit, joined by run_id. A started row with
+      no finished row names a killed runner. A refused run writes nothing.
     sources: [agents]
     data:
       required: [run_id, stage]
       properties:
         run_id:
           type: string
-          description: "Join id minted by the runner for this run."
         stage:
           type: string
           enum: [started, finished]
         command:
           type: string
-          description: "The argv as run, capped at 400 characters."
         command_key:
           type: string
-          description: "Normalized grouping key: tool, crate, selector, and (whole) when no target narrowed the run."
         pid:
           type: integer
-          description: "The child's pid, on started rows."
         node_id:
           type: string
         session_id:
@@ -3166,10 +3160,8 @@ event_types:
           type: string
         exit_code:
           type: integer
-          description: "On finished rows: the child's code, 124 on timeout, 128+signal when signalled."
         duration_ms:
           type: integer
-          description: "On finished rows: wall time from admission to exit."
     consumers: [fno-agents test-run stats]
 
   - name: orphan_test_binary_reaped
