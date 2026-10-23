@@ -1,0 +1,1 @@
+{"platform": "darwin", "op": "read_slot_blob", "args": {"cli": "claude", "config_dir": "alt"}, "keychain": {"unscoped": "{\"claudeAiOauth\": {\"accessToken\": \"t-shared\", \"refreshToken\": \"r\"}}"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}

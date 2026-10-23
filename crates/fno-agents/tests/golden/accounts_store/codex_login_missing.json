@@ -1,0 +1,1 @@
+{"op": "codex_login", "args": {}, "codex_login": "missing", "now": 1800000000.0, "expect": {"result": {"ok": null, "reason": "codex-login-status-missing", "home": "<TMP>/home/.codex"}, "error": null, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}

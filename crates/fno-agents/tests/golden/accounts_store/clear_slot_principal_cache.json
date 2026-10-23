@@ -1,0 +1,1 @@
+{"op": "clear_cache", "args": {"cli": "claude"}, "store": {".active-claude.principal": "{}", ".active-codex.principal": "{}"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {".active-codex.principal": {}}, "modes": {".active-codex.principal": false}, "files": {}, "keychain_writes": []}}

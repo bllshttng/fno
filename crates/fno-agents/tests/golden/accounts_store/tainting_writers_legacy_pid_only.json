@@ -1,0 +1,1 @@
+{"op": "tainting_writers", "args": {"cli": "claude"}, "store": {".active-claude.tainted": "{\"pids\": [7, \"x\", 8]}"}, "now": 1800000000.0, "expect": {"result": [[7, null], [8, null]], "error": null, "store": {".active-claude.tainted": {"pids": [7, "x", 8]}}, "modes": {".active-claude.tainted": false}, "files": {}, "keychain_writes": []}}
