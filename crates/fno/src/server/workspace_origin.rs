@@ -34,7 +34,7 @@ impl Core {
     /// name is refused fail-closed, and nothing is created. The shell opens in
     /// `origin`, else where the sender is, and that folder is the workspace's
     /// first origin: the workspace owns the rows under the folder it was made
-    /// from. PTY-first ordering: a spawn failure mutates no model.
+    /// from. An empty `origin` makes a workspace with no folder at all. PTY-first ordering: a spawn failure mutates no model.
     pub(super) fn handle_new_squad(
         &mut self,
         client_id: u64,
@@ -52,14 +52,21 @@ impl Core {
             self.notice(client_id, format!("name taken: {name} is {holder}"));
             return Flow::Continue;
         }
-        let cwd = origin.unwrap_or_else(|| {
+        let viewed = || {
             self.session
                 .squad(view.0)
                 .map(|s| s.canonical_cwd().to_string())
                 .unwrap_or_default()
-        });
+        };
+        // `Some("")` is the explicit "no folder" choice: the shell opens where
+        // the sender is, but the workspace owns nothing by cwd.
+        let no_folder = origin.as_deref() == Some("");
+        let cwd = match origin {
+            Some(o) if !o.is_empty() => o,
+            _ => viewed(),
+        };
         let origins: Vec<String> = Some(cwd.clone())
-            .filter(|c| !c.is_empty())
+            .filter(|c| !c.is_empty() && !no_folder)
             .into_iter()
             .collect();
         let (rows, cols) = self

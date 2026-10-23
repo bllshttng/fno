@@ -1,8 +1,7 @@
-"""Unit tests for the operator capture path.
+"""The ``--source-kind operator_request`` writer surface on the graph side.
 
-Covers ``fno inbox operator`` (the derived queue, the classifier, the ack
-ledger) and the ``--source-kind operator_request`` writer surface on the
-graph side (``idea``, ``new``, ``capture promote``, ``find``).
+The ``fno inbox user`` queue, its refusals and the ack ledger are native;
+their goldens live in crates/fno-agents/tests/user_*_parity.rs.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -11,13 +10,8 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from tests.conftest import run_native_create
-
-runner = CliRunner()
-
 
 @pytest.fixture
 def tmp_graph(tmp_path, monkeypatch) -> Path:
@@ -58,13 +52,6 @@ def _native_backlog(*args: str, cwd=None) -> tuple[int, str, str]:
     )
     return proc.returncode, proc.stdout, proc.stderr
 
-@pytest.fixture
-def tmp_ledger(tmp_path, monkeypatch) -> Path:
-    d = tmp_path / "operator-capture"
-    monkeypatch.setenv("FNO_OPERATOR_CAPTURE_DIR", str(d))
-    return d
-
-
 def _transcript(tmp_path: Path, rows: list[dict]) -> Path:
     p = tmp_path / "transcript.jsonl"
     p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
@@ -81,33 +68,6 @@ def operator_turn(tmp_path: Path, monkeypatch, native_backlog_door):
     monkeypatch.setenv("FNO_OPERATOR_HARNESS", "claude")
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(transcript))
     monkeypatch.setenv("FNO_OPERATOR_CAPTURE_DIR", str(tmp_path / "operator-capture"))
-
-
-def _pin(monkeypatch, tmp_path: Path, rows: list[dict], session: str = "s-test") -> None:
-    """Point the command at a fixture transcript through the env pins."""
-    tp = _transcript(tmp_path, rows)
-    monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", session)
-    monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(tp))
-
-
-def _user_row(text, uuid: str, ts: str = "2026-09-06T21:00:00.000Z") -> dict:
-    return {
-        "type": "user",
-        "uuid": uuid,
-        "timestamp": ts,
-        "message": {"role": "user", "content": text},
-    }
-
-
-def test_invalid_outcome_refused_naming_legal_values(tmp_path, tmp_ledger, monkeypatch):
-    """AC: a nonsense --outcome exits non-zero and names the legal forms."""
-    _pin(monkeypatch, tmp_path, [_user_row("ask", "u-x")])
-    ack = runner.invoke(app, ["inbox", "user", "ack", "u-x", "--outcome", "nonsense"])
-    assert ack.exit_code != 0
-    assert "law:" in ack.output and "capture:" in ack.output and "node:" in ack.output
-
-
-# -- the source_kind writer surface --
 
 
 def _entries(g: Path) -> list[dict]:

@@ -456,22 +456,12 @@ impl ResolveError {
     }
 }
 
-/// The one operator session resolver: the `FNO_OPERATOR_*` pins first, then
-/// the ambient identity, which is resolved only when a pin is missing.
-pub(crate) fn resolve_operator_session(
-    get: &impl Fn(&str) -> Option<String>,
-    home: &crate::paths::AgentsHome,
+/// The session id and capture dir behind a queue read or an ack.
+fn operator_identity<'a>(
+    pin: &impl Fn(&str) -> Option<String>,
+    ambient: &impl Fn() -> &'a crate::spawn_context::OwnedIdentity,
     cwd: &Path,
-) -> Result<OperatorSession, ResolveError> {
-    let pin = |key: &str| {
-        get(key)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let identity = std::cell::OnceCell::new();
-    let ambient = || {
-        identity.get_or_init(|| crate::spawn_context::resolve_self_identity(get, None, None, home))
-    };
+) -> Result<(String, PathBuf), ResolveError> {
     let session = pin("FNO_OPERATOR_SESSION_ID")
         .or_else(|| ambient().session_id.clone())
         .map(|value| value.trim().to_string())
@@ -483,6 +473,42 @@ pub(crate) fn resolve_operator_session(
         .ok_or_else(|| {
             ResolveError::Other("no operator capture directory could be resolved".to_string())
         })?;
+    Ok((session, capture_dir))
+}
+
+fn trimmed_pin(get: &impl Fn(&str) -> Option<String>, key: &str) -> Option<String> {
+    get(key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// The ack's session and capture dir. The ledger outlives the transcript,
+/// so an ack needs no transcript.
+pub(crate) fn resolve_ack_target(
+    get: &impl Fn(&str) -> Option<String>,
+    home: &crate::paths::AgentsHome,
+    cwd: &Path,
+) -> Result<(String, PathBuf), ResolveError> {
+    let identity = std::cell::OnceCell::new();
+    let ambient = || {
+        identity.get_or_init(|| crate::spawn_context::resolve_self_identity(get, None, None, home))
+    };
+    operator_identity(&|key: &str| trimmed_pin(get, key), &ambient, cwd)
+}
+
+/// The one operator session resolver: the `FNO_OPERATOR_*` pins first, then
+/// the ambient identity, which is resolved only when a pin is missing.
+pub(crate) fn resolve_operator_session(
+    get: &impl Fn(&str) -> Option<String>,
+    home: &crate::paths::AgentsHome,
+    cwd: &Path,
+) -> Result<OperatorSession, ResolveError> {
+    let pin = |key: &str| trimmed_pin(get, key);
+    let identity = std::cell::OnceCell::new();
+    let ambient = || {
+        identity.get_or_init(|| crate::spawn_context::resolve_self_identity(get, None, None, home))
+    };
+    let (session, capture_dir) = operator_identity(&pin, &ambient, cwd)?;
     let harness = || {
         pin("FNO_OPERATOR_HARNESS")
             .or_else(|| ambient().harness.clone())
@@ -697,7 +723,9 @@ pub fn run(args: &[String]) -> i32 {
     let session = resolved.session;
     // The id lands in a path join; a crafted id must not escape the capture dir.
     if session.contains('/') || session.contains('\\') || session.contains("..") {
-        eprintln!("compaction operator-turns: --session must be a bare id (no '/', '\\', '..'): {session}");
+        eprintln!(
+            "compaction operator-turns: the session id must be a bare id (no '/', '\\', '..'): {session}"
+        );
         return 2;
     }
     let now_epoch = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
@@ -738,40 +766,74 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
-/// CLI entry: `fno-agents compaction ack --session <id> --turn <id>
-/// --outcome <o> [--why <w>] --capture-dir <dir>`. Session resolution stays
-/// in Python; this binary resolves nothing.
+/// CLI entry: `fno-agents compaction ack <turn> --outcome <o> [--why <w>]`,
+/// the native answer behind `fno inbox user ack`. `--session`, `--turn` and
+/// `--capture-dir` pin what the resolver would otherwise find. The row and
+/// the refusals print as the retired Python command printed them.
 pub fn run_ack(args: &[String]) -> i32 {
-    let (Some(session), Some(turn), Some(outcome), Some(capture_dir)) = (
-        crate::compaction::flag_value(args, "--session"),
-        crate::compaction::flag_value(args, "--turn"),
-        crate::compaction::flag_value(args, "--outcome"),
-        crate::compaction::flag_value(args, "--capture-dir"),
-    ) else {
-        eprintln!("usage: compaction ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir>");
+    const USAGE: &str = "usage: compaction ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>]";
+    let mut positional: Vec<&String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--session" | "--turn" | "--outcome" | "--why" | "--capture-dir" => {
+                it.next();
+            }
+            word if !word.starts_with('-') => positional.push(arg),
+            _ => {
+                eprintln!("{USAGE}");
+                return 2;
+            }
+        }
+    }
+    let flag = |name: &str| crate::compaction::flag_value(args, name);
+    let turn = match (positional.as_slice(), flag("--turn")) {
+        ([word], None) => word.trim().to_string(),
+        ([], Some(turn)) => turn,
+        _ => {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+    };
+    let Some(outcome) = flag("--outcome") else {
+        eprintln!("{USAGE}");
         return 2;
+    };
+    let get = |key: &str| {
+        let pinned = match key {
+            "FNO_OPERATOR_SESSION_ID" => flag("--session"),
+            "FNO_OPERATOR_CAPTURE_DIR" => flag("--capture-dir"),
+            _ => None,
+        };
+        pinned.or_else(|| std::env::var(key).ok())
+    };
+    let home = crate::paths::AgentsHome::from_env();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let (session, capture_dir) = match resolve_ack_target(&get, &home, &cwd) {
+        Ok(target) => target,
+        Err(e) => {
+            eprintln!("error: {}", e.cli_message());
+            return 1;
+        }
     };
     // The id lands in a path join; a crafted id must not escape the capture dir.
     if session.contains('/') || session.contains('\\') || session.contains("..") {
-        eprintln!("compaction ack: --session must be a bare id (no '/', '\\', '..'): {session}");
+        eprintln!(
+            "compaction ack: the session id must be a bare id (no '/', '\\', '..'): {session}"
+        );
         return 2;
     }
-    let why = crate::compaction::flag_value(args, "--why").unwrap_or_default();
-    let home = crate::paths::AgentsHome::from_env();
-    match ack_turn(
-        &home,
-        Path::new(&capture_dir),
-        &session,
-        &turn,
-        &outcome,
-        &why,
-    ) {
+    let why = flag("--why").unwrap_or_default();
+    match ack_turn(&home, &capture_dir, &session, &turn, &outcome, &why) {
         Ok(row) => {
-            println!("{}", serde_json::to_string(&row).unwrap_or_default());
+            println!(
+                "{}",
+                crate::backlog::maintenance::validity::py_dumps(&row, false, true)
+            );
             0
         }
         Err(e) => {
-            eprintln!("{e}");
+            eprintln!("error: the ack write failed: {e}");
             1
         }
     }

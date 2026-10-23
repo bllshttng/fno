@@ -328,7 +328,7 @@ pub fn run_compaction(args: &[String]) -> i32 {
         Some((action, rest)) if action == "inbox-peers" => crate::inbox_peers::run(rest),
         _ => {
             eprintln!(
-                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir> | inbox-peers [--json]"
+                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json]"
             );
             2
         }

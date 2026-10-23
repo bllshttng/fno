@@ -370,7 +370,7 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # P1: internal helper the Rust `list` render path shells out to
     # for the discovered-live-sessions lane. Pure Python (reads
     # ~/.claude/sessions via fno.agents.discover); no Rust port, so it
-    # must never auto-route — Rust invokes it with FNO_AGENTS_RUNTIME=python.
+    # must never auto-route - Rust invokes it with FNO_AGENTS_RUNTIME=python.
     "discovered-json",
     #: the shared bg-dispatch guard command. Pure-Python orchestration of
     # `fno agents claim` (Guard 1 node-claim probe + Guard 2 dispatch:<id> reservation)
@@ -401,9 +401,9 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     #: the registry-miss healer the Rust lifecycle commands shell out to.
     # Pure Python (fno.agents.store_fallback); no Rust port. Staying out of
     # RUST_CLIENT_COMMANDS is the recursion guard for that shellout, so listing it
-    # here is documentary — AUTO_ROUTE_COMMANDS already excludes it.
+    # here is documentary - AUTO_ROUTE_COMMANDS already excludes it.
     "heal-token",
-    #: "what is MY registered mesh name?" — reads FNO_AGENT_SELF + the
+    #: "what is MY registered mesh name?" - reads FNO_AGENT_SELF + the
     # registry, read-only. Pure Python (fno.agents.whoami); there is NO
     # `whoami` on the Rust client, so it must never auto-route to the daemon.
     # Listing it here is defensive/documentary: whoami is not in
@@ -513,7 +513,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "probe-run": "Evaluate a plan's named probe list (done_probes/close_probes); exit 0 only when every row is PASS - exit 0 with no output reads SKIP, not pass. Rows carry verdict (PASS FAIL BLOCKED SKIP), an optional ` # claim` comment from the declaration, and bounded captured output. Shelled by the close commands for close_probes and by prove-it for runtime evidence.",
     "honesty-sweep": "Declared-vs-measured sweep over declared populations: --population harness-capabilities (the default) sweeps the compiled capability table, --population lead-manifests sweeps the space's lead manifests, --rows-json <path|-> [--rows-key <key>] [--name <label>] sweeps piped or filed JSON rows. Four passes: uniform fields, uniform among declarers, negative-claim counts, and (harness-capabilities only) negative claims paired with harness-named exported definitions plus hardcoded harness-name lists. Exit 2 unmeasured (unreadable source, <2 rows, invalid JSON), 0 otherwise - a finding is a candidate, never a verdict.",
     "prove-it-verdicts": "Read terminal prove-it records: walks every node's `<plan>.artifacts/` tree, takes each report's LAST non-empty line when it carries the `fno-prove-it:` JSON record, and emits one row per unretired FAIL plus the newest PASS/FAIL record as the node's headline (a PASS retires a FAIL only when its claim states the FAIL claim, optionally scoped by a `retires` report path; SKIP/BLOCKED retire nothing). --json emits {read_at, rows, unreadable}; --route writes the one progress note per open, unrouted FAIL (never changes node status - a lead rules). Retire a FAIL with a newer PASS whose claim states the FAIL claim, or a decision naming the report.",
-    "test-run": "Native test-suite process-group owner: --timeout SECS [--claims-root PATH] -- ARGV...; admits under the machine-wide test:suite claim, spawns ARGV as the leader of a fresh session, and always kills the group after. Invoked directly by cli/src/fno/test_runner.py's run_suite_bounded, not `fno agents` routing.",
+    "test-run": "Native test-suite process-group owner: --timeout SECS [--claims-root PATH] -- ARGV...; admits under the machine-wide test:suite claim, spawns ARGV as the leader of a fresh session, and always kills the group after. Each run journals test_run started/finished rows; `test-run stats` prints the median and p90 per command. Invoked directly by cli/src/fno/test_runner.py's run_suite_bounded, not `fno agents` routing.",
     "report": "Inside-leg state push (E3.2): store working|blocked|done on a claude row; called by the per-turn hook.",
     "wait": "Block until an agent's registry row reaches idle|blocked|done: --agent <name> --state <s> [--timeout-ms N] [--json].",
     "subscribe": "Stream registry state transitions + pane exits as NDJSON (follows events.jsonl): [--agent <name>] [--kinds state,exit] [--json].",
@@ -741,7 +741,7 @@ def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
         substrate,
         _seed_of(toks),
         resume=_spawn_flag_value(toks, "--resume"),
-        role=_has_flag(toks, "-k", ("--promote", "--promote")),
+        role=_has_flag(toks, longs=("--promote",)),
         name=_spawn_flag_value(toks, "--name"),
         node=_spawn_flag_value(toks, "--node"),
     )
@@ -766,7 +766,6 @@ def _node_seed_at_seam(args: "Sequence[str]") -> "tuple[list[str], Optional[str]
         try:
             answer = command_call("spawn-axes", {"node_seed": {
                 "family": list(_TARGET_FAMILY_COMMANDS),
-                "role": _is_promotion_bearing_spawn("spawn", args),
                 "resume": _is_resume_bearing_spawn("spawn", args),
                 "argv": list(args),
             }}, CommandUnavailable)
@@ -810,7 +809,6 @@ def _node_seed_at_seam(args: "Sequence[str]") -> "tuple[list[str], Optional[str]
         "derive_error": derive_error,
         "node_source": node_source,
         "family": list(_TARGET_FAMILY_COMMANDS),
-        "role": _is_promotion_bearing_spawn("spawn", args),
         "resume": _is_resume_bearing_spawn("spawn", args),
         "argv": list(args),
         "seed_index": (slot[0] + 1) if slot else None,
@@ -1057,11 +1055,6 @@ def _gate_rm_at_seam(args: Sequence[str]) -> bool:
         return True
 
 
-def _is_promotion_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """Keep grant-at-spawn on the Python path that owns promotion."""
-    return command == "spawn" and _has_flag(args, longs=("--promote",))
-
-
 def _is_dispatch_account_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--dispatch-account`` (the cutover carrier).
 
@@ -1110,13 +1103,15 @@ def _with_seam_marker(args: "list[str]", command: str) -> "list[str]":
     ``--defaults-applied=<state>`` straight after the command is the only record
     the config-blind binary sees of the seam's decision. The token is
     inserted, never appended: everything after ``--`` is the worker's seed.
-    Spawn-only: no other command crosses this fork.
+    The take-over reason compose consumed rides the same way, so the
+    binary's promote door reads it. Spawn-only: no other command crosses this fork.
     """
     if command != "spawn" or not args or args[0] != "spawn":
         return args
-    from fno.agents.spawn_defaults import spawn_seam_marker
+    from fno.agents.spawn_defaults import PENDING_TAKE_OVER, spawn_seam_marker
 
-    return [args[0], spawn_seam_marker(), *args[1:]]
+    take_over = [f"--take-over={reason}" for reason in PENDING_TAKE_OVER]
+    return [args[0], spawn_seam_marker(), *take_over, *args[1:]]
 
 
 def _spawn_flag_value(args: Sequence[str], *names: str) -> Optional[str]:
@@ -1481,7 +1476,7 @@ def make_agents_group_cls() -> type:
     """Build the TyperGroup subclass that short-circuits to the Rust binary.
 
     Returned (not module-level) so importing this module never imports
-    ``typer.core`` unless the agents sub-app is actually constructed — keeps the
+    ``typer.core`` unless the agents sub-app is actually constructed - keeps the
     lazy-import startup budget intact.
     """
     from fno._lazy_group import LazyTypeGroup, _LazyStub
@@ -1577,7 +1572,6 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 py_spawn = (
                     _is_role_bearing_spawn(command, args)
-                    or _is_promotion_bearing_spawn(command, args)
                     or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account") is not None)
                     or _is_default_substrate_spawn(command, args)
                     or _is_retired_axis_spawn(command, args)

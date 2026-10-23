@@ -1,0 +1,11 @@
+{
+  "detail": "ambiguous built-in definitions for marketing/twin: built-in/twin-a.json, built-in/twin-b.json",
+  "reason": "invalid_overlay",
+  "reference": "twin",
+  "role": {
+    "function_id": "marketing",
+    "id": "twin"
+  },
+  "source_id": "built-in/twin-a.json",
+  "source_layer": "built-in"
+}

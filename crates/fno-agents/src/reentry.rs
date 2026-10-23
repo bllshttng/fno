@@ -630,9 +630,19 @@ fn resolve_reentry_inner(
                 None => true,
                 Some(route) => {
                     saved_job_settings(&claude_home.jobs_dir_for(&short_id).join("state.json"))
-                        .is_some_and(|saved| &saved == route)
+                        .is_some_and(|saved| same_route_file(&saved, route))
                 }
             };
+            // `claude --bg --resume` on a session a live process still holds
+            // starts a COPY under a new session id, and the copy then shows
+            // as a second worker. Refuse rather than fork.
+            if !(listed && job_keeps_route) && claude_home.session_held(&session_id) {
+                return Err(format!(
+                    "row {name:?}: a live process still holds session {session_id}, and \
+                     `claude --bg --resume` would start a copy of it under a new session id; \
+                     attach it with `claude attach {short_id}` or stop it first"
+                ));
+            }
             if listed && job_keeps_route {
                 mechanism = "respawn".to_string();
                 argv.push("claude".into());
@@ -659,6 +669,13 @@ fn resolve_reentry_inner(
         if let Some(path) = plan_route.as_deref() {
             argv.push("--settings".into());
             argv.push(path.to_string());
+        } else if mechanism == "bg-resume" {
+            // An unrouted revive starts a fresh process, and the attached
+            // view wears the theme that launch carries.
+            if let Some(theme) = crate::route_settings::claude_theme_env() {
+                argv.push("--settings".into());
+                argv.push(format!("{{\"theme\":\"{theme}\"}}"));
+            }
         }
     }
 
@@ -754,6 +771,21 @@ fn saved_job_settings(state: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a job's saved `--settings` file applies the plan's route. Claude
+/// reads only the file's bytes, so two paths with the same bytes are the same
+/// route: a lane alias (`lane-zai-flash.json`) and the hashed file it was
+/// written from both qualify. Comparing path strings sent such a revive to
+/// `claude --bg --resume`, which copies a session that is still held.
+fn same_route_file(saved: &str, route: &str) -> bool {
+    if saved == route {
+        return true;
+    }
+    match (std::fs::read(saved), std::fs::read(route)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// One argv that runs the relaunch, then becomes `claude attach <short>`:
@@ -1150,6 +1182,7 @@ mod tests {
             "aaaaaaaa",
             &["--settings", &dir.to_string_lossy()],
         );
+        let mut aliased = e.clone();
         let plan = resolve_reentry_with(
             &reg(vec![e]),
             "glm",
@@ -1188,6 +1221,45 @@ mod tests {
             plan.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
             Some("/acct/makers/cfg")
         );
+
+        // The saved launch names a different file with the same bytes (a lane
+        // alias beside its hashed source): still the row's route, so respawn
+        // keeps the id. A path-string compare sent this to `--bg --resume`.
+        let alias = std::env::temp_dir().join("reentry-test-route-a-alias.json");
+        std::fs::copy(&dir, &alias).unwrap();
+        aliased.route_settings_path = Some(alias.to_string_lossy().to_string());
+        let plan = resolve_reentry_with(
+            &reg(vec![aliased.clone()]),
+            "glm",
+            ReentryTransition::Resume,
+            None,
+            &binding_ok,
+            &home,
+            None,
+        )
+        .unwrap();
+        assert_eq!(plan.mechanism, "respawn");
+
+        // A real route change on a session a live process still holds would
+        // fork it under a new id, so the resume refuses instead.
+        let mut changed = std::fs::read(&dir).unwrap();
+        changed.push(b'\n');
+        std::fs::write(&alias, changed).unwrap();
+        let live_home = home
+            .clone()
+            .with_live_sessions(vec!["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into()]);
+        let err = resolve_reentry_with(
+            &reg(vec![aliased]),
+            "glm",
+            ReentryTransition::Resume,
+            None,
+            &binding_ok,
+            &live_home,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("would start a copy"), "{err}");
+        std::fs::remove_file(&alias).ok();
 
         // The ATTACH arm is a fresh interactive launch: there the recorded
         // route DOES ride the argv as --settings.

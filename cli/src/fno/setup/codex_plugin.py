@@ -36,6 +36,13 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 _OUTPUT_LIMIT = 500
 
 
+def _remedy(channel: object) -> str:
+    # The dev install refuses a release marker; setup converges release.
+    if channel == "release":
+        return "fno config setup run --only harness-wiring"
+    return "fno config plugin install codex --force"
+
+
 @dataclass(frozen=True)
 class Marketplace:
     name: str
@@ -785,7 +792,7 @@ def inspect_freshness(
             "status": "error",
             "issue": "rollback-failure",
             "detail": detail[-_OUTPUT_LIMIT:],
-            "remedy": "fno config plugin install codex --force",
+            "remedy": _remedy(rollback_channel),
         }
     marker: dict[str, object] | None = None
     marker_error: Exception | None = None
@@ -840,7 +847,7 @@ def inspect_freshness(
             "enabled_plugin_ids": [p.plugin_id for p in enabled],
             "status": "conflict",
             "issue": "ambiguous-duplicate-state",
-            "remedy": "fno config plugin install codex --force",
+            "remedy": _remedy(conflict_channel),
         }
     if marker_error is not None:
         if isinstance(marker_error, FileNotFoundError):
@@ -866,7 +873,7 @@ def inspect_freshness(
         "marketplace_source": expected_source,
         "installed_plugin_ids": [p.plugin_id for p in installed],
         "enabled_plugin_ids": [p.plugin_id for p in enabled],
-        "remedy": "fno config plugin install codex --force",
+        "remedy": _remedy(channel),
     }
     if not enabled:
         return {**base, "status": "missing", "issue": "plugin-missing"}

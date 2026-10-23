@@ -481,9 +481,10 @@ fn predicate(ctx: &Ctx, name: &str, ev: Option<&Value>) -> bool {
     negated != value
 }
 
-/// A worker ask addressed to its lead (the `Approval:` template), or any ask
-/// sentence plus a numbered list of two or more options - the chat shape the
-/// R1 rows police.
+/// A worker ask addressed to its lead (the `Approval:` template), or an ask
+/// sentence with its options: the numbered list right under the ask line, or
+/// the options inline on the ask's own line. An ask word in one paragraph and
+/// a status list in another is a report, not an ask.
 fn decision_ask(text: &str) -> bool {
     if text
         .lines()
@@ -491,10 +492,42 @@ fn decision_ask(text: &str) -> bool {
     {
         return true;
     }
-    if crate::repeated_asks::asks_in(text).is_empty() {
-        return false;
-    }
-    numbered_options(text) >= 2
+    let lines: Vec<&str> = text.lines().collect();
+    lines.iter().enumerate().any(|(i, line)| {
+        if crate::repeated_asks::asks_in(line).is_empty() {
+            return false;
+        }
+        if numbered_options(line) >= 2 {
+            return true;
+        }
+        let blank = |l: &&&str| l.trim().is_empty();
+        let item = |l: &&&str| is_numbered_item(l);
+        !is_numbered_item(line)
+            && (lines[i + 1..]
+                .iter()
+                .skip_while(blank)
+                .take_while(item)
+                .count()
+                >= 2
+                // "Options: 1. x 2. y" then "Which do you want?" is an ask too.
+                || (line.trim_end().ends_with('?')
+                    && lines[..i]
+                        .iter()
+                        .rev()
+                        .skip_while(blank)
+                        .take_while(item)
+                        .count()
+                        >= 2))
+    })
+}
+
+fn is_numbered_item(line: &str) -> bool {
+    let line = line.trim_start();
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0
+        && line[digits..]
+            .strip_prefix(['.', ')'])
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace))
 }
 
 fn numbered_options(text: &str) -> usize {
@@ -1104,6 +1137,19 @@ mod tests {
         assert!(!decision_ask(next));
         let receipt = "You ruled hold, which was your call.\n1. held\n2. noted";
         assert!(!decision_ask(receipt));
+        // A numbered status list plus an unrelated "want" sentence in another
+        // paragraph is a report: the options must sit under the ask line.
+        let split =
+            "Prep list:\n1. read the node\n2. cut the worktree\n\nLet me know if the fix grows.";
+        assert!(!decision_ask(split));
+        let spaced = "Should I merge?\n\n1. merge now\n2. hold";
+        assert!(decision_ask(spaced));
+        assert!(decision_ask(
+            "Options:\n1. merge now\n2. hold\nWhich do you want?"
+        ));
+        assert!(!decision_ask(
+            "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
+        ));
     }
 
     fn r1_unpromoted_and_cap_legs() {

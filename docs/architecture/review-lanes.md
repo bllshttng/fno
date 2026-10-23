@@ -113,7 +113,7 @@ One boundary on where the refused state surfaces. The row is scoped to the EXACT
 
 ## A reply does not resolve a thread
 
-`fno do pr status` reports `optional_reviews_unresolved`, and `ready` is `green && unresolved == 0`.
+`fno do pr status` reports `optional_reviews_unresolved`, and `ready` is `green && unresolved == 0`. An unreadable count (null) warns and does not hold ready.
 Answering a finding in-thread does not decrement that counter: a GitHub review thread stays unresolved until it is resolved EXPLICITLY.
 So a PR whose every finding has been fixed and answered can sit at `ready: false` indefinitely while reading, to a human and to the loop, as fully handled.
 

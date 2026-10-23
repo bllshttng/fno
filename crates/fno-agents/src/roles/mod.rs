@@ -5,8 +5,16 @@
 //! - [`registry`]: discovery under the layered root, and the
 //!   `spawn-overlay` kind `roles-discover` the Python package reads its
 //!   records through.
+//! - [`resolver`]: business-role resolution, and the `spawn-overlay` kind
+//!   `roles-resolve` the Python package resolves through.
+//! - [`context`]: the catalog of configured `[context.artifacts]` files.
+//! - [`routing`]: the business-role lookup model routing reads, and the
+//!   `spawn-overlay` kind `business-role`.
 //! - [`cli`]: the commands, reached as `fno-agents spawn-overlay roles <op>`.
 
 pub mod cli;
+pub mod context;
 pub mod models;
 pub mod registry;
+pub mod resolver;
+pub mod routing;

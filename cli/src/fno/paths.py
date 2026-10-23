@@ -1900,6 +1900,23 @@ def resolve_plugin_script(relpath: str) -> Path:
     return resolve_repo_root() / relpath
 
 
+def installed_plugin_script(relpath: str) -> "Path | None":
+    """The installed plugin's copy of ``relpath``, ignoring every env hint.
+
+    ``resolve_plugin_script`` honors ``FNO_REPO_ROOT`` raw, and in a foreign
+    repo that names the project, which ships none of the plugin's scripts. A
+    caller that must find the script anyway asks here after the hinted path
+    misses. None when neither the package root nor the persisted plugin
+    pointer holds the file."""
+    pkg_root = Path(__file__).resolve().parents[3]
+    if _is_plugin_root(pkg_root) and (pkg_root / relpath).is_file():
+        return pkg_root / relpath
+    persisted = _read_persisted_plugin_root()
+    if persisted is not None and (persisted / relpath).is_file():
+        return persisted / relpath
+    return None
+
+
 def resolve_plugin_script_durable(relpath: str) -> Path:
     """``resolve_plugin_script`` mapped onto the canonical checkout.
 

@@ -638,7 +638,7 @@ fn plant_stale_socket(path: &Path) {
 }
 
 #[test]
-fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
+fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
     let scratch = Scratch::new("ls");
     let _server = sh_server(&scratch); // session "main"
     let cwd = scratch.dir("w");
@@ -668,14 +668,31 @@ fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
         stdout.contains(needle),
         "live row with counts; got: {stdout}"
     );
-    assert!(stdout.contains("dead: stale"), "stale row; got: {stdout}");
+    // A refused socket with no pid sidecar is a proven corpse: ls heals it
+    // away instead of listing it, and the files go with it.
+    assert!(
+        !stdout.contains("dead:"),
+        "corpse row healed; got: {stdout}"
+    );
+    assert!(
+        !scratch.0.join("dead.sock").exists(),
+        "ls removes a proven-dead session's socket"
+    );
+    let healed = fno::event_store::journal_text(
+        &scratch.0.join("iso-agents").join("events.jsonl"),
+        &["mux_session_healed"],
+    );
+    assert!(
+        healed.contains("mux_session_healed") && healed.contains("dead.sock"),
+        "the heal journals one row naming the session; got: {healed}"
+    );
     assert!(
         stdout.contains("odd: alive (unqueryable"),
         "unanswering server degrades per-row (AC4-ERR); got: {stdout}"
     );
     assert!(
-        scratch.0.join("dead.sock").exists(),
-        "ls is read-only: it never unlinks (AC4-HP)"
+        scratch.0.join("odd.sock").exists(),
+        "a socket that accepts is never removed"
     );
     // The probed live session is unharmed: the client still works.
     let pane = c.focus();

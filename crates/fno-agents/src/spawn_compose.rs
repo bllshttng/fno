@@ -94,15 +94,6 @@ pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
             cwd,
             &["dispatch", "command_registry"],
         )
-        .or_else(|| {
-            crate::agents_config::config_value_deep(
-                cwd,
-                &[
-                    "dispatch",
-                    crate::backlog::settings::LEGACY_COMMAND_REGISTRY_KEY,
-                ],
-            )
-        })
         .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new())),
         env_node,
         facts: ask.get("facts").cloned().unwrap_or_else(|| json!({})),
@@ -911,23 +902,14 @@ fn read_fields(stage: &Stage) -> Fields {
     }
 }
 
-/// Whether the argv names a role (`-k` in all three Click spellings, or
-/// `--promote`) before the `--argv` boundary or a bare `--` fence (fenced
-/// tokens are prompt text) - the same boundary rule Python's
-/// `_has_permission_mode` applies, and the same short-form spellings the
-/// Python routing detector accepts.
-fn argv_has_team(argv: &[String]) -> bool {
+/// Whether the argv names a team (`--promote`) before the `--argv` boundary
+/// or a bare `--` fence (fenced tokens are prompt text) - the same boundary
+/// rule Python's `_has_permission_mode` applies.
+pub(crate) fn argv_has_team(argv: &[String]) -> bool {
     argv.iter()
         .skip(1)
         .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
-        .any(|t| {
-            // retired-ok: the daemon accepts the retired alias for one release
-            t == "--promote"
-                || t.starts_with("--promote=")
-                || t == "-k"
-                || t.starts_with("-k=")
-                || (t.starts_with("-k") && t.len() > 2 && !t.starts_with("--"))
-        })
+        .any(|t| t == "--promote" || t.starts_with("--promote="))
 }
 
 /// Whether the argv carries `--take-over` (or `--take-over=...`) before the

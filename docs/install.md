@@ -21,6 +21,8 @@ In any Claude Code session:
 
 If the add refuses because the name `footnote` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
 
+`fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `footnote` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
+
 On the first session after install, footnote prints the install plan and starts nothing: a person's yes is what runs it. On a yes, run `bash <plugin root>/.claude-plugin/postinstall.sh`. Its output ends with `installer exit 0` on success. Then open a new session, and `fno` is on your PATH.
 
 ### Codex, opencode, agy and other harnesses

@@ -17,10 +17,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
 from fno.plugins.cli import plugins_app
+
+# Role resolution runs in fno-agents (spawn-overlay kind roles-resolve).
+pytestmark = pytest.mark.dev_build
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "external_workflow_pack"
 POSITIVE_MARKER = "EVALUATOR PASS"

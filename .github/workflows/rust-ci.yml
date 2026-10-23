@@ -6,12 +6,12 @@ name: rust-ci
 # stress trials, and dependency audit.
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Each main push gets its own group keyed by sha: a group keeps one
-# pending run and drops the older one, so a shared main group left the middle
-# merge of a burst untested on main. The nightly schedule run gets its own
-# group so a nightly never makes a main push queue behind it.
+# run. Main pushes share one group keyed by ref, with the same rule as
+# cli-ci.yml: the running main run finishes, the newest push replaces the
+# pending one, and the tip is the commit that tests. The nightly schedule run
+# gets its own group so a nightly never makes a main push queue behind it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.head_ref || (github.event_name == 'push' && github.sha) || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
@@ -195,7 +195,7 @@ jobs:
           # does; the Mac demo works because the binary is installed there.
           export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
           mkdir -p shots
-          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban navigator-pr navigator-model; do
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban navigator-pr navigator-model navigator-menu; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
           # The whole mux with no view open: the card sideline at two widths.

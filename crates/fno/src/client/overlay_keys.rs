@@ -381,6 +381,12 @@ pub(super) async fn nav_keys(
                     input_field::clear_opt(view.nav.as_mut().map(|n| &mut n.query));
                     view.nav_ring_if_empty();
                 }
+                // Ctrl-o opens the sideline's row menu on the cursor row. Bare
+                // letters stay query text (Locked 5), so the menu's own keys
+                // (x remove, p peek, m mail, ...) work one keypress later.
+                0x0f => {
+                    view.nav_open_menu();
+                }
                 // Printable ASCII edits the query; capped like search so a held
                 // key / paste can't grow it unbounded. Cursor re-anchors to 0.
                 0x20..=0x7e => {
@@ -487,11 +493,16 @@ pub(super) async fn create_keys(
         }
         match key {
             NavKey::Esc => {
+                // In the folder field Esc steps back to the name; otherwise it cancels.
+                if view.folder_pick.path.take().is_some() {
+                    continue;
+                }
                 view.create = None;
                 view.create_esc.clear();
                 break;
             }
             NavKey::Up | NavKey::Down => {
+                view.folder_pick.path = None;
                 let name = view.create.clone().unwrap_or_default();
                 view.cycle_create_folder(&name, matches!(key, NavKey::Down));
             }
@@ -501,7 +512,13 @@ pub(super) async fn create_keys(
                     // Validate on a reference; only allocate when actually sending.
                     if let Some(name) = view.create.as_deref().map(str::trim) {
                         if !name.is_empty() {
-                            let origin = view.create_folder(name);
+                            let origin = match view.create_folder(name) {
+                                Ok(o) => o.wire(),
+                                Err(msg) => {
+                                    view.set_notice(msg);
+                                    continue;
+                                }
+                            };
                             write_msg(
                                 sock_w,
                                 &ClientMsg::Command(Command::NewSquad {
@@ -519,14 +536,20 @@ pub(super) async fn create_keys(
                     // Empty name: keep the overlay open (AC2-FR shape - a failed
                     // create leaves the input intact).
                 }
+                0x09 => {
+                    let name = view.create.clone().unwrap_or_default();
+                    view.tab_create_folder(&name);
+                }
                 0x7f | 0x08 => {
-                    if let Some(buf) = view.create.as_mut() {
+                    if let Some(buf) = view.folder_pick.path.as_mut().or(view.create.as_mut()) {
                         buf.pop();
                     }
                 }
-                0x15 => input_field::clear_opt(view.create.as_mut()),
+                0x15 => {
+                    input_field::clear_opt(view.folder_pick.path.as_mut().or(view.create.as_mut()))
+                }
                 0x20..=0x7e => {
-                    if let Some(buf) = view.create.as_mut() {
+                    if let Some(buf) = view.folder_pick.path.as_mut().or(view.create.as_mut()) {
                         if buf.len() < MAX_SEARCH_QUERY {
                             buf.push(b as char);
                         }

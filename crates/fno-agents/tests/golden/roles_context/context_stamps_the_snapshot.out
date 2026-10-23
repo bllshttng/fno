@@ -1,0 +1,30 @@
+[
+  {
+    "byte_size": 22,
+    "content_digest": "22957c33c4c8c407d917469cd92dca5db7741655d0f6da549b8879da835a8fa1",
+    "content_revision": "22957c33c4c8c407d917469cd92dca5db7741655d0f6da549b8879da835a8fa1",
+    "fresh_until": null,
+    "identifier": "brief",
+    "kind": "artifact",
+    "provenance": "<FIXTURE>/repo/docs/brief.md",
+    "readable": true,
+    "sensitivity": "sensitive",
+    "snapshot_revision": "snap-9",
+    "unavailable_reason": null,
+    "work_order_scope": null
+  },
+  {
+    "byte_size": 0,
+    "content_digest": null,
+    "content_revision": null,
+    "fresh_until": null,
+    "identifier": "through-a-file",
+    "kind": "artifact",
+    "provenance": "<FIXTURE>/repo/docs/brief.md/inner",
+    "readable": false,
+    "sensitivity": "internal",
+    "snapshot_revision": "snap-9",
+    "unavailable_reason": "<FIXTURE>/repo/docs/brief.md/inner: NotADirectoryError",
+    "work_order_scope": null
+  }
+]

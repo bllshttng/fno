@@ -74,6 +74,9 @@ def _operator_shell_identity(monkeypatch):
 
     for name in AMBIENT_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
+    # A mux worker pane exports the claude theme; a bg_create test must not
+    # inherit a settings file from the shell that ran pytest.
+    monkeypatch.delenv("FNO_CLAUDE_THEME", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -262,6 +265,28 @@ def _dev_build_absent() -> bool:
 
         _dev_build_absent_cache = find_dev_binary() is None
     return _dev_build_absent_cache
+
+
+@pytest.fixture(autouse=True)
+def _business_role_door_without_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Model routing asks fno-agents for the business role behind every named
+    spawn role. A shard with no dev build has no door to ask. With no
+    FNO_ROLES_ROOT the checkout carries no role root, so the door's answer
+    there is not_found; a test that sets a root needs the build."""
+    if not _dev_build_absent():
+        return
+    from fno import rust_binary
+
+    real = rust_binary.command_call
+
+    def answer(command, payload, *args, **kwargs):
+        if payload.get("kind") != "business-role" or os.environ.get("FNO_ROLES_ROOT"):
+            return real(command, payload, *args, **kwargs)
+        role = payload["role"]
+        return {"role": {"id": role, "function_id": "unavailable"}, "reason": "not_found",
+                "source_layer": None, "source_id": None, "reference": role, "detail": None}
+
+    monkeypatch.setattr(rust_binary, "command_call", answer)
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -1361,7 +1361,7 @@ async fn run(args: Vec<String>) -> i32 {
     // would capture "--force" and print the wrong success line (gemini-code-assist
     // high on PR #361). Falls back to the raw first positional for commands that don't
     // set params.name (none of the formatted commands hit that path today).
-    let agent_name = params
+    let mut agent_name = params
         .get("name")
         .and_then(|v| v.as_str())
         .map(str::to_string)
@@ -1473,11 +1473,10 @@ async fn run(args: Vec<String>) -> i32 {
         }
     }
 
-    // Task 1.3a: intercept `spawn` (NOT host/promote, which also map to
-    // agent.spawn) to route claude -> dispatch_claude_spawn, and
-    // codex/gemini + --once -> dispatch_codex_once / dispatch_gemini_once.
-    // `host` and `promote` must fall through to the daemon RPC unchanged.
+    // Intercept `spawn` only: `host` and `promote` also map to agent.spawn
+    // and fall through to the daemon RPC unchanged.
     let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
+    let mut promotion = None;
     if method == "agent.spawn" && command_owned == "spawn" {
         // The seam gate comes FIRST. A spawn that skipped
         // the Python seam carries no configured route/model/effort/account,
@@ -1522,6 +1521,10 @@ async fn run(args: Vec<String>) -> i32 {
         if fno_agents::claude_workspace_trust::spawn_preflight_refuses(&params, substrate) {
             return 2;
         }
+        promotion = match fno_agents::spawn_promote::plan(&mut params, &mut agent_name, substrate) {
+            Ok(planned) => planned,
+            Err(code) => return code,
+        };
         // A DEFAULT never opens a view: a bare spawn is a paneless thread,
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
@@ -1530,13 +1533,24 @@ async fn run(args: Vec<String>) -> i32 {
             // the pane spine answers every harness arm itself - the Python
             // bounce this branch kept for unseated shapes is deleted.
             return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
-                fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args)
+                let code =
+                    fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+                fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name)
             });
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
         // stamp names the account it applied; anything else re-execs Python.
-        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &args, &mut spawn_hold) {
+        let promoted = promotion.as_ref();
+        if let Some(code) = maybe_run_spawn(
+            &home,
+            &params,
+            &agent_name,
+            &args,
+            &mut spawn_hold,
+            promoted,
+        ) {
             fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
+            let code = fno_agents::spawn_promote::settle(promoted, code, &agent_name);
             if code == 0 {
                 // A placement failure never recolors the spawn verdict: the
                 // receipt is the truth, the worker is live, and a nonzero here
@@ -1668,7 +1682,7 @@ async fn run(args: Vec<String>) -> i32 {
                 flags: daemon_gate_flags,
                 seed: daemon_gate_seed,
                 route_provider: daemon_gate_route_provider,
-                ..Default::default()
+                ..fno_agents::spawn_promote::gate_input(promotion.as_ref())
             },
         ) {
             Ok(guard) => Some(guard),
@@ -1700,6 +1714,7 @@ async fn run(args: Vec<String>) -> i32 {
     drop(daemon_spawn_gate);
     if matches!(&call_result, Ok(resp) if matches!(resp.payload, ResponsePayload::Ok(_))) {
         fno_agents::spawn_guard::settle(&mut spawn_hold, 0, &agent_name);
+        fno_agents::spawn_promote::settle(promotion.as_ref(), 0, &agent_name);
     }
     match call_result {
         Ok(resp) => match resp.payload {
@@ -1923,23 +1938,6 @@ const HARNESS_MARKERS: &[(&str, &str)] = &[
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
 ];
-
-/// Infer the dispatch provider when `--provider` is absent, mirroring Python
-/// `infer_invoking_harness`: resolve when the present markers name exactly one
-/// *distinct* harness. Multiple markers for the same harness (Codex's thread id
-/// plus its legacy session id) agree; markers naming different harnesses, or
-/// none, fall through to the builtin `claude`. Never guesses. `lookup` is
-/// injectable so tests don't touch process-global env.
-fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'static str {
-    match fno_agents::claims::resolve_harness_from(lookup).as_deref() {
-        Some("claude") => "claude",
-        Some("codex") => "codex",
-        Some("gemini") => "gemini",
-        Some("opencode") => "opencode",
-        Some("agy") => "agy",
-        _ => "claude",
-    }
-}
 
 /// Route a codex `ask` to the client-side `codex exec` path, bypassing the
 /// daemon. Returns `Some(exit_code)` when the target is codex
@@ -2188,6 +2186,7 @@ fn maybe_run_spawn(
     name: &str,
     args: &[String],
     hold: &mut Option<fno_agents::spawn_guard::SpawnHold>,
+    promotion: Option<&fno_agents::spawn_promote::Promotion>,
 ) -> Option<i32> {
     use fno_agents::agy_ask::dispatch_agy_once_with_effort;
     use fno_agents::claude_ask::{
@@ -2260,7 +2259,7 @@ fn maybe_run_spawn(
     // which already infers via the Python re-exec.
     let provider = match provider_param {
         Some(p) => p,
-        None => infer_dispatch_provider(|k| std::env::var(k).ok()),
+        None => fno_agents::provider::infer_dispatch_provider(|k| std::env::var(k).ok()),
     };
 
     // The row-9 flag seams: the refusals the binary owns print the Python
@@ -2491,7 +2490,7 @@ fn maybe_run_spawn(
                     .get("session_phase")
                     .and_then(Value::as_str)
                     .map(str::to_string),
-                ..Default::default()
+                ..fno_agents::spawn_promote::gate_input(promotion)
             },
         ) {
             Ok(g) => Some(g),
@@ -2524,9 +2523,7 @@ fn maybe_run_spawn(
     }
 
     match (provider, substrate) {
-        // pane (default): mux-hosted since 4a-G2. The caller intercepts pane
-        // spawns BEFORE this fn and re-execs the Python CLI (mux_spawn back
-        // half), so this arm is unreachable; None keeps the match total.
+        // pane: the caller sends it to the pane spine before this fn.
         (_, "pane") => None,
 
         // claude bg: the detached `claude --bg` thread (appears in `claude
@@ -3766,6 +3763,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--harness-arg",
         "--role-level",
         "--role-scope",
+        "--promote",
+        "--take-over",
         "--output-format",
         "--monitor",
     ];
@@ -4041,7 +4040,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             }
             // The role halves the Python seam carries for a promoted codex
             // thread spawn; the typed parse lives in spawn_axes.
-            "--role-level" | "--role-scope" => {
+            f if fno_agents::spawn_axes::ROLE_FLAGS.contains(&f) => {
                 fno_agents::spawn_axes::insert_role_flag(&a, &mut it, &mut params)?;
             }
             // The row-9 flags: typed parse in spawn_axes (the equals form

@@ -185,8 +185,7 @@ fn stamp(registry: &Path, payload: &Value) -> Result<Value, String> {
                 ]
                 .into_iter()
                 .flatten()
-                .find(|s| !s.is_empty())
-                    == Some(session)
+                .any(|s| !s.is_empty() && s == session)
         });
         answer["found"] = json!(successor.is_some());
         let Some(row) = successor else {

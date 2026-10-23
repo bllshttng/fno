@@ -16,9 +16,10 @@
 //! never sees.
 //!
 //! Scrub runs before any row reaches disk: secret shapes are masked with the
-//! report scrub's regex, home paths collapse to `~`, the row is rescanned,
-//! and a residual match drops it. A row that cites a tool call which read or
-//! printed a `.env*`, credentials, `.pem` or keychain path is dropped whole.
+//! report scrub's regex, home paths collapse to `~`, email addresses become
+//! `[email]`, the row is rescanned, and a residual match drops it. A row that
+//! cites a tool call which read or printed a `.env*`, credentials, `.pem` or
+//! keychain path is dropped whole.
 //! Whole sessions go to the eval candidates, so no eval session ever lends a
 //! row to train, holdout or unlabelled; the manifest's `leaks` re-reads the
 //! written files to prove it. Nothing leaves the machine.
@@ -75,6 +76,14 @@ const HELP_CLASSES: &[(&str, &str)] = &[
 
 fn rx(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
+}
+
+fn email_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    rx(
+        &RX,
+        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}",
+    )
 }
 
 fn sensitive_rx() -> &'static Regex {
@@ -354,6 +363,7 @@ fn reaction_rule(text: &str) -> Option<&'static str> {
 struct ScrubCounts {
     secrets_masked: u64,
     paths_masked: u64,
+    emails_masked: u64,
     residual_drops: u64,
     sensitive_drops: u64,
 }
@@ -377,6 +387,11 @@ fn scrub_string(s: &str, counts: &mut ScrubCounts) -> String {
         out = paths.replace_all(&out, "~").into_owned();
         counts.paths_masked += n as u64;
     }
+    let n = email_rx().find_iter(&out).count();
+    if n > 0 {
+        out = email_rx().replace_all(&out, "[email]").into_owned();
+        counts.emails_masked += n as u64;
+    }
     out
 }
 
@@ -396,7 +411,8 @@ fn scrub_row(mut row: Value, counts: &mut ScrubCounts) -> Option<Value> {
     let text = row.to_string();
     let residual = crate::intel_html::secret_rx()
         .find_iter(&text)
-        .any(|m| !m.as_str().contains("[redacted]"));
+        .any(|m| !m.as_str().contains("[redacted]"))
+        || email_rx().is_match(&text);
     if residual {
         counts.residual_drops += 1;
         return None;
@@ -1224,6 +1240,18 @@ fn rows_from_sessions(path: &Path, sessions: &HashSet<String>) -> usize {
         .count()
 }
 
+/// Email addresses in one written file, read a line at a time.
+fn emails_in_file(path: &Path) -> usize {
+    let Ok(fh) = std::fs::File::open(path) else {
+        return 0;
+    };
+    std::io::BufReader::new(fh)
+        .lines()
+        .map_while(Result::ok)
+        .map(|l| email_rx().find_iter(&l).count())
+        .sum()
+}
+
 /// True when an earlier export's pages already carry a checked item: a new
 /// export would overwrite the user's labels.
 fn pages_hold_checks(dir: &Path) -> bool {
@@ -1378,6 +1406,12 @@ pub(crate) fn export(
         .map(|name| rows_from_sessions(&dir.join(name), &eval_sessions))
         .sum();
 
+    // Same independence: count what reached disk, not what the scrub reports.
+    let emails_residual: usize = [TRAIN, HOLDOUT, UNLABELLED, EVAL_CANDIDATES]
+        .iter()
+        .map(|name| emails_in_file(&dir.join(name)))
+        .sum();
+
     let reaction = |label: bool| -> u64 {
         by_source
             .iter()
@@ -1424,6 +1458,8 @@ pub(crate) fn export(
         "scrub": {
             "secrets_masked": scrub.secrets_masked,
             "paths_masked": scrub.paths_masked,
+            "emails_masked": scrub.emails_masked,
+            "emails_residual": emails_residual,
             "residual_drops": scrub.residual_drops,
             "sensitive_drops": scrub.sensitive_drops,
         },
@@ -1435,6 +1471,12 @@ pub(crate) fn export(
         serde_json::to_string_pretty(&manifest).unwrap_or_default() + "\n",
     )
     .map_err(|e| format!("fno-agents intel: cannot write manifest: {e}"))?;
+    if emails_residual > 0 {
+        return Err(format!(
+            "fno-agents intel: {emails_residual} email address(es) survive the scrub in {}; no row may leave this machine",
+            dir.display()
+        ));
+    }
     Ok(manifest)
 }
 
@@ -1840,7 +1882,19 @@ mod tests {
         }
         assert!(manifest["scrub"]["secrets_masked"].as_u64().unwrap() >= 1);
         assert_eq!(manifest["leaks"], json!(0));
+        assert_eq!(manifest["scrub"]["emails_residual"], json!(0));
         let _ = std::fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn an_email_address_is_masked_in_every_string_and_none_survives_the_rescan() {
+        let mut counts = ScrubCounts::default();
+        let row = json!({"text": "mail jane.doe+x@example.co.uk now", "meta": {"to": ["a@b.io"]}});
+        let out = scrub_row(row, &mut counts).expect("masked rows are kept");
+        assert!(!email_rx().is_match(&out.to_string()));
+        assert!(out.to_string().contains("[email]"));
+        assert_eq!(counts.emails_masked, 2);
+        assert_eq!(counts.residual_drops, 0);
     }
 
     #[test]

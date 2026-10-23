@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "mixed_revision",
+  "reference": "snapshot-2",
+  "role": {
+    "function_id": "communications",
+    "id": "publisher"
+  },
+  "source_id": "project/publisher.json",
+  "source_layer": "project"
+}
