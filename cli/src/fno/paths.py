@@ -1884,28 +1884,37 @@ def resolve_plugin_script(relpath: str) -> Path:
     project), e.g. ``hooks/helpers/init-target-state.sh`` or
     ``scripts/setup/setup-worktree.sh``.
 
-    Order: CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT (authoritative) -> FNO_REPO_ROOT
-    when it holds the script -> package-relative -> persisted
-    ~/.fno/install/plugin-root pointer -> FNO_REPO_ROOT -> repo."""
-    for env_name in ("CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT"):
+    Order: env hint (CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT / FNO_REPO_ROOT, authoritative) ->
+    package-relative -> persisted ~/.fno/install/plugin-root pointer -> repo."""
+    for env_name in ("CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"):
         root = os.environ.get(env_name)
         if root:
-            return Path(root).expanduser() / relpath
-    # FNO_REPO_ROOT names the active project, which in a foreign repo ships no
-    # plugin scripts: it must not shadow the installed plugin.
-    repo_hint = os.environ.get("FNO_REPO_ROOT")
-    hinted = Path(repo_hint).expanduser() / relpath if repo_hint else None
-    if hinted is not None and hinted.exists():
-        return hinted
+            base = Path(root).expanduser()
+            return base / relpath
     pkg_root = Path(__file__).resolve().parents[3]
-    if _is_plugin_root(pkg_root) and ((pkg_root / relpath).exists() or hinted is None):
+    if _is_plugin_root(pkg_root):
         return pkg_root / relpath
     persisted = _read_persisted_plugin_root()
     if persisted is not None and (persisted / relpath).exists():
         return persisted / relpath
-    if hinted is not None:
-        return hinted
     return resolve_repo_root() / relpath
+
+
+def installed_plugin_script(relpath: str) -> "Path | None":
+    """The installed plugin's copy of ``relpath``, ignoring every env hint.
+
+    ``resolve_plugin_script`` honors ``FNO_REPO_ROOT`` raw, and in a foreign
+    repo that names the project, which ships none of the plugin's scripts. A
+    caller that must find the script anyway asks here after the hinted path
+    misses. None when neither the package root nor the persisted plugin
+    pointer holds the file."""
+    pkg_root = Path(__file__).resolve().parents[3]
+    if _is_plugin_root(pkg_root) and (pkg_root / relpath).is_file():
+        return pkg_root / relpath
+    persisted = _read_persisted_plugin_root()
+    if persisted is not None and (persisted / relpath).is_file():
+        return persisted / relpath
+    return None
 
 
 def resolve_plugin_script_durable(relpath: str) -> Path:

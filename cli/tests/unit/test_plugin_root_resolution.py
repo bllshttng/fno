@@ -72,21 +72,6 @@ def test_resolve_falls_to_persisted_when_env_and_pkg_miss(tmp_path, monkeypatch,
     assert got == plugin / "scripts" / "lib" / "set-gate.sh"
 
 
-def test_env_hint_lacking_the_script_does_not_shadow_the_installed_plugin(
-    tmp_path, monkeypatch, isolated_home
-):
-    """FNO_REPO_ROOT is the active project in a foreign repo; it carries no
-    scripts/lib, so the persisted plugin must still answer."""
-    plugin = _make_plugin(tmp_path / "plugin")
-    foreign = tmp_path / "foreign-repo"
-    foreign.mkdir()
-    _pointer_path(isolated_home).write_text(str(plugin) + "\n")
-    monkeypatch.setenv("FNO_REPO_ROOT", str(foreign))
-    monkeypatch.setattr(paths, "_is_plugin_root", lambda r: Path(r) == plugin)
-    got = paths.resolve_plugin_script("scripts/lib/set-gate.sh")
-    assert got == plugin / "scripts" / "lib" / "set-gate.sh"
-
-
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(cwd), *args], check=True,
                    capture_output=True, text=True)
