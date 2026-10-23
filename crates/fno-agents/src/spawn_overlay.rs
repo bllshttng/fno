@@ -32,15 +32,12 @@
 //! - kind `role-resolve`: the org ladder (`territory::resolve_role`), a
 //!   scope's rung and canonical form, the one resolver the board and the
 //!   promote path share.
-<<<<<<< HEAD
 //! - kind `role-grant`: the grant decision and the re-scope strand scan
 //!   (`territory::role_grant_kind`), over the one containment rule
 //!   `territory::scope_contains`.
-=======
 //!
 //! The `fno config accounts` commands ride the same action as argv ops,
 //! `spawn-overlay accounts <command>` (see `accounts::run`).
->>>>>>> origin/main
 
 use crate::provider::{known_providers_csv, KNOWN_PROVIDERS};
 use serde_json::{json, Map, Value};
