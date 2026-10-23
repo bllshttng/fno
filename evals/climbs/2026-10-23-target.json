@@ -1,0 +1,148 @@
+{
+  "verdict": "unmeasured_cost",
+  "reason": "cost per accepted is unmeasured for a held-out cell; every scored row needs usage and a --prices line",
+  "baseline": "x-4ad5-base",
+  "trial": "x-4ad5-trial",
+  "train": {
+    "baseline": {
+      "attempts": 0,
+      "graded": 0,
+      "scored": 0,
+      "accepted": 0,
+      "pass_rate": null,
+      "pass_rate_ci95": null,
+      "median_wall_s": 0.0,
+      "lane_status_counts": {},
+      "status_counts": {},
+      "excluded": {
+        "total": 0,
+        "by_reason": {},
+        "usage_missing": 0
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    },
+    "trial": {
+      "attempts": 0,
+      "graded": 0,
+      "scored": 0,
+      "accepted": 0,
+      "pass_rate": null,
+      "pass_rate_ci95": null,
+      "median_wall_s": 0.0,
+      "lane_status_counts": {},
+      "status_counts": {},
+      "excluded": {
+        "total": 0,
+        "by_reason": {},
+        "usage_missing": 0
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    }
+  },
+  "heldout": {
+    "baseline": {
+      "attempts": 21,
+      "graded": 21,
+      "scored": 21,
+      "accepted": 21,
+      "pass_rate": 1.0,
+      "pass_rate_ci95": [
+        0.8454,
+        1.0
+      ],
+      "median_wall_s": 79.651,
+      "lane_status_counts": {
+        "unverified": 21
+      },
+      "status_counts": {
+        "graded": 21
+      },
+      "excluded": {
+        "total": 0,
+        "by_reason": {},
+        "usage_missing": 21
+      },
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    },
+    "trial": {
+      "attempts": 21,
+      "graded": 21,
+      "scored": 21,
+      "accepted": 20,
+      "pass_rate": 0.9524,
+      "pass_rate_ci95": [
+        0.7733,
+        0.9915
+      ],
+      "median_wall_s": 419.136,
+      "lane_status_counts": {
+        "account-dropped": 21
+      },
+      "status_counts": {
+        "graded": 21
+      },
+      "excluded": {
+        "total": 0,
+        "by_reason": {},
+        "usage_missing": 0
+      },
+      "tokens": {
+        "input": 1662315,
+        "output": 286770,
+        "cache_read": 13280128,
+        "cache_write": 0
+      },
+      "cost": {
+        "measured": false,
+        "dollars_total": null,
+        "dollars_per_accepted": null
+      }
+    }
+  },
+  "lane_status_by_cell": {
+    "train": {
+      "baseline": {},
+      "trial": {}
+    },
+    "heldout": {
+      "baseline": {
+        "unverified": 21
+      },
+      "trial": {
+        "account-dropped": 21
+      }
+    }
+  },
+  "wrong_rev": 0,
+  "unsplit": 0
+}
