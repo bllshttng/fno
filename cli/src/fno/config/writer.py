@@ -18,6 +18,7 @@ the write (the shared one-shot migrate), so a legacy install is never lost.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import os
 import sys
@@ -43,11 +44,7 @@ from fno.config.optouts import MERGE_GATING_OPTOUTS
 from fno.time_budget import validate_timeout_budget
 
 
-# Pre-rename dispatch keys no loader reads any more. `unset` still removes them
-# from disk, since the model rejects a key it no longer knows.
-RETIRED_DISPATCH_KEYS = frozenset(
-    {"dispatch.allowed_verbs", "dispatch.verb_registry"}  # verb-wording: allow (config keys)
-)
+RETIRED_DISPATCH_KEYS = ("dispatch.allowed_verbs", "dispatch.verb_registry")  # verb-wording: allow
 
 
 class ConfigSetError(Exception):
@@ -915,46 +912,19 @@ def unset_config_value(
 
 
 def drop_retired_dispatch_keys(paths: typing.Iterable[Path]) -> list[str]:
-    """Remove the retired dispatch keys from every config file that holds one.
+    gone: list[str] = []
+    for real in {os.path.realpath(p) for p in paths if os.path.isfile(p)}:
+        if not any(k.split(".")[1] in Path(real).read_text(encoding="utf-8") for k in RETIRED_DISPATCH_KEYS):
+            continue
+        def _mutate(d: dict[str, Any]) -> dict[str, Any]:
+            for key in RETIRED_DISPATCH_KEYS:
+                d, _was, hit = _deep_unset(d, key.split("."))
+                gone.extend([f"removed retired key {key} from {real}"] * hit)
+            return d
 
-    Runs on the first settings load after an update. Returns one receipt line
-    per file and key. A file it cannot write is skipped: the unmodeled-key
-    warning still names the key.
-    """
-    receipts: list[str] = []
-    seen: set[str] = set()
-    global_path = os.path.realpath(_global_settings_path())
-    for path in paths:
-        real = os.path.realpath(path)
-        if real in seen or not os.path.isfile(real):
-            continue
-        seen.add(real)
-        try:
-            text = Path(real).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        held = sorted(k for k in RETIRED_DISPATCH_KEYS if k.split(".", 1)[1] in text)
-        if not held:
-            continue
-        removed: list[str] = []
-
-        def _mutate(existing: dict[str, Any]) -> dict[str, Any]:
-            for key in held:
-                existing, _was, present = _deep_unset(existing, key.split("."))
-                if present:
-                    removed.append(key)
-            return existing
-
-        try:
-            _locked_update(
-                Path(real), _mutate,
-                scope="global" if real == global_path else "project",
-                lock_timeout=2.0,
-            )
-        except (OSError, TimeoutError, ConfigSetError):
-            continue
-        receipts.extend(f"removed retired key {key} from {real}" for key in removed)
-    return receipts
+        with contextlib.suppress(OSError, TimeoutError, ConfigSetError):
+            _locked_update(Path(real), _mutate, lock_timeout=2.0)
+    return gone
 
 
 def read_scope_value(

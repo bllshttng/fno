@@ -143,11 +143,9 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
     # alias pass (whose deprecation warnings fire once per process per chain,
     # not once per consumer) live in exactly one place.
     candidates = _candidate_paths()
-    # One-shot upgrade: the dispatch keys the loader stopped reading come off disk
-    # here, so no machine needs a manual unset after an update.
     from fno.config.writer import drop_retired_dispatch_keys
 
-    for receipt in drop_retired_dispatch_keys(candidates):
+    for receipt in drop_retired_dispatch_keys(candidates):  # retired keys leave disk once
         print(f"fno config: {receipt}", file=sys.stderr)
     layers = list(_aliased_layers(tuple(candidates)))
 
