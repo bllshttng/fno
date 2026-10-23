@@ -72,17 +72,14 @@ def armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime-state.json"))
 
-    from fno.adapters.providers.runtime_state import write_usage_snapshot
-    from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-
     now = time.time()
-    write_usage_snapshot(
-        UsageSnapshot("readyrule", (UsageWindow("5h", 100.0, now + 3600),), now, "t"),
-        now=now,
-    )
-    write_usage_snapshot(
-        UsageSnapshot("makers", (UsageWindow("5h", 32.0, now + 3600),), now, "t"),
-        now=now,
+
+    def snap(used: float) -> dict:
+        return {"windows": [{"label": "5h", "used_pct": used, "resets_at": now + 3600}],
+                "probed_at": now, "source": "t"}
+
+    (tmp_path / "runtime-state.json").write_text(
+        json.dumps({"usage": {"readyrule": snap(100.0), "makers": snap(32.0)}})
     )
     return tmp_path
 

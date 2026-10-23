@@ -8,9 +8,8 @@ A Combo is a named ordered list of provider IDs with a strategy:
 * ``fallback``: sequential try-next-on-error (the default; matches
   pre-combo single-provider semantics when the list has one entry).
 * ``round_robin``: time-sliced cycle with a per-combo cursor that
-  sticks for ``sticky_limit`` calls before advancing. Cursor lives in
-  ``provider-runtime-state.json`` so parallel target spawns within a
-  megawalk campaign share rotation state via fcntl locking.
+  sticks for ``sticky_limit`` calls before advancing. The cursor lives in
+  ``provider-runtime-state.json``; the combo list view reads it.
 
 """
 from __future__ import annotations
@@ -79,31 +78,6 @@ def compute_providers_hash(providers: tuple[str, ...]) -> str:
     """
     payload = "|".join(providers).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
-
-
-def _rotate_at(providers: tuple[str, ...], idx: int) -> list[str]:
-    """Pure: return providers rotated so element at idx is at position 0."""
-    return list(providers[idx:]) + list(providers[:idx])
-
-
-def get_rotated_providers(combo: Combo) -> list[str]:
-    """Return the provider list to try next, in order. ALSO advances cursor.
-
-    A single-shot helper for callers that want one rotation and one
-    bump in one call (ad-hoc tools, the CLI list view's cursor preview).
-    """
-    from fno.adapters.providers.runtime_state import advance_cursor
-
-    if combo.strategy != "round_robin" or len(combo.providers) <= 1:
-        return list(combo.providers)
-    providers_hash = compute_providers_hash(combo.providers)
-    cursor = advance_cursor(
-        combo.name,
-        sticky_limit=combo.sticky_limit,
-        providers_hash=providers_hash,
-        providers_count=len(combo.providers),
-    )
-    return _rotate_at(combo.providers, cursor.cursor_index)
 
 
 def next_healthy_provider(

@@ -123,13 +123,12 @@ class TestObserveSplitsLookingFromActing:
     def test_ac2_err_credential_probe_failure_stays_unknown_and_eligible(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        import json
         import time
-        from fno.adapters.providers.error_taxonomy import ErrorRule
         from fno.adapters.providers.rotation import Combo, next_healthy_provider
         from fno.adapters.providers.runtime_state import (
             PROVIDER_HEALTH_TTL_SECONDS,
             UsageRefresh,
-            update_provider_health,
         )
         monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime.json"))
         quota = QuotaConfig(observe=True, defer_dispatch=True)
@@ -138,11 +137,11 @@ class TestObserveSplitsLookingFromActing:
             lambda repo_root=None: quota,
         )
         now = time.time()
-        update_provider_health(
-            "p1", ErrorRule(status=429, backoff=True),
-            now=now - PROVIDER_HEALTH_TTL_SECONDS - 1,
-            resets_at=now + 3600,
-        )
+        # A long lock from a refusal older than the health TTL no longer binds.
+        (tmp_path / "runtime.json").write_text(json.dumps({"provider_health": {"p1": {
+            "backoff_level": 1, "rate_limited_until": now + 3600,
+            "last_error_at": now - PROVIDER_HEALTH_TTL_SECONDS - 1,
+        }}}))
         monkeypatch.setattr(
             runtime_state, "refresh_usage_detailed",
             lambda *a, **kw: UsageRefresh(None, "credential-rejected"),

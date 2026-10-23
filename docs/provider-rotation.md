@@ -1006,7 +1006,7 @@ The error taxonomy classifies a provider call into a closed `ErrorClass` set. Pl
 
 1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `cli/src/fno/adapters/providers/error_taxonomy.py::ERROR_RULES` as a verbatim rule table.
 
-2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at MAX_BACKOFF_MS = 5min). `reset_provider_health(provider_id)` clears the level back to 0.
+2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at 5min). The level drops back to 0 when the entry ages past the 1h health TTL. The Rust writer `accounts::state::update_health` does this arithmetic.
 
 ### Schema (provider-runtime-state.json)
 
@@ -1188,28 +1188,11 @@ Per-combo cursors live in `provider-runtime-state.json` under `combo_cursors.<na
 }
 ```
 
-`providers_hash` is a stable order-sensitive sha256[:16] of the combo's providers tuple. When the user edits the combo (add/remove/reorder), the hash changes and the next read returns `None` (cursor invalidated) - the next `advance_cursor` resets to `(idx=0, count=1)` cleanly.
+`providers_hash` is a stable order-sensitive sha256[:16] of the combo's providers tuple. When the user edits the combo (add/remove/reorder), the hash changes and the next read returns `None` (cursor invalidated).
 
-`last_rotated_at` drives the 24h TTL: a quiescent combo's cursor is dropped on the next locked write to `provider-runtime-state.json` and a future advance starts fresh at `(idx=0, count=1)`.
+`last_rotated_at` drives the 24h TTL: a quiescent combo's cursor is dropped on the next locked write to `provider-runtime-state.json`.
 
-Cursor-state writes serialize via the same fcntl lock (`provider-runtime-state.json.update.lock`) as `update_provider_health` / `reset_provider_health`, so two parallel `advance_cursor` calls never lose updates.
-
-### Sticky math
-
-For `round_robin` with `N` providers and `sticky_limit=K`:
-
-| Call # | Returned cursor (idx, count) | Rotation result (providers=[a,b,c], K=3) |
-|--------|------------------------------|------------------------------------------|
-| 1      | (0, 1) | [a, b, c] |
-| 2      | (0, 2) | [a, b, c] |
-| 3      | (0, 3) | [a, b, c] |
-| 4      | (1, 1) | [b, c, a] |
-| 5      | (1, 2) | [b, c, a] |
-| 6      | (1, 3) | [b, c, a] |
-| 7      | (2, 1) | [c, a, b] |
-| ...    | ...    | ...    |
-
-Single-provider combos short-circuit (cursor never advances past `idx=0`).
+Nothing advances a cursor today. The round-robin advance had no caller, so it was deleted when the state writers moved to Rust. `fno config accounts combos` still reads a cursor that an earlier build left.
 
 ### Skill + entry-point integration
 

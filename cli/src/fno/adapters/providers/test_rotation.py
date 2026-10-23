@@ -1,4 +1,4 @@
-"""Tests for combos rotation: Combo dataclass, load_combos, get_rotated_providers.
+"""Tests for combos rotation: Combo dataclass, load_combos, next_healthy_provider.
 
 Provider-rotation Plan B tests. Run:
     cd cli && uv run pytest src/fno/adapters/providers/test_rotation.py -v
@@ -258,109 +258,12 @@ class TestComputeProvidersHash:
         assert h1 != h2
 
 
-# ---------------------------------------------------------------------------
-# AC2.1-HP: cursor advances per sticky_limit (sticky=3, providers=[a,b,c])
-# ---------------------------------------------------------------------------
-
 @pytest.fixture
 def cursor_state_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect runtime_state to tmp path so cursor tests don't touch real files."""
     target = tmp_path / "provider-runtime-state.json"
     monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(target))
     return target
-
-
-class TestAdvanceCursorStickyMath:
-    def test_nine_calls_walk_idx_0_1_2_each_three_times(
-        self, cursor_state_path: Path
-    ):
-        """AC2.1-HP: 9 calls with sticky=3, N=3 produce
-        (0,1) (0,2) (0,3) (1,1) (1,2) (1,3) (2,1) (2,2) (2,3)."""
-        from fno.adapters.providers.runtime_state import advance_cursor
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h = compute_providers_hash(("a", "b", "c"))
-        expected = [
-            (0, 1), (0, 2), (0, 3),
-            (1, 1), (1, 2), (1, 3),
-            (2, 1), (2, 2), (2, 3),
-        ]
-        seen: list[tuple[int, int]] = []
-        for _ in range(9):
-            c = advance_cursor("my-stack", sticky_limit=3, providers_hash=h, providers_count=3)
-            seen.append((c.cursor_index, c.consecutive_use_count))
-        assert seen == expected
-
-    def test_sticky_limit_one_advances_every_call(self, cursor_state_path: Path):
-        """sticky_limit=1: every call advances the index. Walks 0,1,2,0,1,2..."""
-        from fno.adapters.providers.runtime_state import advance_cursor
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h = compute_providers_hash(("a", "b", "c"))
-        idxs = [
-            advance_cursor("s1", sticky_limit=1, providers_hash=h, providers_count=3).cursor_index
-            for _ in range(7)
-        ]
-        assert idxs == [0, 1, 2, 0, 1, 2, 0]
-
-    def test_single_provider_combo_never_advances(self, cursor_state_path: Path):
-        """AC3.5-EDGE: single-provider combo: cursor never moves past idx=0."""
-        from fno.adapters.providers.runtime_state import advance_cursor
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h = compute_providers_hash(("only",))
-        for _ in range(20):
-            c = advance_cursor("solo", sticky_limit=3, providers_hash=h, providers_count=1)
-            assert c.cursor_index == 0
-
-
-# ---------------------------------------------------------------------------
-# AC2.2-EDGE: providers_hash mismatch invalidates cursor
-# ---------------------------------------------------------------------------
-
-class TestCursorHashInvalidation:
-    def test_read_returns_none_on_hash_mismatch(self, cursor_state_path: Path):
-        from fno.adapters.providers.runtime_state import (
-            advance_cursor,
-            read_cursor,
-        )
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h_old = compute_providers_hash(("a", "b", "c"))
-        # Walk cursor to index 2 under the old hash.
-        for _ in range(7):  # 7 calls with sticky=3 lands at (2, 1)
-            advance_cursor("k", sticky_limit=3, providers_hash=h_old, providers_count=3)
-        # User edits the combo: hash changes.
-        h_new = compute_providers_hash(("a", "b", "c", "d"))
-        assert read_cursor("k", h_new) is None
-
-    def test_read_returns_cursor_when_hash_matches(self, cursor_state_path: Path):
-        from fno.adapters.providers.runtime_state import (
-            advance_cursor,
-            read_cursor,
-        )
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h = compute_providers_hash(("a", "b"))
-        advance_cursor("k", sticky_limit=2, providers_hash=h, providers_count=2)
-        c = read_cursor("k", h)
-        assert c is not None
-        assert c.cursor_index == 0
-        assert c.consecutive_use_count == 1
-
-    def test_advance_resets_to_idx_0_when_hash_changes(self, cursor_state_path: Path):
-        """Cursor at (idx=2, count=1) under hash-A. User edits combo (hash-B).
-        Next advance under hash-B treats it as fresh: returns (0, 1)."""
-        from fno.adapters.providers.runtime_state import advance_cursor
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h_old = compute_providers_hash(("a", "b", "c"))
-        for _ in range(7):
-            advance_cursor("k", sticky_limit=3, providers_hash=h_old, providers_count=3)
-        h_new = compute_providers_hash(("a", "b", "c", "d"))
-        c = advance_cursor("k", sticky_limit=3, providers_hash=h_new, providers_count=4)
-        assert c.cursor_index == 0
-        assert c.consecutive_use_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -396,80 +299,6 @@ class TestCursorMalformedDiskEntry:
 
 
 # ---------------------------------------------------------------------------
-# AC2.4-EDGE: 24h TTL clears stale cursor
-# ---------------------------------------------------------------------------
-
-class TestCursorTTL:
-    def test_read_returns_none_when_cursor_is_25h_old(
-        self, cursor_state_path: Path
-    ):
-        from fno.adapters.providers.runtime_state import (
-            advance_cursor,
-            read_cursor,
-            COMBO_CURSOR_TTL_SECONDS,
-        )
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        h = compute_providers_hash(("a", "b"))
-        now = 1_000_000.0
-        old_now = now - COMBO_CURSOR_TTL_SECONDS - 60
-        advance_cursor(
-            "stale", sticky_limit=2, providers_hash=h, providers_count=2, now=old_now
-        )
-        # Now read with a 'now' beyond TTL.
-        assert read_cursor("stale", h, now=now) is None
-
-
-# ---------------------------------------------------------------------------
-# AC2.5-Concurrency: parallel advance_cursor serialize, no lost updates
-# ---------------------------------------------------------------------------
-
-def _hit_advance(state_path_str: str, combo_name: str, providers_hash: str) -> None:
-    """Worker for parallel test - must be top-level for multiprocessing pickling."""
-    import os
-    from fno.adapters.providers.runtime_state import advance_cursor
-    os.environ["FNO_RUNTIME_STATE_PATH"] = state_path_str
-    advance_cursor(combo_name, sticky_limit=1, providers_hash=providers_hash, providers_count=10)
-
-
-class TestCursorConcurrency:
-    def test_parallel_advances_serialize_and_count_correctly(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """AC2.5: 20 parallel advance_cursor calls must serialize via fcntl.
-        Final cursor reflects all 20 increments (no lost updates)."""
-        import json
-        import multiprocessing
-        from fno.adapters.providers.rotation import compute_providers_hash
-
-        state_path = tmp_path / "provider-runtime-state.json"
-        monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(state_path))
-        h = compute_providers_hash(tuple(f"p{i}" for i in range(10)))
-
-        ctx = multiprocessing.get_context("spawn")
-        procs = [
-            ctx.Process(target=_hit_advance, args=(str(state_path), "race", h))
-            for _ in range(20)
-        ]
-        for p in procs:
-            p.start()
-        for p in procs:
-            p.join(timeout=30)
-            assert p.exitcode == 0, f"worker failed: {p.exitcode}"
-
-        # 20 advances at sticky=1, N=10 walks the index 20 times.
-        # Net result: cursor_index = 20 % 10 = 0, count tracks the
-        # final position; the load-bearing assertion is "no lost updates".
-        # We verify by reading the on-disk file directly.
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-        cursors = payload.get("combo_cursors", {})
-        assert "race" in cursors
-        # 20 successful advances: at sticky=1 the count rolls every time;
-        # final state's count is 1 (we just landed on a new idx after the 20th call).
-        assert cursors["race"]["consecutive_use_count"] == 1
-
-
-# ---------------------------------------------------------------------------
 # Schema migration: v1 file (provider_health only) reads cleanly
 # ---------------------------------------------------------------------------
 
@@ -501,78 +330,7 @@ class TestSchemaMigration:
 
 
 # ---------------------------------------------------------------------------
-# get_rotated_providers
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def combos_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Set up a tmp project with settings.yaml + isolated runtime_state path."""
-    settings = tmp_path / ".fno" / "settings.yaml"
-    _write_settings(
-        settings,
-        _settings_with_records_and_combos({
-            "rr": {
-                "strategy": "round_robin",
-                "sticky_limit": 2,
-                "providers": ["a", "b", "c"],
-            },
-            "fb": {
-                "strategy": "fallback",
-                "providers": ["a", "b", "c"],
-            },
-            "solo": {
-                "strategy": "round_robin",
-                "providers": ["a"],
-            },
-        }),
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PWD", str(tmp_path))
-    monkeypatch.setenv(
-        "FNO_RUNTIME_STATE_PATH",
-        str(tmp_path / "provider-runtime-state.json"),
-    )
-    return tmp_path
-
-
-class TestGetRotatedProviders:
-    def test_fallback_returns_list_unchanged(self, combos_env: Path):
-        from fno.adapters.providers.loader import load_combos
-        from fno.adapters.providers.rotation import get_rotated_providers
-
-        combos = load_combos()
-        for _ in range(5):
-            assert get_rotated_providers(combos["fb"]) == ["a", "b", "c"]
-
-    def test_round_robin_advances_per_sticky(self, combos_env: Path):
-        """sticky=2, N=3, 7 calls -> [a,b,c]x2, [b,c,a]x2, [c,a,b]x2, [a,b,c]"""
-        from fno.adapters.providers.loader import load_combos
-        from fno.adapters.providers.rotation import get_rotated_providers
-
-        combos = load_combos()
-        seq = [get_rotated_providers(combos["rr"]) for _ in range(7)]
-        assert seq == [
-            ["a", "b", "c"],
-            ["a", "b", "c"],
-            ["b", "c", "a"],
-            ["b", "c", "a"],
-            ["c", "a", "b"],
-            ["c", "a", "b"],
-            ["a", "b", "c"],
-        ]
-
-    def test_single_provider_round_robin_short_circuits(self, combos_env: Path):
-        from fno.adapters.providers.loader import load_combos
-        from fno.adapters.providers.rotation import get_rotated_providers
-
-        combos = load_combos()
-        for _ in range(10):
-            assert get_rotated_providers(combos["solo"]) == ["a"]
-
-
-# ---------------------------------------------------------------------------
-# next_healthy_provider (x-0676 exhaustion-failover primitive)
+# next_healthy_provider (the exhaustion-failover primitive)
 # ---------------------------------------------------------------------------
 
 _QUOTA = SimpleNamespace(probe_ttl_seconds=300.0, defer_threshold_pct=90.0)
@@ -600,7 +358,7 @@ def test_next_healthy_low_counts_as_healthy(monkeypatch):
 
 
 def test_next_healthy_unknown_counts_as_healthy(monkeypatch):
-    # UNKNOWN never counts as exhausted (fail-open, x-6bcf): a GLM/gemini record
+    # UNKNOWN never counts as exhausted (fail-open): a GLM/gemini record
     # with no headroom signal is a valid failover TARGET.
     _patch_headroom(monkeypatch, {"ccm": HeadroomState.EXHAUSTED, "glm": HeadroomState.UNKNOWN})
     combo = Combo(name="c", providers=("ccm", "glm"))

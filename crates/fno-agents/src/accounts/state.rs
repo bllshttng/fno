@@ -1,9 +1,10 @@
-//! The provider runtime-state file, read side: provider health (locks and
-//! backoff), usage snapshots, combo cursors and window opens, and the reads
-//! the dispatcher asks of them (cooldown, usage, headroom, the projected
-//! window close, the round-robin cursor). Ported from the read side of
-//! `fno.adapters.providers.runtime_state`; the parity cases live in
-//! `tests/accounts_state_read_parity.rs`.
+//! The provider runtime-state file: provider health (locks and backoff),
+//! usage snapshots, combo cursors and window opens, the reads the dispatcher
+//! asks of them (cooldown, usage, headroom, the projected window close, the
+//! round-robin cursor) and the one writer of the file. Ported from
+//! `fno.adapters.providers.runtime_state`, whose writers are now transports
+//! over [run]; the parity cases live in `tests/accounts_state_read_parity.rs`
+//! and `tests/accounts_state_write_parity.rs`.
 //!
 //! The file is where `provider_cap::runtime_state_path` resolves it. Every
 //! parse drops a malformed entry and keeps the rest, as Python does: one
@@ -13,7 +14,11 @@
 use crate::fallback_chain::{self, HeadroomVerdict};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// A reactive health observation older than this drops, locks included.
 pub const PROVIDER_HEALTH_TTL_SECONDS: f64 = 60.0 * 60.0;
@@ -487,5 +492,521 @@ impl State {
             }).collect()),
             "schema_version": self.schema_version,
         })
+    }
+}
+
+// The write side, the one writer of the file. Every write takes the
+// `<file>.update.lock` flock (Python's `filelock` takes the same lock),
+// re-reads under it and replaces the file atomically. The serialized form is
+// Python's `json.dumps(asdict, indent=2, sort_keys=True)`: each entry carries
+// its own key (`provider_id`, `combo_name`).
+
+const BASE_BACKOFF_MS: i64 = 2_000;
+const MAX_BACKOFF_MS: i64 = 5 * 60 * 1000;
+/// How long a writer waits for the update lock before its timeout branch.
+pub const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The part of a classified error rule the health write reads: a backoff
+/// rule ramps the level, a fixed rule holds it and cools for `cooldown_ms`.
+#[derive(Clone, Copy, Debug)]
+pub struct Rule {
+    pub backoff: bool,
+    pub cooldown_ms: Option<i64>,
+}
+
+/// The update lock, held until the returned file drops. None when another
+/// writer held it past `timeout`.
+pub fn lock(path: &Path, timeout: Duration) -> io::Result<Option<File>> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".update.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: flock on a descriptor this function owns.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(file));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A temp file beside the target, then one rename: a reader sees the old
+/// file or the new one, never half of either. The caller holds the lock.
+pub fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let mut tmp = tempfile::Builder::new()
+        .prefix(&format!(".{name}."))
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+fn sort_keys(v: Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut entries: Vec<(String, Value)> = m.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k, sort_keys(v)))
+                    .collect(),
+            )
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(sort_keys).collect()),
+        other => other,
+    }
+}
+
+/// `value` with its own key added, as `dataclasses.asdict` writes an entry.
+pub fn keyed(mut value: Value, field: &str, id: &str) -> Value {
+    if let Some(m) = value.as_object_mut() {
+        m.insert(field.to_string(), json!(id));
+    }
+    value
+}
+
+/// `_serialize_state`.
+pub fn serialize(state: &State) -> String {
+    let mut v = state.to_json();
+    for (block, field) in [
+        ("provider_health", "provider_id"),
+        ("usage", "provider_id"),
+        ("combo_cursors", "combo_name"),
+    ] {
+        if let Some(m) = v.get_mut(block).and_then(Value::as_object_mut) {
+            for (id, entry) in m.iter_mut() {
+                *entry = keyed(entry.take(), field, id);
+            }
+        }
+    }
+    serde_json::to_string_pretty(&sort_keys(v)).unwrap_or_default()
+}
+
+fn schema_of(raw: &Value) -> i64 {
+    raw.get("schema_version")
+        .and_then(py_int)
+        .unwrap_or(SCHEMA_VERSION)
+}
+
+/// The file as a writer rewrites it: stale health and stale cursors dropped.
+fn rewritable(raw: Option<&Value>, now: f64) -> State {
+    let empty = json!({});
+    let raw = raw.unwrap_or(&empty);
+    let cursor_cutoff = now - COMBO_CURSOR_TTL_SECONDS;
+    State {
+        provider_health: drop_stale(parse_health(raw), now),
+        combo_cursors: parse_cursors(raw)
+            .into_iter()
+            .filter(|(_, c)| c.last_rotated_at >= cursor_cutoff)
+            .collect(),
+        usage: parse_usage(raw),
+        windows_opened: parse_windows_opened(raw),
+        schema_version: schema_of(raw),
+    }
+}
+
+/// One read-modify-write under the lock; None when the lock timed out.
+fn locked<T>(
+    path: &Path,
+    timeout: Duration,
+    f: impl FnOnce(Option<Value>) -> io::Result<T>,
+) -> io::Result<Option<T>> {
+    let Some(_guard) = lock(path, timeout)? else {
+        return Ok(None);
+    };
+    f(read_raw(path)).map(Some)
+}
+
+fn cooldown_ms(level: i64) -> i64 {
+    (BASE_BACKOFF_MS << level.clamp(0, MAX_BACKOFF_LEVEL)).min(MAX_BACKOFF_MS)
+}
+
+/// `_next_health`: the cooldown comes from the OLD level, and a reset the
+/// provider named in the future beats the guessed cooldown, so a stale stamp
+/// never shortens a lock.
+fn next_health(
+    current: &Health,
+    rule: Rule,
+    now: f64,
+    model: Option<&str>,
+    resets_at: Option<f64>,
+) -> Health {
+    let (level, ms) = if rule.backoff {
+        (
+            (current.backoff_level + 1).min(MAX_BACKOFF_LEVEL),
+            cooldown_ms(current.backoff_level),
+        )
+    } else {
+        (current.backoff_level, rule.cooldown_ms.unwrap_or(0))
+    };
+    let until = now + ms as f64 / 1000.0;
+    let harvested = resets_at.filter(|r| *r > now);
+    let mut next = Health {
+        backoff_level: level,
+        rate_limited_until: Some(harvested.unwrap_or(until)),
+        last_error_at: Some(now),
+        model_locks: current.model_locks.clone(),
+    };
+    if let Some(model) = model {
+        next.model_locks.insert(model.to_string(), until);
+        next.rate_limited_until = harvested.or(current.rate_limited_until);
+    }
+    next
+}
+
+/// `update_provider_health`. `span` is the record's window length: a
+/// harvested reset then stamps the window it closed, keeping `warned` while
+/// it is the same window. On lock timeout nothing is written and the last
+/// known entry (or a zero one) comes back.
+#[allow(clippy::too_many_arguments)]
+pub fn update_health(
+    path: &Path,
+    provider_id: &str,
+    rule: Rule,
+    model: Option<&str>,
+    resets_at: Option<f64>,
+    span: Option<f64>,
+    now: f64,
+    timeout: Duration,
+) -> io::Result<Health> {
+    let written = locked(path, timeout, |raw| {
+        let mut state = rewritable(raw.as_ref(), now);
+        let current = state
+            .provider_health
+            .get(provider_id)
+            .cloned()
+            .unwrap_or_default();
+        let next = next_health(&current, rule, now, model, resets_at);
+        state
+            .provider_health
+            .insert(provider_id.to_string(), next.clone());
+        if let (Some(reset), Some(span)) =
+            (resets_at.filter(|r| *r > now), span.filter(|s| *s != 0.0))
+        {
+            let labels = state
+                .windows_opened
+                .entry(provider_id.to_string())
+                .or_default();
+            let opened_at = reset - span;
+            let warned = labels
+                .get(WINDOW_LABEL)
+                .is_some_and(|prior| (prior.opened_at - opened_at).abs() < 1.0 && prior.warned);
+            labels.insert(WINDOW_LABEL.to_string(), WindowOpen { opened_at, warned });
+        }
+        write_atomic(path, &serialize(&state))?;
+        Ok(next)
+    })?;
+    Ok(written.unwrap_or_else(|| {
+        read_raw(path)
+            .and_then(|raw| parse_health(&raw).remove(provider_id))
+            .unwrap_or_default()
+    }))
+}
+
+/// `write_usage_snapshot`: true when the snapshot landed, false when the
+/// lock timed out (the stale snapshot then decays to UNKNOWN).
+pub fn write_usage(
+    path: &Path,
+    provider_id: &str,
+    snapshot: Snapshot,
+    now: f64,
+    timeout: Duration,
+) -> io::Result<bool> {
+    let written = locked(path, timeout, |raw| {
+        let mut state = rewritable(raw.as_ref(), now);
+        state.usage.insert(provider_id.to_string(), snapshot);
+        write_atomic(path, &serialize(&state))
+    })?;
+    Ok(written.is_some())
+}
+
+/// `stamp_window_open`: true when written. A stamp inside a recorded window
+/// still in force is a no-op, so a repeated dispatch never resets it.
+pub fn stamp_window(
+    path: &Path,
+    provider_id: &str,
+    opened_at: f64,
+    label: &str,
+    span: Option<f64>,
+    now: f64,
+    timeout: Duration,
+) -> io::Result<bool> {
+    let written = locked(path, timeout, |raw| {
+        let mut state = rewritable(raw.as_ref(), now);
+        let prior = state
+            .windows_opened
+            .get(provider_id)
+            .and_then(|labels| labels.get(label));
+        if let (Some(prior), Some(span)) = (prior, span.filter(|s| *s != 0.0)) {
+            if prior.opened_at + span > opened_at {
+                return Ok(false);
+            }
+        }
+        state
+            .windows_opened
+            .entry(provider_id.to_string())
+            .or_default()
+            .insert(
+                label.to_string(),
+                WindowOpen {
+                    opened_at,
+                    warned: false,
+                },
+            );
+        write_atomic(path, &serialize(&state))?;
+        Ok(true)
+    })?;
+    Ok(written.unwrap_or(false))
+}
+
+/// `mark_window_warned`: true only when this call set the flag.
+pub fn mark_warned(
+    path: &Path,
+    provider_id: &str,
+    now: f64,
+    timeout: Duration,
+) -> io::Result<bool> {
+    let written = locked(path, timeout, |raw| {
+        let mut state = rewritable(raw.as_ref(), now);
+        let Some(entry) = state
+            .windows_opened
+            .get_mut(provider_id)
+            .and_then(|labels| labels.get_mut(WINDOW_LABEL))
+            .filter(|e| !e.warned)
+        else {
+            return Ok(false);
+        };
+        entry.warned = true;
+        write_atomic(path, &serialize(&state))?;
+        Ok(true)
+    })?;
+    Ok(written.unwrap_or(false))
+}
+
+fn modified(path: &Path) -> io::Result<std::time::SystemTime> {
+    fs::metadata(path)?.modified()
+}
+
+/// `Path.resolve()`: an existing parent canonicalizes even when the file
+/// itself is absent.
+fn resolved(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        match (
+            path.parent().and_then(|p| fs::canonicalize(p).ok()),
+            path.file_name(),
+        ) {
+            (Some(parent), Some(name)) => parent.join(name),
+            _ => path.to_path_buf(),
+        }
+    })
+}
+
+/// `_fold_one_legacy_file`: merge a legacy per-cwd file into `target` when
+/// it is newer, per key by the newest inner timestamp. The legacy file stays
+/// in place, so a rolled-back binary loses nothing.
+pub fn fold_legacy(target: &Path, legacy: &Path, now: f64, timeout: Duration) -> io::Result<()> {
+    if !legacy.is_file() || resolved(legacy) == resolved(target) {
+        return Ok(());
+    }
+    let current =
+        || -> io::Result<bool> { Ok(target.is_file() && modified(target)? >= modified(legacy)?) };
+    if current()? {
+        return Ok(());
+    }
+    let Some(_guard) = lock(target, timeout)? else {
+        return Ok(());
+    };
+    // A racing process may have folded already.
+    if current()? {
+        return Ok(());
+    }
+    let dst = read_raw(target).unwrap_or_else(|| json!({}));
+    let src = read_raw(legacy).unwrap_or_else(|| json!({}));
+    let ts = |v: Option<f64>| v.unwrap_or(0.0);
+    let mut health = parse_health(&dst);
+    for (id, entry) in parse_health(&src) {
+        if health.get(&id).map_or(true, |prior| {
+            ts(entry.last_error_at) > ts(prior.last_error_at)
+        }) {
+            health.insert(id, entry);
+        }
+    }
+    let mut usage = parse_usage(&dst);
+    for (id, snap) in parse_usage(&src) {
+        if usage
+            .get(&id)
+            .map_or(true, |prior| snap.probed_at > prior.probed_at)
+        {
+            usage.insert(id, snap);
+        }
+    }
+    let mut cursors = parse_cursors(&dst);
+    for (name, cur) in parse_cursors(&src) {
+        if cursors
+            .get(&name)
+            .map_or(true, |prior| cur.last_rotated_at > prior.last_rotated_at)
+        {
+            cursors.insert(name, cur);
+        }
+    }
+    let mut windows = parse_windows_opened(&dst);
+    for (id, labels) in parse_windows_opened(&src) {
+        let slot = windows.entry(id).or_default();
+        for (label, open) in labels {
+            if slot
+                .get(&label)
+                .map_or(true, |prior| open.opened_at > prior.opened_at)
+            {
+                slot.insert(label, open);
+            }
+        }
+    }
+    let state = State {
+        provider_health: drop_stale(health, now),
+        combo_cursors: cursors,
+        usage,
+        windows_opened: windows,
+        schema_version: schema_of(&dst),
+    };
+    write_atomic(target, &serialize(&state))
+}
+
+fn wall_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+const STATE_USAGE: &str = "usage: fno-agents spawn-overlay accounts state <update-health|write-usage|stamp-window|mark-warned>  (a JSON payload on stdin)";
+
+/// `accounts state <op>`: the door the Python writers call. The payload is
+/// one JSON object on stdin, the answer one JSON object on stdout.
+pub fn run(args: &[String]) -> i32 {
+    let Some(op) = args.first() else {
+        eprintln!("{STATE_USAGE}");
+        return 2;
+    };
+    if matches!(op.as_str(), "-h" | "--help") {
+        println!("{STATE_USAGE}");
+        return 0;
+    }
+    let mut input = String::new();
+    if let Err(error) = io::stdin().read_to_string(&mut input) {
+        eprintln!("accounts state: stdin unreadable: {error}");
+        return 2;
+    }
+    let payload: Value = if input.trim().is_empty() {
+        json!({})
+    } else {
+        match serde_json::from_str(&input) {
+            Ok(v @ Value::Object(_)) => v,
+            _ => {
+                eprintln!("accounts state: the payload is not a JSON object");
+                return 2;
+            }
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let path = crate::provider_cap::runtime_state_path(&cwd);
+    // The env override names one explicit file, so nothing folds into it.
+    if std::env::var_os("FNO_RUNTIME_STATE_PATH").is_none() {
+        // A legacy file has the machine file's name under the root's `.fno`.
+        let legacy = Path::new(".fno").join(path.file_name().unwrap_or_default());
+        let repo_root = payload
+            .get("repo_root")
+            .and_then(Value::as_str)
+            .map(Path::new);
+        for root in std::iter::once(cwd.as_path()).chain(repo_root) {
+            if let Err(error) = fold_legacy(&path, &root.join(&legacy), wall_now(), LOCK_TIMEOUT) {
+                eprintln!(
+                    "runtime_state: legacy per-cwd fold skipped for {}: {error}",
+                    root.display()
+                );
+            }
+        }
+    }
+    let now = payload
+        .get("now")
+        .and_then(py_float)
+        .unwrap_or_else(wall_now);
+    let text = |key: &str| payload.get(key).and_then(Value::as_str);
+    let int = |key: &str| payload.get(key).and_then(py_int);
+    let id = text("provider_id").unwrap_or_default();
+    // Every op is keyed by a provider; an empty id would land an entry the
+    // parser then drops, so refuse it before taking the lock.
+    if id.is_empty() {
+        eprintln!("accounts state {op}: provider_id is required");
+        return 2;
+    }
+    let answer = match op.as_str() {
+        "update-health" => {
+            let rule = Rule {
+                backoff: payload.get("backoff").is_some_and(py_truthy),
+                cooldown_ms: int("cooldown_ms"),
+            };
+            let resets_at = payload.get("resets_at").and_then(py_float);
+            let span = resets_at
+                .filter(|r| *r > now)
+                .and_then(|_| record_window_seconds(&cwd, id));
+            update_health(
+                &path,
+                id,
+                rule,
+                text("model"),
+                resets_at,
+                span,
+                now,
+                LOCK_TIMEOUT,
+            )
+            .map(|h| keyed(h.to_json(), "provider_id", id))
+        }
+        "write-usage" => {
+            let Some(snapshot) = payload.get("snapshot").and_then(parse_snapshot) else {
+                eprintln!("accounts state write-usage: the snapshot is malformed");
+                return 2;
+            };
+            write_usage(&path, id, snapshot, now, LOCK_TIMEOUT).map(|ok| json!({"persisted": ok}))
+        }
+        "stamp-window" => {
+            let span = record_window_seconds(&cwd, id);
+            let label = text("label").unwrap_or(WINDOW_LABEL);
+            let opened_at = payload.get("opened_at").and_then(py_float).unwrap_or(now);
+            stamp_window(&path, id, opened_at, label, span, now, LOCK_TIMEOUT)
+                .map(|ok| json!({"written": ok}))
+        }
+        "mark-warned" => mark_warned(&path, id, now, LOCK_TIMEOUT).map(|ok| json!({"set": ok})),
+        _ => {
+            eprintln!("{STATE_USAGE}");
+            return 2;
+        }
+    };
+    match answer {
+        Ok(v) => {
+            println!("{v}");
+            0
+        }
+        Err(error) => {
+            eprintln!("accounts state {op}: {error} at {}", path.display());
+            1
+        }
     }
 }
