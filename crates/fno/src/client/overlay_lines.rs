@@ -222,9 +222,8 @@ pub(crate) fn peek_overlay_lines(
 }
 
 impl View {
-    /// The navigator's framed block: the filtered flat catalog + query/chip
-    /// line, laid out from the live layout (no cache). One layout feeds the
-    /// painter and the row menu's anchor, so the two cannot disagree.
+    /// The navigator's framed block, from the live layout. One layout feeds
+    /// the painter and the row menu's anchor, so the two cannot disagree.
     pub(super) fn nav_layout(
         &self,
         overlay_origin: (usize, usize),
@@ -239,13 +238,13 @@ impl View {
             overlay_dims,
             &chrome,
             &lines,
-            // Keep the cursor on screen past the fold; +1 for the query line.
+            // +1 for the query line.
             Some(nav.cursor + 1),
             OverlayAnchor::Center,
         ))
     }
 
-    /// Paint the navigator. A no-op when it is closed.
+    /// Paint the navigator, if open.
     pub(super) fn draw_nav(
         &self,
         cells: &mut [Cell],

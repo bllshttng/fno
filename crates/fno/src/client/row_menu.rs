@@ -1657,7 +1657,7 @@ impl View {
         else {
             return false;
         };
-        // Beside the highlighted line, so the menu never hides its own row.
+        // Beside the highlighted line: the menu never hides its own row.
         let (origin, dims) = self.overlay_viewport();
         let anchor = self.nav.as_ref().zip(self.nav_layout(origin, dims)).map_or(
             Anchor::Center,
