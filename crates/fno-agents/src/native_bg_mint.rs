@@ -65,7 +65,7 @@ pub(crate) fn mint_missing_native_bg(
     let mut prepared = Vec::new();
     // Forks of a session a row holds: (child, parent, child pid). They take
     // the parent's row under the lock instead of minting a second one.
-    let mut forks: Vec<(String, String, Option<u32>)> = Vec::new();
+    let mut forks: Vec<(String, String, u32)> = Vec::new();
     let mut deferred = false;
     // State alone lies: a died session keeps its last `working`/`blocked`
     // row with no pid. A listing that carries pids makes the missing pid a
@@ -95,12 +95,12 @@ pub(crate) fn mint_missing_native_bg(
         let fork_parent = row
             .pid
             .and_then(|pid| crate::native_adopt::claude_fork_parent(session, Some(pid)));
-        if let Some(parent) = fork_parent {
+        if let Some((parent, pid)) = fork_parent {
             if entries
                 .iter()
                 .any(|e| e.harness_session_id.as_deref() == Some(parent.as_str()))
             {
-                forks.push((session.to_string(), parent, row.pid));
+                forks.push((session.to_string(), parent, pid));
                 continue;
             }
         }
@@ -180,7 +180,7 @@ pub(crate) fn mint_missing_native_bg(
     let write = crate::state::update_registry(&home.registry_json(), |r| {
         for (child, parent, pid) in forks {
             if crate::session_report::find_row(&r.entries, "claude", &child, None).is_none() {
-                crate::native_adopt::bind_fork_child(&mut r.entries, &parent, &child, pid);
+                crate::native_adopt::bind_fork_child(&mut r.entries, &parent, &child, Some(pid));
             }
         }
         for cand in prepared {

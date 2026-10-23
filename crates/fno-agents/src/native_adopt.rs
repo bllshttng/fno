@@ -195,14 +195,15 @@ pub(crate) fn fork_parent_in_argv(argv: &[String], session_id: &str) -> Option<S
         .map(|pair| pair[1].clone())
 }
 
-/// The fork parent of a live claude bg session, from the argv of the pid
-/// the claude agents listing names for it.
-pub(crate) fn claude_fork_parent(session_id: &str, pid: Option<u32>) -> Option<String> {
+/// The fork parent of a live claude bg session and the fork's own pid, from
+/// the argv of the pid the claude agents listing names for it.
+pub(crate) fn claude_fork_parent(session_id: &str, pid: Option<u32>) -> Option<(String, u32)> {
     let pid = pid.or_else(|| {
         let short = crate::client_commands::derived_short_id(session_id);
         crate::claude_roster::read_all_agents_union().live_bg_pid(&short)
     })?;
-    fork_parent_in_argv(&crate::census::process_argv(pid)?, session_id)
+    let parent = fork_parent_in_argv(&crate::census::process_argv(pid)?, session_id)?;
+    Some((parent, pid))
 }
 
 /// A session a row has already moved past. It never mints a row of its own:

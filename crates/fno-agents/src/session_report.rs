@@ -289,8 +289,13 @@ pub(crate) fn handle_session_report(
     let mut manifest_arm: Option<(String, String, Option<String>)> = None;
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
-            if let Some(i) = fork_parent.as_deref().and_then(|parent| {
-                crate::native_adopt::bind_fork_child(&mut r.entries, parent, &session_id, None)
+            if let Some(i) = fork_parent.as_ref().and_then(|(parent, pid)| {
+                crate::native_adopt::bind_fork_child(
+                    &mut r.entries,
+                    parent,
+                    &session_id,
+                    Some(*pid),
+                )
             }) {
                 let entry = &mut r.entries[i];
                 entry.last_report_at = Some(now_stamp.clone());
