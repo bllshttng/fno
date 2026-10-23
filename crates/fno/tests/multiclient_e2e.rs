@@ -678,6 +678,14 @@ fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
         !scratch.0.join("dead.sock").exists(),
         "ls removes a proven-dead session's socket"
     );
+    let healed = fno::event_store::journal_text(
+        &scratch.0.join("iso-agents").join("events.jsonl"),
+        &["mux_session_healed"],
+    );
+    assert!(
+        healed.contains("mux_session_healed") && healed.contains("dead.sock"),
+        "the heal journals one row naming the session; got: {healed}"
+    );
     assert!(
         stdout.contains("odd: alive (unqueryable"),
         "unanswering server degrades per-row (AC4-ERR); got: {stdout}"
