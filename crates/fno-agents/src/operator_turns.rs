@@ -723,7 +723,9 @@ pub fn run(args: &[String]) -> i32 {
     let session = resolved.session;
     // The id lands in a path join; a crafted id must not escape the capture dir.
     if session.contains('/') || session.contains('\\') || session.contains("..") {
-        eprintln!("compaction operator-turns: --session must be a bare id (no '/', '\\', '..'): {session}");
+        eprintln!(
+            "compaction operator-turns: the session id must be a bare id (no '/', '\\', '..'): {session}"
+        );
         return 2;
     }
     let now_epoch = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
@@ -816,7 +818,9 @@ pub fn run_ack(args: &[String]) -> i32 {
     };
     // The id lands in a path join; a crafted id must not escape the capture dir.
     if session.contains('/') || session.contains('\\') || session.contains("..") {
-        eprintln!("compaction ack: --session must be a bare id (no '/', '\\', '..'): {session}");
+        eprintln!(
+            "compaction ack: the session id must be a bare id (no '/', '\\', '..'): {session}"
+        );
         return 2;
     }
     let why = flag("--why").unwrap_or_default();
