@@ -1924,6 +1924,8 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
                 "install".into(),
                 "codex".into(),
                 "--force".into(),
+                "--source".into(),
+                resolved.to_string_lossy().into_owned(),
             ]
             .to_vec();
             let code = run_inherit(&fno_py, &args);
