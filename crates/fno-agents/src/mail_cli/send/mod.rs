@@ -1,5 +1,5 @@
-//! The `mail send` wrapped command: agent, project, kind, job, lead and ruling
-//! lanes plus the durable floor.
+//! The `mail send` wrapped command: agent, project, kind, job and lead lanes
+//! plus the durable floor.
 //!
 //! Port of the Python `cmd_send` body (`cli/src/fno/mail/cli.py`) with the
 //! dispatch engine it drove (`agents/dispatch.py::dispatch_send`,
@@ -645,7 +645,6 @@ struct SendArgs {
     provider_tombstone: Option<String>,
     from_name: Option<String>,
     origin: Option<String>,
-    ruling: Option<String>,
     from_self: bool,
     to_project: Option<String>,
     to_lead: Option<String>,
@@ -680,7 +679,6 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         provider_tombstone: None,
         from_name: None,
         origin: None,
-        ruling: None,
         from_self: false,
         to_project: None,
         to_lead: None,
@@ -725,14 +723,13 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             }
             "--cwd" | "-c" => {
                 // Python's `workdir`: every repo-scoped read below (project
-                // resolution, the kind sender, config lookups, the ruling
-                // child) resolves against this directory, not the ambient
-                // one. run() chdir's to it before any consumer reads.
+                // resolution, the kind sender, config lookups) resolves
+                // against this directory, not the ambient one. run() chdir's
+                // to it before any consumer reads.
                 out.cwd = Some(PathBuf::from(take_arg(args, &mut index, "--cwd")?));
             }
             "--from-name" => out.from_name = Some(take_arg(args, &mut index, "--from-name")?),
             "--origin" => out.origin = Some(take_arg(args, &mut index, "--origin")?),
-            "--ruling" => out.ruling = Some(take_arg(args, &mut index, "--ruling")?),
             "--from-self" => out.from_self = true,
             "--to-project" => out.to_project = Some(take_arg(args, &mut index, "--to-project")?),
             "--to-lead" => out.to_lead = Some(take_arg(args, &mut index, "--to-lead")?),
@@ -869,6 +866,10 @@ fn is_unsafe_short_address(token: &str) -> bool {
 const BUDGET_WINDOW_SECONDS: f64 = 600.0;
 
 const BUDGET_CONTROL_CAP: i64 = 60;
+
+/// The lane that reaches an underway worker with no pane and no word cap.
+/// Every refusal on the correction path names it.
+pub(crate) const CORRECTION_HINT: &str = "To correct an underway worker, write it on its node: `fno backlog note <node> --body-file <file>` mails the node's holder a pointer.";
 
 /// Python `budget.pair_label`.
 fn budget_pair_label(sender: &str, recipient: &str) -> String {
@@ -1113,7 +1114,7 @@ pub(crate) fn reserve_send_budget(
             Ok(Some(r))
         }
         BudgetOutcome::Refused(pair, running, current, cap) => Err((
-            format!("refused: control word budget for {pair}: running {running} + {current} over cap {cap}"),
+            format!("refused: control word budget for {pair}: running {running} + {current} over cap {cap}. {CORRECTION_HINT}"),
             1,
         )),
         BudgetOutcome::Unavailable(pair, detail) => Err((format!("refused: {pair}: {detail}"), 1)),
@@ -1135,6 +1136,49 @@ pub(crate) fn release_budget(reservation: &Option<BudgetReservation>) {
         })();
         lock_dir_release(lock);
     }
+}
+
+/// Drop every ledger entry charged to `msg_id`; the count removed. A
+/// withdrawal proves non-delivery, so its words stop blocking the retry.
+/// Scan by id: the envelope carries handles, and the ledger key may be a
+/// session id or the control prefix. Best-effort like [`release_budget`].
+pub(crate) fn release_budget_by_id(msg_id: &str) -> usize {
+    let Some(ledgers) = budget_ledger_path("").parent().map(Path::to_path_buf) else {
+        return 0;
+    };
+    let Ok(dir) = std::fs::read_dir(ledgers) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for path in dir.flatten().map(|e| e.path()) {
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !raw.contains(msg_id) {
+            continue;
+        }
+        let Some(pair) = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|v| v.get("pair").and_then(Value::as_str).map(str::to_string))
+        else {
+            continue;
+        };
+        let Ok(lock) = lock_dir_acquire(&path, 10.0) else {
+            continue;
+        };
+        if let Ok(mut entries) = budget_load(&path, &pair) {
+            let before = entries.len();
+            entries.retain(|e| e.get("id").and_then(Value::as_str) != Some(msg_id));
+            if entries.len() < before && budget_store(&path, &pair, &entries).is_ok() {
+                removed += before - entries.len();
+            }
+        }
+        lock_dir_release(lock);
+    }
+    removed
 }
 
 // ---------------------------------------------------------------------------
@@ -1576,44 +1620,6 @@ fn append_render_block(
     let _ = std::fs::write(thread_path, out);
 }
 
-/// Python `_ruling_graph_path` + `_append_ruling_to_node`: append a dated
-/// ruling block to a governed node's details. The native backlog note command
-/// owns that write today; the lane refuses the same shapes the Python lane
-/// refused before the append.
-fn append_ruling(ruling: &str, message: &str, graph_path: Option<&Path>) -> Result<(), i32> {
-    // The graph write rides the native note command, the post-port home of the
-    // same transaction, so the gate the graph store enforces stays the one
-    // gate. The Python leg resolved the graph from --cwd or the ambient
-    // project; the native command resolves identically.
-    // Refuse an unknown node by name before any mail moves, through the same
-    // id/slug read and store the note command uses. An unreadable store falls
-    // through so the note command reports its own cause.
-    let graph = graph_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(crate::graph_get::default_graph_path);
-    if let Ok(None) = crate::graph_store::read_one(&graph, ruling) {
-        eprintln!("error: ruling node not found: {}", py_repr(ruling));
-        return Err(2);
-    }
-    let front = crate::mail_remote::fno_binary();
-    let argv = vec![
-        front.to_string_lossy().into_owned(),
-        "backlog".to_string(),
-        "note".to_string(),
-        ruling.to_string(),
-        format!("ruling ({}) {}", now_iso(), message),
-    ];
-    let captured = run_captured(&argv, "", true, 30.0);
-    if captured.status != Some(0) {
-        eprintln!(
-            "error: --ruling could not append to {}: run `fno backlog note` by hand",
-            py_repr(ruling)
-        );
-        return Err(2);
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Body vetting (cli.py _vet_body twins)
 // ---------------------------------------------------------------------------
@@ -1794,8 +1800,6 @@ pub fn run(args: &[String]) -> i32 {
             Some("--force")
         } else if args.any_live {
             Some("--any")
-        } else if args.ruling.is_some() {
-            Some("--ruling")
         } else {
             None
         };
@@ -1810,27 +1814,6 @@ pub fn run(args: &[String]) -> i32 {
 
     let mut name = name;
     let mut message = message;
-    if args.ruling.is_some() {
-        let combined = args.raw
-            || args.kind.is_some()
-            || args.to_project.is_some()
-            || args.to_lead.is_some()
-            || args.to_self;
-        if combined {
-            eprintln!(
-                "error: --ruling supports only send <worker> <message>; drop --raw, --kind, --to-project, --to-lead, or --to-self"
-            );
-            return 2;
-        }
-        let worker_only = match &name {
-            Some(n) => !n.is_empty() && !is_job_token(n),
-            None => false,
-        };
-        if !worker_only || message.is_none() {
-            eprintln!("error: --ruling supports only send <worker> <message>");
-            return 2;
-        }
-    }
 
     let classified_origin = match classify_origin(args.origin.as_deref()) {
         Ok(origin) => origin,
@@ -2112,14 +2095,6 @@ pub fn run(args: &[String]) -> i32 {
         if let Err(code) = vet_body(&body, args.style_exception.as_deref()) {
             return code;
         }
-        if let Some(ruling) = args.ruling.as_deref() {
-            // The ruling is an annotation on top of the delivery, not a
-            // terminal lane: append, then fall through and send.
-            match append_ruling(ruling, &body, None) {
-                Ok(()) => {}
-                Err(code) => return code,
-            }
-        }
         if args.force {
             return run_name_lane_force(
                 &args,
@@ -2299,6 +2274,32 @@ mod style_gate_tests {
             .find(|v| v.rule == 7)
             .expect("the cap fires");
         assert!(rule7.detail.contains("runs 81 words"), "{}", rule7.detail);
+    }
+
+    /// A spent control window refuses and names the node lane. Withdrawing
+    /// the charged message frees the window for its retry.
+    #[test]
+    fn a_withdrawn_control_send_frees_its_words_and_the_refusal_names_the_node_lane() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let scratch = tempfile::tempdir().unwrap();
+        let _bus = EnvVarGuard::set("FNO_BUS_DIR", scratch.path().to_str().unwrap());
+        let body = format!("control: {}", style_clean_body(45));
+        assert!(matches!(
+            reserve_send_budget("a", "b", &body, "msg-A"),
+            Ok(Some(_))
+        ));
+        let Err((refusal, 1)) = reserve_send_budget("a", "b", &body, "msg-R") else {
+            panic!("a second 46-word control send must overrun the 60-word window");
+        };
+        assert!(refusal.contains(CORRECTION_HINT), "{refusal}");
+        assert_eq!(release_budget_by_id("msg-A"), 1);
+        assert_eq!(release_budget_by_id("msg-A"), 0);
+        assert!(matches!(
+            reserve_send_budget("a", "b", &body, "msg-R"),
+            Ok(Some(_))
+        ));
     }
 
     fn style_clean_body(n_words: usize) -> String {

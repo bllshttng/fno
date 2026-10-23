@@ -140,6 +140,9 @@ pub fn run_sent(args: &[String]) -> i32 {
                     // and the recipient cannot drain it.
                     "claimable": delivery_of(m) != TYPED_DELIVERY,
                     "landed": landed_flag.get(&id).cloned().flatten().map(Value::from).unwrap_or(Value::Null),
+                    // The stored envelope, wrapper included: a sender judges a
+                    // stale message by its words before withdrawing it.
+                    "body": str_field(m, "body", ""),
                 })
             })
             .collect();

@@ -1630,11 +1630,6 @@ def mail_send_forward(
         hidden=True,
         help="Stamped machine mail origin: operator, peer, scheduler, or recovery.",
     ),
-    ruling: str | None = typer.Option(
-        None,
-        "--ruling",
-        help="Append the message to the governed node's details as a dated ruling block.",
-    ),
     from_self: bool = typer.Option(
         False, "--from-self",
         help=(
@@ -1770,8 +1765,6 @@ def mail_send_forward(
         argv += ["--from-name", from_name]
     if origin is not None:
         argv += ["--origin", origin]
-    if ruling is not None:
-        argv += ["--ruling", ruling]
     if from_self:
         argv.append("--from-self")
     if to_project is not None:
