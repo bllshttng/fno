@@ -166,20 +166,28 @@ pub(crate) fn mint_missing_native_bg(
     // A row still named by its short id: the mail-hold register writes
     // `sid[..8]` before any beat mints, and both minters then skip the held
     // session, so no later step named it. The listing and the record still
-    // know the session's name.
+    // know the session's name; a row nothing names waits for a later beat.
     let mut renames: Vec<(String, String)> = Vec::new();
     for e in entries.iter().filter(|e| e.harness_name() == "claude") {
-        if renames.len() >= BUDGET_PER_BEAT {
-            deferred = true;
-            break;
-        }
-        let Some(session) = e.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {
+        let Some(session) = e.harness_session_id.as_deref() else {
             continue;
         };
         if !named_by_short_id(&e.name, session) {
             continue;
         }
-        if let Some(name) = rename_for(home, rows, e, session) {
+        if renames.len() >= BUDGET_PER_BEAT {
+            deferred = true;
+            break;
+        }
+        let record = crate::launch_record::claimed_edge(home.root(), session);
+        let handle = crate::identity::canonical_handle(session);
+        let listed = rows
+            .iter()
+            .find(|r| r.short_id == handle)
+            .and_then(|r| r.name.as_deref());
+        if let Some(name) =
+            worker_row_name(session, record.as_ref(), e.node.as_deref(), &e.cwd, listed)
+        {
             renames.push((session.to_string(), name));
         }
     }
@@ -451,28 +459,9 @@ fn worker_row_name(
         .filter(names)
         .or_else(|| {
             let node = node.or_else(|| record.and_then(|r| r.launch.node.as_deref()))?;
-            crate::naming::node_worker_name(node, Path::new(cwd), None, Some(session))
+            crate::naming::node_worker_name(node, Path::new(cwd), session)
         })
         .or_else(|| listed.map(listing_name_slug).filter(names))
-}
-
-/// The name a short-id row takes, else `None`: the row keeps its name and a
-/// later beat tries again.
-fn rename_for(
-    home: &crate::paths::AgentsHome,
-    rows: &[crate::claude_roster::ClaudeAgentRow],
-    e: &RegistryEntry,
-    session: &str,
-) -> Option<String> {
-    let record = crate::launch_record::claimed_edge(home.root(), session);
-    let listed = rows
-        .iter()
-        .find(|r| {
-            r.session_id.as_deref() == Some(session)
-                || r.short_id == crate::identity::canonical_handle(session)
-        })
-        .and_then(|r| r.name.as_deref());
-    worker_row_name(session, record.as_ref(), e.node.as_deref(), &e.cwd, listed)
 }
 
 fn prepare_row(

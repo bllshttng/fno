@@ -653,22 +653,15 @@ fn seed_skill(seed: &str) -> Option<String> {
 /// `agents.naming.worker` template of the project at `cwd`, else None. A
 /// row's own cwd picks its project, so a node of another project than the
 /// daemon's reads its own graph and its own template.
-pub fn node_worker_name(
-    token: &str,
-    cwd: &std::path::Path,
-    skill: Option<&str>,
-    session: Option<&str>,
-) -> Option<String> {
+pub fn node_worker_name(token: &str, cwd: &std::path::Path, session: &str) -> Option<String> {
     let slug = node_slug(token, cwd);
-    render_worker_name(
-        &worker_template(cwd),
-        &WorkerFacts {
-            node: Some(token),
-            slug: slug.as_deref(),
-            skill,
-            session,
-        },
-    )
+    let facts = WorkerFacts {
+        node: Some(token),
+        slug: slug.as_deref(),
+        skill: None,
+        session: Some(session),
+    };
+    render_worker_name(&worker_template(cwd), &facts)
 }
 
 /// The slug of the node `token` names (id first, then slug), else None.
@@ -974,29 +967,25 @@ mod tests {
             })],
         )
         .unwrap();
-        let named = node_worker_name("fb-bd7a", tmp.path(), None, None);
-        let missing = node_worker_name("fb-0000", tmp.path(), None, None);
+        let sid = "cccccccc-ab12-0000-0000-000000000003";
+        let named = node_worker_name("fb-bd7a", tmp.path(), sid);
+        let missing = node_worker_name("fb-0000", tmp.path(), sid);
         // A project's agents.naming.worker renders every token it names.
         let project = tmp.path().join("proj");
         std::fs::create_dir_all(project.join(".fno")).unwrap();
         std::fs::write(
             project.join(".fno/config.toml"),
-            "[agents.naming]\nworker = \"{skill}-{node}-{slug}\"\n",
+            "[agents.naming]\nworker = \"{node}-{slug}-{random}\"\n",
         )
         .unwrap();
-        let templated = node_worker_name("fb-bd7a", &project, Some("target"), None);
-        let no_skill = node_worker_name("fb-bd7a", &project, None, None);
+        let templated = node_worker_name("fb-bd7a", &project, sid);
         match saved {
             Some(v) => std::env::set_var("FNO_STATE_DIR", v),
             None => std::env::remove_var("FNO_STATE_DIR"),
         }
         assert_eq!(named.as_deref(), Some("t-books-index-sweep"));
         assert_eq!(missing, None);
-        assert_eq!(
-            templated.as_deref(),
-            Some("target-fb-bd7a-books-index-sweep")
-        );
-        assert_eq!(no_skill, None, "a token with no fact renders nothing");
+        assert_eq!(templated.as_deref(), Some("fb-bd7a-books-index-sweep-ab12"));
     }
 
     /// The default template: `t-` and the first slug words, two when three
@@ -1034,6 +1023,11 @@ mod tests {
         };
         let random = render_worker_name("w-{node}-{random}", &facts);
         assert_eq!(random.as_deref(), Some("w-x-6c15-ab12"));
+        assert_eq!(
+            render_worker_name("{skill}-{node}", &facts),
+            None,
+            "no skill fact"
+        );
         assert_eq!(render_worker_name("{bogus}", &facts), None);
         assert_eq!(render_worker_name("t-{node", &facts), None);
         assert_eq!(

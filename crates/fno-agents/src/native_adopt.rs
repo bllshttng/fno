@@ -103,8 +103,7 @@ pub(crate) fn prepare_mint(
                 crate::naming::node_worker_name(
                     node,
                     std::path::Path::new(&r.launch.cwd),
-                    None,
-                    Some(session_id),
+                    session_id,
                 )
             });
             crate::claude_adopt::synthesized_entry_name(session_id, &short, node_name)
