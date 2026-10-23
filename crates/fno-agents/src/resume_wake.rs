@@ -1572,8 +1572,7 @@ pub(crate) fn relaunch_exited_claude_with(
             );
         }
     };
-    // A stale registry pid is not proof the session is free: `claude --bg
-    // --resume` on a session a live process holds starts a copy.
+    // A stale pid proves nothing: `--bg --resume` on a held session copies it.
     if claude_home.session_held(&uuid) {
         eprintln!(
             "fno agents resume: a live claude process still holds {uuid}, so a relaunch \
