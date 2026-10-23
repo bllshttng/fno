@@ -41,5 +41,5 @@ when = ["actor_is_session", "reversible", "has_recommendation", "why_user_set", 
 action = "nudge"
 what = "you sent the user a reversible question you hold a recommendation for"
 why = "only public-surface, irreversible, money-security and law-change go to the user"
-instead = "withdraw it and record: fno backlog decide <node> \"<ruling>\" --authority role"
+instead = "withdraw it and record: fno backlog decide <node> \"<ruling>\""
 default = true

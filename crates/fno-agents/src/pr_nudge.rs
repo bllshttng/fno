@@ -256,7 +256,9 @@ fn ladder_run(argv: &[String], cwd: &str) -> (i32, String, String) {
 pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow], grace_secs: i64) {
     let now = crate::daemon::now_epoch_secs();
     for row in rows {
-        let held = merge_order_hold(home, &row.node) || authorized_merge_hold(home, row);
+        let held = merge_order_hold(home, &row.node)
+            || authorized_merge_hold(home, row)
+            || merge_freeze_hold(home, row);
         let state = load_state(home, &row.session_id);
         apply(
             home,
@@ -273,7 +275,10 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
 }
 
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    if merge_order_hold(home, &row.node) || authorized_merge_hold(home, row) {
+    if merge_order_hold(home, &row.node)
+        || authorized_merge_hold(home, row)
+        || merge_freeze_hold(home, row)
+    {
         return true;
     }
     loop_pause_hold(home, row)
@@ -872,6 +877,16 @@ fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
 /// `gh`-fetched probe, so a held row costs the ladder one local `git
 /// remote` read, never a network call. A row with no PR yet has nothing to
 /// hold.
+/// A release freeze holds every off-pin PR of its repo until the user lifts
+/// it, so nudging the owner to merge one only repeats a refusal.
+fn merge_freeze_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+    let Some(pr) = row.pr else {
+        return false;
+    };
+    let slug = crate::backlog::pr_link::resolve_current_repo_slug(Some(&row.cwd));
+    crate::merge_freeze::holds_pr(home, pr, slug.as_deref())
+}
+
 fn authorized_merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
     let Some(pr) = row.pr else {
         return false;
