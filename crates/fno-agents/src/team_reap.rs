@@ -511,6 +511,13 @@ pub fn production_sweep(home: &crate::paths::AgentsHome, cwd: &Path, apply: bool
         eprintln!("team-reap: team names: {e}");
         Vec::new()
     });
+    // Land this machine's name history on the fleet ledger, so a machine
+    // that names nobody for a while still burns its names for its peers.
+    if apply {
+        if let Err(e) = crate::team_names::history_sync(&home.team_names_json()) {
+            eprintln!("team-reap: name ledger: {e}");
+        }
+    }
     out
 }
 

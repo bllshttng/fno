@@ -322,6 +322,26 @@ fn holder_ids(holders: &[Holder]) -> Vec<Value> {
         .collect()
 }
 
+/// The refusal for a proposed lead name any machine already drew or bound,
+/// naming who used it and when; `None` when it is fresh. Fail closed: an
+/// unreadable history refuses the ask, never reads the name as fresh. No
+/// declared agents home (a unit test) reads no store.
+fn retired_name_refusal(proposed: &str, door: &str) -> Result<Option<String>, String> {
+    let Some(store_path) = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json())
+    else {
+        return Ok(None);
+    };
+    let used = crate::team_names::history_names(&store_path)
+        .map_err(|e| format!("{door} cannot read the name history: {e}"))?;
+    if !used.contains(&proposed.to_ascii_lowercase()) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{door} requires a fresh person name: {proposed} is retired ({}), and names are never reused on any machine",
+        crate::team_names::used_by(&store_path, proposed)
+    )))
+}
+
 fn plan_answer(
     outcome: &str,
     occupancy: Occupancy,
@@ -437,6 +457,24 @@ fn plan_with_projects(
         ));
     }
 
+    // A fresh grant (`--promote --name X`) names a new lead: X must be fresh
+    // on every machine. A revive keeps its own row's name.
+    if !succession
+        && take_over.is_none()
+        && crate::team_names::valid_person_name(proposed_name)
+        && !exclude_name.is_some_and(|n| n.eq_ignore_ascii_case(proposed_name))
+    {
+        if let Some(refusal) = retired_name_refusal(proposed_name, "--promote --name")? {
+            return Ok(plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!(refusal),
+                caller_value,
+            ));
+        }
+    }
+
     if holders.is_empty() {
         return Ok(plan_answer(
             "granted",
@@ -542,24 +580,14 @@ fn plan_with_projects(
         // registry move would still commit, and a carry error skips both the
         // journal row and the mail, leaving the team moved unjournaled. A
         // take-over has no draw, so the pending-draw accept never applies.
-        if let Some(store_path) =
-            crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json())
-        {
-            // Fail closed: an unreadable store must refuse the ask, never
-            // read the name as fresh; the carry side refuses the same way.
-            let used = crate::team_names::history_names(&store_path)
-                .map_err(|e| format!("--take-over cannot read the name history: {e}"))?;
-            if used.contains(&proposed_name.to_ascii_lowercase()) {
-                return Ok(plan_answer(
-                    "declined",
-                    occupancy,
-                    Vec::new(),
-                    json!(format!(
-                        "--take-over requires a fresh person name: {proposed_name} is retired, an earlier lead, worker or draw used it, and names are never reused"
-                    )),
-                    caller_value,
-                ));
-            }
+        if let Some(refusal) = retired_name_refusal(proposed_name, "--take-over")? {
+            return Ok(plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!(refusal),
+                caller_value,
+            ));
         }
         let vacate = holder_names(&occupancy.holders);
         let predecessors: Vec<Value> = occupancy

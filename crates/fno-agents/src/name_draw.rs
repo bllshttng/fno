@@ -5,7 +5,8 @@
 //! kept reaching for a short list of favorites (Rowan led the same scope
 //! twice in nine days; the iMac drew the same name while the MacBook Rowan
 //! lived). Two locks close it. `team_names` refuses every name already used
-//! on this host (history ledger, store, registry, bus, handoffs), and every
+//! (the history ledger, merged across machines by `name_ledger`, plus this
+//! host's store, registry, bus and handoffs), and every
 //! draw takes a `name:` claim - shared across hosts when `store.remote_url`
 //! is set - so two hosts never hold one name at once.
 //!
@@ -401,6 +402,33 @@ pub fn draw_successor_name(
     redraw: bool,
     claims_root: Option<&Path>,
 ) -> Result<String, String> {
+    draw_from(
+        NAME_POOL,
+        &[],
+        store_path,
+        registry_path,
+        scope,
+        proposed,
+        redraw,
+        claims_root,
+    )
+}
+
+/// [`draw_successor_name`] over an explicit pool, minus `outgoing` (the
+/// holders this succession replaces). An outgoing name is already used when
+/// its row sits in this machine's registry; naming it here keeps the rule
+/// when the outgoing lead lived on a peer machine.
+#[allow(clippy::too_many_arguments)]
+fn draw_from(
+    name_pool: &[&str],
+    outgoing: &[String],
+    store_path: &Path,
+    registry_path: &Path,
+    scope: &str,
+    proposed: Option<&str>,
+    redraw: bool,
+    claims_root: Option<&Path>,
+) -> Result<String, String> {
     let canon = crate::territory::canonical_scope(scope);
     let pending = crate::team_names::pending_draw(store_path, scope)?;
     if let Some(name) = proposed.map(str::trim).filter(|p| !p.is_empty()) {
@@ -436,8 +464,9 @@ pub fn draw_successor_name(
     ))
     .map_err(|e| e.to_string())?;
     let drawn = (|| -> Result<String, String> {
-        let used = crate::team_names::used_names(store_path, registry_path)?;
-        let pool: Vec<&str> = NAME_POOL
+        let mut used = crate::team_names::used_names(store_path, registry_path)?;
+        used.extend(outgoing.iter().map(|n| n.to_ascii_lowercase()));
+        let pool: Vec<&str> = name_pool
             .iter()
             .copied()
             .filter(|n| !used.contains(&n.to_ascii_lowercase()))
@@ -452,13 +481,7 @@ pub fn draw_successor_name(
                 Ok(()) => {
                     crate::team_names::history_append_locked(
                         store_path,
-                        crate::team_names::NameHistoryEntry {
-                            name: pick.to_ascii_lowercase(),
-                            scope: canon.clone(),
-                            session: None,
-                            kind: "drawn".into(),
-                            ts: crate::daemon::now_rfc3339_like(),
-                        },
+                        crate::team_names::NameHistoryEntry::here(pick, &canon, None, "drawn"),
                     )?;
                     return Ok(crate::team_names::display(pick, 1));
                 }
@@ -507,7 +530,21 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
         .get("claims_root")
         .and_then(Value::as_str)
         .map(PathBuf::from);
-    match draw_successor_name(
+    // The plan answer names the holders this succession vacates.
+    let outgoing: Vec<String> = answer
+        .get("holders")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    match draw_from(
+        NAME_POOL,
+        &outgoing,
         store,
         &registry,
         payload.get("scope").and_then(Value::as_str).unwrap_or(""),
@@ -586,6 +623,32 @@ mod tests {
         let second =
             draw_successor_name(&store, &registry, "x-aaaa", None, true, Some(tmp.path())).unwrap();
         assert_ne!(drawn, second);
+    }
+
+    /// The successor of Anouk never draws Anouk, even when Anouk's row lives
+    /// on a peer machine and this registry has never seen it.
+    #[test]
+    fn the_draw_never_returns_the_outgoing_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("team_names.json");
+        let registry = tmp.path().join("registry.json");
+        crate::registry_store::seed_raw(
+            &registry,
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        let drawn = draw_from(
+            &["anouk", "zelda"],
+            &["Anouk".to_string()],
+            &store,
+            &registry,
+            "x-aaaa",
+            None,
+            false,
+            Some(tmp.path()),
+        )
+        .unwrap();
+        assert_eq!(drawn, "Zelda");
     }
 
     #[test]
