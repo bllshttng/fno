@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -219,6 +220,15 @@ def _make_disposable_worktree(repo_root: Path, ref: str, tag: str) -> Path:
     return path
 
 
+def _forget_trial_transcripts(workdir: Path) -> None:
+    # Every trial worktree is a fresh cwd, so claude keeps one projects dir per
+    # trial, and they pile up in its own session list. The observe door has
+    # read the transcript by now; the history row is the record.
+    from fno.agents.harnesses.claude import _claude_project_slug, _claude_projects_dir
+
+    shutil.rmtree(_claude_projects_dir(os.environ) / _claude_project_slug(workdir), ignore_errors=True)
+
+
 def _remove_worktree(repo_root: Path, path: Path) -> None:
     # Best-effort: a failed removal must never mask the run's verdict. The next
     # `fno doctor evals run` sweeps orphans (see sweep_orphans).
@@ -386,6 +396,8 @@ def run_task(
                 if spawn_res is not None and spawn_res.lane_note:
                     lane_evidence.update(account_dropped=True, lane_reason=spawn_res.lane_note)
                     lane_evidence["lane_status"] = "account-dropped" if lane_evidence.get("lane_status") == "ok" else lane_evidence.get("lane_status")
+            if spawned and spawn is None and workdir is not None:
+                _forget_trial_transcripts(workdir)
 
             duration = round(time.monotonic() - started, 3)
             passed = outcome is not None and outcome.passed
