@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 
 /// The account commands served by `fno-agents spawn-overlay accounts`.
-pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &["show", "add"];
+pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &["show", "add", "reconcile-slot"];
 
 /// `fno config accounts <command> ...` for a native command: the args from the
 /// command on, ready for `fno-agents spawn-overlay accounts`.
@@ -40,6 +40,8 @@ mod tests {
         assert_eq!(rest, oss(&["show", "alt", "--print-binding"]));
         let rest = classify(&oss(&["config", "accounts", "add", "alt", "-H", "claude"])).unwrap();
         assert_eq!(rest, oss(&["add", "alt", "-H", "claude"]));
+        let rest = classify(&oss(&["config", "accounts", "reconcile-slot"])).unwrap();
+        assert_eq!(rest, oss(&["reconcile-slot"]));
         assert_eq!(classify(&oss(&["config", "accounts", "list"])), None);
         assert_eq!(classify(&oss(&["config", "accounts"])), None);
         assert_eq!(classify(&oss(&["config", "paths", "show"])), None);
