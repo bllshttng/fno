@@ -500,13 +500,24 @@ fn decision_ask(text: &str) -> bool {
         if numbered_options(line) >= 2 {
             return true;
         }
+        let blank = |l: &&&str| l.trim().is_empty();
+        let item = |l: &&&str| is_numbered_item(l);
         !is_numbered_item(line)
-            && lines[i + 1..]
+            && (lines[i + 1..]
                 .iter()
-                .skip_while(|l| l.trim().is_empty())
-                .take_while(|l| is_numbered_item(l))
+                .skip_while(blank)
+                .take_while(item)
                 .count()
                 >= 2
+                // "Options: 1. x 2. y" then "Which do you want?" is an ask too.
+                || (line.trim_end().ends_with('?')
+                    && lines[..i]
+                        .iter()
+                        .rev()
+                        .skip_while(blank)
+                        .take_while(item)
+                        .count()
+                        >= 2))
     })
 }
 
@@ -1133,6 +1144,12 @@ mod tests {
         assert!(!decision_ask(split));
         let spaced = "Should I merge?\n\n1. merge now\n2. hold";
         assert!(decision_ask(spaced));
+        assert!(decision_ask(
+            "Options:\n1. merge now\n2. hold\nWhich do you want?"
+        ));
+        assert!(!decision_ask(
+            "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
+        ));
     }
 
     fn r1_unpromoted_and_cap_legs() {
