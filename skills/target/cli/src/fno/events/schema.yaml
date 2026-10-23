@@ -8276,7 +8276,7 @@ event_types:
       required: [session_id, writer]
       properties:
         session_id: { type: string }
-        writer: { type: string, enum: [conversation_arm, hold_verb] }
+        writer: { type: string, enum: [conversation_arm, hold_verb, register_command] }
         pid: { type: integer }
         ppid: { type: integer }
         argv: { type: array }
