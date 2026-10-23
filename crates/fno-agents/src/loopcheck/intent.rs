@@ -103,11 +103,32 @@ pub(crate) fn declared_recovery_hold(text: &str) -> Option<String> {
     }
 }
 
+/// Reads `attr="value"`. A model that writes the tag with typographic quotes
+/// (`attr=\u{201c}value\u{201d}`) or single quotes still parses. An ASCII
+/// opening quote closes only on the same ASCII quote, so prose quotes inside
+/// the value survive. A typographic opening quote closes on any quote of its
+/// family, since models mix the two forms.
 pub(crate) fn parse_xml_attr(tag_text: &str, attr: &str) -> Option<String> {
-    let pattern = format!(r#"{attr}=""#);
-    let start = tag_text.find(&pattern)? + pattern.len();
-    let end = tag_text[start..].find('"')?;
-    Some(tag_text[start..start + end].to_string())
+    let pattern = format!("{attr}=");
+    let mut from = 0usize;
+    while let Some(rel) = tag_text[from..].find(&pattern) {
+        let value_at = from + rel + pattern.len();
+        let open = tag_text[value_at..].chars().next()?;
+        let closers: &[char] = match open {
+            '"' => &['"'],
+            '\'' => &['\''],
+            '\u{201c}' | '\u{201d}' => &['\u{201c}', '\u{201d}', '"'],
+            '\u{2018}' | '\u{2019}' => &['\u{2018}', '\u{2019}', '\''],
+            _ => {
+                from = value_at;
+                continue;
+            }
+        };
+        let start = value_at + open.len_utf8();
+        let end = tag_text[start..].find(closers)?;
+        return Some(tag_text[start..start + end].to_string());
+    }
+    None
 }
 
 /// Extract `last_assistant_message` from the Stop-hook stdin JSON
