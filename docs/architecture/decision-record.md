@@ -35,7 +35,7 @@ When every id succeeds, clear exits 0. An unknown id exits 4, a different-answer
 
 Every read derives an authority lane in the engine. `operator` authority is `law`. Agent and role authority are both `coord`. `beastmode` authority is `grant`. The human list leads with `LAW`, `coord`, or `grant`, and `--lane law|coord|grant|unattributed` filters at that same engine seam.
 
-`--authority` takes exactly four values: `operator`, `role`, `agent`, `beastmode`. Anything else is refused on the write path, and nothing is recorded. Pass `role` for a lead ruling inside its own role scope. That value exists because three rows on disk carry invented `role-l1` and `role-l2-<node>` spellings. Leads wrote them because no correct value existed. The scope belongs on the role row, so the value carries no suffix.
+`--authority` takes exactly four values: `operator`, `role`, `agent`, `beastmode`. Anything else is refused on the write path, and nothing is recorded. Pass `role` for a lead ruling inside its own role scope. The door checks the claim: an agent session must hold a live team in the registry, and a caller with no session identity and no terminal is refused. The visual-approval gate clears on a role row, so a worker that could mint one could clear the gate itself. That value exists because three rows on disk carry invented `role-l1` and `role-l2-<node>` spellings. Leads wrote them because no correct value existed. The scope belongs on the role row, so the value carries no suffix.
 
 The closed set is NOT in `schema.yaml`. The index already holds those invented spellings. A schema enum makes `fno backlog decide-reindex` reject them, which drops recall for real rulings.
 

@@ -694,18 +694,19 @@ fn resolve_clear_caller(req: &ClearRequest) -> ClearCaller {
             teamed: false,
         },
     );
-    let teamed = handle
-        .as_deref()
-        .map(|handle| {
-            crate::territory::live_teams(&crate::paths::AgentsHome::from_env().registry_json())
-                .map(|teams| holds_team(&teams, handle))
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
+    let teamed = handle.as_deref().is_some_and(handle_holds_live_team);
     ClearCaller {
         ancestry_handle,
         teamed,
     }
+}
+
+/// Whether `handle` holds a live team in this machine's registry. A registry
+/// read error reads as no team (fail closed).
+pub(crate) fn handle_holds_live_team(handle: &str) -> bool {
+    crate::territory::live_teams(&crate::paths::AgentsHome::from_env().registry_json())
+        .map(|teams| holds_team(&teams, handle))
+        .unwrap_or(false)
 }
 
 /// Whether `handle` holds a live team: the team-name store binds by session

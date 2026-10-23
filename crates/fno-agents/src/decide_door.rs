@@ -43,12 +43,15 @@ const AUTHORITY_SOURCES: &[&str] = &["operator", "role", "agent", "beastmode"];
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
 /// or a scrubbed identity (`None`), the seam the tests drive where the law
-/// door injects a caller.
+/// door injects a caller. `ForcedLead` injects a handle that holds a live
+/// team; a `Forced` handle holds none.
 #[derive(Clone, Copy)]
 pub(crate) enum DecideIdentity {
     Ambient,
     #[cfg_attr(not(test), expect(dead_code))]
     Forced(Option<&'static str>),
+    #[cfg_attr(not(test), expect(dead_code))]
+    ForcedLead(&'static str),
 }
 
 impl DecideIdentity {
@@ -71,7 +74,17 @@ impl DecideIdentity {
                 }
             }
             Self::Forced(None) => None,
-            Self::Forced(Some(h)) => Some((*h).to_string()),
+            Self::Forced(Some(h)) | Self::ForcedLead(h) => Some((*h).to_string()),
+        }
+    }
+
+    /// Whether `handle` holds a live team in the registry. A registry read
+    /// error reads as no team (fail closed).
+    fn holds_live_team(self, handle: &str) -> bool {
+        match self {
+            Self::Ambient => crate::question_clear::handle_holds_live_team(handle),
+            Self::Forced(_) => false,
+            Self::ForcedLead(_) => true,
         }
     }
 }
@@ -633,6 +646,18 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         }
         Err(DecideRefusal::UnattributedAuthority) => return decide_unattributed_refusal(),
     };
+    // The role lane is a lead's ruling, and gates read it (the visual gate
+    // clears on a role row). An agent session must hold a live team; a
+    // caller with no identity and no terminal holds none.
+    if provenance.authority_source.as_deref() == Some("role") {
+        let allowed = match caller_session.as_deref() {
+            Some(handle) => id.holds_live_team(handle),
+            None => provenance.decided_by != "unattributed-caller",
+        };
+        if !allowed {
+            return decide_role_refusal(&provenance.decided_by);
+        }
+    }
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator (an attended terminal;
     // the waiver command inherits this).
@@ -957,6 +982,16 @@ this refusal. Append agent findings without replacing node details with \
     3
 }
 
+/// The role-lane refusal: the caller holds no live team.
+fn decide_role_refusal(caller: &str) -> i32 {
+    eprintln!(
+        "decide: refused. --authority role is a lead's ruling, and {caller} holds no live \
+team. Nothing was recorded. Omit --authority to record it as agent, or ask your lead to \
+record it."
+    );
+    3
+}
+
 /// The decide door's unattributed refusal (`UnattributedAuthorityError`).
 fn decide_unattributed_refusal() -> i32 {
     eprintln!(
@@ -1261,6 +1296,32 @@ mod tests {
         assert!(
             route["ts"].as_str().unwrap() <= row["ts"].as_str().unwrap(),
             "route precedes the row in ts order"
+        );
+    }
+
+    #[test]
+    fn decide_role_lane_needs_a_live_team() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let role = || decide_argv(&["x-n1", "Approved: PR 7", "--authority", "role"]);
+        // A worker with no team cannot mint the lead's lane.
+        assert_eq!(
+            decide_door_write(role(), DecideIdentity::Forced(Some("cl-role1"))),
+            3
+        );
+        // Nor can a caller with no identity and no terminal.
+        assert_eq!(decide_door_write(role(), DecideIdentity::Forced(None)), 3);
+        let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
+        assert!(rows.is_empty(), "nothing recorded");
+        // A lead records it.
+        assert_eq!(
+            decide_door_write(role(), DecideIdentity::ForcedLead("cl-lead1")),
+            0
+        );
+        let (rows, _) = all_decision_rows().expect("reads");
+        assert_eq!(
+            rows.last().expect("a row")["authority_source"],
+            json!("role")
         );
     }
 
