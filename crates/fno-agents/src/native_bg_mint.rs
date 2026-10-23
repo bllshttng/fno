@@ -275,7 +275,9 @@ pub(crate) fn mint_missing_native_bg(
             let name = crate::native_adopt::unique_name(&r.entries, &name);
             let e = &mut r.entries[i];
             renamed.push(json!({"from": e.name.clone(), "name": name.clone()}));
-            e.name = name;
+            // The old label keeps resolving, as `rename_agent` keeps it.
+            let old = std::mem::replace(&mut e.name, name);
+            e.aliases.push(old);
         }
     });
     if let Err(e) = write {
@@ -670,6 +672,7 @@ mod tests {
             assert_eq!(row(own).spawned_by_session, None);
             assert_eq!(row(raced).name, "t-xaaaa-glm-2");
             assert_eq!(row(own).name, "greeting-checkout-status");
+            assert_eq!(row(own).aliases, ["dddddddd"]);
             assert_eq!(row(bare).name, "eeeeeeee");
             assert!(named_by_short_id("t-eeeeeeee", bare));
             assert!(named_by_short_id("eeeeeeee-3", bare));

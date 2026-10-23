@@ -1008,12 +1008,12 @@ mod tests {
         assert_eq!(slug("fix").as_deref(), Some("t-fix"));
         assert_eq!(slug("--"), None);
         let facts = WorkerFacts {
-            node: Some("X-6C15"),
+            node: Some("X-AAAA"),
             session: Some("cccccccc-AB12-0000-0000-000000000003"),
             ..Default::default()
         };
         let random = render_worker_name("w-{node}-{random}", &facts);
-        assert_eq!(random.as_deref(), Some("w-x-6c15-ab12"));
+        assert_eq!(random.as_deref(), Some("w-x-aaaa-ab12"));
         assert_eq!(
             render_worker_name("{skill}-{node}", &facts),
             None,
