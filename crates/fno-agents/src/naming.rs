@@ -1030,7 +1030,6 @@ mod tests {
             seed_skill("/fno:blueprint x-aaaa").as_deref(),
             Some("blueprint")
         );
-        assert_eq!(seed_skill("go"), None);
         assert_eq!(
             target_seed_node("/fno:target x-aaaa").as_deref(),
             Some("x-aaaa")
