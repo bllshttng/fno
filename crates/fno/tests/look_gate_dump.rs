@@ -109,6 +109,7 @@ fn to_framed(rendered: &fno::popup::Rendered) -> chrome::Framed {
                 text: l.text.clone(),
                 roles: l.roles.clone(),
                 hits: vec![],
+                body: None,
             })
             .collect(),
     }
