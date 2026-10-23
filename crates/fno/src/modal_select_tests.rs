@@ -33,6 +33,11 @@ fn info_popup(value: &str) -> Popup {
     .plain_body()
 }
 
+/// Whether a selection is on screen.
+fn active() -> bool {
+    STATE.with(|s| s.borrow().sel.is_some())
+}
+
 /// The first and last body cells the last frame painted, and the row count.
 fn bounds() -> ((usize, usize), (usize, usize), usize) {
     STATE.with(|s| {

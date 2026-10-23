@@ -270,11 +270,6 @@ pub fn clear() {
     STATE.with(|s| s.borrow_mut().sel = None);
 }
 
-/// Whether a selection is on screen.
-pub fn active() -> bool {
-    STATE.with(|s| s.borrow().sel.is_some())
-}
-
 /// What a left press did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Press {
@@ -422,7 +417,7 @@ fn extract(block: &Block, from: (usize, usize), to: (usize, usize)) -> String {
     let indent = pieces
         .iter()
         .filter(|p| p.from_edge && p.join == Join::Line && !p.text.trim().is_empty())
-        .map(|p| p.text.len() - p.text.trim_start().len())
+        .map(|p| lead(&p.text))
         .min()
         .unwrap_or(0);
     let mut out = String::new();
