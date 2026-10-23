@@ -86,8 +86,9 @@ impl NormalizedError {
     }
 }
 
-/// One provider call's outcome, as [`normalize`] reads it.
-#[derive(Clone, Copy, Debug, Default)]
+/// One provider call's outcome, as [`normalize`] reads it. No `Default`: a
+/// defaulted `now` of 0 would refuse every reset stamp as past the horizon.
+#[derive(Clone, Copy, Debug)]
 pub struct Outcome<'a> {
     pub http_status: Option<i64>,
     pub exit_code: Option<i64>,
