@@ -38,6 +38,13 @@ pub(super) fn row_answers_key(a: &RegistryAgent, key: &str) -> bool {
             || a.name == key)
 }
 
+/// Two registry rows for one session (an adopted twin) are one row to a
+/// tap: the reach lands on the first instead of refusing.
+pub(super) fn same_session_twins(a: &RegistryAgent, b: &RegistryAgent) -> bool {
+    let sid = super::agent_harness_session_id;
+    sid(a).is_some() && sid(a) == sid(b)
+}
+
 /// The session a claude viewer's OSC title names: the title minus one
 /// leading status glyph token ("✳", "◐", a braille spinner frame).
 pub(super) fn title_session_name(title: &str) -> &str {
@@ -224,6 +231,7 @@ pub(super) fn fill_held_portal_at(
     let second = hits.next();
     let row = match (first, second) {
         (Some(row), None) => row,
+        (Some(row), Some(other)) if same_session_twins(row, other) => row,
         (Some(_), Some(_)) => {
             core.notice_all(format!(
                 "portal {idx} fill refused: {row_key} is ambiguous - reach it by its pane"
@@ -624,6 +632,7 @@ impl Core {
         let mut hits = self.agents.iter().filter(|a| row_answers_key(a, key));
         let row = match (hits.next(), hits.next()) {
             (Some(a), None) => a.clone(),
+            (Some(a), Some(b)) if same_session_twins(a, b) => a.clone(),
             (Some(_), Some(_)) => {
                 self.notice(
                     client_id,
@@ -1197,12 +1206,16 @@ impl Core {
         // LIVE PANELESS rows - the rows a reach could serve - so a hosted
         // or exited namesake never turns a reachable row into a refusal.
         let mut named_hits = self.agents.iter().filter(|a| row_answers_key(a, name));
-        if let (Some(_), Some(_)) = (named_hits.next(), named_hits.next()) {
-            let _ = reply.send(ServerMsg::Err {
-                code: err_code::BAD_REQUEST,
-                msg: "more than one row goes by that name - reach it by its pane".to_string(),
-            });
-            return;
+        if let (Some(a), Some(b)) = (named_hits.next(), named_hits.next()) {
+            if same_session_twins(a, b) {
+                // twins are one row; fall through to the reach below
+            } else {
+                let _ = reply.send(ServerMsg::Err {
+                    code: err_code::BAD_REQUEST,
+                    msg: "more than one row goes by that name - reach it by its pane".to_string(),
+                });
+                return;
+            }
         }
         // The row the reach would land on decides this door's shape: the
         // sync path drives the reach inline, a claude Drive row parks below.
@@ -1703,6 +1716,7 @@ impl Core {
         let mut hits = self.agents.iter().filter(|a| row_answers_key(a, key));
         let row = match (hits.next(), hits.next()) {
             (Some(a), None) => a.clone(),
+            (Some(a), Some(b)) if same_session_twins(a, b) => a.clone(),
             (Some(_), Some(_)) => {
                 self.notice(
                     client_id,

@@ -925,6 +925,26 @@ fn sideline_reach_by_session_id_lands_on_the_picked_namesake() {
 }
 
 #[test]
+fn reach_treats_two_rows_of_one_session_as_one() {
+    set_peek_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let mut a = bg_row("fnh", "/tmp/seen", None);
+    a.harness = Some("codex".into());
+    a.harness_session_id = Some("sess-twin".into());
+    let b = a.clone();
+    core.agents = vec![a, b];
+
+    core.command(client_id, thread_reach_cmd("sess-twin"));
+    assert!(
+        !drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("more than one row")),
+        "twins of one session never refuse"
+    );
+    assert_eq!(core.portals.len(), 1, "the tap opened the row");
+}
+
+#[test]
 fn thread_pane_tier_rows() {
     // A paneless codex row (Follow) tails its transcript; a gemini row
     // (Locate) renders the self-teaching screen. Both reach by NAME -
