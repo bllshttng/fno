@@ -103,11 +103,13 @@ pub(crate) struct Flags {
     pub(crate) no_rust: bool,
     pub(crate) check: bool,
     pub(crate) published: bool,
+    /// `--published <rev>`: that exact published build, older included.
+    pub(crate) published_rev: Option<String>,
 }
 
 pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
     let mut f = Flags::default();
-    let mut it = rest.iter();
+    let mut it = rest.iter().peekable();
     while let Some(tok) = it.next() {
         let t = tok
             .to_str()
@@ -124,7 +126,15 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
             "--rust" => f.rust = true,
             "--no-rust" => f.no_rust = true,
             "--check" => f.check = true,
-            "--published" => f.published = true,
+            "--published" => {
+                f.published = true;
+                if let Some(rev) = it
+                    .next_if(|v| v.to_str().is_some_and(|s| !s.starts_with('-')))
+                    .and_then(|v| v.to_str())
+                {
+                    f.published_rev = Some(rev.to_string());
+                }
+            }
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -439,14 +449,7 @@ pub(crate) fn last_green_rev(repo: &Path, published: &str) -> Result<String, Str
         )
     };
     // One ancestry read refuses an off-line build before the walk's 50 reads.
-    let on_line = crate::process_admission::std_command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["merge-base", "--is-ancestor", published, "HEAD"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !on_line {
+    if published_is_older(repo, published, "HEAD") != Some(true) {
         return Err(off_line());
     }
     let changes = git_in(
@@ -479,13 +482,36 @@ pub(crate) fn last_green_rev(repo: &Path, published: &str) -> Result<String, Str
 /// `--published`: Some((rev, crates_rev)) when the source's crates/ rev has
 /// no published build yet, None when it has one (a plain update then
 /// installs it). Local dev only: it needs a git checkout and the bin-cache
-/// tarballs, never the release channel.
-fn resolve_last_green(source: &Path) -> Result<Option<(String, String)>, String> {
+/// tarballs, never the release channel. A `pin` names one exact rev instead:
+/// it installs when its crates/ rev is published, older than the tip or not.
+fn resolve_last_green(
+    source: &Path,
+    pin: Option<&str>,
+) -> Result<Option<(String, String)>, String> {
     let repo = git_in(source, &["rev-parse", "--show-toplevel"])
         .map(PathBuf::from)
         .ok_or("--published needs a git source checkout (local dev only)")?;
     let platform =
         crate::update_prebuilt::platform().ok_or("CI builds no binary for this platform")?;
+    if let Some(pin) = pin {
+        let rev = git_in(
+            &repo,
+            &["rev-parse", "--verify", &format!("{pin}^{{commit}}")],
+        )
+        .ok_or_else(|| format!("{pin} names no commit in this checkout"))?;
+        let crates = git_in(&repo, &["log", "-1", "--format=%H", &rev, "--", "crates/"])
+            .ok_or_else(|| format!("{pin} has no crates/ history"))?;
+        crate::update_prebuilt::probe_published(&crates, platform).map_err(|why| {
+            format!(
+                "{pin} has no published build (crates {}): {why}",
+                &crates[..crates.len().min(12)]
+            )
+        })?;
+        if source_rev(source).as_deref() == Some(rev.as_str()) {
+            return Ok(None);
+        }
+        return Ok(Some((rev, crates)));
+    }
     let published = crate::update_prebuilt::newest_published(platform)
         .map_err(|why| format!("cannot list the published builds ({why})"))?
         .ok_or_else(|| format!("no published build for {platform} at all"))?;
@@ -2190,7 +2216,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         let _ = sync_source_checkout(&resolved, true);
         let mut last_green_crates: Option<String> = None;
         if flags.published {
-            match resolve_last_green(&resolved) {
+            match resolve_last_green(&resolved, flags.published_rev.as_deref()) {
                 Ok(Some((r, crates))) => {
                     let dir = last_green_source(&resolved);
                     println!(
@@ -2268,21 +2294,35 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     // come from that one rev. The pinned source checkout stays as it is.
     let mut last_green: Option<String> = None;
     if flags.published {
-        let staged = resolve_last_green(&resolved).and_then(|found| match found {
+        let pin = flags.published_rev.as_deref();
+        let staged = resolve_last_green(&resolved, pin).and_then(|found| match found {
             None => Ok(None),
             Some((r, crates)) => stage_last_green(&resolved, &r).map(|dir| Some((r, crates, dir))),
         });
         match staged {
             Ok(None) => println!(
-                "fno doctor update: --published: the source rev is published; installing it as usual"
+                "fno doctor update: --published: the source already sits on a published rev; installing it as usual"
             ),
             Ok(Some((r, crates, dir))) => {
+                let why = if pin.is_some() {
+                    "the pinned published build"
+                } else {
+                    "the source tip has no published build yet"
+                };
                 println!(
-                    "fno doctor update: --published: installing rev {} (crates {}) from {}; the source tip has no published build yet",
+                    "fno doctor update: --published: installing rev {} (crates {}) from {}; {why}",
                     &r[..r.len().min(12)],
                     &crates[..crates.len().min(12)],
                     dir.display()
                 );
+                if let Some(installed) = read_marker(&installed_rev_file()) {
+                    if installed != r && published_is_older(&dir, &r, &installed) == Some(true) {
+                        println!(
+                            "fno doctor update: --published: moved back from the installed rev {}",
+                            &installed[..installed.len().min(12)]
+                        );
+                    }
+                }
                 resolved = dir;
                 rev = Some(r.clone());
                 last_green = Some(r);

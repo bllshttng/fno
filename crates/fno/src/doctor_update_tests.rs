@@ -40,6 +40,14 @@ fn parse_args_reads_every_flag() {
 
     let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--published"])).expect("parses");
     assert!(f.dry_run && f.force && f.no_rust && f.check && f.published);
+    assert_eq!(f.published_rev, None);
+
+    // A rev after --published pins that build; a flag after it does not.
+    let f = parse_args(&os(&["--published", "a3670af2", "-N"])).expect("parses");
+    assert_eq!(f.published_rev.as_deref(), Some("a3670af2"));
+    assert!(f.published && f.dry_run);
+    let f = parse_args(&os(&["--published", "-N"])).expect("parses");
+    assert!(f.published && f.dry_run && f.published_rev.is_none());
 
     assert!(parse_args(&os(&["--bogus"])).is_err());
     assert!(parse_args(&os(&["--source"])).is_err());
