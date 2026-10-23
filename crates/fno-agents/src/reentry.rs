@@ -659,6 +659,13 @@ fn resolve_reentry_inner(
         if let Some(path) = plan_route.as_deref() {
             argv.push("--settings".into());
             argv.push(path.to_string());
+        } else if mechanism == "bg-resume" {
+            // An unrouted revive starts a fresh process, and the attached
+            // view wears the theme that launch carries.
+            if let Some(theme) = crate::route_settings::claude_theme_env() {
+                argv.push("--settings".into());
+                argv.push(format!("{{\"theme\":\"{theme}\"}}"));
+            }
         }
     }
 

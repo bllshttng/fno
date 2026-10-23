@@ -96,7 +96,13 @@ pub(crate) fn prepare_mint(
         .and_then(|r| r.launch.name.clone())
         .or_else(|| agent_self.map(str::to_string))
         .or_else(|| child_name.map(str::to_string))
-        .unwrap_or_else(|| crate::claude_adopt::synthesized_entry_name(session_id, &short));
+        .unwrap_or_else(|| {
+            let node_name = record.and_then(|r| {
+                let node = r.launch.node.as_deref()?;
+                crate::naming::node_worker_name(node, std::path::Path::new(&r.launch.cwd))
+            });
+            crate::claude_adopt::synthesized_entry_name(session_id, &short, node_name)
+        });
     let (node, cwd, substrate) = match record {
         Some(r) => (
             r.launch.node.clone(),

@@ -1042,19 +1042,7 @@ pub(crate) fn resolve_decider_lanes(
         });
     }
     if attended_terminal() {
-        // State 2. A person is at a terminal; the stated name IS the record.
-        // Authority is never defaulted to operator here.
-        let decider = decided_by
-            .map(str::trim)
-            .filter(|d| !d.is_empty())
-            .unwrap_or("operator");
-        let attested = origin.filter(|o| !o.is_empty()).unwrap_or(decider);
-        return Ok(DecideProvenance {
-            decided_by: decider.to_string(),
-            authority_source: authority_source.map(str::to_string),
-            attested_by: Some(attested.to_string()),
-            relayed_by: None,
-        });
+        return Ok(attended_provenance(decided_by, authority_source, origin));
     }
     // State 3, fail closed.
     if authority_source == Some("operator") {
@@ -1071,10 +1059,59 @@ pub(crate) fn resolve_decider_lanes(
     })
 }
 
+/// State 2: a person at a terminal with no session identity; the stated name
+/// IS the record. With no stated authority this resolves operator, the lane
+/// the law door's `resolve_caller` gives the same caller: a row that reads
+/// "decided by operator" must be law, or it cannot lift the hold it answers.
+/// A relayed name or a non-operator origin is someone else's ruling, so the
+/// superuser lane is never defaulted for it.
+fn attended_provenance(
+    decided_by: Option<&str>,
+    authority_source: Option<&str>,
+    origin: Option<&str>,
+) -> DecideProvenance {
+    let decider = decided_by
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .unwrap_or("operator");
+    let origin = origin.filter(|o| !o.is_empty());
+    let authority = authority_source.or_else(|| {
+        (decider == "operator" && origin.is_none_or(|o| max_authority_by_origin(o) == "operator"))
+            .then_some("operator")
+    });
+    DecideProvenance {
+        decided_by: decider.to_string(),
+        authority_source: authority.map(str::to_string),
+        attested_by: Some(origin.unwrap_or(decider).to_string()),
+        relayed_by: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::law_match::scope_tests::DoorEnv;
+
+    #[test]
+    fn attended_decide_with_no_stated_authority_records_law() {
+        let lane = |by, auth, origin| attended_provenance(by, auth, origin).authority_source;
+        assert_eq!(lane(None, None, None).as_deref(), Some("operator"));
+        assert_eq!(
+            lane(None, None, Some("operator")).as_deref(),
+            Some("operator")
+        );
+        assert_eq!(lane(None, Some("role"), None).as_deref(), Some("role"));
+        assert_eq!(lane(Some("robin"), None, None), None);
+        assert_eq!(lane(None, None, Some("scheduler")), None);
+        let p = attended_provenance(None, None, None);
+        let row = json!({
+            "subject": "fb-b44f",
+            "decided_by": p.decided_by,
+            "authority_source": p.authority_source,
+            "ts": now_iso(),
+        });
+        assert!(crate::decision_index::is_law(&row), "{row}");
+    }
 
     // -------------------------------------------------------------------
     // The decide door: injected-identity unit tests (the parity goldens

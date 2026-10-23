@@ -91,7 +91,7 @@ event_types:
     consumers: [operator]
 
   - name: native_bg_parent_backfilled
-    description: "A native-bg registry row born with no parent gained its spawner from the launch record its child claimed. One row per fill."
+    description: "A claude registry row born with no parent gained its spawner from the launch record its child claimed: a native-bg adopted row, or a row the mail-hold register minted first with no origin. One row per fill."
     sources: [daemon]
     data:
       required: [name, spawned_by_session]
@@ -3130,6 +3130,39 @@ event_types:
           type: string
         pid:
           type: integer
+
+  - name: test_run
+    retention: durable
+    description: >
+      One local test run through `fno doctor test`. A started row lands at
+      spawn and a finished row at exit, joined by run_id. A started row with
+      no finished row names a killed runner. A refused run writes nothing.
+    sources: [daemon]
+    data:
+      required: [run_id, stage]
+      properties:
+        run_id:
+          type: string
+        stage:
+          type: string
+          enum: [started, finished]
+        command:
+          type: string
+        command_key:
+          type: string
+        pid:
+          type: integer
+        node_id:
+          type: string
+        session_id:
+          type: string
+        worktree:
+          type: string
+        exit_code:
+          type: integer
+        duration_ms:
+          type: integer
+    consumers: [fno-agents test-run stats]
 
   - name: orphan_test_binary_reaped
     description: "An orphaned cargo deps/ test binary (parentless or holding 20+ zombie children, CACHEDIR.TAG-confirmed) was SIGKILLed by the daemon's 300s reap sweep, past the config.test.orphan_min_elapsed_seconds age guard. The payload is the reap row: pid, command, zombie count, elapsed_seconds."

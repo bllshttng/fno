@@ -580,9 +580,16 @@ fn target_seed_node(seed: &str) -> Option<String> {
     }
 }
 
+/// The default worker name of the node `token` names, read from the graph
+/// the project at `cwd` resolves, else None. A row's own cwd picks its
+/// project, so a node of another project than the daemon's reads its own graph.
+pub fn node_worker_name(token: &str, cwd: &std::path::Path) -> Option<String> {
+    node_slug(token, cwd).as_deref().and_then(worker_name)
+}
+
 /// The slug of the node `token` names (id first, then slug), else None.
-fn node_slug(token: &str) -> Option<String> {
-    let path = crate::graph_get::graph_path_for(std::path::Path::new("."));
+fn node_slug(token: &str, cwd: &std::path::Path) -> Option<String> {
+    let path = crate::graph_get::graph_path_for(cwd);
     let by_id = crate::backlog::RowQuery {
         filter: crate::backlog::api::NodeFilter {
             id_in: Some(vec![token.to_string()]),
@@ -609,9 +616,10 @@ fn run_worker_mint(args: &[String]) -> i32 {
     let node = value_of(args, "--worker")
         .filter(nonblank)
         .or_else(|| value_of(args, "--seed").and_then(|s| target_seed_node(&s)));
-    let slug = value_of(args, "--slug")
-        .filter(nonblank)
-        .or_else(|| node.as_deref().and_then(node_slug));
+    let slug = value_of(args, "--slug").filter(nonblank).or_else(|| {
+        node.as_deref()
+            .and_then(|n| node_slug(n, std::path::Path::new(".")))
+    });
     match slug.as_deref().and_then(worker_name) {
         Some(name) => {
             println!("{name}");
@@ -846,6 +854,38 @@ mod tests {
         let err = dispatch_agent_name(Some("ab"), "t", &long, None, None, None, None).unwrap_err();
         assert!(err.message.contains("64-char"), "{err}");
         assert_eq!(err.exit, 3);
+    }
+
+    /// A node of another project than the cwd still names its worker: the
+    /// slug reads from the shared store the cwd resolves.
+    #[test]
+    fn node_worker_name_reads_the_slug_from_the_store() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let saved = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", tmp.path());
+        let graph = crate::state_layout::graph_anchor(tmp.path());
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({
+                "id": "fb-bd7a",
+                "slug": "books-index-sweep-run",
+                "title": "Books index sweep",
+                "status": "idea",
+                "project": "fno-books"
+            })],
+        )
+        .unwrap();
+        let named = node_worker_name("fb-bd7a", tmp.path());
+        let missing = node_worker_name("fb-0000", tmp.path());
+        match saved {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert_eq!(named.as_deref(), Some("t-books-index-sweep"));
+        assert_eq!(missing, None);
     }
 
     /// A target worker's default name: `t-` and the first slug words, two
