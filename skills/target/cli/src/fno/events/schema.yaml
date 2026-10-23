@@ -91,7 +91,7 @@ event_types:
     consumers: [operator]
 
   - name: native_bg_parent_backfilled
-    description: "A native-bg registry row born with no parent gained its spawner from the launch record its child claimed. One row per fill."
+    description: "A claude registry row born with no parent gained its spawner from the launch record its child claimed: a native-bg adopted row, or a row the mail-hold register minted first with no origin. One row per fill."
     sources: [daemon]
     data:
       required: [name, spawned_by_session]
