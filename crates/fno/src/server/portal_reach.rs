@@ -34,6 +34,7 @@ pub(super) fn row_answers_key(a: &RegistryAgent, key: &str) -> bool {
         && !a.exited
         && (a.attach_id.as_deref() == Some(key)
             || super::agent_harness_session_id(a) == Some(key)
+            || a.predecessor_session_ids.iter().any(|p| p == key)
             || a.name == key)
 }
 
