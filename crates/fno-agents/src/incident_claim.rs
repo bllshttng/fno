@@ -10,7 +10,7 @@
 //! claim refuses and names the first; the owner releases the claim by
 //! deleting the file the refusal names.
 //!
-//! Binary verb `fno-agents fleet-incident claim <incident> --pr <n>`, one
+//! Binary command `fno-agents fleet-incident claim <incident> --pr <n>`, one
 //! arm beside the breaker arms in [`crate::fleet_incident`]; the public
 //! surface is the same thin Python adapter, `fno agents incident claim`.
 
@@ -95,7 +95,7 @@ pub(crate) struct ClaimReceipt {
     announce_error: Option<String>,
 }
 
-/// The whole verb in one function: refuse a second claim, else write the
+/// The whole command in one function: refuse a second claim, else write the
 /// durable record and announce the owner on the fleet-incident channel.
 /// Read-modify-write under an exclusive sidecar lock, so two concurrent
 /// claims cannot both see an empty slot; the announce failure is visible in
@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn the_claim_verb_names_one_owner_end_to_end() {
+    fn the_claim_command_names_one_owner_end_to_end() {
         let (dir, home) = fixture();
         let _guard = AgentsHomeEnvGuard::set(home.root());
         live_registry(&home);

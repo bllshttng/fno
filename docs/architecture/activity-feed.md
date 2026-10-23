@@ -52,7 +52,7 @@ The panel holds a bounded window of at most 600 rows, three pages. Scrolling bac
 
 A page costs one projection run. The questions leg reads its kinds typed. The owner rollup indexes the graph once. The whole projection runs under a second where it ran over two.
 
-## The verb and the panel
+## The command and the panel
 
 `fno agents fleet feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json]` is the projection. A missing or unreadable store is not fatal. The rows the other stores yielded still emit, with one stderr line naming the store skipped.
 
@@ -125,7 +125,7 @@ Tab completes the token before the cursor. A key prefix completes from the share
 
 ## Day boundaries
 
-`fno inbox day start` and `fno inbox day end` fold the existing project journal, question lifecycle, graph completion records, decision retractions, review retractions, and lead check-ins. The native fold returns JSON or a short text readback. The native verb's `--commit` writes one bounded `day_boundary` row to the project journal first. It then writes the same row to `~/.fno/questions.jsonl` for durable cross-rotation recall. The inbox relay only selects the destination, so the operator command lives under the inbox. The row carries ids and counts only. The writer sizes the row against the validated event limit before any write. If the row is over the limit, the writer refuses it and never substitutes.
+`fno inbox day start` and `fno inbox day end` fold the existing project journal, question lifecycle, graph completion records, decision retractions, review retractions, and lead check-ins. The native fold returns JSON or a short text readback. The native command's `--commit` writes one bounded `day_boundary` row to the project journal first. It then writes the same row to `~/.fno/questions.jsonl` for durable cross-rotation recall. The inbox relay only selects the destination, so the operator command lives under the inbox. The row carries ids and counts only. The writer sizes the row against the validated event limit before any write. If the row is over the limit, the writer refuses it and never substitutes.
 
 The permanent question index stores the boundary reference because the project journal rotates at 8 MiB and keeps only one rotated file. The index is recall and provenance, not a second source of question truth. Open questions still come from the existing lifecycle fold, and a failed index append names the boundary id after the project append. The boundary id is stable per kind and local day. A retry after that failure recognizes its own journal row and appends only the index leg, so no orphan row accumulates.
 

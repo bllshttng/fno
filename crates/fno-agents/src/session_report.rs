@@ -43,14 +43,14 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const SPOOL_CAP_FRAMES: usize = 128;
 /// Raw hook payloads are small; refuse to read more off stdin.
 const MAX_PAYLOAD_BYTES: u64 = 64 * 1024;
-/// The daemon's verb for this report. The daemon arm matches this const and
+/// The daemon's command for this report. The daemon arm matches this const and
 /// the client builds its method from it: the two spellings once drifted
 /// (`session_report` vs `session-report`), and every SessionStart report fell
-/// to the unknown-verb arm, so no adopt row was ever minted.
-pub const SESSION_REPORT_VERB: &str = "session-report";
+/// to the unknown-command arm, so no adopt row was ever minted.
+pub const SESSION_REPORT_COMMAND: &str = "session-report";
 
 fn session_report_request(params: Value) -> Request {
-    Request::new(1, format!("agent.{SESSION_REPORT_VERB}"), params)
+    Request::new(1, format!("agent.{SESSION_REPORT_COMMAND}"), params)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ pub(crate) fn handle_session_report(
     // `prepare_mint`'s own transcript IO above), so it runs here, gated to
     // the one case that needs it: an existing claude row.
     let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
-        let short = crate::client_verbs::derived_short_id(&session_id);
+        let short = crate::client_commands::derived_short_id(&session_id);
         // The union reader, not the ambient-only one: a row launched under an
         // isolated `--account` never shows up in `~/.claude`'s own roster, so
         // the ambient read alone would leave such a row's stale substrate/pid
@@ -720,7 +720,7 @@ fn arm_role_manifest(
 /// `--wait-row`.
 fn build_session_report_params(rest: &[String]) -> Result<Value, String> {
     let mut params = Map::new();
-    let mut it = crate::client_verbs::expand_eq(rest).into_iter();
+    let mut it = crate::client_commands::expand_eq(rest).into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--harness" => {
@@ -1000,12 +1000,12 @@ fn claim_launch(
     (record, child_name)
 }
 
-/// The `report` verb's dispatcher. `--kind session` selects the SessionStart
+/// The `report` command's dispatcher. `--kind session` selects the SessionStart
 /// transport; every other invocation is the inside-leg report, unchanged. The
 /// SessionStart form rides the EXISTING action because the client action list
-/// is shrink-only: no new verb, only an argument on `report`.
+/// is shrink-only: no new command, only an argument on `report`.
 pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
-    let args = crate::client_verbs::expand_eq(rest);
+    let args = crate::client_commands::expand_eq(rest);
     let mut is_session = false;
     let mut stripped: Vec<String> = Vec::with_capacity(args.len());
     let mut it = args.into_iter();
@@ -1016,7 +1016,7 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
                     is_session = true;
                     continue;
                 }
-                // The session join rides the same action: no verb is added.
+                // The session join rides the same action: no command is added.
                 Some(v) if v == "join" => {
                     let rest: Vec<String> = it.collect();
                     let mut join_args = stripped;
@@ -1035,7 +1035,7 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
         stripped.push(a);
     }
     if !is_session {
-        return crate::client_verbs::run_report(rest, home).await;
+        return crate::client_commands::run_report(rest, home).await;
     }
     run_session_report(&stripped, home).await
 }
@@ -1126,7 +1126,7 @@ fn remove_retired_claude_session(session_id: &str) {
     entry.harness = Some("claude".to_string());
     entry.harness_session_id = Some(session_id.to_string());
     entry.claude_session_uuid = Some(session_id.to_string());
-    entry.short_id = crate::client_verbs::derived_short_id(session_id);
+    entry.short_id = crate::client_commands::derived_short_id(session_id);
     let _ = std::thread::spawn(move || {
         let _ = crate::gc_native::apply_active_surface_removal(&entry);
     });

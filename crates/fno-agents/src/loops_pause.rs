@@ -1109,7 +1109,7 @@ pub fn run_loops_table(json_out: bool, markdown: bool) -> i32 {
             }
             None => println!("launchd: not applicable on this host"),
         }
-        println!("detail per loop: run the row's reader verb, or fno agents loops table --json");
+        println!("detail per loop: run the row's reader command, or fno agents loops table --json");
     }
     if any_red {
         1
@@ -1122,10 +1122,10 @@ pub fn run_loops_table(json_out: bool, markdown: bool) -> i32 {
 /// regenerated file is byte-identical while the loops sit still. One row per
 /// loop, then one paragraph per loop: where it starts (the trigger), where
 /// it ends (the receipt event), and what to run when it looks wrong (the
-/// reader verb).
+/// reader command).
 fn markdown_doc(launchd: &Option<crate::tick_ledger::LaunchdFold>) -> String {
     let mut out = String::from(
-        "# Scheduled loops\n\nThe control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the verb that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.\n\n",
+        "# Scheduled loops\n\nThe control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the command that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.\n\n",
     );
     out.push_str("| loop | scheduler | interval (s) | armed by | ends with receipt | reads with |\n|---|---|---|---|---|---|\n");
     for spec in crate::tick_ledger::KNOWN_ARMS {

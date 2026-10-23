@@ -87,7 +87,7 @@ if printf '%s' "$out" | grep -qi "fno doctor update"; then PASS=$((PASS+1)); els
 out="$(run "$R_TYPO" --node ab-deadbeef --provider claude --payload-mode build --mode exec)"
 ok 'invalid enum (typo) -> no confirm (auto), never silently confirms' "$(field "$out" confirm_required)" '0'
 
-# --- a free-text seed confirms under `always` (x-cbb0: the retired `ask` verb's
+# --- a free-text seed confirms under `always` (x-cbb0: the retired `ask` command's
 #     never-confirm carve-out is gone; `always` confirms every free lane) --------
 out="$(run "$R_ALWAYS" --provider codex --payload-mode seed --mode exec)"
 ok 'seed confirms under always (no ask carve-out)' "$(field "$out" confirm_required)" '1'

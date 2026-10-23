@@ -196,7 +196,7 @@ fn normalize(raw: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    // The python events layer's store-client verb is skewed against the
+    // The python events layer's store-client command is skewed against the
     // rust front (a pre-existing break, filed separately); its best-effort
     // refusal banner is oracle-infra noise, not leaf contract, so the whole
     // embedded block is dropped before comparison.

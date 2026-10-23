@@ -115,8 +115,8 @@ pub fn heal_dead_pane_binding(
     if write.is_err() || !wrote {
         return verdict("unmeasurable", Some("row-changed"), None);
     }
-    crate::client_verbs::append_agents_event(
-        &crate::client_verbs::trace_events_path(home),
+    crate::client_commands::append_agents_event(
+        &crate::client_commands::trace_events_path(home),
         "agent_lane_rebound",
         &[
             ("name", serde_json::Value::String(row.name.clone())),
@@ -203,8 +203,10 @@ mod tests {
         assert!(row.pid_start_time.is_none());
         assert_eq!(row.substrate.as_deref(), Some("thread"));
         assert_eq!(row.host_mode.as_deref(), Some("interactive"));
-        let events =
-            crate::event_store::journal_text(&crate::client_verbs::trace_events_path(&home), &[]);
+        let events = crate::event_store::journal_text(
+            &crate::client_commands::trace_events_path(&home),
+            &[],
+        );
         assert!(events.contains("agent_lane_rebound"));
         assert!(events.contains("2179"));
     }

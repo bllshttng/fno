@@ -2,7 +2,7 @@
 """The capture-mode oracle for the pr-watch heal parity test.
 
 Replays the `fno do pr watch heal` leaf body (the gates, the cure, the
-output contract) over the same fixture the Rust verb reads, with the
+output contract) over the same fixture the Rust command reads, with the
 liveness probe, the single-flight, the tick-in-flight answer and the
 launchctl steps injected through env pins. The goldens freeze the live
 Python leaf's bytes; the body itself was replaced by a forward in the

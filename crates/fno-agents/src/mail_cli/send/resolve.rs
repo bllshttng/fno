@@ -135,7 +135,7 @@ pub(super) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
         }
     }
     let registry = AgentsHome::shared_registry_json();
-    if let Ok(rows) = crate::client_verbs::load_registry_entries(&registry) {
+    if let Ok(rows) = crate::client_commands::load_registry_entries(&registry) {
         for row in &rows {
             let aliases = row.get("aliases").and_then(Value::as_array);
             if let Some(aliases) = aliases {
@@ -157,7 +157,7 @@ pub(super) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
 /// Python `_reachable_from_registry`.
 pub(super) fn reachable_from_registry(token: &str) -> (Vec<ReachableSession>, bool) {
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(_) => return (Vec::new(), false),
     };

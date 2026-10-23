@@ -804,7 +804,7 @@ fn qualification_report(
 }
 
 pub fn run_evals_trend(args: &[String]) -> i32 {
-    // `--mode stability` rides this verb in any argument position rather
+    // `--mode stability` rides this command in any argument position rather
     // than growing the over-cap fno-agents root; stability_report owns the
     // remaining flags.
     let mut mode_index: Option<usize> = None;
@@ -831,7 +831,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         }
     }
     if args.is_empty() {
-        // stdin summary: a JSON payload on stdin (the verb_call shape),
+        // stdin summary: a JSON payload on stdin (the command_call shape),
         // `{"op": "summary", "history": "...", "stale_days": N}`; the flags
         // below remain the human surface.
         use std::io::Read;

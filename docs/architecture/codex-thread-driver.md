@@ -64,7 +64,7 @@ $ codex resume <id> --cd <dir> -s danger-full-access -a never "..." < /dev/null
 Error: stdin is not a terminal
 ```
 
-So a worker that must RECEIVE a turn while nobody is looking cannot use it. The only way into a running TUI is keystrokes at a pane. That path yields `typed (pane <id>)` rather than delivery. It also refuses a review verb outright while a task runs.
+So a worker that must RECEIVE a turn while nobody is looking cannot use it. The only way into a running TUI is keystrokes at a pane. That path yields `typed (pane <id>)` rather than delivery. It also refuses a review command outright while a task runs.
 
 **That unattended case is the only one that needs more than a flag.** `codex exec resume` answers most of it. It needs no PTY and carries settings through `-c`. Its per-turn boot is roughly ten seconds, against a held connection's fraction of one. On turns that run for minutes that is a few percent, not a barrier.
 
@@ -104,7 +104,7 @@ A private `codex app-server` child speaks newline-delimited JSON on stdin and st
 
 **The driver takes the shared daemon, and the reason is not durability.** `crates/fno-agents/src/codex_thread.rs` calls `ensure_codex_daemon()`, connects through `codex_inject::connect_app_server`, and holds no child process. It used to fork a private app-server per worker as a child of `fno-agents-daemon`. On 2026-08-28 that left eight `codex app-server` processes parented to `fno-agents-daemon` beside one shared daemon holding the socket.
 
-A private app-server owns no control socket. `codex agents`, `codex resume`, `codex fork`, `codex queue`, `codex archive` and Remote Control are all scoped to the shared one. `codex agents --help` says so in its own words: "Browse all agent sessions on the shared local app-server daemon." So a private child forfeits every vendor verb at once, including every verb the vendor ships next. The only symptom is that a thing the operator expects to work does not.
+A private app-server owns no control socket. `codex agents`, `codex resume`, `codex fork`, `codex queue`, `codex archive` and Remote Control are all scoped to the shared one. `codex agents --help` says so in its own words: "Browse all agent sessions on the shared local app-server daemon." So a private child forfeits every vendor command at once, including every command the vendor ships next. The only symptom is that a thing the operator expects to work does not.
 
 ### Exec, never proxy
 
@@ -290,6 +290,6 @@ The order is fixed. Acquire the provider-daemon lock. Re-read readiness under it
 
 Then, and only then, run the vendor restart with the resolved `CODEX_HOME`. Verify after. The recorded incarnation must have changed. Initialize must answer. Both version readers must agree the daemon now equals the installed CLI. Every snapshot id must re-read with the same cwd. The config bytes must be unchanged. Every check passing makes the receipt `upgraded`. Any failure makes it `failed` with the missing ids named. Never a success-shaped line on failure. Never a blind retry.
 
-`fno agents session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the verb, because nothing was mutated. A post-restart verification failure DOES fail the verb.
+`fno agents session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the command, because nothing was mutated. A post-restart verification failure DOES fail the command.
 
-Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor verbs in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.
+Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor commands in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.

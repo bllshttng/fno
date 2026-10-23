@@ -18,7 +18,7 @@ fn plan_fidelity_gate_blocks_an_uncovered_shortfall() {
 
 #[test]
 fn plan_fidelity_gate_fails_open_on_an_unparseable_or_missing_fno() {
-    // A stale fno without the verb prints an error, not JSON. The stop gate
+    // A stale fno without the command prints an error, not JSON. The stop gate
     // must not block on that - the merge gate is the backstop, and fail-open
     // here is what keeps a stale install from wedging every run.
     let cwd = std::env::temp_dir();
@@ -38,7 +38,7 @@ fn plan_fidelity_gate_fails_open_on_an_unparseable_or_missing_fno() {
 }
 
 #[test]
-fn plan_fidelity_gate_degrades_and_names_the_verb_on_timeout() {
+fn plan_fidelity_gate_degrades_and_names_the_command_on_timeout() {
     // a hung `fno do plan fidelity` child (was one concrete
     // cause; the bound must hold regardless of WHY the child hangs) must
     // be killed, not waited on forever, and must report as exactly that -

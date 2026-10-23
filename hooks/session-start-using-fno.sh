@@ -3,7 +3,7 @@
 # Inject the using-fno SKILL.md as additionalContext, for a session that
 # joined fno only.
 #
-# A session joins at its first fno skill or verb (crates/fno-agents/src/
+# A session joins at its first fno skill or command (crates/fno-agents/src/
 # join_marker.rs). An unjoined session gets no preamble. A joined one gets it
 # once, and again after each compaction: `fno-agents report --kind join
 # --preamble-due --mark` answers `due` and stamps it taught.

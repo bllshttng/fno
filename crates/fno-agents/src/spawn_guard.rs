@@ -708,7 +708,7 @@ pub fn exported_provenance() -> Vec<(&'static str, String)> {
 const SESSION_PHASES: [&str; 5] = ["blueprint", "execute", "review", "ship", "think"];
 
 /// The phase a node spawn binds its worker under: the explicit
-/// `--session-phase` (with the retired `do` alias), else the seed verb's.
+/// `--session-phase` (with the retired `do` alias), else the seed command's.
 fn spawn_phase(params: &Value, node: &str) -> Result<String, i32> {
     let listed = format!("{:?}", SESSION_PHASES).replace('"', "'");
     if let Some(given) = params.get("session_phase").and_then(Value::as_str) {
@@ -727,7 +727,7 @@ fn spawn_phase(params: &Value, node: &str) -> Result<String, i32> {
         Some(phase) => Ok(phase.to_string()),
         None => {
             eprintln!(
-                "refusing --node {node}: the message verb names no session phase, so no \
+                "refusing --node {node}: the message command names no session phase, so no \
                  worker would be bound to the node. Pass --session-phase <one of {listed}>. \
                  No worker launched."
             );

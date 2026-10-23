@@ -2,7 +2,7 @@
 //! installed rev and source HEAD (first-parent merge commits), grouped by
 //! user-facing area, with test/docs/ci/chore hidden behind a count. Python's
 //! `fno doctor update --check` resolver calls [`run_release_notes`] through
-//! the verb seam (`fno.rust_binary.verb_call`), the same bridge
+//! the command seam (`fno.rust_binary.command_call`), the same bridge
 //! `sandbox_probe` uses: `cli/src/fno` bars new Python, so the notes builder
 //! lives here and Python only forwards. The TUI still renders only the
 //! payload (Locked Decision 6, installed-fno-staleness.md): it reads these
@@ -251,7 +251,7 @@ pub fn build(installed_rev: &str, source: &Path) -> Value {
     })
 }
 
-/// The `release-notes` verb: payload `{"installed_rev": ..., "source": ...}`
+/// The `release-notes` command: payload `{"installed_rev": ..., "source": ...}`
 /// on stdin, `{"notes": <payload|null>}` on stdout. It answers, the caller
 /// judges (same posture as sandbox-probe).
 pub fn run_release_notes(args: &[String]) -> i32 {

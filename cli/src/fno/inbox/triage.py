@@ -157,9 +157,9 @@ def _build_prompt(handle: ThreadHandle, receiver: str, cwd: Path) -> str:
     backlog_failed = False
     backlog_failure_reason = ""
     try:
-        # The ready verb answers natively; resolve fno-agents the way every
+        # The ready command answers natively; resolve fno-agents the way every
         # wheel door does (a stale or absent fno-py wheel surface would
-        # answer "No such command" for a verb the binary owns).
+        # answer "No such command" for a command the binary owns).
         from fno import rust_binary
 
         binary = rust_binary.resolve_binary()

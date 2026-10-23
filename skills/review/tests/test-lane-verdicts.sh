@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 LANE="$REPO_ROOT/skills/review/references/single-lane.md"
 # `fno` is never on PATH in CI (a bare name would shadow the Python entry
 # point every other smoke step resolves, per .github/actions/smoke-setup), and
-# the Python classify leaf is deleted: the verb answers from the fno-agents
+# the Python classify leaf is deleted: the command answers from the fno-agents
 # findings door now. Resolve a native runner in the order the codebase already
 # uses elsewhere: an explicit override, the CI-built Rust front (which execs
 # the same door), then a built fno-agents binary; with neither built, the

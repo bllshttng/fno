@@ -3,7 +3,7 @@
 //! write inside the grant, and the negative control the old probe lacked: a
 //! write OUTSIDE the granted roots must fail. Ported from
 //! `cli/src/fno/agents/sandbox_probe.py`, which shrinks to a bridge over the
-//! hidden `sandbox-probe` verb; exit 85 and the `sandbox-probe:` marker stay
+//! hidden `sandbox-probe` command; exit 85 and the `sandbox-probe:` marker stay
 //! Python-side (rust_runtime.py, backlog/advance.py).
 
 use serde_json::{json, Value};
@@ -390,9 +390,9 @@ pub fn probe_codex_sandbox(
     }
 }
 
-/// The hidden client verb: one JSON payload in
+/// The hidden client command: one JSON payload in
 /// (`{"cwd", "mode"?, "state_dirs"?}`), the verdict out. Exit 85 stays the
-/// Python spawn gate's decision (rust_runtime.py), never the verb's.
+/// Python spawn gate's decision (rust_runtime.py), never the command's.
 pub fn run_sandbox_probe(args: &[String]) -> i32 {
     use std::io::Read;
     let mut payload = String::new();

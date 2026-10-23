@@ -51,7 +51,7 @@ gpt-5.5.** It falls through to a Bedrock model and fails with "Token is
 expired. To refresh this SSO session run 'aws sso login'", which names AWS and
 misdirects completely. Every argv builder below passes both.
 
-Credentials are operator-owned. ``pi auth`` is read-only (three verbs, none of
+Credentials are operator-owned. ``pi auth`` is read-only (three commands, none of
 which writes); only the TUI's ``/login <provider>`` writes one, and that is an
 operator action. Never synthesize a credential.
 """

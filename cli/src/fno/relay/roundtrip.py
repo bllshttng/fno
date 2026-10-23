@@ -238,7 +238,7 @@ def resolve_attached_short_id(session_id: str) -> Optional[str]:
     An adopted ``claude --bg`` session is not a footnote PTY worker, but since v9
     its wire short lives in ``short_id`` (the unified transport key), and its only
     drive handle is the daemon ``control.sock`` (driven via the ``mail-inject``
-    op:'reply' verb); the single-writer claim the adopt path writes is keyed
+    op:'reply' command); the single-writer claim the adopt path writes is keyed
     ``pty:<short>`` (mirrors ``crate::claude_adopt::pty_claim_holder``). This reads
     the raw registry (no load-time backfill), so a legacy ``claude_short_id`` row
     is tolerated as a fallback. Returns the path-safe short, or None when
@@ -672,10 +672,10 @@ def deliver_worker(
 
 
 # ---------------------------------------------------------------------------
-# Adopted-session vehicle (G3): control.sock op:'reply' via the mail-inject verb.
+# Adopted-session vehicle (G3): control.sock op:'reply' via the mail-inject command.
 # ---------------------------------------------------------------------------
 
-# Subprocess budget for the mail-inject verb: it polls the recipient transcript
+# Subprocess budget for the mail-inject command: it polls the recipient transcript
 # for ~10s (40 * 250ms) before reporting not-confirmed, so give it headroom.
 # Mirrors fno.agents.dispatch._MAIL_INJECT_TIMEOUT_S.
 _MAIL_INJECT_TIMEOUT_S = 20.0
@@ -689,13 +689,13 @@ _MAIL_INJECT_TIMEOUT_S = 20.0
 INJECT_CONFIRMED = "confirmed"      # mail-inject saw transcript growth: the turn landed.
 INJECT_UNCONFIRMED = "unconfirmed"  # op:'reply' sent, growth not confirmed in budget (or the
                                     # subprocess timed out mid-confirm): the turn may still land.
-INJECT_NOT_SENT = "not_sent"        # the inject never reached the session (not-injectable, verb
+INJECT_NOT_SENT = "not_sent"        # the inject never reached the session (not-injectable, command
                                     # absent, attach/write failed): nothing was delivered.
 
 
 def submit_via_control_reply(session_id: str, framed: str) -> str:
     """Inject one framed turn into an ADOPTED ``claude --bg`` session over the daemon
-    ``control.sock`` via the ``fno-agents mail-inject`` verb (the G1 op:'reply'
+    ``control.sock`` via the ``fno-agents mail-inject`` command (the G1 op:'reply'
     primitive, node ; the one live-delivery vehicle, node). NEVER raises.
 
     Returns one of :data:`INJECT_CONFIRMED` / :data:`INJECT_UNCONFIRMED` /
@@ -704,7 +704,7 @@ def submit_via_control_reply(session_id: str, framed: str) -> str:
     op:'reply' WAS written but growth wasn't seen in budget -- a busy recipient still
     lands it); every other not-delivered reason (``not-injectable`` / ``no-transcript`` /
     ``attach-failed`` / ``io-error`` / ``unsafe-text``) means the turn never reached
-    the session -> NOT_SENT. A subprocess timeout is UNCONFIRMED: the verb may have
+    the session -> NOT_SENT. A subprocess timeout is UNCONFIRMED: the command may have
     written the op:'reply' before its growth-confirm poll was cut off.
 
     This is the adopted-lane sibling of :func:`submit_via_worker`: an adopted session
@@ -759,7 +759,7 @@ def deliver_attached(
     reply from the transcript -- the G3 relay re-point (epic, node).
 
     The adopted session has no fno agents worker socket; :func:`submit_via_control_reply`
-    (the ``mail-inject`` verb) is the only live handle. The hard failure is ONLY a
+    (the ``mail-inject`` command) is the only live handle. The hard failure is ONLY a
     NOT_SENT inject (the turn never reached the session). On CONFIRMED *or*
     UNCONFIRMED the turn may have landed -- mail-inject's growth-confirm budget is
     short (~10s) and a busy recipient records the inject later -- so we poll for the

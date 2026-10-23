@@ -80,7 +80,7 @@ class Kind(str, Enum):
     HEADS_UP = "heads-up"
     QUESTION = "question"
     FYI = "fyi"
-    # G2 cross-agent bus: async fire-and-forget message (send verb)
+    # G2 cross-agent bus: async fire-and-forget message (send command)
     SEND = "send"
 
 
@@ -1123,7 +1123,7 @@ def resolve_project(
     """Resolve the local project name from ``.fno/config.toml``.
 
     ``flag_hint`` names the flag the caller actually exposes, so the failure
-    message points at a real flag (inbox verbs have ``--from``; ``mail send``
+    message points at a real flag (inbox commands have ``--from``; ``mail send``
     has ``--from-name``/``--from-self``)."""
     if override is not None:
         return override

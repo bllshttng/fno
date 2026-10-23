@@ -13,7 +13,7 @@ from fno.claims.roster import _worker_reachability
 
 @pytest.fixture(autouse=True)
 def _no_worked_reply(monkeypatch):
-    """Hermetic overlay: the verb never runs unless a test provides a reply."""
+    """Hermetic overlay: the command never runs unless a test provides a reply."""
     monkeypatch.setattr(
         "fno.graph.statuses._worked_nodes_reply", lambda rows: {}
     )

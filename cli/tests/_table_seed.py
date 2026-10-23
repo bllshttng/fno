@@ -51,7 +51,7 @@ def update_claim(key: str, root: Optional[Path] = None, **columns: Any) -> None:
     """Rewrite columns of an existing claims-table row, e.g. back-date it.
 
     The public API cannot age a claim, so a test that needs an expired or
-    pid-less row edits the table the claim verbs read. ``expires_at=1``
+    pid-less row edits the table the claim commands read. ``expires_at=1``
     makes the row expired.
     """
     import json

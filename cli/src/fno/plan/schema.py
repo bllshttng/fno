@@ -322,7 +322,7 @@ class ConsolidationBlock(BaseModel):
     proceed_alone_against: list[ConsolidationEntry] = Field(default_factory=list)
     # A node this plan rules OUT - stronger than a proceed_alone_against
     # contrast, so it is the key `plan_rulings` scans for and the reversal
-    # verbs print back. Sits beside any outcome: an absorb plan can still
+    # commands print back. Sits beside any outcome: an absorb plan can still
     # reject a third node.
     rejected: list[ConsolidationEntry] = Field(default_factory=list)
     decisions_acknowledged: list[DecisionAcknowledgment] = Field(default_factory=list)
@@ -389,7 +389,7 @@ class PlanFrontmatter(BaseModel):
     title: str | None = None
     size: Literal["S", "M", "L"] | None = None
     type: str | None = None
-    # Mirror fields: a PROJECTION of the graph node, written only by fno verbs
+    # Mirror fields: a PROJECTION of the graph node, written only by fno commands
     # (intake + backlog update), never hand-edited. They give the Obsidian Bases
     # the navigation columns the graph already has (order "Next up" by priority).
     priority: str | None = None
@@ -398,7 +398,7 @@ class PlanFrontmatter(BaseModel):
     # Who hands out the plan's remaining waves: `manual` waits for a person or
     # a lead session to run `fno backlog join` (default), or `auto`
     # fires join at target init. Opt-in - `manual` changes nothing, so every
-    # plan written before the key keeps its behavior. Named for the verb it
+    # plan written before the key keeps its behavior. Named for the command it
     # gates: `orchestration` already does four unrelated jobs in this repo, so
     # a grep for the key returned mostly noise.
     join: str = "manual"
@@ -432,7 +432,7 @@ class PlanFrontmatter(BaseModel):
     # would graduate a plan with no URLs; the stamp/set-expected writers already
     # reject < 1, and this makes validate catch the same corrupt frontmatter.
     expected_url_count: int | None = Field(default=None, ge=1)
-    # Node-closure outcome probes, read by the three close verbs via
+    # Node-closure outcome probes, read by the three close commands via
     # resolve_promise_evidence. Sibling to loop-check's `done_probes` (which
     # gates session termination); this gates node closure. Scalar or list, the
     # same permissive shape as `kill_criteria`, since the Rust runner parses the

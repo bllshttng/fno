@@ -11,7 +11,7 @@ events.jsonl. One helper serves every test that used to slurp the journal:
 The fast path reads the sibling store DIRECTLY over read-only SQL: no process
 spawn, no retention side effects - a test asserts state, it never prunes.
 A journal holding ANY bytes routes through the native ``doctor event rows``
-verb, which imports uncommitted journal bytes before querying: a raw fixture
+command, which imports uncommitted journal bytes before querying: a raw fixture
 line written after the last store commit is invisible to direct SQL. With no
 store at all the helper answers the raw journal, mirroring the pre-store
 reader. Rows are parsed envelopes in commit order.

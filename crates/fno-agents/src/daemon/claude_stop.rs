@@ -1,4 +1,4 @@
-//! The claude arm of the stop verb: `stop_claude`, its no-transport-id pid
+//! The claude arm of the stop command: `stop_claude`, its no-transport-id pid
 //! escalation, and the ownership proof every signal in this module rests on.
 //! Claude is shellout-managed (LD8): there is no worker PTY to signal, so the
 //! daemon shells out to the claude supervisor's `stop` on the agent's short id
@@ -137,7 +137,7 @@ fn capture_target(
     Ok(proved)
 }
 
-/// The pre-signal proof the stop verb and the terminal-stop sweep share: load
+/// The pre-signal proof the stop command and the terminal-stop sweep share: load
 /// the default roster and the process table (both blocking reads, offloaded
 /// from the async handlers) and name the exact process set the stop may end.
 /// `Err` means no proof; no caller signals on `Err`. A session under an
@@ -235,7 +235,7 @@ pub(super) async fn mark_claude_stopped(
         if let Some(e) = r.find_mut(&claude_name) {
             e.status = AgentStatus::Exited;
             e.exited_at = Some(now_rfc3339_like());
-            state::record_stop(e, "stop-verb", Some("claude".into()));
+            state::record_stop(e, "stop-command", Some("claude".into()));
             // best-effort: a failed stamp costs a later wake its name,
             // never the stop.
             crate::wake_name::stamp_from_row(&wake_home, e);
@@ -257,7 +257,7 @@ pub(super) async fn mark_claude_stopped(
 ///
 /// A row can carry a live process and no short id at all when the spawn receipt
 /// never yielded one. Refusing there left the operator with a running worker and
-/// no verb that addressed it -- the duplicate-worker half of the wave-boundary
+/// no command that addressed it -- the duplicate-worker half of the wave-boundary
 /// handoff failure, which had to be killed by hand to restore one-writer
 /// semantics. Unlike a PTY worker there is no socket to probe, so `pid_is_ours`
 /// (which rejects pid <= 1, treats an unsignalable pid as not ours, and compares

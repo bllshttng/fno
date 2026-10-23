@@ -1,4 +1,4 @@
-//! The `mail send` wrapped verb: agent, project, kind, job, lead and ruling
+//! The `mail send` wrapped command: agent, project, kind, job, lead and ruling
 //! lanes plus the durable floor.
 //!
 //! Port of the Python `cmd_send` body (`cli/src/fno/mail/cli.py`) with the
@@ -331,6 +331,8 @@ fn state_dir() -> PathBuf {
 /// mirrors on `AgentsHome`. The inbox threads tree is
 /// `<state>/inbox/<recipient>/inbox/`, the bus log `<bus_dir>/messages.jsonl`.
 fn inbox_dir_for(project: &str) -> Result<PathBuf, String> {
+    let mapped = system_arm_inbox_key(project);
+    let project = mapped.as_deref().unwrap_or(project);
     // store.py inbox_dir_for: strict validation closes the traversal hole a
     // crafted recipient would open into the inbox tree.
     if project.contains('/') || project.contains('\\') {
@@ -371,6 +373,19 @@ fn inbox_dir_for(project: &str) -> Result<PathBuf, String> {
     let agents_root =
         obsidian_agents_root(&cwd).unwrap_or_else(|| state_dir().join("inbox").join("agents"));
     Ok(agents_root.join(project).join("inbox"))
+}
+
+/// A system arm address (`fno/quiet-recovery`) has exactly one slash between
+/// two non-empty segments. It maps to the single segment `fno.quiet-recovery`
+/// so its durable floor is a plain directory. Any other slash shape returns
+/// None and stays refused by the traversal guard; the mapped key still passes
+/// through that guard, so `a/..` or `./x` fail on the `..` it produces.
+fn system_arm_inbox_key(name: &str) -> Option<String> {
+    let (project, arm) = name.split_once('/')?;
+    if project.is_empty() || arm.is_empty() || arm.contains('/') {
+        return None;
+    }
+    Some(format!("{project}.{arm}"))
 }
 
 /// paths.vault_root + inbox_agents_root: `<vault>/internal/agents` when a
@@ -804,7 +819,7 @@ fn refuse_unsafe_short_address(token: Option<&str>, self_addressed: bool) -> Res
         return Ok(());
     }
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(_) => return Ok(()),
     };
@@ -1562,17 +1577,17 @@ fn append_render_block(
 }
 
 /// Python `_ruling_graph_path` + `_append_ruling_to_node`: append a dated
-/// ruling block to a governed node's details. The native backlog note verb
+/// ruling block to a governed node's details. The native backlog note command
 /// owns that write today; the lane refuses the same shapes the Python lane
 /// refused before the append.
 fn append_ruling(ruling: &str, message: &str, graph_path: Option<&Path>) -> Result<(), i32> {
-    // The graph write rides the native note verb, the post-port home of the
+    // The graph write rides the native note command, the post-port home of the
     // same transaction, so the gate the graph store enforces stays the one
     // gate. The Python leg resolved the graph from --cwd or the ambient
-    // project; the native verb resolves identically.
+    // project; the native command resolves identically.
     // Refuse an unknown node by name before any mail moves, through the same
-    // id/slug read and store the note verb uses. An unreadable store falls
-    // through so the note verb reports its own cause.
+    // id/slug read and store the note command uses. An unreadable store falls
+    // through so the note command reports its own cause.
     let graph = graph_path
         .map(Path::to_path_buf)
         .unwrap_or_else(crate::graph_get::default_graph_path);
@@ -1700,7 +1715,7 @@ pub(crate) fn vet_body(body: &str, allow_reason: Option<&str>) -> Result<(), i32
 // ---------------------------------------------------------------------------
 
 /// Python `cmd_send`. The front routes every `send` here; `--raw` delegates
-/// to the raw leaf, every other lane is the wrapped verb.
+/// to the raw leaf, every other lane is the wrapped command.
 #[allow(clippy::too_many_lines)]
 pub fn run(args: &[String]) -> i32 {
     let args = match parse_args(args) {
@@ -1709,7 +1724,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     if let Some(cwd) = args.cwd.as_deref() {
         // Python resolved `workdir = Path(cwd).resolve()` and passed it to
-        // every repo-scoped consumer; the native verb reaches the same place
+        // every repo-scoped consumer; the native command reaches the same place
         // by making it the process cwd before any consumer reads.
         let resolved = std::fs::canonicalize(cwd);
         match resolved {
@@ -2350,5 +2365,26 @@ mod ask_anycast_tests {
             ask_recipient_or_refuse("p", Some("alpha".to_string())),
             Ok("alpha".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod system_arm_inbox_tests {
+    use super::*;
+    use crate::claims::EnvVarGuard;
+
+    #[test]
+    fn a_system_arm_address_maps_to_one_safe_segment_and_other_slashes_stay_refused() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _root = EnvVarGuard::set("FNO_INBOX_ROOT", "/tmp/fno-arm-inbox");
+        assert_eq!(
+            inbox_dir_for("fno/quiet-recovery").unwrap(),
+            PathBuf::from("/tmp/fno-arm-inbox/fno.quiet-recovery/inbox")
+        );
+        for bad in ["a/b/c", "/arm", "fno/", "a/..", "../x", "./x", "a\\b"] {
+            assert!(inbox_dir_for(bad).is_err(), "{bad} must stay refused");
+        }
     }
 }

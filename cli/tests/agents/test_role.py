@@ -23,7 +23,7 @@ from fno.paths_testing import use_tmpdir
 # --- the stored scope encoding ----------------------------------------------
 #
 # There is no `--promote` spec parser any more. The flag takes scopes directly and
-# the rung is derived (see test_role_level_derivation), so what remains to pin
+# the rung is derived (see crates/fno-agents/tests/role_ladder_parity.rs), so what remains to pin
 # here is the ENCODING: a portfolio has to reduce to one canonical string,
 # because the one-live-role guard compares scopes by equality and would
 # otherwise miss a duplicate spelled in a different order.
@@ -38,42 +38,6 @@ def test_a_portfolio_canonicalizes_regardless_of_spelling() -> None:
     assert split_scope(canonical_scope(["web", "etl"])) == ["etl", "web"]
     # A corrupted row's non-string scope degrades instead of crashing a read.
     assert split_scope(5) == []  # type: ignore[arg-type]
-
-
-def test_scope_contains_canonicalizes_an_alias_project(monkeypatch, tmp_path) -> None:
-    """scope_contains must canonicalize the graph node's project field before
-    comparing it to the canonicalized role scope. Graph intake stores the
-    project field RAW (the short_name alias a node was filed under), so without
-    canonicalization a lead over 'alpha' is falsely refused an epic filed as
-    'a' - a legitimate delegation blocked."""
-    import fno.projects.resolve as proj_resolve
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\nprojects = [{ name = "alpha", short_name = "a" }]\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
-
-    from fno.agents import role
-
-    # An epic filed under the alias 'a' (the raw spelling intake stores).
-    # The containment resolves the index once, so the stub sits there.
-    monkeypatch.setattr(
-        role,
-        "_graph_index",
-        lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "a"}},
-    )
-    assert role.scope_contains("alpha", "epic-1") is True
-
-    # A genuinely different project is still not contained.
-    monkeypatch.setattr(
-        role,
-        "_graph_index",
-        lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "beta"}},
-    )
-    assert role.scope_contains("alpha", "epic-1") is False
 
 
 # --- spawn stamps the role, grantor is provenance not self-declared ---------
@@ -427,7 +391,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
     # here so this exact-dict assertion stays about the role fields. The
     # team-name carry line is the same shape of advisory receipt data.
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: "msg-t delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: "msg-t delivered (hosted)"
     )
     monkeypatch.setattr(role_mod, "_carry_team_name", lambda *args: "carried")
     result = _invoke_role("worker", "--scope", "alpha")
@@ -875,7 +839,6 @@ def test_a_lead_cannot_role_itself_even_to_a_strict_subset(
         "beta": {"id": "beta", "type": "epic", "status": "ready"},
     }
     monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
     before = [asdict(row) for row in load_registry()]
     monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
 
@@ -983,7 +946,7 @@ def test_a_self_widen_fails_closed_without_the_binary(
     real_call = spawn_overlay_client.spawn_overlay_call
 
     def _unavailable(payload):
-        if payload.get("kind") == "role-resolve":
+        if payload.get("kind") in ("role-resolve", "role-grant"):
             return real_call(payload)
         raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
 
@@ -1022,7 +985,6 @@ def test_a_lead_drops_a_done_epic_and_keeps_the_prior_grantor(
         "e-2": {"id": "e-2", "type": "epic", "status": "done"},
     }
     monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
 
     result = _invoke_role("lead-a", "--scope", "e-1")
@@ -1102,7 +1064,7 @@ def test_a_self_add_answer_without_a_grantor_refuses_fail_closed(
     real_call = spawn_overlay_client.spawn_overlay_call
 
     def _old_binary(payload):
-        if payload.get("kind") == "role-resolve":
+        if payload.get("kind") in ("role-resolve", "role-grant"):
             return real_call(payload)
         return {"widen": True, "added": ["e-2"], "hint": None}
 
@@ -1119,7 +1081,7 @@ def test_succession_by_an_agent_caller_is_refused_with_a_reachable_remedy(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-EDGE: grant_error's succession branch accepts an equal scope because
-    SPAWN succession is legal there. This verb only stamps the target, so it
+    SPAWN succession is legal there. This command only stamps the target, so it
     must refuse - and the refusal has to name a remedy the caller can act on.
     Falling through to the live-holder scan named the caller's OWN row as the
     blocker and offered three remedies that all contradict the refusal: re-scope
@@ -1249,7 +1211,7 @@ def test_in_place_role_refuses_when_the_identity_check_is_unavailable(
     real_call = spawn_overlay_client.spawn_overlay_call
 
     def unavailable(payload, *args, **kwargs):
-        if payload.get("kind") == "role-resolve":
+        if payload.get("kind") in ("role-resolve", "role-grant"):
             return real_call(payload, *args, **kwargs)
         raise spawn_overlay_client.SpawnOverlayUnavailable("not built")
 
@@ -1298,10 +1260,10 @@ def test_spawn_role_refuses_before_launch_when_scope_already_occupied(
     assert not _space_manifest(tmp_path, "epic-x").exists()
 
 
-# --- the role types the verb (x-7b36 change 11): raw mail names the delivery
+# --- the role types the command (x-7b36 change 11): raw mail names the delivery
 
 
-def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
+def test_in_place_role_mails_the_term_command_and_names_the_delivery(
     tmp_path: Path, monkeypatch
 ) -> None:
     import fno.agents.role as role_mod
@@ -1314,13 +1276,13 @@ def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
     )
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: sent.append((address, verb)) or "msg-1 delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: sent.append((address, command)) or "msg-1 delivered (hosted)"
     )
 
     receipt = promote_existing_session("worker", ["alpha"])
 
     assert receipt["term_delivery"] == "msg-1 delivered (hosted)"
-    # AC28: the holder receives the plugin-qualified verb by raw mail,
+    # AC28: the holder receives the plugin-qualified command by raw mail,
     # addressed by the full session id (the ADDRESS, never the spawn label).
     assert sent == [("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "/fno:lead alpha")]
 

@@ -1,6 +1,6 @@
 # How-to: create a peer agent with `fno agents spawn`
 
-`fno agents spawn "<prompt>" [--name <n>] [--harness <h>]` creates a new peer agent. The single positional is the prompt; the agent name is minted unless `--name` supplies one. It is the creation half of the de-overloaded verb pair from the cross-agent message bus epic: **`spawn` creates, `ask` messages**. An `ask` to a name that does not exist errors with exit 16 ("spawn it first") instead of silently creating - see [fno-agents-ask-followup.md](fno-agents-ask-followup.md) for the messaging half.
+`fno agents spawn "<prompt>" [--name <n>] [--harness <h>]` creates a new peer agent. The single positional is the prompt; the agent name is minted unless `--name` supplies one. It is the creation half of the de-overloaded command pair from the cross-agent message bus epic: **`spawn` creates, `ask` messages**. An `ask` to a name that does not exist errors with exit 16 ("spawn it first") instead of silently creating - see [fno-agents-ask-followup.md](fno-agents-ask-followup.md) for the messaging half.
 
 Use this guide when an orchestrator (script, LLM session, CI job) needs to launch a worker agent and capture a machine-parseable receipt.
 
@@ -167,7 +167,7 @@ Every refusal below exits 2 before the worker starts, and each message names the
 
 ### Give a running thread a portal
 
-A thread that already runs gets tuned with `fno mux thread <key>`. No flag focuses the row's open portal. With none open, the door's own portal 0 serves it. `<key>` is the agent name, or the full `session` id `fno agents registry whoami` prints. A thread-shaped Codex row answers to the full id. Claude answers to its printed `short_id`. The door matches one live row exactly and never creates, resumes, or duplicates a worker. Zero matches, or several rows answering the same key, refuse and spawn no worker. The broad selector tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`, not to this door. In the sideline, Enter on a paneless live row reaches it. `P` opens the next free index. A row already shown through a portal takes focus with Enter. the reseat verb tunes the named portal to that worker: `fno mux thread reseat <name>` with the portal index.
+A thread that already runs gets tuned with `fno mux thread <key>`. No flag focuses the row's open portal. With none open, the door's own portal 0 serves it. `<key>` is the agent name, or the full `session` id `fno agents registry whoami` prints. A thread-shaped Codex row answers to the full id. Claude answers to its printed `short_id`. The door matches one live row exactly and never creates, resumes, or duplicates a worker. Zero matches, or several rows answering the same key, refuse and spawn no worker. The broad selector tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`, not to this door. In the sideline, Enter on a paneless live row reaches it. `P` opens the next free index. A row already shown through a portal takes focus with Enter. the reseat command tunes the named portal to that worker: `fno mux thread reseat <name>` with the portal index.
 
 Portals persist across a restart as slots, not live panes. The restored screen sits parked on its channel while the thread keeps running. A reach, a focus, or an explicit `fno mux workspace restore` fills it. The model is the whole of [portals.md](../architecture/portals.md).
 
@@ -220,7 +220,7 @@ fno agents spawn "/target ab-1234abcd" --name w1 -H claude --fresh
 
 Precedence is `--cwd` > `--fresh` > caller cwd. An explicit `--cwd` always wins; `--here` (alias `--in-place`) opts back out of `--fresh` and keeps the caller cwd. `--fresh` is a no-op when the caller is already at canonical, and falls back to the caller cwd (the safe side) when resolution is ambiguous: a bare or `--separate-git-dir` checkout, or no `git` on `$PATH`. A real redirect prints one stderr line so it is never silent.
 
-`--fresh` is opt-in at this layer, so plain interactive `ask` / `host` / `spawn` keep the caller cwd. The policy that turns it on lives one layer up. For autonomous single-repo target-class work, `/target bg` (via `dispatch-node.sh`) defaults a node with no recorded cwd to `--fresh`. Cross-project dispatch and non-target verbs are exempt.
+`--fresh` is opt-in at this layer, so plain interactive `ask` / `host` / `spawn` keep the caller cwd. The policy that turns it on lives one layer up. For autonomous single-repo target-class work, `/target bg` (via `dispatch-node.sh`) defaults a node with no recorded cwd to `--fresh`. Cross-project dispatch and non-target commands are exempt.
 
 ## Errors you will see
 

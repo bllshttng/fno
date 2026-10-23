@@ -340,7 +340,7 @@ pub(crate) fn hook_beat(
 /// first row whose `data.holder_session` names it (`source` restricted to
 /// `loop` when `loop_only`); without a session, or when none match, it
 /// returns today's result: the first such row of `scan(.., scope)`. Only
-/// the verb's own rows carry NUMERIC_DIFF_KEYS, so the diff baseline is
+/// the command's own rows carry NUMERIC_DIFF_KEYS, so the diff baseline is
 /// the newest `loop` row; a hook row or a hand row must never baseline
 /// the diff.
 pub(crate) fn previous_beat(
@@ -1737,7 +1737,7 @@ mod verdict_tests {
         assert_eq!(bound_summary(v2, &b2), "converging (absent: block_cap)");
     }
 
-    /// The input tree the self-assembling verb reads: config, graph, manifest,
+    /// The input tree the self-assembling command reads: config, graph, manifest,
     /// journal. Spaces and the agents home resolve through a `DeclaredRoot`
     /// pin, the config anchors on `--cwd`, and the graph path rides that
     /// config - no ambient resolution, so a parallel test's pins never race.

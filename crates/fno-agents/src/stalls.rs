@@ -4,7 +4,7 @@
 //! Same split as `intel` and `evals-macro`: Python resolves the journal
 //! defaults and shells HERE; the binary owns the fold, so the file-budget
 //! Python-tree ratchet holds. Daemon-free read, not a routable `fno agents`
-//! verb.
+//! command.
 //!
 //! The report closes the four attribution gaps the 2026-09-29 hand analysis
 //! named: a timeout row now carries what it waited on, a NoProgress stop
@@ -16,7 +16,7 @@
 //! twenty problems. `unattributed` is its own row and never folds away: a
 //! row with no cause evidence stays visible as an unknown, not a zero.
 
-use crate::client_verbs::parse_iso8601 as parse_loose_ts;
+use crate::client_commands::parse_iso8601 as parse_loose_ts;
 use crate::evals_macro::canonical_json;
 use crate::evals_macro::parse_since;
 use serde_json::{json, Value};

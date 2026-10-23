@@ -92,11 +92,11 @@ Driver skills (`/target`) must stay portable to any markdown-aware runtime. CI e
 
 ## State files are CLI-owned
 
-Never hand-edit `~/.fno/graph.db` or the immutable session manifest `.fno/target-state.md` (an inputs-only file; the only legal post-init write is first-fill of `plan_path` via `fno state set`). Use the `fno` verbs (e.g. `fno backlog`). Hooks detect direct graph mutations post-hoc. See `skills/using-fno/SKILL.md` for the full surface map.
+Never hand-edit `~/.fno/graph.db` or the immutable session manifest `.fno/target-state.md` (an inputs-only file; the only legal post-init write is first-fill of `plan_path` via `fno state set`). Use the `fno` commands (e.g. `fno backlog`). Hooks detect direct graph mutations post-hoc. See `skills/using-fno/SKILL.md` for the full surface map.
 
 ## Conventions
 
-- **Vocabulary.** Abilities uses **target** as the verb for autonomous delivery. We do not use "AFK", "autonomous coding agent", "background agent", or generic search terms. The distinctive verb is the brand; PRs that introduce generic terms will be asked to rename.
+- **Vocabulary.** Abilities uses **target** as the command for autonomous delivery. We do not use "AFK", "autonomous coding agent", "background agent", or generic search terms. The distinctive command is the brand; PRs that introduce generic terms will be asked to rename.
 - **Surgical changes.** Touch only what the change requires. Match the surrounding style. Don't refactor adjacent code that isn't broken.
 - **Tests first** for behavior changes: a failing test that captures the bug or feature, then the code that makes it pass.
 

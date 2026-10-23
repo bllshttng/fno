@@ -4,7 +4,7 @@ The three loops that turn what the fleet did into what the fleet does better. Ea
 
 ## The loops
 
-| Loop | Trigger | Config key | Default | Output lands in | Read verb |
+| Loop | Trigger | Config key | Default | Output lands in | Read command |
 |------|---------|-----------|---------|-----------------|-----------|
 | autocorrect | Weekly review (Mondays 09:00) + a 15-minute S0 watcher (`com.user.autocorrect`, `com.user.autocorrect-watcher`; install with `scripts/install-autocorrect-cron.sh`) | (launchd labels, not config) | not installed | Postmortems to `~/.fno/postmortems/`, lessons to agent memory, backlog nodes via `cli/src/fno/retro/` | `fno backlog find` / the weekly review pack |
 | S2 corrections (the intel path) | Runs when `/fno:intel` writes its report; the writer is `scripts/corrections-insights-tag.sh` | (none; watermark in `~/.fno/logs/corrections.log.wm`) | always available | S2 rows in `~/.fno/logs/corrections.log`, one per `#agent-correction` line, carrying `signal=<friction category>` | `fno outstanding` scoring via the `verifyDecisions` lane |

@@ -1,4 +1,4 @@
-"""Tests for starting workers in panes placed by a separate mux verb."""
+"""Tests for starting workers in panes placed by a separate mux command."""
 from __future__ import annotations
 
 import json

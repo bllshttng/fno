@@ -82,10 +82,10 @@ pub struct GcRow {
     /// other session's planning row on it started earlier. The sweep
     /// resolves it from the graph; empty on every row that did not plan.
     pub planning_plan_written: Vec<String>,
-    /// A `reap --release` ruling matched this row's planning hold: the
-    /// marker question is answered (the operator ruled the assignment
-    /// over), so only the 1200 s quiet gate remains.
-    pub planning_released: bool,
+    /// A `reap --release` ruling matched this row's planning or
+    /// no-provenance hold: the operator ruled the question answered, so only
+    /// the quiet gate remains (1200 s for a planner).
+    pub hold_released: bool,
     /// The row's latest inside-leg report reads `done`: the turn
     /// ended and the session is not waiting. A halted planner - one whose
     /// turn ended with no plan on the node - counts as finished, never as
@@ -119,7 +119,7 @@ pub struct GcRow {
     pub process_gone: bool,
     /// A `reap --release` ruling for THIS row: the release lifts
     /// the transcript-unresolved gate, so an absent transcript age retires
-    /// instead of holding. Set only when the verb's ruling matched the row;
+    /// instead of holding. Set only when the command's ruling matched the row;
     /// a missing age is never quiet on any other path.
     pub release_quiet: bool,
     /// The `(node, pr)` THIS session drives and the PR still reads open
@@ -317,7 +317,7 @@ impl KeepReason {
             KeepReason::Active { .. } => "active",
             KeepReason::TranscriptUnresolved => "transcript unresolved",
             KeepReason::GraphUnreadable => "graph unreadable",
-            KeepReason::OpenDoRow { .. } => "open do row on done node",
+            KeepReason::OpenDoRow { .. } => "open do row",
             KeepReason::OpenPr { .. } => "open pr",
             KeepReason::DeadOpenWork { .. } => "dead open work",
             KeepReason::LiveClaim { .. } => "live claim held",
@@ -424,7 +424,11 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // no-node row that never wrote a done report used to keep
             // forever. It takes the same grace gate a reported-done row
             // takes.
-            if row.turn_ended || row.session_released() || row.registry_terminal {
+            if row.turn_ended
+                || row.session_released()
+                || row.registry_terminal
+                || row.hold_released
+            {
                 spawn_idle_gate(row)
             } else {
                 (GcAction::Keep, Some(KeepReason::NoProvenance))
@@ -450,7 +454,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // session-shaped releases below, and an unfinished assignment
             // holds even when the node's status would free a non-planner.
             if let Some(assignments) = &row.planning {
-                if row.planning_released {
+                if row.hold_released {
                     return spawn_idle_gate(row);
                 }
                 // An EMPTY status set fails closed: a lane that fires on a
@@ -728,7 +732,7 @@ pub fn probe_entry_ages(
 
 // --- the sweep shells -------------------------------------------------------
 // The two triggers behind the pure decision above: the daemon's idle tick and
-// the manual `fno agents reap` verb both shell these. The sweep body lives in
+// the manual `fno agents reap` command both shell these. The sweep body lives in
 // `gc_sweep.rs`; these resolve the production seams (graph read, store index,
 // stop lane) and call it.
 
@@ -810,7 +814,7 @@ pub fn gc_sweep(
     summary.settle_refused = refused;
     // A reap leaves nothing behind: a retired worker's dead cargo still
     // holds the build lock and a run slot under its own pid.
-    let freed = crate::claim_verbs::reap_dead_cargo_claims();
+    let freed = crate::claim_commands::reap_dead_cargo_claims();
     if freed > 0 {
         eprintln!("reap: freed {freed} build or run-slot claim(s) held by a dead cargo");
     }
@@ -1320,7 +1324,7 @@ pub fn unowned_sweeps(home: &AgentsHome, emitter: &EventEmitter, cwd: &std::path
 /// tick row carries the same `interval` the guard compared, so the arms
 /// readout and the loop read one number.
 /// The argv `fno mux workspace prune` is built from: one seam so the daemon
-/// (default flags) and the manual reap verb (`--include-used-shells`) cannot
+/// (default flags) and the manual reap command (`--include-used-shells`) cannot
 /// drift. Default flags already close an orphaned worker's tab; closing a
 /// human's spent shells stays opt-in.
 pub fn mux_prune_args(dry_run: bool, include_used_shells: bool) -> Vec<&'static str> {
@@ -1335,7 +1339,7 @@ pub fn mux_prune_args(dry_run: bool, include_used_shells: bool) -> Vec<&'static 
     args
 }
 
-/// (moved from the manual verb) Shell out to the existing prune verb
+/// (moved from the manual command) Shell out to the existing prune command
 /// - one sweep body, reused, not reimplemented. Fail-closed: a spawn
 /// failure, a non-zero exit, or an unparsable receipt is `Unread`, never a
 /// measured zero.
@@ -1353,7 +1357,7 @@ pub fn mux_prune_args(dry_run: bool, include_used_shells: bool) -> Vec<&'static 
 ///
 /// The daemon arm passes the DEFAULT prune flags only: an orphaned worker
 /// tab closes on the retire cadence (Locked Decision 6); a human's spent
-/// shells stay opt-in via the manual verb.
+/// shells stay opt-in via the manual command.
 pub fn mux_tab_sweep(
     root: Option<&Path>,
     cwd: &Path,
@@ -1422,7 +1426,7 @@ pub fn mux_tab_sweep(
 /// The production roster sweep the retire arm runs: the real enumeration
 /// and removal, `dry_run` false, at the scope the caller resolved.
 /// The production dead-team sweep the retire arm runs: apply on. The
-/// manual verb calls `team_reap::sweep` itself so a dry run can report
+/// manual command calls `team_reap::sweep` itself so a dry run can report
 /// without applying.
 pub fn production_team_sweep(home: &AgentsHome, cwd: &Path) -> crate::team_reap::TeamReap {
     crate::team_reap::production_sweep(home, cwd, true)
@@ -1498,7 +1502,7 @@ pub fn maybe_retirement_sweep(
         let summary = gc_sweep(&home, &emitter, grace_secs, retain_days);
         // Locked Decision 5: the nudge ladder rides the daemon's retire arm
         // only, after the sweep that classified the open-PR rows. A manual
-        // verb run never nudges; its dry run prints the plan. The ladder's
+        // command run never nudges; its dry run prints the plan. The ladder's
         // input is the concatenation: open-PR rows first, then the
         // dead-worker rows, in one slice so `cleanup_state_files` sees both.
         let mut ladder_rows = summary.open_pr_rows.clone();
@@ -1533,7 +1537,7 @@ pub fn maybe_retirement_sweep(
         // The mux surface is one of the stores a reap must clear: the
         // default-flag prune closes an orphaned worker's tab on the retire
         // cadence, so the operator never runs the manual
-        // reap verb just to clear tabs.
+        // reap command just to clear tabs.
         let mux = tab_sweep();
         let mux_detail = match &mux {
             crate::reap_render::MuxSweep::Ran { receipt } => {
@@ -1990,8 +1994,8 @@ mod tests {
     }
 
     #[test]
-    fn manual_reap_verb_argv_includes_used_shells() {
-        // AC5-CLI: the manual verb opts in to closing a human's spent
+    fn manual_reap_command_argv_includes_used_shells() {
+        // AC5-CLI: the manual command opts in to closing a human's spent
         // shells; the daemon default never does.
         assert_eq!(
             mux_prune_args(false, true),
@@ -2432,7 +2436,7 @@ mod tests {
             planning: None,
             planning_closed: Vec::new(),
             planning_plan_written: Vec::new(),
-            planning_released: false,
+            hold_released: false,
             turn_ended: false,
             confirm_hold: None,
             session_terminal: None,
@@ -2579,7 +2583,7 @@ mod tests {
                 status: "idea".into(),
             },
             planning: Some(vec![("x-m2".to_string(), "idea".to_string())]),
-            planning_released: true,
+            hold_released: true,
             turn_ended: true,
             ..retiring()
         };
@@ -3124,7 +3128,7 @@ mod tests {
             planning: None,
             planning_closed: Vec::new(),
             planning_plan_written: Vec::new(),
-            planning_released: false,
+            hold_released: false,
             turn_ended: false,
             confirm_hold: None,
             session_terminal: None,

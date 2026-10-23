@@ -2,7 +2,7 @@
 
 Each call drives the store keeper's ``api`` command (one op per function,
 same name and fields) and parses the reply into ``fno.graph.types`` models.
-``cmd_version`` is the ``fno backlog version`` verb body.
+``cmd_version`` is the ``fno backlog version`` command body.
 """
 from __future__ import annotations
 

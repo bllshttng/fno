@@ -561,7 +561,7 @@ row_cargo() {
     miss "cargo-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0
   fi
-  # cargo install lands the front door here; its first forwarded verb
+  # cargo install lands the front door here; its first forwarded command
   # bootstraps the wheel, whose data scripts carry fno-agents into the uv
   # tool bin ($HOME/.local/bin). `fno backlog` never provisions, so warm up
   # once, and keep the tool bin on PATH for the front door's bare-name
@@ -664,10 +664,10 @@ row_clone_setup() {
   shared_smoke "$HOME/.local/bin"
 }
 
-# setup-scratch-home: the setup verb's three report modes plus the wizard's
+# setup-scratch-home: the setup command's three report modes plus the wizard's
 # unattended refusal, scored on the fresh HOME the harness already scrubbed
 # to. The binary is built from THIS tree, not a published wheel: the wizard
-# verb ships in no release yet, so the PyPI and script channels cannot serve
+# command ships in no release yet, so the PyPI and script channels cannot serve
 # this row.
 row_setup_scratch_home() {
   assert_clean_machine

@@ -1,7 +1,7 @@
-//! `fno mux workspace restore`: the verb's CLI rendering. Split by
+//! `fno mux workspace restore`: the command's CLI rendering. Split by
 //! kind - `members` are squad members, `portals` are held portal seats - so
 //! a refused portal is never hidden behind a member total. Lives beside the
-//! verb it renders, out of the shrink-only mux_cli.rs (file budget).
+//! command it renders, out of the shrink-only mux_cli.rs (file budget).
 
 use super::*;
 
@@ -76,12 +76,12 @@ pub(super) fn workspace_restore(args: &[OsString], env_session: Option<&str>) ->
         eprintln!("fno mux workspace restore: exact-session restore needs server protocol 109 or newer; no restore sent");
         return EXIT_ERROR;
     }
-    let verb = ControlVerb::WorkspaceRestore {
+    let command = ControlCommand::WorkspaceRestore {
         dry_run,
         harness: harness.clone(),
         member_session: member_session.clone(),
     };
-    match control_roundtrip(&sock, &session, verb) {
+    match control_roundtrip(&sock, &session, command) {
         Ok(ServerMsg::WorkspaceRestored { rows }) => {
             // The reply splits by kind: `members` are squad members,
             // `portals` are held portal seats. The counts sum both, so the

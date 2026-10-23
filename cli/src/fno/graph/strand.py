@@ -75,7 +75,7 @@ def _release_contained_children(entries: list[dict], owner_id: Optional[str]) ->
 
 def _release_parented_children(entries: list[dict], owner_id: Optional[str]) -> list[str]:
     """Clear ``parent`` on the owner's non-done children; return the ids freed.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     if not owner_id:
         return []
@@ -206,9 +206,9 @@ def _reparent_receipt(pairs: list[tuple[str, Optional[str]]], lead: str = "") ->
     """One line per batch. Bare lead is the past tense whose line start groom
     parses (``^re-parented N stranded child``); "Would " previews instead.
     """
-    verb = "re-parented" if not lead else "re-parent"
+    command = "re-parented" if not lead else "re-parent"
     listed = ", ".join(f"{cid} -> {p or '(none)'}" for cid, p in pairs)
-    return f"{lead}{verb} {len(pairs)} stranded child(ren) under terminal parents: {listed}"
+    return f"{lead}{command} {len(pairs)} stranded child(ren) under terminal parents: {listed}"
 
 
 def _stranded_next_receipts(receipts: list[tuple[str, str]]) -> list[str]:

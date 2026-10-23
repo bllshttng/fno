@@ -456,7 +456,7 @@ fn process_parent(pid: u32) -> Option<u32> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
-/// Binary-direct verb: `fno-agents orphan-reap [--apply] [--json]`. Dry-run by
+/// Binary-direct command: `fno-agents orphan-reap [--apply] [--json]`. Dry-run by
 /// default; prints one line per confirmed orphan and its disposition.
 pub fn run_orphan_reap(args: &[String]) -> i32 {
     let apply = args.iter().any(|a| a == "--apply");

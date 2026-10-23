@@ -61,7 +61,7 @@ def test_plan_validate_execution_refuses_post_gate_no_difficulty(tmp_path):
 
 
 def _stub_plan_docs(monkeypatch, exit_code=0):
-    """Capture what the verb hands the keeper client, without a keeper."""
+    """Capture what the command hands the keeper client, without a keeper."""
     import fno.plan._project as project_client
 
     captured: list = []

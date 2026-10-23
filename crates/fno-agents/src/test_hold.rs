@@ -18,7 +18,7 @@
 //! a lift still SIGCONTs exactly those incarnations, so a hold armed before
 //! an upgrade resumes cleanly. Kills need no resume record.
 //!
-//! [`reconcile`] is idempotent and is the one entry. The incident verb runs
+//! [`reconcile`] is idempotent and is the one entry. The incident command runs
 //! it after every machine-wide transition, and the daemon's machine tick
 //! runs it every interval, so an expired TTL still resumes what an older
 //! build paused and a bare pytest started mid-hold (no door gates it) ends
@@ -105,7 +105,7 @@ pub(crate) fn is_test_root(command: &str) -> bool {
 
 /// Every pid a hold pauses: each test root under a fleet pid, plus its
 /// whole subtree. `spare` (this process and its ancestors) is never picked,
-/// so the verb can never stop the shell that ran it.
+/// so the command can never stop the shell that ran it.
 pub(crate) fn pick(table: &[ProcRow], fleet: &HashSet<u32>, spare: &HashSet<u32>) -> Vec<u32> {
     let parents: HashMap<u32, u32> = table.iter().map(|r| (r.pid, r.ppid)).collect();
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();

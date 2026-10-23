@@ -166,7 +166,7 @@ def test_locked_update_holds_lock_across_read_and_mutate(tmp_path):
 
 
 def test_set_raw_list_field_stores_a_list_not_a_string(tmp_path):
-    # `lanes` is typed Any so a bad list never breaks a config read. The verb
+    # `lanes` is typed Any so a bad list never breaks a config read. The command
     # stored the JSON argument as a string, and the router saw no lanes.
     set_config_value(
         "agents.profiles.target.lanes",

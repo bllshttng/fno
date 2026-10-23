@@ -107,7 +107,7 @@ pub(crate) fn hold_sidecar_path(handle: &str) -> PathBuf {
 /// The one token-to-row rule, `hold.addresses` mirrored: a token addresses a
 /// row when it names its full session id (case-normalized), the row's
 /// canonical first-eight handle, its daemon short_id, or its name. The
-/// check-in resolves by full session id, the status verb by the short
+/// check-in resolves by full session id, the status command by the short
 /// handle, senders by any of the four; one matcher so every reader of a hold
 /// answers the same question instead of the gate resolving fewer addresses
 /// than the writers stamp.
@@ -467,7 +467,7 @@ fn ensure_clock(handle: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
 }
 
 /// A real user message (C2): the provenance classifier passes it, and it is
-/// neither a `!` shell line nor a slash/dollar verb token. Everything else
+/// neither a `!` shell line nor a slash/dollar command token. Everything else
 /// is machinery, and machinery never arms the conversation hold.
 pub(crate) fn is_real_message(prompt: &str) -> bool {
     let Ok(cleaned) = crate::provenance::classify(prompt) else {
@@ -479,7 +479,7 @@ pub(crate) fn is_real_message(prompt: &str) -> bool {
     cleaned
         .split_whitespace()
         .next()
-        .map(|tok| crate::provider::parse_verb_token(tok).is_none())
+        .map(|tok| crate::provider::parse_command_token(tok).is_none())
         .unwrap_or(false)
 }
 
@@ -498,7 +498,7 @@ pub(crate) enum ArmOutcome {
 }
 
 impl ArmOutcome {
-    /// The `mail-hold` verb's exit code for the outcome.
+    /// The `mail-hold` command's exit code for the outcome.
     pub(crate) fn code(self) -> i32 {
         match self {
             ArmOutcome::Armed | ArmOutcome::StoodAside => 0,
@@ -931,7 +931,7 @@ fn park_payload(session_id: &str, payload: &str) -> i32 {
 }
 
 /// The body of [`park_payload`]: park one payload and answer the receipt
-/// line, or the caller verb's exit code on failure. Shared with the
+/// line, or the caller command's exit code on failure. Shared with the
 /// `--gate --park-on-hold` arm, which answers the receipt in JSON instead.
 fn park_payload_inner(session_id: &str, payload: &str) -> Result<String, i32> {
     let Some((matched, name, _)) = lookup_gate_row(session_id) else {
@@ -1228,8 +1228,10 @@ const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
 /// bus-only` is the one door that stamps with no clock on purpose, and it
 /// writes `operator` over an adopted or unmarked origin. Spawned, adopted
 /// and unmarked rows are stamped only by a clocked arm, so a missing clock
-/// there is the lapsed-tidy orphan. A row with no readable `created_at` has
-/// no proof of age and stays. Pure so the pick is testable without a
+/// there is the lapsed-tidy orphan. A row with no readable `created_at` counts
+/// as old: every clocked arm writes its clock before its stamp, and a minted
+/// row gets a `created_at`, so an undated clockless stamp is one the old join
+/// path wrote with no clock at all. Pure so the pick is testable without a
 /// registry write.
 pub(crate) fn orphan_stamp_rows(
     registry: &crate::state::Registry,
@@ -1242,9 +1244,10 @@ pub(crate) fn orphan_stamp_rows(
         .filter(|e| e.origin.as_deref() != Some("operator"))
         .filter_map(|e| {
             let sid = e.harness_session_id.as_deref()?;
-            let born = chrono::DateTime::parse_from_rfc3339(&e.created_at).ok()?;
-            let old = now - born.with_timezone(&chrono::Utc)
-                > chrono::Duration::seconds(ORPHAN_STAMP_AGE_S);
+            let old = chrono::DateTime::parse_from_rfc3339(&e.created_at).map_or(true, |born| {
+                now - born.with_timezone(&chrono::Utc)
+                    > chrono::Duration::seconds(ORPHAN_STAMP_AGE_S)
+            });
             let clockless = gate_clock_addresses(sid, sid)
                 .iter()
                 .all(|h| read_clock(h).is_none());
@@ -1298,6 +1301,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     let mut describe_handles: Vec<&String> = Vec::new();
     let mut status_line_handle: Option<&String> = None;
     let mut policy_value: Option<&String> = None;
+    let mut record_stamp_session: Option<&String> = None;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--session" => session = iter.next(),
@@ -1318,11 +1322,18 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
             "--describe" => describe_handles = iter.by_ref().collect(),
             "--status-line" => status_line_handle = iter.next(),
             "--policy" => policy_value = iter.next(),
+            "--record-stamp" => record_stamp_session = iter.next(),
             other => {
                 eprintln!("mail-hold: unknown argument {other:?}");
                 return 2;
             }
         }
+    }
+    if let Some(session_id) = record_stamp_session {
+        // The Python register door's stamp: `fno agents register
+        // --delivery-policy bus-only` writes the row, then journals here.
+        record_stamp("register_command", session_id);
+        return 0;
     }
     if let Some(handle) = arm_handle {
         // The Python arm/arm_wall bodies, ported: idle re-arms on activity
@@ -1512,7 +1523,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     };
     if gate_mode {
         // The body is optional. A terminal stdin is never read (the gate is a
-        // caller verb, not an interactive prompt); a piped or closed stdin is
+        // caller command, not an interactive prompt); a piped or closed stdin is
         // drained, and a read failure degrades to the no-body gate.
         let mut body = String::new();
         use std::io::IsTerminal as _;
@@ -1547,7 +1558,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
         // release leg: the clock is rewritten EXPIRED, so the detached
         // timer's first wake releases at once and drains what the hold kept
         // on the bus - the same effect `fno agents mail hold --off` has
-        // inside the held session, through the timer's own verb.
+        // inside the held session, through the timer's own command.
         match set_policy(session_id, None) {
             Some(matched) => {
                 let handle = identity_key(&matched);
@@ -1599,7 +1610,7 @@ pub(crate) mod tests {
 
     /// Pin FNO_AGENTS_HOME (registry + journal), FNO_HOME (hold sidecars)
     /// and FNO_STATE_DIR (chats store) to one tempdir for `f`, under the
-    /// crate-wide env lock (claim_verbs idiom). FNO_PY points at `true` so
+    /// crate-wide env lock (claim_commands idiom). FNO_PY points at `true` so
     /// a parked-payload drain spawn is a no-op the test never waits on.
     /// Prior values are restored, so an ambient FNO_HOME survives the test.
     pub(crate) fn with_hold_env(f: impl FnOnce(&std::path::Path)) {
@@ -1752,7 +1763,7 @@ pub(crate) mod tests {
                 crate::hold_label::hold_attention(&status).unwrap(),
                 "mail held while the user talks to you (machine-armed; lifts about 2 min after your answer)"
             );
-            // The status verb addresses the same hold by the canonical
+            // The status command addresses the same hold by the canonical
             // short handle; the gate must hold on it, not deliver.
             let first8 = identity_key(SID).get(..8).unwrap().to_string();
             assert!(!gate(&first8, None, chrono::Utc::now()).deliver);
@@ -2287,6 +2298,7 @@ pub(crate) mod tests {
                     row("clocked", 5, Some("spawn"), &old),
                     row("adopted", 6, Some("adopted"), &old),
                     row("young-adopted", 7, Some("adopted"), &young),
+                    row("unborn", 8, None, ""),
                 ]),
             );
             write_clock(
@@ -2305,8 +2317,9 @@ pub(crate) mod tests {
                     ("orphan".to_string(), sid(1)),
                     ("unmarked".to_string(), sid(4)),
                     ("adopted".to_string(), sid(6)),
+                    ("unborn".to_string(), sid(8)),
                 ],
-                "an old clock-less stamp is an orphan unless an operator set it"
+                "an old or undated clock-less stamp is an orphan unless an operator set it"
             );
         });
     }

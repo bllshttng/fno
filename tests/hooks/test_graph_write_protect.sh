@@ -112,10 +112,10 @@ expect "AC2-ERR: malformed no-token approve" approve \
 expect "AC1-EDGE: Edit AGENTS.md mentions path" approve \
   '{"tool_name":"Edit","tool_input":{"file_path":"/proj/AGENTS.md","old_string":"x","new_string":"see ~/.fno/graph.json here"}}'
 
-# ── AC2-EDGE: legitimate fno verb approved (no path+redirect) ─────────────────
+# ── AC2-EDGE: legitimate fno command approved (no path+redirect) ─────────────────
 expect "AC2-EDGE: fno target init" approve \
   '{"tool_name":"Bash","tool_input":{"command":"fno target init --node x-4c48"}}'
-# fno state set carrying --path .fno/target-state.md is still a named verb, no write-op
+# fno state set carrying --path .fno/target-state.md is still a named command, no write-op
 expect "AC2-EDGE: fno state set --path" approve \
   '{"tool_name":"Bash","tool_input":{"command":"fno state set --field plan_path --value /p.md --path .fno/target-state.md"}}'
 

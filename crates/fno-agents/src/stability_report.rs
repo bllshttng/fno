@@ -1,6 +1,6 @@
 //! `evals-trend --mode stability`: the stability eval's first slice, native
 //! under d-b6cc1a2a (all new code lands in crates). It rides the existing
-//! evals-trend verb rather than growing the over-cap fno-agents root, so
+//! evals-trend command rather than growing the over-cap fno-agents root, so
 //! the menu-caps lint sees no new action:
 //! `fno-agents evals-trend --mode stability` computes, from one repo's git
 //! history plus the backlog graph, the fix-of-fix rate and the product-path
@@ -490,7 +490,7 @@ fn compute(
 
 /// One first-parent walk over PR deliveries, newest-first, deduped to the
 /// newest landing per PR: the report's delivery map, shared by the stability
-/// verb (on HEAD) and the scorecard's fix-of-fix join (on a named ref).
+/// command (on HEAD) and the scorecard's fix-of-fix join (on a named ref).
 fn walk_deliveries(
     repo: &std::path::Path,
     rev: &str,

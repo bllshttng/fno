@@ -169,7 +169,7 @@ OUT="$( cd "$T" && PATH="$TMP_BASE/stub-hn-multi:$PATH" bash "$HELPER" )"
 [[ "$(val "$OUT" verdict)" == "canonical-protected" ]] && pass "multi-line harness-native stays protected" || fail "verdict was '$(val "$OUT" verdict)'"
 
 echo ""
-echo "--- policy verb error stays fail-closed to protected ---"
+echo "--- policy command error stays fail-closed to protected ---"
 mk_fno_stub "$TMP_BASE/stub-err" error
 T="$TMP_BASE/err-canon"; make_repo "$T" main
 OUT="$( cd "$T" && PATH="$TMP_BASE/stub-err:$PATH" bash "$HELPER" )"

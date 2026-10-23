@@ -25,7 +25,7 @@ impl CodexIndexCapture {
         let Some(sid) = entry.harness_session_id.as_deref() else {
             return Self { lines: Vec::new() };
         };
-        let Some(codex_dir) = crate::client_verbs::codex_home() else {
+        let Some(codex_dir) = crate::client_commands::codex_home() else {
             return Self { lines: Vec::new() };
         };
         Self {
@@ -38,7 +38,7 @@ impl CodexIndexCapture {
     /// the window, so a failed restore names itself on stderr and the caller's
     /// refusal carries either way.
     pub(crate) fn restore_on_registry_failure(&self) {
-        let Some(codex_dir) = crate::client_verbs::codex_home() else {
+        let Some(codex_dir) = crate::client_commands::codex_home() else {
             return;
         };
         self.restore_inner(&codex_dir.join("session_index.jsonl"));

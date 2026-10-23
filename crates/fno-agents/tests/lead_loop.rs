@@ -5,7 +5,7 @@
 //! shrink-only, and this family is self-contained - its own fixture (a real
 //! graph under a temp home, stub gh/fno-py/fno on PATH), its own spawn
 //! helper, and exactly one read still served by a mock (the escalation
-//! verb). The board itself is read in process, so the canned-payload mocks
+//! command). The board itself is read in process, so the canned-payload mocks
 //! are gone; a spec names the graph the fixture writes instead.
 
 use std::fs;
@@ -31,7 +31,7 @@ fn event_text(path: &Path) -> String {
 // ── the lead driver arm ───────────────────────────────────────────────────────
 //
 // A lead has no PR, so none of the target conjuncts above apply. These drive
-// the same verb with `--driver lead` over a lead manifest and a mocked board.
+// the same command with `--driver lead` over a lead manifest and a mocked board.
 
 /// A `created_at` inside every default `span:96h` term, so a fixture that
 /// declares no term of its own never trips the Stop-hook term gate: these
@@ -206,7 +206,7 @@ fn lead_prepare_fixture(cwd: &Path, home: &Path, board_spec: &Path) {
     };
     // The board folds undispatched and ready in-process now, so this stub
     // serves the one queue read that still rides a subprocess: the operator
-    // questions. The `*)` arm answers {} for every other verb the board or
+    // questions. The `*)` arm answers {} for every other command the board or
     // the truth probe shells.
     fs::write(
         stubs.join("fno-py"),
@@ -279,7 +279,7 @@ fn lead_spawn_with(
         events.to_str().unwrap(),
     ]);
     // The board is read in process, so the fixture `fno` serves exactly one
-    // live read: the escalation verb. Its mock is staged by the fixture and
+    // live read: the escalation command. Its mock is staged by the fixture and
     // overwritten by tests that need the argv recorder.
     cmd.arg("--fno-bin").arg(home.join("escalate-mock"));
     cmd.args(extra);
@@ -1188,7 +1188,7 @@ fn lead_escalate_bin(dir: &Path, payload: &str, log: &Path) -> PathBuf {
 /// function and not the destination.
 ///
 /// The second half, that repeated calls over one stalled set yield exactly ONE
-/// operator question, is `test_lead_escalate.py`: the dedupe lives in the verb,
+/// operator question, is `test_lead_escalate.py`: the dedupe lives in the command,
 /// and a mock `fno` here records no questions to count. Neither test alone is
 /// the verification; the seam between them is the `--stalled` argument.
 #[test]
@@ -1228,7 +1228,7 @@ fn every_lead_noprogress_terminal_escalates() {
 
     // Terminal 2: a board that never answers. There are no ids to name, so the
     // escalation carries an EMPTY set rather than being skipped. An operator
-    // told nothing is the failure this verb exists to prevent, and a lead that
+    // told nothing is the failure this command exists to prevent, and a lead that
     // cannot see its board is the case most worth telling them about.
     let blind_tmp = TempDir::new().unwrap();
     let blind_cwd = blind_tmp.path();

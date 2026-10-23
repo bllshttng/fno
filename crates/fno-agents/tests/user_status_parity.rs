@@ -5,7 +5,7 @@
 //!
 //! Characterization tests for `compaction operator-turns --render status`,
 //! the native answer behind `fno inbox user status`. The contract is the
-//! Python verb's stdout, stderr and exit code: the depth line and the oldest
+//! Python command's stdout, stderr and exit code: the depth line and the oldest
 //! excerpt, the stderr skip report, the `--json` payload without its turns
 //! (non-ASCII escaped the way `json.dumps` writes it), and the refusal when
 //! no session identity resolves. The fixture rows carry no timestamp, so the
@@ -63,7 +63,7 @@ fn status(dir: &Path, pins: &[(&str, String)], json: bool) -> Golden {
 }
 
 #[test]
-fn status_matches_the_python_verb() {
+fn status_matches_the_python_command() {
     let assistant = r#"{"type": "assistant", "message": {"role": "assistant", "content": "hi"}}"#;
     let cases: [(&str, Vec<String>, Option<&str>); 5] = [
         ("empty", vec![assistant.to_string()], None),

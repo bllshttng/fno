@@ -7,7 +7,7 @@ fuse in place. This is the fuse.
 The causing worker said it in its own words the same hour: "my mail and
 review-request calls ran the worktree CLI against the real HOME." No test ran.
 So the boundary that has to hold is not test versus production, it is worktree
-SOURCE versus deployed STATE, and it has to hold on the most common verb on the
+SOURCE versus deployed STATE, and it has to hold on the most common command on the
 fleet.
 
 Three conditions gate the refusal, and each one is load-bearing:

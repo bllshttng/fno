@@ -6,9 +6,9 @@ The deliverable an operator actually asked for: "what can spawn without me"
 answerable in one command, buildable before any gate is unified (wave 3).
 
 Each spawner is resolved THROUGH ITS REAL RESOLVER, never by reading config
-directly - a status verb that read config.auto_continue.enabled directly
+directly - a status command that read config.auto_continue.enabled directly
 would have printed "false" throughout the six-and-a-half-week incident that
-motivated this verb, because a since-removed marker file silently outranked
+motivated this command, because a since-removed marker file silently outranked
 it. A spawner with no gate at all (groom / restart / evals, until wave 2
 gates them) renders as ``ungated`` rather than being omitted from the table -
 omission is exactly what hid them.
@@ -42,7 +42,7 @@ class SpawnerStatus:
     armed: Optional[bool]  # None = ungated (no gate exists yet)
     rank: str  # "env" | "config" | "default" | "autonomy" | "ungated"
     source: Optional[str] = None  # dispatch source code; None = n/a
-    verb: Optional[str] = None  # dispatch verb code, or "resolved" at runtime
+    command: Optional[str] = None  # dispatch command code, or "resolved" at runtime
 
 
 @lru_cache(maxsize=1)
@@ -95,9 +95,9 @@ def _gate_with_master(
 
 
 def _advance_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    answer = command_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
     armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "advance (node-walk)", "PR merge (reconcile / /fno:ship pr merged)",
@@ -109,9 +109,9 @@ def _dispatch_lanes_status(project_root: Optional[Path]) -> SpawnerStatus:
     # dispatch_lanes has no gate check of its own; every caller invokes it
     # only after auto_continue_enabled() already passed (design doc,
     # x-aaaa), so its armed state and rank are the SAME resolution.
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    answer = command_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
     armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "dispatch_lanes (parallel fill)", "active-backlog daemon tick",
@@ -120,9 +120,9 @@ def _dispatch_lanes_status(project_root: Optional[Path]) -> SpawnerStatus:
 
 
 def _epic_converge_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    answer = command_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
     armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "epic converge (mission drain)", "fno backlog advance --epic",
@@ -131,9 +131,9 @@ def _epic_converge_status(project_root: Optional[Path]) -> SpawnerStatus:
 
 
 def _reconcile_dispatch_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    answer = command_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
     armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "reconcile_dispatch (G4 de-stub)", "PR merge (contract dependent's blocker closes)",
@@ -310,12 +310,12 @@ def collect_status(project_root: Optional[Path] = None) -> list[SpawnerStatus]:
     stamped = []
     for r in rows:
         codes = _provenance_by_spawner().get(r.name)
-        stamped.append(replace(r, source=codes[1] if codes else None, verb=codes[2] if codes else None))
+        stamped.append(replace(r, source=codes[1] if codes else None, command=codes[2] if codes else None))
     return stamped
 
 
 def format_table(rows: list[SpawnerStatus]) -> str:
-    headers = ("SPAWNER", "TRIGGER", "GATE KEY", "ARMED", "RANK", "SOURCE", "VERB")
+    headers = ("SPAWNER", "TRIGGER", "GATE KEY", "ARMED", "RANK", "SOURCE", "COMMAND")
 
     def _armed_cell(v: Optional[bool]) -> str:
         if v is None:
@@ -328,7 +328,7 @@ def format_table(rows: list[SpawnerStatus]) -> str:
     table_rows = [
         (
             r.name, r.trigger, r.gate_key, _armed_cell(r.armed), r.rank,
-            _code_cell(r.source), _code_cell(r.verb),
+            _code_cell(r.source), _code_cell(r.command),
         )
         for r in rows
     ]

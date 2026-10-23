@@ -89,7 +89,7 @@ def test_emit_operator_initiated_envelope_and_data(tmp_path: Path) -> None:
     }
 
 
-# --- CLI verb --------------------------------------------------------------
+# --- CLI command --------------------------------------------------------------
 
 
 @pytest.fixture

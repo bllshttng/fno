@@ -34,7 +34,7 @@ pub fn run_revival_check(args: &[String], home: &AgentsHome) -> i32 {
         eprintln!("revival-check: --name is required");
         return 2;
     };
-    let rows = match crate::client_verbs::read_registry_entries(&home.registry_json()) {
+    let rows = match crate::client_commands::read_registry_entries(&home.registry_json()) {
         Ok(rows) => rows,
         Err(e) => {
             eprintln!("revival-check: registry unreadable: {e}");

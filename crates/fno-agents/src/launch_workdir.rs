@@ -81,7 +81,7 @@ fn decide(payload: &Value) -> (Value, Option<String>) {
             // ONLY a genuine "not a git repository" answer means
             // launch-in-place; any other git failure (dubious ownership, a
             // corrupted .git) must HOLD, not silently fall back to the
-            // canonical checkout this verb exists to keep workers off.
+            // canonical checkout this command exists to keep workers off.
             if e.message().contains("not a git repository") {
                 return (json!({ "workdir": recorded }), None);
             }

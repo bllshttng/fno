@@ -4,7 +4,7 @@
 //! transport while `fno mail send` was down) goes back into the bus log as
 //! durable rows that never re-deliver. The whole engine lives here once and
 //! Python keeps one thin transport (`fno agents mail backfill` resolves the
-//! window and the paths, then runs the verb): the transcript scan, the
+//! window and the paths, then runs the command): the transcript scan, the
 //! sender/receiver join, the deterministic archive id (the idempotency
 //! key), the envelope assembly, and the write through the bus-append door.
 //!

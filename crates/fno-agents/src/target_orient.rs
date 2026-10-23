@@ -378,7 +378,7 @@ fn tests_line(project_root: &Path) -> String {
 
 /// Backticked token that looks like a repo path: a slash and a dotted
 /// extension, no whitespace. The slash requirement excludes dotted config
-/// keys and bare verbs, the common prose false positives.
+/// keys and bare commands, the common prose false positives.
 fn path_token_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"`([^`\s]+/[^`\s]+\.[A-Za-z0-9_]+)`").unwrap())
@@ -1016,7 +1016,7 @@ fn local_review_gates(settings: &Settings) -> Vec<String> {
     gates
 }
 
-/// The inline self-review verb and refusal remedy. The lane is
+/// The inline self-review command and refusal remedy. The lane is
 /// `/fno:review` on a slash surface and `$fno:review` on codex; an unknown
 /// harness gets the claude spelling (advisory text, never a gate). `None`
 /// from the diff sizing leaves the `<level>` placeholder in place.
@@ -1080,7 +1080,7 @@ fn done_when_line(manifest_raw: &Option<BTreeMap<String, String>>, project_root:
         ));
     }
     // Self-review floor: when the obligation is on and no local lane is
-    // configured, name this harness's verb so a session serves itself.
+    // configured, name this harness's command so a session serves itself.
     if local.is_empty() && settings.self_review_required.unwrap_or(true) {
         let clause = self_review_clause(project_root);
         if !clause.is_empty() {

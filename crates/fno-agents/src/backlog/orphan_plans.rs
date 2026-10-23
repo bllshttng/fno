@@ -10,7 +10,7 @@
 //! the lead board read the node as `unplanned`. This is the retry and the
 //! reader, in one pass over `<plans-dir>/*.md`.
 //!
-//! Transport-only, like the other early arms: it registers no client verb
+//! Transport-only, like the other early arms: it registers no client command
 //! (the shrink law allows no new one). Its caller is the SessionStart
 //! reconcile sweep, which execs the binary directly.
 //!

@@ -1,7 +1,7 @@
-"""In-package Python parallel to the ``verify_child_promise`` verb.
+"""In-package Python parallel to the ``verify_child_promise`` command.
 
 The canonical implementation is the bundled ``fno-agents`` binary's
-``verify-evidence child-promise`` verb (folded out of the deleted
+``verify-evidence child-promise`` command (folded out of the deleted
 ``scripts/lib/verify-event-evidence.sh`` in US1). This
 module mirrors its semantics so a CLI consumer (e.g. when megawalk
 promotes off the bash hooks) can verify a child target session's
@@ -11,11 +11,11 @@ shelling out to the binary.
 Design notes
 ============
 * **Vocabulary symmetry.** Error keys returned by this module overlap
-  with the ``fno-agents`` verb's stderr substrings so a consumer can map
+  with the ``fno-agents`` command's stderr substrings so a consumer can map
   between them without per-language branching:
 
   ====================================  =============================================
-  Python error key                       fno-agents verb stderr substring
+  Python error key                       fno-agents command stderr substring
   ====================================  =============================================
   ``child_promise_missing``              ``child_promise missing for session``
   ``child_promise_nonce_mismatch``       ``nonce mismatch``
@@ -27,7 +27,7 @@ Design notes
   and ``data.nonce``, so the parser only inspects the data block.
 * **Truncated lines are skipped.** A malformed JSON line is not a fatal
   substrate failure - the helper continues scanning. This mirrors the
-  ``fno-agents`` verb's pre-filter-then-parse path which silently drops
+  ``fno-agents`` command's pre-filter-then-parse path which silently drops
   un-parseable lines. If no other line matches, the helper reports
   ``child_promise_missing`` rather than ``events_unreadable``.
 

@@ -1,7 +1,7 @@
 """One in flight per backlog arm scope (advance, reconcile).
 
 The lock is native (`fno-agents claim flight-acquire` / `flight-release`); this
-module is the shim the two backlog verbs call. A second invocation for an
+module is the shim the two backlog commands call. A second invocation for an
 in-flight scope reports `held` and exits 0: a skipped tick is correct behavior
 when the previous tick is still running.
 """
@@ -77,7 +77,7 @@ class Flight:
             ]
             if self.root is not None:
                 argv.extend(("--claims-root", str(self.root)))
-            _verb(argv)
+            _command(argv)
         except Exception:
             pass  # the TTL plus the pid probe retire it; never mask the work's outcome
 
@@ -94,10 +94,10 @@ def acquire_flight(
     ttl_ms: int = FLIGHT_TTL_MS,
 ) -> Optional[Flight]:
     """Take the gate, or report it held. None (fail-open) when the lock itself
-    is unavailable - no fno-agents binary, one older than the verb, spawn
+    is unavailable - no fno-agents binary, one older than the command, spawn
     trouble, a gate-side error - and the CALLER owns its action: the backlog
-    verbs proceed ungated, the new callers skip. The holder is unique per invocation and the claim
-    carries our pid, so the verb probes the pid and reclaims a dead holder
+    commands proceed ungated, the new callers skip. The holder is unique per invocation and the claim
+    carries our pid, so the command probes the pid and reclaims a dead holder
     itself: the holder here is a one-shot subprocess, so the
     transcript-liveness basis the claims layer prefers for node claims is the
     wrong policy."""
@@ -117,8 +117,8 @@ def acquire_flight(
         ]
         if root is not None:
             argv.extend(("--claims-root", str(root)))
-        receipt = _verb(argv)
-    except Exception as exc:  # noqa: BLE001 - fail open, never break the verb
+        receipt = _command(argv)
+    except Exception as exc:  # noqa: BLE001 - fail open, never break the command
         typer.echo(f"warning: single-flight gate unavailable for {key} ({exc})", err=True)
         return None
     if receipt is None:
@@ -135,7 +135,7 @@ def acquire_flight(
     )
 
 
-def _verb(argv: list[str]) -> Optional[dict]:
+def _command(argv: list[str]) -> Optional[dict]:
     """Run one `fno-agents claim` lock operation and parse its JSON receipt;
     None on any failure, which the caller treats as fail-open."""
     binary = resolve_binary()
@@ -153,7 +153,7 @@ def _verb(argv: list[str]) -> Optional[dict]:
         return None
 
 
-def _report_held(flight: Flight, verb: str, *, json_out: bool, extra: Optional[dict] = None) -> None:
+def _report_held(flight: Flight, command: str, *, json_out: bool, extra: Optional[dict] = None) -> None:
     """Print the held receipt. Exit stays 0: a held tick is not an error."""
     if json_out:
         payload = flight.payload()
@@ -162,7 +162,7 @@ def _report_held(flight: Flight, verb: str, *, json_out: bool, extra: Optional[d
         typer.echo(json.dumps(payload))
         return
     typer.echo(
-        f"{verb}: held, a run for this scope is already in flight "
+        f"{command}: held, a run for this scope is already in flight "
         f"(holder={flight.holder}, held_for_s={flight.held_for_s}s, requests={flight.requests}); "
         "the in-flight run owns the work, this one stood down"
     )
@@ -180,7 +180,7 @@ def advance_flight_scope(epic: Optional[str], *, json_out: bool) -> Iterator[boo
         yield ok
 
 
-def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
+def _arm_flight_watchdog(flight: "Flight", command: str) -> Optional[IO[str]]:
     """Bound a live holder (: LIVE at 0.0 pct CPU, invisible to a pid
     probe): a SIGUSR1 stack file plus a thread that releases the flight and
     exits 129 when an opted-in parent dies, 124 when the budget trips. The
@@ -226,7 +226,7 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
                     faulthandler.dump_traceback(file=fh, all_threads=True)
                     fh.flush()
                 sys.stderr.write(
-                    f"{verb}: {'parent-gone' if gone else f'budget {int(budget_s)}s'} "
+                    f"{command}: {'parent-gone' if gone else f'budget {int(budget_s)}s'} "
                     f"after {int(elapsed)}s; flight {flight.key} released"
                     + (f"; stack at {stack_path}" if stack_path else "")
                     + "\n"
@@ -244,13 +244,13 @@ def _arm_flight_watchdog(flight: "Flight", verb: str) -> Optional[IO[str]]:
 
 
 @contextlib.contextmanager
-def _flight_scope(key: str, scope: str, verb: str, json_out: bool,
+def _flight_scope(key: str, scope: str, command: str, json_out: bool,
                   extra: Optional[dict]) -> Iterator[bool]:
     flight = acquire_flight(key, scope=scope)
-    watch_fh = _arm_flight_watchdog(flight, verb) if flight is not None and not flight.held else None
+    watch_fh = _arm_flight_watchdog(flight, command) if flight is not None and not flight.held else None
     try:
         if flight is not None and flight.held:
-            _report_held(flight, verb, json_out=json_out, extra=extra)
+            _report_held(flight, command, json_out=json_out, extra=extra)
             yield False
         else:
             yield True

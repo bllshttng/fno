@@ -30,8 +30,8 @@ def test_agent_raw_inject_constructor_minimal():
     assert "sender" not in event["data"], "optional fields omitted when absent"
 
 
-def test_raw_inject_records_the_dollar_verb_token():
-    """x-c976: a `$fno:` payload records its verb; prose records none."""
+def test_raw_inject_records_the_dollar_command_token():
+    """x-c976: a `$fno:` payload records its command; prose records none."""
     event = agent_raw_inject(
         target_session="ses-9",
         payload="$fno:review medium",

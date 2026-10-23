@@ -167,17 +167,17 @@ def ship(
                 "branch": branch,
             }
 
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
     try:
-        evidence_required = verb_call(
+        evidence_required = command_call(
             "verify-evidence",
             {"op": "required", "cwd": str(Path.cwd()), "base": f"origin/{base_branch}"},
         ).get("required", True)
     except Exception:  # noqa: BLE001 - a failed policy call fails closed: demand evidence
         evidence_required = True
     if evidence_required:
-        evidence = verb_call(
+        evidence = command_call(
             "verify-evidence",
             {"op": "check", "cwd": str(Path.cwd()), "allow_equivalent": True},
         )
@@ -204,9 +204,9 @@ def ship(
         # Stale-base guard: a branch cut from a stale local HEAD ships a PR full
         # of phantom deletions. Refuse before gh pr create (the same check the
         # /fno:ship pr create router runs; bypass FNO_PR_BASE_OK=stale-acknowledged).
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
-        answer = verb_call(
+        answer = command_call(
             "pr-base-check",
             {"base": f"origin/{base_branch}", "cwd": os.getcwd()},
         )
@@ -235,10 +235,10 @@ def ship(
         # branch still carries a previous node, so the trailer closed something
         # this PR does not ship. Passing it as `extra_ids` also keeps
         # `contained_in` descendants reachable, which a branch-derived id drops.
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
         manifest_node = _read_graph_node_id(state_path)
-        body = verb_call(
+        body = command_call(
             "pr-closure-ensure",
             {
                 "body": body,
@@ -248,7 +248,7 @@ def ship(
         )["body"]
         # Create new PR
         try:
-            dup = verb_call(
+            dup = command_call(
                 "pr-create",
                 {"check_only": True, "title": title, "base": f"origin/{base_branch}", "cwd": os.getcwd()},
             ).get("refusal", "")
@@ -313,7 +313,7 @@ def ship(
                 file=sys.stderr,
             )
         # `bind-created` stamps the ship lifecycle row itself, on the binding
-        # rather than on one particular verb, so no second stamp here.
+        # rather than on one particular command, so no second stamp here.
 
     # Step 3: write the ship artifact, AFTER binding. It is factor-2 of the
     # two-factor gate check, so it must record the action the call actually

@@ -109,38 +109,38 @@ if (( ENTRY_COUNT > MAX_ENTRIES )); then
   add_violation "${ENTRY_COUNT} entries exceed the ${MAX_ENTRIES}-entry cap; evict or graduate one in this PR"
 fi
 
-# Graduated-verb check: a title naming a shipped `fno` verb as the trap is by
-# definition un-graduated, because the verb IS the carrier its `graduates-to:`
+# Graduated-command check: a title naming a shipped `fno` command as the trap is by
+# definition un-graduated, because the command IS the carrier its `graduates-to:`
 # is waiting for. This is the loop that produced the "`fno doctor test` can report a
-# false green" entry - written the day after the verb that fixed it, then read
+# false green" entry - written the day after the command that fixed it, then read
 # at every SessionStart as a reason to distrust it. Titles only: a body may
-# cite a verb as a specimen without claiming it is the trap.
+# cite a command as a specimen without claiming it is the trap.
 #
-# The verb list is read from the CLI's lazy registry rather than by running
+# The command list is read from the CLI's lazy registry rather than by running
 # `fno`, so the gate stays hermetic and works on a checkout with nothing
 # installed. A consumer repo shipping this gate without the CLI skips it.
 REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/cli/src/fno/cli.py"
 if [[ -n "$TITLES" && -f "$REGISTRY" ]]; then
-  SHIPPED_VERBS=$(sed -n 's/^[[:space:]]*"\([a-z][a-z0-9-]*\)":[[:space:]]*(.*/\1/p' "$REGISTRY")
-  # An empty list here is a BROKEN READ, not a CLI with no verbs. Every title
+  SHIPPED_COMMANDS=$(sed -n 's/^[[:space:]]*"\([a-z][a-z0-9-]*\)":[[:space:]]*(.*/\1/p' "$REGISTRY")
+  # An empty list here is a BROKEN READ, not a CLI with no commands. Every title
   # then matches nothing and the gate passes on anything, which is the shape
   # this gate exists to refuse. An ABSENT registry is the legitimate skip
   # (a consumer repo without the CLI) and is handled by the -f test above; a
   # PRESENT registry that yields nothing is an instrument failure. Fail loud.
-  if [[ -z "$SHIPPED_VERBS" ]]; then
-    echo "check-pitfalls: read 0 verbs from ${REGISTRY}." >&2
+  if [[ -z "$SHIPPED_COMMANDS" ]]; then
+    echo "check-pitfalls: read 0 commands from ${REGISTRY}." >&2
     echo "  The registry exists, so this is a broken read, not an empty CLI." >&2
     echo "  Refusing rather than passing every title against an empty list." >&2
     exit 1
   fi
   while IFS= read -r title; do
     [[ -z "$title" ]] && continue
-    # Backticks are decoration around the verb, not part of it.
+    # Backticks are decoration around the command, not part of it.
     probe="${title//\`/}"
-    while IFS= read -r verb; do
-      [[ -z "$verb" ]] && continue
-      if printf '%s\n' "$SHIPPED_VERBS" | grep -qxF "$verb"; then
-        add_violation "entry '${title}' names the shipped verb 'fno ${verb}'; a shipped verb is the carrier that graduates its entry, so evict the entry and let the verb (plus its --help) teach"
+    while IFS= read -r command; do
+      [[ -z "$command" ]] && continue
+      if printf '%s\n' "$SHIPPED_COMMANDS" | grep -qxF "$command"; then
+        add_violation "entry '${title}' names the shipped command 'fno ${command}'; a shipped command is the carrier that graduates its entry, so evict the entry and let the command (plus its --help) teach"
       fi
     done < <(printf '%s\n' "$probe" | grep -oE '(^|[^a-zA-Z])fno +[a-z][a-z0-9-]*' | sed -E 's/.*fno +//')
   done <<< "$TITLES"
@@ -181,7 +181,7 @@ done <<< "$PINNED_PHRASES"
 # through the store api (the typed client is import-light; this checkout's
 # `cli/src` is on the path), never the file. No graph.db is the legitimate
 # skip (a consumer repo without a working store); a graph that exists but
-# cannot be read fails loud, on the shipped-verb registry precedent above.
+# cannot be read fails loud, on the shipped-command registry precedent above.
 # FNO_GRAPH_JSON (or GRAPH_JSON) names the store anchor, so a sandbox or a
 # consumer repo can point the gate at its own graph.db.
 GRAPH_TARGET="${FNO_GRAPH_JSON:-${GRAPH_JSON:-$HOME/.fno/graph.json}}"

@@ -20,8 +20,8 @@ source "$HOOK_DIR/lib/write-targets.sh" 2>/dev/null || true
 input="$(cat 2>/dev/null || true)"
 [[ -n "$input" ]] || exit 0
 # An Edit|Write payload carries the files it is about to change; they ride
-# the request as `paths` and the verb answers the edit read (path laws) in
-# place of the verb classifier. A prompt or Skill payload builds the request
+# the request as `paths` and the command answers the edit read (path laws) in
+# place of the command classifier. A prompt or Skill payload builds the request
 # exactly as before, with no `paths` key.
 file_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"
 command_str="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"

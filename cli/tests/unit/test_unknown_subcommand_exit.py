@@ -1,8 +1,8 @@
 """An unknown subcommand must exit nonzero.
 
-A missing verb that exits 0 is byte-identical, to a caller gating on the
+A missing command that exits 0 is byte-identical, to a caller gating on the
 exit code, to a genuinely empty result: four no-match readings were once
-read as "no node exists" because the verb was `find`, not `search`. Click's
+read as "no node exists" because the command was `find`, not `search`. Click's
 own default already answers nonzero; these tests pin that default so no
 future wrapper or entry-point change can flatten it back to silence.
 """
@@ -13,8 +13,8 @@ import subprocess
 import sys
 
 
-def test_unknown_verb_module_mode_exits_nonzero_with_diagnostic():
-    """Caller-facing contract: `python -m fno.cli <group> <missing-verb>`.
+def test_unknown_command_module_mode_exits_nonzero_with_diagnostic():
+    """Caller-facing contract: `python -m fno.cli <group> <missing-command>`.
 
     Pins both halves a safe count-or-existence read needs: a nonzero exit
     AND a stderr diagnostic, so an empty-stdout reading can never masquerade

@@ -285,7 +285,7 @@ fn positive_usize(raw: &str) -> Option<usize> {
 }
 
 /// `owner/repo` out of the project root's origin remote, through the
-/// publish verb's parser.
+/// publish command's parser.
 fn origin_repo(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])

@@ -1,12 +1,12 @@
 //! How a resume wake delivers, and when its receipt may say live.
 //!
-//! Split out of `client_verbs.rs` : that file is over the 5,000-line
+//! Split out of `client_commands.rs` : that file is over the 5,000-line
 //! budget and shrink-only, and the wake-delivery + respawn-confirm question
 //! outgrew living beside the argv parsers. Callers keep thin call sites in
-//! `client_verbs.rs`; the delivery and confirmation logic lives here.
+//! `client_commands.rs`; the delivery and confirmation logic lives here.
 
 use crate::claude_ask::{read_state_json, ClaudeHome};
-use crate::client_verbs::{append_agents_event, trace_events_path};
+use crate::client_commands::{append_agents_event, trace_events_path};
 use crate::daemon::PaneProbe;
 use crate::paths::AgentsHome;
 use crate::state;
@@ -453,7 +453,7 @@ fn finish_on_the_thread_lane(
 
 /// Run a respawn plan as a child and confirm it actually revived the row.
 ///
-/// `claude respawn` exits as soon as the job is relaunched, so this verb must
+/// `claude respawn` exits as soon as the job is relaunched, so this command must
 /// NOT exec it (the exec convention the other arms use): the operator's shell
 /// would come back with nothing to show. And exit 0 is not proof - the
 /// receipt-can-lie shape `fno agents rm` already shipped once. The
@@ -477,14 +477,14 @@ fn copy_short_from_notice(text: &str) -> Option<String> {
 pub(crate) fn run_and_confirm_respawn(
     plan: &crate::reentry::ReentryPlan,
     name: &str,
-    verb: &str,
+    command: &str,
     event_kind: &str,
     home: &AgentsHome,
 ) -> i32 {
     run_and_confirm_respawn_with_truth(
         plan,
         name,
-        verb,
+        command,
         event_kind,
         home,
         ClaudeHome::from_env(),
@@ -596,7 +596,7 @@ where
 pub(crate) fn run_and_confirm_respawn_with_truth<F, S>(
     plan: &crate::reentry::ReentryPlan,
     name: &str,
-    verb: &str,
+    command_name: &str,
     event_kind: &str,
     home: &AgentsHome,
     claude_home: ClaudeHome,
@@ -645,13 +645,16 @@ where
         let out = match command.output() {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("fno agents {verb}: failed to run {}: {e}", plan.argv[0]);
+                eprintln!(
+                    "fno agents {command_name}: failed to run {}: {e}",
+                    plan.argv[0]
+                );
                 return 1;
             }
         };
         if !out.status.success() {
             eprintln!(
-                "fno agents {verb}: {} for {name} exited {}",
+                "fno agents {command_name}: {} for {name} exited {}",
                 plan.argv.join(" "),
                 out.status
                     .code()
@@ -683,7 +686,7 @@ where
                 let _ = stop.status();
             }
             eprintln!(
-                "fno agents {verb}: refused: session {} is already running, so the \
+                "fno agents {command_name}: refused: session {} is already running, so the \
                  relaunch started a COPY instead of continuing it and the copy was \
                  stopped. Reach the live original with `fno agents attach {name}`.",
                 plan.session_id
@@ -694,13 +697,16 @@ where
         let status = match command.status() {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("fno agents {verb}: failed to run {}: {e}", plan.argv[0]);
+                eprintln!(
+                    "fno agents {command_name}: failed to run {}: {e}",
+                    plan.argv[0]
+                );
                 return 1;
             }
         };
         if !status.success() {
             eprintln!(
-                "fno agents {verb}: {} for {name} exited {}",
+                "fno agents {command_name}: {} for {name} exited {}",
                 plan.argv.join(" "),
                 status
                     .code()
@@ -725,7 +731,7 @@ where
     };
     if !confirmed {
         eprintln!(
-            "fno agents {verb}: respawn for {name} reported success but {} did not \
+            "fno agents {command_name}: respawn for {name} reported success but {} did not \
              advance; the row is NOT confirmed back in agent view. Check \
              `claude agents` before retrying.",
             jobs_dir.join("state.json").display()
@@ -780,7 +786,7 @@ where
     }
     if !live {
         eprintln!(
-            "fno agents {verb}: respawned {name}, but truth reads \
+            "fno agents {command_name}: respawned {name}, but truth reads \
              {last_state}; not confirmed live."
         );
         return 16;
@@ -807,14 +813,14 @@ where
         Ok(true) => {}
         Ok(false) => {
             eprintln!(
-                "fno agents {verb}: {name} is live, but no registry row carries \
+                "fno agents {command_name}: {name} is live, but no registry row carries \
                  session {}; the row was removed while the relaunch ran.",
                 plan.session_id
             );
             return 16;
         }
         Err(e) => {
-            eprintln!("fno agents {verb}: registry flip failed: {e}");
+            eprintln!("fno agents {command_name}: registry flip failed: {e}");
             return 16;
         }
     }
@@ -1092,7 +1098,7 @@ pub(crate) fn parked_claude_route(
                 home,
                 name,
                 row_name,
-                crate::client_verbs::resume_session_id(entry, harness),
+                crate::client_commands::resume_session_id(entry, harness),
                 short,
                 uuid,
                 cwd,
@@ -1238,7 +1244,7 @@ where
         .get("claude_session_uuid")
         .and_then(Value::as_str)
         .filter(|value| is_uuid_shaped(value))
-        .unwrap_or_else(|| crate::client_verbs::resume_session_id(entry, "claude"));
+        .unwrap_or_else(|| crate::client_commands::resume_session_id(entry, "claude"));
     if !is_uuid_shaped(session_uuid) {
         eprintln!("fno agents resume: no valid claude session id for {name} ({short_id})");
         return 16;
@@ -1515,7 +1521,7 @@ fn relaunch_name(claude_home: &ClaudeHome, row_name: &str, short_id: &str, uuid:
 
 /// The exited-row relaunch: a full, warning-free roster that lacks
 /// the row is affirmative death no process answered, and the recovery is one
-/// command, claude's own `--bg --resume` (the spawn verb's resume axis is
+/// command, claude's own `--bg --resume` (the spawn command's resume axis is
 /// retired). Run it as a child in the session's cwd, which keys the
 /// transcript, and let its exit answer; the resumed session adopts its own
 /// fleet row at SessionStart. Refuse only when no transcript exists to seed

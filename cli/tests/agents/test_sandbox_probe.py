@@ -1,4 +1,4 @@
-"""The codex sandbox probe bridge: the verdict is the Rust verb's answer, an
+"""The codex sandbox probe bridge: the verdict is the Rust command's answer, an
 unavailable owner reads unknown, and a guessed reachable is impossible."""
 from __future__ import annotations
 
@@ -10,24 +10,24 @@ import pytest
 from fno.agents.sandbox_probe import probe_codex_sandbox
 
 
-def _stub_verb(monkeypatch, answer=None, raises=None):
-    """Pin the Rust verb seam; record each request payload."""
+def _stub_command(monkeypatch, answer=None, raises=None):
+    """Pin the Rust command seam; record each request payload."""
     calls: list[dict] = []
 
-    def call(verb, payload, _err):
-        calls.append({"verb": verb, **payload})
+    def call(command, payload, _err):
+        calls.append({"verb": command, **payload})
         if raises is not None:
             raise raises
         return answer if answer is not None else {}
 
     import fno.rust_binary as rust
 
-    monkeypatch.setattr(rust, "verb_call", call)
+    monkeypatch.setattr(rust, "command_call", call)
     return calls
 
 
 def test_bridge_maps_the_envelopes_verdict_blocked_and_note(tmp_path, monkeypatch):
-    calls = _stub_verb(
+    calls = _stub_command(
         monkeypatch,
         answer={"verdict": "blocked", "note": "no network grant",
                 "blocked": [["gh", "error connecting"], ["git", "cannot lock"]]},
@@ -40,15 +40,15 @@ def test_bridge_maps_the_envelopes_verdict_blocked_and_note(tmp_path, monkeypatc
 
 
 def test_an_absent_verdict_reads_unknown_never_reachable(tmp_path, monkeypatch):
-    _stub_verb(monkeypatch, answer={"note": "half an answer"})
+    _stub_command(monkeypatch, answer={"note": "half an answer"})
     probe = probe_codex_sandbox(tmp_path)
     assert probe.verdict == "unknown"
 
 
 def test_an_unavailable_owner_is_unknown_with_the_reason(tmp_path, monkeypatch):
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
-    _stub_verb(monkeypatch, raises=VerbUnavailable("no binary"))
+    _stub_command(monkeypatch, raises=CommandUnavailable("no binary"))
     probe = probe_codex_sandbox(tmp_path)
     assert probe.verdict == "unknown"
     assert "no binary" in probe.note

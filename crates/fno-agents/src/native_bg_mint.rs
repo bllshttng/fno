@@ -81,17 +81,51 @@ pub(crate) fn mint_missing_native_bg(
         // Two-key dedup, the same shape liveness_sweep's find() runs: a row
         // keyed only by its short id still holds this session.
         let held_by_short = entries.iter().any(|e| e.short_id == session);
-        // Only a session that joined fno is adopted; the listing then only
-        // rescues a joined row that went missing.
-        if !crate::join_marker::is_joined(home.root(), "claude", session)
-            || held_by_short
+        if held_by_short
             || crate::session_report::find_row(&entries, "claude", session, None).is_some()
         {
             continue;
         }
+        // Only a session that joined fno, or one a launch record names, is
+        // adopted; the listing then only rescues a row that went missing.
+        let record = crate::launch_record::claimed_edge(home.root(), session);
+        if record.is_none() && !crate::join_marker::is_joined(home.root(), "claude", session) {
+            continue;
+        }
         let transcript = find_transcript_for(row, session);
         let (node, model) = transcript_facts(transcript.as_deref());
-        prepared.push(prepare_row(row, session, transcript, node, model));
+        prepared.push(prepare_row(
+            row,
+            session,
+            transcript,
+            node,
+            model,
+            record.as_ref(),
+        ));
+    }
+
+    // A row an earlier beat birthed with no parent: the launch record its
+    // child claimed still names the spawner.
+    let mut parented: Vec<(String, crate::launch_record::Record)> = Vec::new();
+    for e in entries.iter().filter(|e| {
+        e.harness_name() == "claude"
+            && e.substrate.as_deref() == Some(SUBSTRATE)
+            && e.origin.as_deref() == Some("adopted")
+            && e.spawned_by_session
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+    }) {
+        if parented.len() >= BUDGET_PER_BEAT {
+            deferred = true;
+            break;
+        }
+        let Some(session) = e.harness_session_id.as_deref() else {
+            continue;
+        };
+        if let Some(record) = crate::launch_record::claimed_edge(home.root(), session) {
+            parented.push((session.to_string(), record));
+        }
     }
 
     let mut backfills: Vec<(String, String)> = Vec::new();
@@ -124,6 +158,7 @@ pub(crate) fn mint_missing_native_bg(
 
     let mut born: Vec<Value> = Vec::new();
     let mut filled: Vec<Value> = Vec::new();
+    let mut parent_filled: Vec<Value> = Vec::new();
     let write = crate::state::update_registry(&home.registry_json(), |r| {
         for cand in prepared {
             let session = cand
@@ -139,8 +174,16 @@ pub(crate) fn mint_missing_native_bg(
             }
             let mut entry = cand;
             entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
+            let launch = match entry.origin.as_deref() {
+                Some("spawn") => "native",
+                _ => "adopted",
+            };
             born.push(json!({
                 "name": entry.name.clone(),
+                "launch": launch,
+                "spawned_by_session": entry.spawned_by_session.clone(),
+                "spawned_by_harness": entry.spawned_by_harness.clone(),
+                "spawned_by_cwd": entry.spawned_by_cwd.clone(),
                 "harness_session_id": entry.harness_session_id.clone(),
                 "cwd": entry.cwd.clone(),
                 "node": entry.node.clone(),
@@ -163,6 +206,30 @@ pub(crate) fn mint_missing_native_bg(
                 filled.push(json!({"name": e.name.clone(), "node": node}));
             }
         }
+        for (session, record) in parented {
+            let Some(e) = r.entries.iter_mut().find(|e| {
+                e.harness_session_id.as_deref() == Some(session.as_str())
+                    && e.spawned_by_session
+                        .as_deref()
+                        .unwrap_or_default()
+                        .is_empty()
+            }) else {
+                continue;
+            };
+            let lineage = crate::native_adopt::launcher_lineage(&record);
+            e.origin = Some("spawn".into());
+            e.spawned_by_session = lineage.session;
+            e.spawned_by_harness = lineage.harness;
+            e.spawned_by_cwd = lineage.cwd;
+            e.lineage_reason = None;
+            if e.node.is_none() {
+                e.node = record.launch.node.clone();
+            }
+            parent_filled.push(json!({
+                "name": e.name.clone(),
+                "spawned_by_session": e.spawned_by_session.clone(),
+            }));
+        }
     });
     if let Err(e) = write {
         // A failed birth write surfaces as an event, never a silent zero:
@@ -180,19 +247,30 @@ pub(crate) fn mint_missing_native_bg(
             "cwd": b["cwd"],
             "substrate": SUBSTRATE,
             "pid": b["pid"],
-            "launch": "adopted",
+            "launch": b["launch"],
         });
+        let lineage = match b["spawned_by_session"].as_str() {
+            Some(session) => Lineage::captured((
+                Some(session.to_string()),
+                b["spawned_by_harness"].as_str().map(str::to_string),
+                b["spawned_by_cwd"].as_str().map(str::to_string),
+            )),
+            None => Lineage::unproven(LINEAGE_REASON),
+        };
         let _ = emitter.emit(
             "agent_spawned",
             &crate::spawn_edge::birth_event(
                 b["name"].as_str().unwrap_or_default(),
-                &Lineage::unproven(LINEAGE_REASON),
+                &lineage,
                 extras,
             ),
         );
     }
     for f in &filled {
         let _ = emitter.emit("native_bg_node_backfilled", f);
+    }
+    for f in &parent_filled {
+        let _ = emitter.emit("native_bg_parent_backfilled", f);
     }
     if deferred {
         let _ = emitter.emit(
@@ -303,22 +381,29 @@ fn prepare_row(
     transcript: Option<PathBuf>,
     node: Option<String>,
     model: Option<String>,
+    record: Option<&crate::launch_record::Record>,
 ) -> RegistryEntry {
     let model_basis = model.as_ref().map(|_| "verified".to_string());
     let cwd = row.cwd.clone().unwrap_or_default();
+    // The session report that carries the claimed record can die after the
+    // claim, so the record is read here too: it names the spawner.
+    let (origin, lineage) = match record {
+        Some(r) => ("spawn", crate::native_adopt::launcher_lineage(r)),
+        None => ("adopted", Lineage::unproven(LINEAGE_REASON)),
+    };
     RegistryEntry {
-        name: row
-            .name
-            .as_deref()
-            .map(listing_name_slug)
+        name: record
+            .and_then(|r| r.launch.name.clone())
+            .or_else(|| row.name.as_deref().map(listing_name_slug))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| crate::claude_adopt::synthesized_entry_name(session, &row.short_id)),
-        origin: Some("adopted".into()),
+        origin: Some(origin.into()),
         status: AgentStatus::Live,
         short_id: row.short_id.clone(),
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
-        node,
+        node: record.and_then(|r| r.launch.node.clone()).or(node),
+        created_at: crate::daemon::now_rfc3339_like(),
         // The listing pid can be a pre-warmed spare in claude's bg daemon,
         // not this session; the row stays pidless and routes by short id.
         pid: None,
@@ -329,7 +414,7 @@ fn prepare_row(
         claude_session_uuid: row.session_id.clone().filter(|s| !s.is_empty()),
         model,
         model_basis,
-        ..RegistryEntry::new(Some(session.to_string()), Lineage::unproven(LINEAGE_REASON))
+        ..RegistryEntry::new(Some(session.to_string()), lineage)
     }
 }
 
@@ -405,10 +490,54 @@ mod tests {
                 Some("492ccda4-63ff-4736-a02a-8818f63c8b46")
             );
             assert_eq!(e.start_source.as_deref(), Some(START_SOURCE));
+            assert!(!e.created_at.is_empty(), "a birth dates itself");
             let prompt = "Fix the login bug: see /tmp/x.log, then run ALL the tests please now ok";
             let slug = listing_name_slug(prompt);
             assert_eq!(slug, "fix-the-login-bug-see-tmp-x.log-then-run-all-the");
             assert!(slug.len() <= 48);
+        });
+    }
+
+    fn claim_record(home: &crate::paths::AgentsHome, sid: &str) {
+        let dir = home.root().join("launches").join("claimed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = json!({
+            "harness": "claude", "name": "t-xaaaa-glm", "node": "x-aaaa", "cwd": "/tmp/proj",
+            "launcher_session": "d7031e2c", "launcher_harness": "claude",
+            "launched_at_ms": 0, "child_session": sid,
+        });
+        std::fs::write(dir.join(format!("{sid}.json")), record.to_string()).unwrap();
+    }
+
+    /// A claimed launch record names the spawner at birth, even for a session
+    /// that never joined, and a row born before its record was read takes the
+    /// parent on the next beat.
+    #[test]
+    fn a_claimed_launch_record_parents_the_row() {
+        sandbox(|home| {
+            let sid = "bbbbbbbb-0000-0000-0000-000000000002";
+            let mut child = listing_row("prompt words", "working");
+            child.session_id = Some(sid.into());
+            child.short_id = "bbbbbbbb".into();
+            claim_record(home, sid);
+            let em = emitter(home);
+            let snapshot =
+                ClaudeAgentsSnapshot::known(vec![child, listing_row("tui-build", "working")]);
+            assert_eq!(mint_missing_native_bg(home, &snapshot, &em), 2);
+            claim_record(home, "492ccda4-63ff-4736-a02a-8818f63c8b46");
+            mint_missing_native_bg(home, &snapshot, &em);
+            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
+            for e in &registry.entries {
+                assert_eq!(e.origin.as_deref(), Some("spawn"), "{}", e.name);
+                assert_eq!(
+                    e.spawned_by_session.as_deref(),
+                    Some("d7031e2c"),
+                    "{}",
+                    e.name
+                );
+                assert_eq!(e.node.as_deref(), Some("x-aaaa"), "{}", e.name);
+            }
+            assert!(registry.entries.iter().any(|e| e.name == "t-xaaaa-glm"));
         });
     }
 

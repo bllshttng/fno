@@ -71,7 +71,7 @@ pub const EXIT_FLEET_STOP_UNAVAILABLE: i32 = 83;
 /// The lane declares nothing about how it stands toward the fno state root
 /// (epic rule R3). NOT "declares no carrier": an unsandboxed lane needs none.
 pub const EXIT_STATE_ROOT_UNGRANTED: i32 = 84;
-/// The spawn-gate transport could not get an answer at all (the gate verb is
+/// The spawn-gate transport could not get an answer at all (the gate command is
 /// missing, failed, or timed out): fail closed, never admit on an unreadable
 /// gate. Byte-parity with the Python table's EXIT_GATE_UNAVAILABLE. 86 went
 /// to the per-territory team cap, which landed first; the gate-unavailable
@@ -217,7 +217,7 @@ pub(crate) fn verdict_line(r: &Refusal) -> String {
 /// and before any capacity math. Mail stays ungated so the incident can be
 /// announced and explained; `fno agents incident clear` reopens admission.
 fn fleet_incident_gate() -> Result<(), Refusal> {
-    // A caller with no worker identity is the human's own typed verb: their
+    // A caller with no worker identity is the human's own typed command: their
     // call is the recovery path, so the stop holds agent fan-out only.
     if !crate::spawn_gate_admission::gate_agent_origin() {
         return Ok(());
@@ -809,7 +809,7 @@ fn territory_refusal(receipt: &str) -> Refusal {
 }
 
 /// The blueprint thread cap: the machine axis counts live rows whose
-/// names parse to verb `bp`; the territory axis counts the ones working the
+/// names parse to command `bp`; the territory axis counts the ones working the
 /// spawn's territory. Refuses, never queues, beside the machine cap - and
 /// `--force` does not excuse it, the same posture as the territory cap. The
 /// receipt names the live rows so a blocked lead sees what holds the slot.
@@ -963,7 +963,7 @@ fn territory_verdict_receipt(
     }
 }
 
-/// The `--node <id>` argument of a territory door verb, or `None`.
+/// The `--node <id>` argument of a territory door command, or `None`.
 fn parse_node_arg(args: &[String]) -> Option<String> {
     let mut node: Option<String> = None;
     let mut iter = args.iter();
@@ -1133,7 +1133,7 @@ impl Drop for GateGuard {
 
 impl GateGuard {
     /// The still-held keys, taken out before the guard drops, so a
-    /// cross-process transport (the spawn-gate verb) can hand them back to
+    /// cross-process transport (the spawn-gate command) can hand them back to
     /// the caller whose pid owns them. The guard is empty afterwards; it must
     /// NOT be released by the holder of the returned keys.
     pub fn take_keys(&mut self) -> (Option<(String, String)>, Option<(String, String)>) {
@@ -1155,9 +1155,9 @@ pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
 
 /// Auto-emit `gate_escape{reason:spawn-cap}` on an operator bypass of THIS gate
 /// (`FNO_SPAWN_GATE=0`) outside a test context (Locked Decision 2). Best-effort:
-/// shells the shared `fno doctor event gate-escape` verb (which owns the dedup key +
+/// shells the shared `fno doctor event gate-escape` command (which owns the dedup key +
 /// canonical-log resolution, one emit path) and ignores every failure so a
-/// spawn is never blocked by telemetry (AC1-FR). The verb, not this shell,
+/// spawn is never blocked by telemetry (AC1-FR). The command, not this shell,
 /// computes the `(reason, session, day)` dedup bucket, so a Rust-emitted and a
 /// Python-emitted spawn-cap in the same session/day still collapse to one.
 fn maybe_emit_spawn_cap_escape() {
@@ -1272,10 +1272,10 @@ fn state_root_grant_gate_decide(
 }
 
 /// Everything the gate needs to decide one spawn. The Python transport
-/// (`spawn_gate.py run_gate`) sends these as the `spawn-gate` verb's payload;
+/// (`spawn_gate.py run_gate`) sends these as the `spawn-gate` command's payload;
 /// the native arms construct it directly. `holder_pid` is the pid whose death
-/// frees the gate's claims - the PYTHON caller's pid across the verb, so the
-/// native claim verdict judges the real holder, never the verb process.
+/// frees the gate's claims - the PYTHON caller's pid across the command, so the
+/// native claim verdict judges the real holder, never the command process.
 #[derive(Debug, Clone, Default)]
 pub struct GateInput {
     pub name: String,
@@ -1287,7 +1287,7 @@ pub struct GateInput {
     pub caller_session: Option<String>,
     pub succession_scope: Option<String>,
     pub holder_pid: Option<u32>,
-    /// The spawn's seed message. Its first verb names the session phase.
+    /// The spawn's seed message. Its first command names the session phase.
     pub seed: Option<String>,
     /// An explicit `--session-phase` label.
     pub session_phase: Option<String>,
@@ -1463,7 +1463,7 @@ fn decide_gate(
         check_node_occupancy(node, input.caller_session.as_deref(), flags.force)?;
     }
 
-    // A caller with no worker identity is the human's own typed verb: no
+    // A caller with no worker identity is the human's own typed command: no
     // capacity gate below may refuse or hold it. The slot acquire stays
     // best-effort so the spawned worker still joins the roster accounting.
     if !crate::spawn_gate_admission::gate_agent_origin() {
@@ -2455,7 +2455,7 @@ pub(crate) struct CpuAdmission {
 }
 
 /// The one spelling of the instrument refusal: the condition, the probe's
-/// own words for what it measured, and a verb the reader can run.
+/// own words for what it measured, and a command the reader can run.
 fn instrument_refusal_sentence(why: &str) -> String {
     format!(
         "spawn-gate: the CPU instrument is unreadable ({why}); \
@@ -2588,15 +2588,26 @@ pub fn machine_reading_notes() -> (Option<String>, Option<String>) {
     (footer, keeper)
 }
 
-/// The footprint payload's admission split, `(fleet_cores, machine_cores)`,
-/// as the one fleet-share answer for the machine arm and the spawn CPU
-/// axis alike. `None` when the probe or the parse fails, which classifies
-/// as fleet load.
-pub(crate) fn fleet_split() -> Option<(f64, f64)> {
-    let raw = footprint_cause_raw().ok()?;
-    let payload: FootprintCausePayload = serde_json::from_str(&raw).ok()?;
-    let admission = payload.admission?;
-    Some((admission.fleet_cores, admission.machine_cores))
+/// The decider's admission inside one raw footprint payload, `None` when
+/// the payload does not parse or carries none.
+pub(crate) fn admission_of(raw: &str) -> Option<AdmissionPayload> {
+    serde_json::from_str::<FootprintCausePayload>(raw)
+        .ok()?
+        .admission
+}
+
+/// The footprint admission from a live probe: the one fleet-share answer
+/// the machine arm's split and the capacity loop read in one tick. `None`
+/// when the probe or the parse fails, which classifies as fleet load.
+pub(crate) fn fleet_admission() -> Option<AdmissionPayload> {
+    admission_of(&footprint_cause_raw().ok()?)
+}
+
+/// The fleet's CPU share the spawn gate decides on, as one number: the
+/// upper bound, so an attribution gap reads as load, never as headroom.
+/// `None` on an unreadable instrument (axis `cpu_instrument`).
+pub(crate) fn fleet_share(admission: &AdmissionPayload) -> Option<f64> {
+    (admission.axis == "fleet_cpu_share").then_some(admission.share_high)
 }
 
 pub(crate) fn footprint_cause_raw() -> Result<String, String> {
@@ -3293,7 +3304,7 @@ MemAvailable:    8000000 kB\n";
         std::fs::write(&path, serde_json::to_string(&record).unwrap()).unwrap();
 
         // The stop holds an agent-origin caller only; the human's own typed
-        // verb is the recovery path and passes.
+        // command is the recovery path and passes.
         std::env::set_var("FNO_AGENT_SELF", "incident-test-worker");
         assert_eq!(
             fleet_incident_gate().err().map(|r| r.exit_code),
@@ -3308,7 +3319,7 @@ MemAvailable:    8000000 kB\n";
         // The machine admission door one boundary later: armed refuses a
         // worker identity with the same exit code and a machine-runaway
         // reason; expired admits; no identity admits under the same armed
-        // brake (the human's own typed verb is never held here).
+        // brake (the human's own typed command is never held here).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("brake.json");
         let now = std::time::SystemTime::now()

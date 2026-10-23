@@ -10,7 +10,7 @@
 //! The speed win is in-process reads. One graph read (the store's
 //! `backlog::api::rows`, the same defaulted view the keeper serves) feeds
 //! claimed-node lookups, PR binding, team scope, AND the unplanned
-//! queue's ready selection (the same `backlog_ready::select` the verb
+//! queue's ready selection (the same `backlog_ready::select` the command
 //! serves). The claims merge is a directory scan. `needs` folds in-process
 //! over the same sources `fno
 //! agents needs` reads. Two source reads stay subprocesses: `gh pr list` (a
@@ -385,7 +385,7 @@ pub(crate) fn as_int(v: &Value) -> i64 {
 
 /// The `fno-agents board` entry point: parse flags, print the payload, exit
 /// with the board's own exit_code. Kept beside the parity sets' reach (an
-/// `==` arm in client.rs), so no advertised verb is added.
+/// `==` arm in client.rs), so no advertised command is added.
 pub fn run_board(args: &[String]) -> i32 {
     let mut opts = BoardOpts::default();
     let mut it = args.iter();
@@ -507,7 +507,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                         .chain([
                             "size",
                             "model",
-                            "dispatch_verb",
+                            "dispatch_command",
                             "dispatch_brief",
                             "mission_id",
                             "mission_wave",
@@ -1240,7 +1240,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         }),
     );
 
-    // Lane: a file read; there is no verb behind it.
+    // Lane: a file read; there is no command behind it.
     let lane_path = operator_lane_path(&cwd);
     let lane = match parse_lane(&lane_path) {
         Err(e) => SourceRead::err(e),
@@ -1281,7 +1281,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     rows: Vec::new(),
                     actionable: true,
                     note: String::new(),
-                    verb: "",
+                    command: "",
                 })],
                 "warnings": warnings,
                 "exit_code": 1,
@@ -1306,7 +1306,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     rows: Vec::new(),
                     actionable: true,
                     note: String::new(),
-                    verb: "",
+                    command: "",
                 })],
                 "warnings": warnings,
                 "exit_code": 1,
@@ -1335,7 +1335,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                         rows: Vec::new(),
                         actionable: true,
                         note: String::new(),
-                        verb: "",
+                        command: "",
                     })],
                     "warnings": warnings,
                     "exit_code": 1,
@@ -1644,7 +1644,7 @@ pub(crate) fn enrich_worked_rows(
     fresh
 }
 
-/// The needs verb's default sources (needs.default_sources): project + global
+/// The needs command's default sources (needs.default_sources): project + global
 /// events + questions, and the ledger.
 pub(crate) fn default_needs_sources(home: &crate::paths::AgentsHome) -> (Vec<PathBuf>, PathBuf) {
     let fno_dir = home
@@ -1867,7 +1867,7 @@ mod tests {
     #[test]
     fn unplanned_note_names_the_batch_and_undispatched_names_the_target() {
         // a rule without a number is advice nobody applies; the
-        // queue a lead dispatches from names the verb, never the blueprint.
+        // queue a lead dispatches from names the command, never the blueprint.
         let inputs = inputs_with(
             json!([{"id": "x-aaaa", "priority": "p0"}]),
             json!([]),
@@ -1967,7 +1967,7 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["x-open"]);
         // AC8-HP: the row names the worker behind the marker, and the source
-        // hands the reader the peek verb for THAT worker, not the raw holder
+        // hands the reader the peek command for THAT worker, not the raw holder
         // string no resolver accepts.
         let row = &stalled["rows"].as_array().unwrap()[0];
         assert_eq!(row["worker"], "h");

@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.mail.cli.cmd_withdraw (the deleted Python body, goldens captured from the live leaf)
 //!
-//! Characterization harness for the `mail withdraw` leaf port. The goldens were captured from the Python leaf while it still ran its own body: the success receipt, the ownership / cursor-claim / hosted / typed refusals, the idempotent re-withdraw, the unknown id, and the explicit `--from-name` lane. Captured through the parity env block with the venv python invoked directly while the oracle existed; in normal mode the frozen bytes are the contract and the Python leg is gone (the verb is a forward to this leaf).
+//! Characterization harness for the `mail withdraw` leaf port. The goldens were captured from the Python leaf while it still ran its own body: the success receipt, the ownership / cursor-claim / hosted / typed refusals, the idempotent re-withdraw, the unknown id, and the explicit `--from-name` lane. Captured through the parity env block with the venv python invoked directly while the oracle existed; in normal mode the frozen bytes are the contract and the Python leg is gone (the command is a forward to this leaf).
 //!
 //! Normalization mirrors the capture pipeline exactly: the five path-migration drops, the events.emit multi-line skip, rstrip, then the ROOT scrub. No rename translate, no JSON re-dump, no time scrubs - the oracle is static prose, so anything beyond the capture's pipeline would mask a real divergence instead of freezing it.
 //!

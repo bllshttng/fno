@@ -1,7 +1,7 @@
 """Tests for the shared identifier resolver (x-1b1e US2).
 
 `resolve_agent(token)` accepts one of three address forms — name/slug, full
-harness_session_id, or an 8-hex short — for every session-connecting verb.
+harness_session_id, or an 8-hex short — for every session-connecting command.
 Rust parity for the same matrix lives in crates/fno-agents (US4).
 """
 from __future__ import annotations

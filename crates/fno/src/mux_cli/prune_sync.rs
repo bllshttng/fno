@@ -1,5 +1,5 @@
 //! The prune aftermath (v71): after an applied store pass, tell every live
-//! server to re-read `squads.json` (`ControlVerb::SquadReload`), then report
+//! server to re-read `squads.json` (`ControlCommand::SquadReload`), then report
 //! the run. Extracted from mux_cli.rs under the file-budget gate - the code
 //! the change touched moves with it.
 
@@ -32,7 +32,8 @@ pub(super) fn reload_live_sessions(ran: bool, answered: &[String]) -> ReloadOutc
         let verdict = proto::socket_path(name)
             .map_err(|e| e.to_string())
             .and_then(|sock| {
-                control_roundtrip(&sock, name, ControlVerb::SquadReload).map_err(|e| e.to_string())
+                control_roundtrip(&sock, name, ControlCommand::SquadReload)
+                    .map_err(|e| e.to_string())
             });
         match verdict {
             Ok(ServerMsg::SquadReloaded { members, .. }) => {
@@ -65,7 +66,7 @@ pub(super) fn prune_identity(sq: &crate::squad_store::PrunedSquad) -> String {
 /// close - a count alone stopped being a decision somewhere around tab six.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn print_prune_summary(
-    verb: &str,
+    command: &str,
     n: usize,
     kept_unknown: usize,
     skipped_named: usize,
@@ -80,12 +81,12 @@ pub(super) fn print_prune_summary(
     unreachable: &[String],
     reload: &ReloadOutcome,
 ) {
-    let mut parts = vec![format!("{verb} {n} workspace(s)")];
-    // The acted-on count carries its mood in the verb: an apply run says
+    let mut parts = vec![format!("{command} {n} workspace(s)")];
+    // The acted-on count carries its mood in the command: an apply run says
     // `closed`, a dry-run says `would close`. Never both numbers at once - the
     // apply reading `tabs 1 (would close 0, ...)` put the closed count beside
     // a zero and read as a no-op.
-    let (tabs_word, tabs_n) = if verb == "pruned" {
+    let (tabs_word, tabs_n) = if command == "pruned" {
         ("closed", tabs.closed)
     } else {
         ("would close", tabs.would_close)
@@ -105,12 +106,12 @@ pub(super) fn print_prune_summary(
         },
     ));
     for label in &tabs.closed_named {
-        let name_verb = if verb == "pruned" {
+        let name_command = if command == "pruned" {
             "closed"
         } else {
             "would close"
         };
-        println!("{name_verb}: {label}");
+        println!("{name_command}: {label}");
     }
     if tabs.used_shells > 0 && tabs.would_close_used == 0 && tabs.closed_used == 0 {
         // The opt-in population the pass saw but (flag off) did not act on.
@@ -123,12 +124,14 @@ pub(super) fn print_prune_summary(
     // read as "nothing matched", the same rule as every other part.
     let orphan_total = tabs.closed_orphaned + tabs.would_close_orphaned;
     if orphan_total > 0 {
-        let overb = if verb == "pruned" {
+        let orphan_command = if command == "pruned" {
             "closed"
         } else {
             "would close"
         };
-        parts.push(format!("orphaned worker tabs {overb} {orphan_total}"));
+        parts.push(format!(
+            "orphaned worker tabs {orphan_command} {orphan_total}"
+        ));
     }
     if !unreachable.is_empty() {
         parts.push(format!(
@@ -148,13 +151,13 @@ pub(super) fn print_prune_summary(
         ));
     }
     if members_reaped > 0 {
-        let mverb = if verb == "pruned" {
+        let member_command = if command == "pruned" {
             "reaped"
         } else {
             "would reap"
         };
         parts.push(format!(
-            "{mverb} {members_reaped} dead member(s) from surviving workspaces"
+            "{member_command} {members_reaped} dead member(s) from surviving workspaces"
         ));
     }
     if members_kept_live > 0 {

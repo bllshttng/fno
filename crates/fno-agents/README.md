@@ -2,7 +2,7 @@
 
 Rust PTY supervisor substrate for footnote multi-CLI agents (Phase 6, backlog ``).
 
-This crate is the substrate half of the Phase 6 design (`~/your-vault/internal/fno/design/2026-05-22-fno-pty-supervisor-and-drive.md`). It gives codex / gemini (and future OpenCode) agents the persistent-session, attach/detach, drive UX that Claude has. Python `fno agents <verb>` shells into the daemon/client binary; the daemon talks to per-agent workers over Unix sockets.
+This crate is the substrate half of the Phase 6 design (`~/your-vault/internal/fno/design/2026-05-22-fno-pty-supervisor-and-drive.md`). It gives codex / gemini (and future OpenCode) agents the persistent-session, attach/detach, drive UX that Claude has. Python `fno agents <command>` shells into the daemon/client binary; the daemon talks to per-agent workers over Unix sockets.
 
 ## Wave status
 
@@ -47,23 +47,23 @@ The supervisor layer on top of the substrate. Three binaries compile from this c
 | `paths.rs` | `~/.fno/agents/` layout + 0700/0600 perm helpers + worker-socket discovery scan. |
 | `daemon.rs` | Six-state lifecycle (event on entry); socket bind with 0700/0600 fstat-verify + lazy-start race resolution + flock self-test; 7-step startup recovery (`drive_crashed` before clear, orphan-dir archive, dead-PID reap); `agent.spawn/ask/list/status/stop/rm/reconcile` + `channel.register/unregister/push`; idle lazy-exit; zombie reaping; UUIDv4 from urandom. |
 | `worker.rs` + `bin/worker.rs` | Per-agent PTY shim (**Outcome B**): owns the PTY master, runs in its own process group, ignores SIGHUP, outlives the daemon. Serves `worker.write/snapshot/status/resize/shutdown`; emits an `agent_exited` event and flips the registry to `exited` on exit. |
-| `client.rs` + `bin/client.rs` | Lazy-start the daemon, connect, forward a verb; map error code -> exit code. |
+| `client.rs` + `bin/client.rs` | Lazy-start the daemon, connect, forward a command; map error code -> exit code. |
 
 Real-subprocess tests (`tests/daemon_e2e.rs`) prove the load-bearing claims: an agent survives a daemon `SIGKILL` and a restarted daemon reconnects via socket scan; agent exit is observable. `tests/flock_interop.rs` proves cross-language `flock(2)` coordination with Python `fcntl.flock` (the `cross_language_flock_test` kill criterion).
 
 ### Not yet present (arrive with their consumers)
 
 - **Drive WebSocket surface** (Wave 4) — `agent.drive` upgrade, sentinel detach, gate-hardening.
-- **Lifecycle-verb polish** (Wave 5) — full tri-state reconcile probing, per-agent ask serialization.
+- **Lifecycle-command polish** (Wave 5) — full tri-state reconcile probing, per-agent ask serialization.
 
 ### Distribution (Wave 6)
 
 The crate is publishable (`publish = true`) and ships three ways — platform wheels with
 the binary bundled, standalone GitHub Release tarballs, and `cargo install fno-agents`.
 Once installed, this binary is the **default** `fno agents` runtime for the daemon-native
-verbs (`spawn`, `status`, `drive`, `*-channel`); the verbs that share an established Python
+commands (`spawn`, `status`, `drive`, `*-channel`); the commands that share an established Python
 contract stay on Python until the client reaches parity (`FNO_AGENTS_RUNTIME=python` pins
-everything to Python; `=rust` forces the binary for every verb). Build matrix and the
+everything to Python; `=rust` forces the binary for every command). Build matrix and the
 gated live-publish runbook:
 [`docs/distribution.md`](../../docs/distribution.md). Nothing is published yet (machinery
 only); the publish workflows are gated behind manual dispatch + secrets.

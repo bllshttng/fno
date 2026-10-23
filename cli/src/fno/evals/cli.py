@@ -269,7 +269,7 @@ def macro_command(ctx: typer.Context) -> None:
     # A pure argv forwarder: the flags are the binary's (operator ruling on
     # - the Python flag surface never grows), so this arm declares no
     # typer.Options of its own. It only resolves the journal defaults the
-    # verb needs when the caller passed no --events.
+    # command needs when the caller passed no --events.
     args = list(ctx.args)
     binary = resolve_binary()
     if binary is None:

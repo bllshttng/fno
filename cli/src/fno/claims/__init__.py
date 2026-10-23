@@ -11,7 +11,7 @@ Concepts:
     - Stale recovery: reader sees an existing claim, classifies as
       free|live|stale|corrupted; stale recoveries archive + retry
 
-The six verbs are exposed at module level for direct Python import:
+The six commands are exposed at module level for direct Python import:
     acquire_claim(key, holder, ...) -> Claim
     release_claim(key, holder, ...) -> None
     refresh_claim(key, holder, ...) -> Claim

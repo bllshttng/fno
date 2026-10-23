@@ -17,7 +17,7 @@ pub const LOAD_PER_CORE_BAND: f64 = 10.0;
 pub const MACHINE_BRAKE_NAME: &str = "machine-brake.json";
 pub const MACHINE_BRAKE_HOLD_SECS: u64 = 1800;
 /// The sccache server's last seen pid and restart timestamps, one row per
-/// tick: a pid change is one restart. The footprint verb reads it.
+/// tick: a pid change is one restart. The footprint command reads it.
 pub const SCCACHE_WATCH_NAME: &str = "sccache-watch.json";
 const SCCACHE_RESTART_CAP: usize = 64;
 pub const RUNAWAY_LOAD_PER_CORE: f64 = 4.0;
@@ -610,7 +610,7 @@ pub fn observe_sccache_pid(pid: Option<u32>) {
     );
 }
 
-/// Restarts within the trailing hour: the footprint verb's sccache line.
+/// Restarts within the trailing hour: the footprint command's sccache line.
 pub fn sccache_restarts_1h() -> usize {
     #[cfg(test)]
     if std::env::var_os("FNO_SCCACHE_WATCH").is_none() {
@@ -860,7 +860,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         }
         // One long-lived sccache server per machine: a server that died under
         // load is revived within a tick, and the pid change feeds the restart
-        // counter the footprint verb reads. The sample's own table answers the
+        // counter the footprint command reads. The sample's own table answers the
         // probe, so the tick spends no extra process walk.
         let sccache_pid = crate::cargo_build_dirs::sccache_row_pid(&sample.procs);
         crate::cargo_build_dirs::ensure_sccache_server_unless(sccache_pid.is_some());
@@ -888,7 +888,8 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         // Whose load the box is in, from the one footprint answerer the
         // spawn CPU axis already reads: unreadable or fleet-majority keeps
         // today's path, a minority share is outside load.
-        let split = crate::spawn_gate::fleet_split();
+        let admission = crate::spawn_gate::fleet_admission();
+        let split = admission.as_ref().map(|a| (a.fleet_cores, a.machine_cores));
         let source = crate::machine_load::classify(split);
         let outcome = {
             let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1030,8 +1031,17 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         // The capacity loop reads the same sample the arm just took: one
         // machine, one reader, the AIMD state the gate and the gauges share.
         let now_epoch = chrono::Utc::now().timestamp();
-        if let Err(error) = crate::capacity::feed(&sample, &cwd, &home, now_epoch) {
+        let share = admission.as_ref().and_then(crate::spawn_gate::fleet_share);
+        if let Err(error) = crate::capacity::feed(&sample, share, &cwd, &home, now_epoch) {
             tracing::warn!(%error, "capacity state write failed");
+        }
+        // A stream or edit app reserves the machine; the running tests follow
+        // the record now, not at the next tick.
+        if let Some(line) = crate::reserve::auto_tick(&home, &cwd, &sample.procs, now_epoch) {
+            let _ = journal.append("reserve_auto", serde_json::json!({ "line": line }));
+            if let Err(error) = crate::test_hold::reconcile(&home) {
+                tracing::warn!(%error, "test hold reconcile failed");
+            }
         }
         crate::tick_ledger::emit_tick(
             &journal,

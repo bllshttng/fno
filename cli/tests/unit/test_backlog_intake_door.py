@@ -1,6 +1,6 @@
 """The native `fno backlog intake` door.
 
-The Python intake verb moved into the Rust dispatcher; these tests exercise
+The Python intake command moved into the Rust dispatcher; these tests exercise
 the door the same way an operator does: one binary invocation per case, the
 fixture root pinned (cwd, HOME, state dir) so no subprocess write escapes to
 the operator state (the state-canary lesson from the capture port).

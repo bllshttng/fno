@@ -23,7 +23,7 @@ These are cargo_build_dirs tests, not claims tests. They fail on this host becau
 
 Python: 446 declarations in 19 files. Largest: test_claim_reap.py 85, test_claims_cli.py 79, test_claims_core.py 77.
 
-Rust: 169 `#[test]`/`#[tokio::test]` declarations in 11 files. The largest: claims.rs 71, claim_verbs.rs 20, claims_gate_tests.rs 15, reclaim.rs 14, claim_queue.rs 11, claims_identity_tests.rs 10, claims_reservation_tests.rs 10, claims_long_holds.rs 7, claims_release_stopped.rs 4, claims_root.rs 4, claim_store.rs 3.
+Rust: 169 `#[test]`/`#[tokio::test]` declarations in 11 files. The largest: claims.rs 71, claim_commands.rs 20, claims_gate_tests.rs 15, reclaim.rs 14, claim_queue.rs 11, claims_identity_tests.rs 10, claims_reservation_tests.rs 10, claims_long_holds.rs 7, claims_release_stopped.rs 4, claims_root.rs 4, claim_store.rs 3.
 
 ### Baseline coverage (--cov=fno.claims over the 19-file owner suite)
 
@@ -55,7 +55,7 @@ By production owner, not file prefix:
 
 1. Root routing: `claims/io.py` (`claims_root_for`), `claims_root.rs` / `test_claims_root_routing.py` (parity guard `test_claims_root_routing.py` stays while both legs live).
 2. Lock core and store: `claims/core.py`, `types.py`, `incarnation.py`, `tasks.py` / `claims.rs`, `claim_store.rs`, `claim_queue.rs`.
-3. Verbs: `claims/cli.py` / `claim_verbs.rs`.
+3. Commands: `claims/cli.py` / `claim_commands.rs`.
 4. Reap and release: `test_claim_reap.py`, `test_claim_closure_release.py`, `test_claim_force_release.py`, `test_claim_rebind.py`, `test_claim_ttl.py` / `reclaim.rs`, `claims_release_stopped.rs`.
 5. Lanes and mutex: `claims/lanes.py` / `test_lane_slots.py`, `test_mutex_steal.py`, `test_claims_concurrency.py`.
 6. Identity and opt-out: `claims/self_identity.py`, `claims/optout_lease.py`, `claims/hostid.py`, `claims/session_pid.py` / `claims_identity_tests.rs`.
@@ -96,18 +96,18 @@ Deletions in this lane:
 |---|---|---|
 | `claims.rs::classify_is_the_state_view_of_classify_with_basis` (1) | D | Production `classify` is the one-line delegate `classify_with_basis(...).0`; the test restates that delegation over six fixtures and can only fail if someone edits the delegation line. No contract lost: `classify_basis_names_each_cause` and `liveness_matches_python_classify_including_hybrid_arm` exercise the real classifier. |
 
-### Lane 3: verbs
+### Lane 3: commands
 
 | Test | Mark | Evidence |
 |---|---|---|
-| `test_claims_cli.py` (72 of 79; marks below) | R | Exit-code contract per verb (1 held, 2 validation, 3 missing, 4 strict mismatch), contention-exhaustion not a traceback, the reconcile mutex, no-op release receipt honesty, do-row stamp/rollback windows (open row on kill, closed row protected, same-session rollback spared), roster crosscheck receipts (positive markers, degraded vs unconsulted, JSON parseability), global-root node-key resolution, import-stub capture regression. |
-| `claim_verbs.rs::tests` (20) | R | Sweep payload shape/filter/corruption exclusion, handover witness subject switch (never answers from the minter; thread-worker by-name/alias join), primed batch wire (one interpreter, every subject, failed batch never hangs), served-liveness tier, handover/gate payload session splits with control twins. |
+| `test_claims_cli.py` (72 of 79; marks below) | R | Exit-code contract per command (1 held, 2 validation, 3 missing, 4 strict mismatch), contention-exhaustion not a traceback, the reconcile mutex, no-op release receipt honesty, do-row stamp/rollback windows (open row on kill, closed row protected, same-session rollback spared), roster crosscheck receipts (positive markers, degraded vs unconsulted, JSON parseability), global-root node-key resolution, import-stub capture regression. |
+| `claim_commands.rs::tests` (20) | R | Sweep payload shape/filter/corruption exclusion, handover witness subject switch (never answers from the minter; thread-worker by-name/alias join), primed batch wire (one interpreter, every subject, failed batch never hangs), served-liveness tier, handover/gate payload session splits with control twins. |
 
 Deletions and consolidations in this lane:
 
 | Test | Mark | Evidence |
 |---|---|---|
-| `test_claims_cli.py::test_help_lists_all_verbs` | D | Restates the declared CLI surface (junk pattern: capability test restating flags). Each verb is exercised by its own behavioral tests, which fail if the verb disappears. |
+| `test_claims_cli.py::test_help_lists_all_commands` | D | Restates the declared CLI surface (junk pattern: capability test restating flags). Each command is exercised by its own behavioral tests, which fail if the command disappears. |
 | `test_claims_cli.py::test_ttl_parser_seconds_no_unit/seconds/minutes/hours/empty/invalid` (6) | C | Six standalone cases over one pure function become one table-driven case; the conversion values are pinned per row. Keeper: the single parametrized `test_ttl_parser_table` this campaign writes in place. The CLI boundary stays covered by `test_acquire_invalid_ttl_format` and `test_acquire_with_ttl`. |
 
 ### Lane 4: reap and release
@@ -120,7 +120,7 @@ Deletions and consolidations in this lane:
 | `test_claim_rebind.py` (16) | R | Full compare_and_rebind matrix: rebound/idempotent/refused states, mutex wait-not-refuse, handover security gate (a live published holder cannot be taken; spawn-handover can), metadata provenance rules. |
 | `reclaim.rs::tests` (14) | R | Leak predicates per lane, apply receipts with byte counts, codex quarantine keep-rules (unreadable marker, converge lock, rollback failure, live symlink, near-miss names, foreign marketplace), daemon path excludes cwd roots. |
 | `claims_release_stopped.rs::tests` (4) | R | Stopped-session release matrix: own handover released, live-pid kept with named reading, other-session and other-worker handovers untouched, zero-scan receipts. |
-| `claims_long_holds.rs::tests` (7) | R | Row shape/threshold/order, witness healing with pid-disagreement naming, probe rendering arms, off-host never probes a foreign pid, verb CLI contract. |
+| `claims_long_holds.rs::tests` (7) | R | Row shape/threshold/order, witness healing with pid-disagreement naming, probe rendering arms, off-host never probes a foreign pid, command CLI contract. |
 
 Deletion in this lane:
 

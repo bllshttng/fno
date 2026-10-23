@@ -23,7 +23,7 @@
 # (Python-only; the Rust binaries then need `cargo install --locked --path <repo>/crates/fno`, whose native update installs the rest).
 #
 # Every path logs which one it took (AC7-UI), so the user knows whether the
-# daemon-backed verbs will work without a second step.
+# daemon-backed commands will work without a second step.
 set -euo pipefail
 
 # The terminal line every consumer reads (the session-start hook's notice, the
@@ -310,7 +310,7 @@ install_source_via_uv() {
   # switched checkout (hurdle B11); fno doctor update uses the same flags.
   if uv_tool_install_retry --reinstall-package fno --refresh-package fno "$CLI_DIR"; then
     log "installed Python-only fno from source. INCOMPLETE install: no 'fno' front door and no Rust binaries -"
-    log "run 'cargo install --locked --path <repo>/crates/fno' for the daemon-backed verbs, or install a published PyPI wheel for the advertised 'fno' command."
+    log "run 'cargo install --locked --path <repo>/crates/fno' for the daemon-backed commands, or install a published PyPI wheel for the advertised 'fno' command."
     log "restart your shell (or source your env) to pick up PATH."
     next_steps
     # Incomplete installs exit 3, not 0: the terminal installer-exit line

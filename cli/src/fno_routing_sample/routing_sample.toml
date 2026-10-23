@@ -14,7 +14,7 @@
 # 18x cheaper on API dollars. And cheap is not a proxy for weak: the cheaper
 # row below also carries more context, more throughput, and less latency.
 #
-# THE SLOT BLOCK. fno owns the SLOTS (the verbs it dispatches); you own the
+# THE SLOT BLOCK. fno owns the SLOTS (the commands it dispatches); you own the
 # FILL. lanes is RANK: a spawn walks the list in order and takes the first
 # lane whose capacity, vendor cap and posture pass. Uncomment this block and
 # the three rows it names to arm the router with a working lane order.
@@ -50,11 +50,11 @@ on_exhausted = "queue"
 # on_low = "skip"        # allow | prefer_healthy (default) | skip
 # on_unknown = "skip"    # allow (default) | skip
 #
-# ROUTING PER VERB. Every verb that dispatches holds its own slot: think,
-# blueprint, target, review, role. One [agents.profiles.<verb>] block each,
-# same fields; a verb with no block routes by the grid (difficulty x priority
-# over the rows below), a verb WITH a block walks only its lanes. Copy the
-# block per verb and vary the fill - here review degrades instead of queueing.
+# ROUTING PER COMMAND. Every command that dispatches holds its own slot: think,
+# blueprint, target, review, role. One [agents.profiles.<command>] block each,
+# same fields; a command with no block routes by the grid (difficulty x priority
+# over the rows below), a command WITH a block walks only its lanes. Copy the
+# block per command and vary the fill - here review degrades instead of queueing.
 # [agents.profiles.review]
 # lanes = ["sonnet-thread", "luna-codex"]
 # on_exhausted = "degrade"

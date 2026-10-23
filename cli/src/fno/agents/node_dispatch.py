@@ -47,7 +47,7 @@ def find_node_row(node: str) -> Optional[dict]:
     return None
 
 
-def _verb_answer(row: Optional[dict], *, node_id: Optional[str] = None) -> tuple:
+def _command_answer(row: Optional[dict], *, node_id: Optional[str] = None) -> tuple:
     from fno.agents.harness_map import DispatchResolveError
     from fno.graph.store import GRAPH_JSON, _client_for
     payload = dict(row or {}, id=(row or {}).get("id") or node_id)
@@ -67,26 +67,26 @@ def _verb_answer(row: Optional[dict], *, node_id: Optional[str] = None) -> tuple
     except Exception:  # noqa: BLE001 - unreadable config -> the lean default
         pass
     try:
-        answer = _client_for(GRAPH_JSON).request("effective_verb", params)
+        answer = _client_for(GRAPH_JSON).request("effective_command", params)
         return answer["verb"], answer["note"]
     except RuntimeError as exc:
         raise DispatchResolveError(str(exc).replace("store error (invalid): ", "")) from exc
 
 
-def node_effective_verb(
+def node_effective_command(
     row: Optional[dict], *, node_id: Optional[str] = None
 ) -> Optional[str]:
     """The lifecycle table's answer for a node row, or None on abstain:
     one answer per node, shared by every door. Accepts a None row; raises
     DispatchResolveError on an unanswerable node."""
-    return _verb_answer(row, node_id=node_id)[0]
+    return _command_answer(row, node_id=node_id)[0]
 
 
 def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]:
-    """Render a node's seed (verb command + brief env) for the spawn door.
+    """Render a node's seed (command line + brief env) for the spawn door.
 
     Prints its own refusal and returns None when the node carries no
-    dispatch_verb, or when the seed render refuses (an unanswerable lifecycle
+    dispatch_command, or when the seed render refuses (an unanswerable lifecycle
     or an over-budget brief) - a truncated brief is never seeded.
     """
     from fno.agents.harness_map import DispatchResolveError, resolve_dispatch
@@ -94,12 +94,12 @@ def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]
 
     seed_rec: Optional[dict] = find_node_row(node)
     seed_node_id = (seed_rec or {}).get("id") or node
-    if not isinstance(seed_rec, dict) or not str(seed_rec.get("dispatch_verb") or "").strip():
+    if not isinstance(seed_rec, dict) or not str(seed_rec.get("dispatch_command") or "").strip():
         print(
             f"refusing node-seeded spawn: node {seed_node_id} carries no "
-            "dispatch_verb and no message was typed; an idle worker holds "
+            "dispatch_command and no message was typed; an idle worker holds "
             "a fleet slot and reads as alive. Encode one with `fno backlog "
-            f"update {seed_node_id} dispatch_verb=<verb>`.",
+            f"update {seed_node_id} dispatch_command=<command>`.",
             file=sys.stderr,
         )
         return None
@@ -108,8 +108,8 @@ def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]
         resolved_seed = resolve_dispatch(
             harness=harness,
             node_id=str(seed_node_id),
-            verb=str(seed_rec.get("dispatch_verb")).strip(),
-            lifecycle=_verb_answer(seed_rec),
+            command_name=str(seed_rec.get("dispatch_command")).strip(),
+            lifecycle=_command_answer(seed_rec),
             brief=node_brief,
             trigger="autonomous",
         )
@@ -136,9 +136,9 @@ def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]
 def ensure_launch_workdir(
     recorded_cwd: Optional[str], node_id: str, harness: str
 ) -> Optional[Path]:
-    """Resolve the launch workdir through the launch-workdir seam verb (Rust);
+    """Resolve the launch workdir through the launch-workdir seam command (Rust);
     the hold line on any refusal, the node id keys the resumed tree."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     payload = {
         "recorded_cwd": str(Path(recorded_cwd) if recorded_cwd else Path.cwd()),
@@ -146,14 +146,14 @@ def ensure_launch_workdir(
         "harness": harness,
     }
     try:
-        answer = verb_call(
+        answer = command_call(
             "launch-workdir",
             payload,
-            VerbUnavailable,
+            CommandUnavailable,
             timeout=150,
             passthrough_stderr=True,
         )
-    except VerbUnavailable:
+    except CommandUnavailable:
         answer = None
     if answer is None or "hold" in answer:
         print(

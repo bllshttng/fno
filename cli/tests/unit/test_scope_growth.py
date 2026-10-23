@@ -63,7 +63,7 @@ def _window(with_origin: int, without_origin: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# The epic verb surfaces it
+# The epic command surfaces it
 # ---------------------------------------------------------------------------
 
 
@@ -75,7 +75,7 @@ def graph(tmp_path, monkeypatch, _plan_hermetic_events_journal):
         seed_graph(g, json.dumps({"entries": entries}, indent=2) + "\n")
         return g
 
-    # The verb answers natively: the binary reads the store through the tmp
+    # The command answers natively: the binary reads the store through the tmp
     # state root, and its events reads sit under the pinned HOME (the global
     # mirror is HOME/.fno/events.jsonl, absent here; FNO_EVENTS_PATH is the
     # conftest journal pin).

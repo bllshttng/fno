@@ -313,7 +313,7 @@ pub fn count_boundaries_since(transcript: &Path, since_epoch: Option<i64>) -> Re
 }
 
 // ---------------------------------------------------------------------------
-// CLI verb: `fno-agents compaction mark --session <id>` (the PreCompact hook
+// CLI command: `fno-agents compaction mark --session <id>` (the PreCompact hook
 // leg) and `status` (read-side debug surface; the daemon and provider_cap call
 // the library in process).
 // ---------------------------------------------------------------------------

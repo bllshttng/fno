@@ -198,7 +198,7 @@ ABIEOF
   # State-path stub: init resolves its manifest, events and cancel sentinel
   # into the sandbox space dir. FNO_AGENTS_BIN outranks PATH in the init
   # script and the smoke runner pins it to the checkout binary, so run_init
-  # points that env at this stub too. Other verbs delegate to the real
+  # points that env at this stub too. Other commands delegate to the real
   # fno-agents when one is on the ambient PATH; init only calls `fno` (the
   # stub above) for claims, so the fiction of this sandbox is unchanged.
   mkdir -p "$sbx/space"

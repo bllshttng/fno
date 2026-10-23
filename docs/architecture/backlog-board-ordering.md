@@ -9,7 +9,7 @@ status: accepted
 
 You ask why one card sits above another, or why the HTML and Kanban boards disagree with your terminal. This page owns the ordering function every board and the work selector share. Misreading it costs a wasted edit: you straighten the rendered board file and the next mutation renders your change away.
 
-Not for: the verbs that create, update, rank, or close a node. That is [../backlog-usage.md](../backlog-usage.md). It also does not answer why `advance` did not dispatch a card. Dispatch ordering is the loop's, not the board's.
+Not for: the commands that create, update, rank, or close a node. That is [../backlog-usage.md](../backlog-usage.md). It also does not answer why `advance` did not dispatch a card. Dispatch ordering is the loop's, not the board's.
 
 ## Overview
 
@@ -90,7 +90,7 @@ Mirrors `reprioritize`; writes through `locked_mutate_graph`. Exactly one of:
 - `--clear`: `rank = null`.
 - `--operator`: write the pin from a session that carries a harness stamp. Without it, every write action above is refused for such a session, `--clear` included.
 
-When the node has a live epic parent, the scope is that epic. Peers and anchors are the epic's children across the whole graph. The `--within-epic` flag is the explicit spelling. Otherwise the scope is the `(column, project)` lane. The verb resolves the target id through `_find_node`, which fuzzy-resolves partial ids. It compares on the **resolved** id for both peer-exclusion and the self-anchor guard. Rejections all print to stderr and exit non-zero. They cover a cross-scope anchor (both scopes named), an unranked anchor (actionable hint), a self-anchor, a non-existent node, and a wrong flag count. An explicit `--within-epic` without a live epic parent is also refused. The mutator raises *before* the locked write, so no partial rank is ever persisted.
+When the node has a live epic parent, the scope is that epic. Peers and anchors are the epic's children across the whole graph. The `--within-epic` flag is the explicit spelling. Otherwise the scope is the `(column, project)` lane. The command resolves the target id through `_find_node`, which fuzzy-resolves partial ids. It compares on the **resolved** id for both peer-exclusion and the self-anchor guard. Rejections all print to stderr and exit non-zero. They cover a cross-scope anchor (both scopes named), an unranked anchor (actionable hint), a self-anchor, a non-existent node, and a wrong flag count. An explicit `--within-epic` without a live epic parent is also refused. The mutator raises *before* the locked write, so no partial rank is ever persisted.
 
 ## HTML board: the canonical dashboard
 

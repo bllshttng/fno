@@ -721,7 +721,7 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             if !read {
                 return Err(
                     "org block rendered without a reading: fno doctor lanes returned none; \
-shoot from a host where the lanes verb answers"
+shoot from a host where the lanes command answers"
                         .into(),
                 );
             }

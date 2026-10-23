@@ -8,7 +8,7 @@
 //!
 //! It used to fork a PRIVATE `codex app-server` per worker and speak
 //! newline-delimited JSON to its stdin/stdout. That made fno the owner of the
-//! process and forfeited every vendor verb above at once, with no symptom
+//! process and forfeited every vendor command above at once, with no symptom
 //! beyond a thing the operator expected to work not working.
 //!
 //! The transport is the ONLY thing that changed. The single-owner actor below
@@ -1815,7 +1815,7 @@ impl CodexThread {
     /// Convert this driver into a single-owner actor and hand back the cheap
     /// command handle. This replaces the old `Arc<Mutex<CodexThread>>` shape,
     /// where `drive_turn` held the guard across a whole (up to `TURN_TIMEOUT`)
-    /// turn and every follow-up verb queued behind it. One task now owns the
+    /// turn and every follow-up command queued behind it. One task now owns the
     /// driver exclusively; the connection's read half moves into a dedicated
     /// read pump (a `select!` arm on a frame read is not cancel-safe:
     /// cancellation mid-frame drops buffered bytes and corrupts the stream).

@@ -30,7 +30,7 @@ const SENDER: &str = "fno-spawn-watch";
 
 /// A launch the caller waits on in its own Bash call (`codex exec`,
 /// `pi -p`) already answers it, so only detached launches are watched: a
-/// `claude --bg` (the only claude line the hook records), a spawn verb, a
+/// `claude --bg` (the only claude line the hook records), a spawn command, a
 /// pane run, or a dispatcher's record, which carries no command.
 fn detached(r: &Record) -> bool {
     r.launch.harness == "claude"

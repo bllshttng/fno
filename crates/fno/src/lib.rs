@@ -8,6 +8,7 @@
 // away at every site.
 #![allow(clippy::doc_lazy_continuation)]
 
+pub mod accounts_route;
 pub mod agents_history;
 pub mod agents_menu;
 pub mod agents_view;
@@ -64,8 +65,8 @@ pub mod mux_cli;
 pub mod mux_rows;
 pub mod needs_overlay;
 pub mod notify;
-#[path = "mux_cli/notify_verb.rs"]
-pub mod notify_verb;
+#[path = "mux_cli/notify_command.rs"]
+pub mod notify_command;
 pub mod observe;
 pub mod open_router;
 pub mod org_model;

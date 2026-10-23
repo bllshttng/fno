@@ -10,8 +10,8 @@ from fno.agents.registry import AgentEntry
 
 @pytest.fixture(autouse=True)
 def _graph_with_target_node(monkeypatch):
-    """Verb resolution loads the node record; default it to a planless low
-    node so the probe resolves the target verb."""
+    """Command resolution loads the node record; default it to a planless low
+    node so the probe resolves the target command."""
     monkeypatch.setattr(
         "fno.graph.store.read_nodes_by_ids",
         lambda path, tokens: {"entries": [{"id": "x-bdb9", "difficulty": "low"}], "missing": []},

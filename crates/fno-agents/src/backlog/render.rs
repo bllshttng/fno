@@ -195,7 +195,7 @@ const GROUPS: &[(&str, &[&str])] = &[
             "session_id",
             "ownership_defect",
             "sessions",
-            "dispatch_verb",
+            "dispatch_command",
             "dispatch_brief",
         ],
     ),

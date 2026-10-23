@@ -220,7 +220,7 @@ def test_sweep_kills_only_the_keeper_whose_graph_is_gone(tmp_path):
             proc.wait(timeout=15)
 
 
-def test_read_nodes_by_ids_returns_none_when_the_keeper_predates_the_verb(tmp_path, monkeypatch):
+def test_read_nodes_by_ids_returns_none_when_the_keeper_predates_the_command(tmp_path, monkeypatch):
     """AC10-EDGE: a stale keeper (installed worker behind the source) answers
     `unknown store method`; the fast path degrades to None and the caller
     falls back, so an old binary never breaks a current client."""

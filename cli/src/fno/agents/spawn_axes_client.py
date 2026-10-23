@@ -1,4 +1,4 @@
-"""Transport for the ``spawn-axes`` verb: one JSON payload in, one parsed
+"""Transport for the ``spawn-axes`` command: one JSON payload in, one parsed
 answer out; a missing or failing owner raises SpawnAxesUnavailable - a
 named refusal, never a silent spawn."""
 
@@ -6,16 +6,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fno.rust_binary import VerbUnavailable, verb_call
+from fno.rust_binary import CommandUnavailable, command_call
 
 
-class SpawnAxesUnavailable(VerbUnavailable):
+class SpawnAxesUnavailable(CommandUnavailable):
     """The fno-agents binary is missing, failed, or answered malformed JSON."""
 
 
 def spawn_axes_call(payload: dict[str, Any]) -> dict[str, Any]:
     """One subprocess round-trip: JSON payload in, parsed JSON answer out."""
-    return verb_call("spawn-axes", payload, SpawnAxesUnavailable)
+    return command_call("spawn-axes", payload, SpawnAxesUnavailable)
 
 
 def _answer_or_raise(answer: dict[str, Any], field: str) -> Any:

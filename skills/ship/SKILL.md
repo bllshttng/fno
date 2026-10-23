@@ -25,7 +25,7 @@ A thing is a ship type ONLY if it has a definable **green** - a finish line read
 
 ## Vocabulary: "ship" the command vs the ship phase/gate
 
-`/ship` (this verb) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, from the `DonePRGreen`/`DoneAdvisory` termination reasons, from `fno do pr merge`, and from `/ship-docs` (which generates documentation and is NOT a ship type). The single canonical disambiguation lives in `AGENTS.md` -> "Ship vocabulary"; read it if the overlap is confusing.
+`/ship` (this command) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, from the `DonePRGreen`/`DoneAdvisory` termination reasons, from `fno do pr merge`, and from `/ship-docs` (which generates documentation and is NOT a ship type). The single canonical disambiguation lives in `AGENTS.md` -> "Ship vocabulary"; read it if the overlap is confusing.
 
 One owner decides every merge. `fno do pr merge` asks it, and so do `fno do pr verify --kind merged` and the `fno-agents finalize` queue arm. It answers merge or arm for one exact head, and it never emits an unpinned request. See [authorized-merge](../../docs/architecture/authorized-merge.md).
 

@@ -12,7 +12,7 @@ use super::*;
 /// the keeper survive" with the keeper's own word - its pid, its child's
 /// pid, its cwd and argv - never with a process count. A socket nobody
 /// lives behind is listed with the reason, because a silent zero is the
-/// receipt-can-lie shape. Read-only: this verb never unlinks anything (the
+/// receipt-can-lie shape. Read-only: this command never unlinks anything (the
 /// server's readopt sweep owns that).
 pub(crate) fn pane_keeper_list(json: bool, stale_after: Option<std::time::Duration>) -> i32 {
     let mut rows: Vec<serde_json::Value> = Vec::new();

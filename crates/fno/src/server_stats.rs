@@ -5,7 +5,7 @@
 //! as an all-time fact. Reading never resets the counter.
 
 use crate::mux_cli::{control_roundtrip, env_server, resolve_session, EXIT_ERROR, EXIT_OK};
-use crate::proto::{self, ControlVerb, ServerMsg};
+use crate::proto::{self, ControlCommand, ServerMsg};
 
 /// Current time as a `YYYY-MM-DDThh:mm:ssZ` UTC stamp (same shape the squad
 /// store writes).
@@ -38,7 +38,7 @@ pub fn cli(json: bool) -> i32 {
             return EXIT_ERROR;
         }
     };
-    match control_roundtrip(&sock, &session, ControlVerb::ServerStats) {
+    match control_roundtrip(&sock, &session, ControlCommand::ServerStats) {
         Ok(ServerMsg::ServerStats {
             touch_emit_failures,
             started_at,

@@ -86,8 +86,8 @@ def _state_hashes(project: Path) -> dict:
 
 
 def _invoke(runner: CliRunner, project: Path, monkeypatch, *args, env_home: Path = None):
-    """Invoke the real top-level `fno` app. `args` is the verb followed by any
-    command-level flags (flags come AFTER the verb now that the options live on
+    """Invoke the real top-level `fno` app. `args` is the command followed by any
+    command-level flags (flags come AFTER the command now that the options live on
     the command, not on a group callback)."""
     monkeypatch.chdir(project)
     if env_home is not None:

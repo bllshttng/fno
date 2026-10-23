@@ -128,7 +128,7 @@ This is the same trade as the rule 1 cap and the rule 4 closed list. A missed br
 
 The word cap depends on the enclosing block, not on sentence mood. A sentence inside a bullet or a numbered item gets the 20-word cap. Every other sentence gets the 25-word cap.
 
-A mood detector needs a verb lexicon, and a wrong guess is worse than no rule. Block type is a clean read from the line, so it needs no lexicon.
+A mood detector needs a verb lexicon, and a wrong guess is worse than no rule. Block type is a clean read from the line, so it needs no lexicon. <!-- verb-wording: allow (the grammar sense) -->
 
 One false negative is accepted and kept. An imperative sentence sitting in a paragraph gets the 25-word cap. It is still capped.
 

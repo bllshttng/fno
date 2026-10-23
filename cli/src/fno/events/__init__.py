@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import yaml as _yaml
 
-from ..config._dispatch_verbs import is_verb_seed
+from ..config._dispatch_commands import is_command_seed
 from ..paths import EPHEMERAL_EVENTS_SUFFIX as EPHEMERAL_SUFFIX
 from .store_client import EventStoreUnavailable, resolve_native_bin
 from .verify_child_promise import FanInTally, tally_fan_in, verify_child_promise
@@ -632,7 +632,7 @@ def operator_notice(
     """Build an ``operator_notice`` event (the notify chokepoint's journal leg).
 
     A notice is a pointer to the durable queue, never a second inbox, so
-    ``pointer`` carries the verb that shows the content and ``body`` carries
+    ``pointer`` carries the command that shows the content and ``body`` carries
     counts, not rows.
     """
     data: dict[str, Any] = {
@@ -744,7 +744,7 @@ def agent_raw_inject(
     target_head: str | None = None,
     confirmed: bool | None = None,
     origin: str | None = None,
-    verb: str | None = None,
+    command: str | None = None,
     self_send: bool = False,
     source: str = "daemon",
 ) -> dict[str, Any]:
@@ -761,8 +761,8 @@ def agent_raw_inject(
     after the send, and its ``False`` covers both a clean refusal and a landed
     payload the confirm budget missed.
     """
-    if verb is None and is_verb_seed(payload):
-        verb = payload.split(maxsplit=1)[0]
+    if command is None and is_command_seed(payload):
+        command = payload.split(maxsplit=1)[0]
     if not isinstance(self_send, bool):
         raise ValidationError("agent_raw_inject self_send must be a boolean")
     data: dict[str, Any] = {
@@ -770,7 +770,7 @@ def agent_raw_inject(
         "payload": payload,
         "harness": harness,
         "lane": lane,
-        "verb": verb,
+        "verb": command,
         "self_send": self_send,
     }
     if sender is not None:

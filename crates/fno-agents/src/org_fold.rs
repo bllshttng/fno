@@ -1,6 +1,6 @@
 //! `org-fold`: the team scope fold for `fno agents org --nodes`.
 //!
-//! Python passes the teams `gather_org` already adjudicated; this verb
+//! Python passes the teams `gather_org` already adjudicated; this command
 //! reads the graph store (in-process, `backlog::api::rows`) and the claims
 //! dir directly, compiles
 //! each team's scope with the same rules `org_board/scope.rs` applies, and
@@ -233,7 +233,8 @@ fn live_workers(claims_dir: Option<&PathBuf>, keys: &[String]) -> (BTreeMap<Stri
     if read_dirs.is_empty() {
         return (BTreeMap::new(), false);
     }
-    let payload = crate::claim_verbs::claim_sweep_payload_from_records(&records, None, keys, false);
+    let payload =
+        crate::claim_commands::claim_sweep_payload_from_records(&records, None, keys, false);
     let mut out = BTreeMap::new();
     if let Some(rows) = payload.get("claims").and_then(|v| v.as_array()) {
         for row in rows {
@@ -1188,7 +1189,7 @@ mod tests {
         assert!(line.contains("x-9"));
     }
 
-    /// The verb's graph read asks the store (`backlog::api::rows`), so a
+    /// The command's graph read asks the store (`backlog::api::rows`), so a
     /// seeded store folds the same way a hand-written file did.
     #[test]
     fn readers_follow_store_fold_reads_the_store() {

@@ -525,7 +525,7 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
     Ok(json!({ "eligible": eligible }))
 }
 
-/// The verb entry: one JSON payload on stdin, the parsed answer on stdout.
+/// The command entry: one JSON payload on stdin, the parsed answer on stdout.
 pub fn run_fallback_chain(args: &[String]) -> i32 {
     let _ = args;
     let mut payload = String::new();

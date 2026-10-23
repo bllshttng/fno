@@ -302,7 +302,7 @@ pub struct ReviewerVerdict {
     /// Positive fresh-context provenance from the attestation
     /// (`reviewer_context`: fresh | shared | unknown); None when the event
     /// predates the field. Measures context independence, never who invoked
-    /// the verb. The coverage count never reads it; the posture verdict's
+    /// the command. The coverage count never reads it; the posture verdict's
     /// `independent` component does (AC4-ERR: only a positive fresh
     /// marker satisfies rung 4 - `other_session` or unknown never does).
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -52,7 +52,7 @@ pub struct ArmSpec {
     pub upstream: Option<&'static str>,
     /// The config key that arms this loop. `None` means always armed.
     pub arm_key: Option<&'static str>,
-    /// The verb that reads this loop's own detail, printed beside the row.
+    /// The command that reads this loop's own detail, printed beside the row.
     pub reader: Option<&'static str>,
 }
 
@@ -435,7 +435,7 @@ pub struct ArmStatus {
     /// The rendered readout line, filled by [`explain`] for every row, red or
     /// not, so no consumer re-formats it.
     pub line: String,
-    /// The one verb that repairs a red row, set by `arm_repair::annotate`.
+    /// The one command that repairs a red row, set by `arm_repair::annotate`.
     pub repair: Option<String>,
     /// Who runs the repair: `auto` (the arm_watch heal lane) or `operator`.
     pub heal: Option<String>,
@@ -447,7 +447,7 @@ pub struct ArmStatus {
     /// The key's resolved value (`true`/`false`/`unreadable`), read at fold
     /// time. `None` when the arm carries no key.
     pub arm_value: Option<String>,
-    /// The verb that reads this loop's own detail, from the spec.
+    /// The command that reads this loop's own detail, from the spec.
     pub reader: Option<String>,
     /// Every observed tick inside `notify.arm_starved_after_s` carried
     /// `acted=0` while the newest stayed fresh: the arm ran and produced

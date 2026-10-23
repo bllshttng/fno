@@ -184,7 +184,7 @@ jobs:
         if: env.shoot == '1'
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
-          # The demo root seeds claims, and the client routes those verbs to
+          # The demo root seeds claims, and the client routes those commands to
           # the fno-agents binary; a runner builds neither by default.
           FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
           # The bootstrap validates the pin at <source>/cli/pyproject.toml,

@@ -344,7 +344,7 @@ pub(crate) struct Queue {
     pub(crate) rows: Vec<Value>,
     pub(crate) actionable: bool,
     pub(crate) note: String,
-    pub(crate) verb: &'static str,
+    pub(crate) command: &'static str,
 }
 
 /// The not-read statuses, decided once. A budget kill is `over_budget`;
@@ -381,7 +381,7 @@ pub(crate) fn queue(
     rows: Vec<Value>,
     actionable: bool,
     note: String,
-    verb: &'static str,
+    command: &'static str,
     count: Option<i64>,
 ) -> Queue {
     if !read.is_ok() {
@@ -398,7 +398,7 @@ pub(crate) fn queue(
             rows: Vec::new(),
             actionable,
             note,
-            verb,
+            command,
         };
     }
     Queue {
@@ -410,7 +410,7 @@ pub(crate) fn queue(
         rows,
         actionable,
         note,
-        verb,
+        command,
     }
 }
 
@@ -424,7 +424,7 @@ pub(crate) fn queue_json(q: &Queue) -> Value {
         "rows": q.rows,
         "actionable": q.actionable,
         "note": q.note,
-        "verb": q.verb,
+        "verb": q.command,
     })
 }
 
@@ -774,13 +774,13 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
                 "id": node.get("id"),
                 "priority": node.get("priority"),
                 "title": node.get("title"),
-                // The verb table reads these four; a slim row would refuse
+                // The command table reads these four; a slim row would refuse
                 // every candidate as undecidable, and a dropped declared
-                // verb would lose its precedence over the derived answer.
+                // command would lose its precedence over the derived answer.
                 "difficulty": node.get("difficulty"),
                 "size": node.get("size"),
                 "tags": node.get("tags"),
-                "dispatch_verb": node.get("dispatch_verb"),
+                "dispatch_command": node.get("dispatch_command"),
             })
         })
         .collect();
@@ -1701,9 +1701,9 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
             carveout_rows,
             false,
             if carveout_root.is_empty() {
-                "report-only: the sweep is a human verb".to_string()
+                "report-only: the sweep is a human command".to_string()
             } else {
-                format!("report-only: the sweep is a human verb; root {carveout_root}")
+                format!("report-only: the sweep is a human command; root {carveout_root}")
             },
             "",
             Some(as_int(carveout_stream.get("total").unwrap_or(&Value::Null))),

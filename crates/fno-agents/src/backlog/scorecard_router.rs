@@ -1,10 +1,11 @@
 //! The scorecard's router: one verdict per candidate inventory row per kind
-//! under a stage verb, folded from the by-lane cells. It proposes and never
+//! under a stage command, folded from the by-lane cells. It proposes and never
 //! applies: the accept line prints and `fno config set` stays the user's
 //! hand, and every proposal names the live seat laws it would contradict.
 //! The decision constants and the accept line are the climb fold's, so one
 //! number and one config shape decide both folds.
 
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -113,10 +114,10 @@ pub(crate) fn declared_inventory() -> Option<(Vec<RowKey>, Value)> {
     Some((rows, inventory))
 }
 
-/// The lane the verb actually seats on one band: a declared lanes list
-/// routes the verb off the grid (the slot walk reads one lanes list for
+/// The lane the command actually seats on one band: a declared lanes list
+/// routes the command off the grid (the slot walk reads one lanes list for
 /// every band), so the seated list decides first, and the grid names the
-/// incumbent only for a verb that declares none. Either way the pick is
+/// incumbent only for a command that declares none. Either way the pick is
 /// declared-only: an empty capacity map reads every row
 /// unknown-permitted, so no live capacity read shapes the incumbent.
 fn incumbent_lane(stage: &str, difficulty: &str, inventory: &Value) -> Option<String> {
@@ -208,7 +209,7 @@ fn in_blueprint_law(row: &RowKey) -> bool {
 /// one-line gist: the router names them, the user decides. A glm-flash
 /// target lane runs against the temporary opus/sonnet seating until it
 /// lapses; any other target lane runs against the standing glm preference.
-fn contradicted_laws(stage: &str, band: &str, row: &RowKey) -> Vec<Value> {
+fn contradicted_laws(stage: &str, band: &str, row: &RowKey, today: NaiveDate) -> Vec<Value> {
     let mut out = Vec::new();
     if stage == BLUEPRINT_STAGE {
         out.push(json!({
@@ -225,9 +226,8 @@ fn contradicted_laws(stage: &str, band: &str, row: &RowKey) -> Vec<Value> {
         }
         return out;
     }
-    let today = chrono::Utc::now().date_naive();
     let flash = row.model_norm == "glm-5.3-flash";
-    if today < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap() {
+    if today < NaiveDate::from_ymd_opt(2026, 10, 23).unwrap() {
         // The temporary law seats by band: sonnet for low and medium, opus
         // for high.
         let low_band = matches!(band, "low" | "medium");
@@ -346,15 +346,19 @@ pub(crate) fn propose(cells: &[Value], stage: &str) -> Value {
     for b in &bands {
         incumbents.insert(b.clone(), incumbent_lane(stage, b, &inventory));
     }
-    propose_with(cells, stage, &rows, &incumbents)
+    let today = chrono::Utc::now().date_naive();
+    propose_with(cells, stage, &rows, &incumbents, today)
 }
 
-/// The hermetic core: the verdicts over handed-in rows and incumbents.
+/// The hermetic core: the verdicts over handed-in rows, incumbents and
+/// date. The seat laws change on a fixed day, so the clock is read by
+/// the caller, never here.
 pub(crate) fn propose_with(
     cells: &[Value],
     stage: &str,
     rows: &[RowKey],
     incumbents: &BTreeMap<String, Option<String>>,
+    today: NaiveDate,
 ) -> Value {
     let mut kinds: Vec<String> = Vec::new();
     for c in cells {
@@ -425,7 +429,7 @@ pub(crate) fn propose_with(
                 "harness": row.harness,
                 "verdict": verdict,
                 "nodes": nodes,
-                "laws": contradicted_laws(stage, difficulty, row),
+                "laws": contradicted_laws(stage, difficulty, row, today),
             });
             if let Some(c) = cell {
                 for k in ["merged", "merged_ci95", "cost_per_merged_usd"] {
@@ -494,6 +498,12 @@ mod tests {
         }
     }
 
+    /// The eve of the temporary seat law's lapse: the tests pin the day
+    /// so their law assertions never depend on when they run.
+    fn before_lapse() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 10, 22).unwrap()
+    }
+
     fn incumbents(band: &str, lane: &str) -> BTreeMap<String, Option<String>> {
         BTreeMap::from([(band.to_string(), Some(lane.to_string()))])
     }
@@ -531,6 +541,7 @@ mod tests {
             "target",
             &rows,
             &incumbents("medium", "claude-sonnet"),
+            before_lapse(),
         );
         let props = out["proposals"].as_array().unwrap();
         let p = props
@@ -544,7 +555,8 @@ mod tests {
         assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
-        // A glm proposal names the temporary seat law it would contradict.
+        // On the pinned day the temporary seat law is live, so a glm proposal
+        // names it. The assertion reads the same pinned day, never the clock.
         let laws: Vec<&str> = p["laws"]
             .as_array()
             .unwrap()
@@ -575,6 +587,7 @@ mod tests {
             "target",
             &rows,
             &incumbents("medium", "claude-sonnet"),
+            before_lapse(),
         );
         let props = out["proposals"].as_array().unwrap();
         let p = props
@@ -624,6 +637,7 @@ mod tests {
             "target",
             &rows,
             &incumbents("medium", "claude-sonnet"),
+            before_lapse(),
         );
         let p = out["proposals"]
             .as_array()
@@ -664,6 +678,7 @@ mod tests {
             "blueprint",
             &bp_rows,
             &incumbents("medium", "claude-opus-5-5"),
+            before_lapse(),
         );
         let props = out["proposals"].as_array().unwrap();
         assert!(

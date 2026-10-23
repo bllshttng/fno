@@ -1,9 +1,9 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.roles.cli.list_roles
 //!
-//! Characterization for `fno agents roles ls`, the first roles verb on the
+//! Characterization for `fno agents roles ls`, the first roles command on the
 //! Rust door (`fno-agents spawn-overlay roles ls`). The goldens under
-//! tests/golden/roles_ls/ were captured from the Python verb on this same
+//! tests/golden/roles_ls/ were captured from the Python command on this same
 //! fixture before it was deleted (step 2 of the port protocol,
 //! docs/architecture/dual-implementation-inventory.md). Capture mode now
 //! refuses: a golden can only be captured while the old leg runs.

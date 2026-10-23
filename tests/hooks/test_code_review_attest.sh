@@ -591,9 +591,9 @@ expect_silent_noclassify "marker-without-forkedskill-flag"
 
 # A spawned TASK is not a review. .meta.json exists for every subagent and
 # its description is caller prose; no marker, no name field, so prose naming
-# the verb must not attest even over an empty fence.
+# the command must not attest even over an empty fence.
 run_hook "$(task_spawn_stop "code-review the failing tests and report matches" $'Matches for the pattern:\n\n```json\n[]\n```')"
-expect_silent_noclassify "task-spawn-verb-in-description"
+expect_silent_noclassify "task-spawn-command-in-description"
 
 # Same trap in the PAYLOAD: its description field is caller prose too, so a
 # task described as a review that ends clean must stay silent. (The

@@ -160,8 +160,7 @@ jobs:
           # split left the heaviest slice dying 7 more times while its
           # siblings stayed green, so the packet spreads thinner still: a leg
           # prices roughly est/10 (eight legs at est 72; a packet at est 10
-          # or under keeps today's single-leg shape). 13 legs is the full
-          # lane's ceiling.
+          # or under keeps today's single-leg shape). 13 legs is the ceiling.
           shards=$(( (est + 9) / 10 ))
           [ "$shards" -gt 13 ] && shards=13
           [ "$shards" -lt 1 ] && shards=1
@@ -404,9 +403,13 @@ jobs:
   # true. `Sync + build` deliberately runs in every leg: it costs about 3s and
   # removes any question of whether pytest can rely on `uv build`.
   #
-  # The 10-way run hit the 12-minute step cap at 724s with tests at 86%. Split
-  # to thirteen; keep both caps fixed. The rest lane stays at four because its
-  # measured legs finish below the cap.
+  # The 10-way run hit the 12-minute step cap at 724s with tests at 86%, so the
+  # lane went to thirteen legs. The suite then shrank: on 2026-10-22 the
+  # thirteen pytest steps ran 46 to 119s each (about 1000s in all), behind
+  # about 310s of provisioning and front build per leg. Every leg also holds
+  # a runner while the fleet queues, so the lane came back to four legs. A leg
+  # count pays its setup once per leg: split again only when a leg's step
+  # nears the cap, and merge legs when the steps fall far below it.
   # If a shard approaches the step cap below, split again or cut work. Do not
   # raise either cap.
   # A hang must stay cheap: the per-test ceiling and every timeout marker stay
@@ -418,10 +421,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        shard: [1, 2, 3, 4]
     runs-on: ubuntu-latest
-    # The latest two-leg main run measured 27m35s for pytest. Eight legs were not
-    # enough for the current tree, so thirteen matrix legs share the work.
     # Keep the 12-minute shard cap and 15-minute job backstop.
     timeout-minutes: 15
     steps:
@@ -441,7 +442,7 @@ jobs:
         # relink seconds.
         run: cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
 
-      - name: "Smoke shard: pytest (${{ matrix.shard }}/13)"
+      - name: "Smoke shard: pytest (${{ matrix.shard }}/4)"
         # The step carries its own cap so a hang dies on the clock that can
         # name it: a step-level timeout-minutes kill reports `failure`, where a
         # job-level kill reports `cancelled` - the same word a superseding push
@@ -487,7 +488,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-pytest-${{ matrix.shard }} "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/13
+          uv run --project cli fno-py doctor test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
 
   slow-e2e:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -714,7 +715,7 @@ jobs:
           enable-cache: true
       - name: Build native fno (Python guard rows)
         # The Python guards commit their guard_decision rows through the
-        # native `fno doctor event emit-envelope` verb. Without this binary
+        # native `fno doctor event emit-envelope` command. Without this binary
         # the rows are dropped (best-effort by contract) and the dispatch
         # fixture sees only the Rust guards' rows. The compiled deps come
         # from the cached build base, so this pays mostly the final link.
@@ -722,7 +723,7 @@ jobs:
       - name: Generated copies match their sources
         run: |
           (cd cli && uv run fno-py doctor harness-matrix --write)
-          awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/verb-matrix.md" { print $1 }' \
+          awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/command-matrix.md" { print $1 }' \
             generated-artifacts.tsv > "$RUNNER_TEMP/generated-paths.txt"
           cat "$RUNNER_TEMP/generated-paths.txt"
           xargs git diff --exit-code -- < "$RUNNER_TEMP/generated-paths.txt"
@@ -900,7 +901,7 @@ jobs:
         # regenerates the capability copies, the merge-posture copy,
         # events_limits.toml, and the registry-schema copy on every build;
         # `fno doctor harness-matrix --write` renders the capability doc (and
-        # the verb doc, whose own cheap freshness step lives in guards.yml
+        # the command doc, whose own cheap freshness step lives in guards.yml
         # because it also reads skills/*/SKILL.md). A committed copy that
         # drifted from its source (a hand edit, a forgotten rebuild) shows up
         # here as a dirty tree - which is the wrong-merge class the retired
@@ -1198,43 +1199,6 @@ jobs:
           --test board_menu_keys_e2e --test squad_prune_live_pane
           --test server_axis_alias_e2e --test server_spine -- --test-threads=1
 
-  test-mux-workspace:
-    needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
-    name: workspace standalone journey
-    runs-on: ubuntu-latest
-    # Keep the real-binary conformance journey separate from the serial mux
-    # suite; both retain explicit bounds and the aggregate requires both.
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo registry + build artifacts
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/build
-            crates/fno-agents/target
-            crates/fno/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Clean cached Rust package artifacts
-        run: |
-          cargo clean -p fno --manifest-path crates/fno/Cargo.toml
-          cargo clean -p fno-agents --manifest-path crates/fno-agents/Cargo.toml
-
-      - name: Workspace standalone journey
-        run: bash tests/mux-workspace-standalone.sh
-
   test-mux-integration:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
@@ -1297,7 +1261,7 @@ jobs:
 
   test:
     name: cargo test + schema parity
-    needs: [pr-affected, test-agents, test-agents-integration, test-mux, test-mux-integration, test-mux-workspace]
+    needs: [pr-affected, test-agents, test-agents-integration, test-mux, test-mux-integration]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # The check name this workflow has always reported, now an aggregator over
@@ -1309,7 +1273,7 @@ jobs:
     steps:
       - name: All shards passed
         run: |
-          echo "test-agents=${{ needs.test-agents.result }} test-agents-integration=${{ needs.test-agents-integration.result }} test-mux=${{ needs.test-mux.result }} test-mux-integration=${{ needs.test-mux-integration.result }} test-mux-workspace=${{ needs.test-mux-workspace.result }}"
+          echo "test-agents=${{ needs.test-agents.result }} test-agents-integration=${{ needs.test-agents-integration.result }} test-mux=${{ needs.test-mux.result }} test-mux-integration=${{ needs.test-mux-integration.result }}"
           [ "${{ needs.test-agents.result }}" = "success" ] || {
             [ "${{ needs.test-agents.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
@@ -1327,11 +1291,6 @@ jobs:
           } || exit 1
           [ "${{ needs.test-mux-integration.result }}" = "success" ] || {
             [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
-              && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
-          } || exit 1
-          [ "${{ needs.test-mux-workspace.result }}" = "success" ] || {
-            [ "${{ needs.test-mux-workspace.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
           } || exit 1

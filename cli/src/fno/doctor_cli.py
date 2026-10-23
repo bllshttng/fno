@@ -68,7 +68,7 @@ doctor_app.command("footprint", hidden=True)(footprint_command)
 doctor_app.command("bash-census", hidden=True)(bash_census_command)
 
 
-# `doctor intel` shells to the Rust fold; hidden per the new-verb convention.
+# `doctor intel` shells to the Rust fold; hidden per the new-command convention.
 @doctor_app.command("intel", hidden=True)
 def intel_command() -> None:
     """Who typed: per-session provenance counters, tool calls, commits, relay facets.
@@ -87,12 +87,12 @@ def intel_command() -> None:
     result = subprocess.run([str(binary), "intel"], check=False)
     raise typer.Exit(code=propagate_returncode(result.returncode))
 # `doctor lanes` is the whole-machine lane advisor: one number and its
-# reasoning, or a refusal naming every dark sensor. Hidden per the new-verb
+# reasoning, or a refusal naming every dark sensor. Hidden per the new-command
 # convention; `fno help doctor --all`.
 doctor_app.command("lanes", hidden=True)(lanes_command)
 
 
-# `doctor stalls` shells to the Rust fold; hidden per the new-verb convention.
+# `doctor stalls` shells to the Rust fold; hidden per the new-command convention.
 @doctor_app.command(
     "stalls", hidden=True,
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
@@ -122,10 +122,10 @@ def stalls_command(ctx: typer.Context) -> None:
     raise typer.Exit(code=propagate_returncode(done.returncode))
 
 
-def _route_harness(verb: str, argv: list[str]) -> None:
+def _route_harness(command: str, argv: list[str]) -> None:
     from fno.agents.rust_runtime import refuse_without_binary, route_to_rust
     from fno.rust_binary import resolve_installed_binary
-    binary = resolve_installed_binary() or refuse_without_binary(verb)
+    binary = resolve_installed_binary() or refuse_without_binary(command)
     route_to_rust(argv, binary=binary)
 
 
@@ -148,7 +148,7 @@ def harness_matrix_command(
 doctor_app.command("plugin-file", hidden=True)(plugin_file_command)
 # `doctor route` is the reachability read: what this installation's declared
 # routing inventory can actually reach (absorbs the old "no surface answers
-# this" gap). Hidden per the new-verb convention; `fno help doctor --all`.
+# this" gap). Hidden per the new-command convention; `fno help doctor --all`.
 doctor_app.command("route", hidden=True)(inventory_cmd)
 doctor_app.add_typer(observer_app, name="observer")
 # `doctor scratch` is the scratch-shape sweep; the Rust binary is

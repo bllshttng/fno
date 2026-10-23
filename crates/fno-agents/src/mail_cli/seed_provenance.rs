@@ -1,4 +1,4 @@
-//! The `seed-provenance` front verb: re-wrap the sidecar that records what
+//! The `seed-provenance` front command: re-wrap the sidecar that records what
 //! message started this session, so a receiver can attribute its seed and
 //! reply to the sender instead of running the quoted copy twice.
 //!

@@ -1,4 +1,4 @@
-//! A session joins fno at its first fno skill or verb.
+//! A session joins fno at its first fno skill or command.
 //!
 //! Joining is opt-in: a session the user opened but never pointed at fno owns
 //! no registry row, holds no spawn-gate slot and gets no using-fno preamble.
@@ -9,7 +9,7 @@
 //! door; the layout is a wire format between the two crates.
 //!
 //! Every hook command runs with `FNO_HOOK_CONTEXT=1`. 25 hook scripts run fno
-//! verbs inside every session, so a join fired from a hook would join every
+//! commands inside every session, so a join fired from a hook would join every
 //! session at its first SessionStart. The join act refuses there. The prompt
 //! and Skill hooks that ARE deliberate triggers clear the variable for their
 //! one call.
@@ -77,7 +77,7 @@ pub fn join(root: &Path, harness: &str, session_id: &str) -> Result<JoinOutcome,
         write_marker(root, harness, session_id)?;
         return Ok(JoinOutcome::SpawnedWorker);
     }
-    crate::mail_cli::hold::register_existing_session(harness, session_id)?;
+    crate::mail_cli::hold::register_existing_session(harness, session_id, false)?;
     write_marker(root, harness, session_id)?;
     Ok(JoinOutcome::Joined)
 }
@@ -112,7 +112,7 @@ pub fn preamble_due(
 // Without --check it joins (refused in hook context, exit 3). --preamble-due
 // prints `due` when the preamble is due, nothing otherwise; with --compacted
 // it is due for any joined session. Rides the report
-// action so no verb is added.
+// action so no command is added.
 // ---------------------------------------------------------------------------
 
 pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
@@ -257,6 +257,16 @@ mod tests {
         assert_eq!(join(home.root(), "claude", sid), Ok(JoinOutcome::Joined));
         assert!(is_joined(home.root(), "claude", sid));
         assert_eq!(rows_for(sid), 1);
+        // A join is not a hold: the row carries no bus-only stamp, and it
+        // has a birth date the orphan sweep can age.
+        let row = crate::state::load_registry(&AgentsHome::shared_registry_json())
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|e| e.harness_session_id.as_deref() == Some(sid))
+            .unwrap();
+        assert_eq!(row.delivery_policy, None);
+        assert!(!row.created_at.is_empty());
         assert_eq!(
             join(home.root(), "claude", sid),
             Ok(JoinOutcome::AlreadyJoined)
