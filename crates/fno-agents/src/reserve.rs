@@ -24,7 +24,7 @@ pub const RESERVE_ORIGIN: &str = "reserve";
 /// `origin` of a reserve the daemon armed for a running app.
 pub const RESERVE_AUTO_ORIGIN: &str = "reserve_auto";
 
-const DEFAULT_FOR_MS: u64 = 2 * 3_600_000;
+pub(crate) const DEFAULT_FOR_MS: u64 = 2 * 3_600_000;
 /// The daemon's reserve outlives two ticks, so one missed tick never drops
 /// it, and lifts within this window if the daemon itself stops.
 const AUTO_TTL_MS: u64 = 30 * 60_000;
@@ -203,95 +203,6 @@ fn auto_reason(app: &App) -> String {
         "{} is running, so the fleet keeps the machine free for {} (agents.reserve_auto); `fno agents incident clear` lifts it until {} restarts",
         app.name, app.preset, app.name
     )
-}
-
-/// `fleet-incident reserve <stream|edit> [--for <dur>] [--reason <text>] [--by <who>]`.
-pub fn run_reserve(args: &[String]) -> i32 {
-    let mut preset: Option<&str> = None;
-    let mut for_ms = DEFAULT_FOR_MS;
-    let mut reason: Option<String> = None;
-    let mut by: Option<String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        let flag = args[i].as_str();
-        match flag {
-            "--for" | "--reason" | "--by" => {
-                let Some(value) = args.get(i + 1) else {
-                    eprintln!("fleet-incident: {flag} needs a value");
-                    return 2;
-                };
-                match flag {
-                    "--for" => match fleet_incident::parse_ttl(value) {
-                        Ok(ms) => for_ms = ms,
-                        Err(error) => {
-                            eprintln!("fleet-incident: {}", error.replace("--ttl", "--for"));
-                            return 2;
-                        }
-                    },
-                    "--reason" => reason = Some(value.clone()),
-                    _ => by = Some(value.clone()),
-                }
-                i += 2;
-            }
-            word if preset.is_none() && preset_holds(word).is_some() => {
-                preset = Some(word);
-                i += 1;
-            }
-            other => {
-                eprintln!(
-                    "fleet-incident: reserve takes stream or edit, then [--for <dur>] [--reason <text>]; got {other:?}"
-                );
-                return 2;
-            }
-        }
-    }
-    let Some(preset) = preset else {
-        eprintln!("fleet-incident: reserve needs a preset: stream (holds spawns and tests) or edit (holds tests)");
-        return 2;
-    };
-    let holds = preset_holds(preset).unwrap_or_default();
-    let expires_at = match fleet_incident::expires_after(for_ms) {
-        Ok(at) => at,
-        Err(error) => {
-            eprintln!("fleet-incident: {error}");
-            return 2;
-        }
-    };
-    let reason = reason.unwrap_or_else(|| {
-        format!(
-            "the user reserved the machine for {preset} until {expires_at}; `fno agents incident clear` ends it early"
-        )
-    });
-    let home = AgentsHome::from_env();
-    match fleet_incident::write_transition_with_metadata(
-        &fleet_incident::fleet_stop_path(&home),
-        "stopped",
-        Some(&reason),
-        by.as_deref(),
-        holds,
-        RecordMetadata {
-            expires_at: Some(expires_at),
-            origin: Some(RESERVE_ORIGIN.to_string()),
-            ..RecordMetadata::default()
-        },
-    ) {
-        Ok(record) => {
-            fleet_incident::print_receipt(&record);
-            match crate::test_hold::reconcile(&home) {
-                Ok(outcome) => {
-                    if let Some(line) = outcome.line() {
-                        eprintln!("fleet-incident: {line}");
-                    }
-                }
-                Err(error) => eprintln!("fleet-incident: test hold not applied: {error}"),
-            }
-            0
-        }
-        Err(error) => {
-            eprintln!("fleet-incident reserve refused: {error}");
-            1
-        }
-    }
 }
 
 #[cfg(test)]

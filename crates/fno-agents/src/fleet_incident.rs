@@ -1017,7 +1017,7 @@ fn parse_hold_list(value: &str) -> Result<Vec<String>, String> {
 
 /// One receipt line, JSON, on stdout: the resulting state, its generation,
 /// and the typed reach it carries.
-pub(crate) fn print_receipt(record: &IncidentRecord) {
+fn print_receipt(record: &IncidentRecord) {
     let (holds, admits) = reach(record);
     println!(
         "{}",
@@ -1147,7 +1147,23 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
         print_usage();
         return 0;
     }
-    match action.as_str() {
+    // `reserve <preset>` is a stop with the preset's holds, a default time
+    // box and the reserve origin, parsed by the same flag loop.
+    let reserve = match action.as_str() {
+        "reserve" => match rest.first().and_then(|p| crate::reserve::preset_holds(p)) {
+            Some(holds) => Some((rest[0].clone(), holds)),
+            None => {
+                eprintln!("fleet-incident: reserve needs a preset: stream (holds spawns and tests) or edit (holds tests)");
+                return 2;
+            }
+        },
+        _ => None,
+    };
+    let (action, rest) = match reserve {
+        Some(_) => ("stop", &rest[1..]),
+        None => (action.as_str(), rest),
+    };
+    match action {
         "stop" | "clear" => {
             let mut reason: Option<String> = None;
             let mut by: Option<String> = None;
@@ -1211,7 +1227,7 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                         raw_target = Some((kind.to_string(), value.clone()));
                         i += 2;
                     }
-                    "--ttl" => {
+                    "--ttl" | "--for" => {
                         match rest.get(i + 1) {
                             Some(value) => match parse_ttl(value) {
                                 Ok(parsed) => ttl_ms = Some(parsed),
@@ -1244,6 +1260,21 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
             if action == "clear" && ttl_ms.is_some() {
                 eprintln!("fleet-incident: --ttl applies to stop only");
                 return 2;
+            }
+            if let Some((preset, preset_holds)) = &reserve {
+                if holds.is_some() || raw_target.is_some() {
+                    eprintln!(
+                        "fleet-incident: a reserve sets its own holds on the machine-wide record"
+                    );
+                    return 2;
+                }
+                holds = Some(preset_holds.clone());
+                ttl_ms = ttl_ms.or(Some(crate::reserve::DEFAULT_FOR_MS));
+                reason = reason.or_else(|| {
+                    Some(format!(
+                        "the user reserved the machine for {preset}; `fno agents incident clear` ends it early"
+                    ))
+                });
             }
             let home = crate::paths::AgentsHome::from_env();
             let cwd = match std::env::current_dir() {
@@ -1320,6 +1351,9 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 RecordMetadata {
                     target,
                     expires_at,
+                    origin: reserve
+                        .as_ref()
+                        .map(|_| crate::reserve::RESERVE_ORIGIN.to_string()),
                     ..RecordMetadata::default()
                 },
             ) {
@@ -1393,7 +1427,6 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
             }
         }
         "claim" => crate::incident_claim::run_claim(rest),
-        "reserve" => crate::reserve::run_reserve(rest),
         "check" => {
             // Admission verdict for callers that cannot link this crate (the
             // spawn gate). Asks one scope's question - the spawn gate's own
