@@ -57,7 +57,7 @@ const CONTEXT_KINDS: [&str; 6] = [
     "source",
     "config",
 ];
-const SENSITIVITY: [&str; 4] = ["public", "internal", "sensitive", "restricted"];
+pub(crate) const SENSITIVITY: [&str; 4] = ["public", "internal", "sensitive", "restricted"];
 const LAYERS: [&str; 5] = ["built-in", "plugin", "company", "project", "plan"];
 
 /// A `RoleRef`: `(id, function_id)`, both trimmed.
@@ -216,7 +216,7 @@ impl DefinitionSource {
 
 type Obj = Map<String, Value>;
 
-fn object<'a>(value: &'a Value, at: &str) -> Result<&'a Obj, String> {
+pub(crate) fn object<'a>(value: &'a Value, at: &str) -> Result<&'a Obj, String> {
     value
         .as_object()
         .ok_or_else(|| format!("{at}: input should be an object"))
@@ -274,7 +274,7 @@ fn str_tuple(obj: &Obj, key: &str, required: bool, at: &str) -> Result<Vec<Strin
     }
 }
 
-fn choice(
+pub(crate) fn choice(
     obj: &Obj,
     key: &str,
     allowed: &[&str],

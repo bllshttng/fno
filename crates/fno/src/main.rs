@@ -498,8 +498,8 @@ fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
 /// `fno agents roles <op>`, the deprecated root `fno roles <op>`, and a
 /// root `-J` before either (`agents org roles` arrives here already
 /// rewritten by the agents menu). The group options may precede the op.
-/// Only the ops the Rust door owns are claimed; any other op, and the bare
-/// group's help, still forward.
+/// Every op is the Rust door's; an unknown op, and the bare group's help,
+/// still forward.
 fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
@@ -514,7 +514,7 @@ fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
             "--json" | "-J" => {}
             "--root" | "--source" => i += 1,
             a if a.starts_with("--root=") || a.starts_with("--source=") => {}
-            "ls" | "show" | "resolve" => {
+            "ls" | "show" | "resolve" | "context" => {
                 let json = root_json.then(|| OsString::from("--json"));
                 return Some(json.into_iter().chain(tail.iter().cloned()).collect());
             }
@@ -1830,8 +1830,8 @@ mod tests {
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
         );
-        // `roles ls`, `show` and `resolve` are the Rust door's in every
-        // spelling, group options carried; an op still on Python forwards.
+        // Every `roles` op is the Rust door's in every spelling, group
+        // options carried; an unknown op forwards.
         assert_eq!(
             decide_role(&os(&["agents", "roles", "--root", "r", "ls", "-J"]), false),
             Role::AgentsRoles(os(&["--root", "r", "ls", "-J"]))
@@ -1850,6 +1850,10 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "roles", "context"]), false),
+            Role::AgentsRoles(os(&["context"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "promote"]), false),
             Role::Forward
         );
     }

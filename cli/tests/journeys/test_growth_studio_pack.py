@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,12 +9,12 @@ import pytest
 from fno.company.contracts import WorkOrderRef
 from fno.plugins.activate import activate, deactivate
 from fno.plugins.registry import PackRegistryStore
-from fno.roles.context import build_artifact_catalog
 from fno.roles.models import (
     ApprovalFloor,
     CapabilityFact,
     ContextBundleBounds,
     ContextKind,
+    ContextReference,
     RoleLayer,
     RoleResolutionBlocked,
     RoleResolutionReason,
@@ -28,6 +29,23 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "growth-studio" / "plugin.yaml"
 PACK_ASSETS = REPO_ROOT / "plugins" / "growth-studio" / "assets"
 ROLE_IDS = ("marketing", "communications", "design", "social")
+
+
+def _pack_asset(identifier: str, sensitivity, revision: str) -> ContextReference:
+    asset = PACK_ASSETS / f"{identifier}.md"
+    data = asset.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    return ContextReference(
+        kind=ContextKind.ARTIFACT,
+        identifier=identifier,
+        provenance=str(asset),
+        content_digest=digest,
+        content_revision=digest,
+        snapshot_revision=revision,
+        sensitivity=sensitivity,
+        byte_size=len(data),
+        readable=True,
+    )
 
 
 def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitions=()):
@@ -54,18 +72,11 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
     # Supply a context catalog satisfying every declared artifact selector. The
     # content here is fixture-only (the pack's own asset files); AC16's
     # project-supplied product-truth provenance is exercised separately in
-    # test_context_catalog.py and test_growth_studio_faucet.py.
-    catalog = build_artifact_catalog(
-        {
-            selector.identifier: {
-                "path": str(PACK_ASSETS / f"{selector.identifier}.md"),
-                "sensitivity": selector.max_sensitivity.value,
-            }
-            for selector in manifest.context_selectors
-            if selector.kind is ContextKind.ARTIFACT and selector.identifier
-        },
-        snapshot_revision=revision,
-        clock=datetime.now(UTC),
+    # the roles_context goldens and test_growth_studio_faucet.py.
+    catalog = tuple(
+        _pack_asset(selector.identifier, selector.max_sensitivity, revision)
+        for selector in manifest.context_selectors
+        if selector.kind is ContextKind.ARTIFACT and selector.identifier
     )
     return resolve_role(
         role=role_ref,
