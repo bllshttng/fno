@@ -1,0 +1,1 @@
+{"op": "overlay", "id": "cx", "config": "[[accounts.records]]\nid = \"cx\"\nname = \"cx\"\nharness = \"codex\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n", "expect": {"error": "account 'cx' is a codex/oauth_dir record; --account is claude-only (codex has its own CODEX_HOME slot)"}}
