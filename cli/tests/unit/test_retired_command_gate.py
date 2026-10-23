@@ -187,3 +187,27 @@ def test_a_malformed_allowlist_line_names_its_line_number(repo: Path) -> None:
     result = _run(repo)
     assert result.returncode == 1
     assert ":2:" in result.stderr and "malformed" in result.stderr
+
+
+def test_a_regex_registry_entry_still_fails_through_the_prefilter(repo: Path) -> None:
+    """An entry written as a regex reaches git grep -F by its literal prefix."""
+    _add(repo, "cli/src/fno/new.py", 'HELP = "fno backlog update <id> --title <text>"\n')
+    result = _run(repo)
+    assert result.returncode == 1
+    assert "cli/src/fno/new.py" in result.stderr
+
+
+def test_the_scan_stays_inside_a_runtime_bound(repo: Path) -> None:
+    """The 153-way ERE alternation ran 31+ minutes on the real tree.
+
+    The synthetic tree is tiny, so this bounds the shape and not the tree. The
+    bound is deliberately loose; it catches a hang, not a slowdown.
+    """
+    result = subprocess.run(
+        ["bash", "scripts/ci/check-retired-command-strings.sh"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
