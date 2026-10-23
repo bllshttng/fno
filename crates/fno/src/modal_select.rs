@@ -486,7 +486,20 @@ fn word_at(block: &Block, row: usize, col: usize) -> Option<((usize, usize), (us
         } else {
             0
         };
-        for (ci, cell) in line.cells.iter().enumerate().skip(skip) {
+        // A row a seam continues ends in the frame's pad, not a word break.
+        let keep = if block
+            .lines
+            .get(li + 1)
+            .is_some_and(|n| n.join == Join::Seam)
+        {
+            line.cells
+                .iter()
+                .rposition(|c| !c.1.is_whitespace())
+                .map_or(0, |p| p + 1)
+        } else {
+            line.cells.len()
+        };
+        for (ci, cell) in line.cells.iter().enumerate().take(keep).skip(skip) {
             chars.push((!cell.1.is_whitespace()).then_some((li, ci)));
         }
     }
