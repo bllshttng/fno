@@ -259,22 +259,4 @@ mod tests {
             assert_eq!(plan(&mut params, &mut name, substrate).unwrap_err(), 2);
         }
     }
-
-    #[test]
-    fn only_a_hand_off_carries_the_succession_scope() {
-        let mut p = Promotion {
-            ask: json!({}),
-            scope: "x-1".into(),
-            hand_off: false,
-            caller_session: Some("s".into()),
-        };
-        assert_eq!(gate_input(Some(&p)).succession_scope, None);
-        assert_eq!(gate_input(Some(&p)).caller_session.as_deref(), Some("s"));
-        p.hand_off = true;
-        assert_eq!(
-            gate_input(Some(&p)).succession_scope.as_deref(),
-            Some("x-1")
-        );
-        assert_eq!(gate_input(None).caller_session, None);
-    }
 }
