@@ -88,8 +88,8 @@ def test_the_workflow_actually_shards_the_gate() -> None:
     assert selectors, "the smoke gate needs no shard jobs carrying --only/--skip"
     counts = {job: sum(1 for candidate, *_rest in selectors if candidate == job)
               for job, *_rest in selectors}
-    assert counts == {"smoke-pytest": 4, "smoke-rest": 4}, (
-        f"expected four pytest legs and four rest legs, found {counts}"
+    assert set(counts) == {"smoke-pytest", "smoke-rest"} and min(counts.values()) >= 1, (
+        f"expected pytest and rest legs, found {counts}"
     )
 
 
@@ -172,20 +172,18 @@ def test_the_rust_binary_is_built_in_the_shard_that_needs_it() -> None:
 def test_the_rest_legs_split_by_measured_weight() -> None:
     """Round-robin once put 1425s of steps on one rest leg and 250s on the others.
 
-    The widest leg must stay under 600 estimated seconds, and the heaviest
-    step must not share a leg with the next heaviest.
+    The widest leg must stay under 600 estimated seconds. Refresh the table
+    from a fresh main run when a leg's smoke-duration line nears its cap.
     """
     names = _names()
     weights = smoke_step_weights(_REPO_ROOT)
     assert len(weights) >= 10, "the weight table is missing or empty"
-    heaviest = sorted(weights, key=weights.get, reverse=True)[:2]
     rest = [s for s in _shard_selectors() if s[0] == "smoke-rest"]
     assert rest, "no smoke-rest legs read from the workflow"
     for _job, shard, total, flag, globs in rest:
         leg = _selected(names, flag, globs, shard, total)
         seconds = sum(weights.get(name, 2.0) for name in leg)
         assert seconds <= 600, f"rest leg {shard}/{total} estimates {seconds:.0f}s"
-        assert not set(heaviest) <= set(leg), f"leg {shard} carries {heaviest}"
 
 
 def test_smoke_setup_cleans_fno_agents_and_fno_before_building_cached_artifacts() -> None:

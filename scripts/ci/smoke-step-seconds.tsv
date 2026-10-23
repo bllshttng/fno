@@ -6,8 +6,8 @@
 # Measured 2026-10-22 from the four smoke-rest legs of main run 39863857342:
 # the time from one ::group:: line to the next in each leg's job log. Steps
 # under 15 seconds are left out. Refresh from a fresh main run when a leg's
-# smoke-duration line nears its cap, then check the split with
-# `uv run --project cli python scripts/ci/smoke-shard-balance.py`.
+# smoke-duration line nears its cap. cli/tests/unit/test_smoke_shards.py
+# refuses a split whose widest rest leg estimates over 600 seconds.
 #
 # seconds<TAB>step name
 482	scripts/tests/stress-rust-e2e-concurrency.sh
