@@ -1,0 +1,32 @@
+# Seconds per smoke registry step, read by `fno doctor test smoke --shard`.
+# The shard split puts the heaviest steps first onto the lightest leg. A step
+# missing from this table counts 2 seconds, the measured mean of the steps
+# left out, so a new slow step lands blind until it is listed here.
+#
+# Measured 2026-10-22 from the four smoke-rest legs of main run 39863857342:
+# the time from one ::group:: line to the next in each leg's job log. Steps
+# under 15 seconds are left out. Refresh from a fresh main run when a leg's
+# smoke-duration line nears its cap, then check the split with
+# `uv run --project cli python scripts/ci/smoke-shard-balance.py`.
+#
+# seconds<TAB>step name
+482	scripts/tests/stress-rust-e2e-concurrency.sh
+211	scripts/tests/check-no-internal-refs-selftest.sh
+203	tests/test-validate-plan.sh
+154	tests/mux-workspace-standalone.sh
+139	Menu-cap guard (cap 12 at three levels, hidden counts)
+101	Target self-handoff harness
+85	tests/test-context-nudge.sh
+75	scripts/tests/check-plan-rung-authority-selftest.sh
+45	tests/test-dev-build-suites.sh
+40	worktree lifecycle: remove-hook contract + cwd-anchored liveness + ttyless archive + job reap
+38	preflight orchestration self-test
+37	tests/hooks/test_size_profile.sh
+36	Smoke tests
+27	loop-check journey tests (e2e + emission-schema + backstop-subprocess)
+23	tests/mux-restart-survival-matrix.sh
+22	loop-check shim + immutable manifest harness
+19	tests/hooks/test_groom_self_heal.sh
+19	tests/test-context-nudge-team-shape.sh
+16	scripts/tests/test-spec-suite.sh
+15	agent skill harness

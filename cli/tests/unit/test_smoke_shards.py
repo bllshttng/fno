@@ -19,6 +19,7 @@ import yaml
 from fno.test_cmd import (
     _name_matches,
     _shard_selected_indices,
+    smoke_step_weights,
     smoke_steps,
 )
 
@@ -66,7 +67,9 @@ def _selected(
         indices = [i for i, name in enumerate(names) if not _name_matches(name, globs)]
     if total:
         steps = [(name, ".", "") for name in names]
-        indices = _shard_selected_indices(steps, indices, shard, total)
+        indices = _shard_selected_indices(
+            steps, indices, shard, total, smoke_step_weights(_REPO_ROOT)
+        )
     return [names[i] for i in indices]
 
 
@@ -164,6 +167,25 @@ def test_the_rust_binary_is_built_in_the_shard_that_needs_it() -> None:
             assert build not in selected, (
                 f"{job} runs pytest and the rust build together; pytest deletes "
                 "the binary that build produces")
+
+
+def test_the_rest_legs_split_by_measured_weight() -> None:
+    """Round-robin once put 1425s of steps on one rest leg and 250s on the others.
+
+    The widest leg must stay under 600 estimated seconds, and the heaviest
+    step must not share a leg with the next heaviest.
+    """
+    names = _names()
+    weights = smoke_step_weights(_REPO_ROOT)
+    assert len(weights) >= 10, "the weight table is missing or empty"
+    heaviest = sorted(weights, key=weights.get, reverse=True)[:2]
+    rest = [s for s in _shard_selectors() if s[0] == "smoke-rest"]
+    assert rest, "no smoke-rest legs read from the workflow"
+    for _job, shard, total, flag, globs in rest:
+        leg = _selected(names, flag, globs, shard, total)
+        seconds = sum(weights.get(name, 2.0) for name in leg)
+        assert seconds <= 600, f"rest leg {shard}/{total} estimates {seconds:.0f}s"
+        assert not set(heaviest) <= set(leg), f"leg {shard} carries {heaviest}"
 
 
 def test_smoke_setup_cleans_fno_agents_and_fno_before_building_cached_artifacts() -> None:
