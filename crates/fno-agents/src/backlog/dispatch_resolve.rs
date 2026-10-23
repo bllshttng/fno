@@ -793,7 +793,6 @@ pub fn dispatch_cfg_for(node_cwd: Option<&str>, command_name: &str) -> DispatchC
         (None, None) => (String::new(), None),
     };
     let allowed_commands = lookup(&["dispatch", "allowed_commands"])
-        .or_else(|| lookup(&["dispatch", super::settings::LEGACY_ALLOWED_COMMANDS_KEY]))
         .and_then(|v| v.as_array().cloned())
         .map(|rows| {
             rows.iter()
@@ -801,7 +800,6 @@ pub fn dispatch_cfg_for(node_cwd: Option<&str>, command_name: &str) -> DispatchC
                 .collect::<Vec<String>>()
         });
     let command_registry = lookup(&["dispatch", "command_registry"])
-        .or_else(|| lookup(&["dispatch", super::settings::LEGACY_COMMAND_REGISTRY_KEY]))
         .and_then(|v| v.as_table().cloned())
         .map(|table| {
             table
