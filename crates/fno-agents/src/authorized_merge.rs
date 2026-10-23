@@ -1257,14 +1257,16 @@ fn flake_blocker(request: &Request, checks: &ChecksRead) -> Option<Blocker> {
     ))
 }
 
-/// The optional-reviews gate, shared by the effect and preview walks: an
-/// unknown read never passes for "none unresolved".
+/// The optional-reviews gate, shared by the effect and preview walks. A
+/// counted unresolved finding holds. An unreadable count warns and passes:
+/// these reviews are optional, and failing closed on a broken read once held
+/// every merge on the machine. Required reviewers gate through coverage.
 fn optional_reviews_blocker(value: Option<Option<i64>>) -> Option<Blocker> {
     match value {
-        None | Some(None) => Some(Blocker::unknown(
-            "optional_reviews_unknown",
-            "optional review findings unreadable; refusing to assume none unresolved",
-        )),
+        None | Some(None) => {
+            eprintln!("warn: optional review findings unreadable; the merge does not wait on them");
+            None
+        }
         Some(Some(0)) => None,
         Some(Some(_)) => Some(Blocker::held(
             "optional_reviews_unresolved",

@@ -1143,6 +1143,21 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
 }
 
 #[test]
+fn an_unreadable_optional_review_count_never_holds_a_merge() {
+    // Specimen 2026-10-22: the gh helpers went missing, the optional count
+    // read unknown, and the old fail-closed gate held every merge.
+    let fake = Fake {
+        optional_unresolved: Some(None),
+        ..clean()
+    };
+    assert!(preview_blockers(&fake, &preview_request(7)).is_empty());
+    assert!(matches!(
+        run(&fake, &request(Effect::Merge)),
+        Outcome::Merged { .. }
+    ));
+}
+
+#[test]
 fn an_immediate_merge_never_passes_auto() {
     let journal = crate::merge_provenance::TestJournal::opt_in();
     let fake = clean();
