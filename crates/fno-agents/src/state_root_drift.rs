@@ -7,6 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
+/// The inventory doc this binary was built with: the last resort when no
+/// override or stage copy is readable, so the reading never fails on a stage
+/// that ships no docs/.
+const BUILT_IN_DOC: &str = include_str!("../../../docs/state-root-inventory.md");
+
 /// Where the inventory doc lives for THIS machine: an explicit override
 /// (tests, custom installs), then the plugin stage beside the state root.
 /// The stage copy is a filtered checkout (docs/ is git-tracked), so both a
@@ -150,10 +155,17 @@ pub struct DriftReport {
 /// The live reading. A failure is a REFUSAL, never a silent zero: an
 /// unreadable doc or root makes the caller print a failed reading.
 pub fn drift_report(state_root: &Path) -> Result<DriftReport, String> {
-    let doc = doc_path(state_root).ok_or_else(|| {
-        "inventory doc unreadable: no docs/state-root-inventory.md upward from the cwd or beside the state root".to_string()
-    })?;
-    let text = std::fs::read_to_string(&doc).map_err(|e| format!("read {}: {e}", doc.display()))?;
+    let (doc, text) = match doc_path(state_root) {
+        Some(doc) => {
+            let text = std::fs::read_to_string(&doc)
+                .map_err(|e| format!("read {}: {e}", doc.display()))?;
+            (doc, text)
+        }
+        None => (
+            PathBuf::from("<built-in docs/state-root-inventory.md>"),
+            BUILT_IN_DOC.to_string(),
+        ),
+    };
     let patterns = top_level_patterns(&text);
     let names: Vec<String> = std::fs::read_dir(state_root)
         .map_err(|e| format!("read {}: {e}", state_root.display()))?
@@ -232,6 +244,17 @@ mod tests {
         names.retain(|n| !pats.iter().any(|p| glob_match(p, n)));
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_state_root_without_a_staged_doc_reads_the_built_in_one() {
+        let dir = std::env::temp_dir().join(format!("fno-drift-nostage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("zz-stray.out"), "").unwrap();
+        let report = drift_report(&dir).expect("built-in doc answers");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(report.entries.contains(&"zz-stray.out".to_string()));
     }
 
     #[test]
