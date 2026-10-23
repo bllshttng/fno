@@ -564,8 +564,10 @@ mod tests {
             .filter(|l| l["contradicted"] == json!(true))
             .filter_map(|l| l["id"].as_str())
             .collect();
+        // The proposal ran at the injected date, so the assertion reads the
+        // same date, never the wall clock.
         let lapse = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
-        let seat_law_live = chrono::Utc::now().date_naive() < lapse;
+        let seat_law_live = before_lapse() < lapse;
         assert_eq!(laws.contains(&"d-e38d92cc"), seat_law_live, "{laws:?}");
     }
 
