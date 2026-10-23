@@ -1,0 +1,1 @@
+{"op": "stamp-window", "state": {"windows_opened": {"zai": {"window": {"opened_at": 1789399400.0, "warned": true}}}}, "id": "zai", "opened_at": 1789400000.0, "expect": {"result": true, "file": {"combo_cursors": {}, "provider_health": {}, "schema_version": 2, "usage": {}, "windows_opened": {"zai": {"window": {"opened_at": 1789400000.0, "warned": false}}}}}}
