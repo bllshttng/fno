@@ -251,9 +251,8 @@ pub(crate) fn handle_session_report(
         report_cwd.as_deref(),
     );
 
-    // A claude session no row holds may be a fork of one a row does hold
-    // (`claude --bg --resume` on a held session copies it). The argv read
-    // shells out, so it runs here, outside the lock, and only for a mint.
+    // A claude session no row holds may fork one a row holds. The argv read
+    // runs here, outside the lock, and only for a mint.
     let fork_parent = (harness == "claude" && pending_mint.is_some())
         .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
         .flatten();
