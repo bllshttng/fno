@@ -331,6 +331,8 @@ fn state_dir() -> PathBuf {
 /// mirrors on `AgentsHome`. The inbox threads tree is
 /// `<state>/inbox/<recipient>/inbox/`, the bus log `<bus_dir>/messages.jsonl`.
 fn inbox_dir_for(project: &str) -> Result<PathBuf, String> {
+    let mapped = system_arm_inbox_key(project);
+    let project = mapped.as_deref().unwrap_or(project);
     // store.py inbox_dir_for: strict validation closes the traversal hole a
     // crafted recipient would open into the inbox tree.
     if project.contains('/') || project.contains('\\') {
@@ -371,6 +373,19 @@ fn inbox_dir_for(project: &str) -> Result<PathBuf, String> {
     let agents_root =
         obsidian_agents_root(&cwd).unwrap_or_else(|| state_dir().join("inbox").join("agents"));
     Ok(agents_root.join(project).join("inbox"))
+}
+
+/// A system arm address (`fno/quiet-recovery`) has exactly one slash between
+/// two non-empty segments. It maps to the single segment `fno.quiet-recovery`
+/// so its durable floor is a plain directory. Any other slash shape returns
+/// None and stays refused by the traversal guard; the mapped key still passes
+/// through that guard, so `a/..` or `./x` fail on the `..` it produces.
+fn system_arm_inbox_key(name: &str) -> Option<String> {
+    let (project, arm) = name.split_once('/')?;
+    if project.is_empty() || arm.is_empty() || arm.contains('/') {
+        return None;
+    }
+    Some(format!("{project}.{arm}"))
 }
 
 /// paths.vault_root + inbox_agents_root: `<vault>/internal/agents` when a
@@ -2350,5 +2365,26 @@ mod ask_anycast_tests {
             ask_recipient_or_refuse("p", Some("alpha".to_string())),
             Ok("alpha".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod system_arm_inbox_tests {
+    use super::*;
+    use crate::claims::EnvVarGuard;
+
+    #[test]
+    fn a_system_arm_address_maps_to_one_safe_segment_and_other_slashes_stay_refused() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _root = EnvVarGuard::set("FNO_INBOX_ROOT", "/tmp/fno-arm-inbox");
+        assert_eq!(
+            inbox_dir_for("fno/quiet-recovery").unwrap(),
+            PathBuf::from("/tmp/fno-arm-inbox/fno.quiet-recovery/inbox")
+        );
+        for bad in ["a/b/c", "/arm", "fno/", "a/..", "../x", "./x", "a\\b"] {
+            assert!(inbox_dir_for(bad).is_err(), "{bad} must stay refused");
+        }
     }
 }

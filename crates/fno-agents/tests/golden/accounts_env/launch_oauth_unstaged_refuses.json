@@ -1,0 +1,1 @@
+{"op": "launch_env", "id": "o1", "config": "[[accounts.records]]\nid = \"o1\"\nname = \"o1\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n", "dirs": ["creds"], "expect": {"error": "ProviderUnavailableError", "message": "Provider 'o1' is not staged. Call stage(record) before dispatch_env()."}}

@@ -206,9 +206,9 @@ fn in_blueprint_law(row: &RowKey) -> bool {
 
 /// The seat laws a proposal seating `row` would contradict, with their
 /// one-line gist: the router names them, the user decides. A glm-flash
-/// target lane contradicts nothing; any other target lane runs against the
-/// standing glm preference.
-fn contradicted_laws(stage: &str, row: &RowKey) -> Vec<Value> {
+/// target lane runs against the temporary opus/sonnet seating until it
+/// lapses; any other target lane runs against the standing glm preference.
+fn contradicted_laws(stage: &str, band: &str, row: &RowKey) -> Vec<Value> {
     let mut out = Vec::new();
     if stage == BLUEPRINT_STAGE {
         out.push(json!({
@@ -225,13 +225,29 @@ fn contradicted_laws(stage: &str, row: &RowKey) -> Vec<Value> {
         }
         return out;
     }
+    let today = chrono::Utc::now().date_naive();
     let flash = row.model_norm == "glm-5.3-flash";
-    if !flash {
+    if today < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap() {
+        // The temporary law seats by band: sonnet for low and medium, opus
+        // for high.
+        let low_band = matches!(band, "low" | "medium");
+        let aligned = (row.model_norm.starts_with("sonnet") && low_band)
+            || (row.model_norm.starts_with("opus") && !low_band);
+        if !aligned {
+            out.push(json!({
+                "id": "d-e38d92cc",
+                "gist": "until 2026-10-23 the law seats sonnet on low and medium bands and opus on high",
+                "contradicted": true,
+            }));
+        }
+    } else if !flash {
         out.push(json!({
             "id": "d-e38d92cc",
-            "gist": "target work returns to glm-5.3-flash[1m]",
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
             "contradicted": true,
         }));
+    }
+    if !flash {
         out.push(json!({
             "id": "d-ecaf06b8",
             "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
@@ -409,7 +425,7 @@ pub(crate) fn propose_with(
                 "harness": row.harness,
                 "verdict": verdict,
                 "nodes": nodes,
-                "laws": contradicted_laws(stage, row),
+                "laws": contradicted_laws(stage, difficulty, row),
             });
             if let Some(c) = cell {
                 for k in ["merged", "merged_ci95", "cost_per_merged_usd"] {
@@ -528,7 +544,8 @@ mod tests {
         assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
-        // A glm-flash proposal contradicts no seat law, on any date.
+        // Until the temporary seat law lapses, a glm proposal names it. After
+        // that date glm is the standing seat and contradicts nothing.
         let laws: Vec<&str> = p["laws"]
             .as_array()
             .unwrap()
@@ -536,7 +553,9 @@ mod tests {
             .filter(|l| l["contradicted"] == json!(true))
             .filter_map(|l| l["id"].as_str())
             .collect();
-        assert!(laws.is_empty(), "{laws:?}");
+        let lapse = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        let seat_law_live = chrono::Utc::now().date_naive() < lapse;
+        assert_eq!(laws.contains(&"d-e38d92cc"), seat_law_live, "{laws:?}");
     }
 
     #[test]
