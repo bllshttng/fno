@@ -45,7 +45,11 @@ pub(super) struct LiveTab {
 /// state, not an anomaly - folding the per-session fact into one boolean
 /// disabled the sweep for every healthy session and reported a clean exit 0
 ///.
-pub(super) fn live_tabs() -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String>) {
+///
+/// A session whose socket is [`proven_listenerless`] has no server and so no
+/// panes: it counts as answered with zero cwds instead of blocking the store
+/// pass forever. With `reap_dead` its leftover session files are removed.
+pub(super) fn live_tabs(reap_dead: bool) -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String>) {
     let Ok(names) = session_names() else {
         // The session list itself is unreadable: nothing was probed, so no
         // session answered, and the refusal below must name that hole rather
@@ -114,6 +118,19 @@ pub(super) fn live_tabs() -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String
                     tab.used_shell_only &= pane.fno_id.is_none() && pane.shell_idle;
                 }
             }
+            _ if proven_listenerless(&sock) => {
+                if reap_dead && !proto::startup_sidecar_path(&sock).exists() {
+                    match proto::remove_session_files(&sock) {
+                        Ok(()) => eprintln!(
+                            "fno mux workspace prune: removed dead session {name:?} (no listener, no live pid)"
+                        ),
+                        Err(e) => eprintln!(
+                            "fno mux workspace prune: warn: dead session {name:?} files remain: {e}"
+                        ),
+                    }
+                }
+                answered.push(name);
+            }
             _ => unreachable.push(name),
         }
     }
@@ -126,6 +143,26 @@ pub(super) fn live_tabs() -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String
         }
     }
     (groups.into_values().collect(), cwds, answered, unreachable)
+}
+
+/// True only when nothing can be serving `sock`: every connect is refused or
+/// finds no file, no starter holds the startup marker, and the pid sidecar is
+/// absent or names a dead or reused pid. A timeout, a wire error, an
+/// unparseable sidecar or a live pid all read false, so the caller stays
+/// fail-closed on everything but a proven corpse.
+pub(super) fn proven_listenerless(sock: &std::path::Path) -> bool {
+    if proto::probe_status(sock) != proto::ProbeOutcome::Dead
+        || proto::startup_sidecar_path(sock).exists()
+    {
+        return false;
+    }
+    match std::fs::read_to_string(proto::pid_sidecar_path(sock)) {
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        Ok(raw) => match proto::parse_pid_sidecar(&raw) {
+            None => false,
+            Some((pid, start)) => proto::pid_confirmed_dead(pid) || identity_mismatch(pid, start),
+        },
+    }
 }
 
 #[derive(Debug, Default)]
@@ -712,6 +749,43 @@ mod tests {
             none_answered.sweep_store,
             "zero sessions is empty, not partial"
         );
+    }
+
+    #[test]
+    fn a_refused_socket_with_no_live_pid_is_proven_listenerless() {
+        // A dead server's leftover socket: the file stays, every connect is
+        // refused. Only a dead or absent pid proves no listener; a live pid,
+        // a garbage sidecar or a startup marker keeps the session unreachable.
+        let sock = std::env::temp_dir().join(format!("fno-pl-{}.sock", std::process::id()));
+        let _ = proto::remove_session_files(&sock);
+        drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
+        assert!(sock.exists(), "the corpse socket stays behind");
+        assert!(proven_listenerless(&sock), "no pid sidecar: proven dead");
+
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        let pid_file = proto::pid_sidecar_path(&sock);
+        std::fs::write(&pid_file, dead_pid.to_string()).unwrap();
+        assert!(proven_listenerless(&sock), "a dead pid: proven dead");
+
+        std::fs::write(&pid_file, std::process::id().to_string()).unwrap();
+        assert!(!proven_listenerless(&sock), "a live pid stays fail-closed");
+        std::fs::write(&pid_file, "junk").unwrap();
+        assert!(
+            !proven_listenerless(&sock),
+            "a garbage sidecar stays fail-closed"
+        );
+
+        std::fs::remove_file(&pid_file).unwrap();
+        let marker = proto::startup_sidecar_path(&sock);
+        std::fs::write(&marker, "x").unwrap();
+        assert!(
+            !proven_listenerless(&sock),
+            "a starter mid-bind stays fail-closed"
+        );
+        std::fs::remove_file(&marker).unwrap();
+        proto::remove_session_files(&sock).unwrap();
     }
 
     #[test]

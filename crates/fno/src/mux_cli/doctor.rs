@@ -27,7 +27,7 @@ pub(super) fn squad_store_check() -> Check {
     // pass an empty `live_cwds` and no clock, so the number the operator read
     // could disagree with what a bare `prune` would do. `include_named: false`
     // stays hardcoded on purpose: it is what a bare `prune` uses.
-    let (_, live_cwds, ..) = live_tabs();
+    let (_, live_cwds, ..) = live_tabs(false);
     let now = crate::squad_store::now_epoch_secs();
     let orphan = loaded
         .squads
