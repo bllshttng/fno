@@ -348,9 +348,10 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     assert counts.get("fenced", 0) >= 20, counts
     assert counts.get("value-form", 0) >= 4, counts
     # A floor AND a ceiling on exemptions: each new exempt marker must be a
-    # visible test edit, never a silent gate bypass. Twelve standing
-    # exemptions: the deprecated-gemini arms, the hermes -q value form, and
-    # the notify-send body (a toast, not a worker seed). The agy arm dropped
+    # visible test edit, never a silent gate bypass. Eleven standing
+    # exemptions: the deprecated-gemini arms and the notify-send body (a
+    # toast, not a worker seed). The hermes -q value form dropped out with
+    # the hermes adapter. The agy arm dropped
     # out when the seed moved off the argv seam onto the shared readiness
     # gate's submit path. pi added two, its pane arm and its headless
     # argv tail, on a PROBED reason rather than an assumed one: `pi --
@@ -372,7 +373,8 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     # ritual's own text) must precede the fence. Sixteen: the pi pane arm's
     # builder in pane_spawn/simple.rs, on the same probed pi reason as
     # pi_run_tail - the seed is a trailing positional after the flag block
-    # and the row-8 golden pins the unfenced form.
-    assert counts.get("exempt", 0) == 16, counts
+    # and the row-8 golden pins the unfenced form. Fifteen in all, after the
+    # hermes adapter left.
+    assert counts.get("exempt", 0) == 15, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts
