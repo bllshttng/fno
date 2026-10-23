@@ -85,8 +85,8 @@ def test_the_workflow_actually_shards_the_gate() -> None:
     assert selectors, "the smoke gate needs no shard jobs carrying --only/--skip"
     counts = {job: sum(1 for candidate, *_rest in selectors if candidate == job)
               for job, *_rest in selectors}
-    assert counts == {"smoke-pytest": 13, "smoke-rest": 4}, (
-        f"expected thirteen pytest legs and four rest legs, found {counts}"
+    assert counts == {"smoke-pytest": 4, "smoke-rest": 4}, (
+        f"expected four pytest legs and four rest legs, found {counts}"
     )
 
 
