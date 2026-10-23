@@ -724,7 +724,7 @@ def _resolve_time() -> float:
 # ---------------------------------------------------------------------------
 
 @cli.command("show")
-def show_provider(
+def show_forward(
     provider_id: str = typer.Argument(...),
     print_binding: bool = typer.Option(
         False,
@@ -736,49 +736,19 @@ def show_provider(
     ),
 ) -> None:
     """Show all fields of a single account record."""
-    config = _load()
-    record = config.by_id.get(provider_id)
-    if record is None:
-        typer.echo(f"error: account '{provider_id}' not found", err=True)
-        raise typer.Exit(1)
-    if print_binding:
-        # the secret-free projection the Rust re-entry resolver
-        # consumes (`fno-agents reentry-plan` shells this). Same KEY=VALUE
-        # grammar as `pick --print-env`, but only the identity/namespace
-        # facts - an api_key record's env never reaches stdout, so the
-        # resolver can be composed into receipts and logs unchanged.
-        from fno.agents.account_env import AccountResolutionError, resolve_account_overlay
+    # Transport only: `fno-agents spawn-overlay accounts show` owns the command.
+    import subprocess
 
-        try:
-            overlay = resolve_account_overlay(provider_id)
-        except AccountResolutionError as exc:
-            typer.echo(f"error: {exc}", err=True)
-            raise typer.Exit(1) from exc
-        typer.echo(f"ACCOUNT_ID={overlay.account_id}")
-        typer.echo(f"LANE={overlay.lane}")
-        config_dir = overlay.env.get("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            typer.echo(f"CLAUDE_CONFIG_DIR={config_dir}")
-        return
-    typer.echo(f"id:                  {record.id}")
-    typer.echo(f"name:                {record.name}")
-    typer.echo(f"harness:             {record.harness}")
-    typer.echo(f"auth:                {record.auth}")
-    typer.echo(f"priority:            {record.priority}")
-    if record.credentials_source is not None:
-        typer.echo(f"credentials_source:  {record.credentials_source}")
-    if record.env:
-        typer.echo(f"env:                 {record.env}")
-    if record.route:
-        typer.echo(f"route:               {record.route}")
-    if record.account_id:
-        typer.echo(f"account_id:          {record.account_id}")
-    if record.tags:
-        typer.echo(f"tags:                {record.tags}")
-    if record.description:
-        typer.echo(f"description:         {record.description}")
-    if config.active == record.id:
-        typer.echo("active:              yes")
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
+        raise typer.Exit(127)
+    argv = [str(binary), "spawn-overlay", "accounts", "show", provider_id]
+    if print_binding:
+        argv.append("--print-binding")
+    raise typer.Exit(subprocess.run(argv).returncode)
 
 
 # ---------------------------------------------------------------------------

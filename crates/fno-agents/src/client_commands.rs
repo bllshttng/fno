@@ -1857,7 +1857,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // seam's own `--resume` skip holds the same reasoning). The value is still
     // validated when it NAMES SOMETHING ELSE: an account that does not resolve
     // in the store is a typo reading as applied. The recorded account itself
-    // is never re-validated here - the reentry resolver below shells the same
+    // is never re-validated here - the reentry resolver below reads the same
     // store for it, and a second spawn per wake buys nothing. Non-claude rows
     // carry no account axis; the row's own lane bills itself.
     if let Some(acct) = account.as_deref() {
@@ -1866,7 +1866,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             .and_then(Value::as_str)
             .unwrap_or("");
         if matches!(&route, ResumeRoute::ClientResume) && acct != recorded {
-            if let Err(reason) = crate::reentry::shell_account_binding(acct) {
+            if let Err(reason) = crate::reentry::account_binding(acct) {
                 eprintln!(
                     "fno agents resume: --account {acct:?} does not resolve: {reason}. \
                      --account never re-binds an existing row; re-spawn the worker under the account you want."
