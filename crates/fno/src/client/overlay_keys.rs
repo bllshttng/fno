@@ -381,6 +381,12 @@ pub(super) async fn nav_keys(
                     input_field::clear_opt(view.nav.as_mut().map(|n| &mut n.query));
                     view.nav_ring_if_empty();
                 }
+                // Ctrl-o opens the sideline's row menu on the cursor row. Bare
+                // letters stay query text (Locked 5), so the menu's own keys
+                // (x remove, p peek, m mail, ...) work one keypress later.
+                0x0f => {
+                    view.nav_open_menu();
+                }
                 // Printable ASCII edits the query; capped like search so a held
                 // key / paste can't grow it unbounded. Cursor re-anchors to 0.
                 0x20..=0x7e => {
