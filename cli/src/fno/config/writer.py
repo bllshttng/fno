@@ -43,6 +43,13 @@ from fno.config.optouts import MERGE_GATING_OPTOUTS
 from fno.time_budget import validate_timeout_budget
 
 
+# Pre-rename dispatch keys no loader reads any more. `unset` still removes them
+# from disk, since the model rejects a key it no longer knows.
+RETIRED_DISPATCH_KEYS = frozenset(
+    {"dispatch.allowed_verbs", "dispatch.verb_registry"}  # verb-wording: allow (config keys)
+)
+
+
 class ConfigSetError(Exception):
     """A user-facing config-set failure carrying a CLI exit code."""
 
@@ -838,11 +845,12 @@ def unset_config_value(
     refused, fail-closed.
     """
     parts = key.split(".")
-    if _resolve_parent_block(parts) is None:
+    retired = key.removeprefix("config.") in RETIRED_DISPATCH_KEYS
+    if not retired and _resolve_parent_block(parts) is None:
         raise ConfigSetError(f"unknown config key {key!r}", 1)
 
-    default = resolve_dotted(SettingsModel(), parts)[1]
-    store_parts = _storage_parts(parts)
+    default = None if retired else resolve_dotted(SettingsModel(), parts)[1]
+    store_parts = parts if retired else _storage_parts(parts)
     # A key that resolves through the providers->accounts rename may still be
     # stored under the pre-rename [providers] block; unset removes both
     # spellings so the legacy copy cannot keep the value alive.
