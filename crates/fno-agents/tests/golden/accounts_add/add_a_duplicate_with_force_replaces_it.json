@@ -1,0 +1,39 @@
+{
+  "global": "# operator note: keep this comment\n[review]\nmax_rounds = 2\n\n[accounts]\nactive = \"work\"\nauto_switch = true\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\ntags = [\"main\"]\n\n[accounts.quota]\ndefer_dispatch = true\n",
+  "args": [
+    "work",
+    "-H",
+    "codex",
+    "-a",
+    "managed",
+    "-F"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'work' added (scope=global).\n",
+    "stderr": "",
+    "global": {
+      "review": {
+        "max_rounds": 2
+      },
+      "accounts": {
+        "active": "work",
+        "auto_switch": true,
+        "records": [
+          {
+            "id": "work",
+            "name": "work",
+            "harness": "codex",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "work"
+          }
+        ],
+        "quota": {
+          "defer_dispatch": true
+        }
+      }
+    },
+    "project": null
+  }
+}

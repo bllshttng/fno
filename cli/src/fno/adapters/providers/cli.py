@@ -756,7 +756,7 @@ def show_forward(
 # ---------------------------------------------------------------------------
 
 @cli.command("add")
-def add_provider(
+def add_forward(
     provider_id: str = typer.Argument(..., help="Unique provider id (lowercase alphanumeric + hyphens)"),
     harness_name: str = typer.Option(
         ...,
@@ -764,7 +764,7 @@ def add_provider(
         "-H",
         help="claude|codex|opencode|agy|trae|openclaw|hermes",
     ),
-    auth: str = typer.Option(..., "--auth", "-a", help="oauth_dir|api_key"),
+    auth: str = typer.Option(..., "--auth", "-a", help="oauth_dir|api_key|managed"),
     credentials_source: Optional[Path] = typer.Option(None, "--credentials-source"),
     env: list[str] = typer.Option([], "--env", help="KEY=VALUE pairs for api_key auth"),
     route: Optional[str] = typer.Option(
@@ -778,81 +778,31 @@ def add_provider(
     scope: str = typer.Option("global", "--scope", "-s", help="global|project"),
     force: bool = typer.Option(False, "--force", "-F", help="Overwrite existing record"),
 ) -> None:
-    """Add a new account record. Refuses to overwrite without --force.
+    """Add a new account record. Refuses to overwrite without --force."""
+    # Transport only: `fno-agents spawn-overlay accounts add` owns the command.
+    import subprocess
 
-    Phase 02 writes the settings.yaml record.
-    # TODO(phase-03): wire up staging.stage(record) here
-    (fno.adapters.providers.staging does not exist yet)
-    """
-    # Parse --env KEY=VALUE pairs
-    env_dict: dict[str, str] | None = None
-    if env:
-        env_dict = {}
-        for pair in env:
-            if "=" not in pair:
-                typer.echo(
-                    f"error: malformed --env entry '{pair}' (expected KEY=VALUE format)",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            k, _, v = pair.partition("=")
-            env_dict[k] = v
-        if not env_dict:
-            env_dict = None
+    from fno.rust_binary import resolve_binary
 
-    # Default name to id
-    record_name = name or provider_id
-
-    # Build + validate the record via Pydantic
-    try:
-        record = ProviderRecord(
-            id=provider_id,
-            name=record_name,
-            harness=harness_name,  # type: ignore[arg-type]
-            auth=auth,  # type: ignore[arg-type]
-            credentials_source=credentials_source,
-            env=env_dict,
-            route=route,
-            priority=priority,
-            account_id=account_id,
-        )
-    except Exception as exc:
-        # Surface Pydantic validation errors including auth_strategy_mismatch
-        msg = str(exc)
-        typer.echo(f"error: {msg}", err=True)
-        raise typer.Exit(1)
-
-    # Load the TARGET scope's own block: a read-modify-write on the merged
-    # view would copy other layers' records into the file being written.
-    try:
-        config = load_scope_config(scope)  # type: ignore[arg-type]
-    except ProviderConfigError as exc:
-        typer.echo(f"error loading existing config: {exc}", err=True)
-        raise typer.Exit(1)
-
-    # Check for duplicate
-    if record.id in config.by_id and not force:
-        typer.echo(
-            f"error: account '{record.id}' already exists. Use --force to overwrite.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    # Replace or append
-    new_records = [r for r in config.records if r.id != record.id]
-    new_records.append(record)
-
-    from fno.adapters.providers.model import ProvidersConfig
-    new_config = ProvidersConfig(records=new_records, active=config.active)
-
-    # Write
-    try:
-        save_providers(new_config, scope=scope)  # type: ignore[arg-type]
-    except OSError as exc:
-        typer.echo(f"error: failed to write settings.yaml: {exc}", err=True)
-        raise typer.Exit(1)
-
-    typer.echo(f"Account '{record.id}' added (scope={scope}).")
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
+        raise typer.Exit(127)
+    argv = [
+        str(binary), "spawn-overlay", "accounts", "add", provider_id,
+        "--harness", harness_name, "--auth", auth,
+        "--priority", str(priority), "--scope", scope,
+    ]
+    if credentials_source is not None:
+        argv += ["--credentials-source", str(credentials_source)]
+    for pair in env:
+        argv += ["--env", pair]
+    for flag, value in (("--route", route), ("--name", name), ("--account-id", account_id)):
+        if value is not None:
+            argv += [flag, value]
+    if force:
+        argv.append("--force")
+    raise typer.Exit(subprocess.run(argv).returncode)
 
 
 # ---------------------------------------------------------------------------

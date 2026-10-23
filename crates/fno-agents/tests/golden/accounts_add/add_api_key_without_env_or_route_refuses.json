@@ -1,0 +1,16 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "codex",
+    "-a",
+    "api_key"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: 1 validation error for ProviderRecord\n  Value error, auth_strategy_mismatch: alpha: auth=api_key requires exactly one of non-empty env or route\n",
+    "global": null,
+    "project": null
+  }
+}

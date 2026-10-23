@@ -1,0 +1,37 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "api_key",
+    "--env",
+    "ANTHROPIC_API_KEY=a=b",
+    "--env",
+    "EXTRA=1"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'alpha' added (scope=global).\n",
+    "stderr": "",
+    "global": {
+      "accounts": {
+        "records": [
+          {
+            "id": "alpha",
+            "name": "alpha",
+            "harness": "claude",
+            "auth": "api_key",
+            "priority": 100,
+            "account_id": "alpha",
+            "env": {
+              "ANTHROPIC_API_KEY": "a=b",
+              "EXTRA": "1"
+            }
+          }
+        ]
+      }
+    },
+    "project": null
+  }
+}

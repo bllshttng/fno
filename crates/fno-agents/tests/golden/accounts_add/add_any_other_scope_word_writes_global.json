@@ -1,0 +1,31 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "managed",
+    "-s",
+    "elsewhere"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'alpha' added (scope=elsewhere).\n",
+    "stderr": "",
+    "global": {
+      "accounts": {
+        "records": [
+          {
+            "id": "alpha",
+            "name": "alpha",
+            "harness": "claude",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "alpha"
+          }
+        ]
+      }
+    },
+    "project": null
+  }
+}
