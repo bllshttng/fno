@@ -111,3 +111,9 @@ class SpawnProfileBlock(SpawnDefaultsBlock):
         if not isinstance(v, dict):
             return {}
         return {k: val for k, val in v.items() if isinstance(val, dict)}
+
+
+class NamingBlock(BaseModel):
+    """``config.agents.naming``; the template is rendered in Rust (naming.rs)."""
+
+    worker: str = "t-{slug}"
