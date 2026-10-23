@@ -262,9 +262,10 @@ mod tests {
             let ro = tmp.path().join("ro");
             std::fs::create_dir(&ro).unwrap();
             std::fs::write(ro.join("config.toml"), "x = 1\n").unwrap();
+            let writable = std::fs::metadata(&ro).unwrap().permissions();
             std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o500)).unwrap();
             let failed = save(&ro.join("config.toml"), Some("work"));
-            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&ro, writable).unwrap();
             assert!(matches!(failed, Err(WriteError::Io(_))), "{failed:?}");
             assert_eq!(
                 std::fs::read_to_string(ro.join("config.toml")).unwrap(),

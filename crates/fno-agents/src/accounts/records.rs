@@ -666,7 +666,7 @@ fn parse_record(t: &toml::Table) -> Result<Record, RecordError> {
     Ok(record)
 }
 
-/// `ProviderRecord(**fields)` as the add verb builds it. The refusal is
+/// `ProviderRecord(**fields)` as the add command builds it. The refusal is
 /// `str(ValidationError)` without pydantic's ` [type=...]` suffix and its
 /// docs-URL line, which carry the pydantic version.
 pub(crate) fn build_record(t: &toml::Table) -> Result<Record, String> {
