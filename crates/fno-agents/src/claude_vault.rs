@@ -740,8 +740,7 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
         principal_json["email"] = json!(email);
     }
     let store = &options.store;
-    if crate::accounts::store::write_snapshot(store, id, "claude", id, &blob, true, now).is_err()
-        || crate::accounts::store::write_record_principal(store, id, &principal_json, now).is_err()
+    if crate::accounts::store::write_bound_snapshot(store, id, &blob, &principal_json, now).is_err()
     {
         return (
             1,

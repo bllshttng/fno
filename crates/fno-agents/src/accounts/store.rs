@@ -655,6 +655,44 @@ pub fn write_snapshot(
     keychain: bool,
     now: f64,
 ) -> Result<PathBuf, StoreError> {
+    write_snapshot_with(
+        root, record_id, harness, account_id, blob, keychain, now, None,
+    )
+}
+
+/// A claude Keychain snapshot bound to the `principal` just proven for it,
+/// in one meta write, so no crash can pair the new blob with a stale
+/// principal.
+pub fn write_bound_snapshot(
+    root: &Path,
+    record_id: &str,
+    blob: &str,
+    principal: &Value,
+    now: f64,
+) -> Result<PathBuf, StoreError> {
+    write_snapshot_with(
+        root,
+        record_id,
+        "claude",
+        record_id,
+        blob,
+        true,
+        now,
+        Some(principal),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_snapshot_with(
+    root: &Path,
+    record_id: &str,
+    harness: &str,
+    account_id: &str,
+    blob: &str,
+    keychain: bool,
+    now: f64,
+    principal: Option<&Value>,
+) -> Result<PathBuf, StoreError> {
     let dir = account_dir(root, record_id);
     let fail = |e: std::io::Error| {
         StoreError::Store(format!("failed to write snapshot for '{record_id}': {e}"))
@@ -675,7 +713,10 @@ pub fn write_snapshot(
         "kind".into(),
         json!(if keychain { "keychain" } else { "file" }),
     );
-    if let Some(prior) = read_meta(root, record_id) {
+    if let Some(principal) = principal {
+        meta.insert("principal".into(), principal.clone());
+        meta.insert("principal_at".into(), json!(iso(now)));
+    } else if let Some(prior) = read_meta(root, record_id) {
         for key in ["principal", "principal_at"] {
             if let Some(v) = prior.get(key) {
                 meta.insert(key.into(), v.clone());
