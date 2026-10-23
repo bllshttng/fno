@@ -251,6 +251,13 @@ pub(crate) fn handle_session_report(
         report_cwd.as_deref(),
     );
 
+    // A claude session no row holds may be a fork of one a row does hold
+    // (`claude --bg --resume` on a held session copies it). The argv read
+    // shells out, so it runs here, outside the lock, and only for a mint.
+    let fork_parent = (harness == "claude" && pending_mint.is_some())
+        .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
+        .flatten();
+
     // A claude session reporting against an id a row ALREADY holds
     // (`pending_mint` is `None` exactly in that case, per
     // `native_adopt::prepare_mint`) may now run as a live `claude --bg` job
@@ -283,6 +290,23 @@ pub(crate) fn handle_session_report(
     let mut manifest_arm: Option<(String, String, Option<String>)> = None;
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
+            if let Some(i) = fork_parent.as_deref().and_then(|parent| {
+                crate::native_adopt::bind_fork_child(&mut r.entries, parent, &session_id, None)
+            }) {
+                let entry = &mut r.entries[i];
+                entry.last_report_at = Some(now_stamp.clone());
+                if let Some(tp) = &transcript_path {
+                    entry.transcript_path = Some(tp.clone());
+                }
+                if let Some(src) = &source {
+                    entry.start_source = Some(src.clone());
+                }
+                row_name = Some(entry.name.clone());
+                outcome = Outcome::Stored {
+                    related_filled: false,
+                };
+                return;
+            }
             match &pending_mint {
                 // A retirement that landed after the pre-read still wins.
                 Some(mint)
