@@ -1,0 +1,114 @@
+[
+  {
+    "disposition": "shadowed",
+    "error": null,
+    "function_id": "marketing",
+    "layer": "built-in",
+    "raw_definition": {
+      "layer": "built-in",
+      "manifest": {
+        "authority_ceiling": "internal",
+        "default_topology": "solo",
+        "deliverable_kinds": [
+          "brief"
+        ],
+        "delivery_policy": {},
+        "function": {
+          "id": "marketing"
+        },
+        "mission": "Grow the caf\u00e9",
+        "review_policy": {
+          "minimum_reviewers": "1",
+          "required": "yes"
+        },
+        "role": {
+          "function_id": "marketing",
+          "id": "owner"
+        },
+        "routing_hint": {
+          "provider": "anthropic"
+        }
+      },
+      "role": {
+        "function_id": "marketing",
+        "id": "owner"
+      },
+      "snapshot_revision": "snapshot-1",
+      "source_id": "built-in/\u00e9quipe.json"
+    },
+    "role_id": "owner",
+    "source": "built-in/\u00e9quipe.json",
+    "status": "valid"
+  },
+  {
+    "disposition": "contributing",
+    "error": null,
+    "function_id": "marketing",
+    "layer": "company",
+    "raw_definition": {
+      "layer": "company",
+      "manifest": {
+        "authority_ceiling": "internal",
+        "default_topology": "solo",
+        "deliverable_kinds": [
+          "brief"
+        ],
+        "delivery_policy": {},
+        "function": {
+          "id": "marketing"
+        },
+        "mission": "Grow the caf\u00e9",
+        "review_policy": {
+          "minimum_reviewers": "1",
+          "required": "yes"
+        },
+        "role": {
+          "function_id": "marketing",
+          "id": "owner"
+        },
+        "routing_hint": {
+          "provider": "anthropic"
+        }
+      },
+      "role": {
+        "function_id": "marketing",
+        "id": "owner"
+      },
+      "snapshot_revision": "snapshot-1",
+      "source_id": "company/owner.json"
+    },
+    "role_id": "owner",
+    "source": "company/owner.json",
+    "status": "valid"
+  },
+  {
+    "disposition": "unchecked",
+    "error": "<ERROR>",
+    "function_id": null,
+    "layer": "project",
+    "raw_definition": null,
+    "role_id": null,
+    "source": "project/bad.json",
+    "status": "invalid"
+  },
+  {
+    "disposition": "unchecked",
+    "error": "FileNotFoundError: [Errno 2] No such file or directory: '<FIXTURE>/extra/missing.json'",
+    "function_id": null,
+    "layer": "plan",
+    "raw_definition": null,
+    "role_id": null,
+    "source": "<FIXTURE>/extra/missing.json",
+    "status": "unreadable"
+  },
+  {
+    "disposition": "unchecked",
+    "error": "<ERROR>",
+    "function_id": null,
+    "layer": "plan",
+    "raw_definition": null,
+    "role_id": null,
+    "source": "plan",
+    "status": "invalid"
+  }
+]
