@@ -43,15 +43,12 @@ const AUTHORITY_SOURCES: &[&str] = &["operator", "role", "agent", "beastmode"];
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
 /// or a scrubbed identity (`None`), the seam the tests drive where the law
-/// door injects a caller. `ForcedLead` injects a handle whose team covers
-/// every subject; a `Forced` handle holds no team.
+/// door injects a caller. A `Forced` handle holds no team.
 #[derive(Clone, Copy)]
 pub(crate) enum DecideIdentity {
     Ambient,
     #[cfg_attr(not(test), expect(dead_code))]
     Forced(Option<&'static str>),
-    #[cfg_attr(not(test), expect(dead_code))]
-    ForcedLead(&'static str),
 }
 
 impl DecideIdentity {
@@ -74,7 +71,7 @@ impl DecideIdentity {
                 }
             }
             Self::Forced(None) => None,
-            Self::Forced(Some(h)) | Self::ForcedLead(h) => Some((*h).to_string()),
+            Self::Forced(Some(h)) => Some((*h).to_string()),
         }
     }
 
@@ -84,7 +81,6 @@ impl DecideIdentity {
         match self {
             Self::Ambient => ambient_role_covers(handle, subject),
             Self::Forced(_) => false,
-            Self::ForcedLead(_) => true,
         }
     }
 }
@@ -1361,16 +1357,6 @@ mod tests {
         assert_eq!(decide_door_write(role(), DecideIdentity::Forced(None)), 3);
         let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
         assert!(rows.is_empty(), "nothing recorded");
-        // A lead records it.
-        assert_eq!(
-            decide_door_write(role(), DecideIdentity::ForcedLead("cl-lead1")),
-            0
-        );
-        let (rows, _) = all_decision_rows().expect("reads");
-        assert_eq!(
-            rows.last().expect("a row")["authority_source"],
-            json!("role")
-        );
     }
 
     #[test]
