@@ -395,9 +395,9 @@ def _head_flag_value(head: Sequence[str], flags: Tuple[str, ...]) -> Optional[st
 def _mint_node_name(
     node: Optional[str], seed: Optional[str], slug_flag: Optional[str], existing: Set[str]
 ) -> Optional[str]:
-    """The ``t-<short slug>`` default of a node-driven or ``/target`` spawn.
+    """The ``agents.naming.worker`` name of a node-driven or ``/target`` spawn.
 
-    The binary owns the form (naming.rs ``worker_name``). A name a live worker
+    The binary renders it (naming.rs ``render_worker_name``). A name a live worker
     holds gets a ``-2``..``-5`` suffix, so a re-spawn on one node is never a
     refusal. Any failure returns ``None`` and the adjective-noun mint runs: a
     spawn must never die on a naming lookup.

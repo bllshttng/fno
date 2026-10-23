@@ -12,7 +12,7 @@ The lead has one push contract on every harness. When a covered PR settles green
 
 ## Launch by harness
 
-Seat a claude worker with its own line: `claude --bg --name t-<short slug> '/fno:target <node>'`. The name is `t-` and the first two or three words of the node's slug. It carries no model token. Seat every other harness through `fno agents spawn`, because none of them has a paneless native start. The harness choice table, the glm route and one page per harness live in the agent skill: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+Seat a claude worker with its own line: `claude --bg --name t-<short slug> '/fno:target <node>'`. The name is `t-` and the first two or three words of the node's slug. It carries no model token. The fno row takes its name from `agents.naming.worker` (default `t-{slug}`) whatever `--name` says, so the `--name` only keeps `claude agents` in step. Seat every other harness through `fno agents spawn`, because none of them has a paneless native start. The harness choice table, the glm route and one page per harness live in the agent skill: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 deepseek has no capability row, so no launch line is verified. Run `fno agents admit capabilities deepseek` before you seat one, and `fno doctor harness deepseek --live` before you call the lane supported.
 

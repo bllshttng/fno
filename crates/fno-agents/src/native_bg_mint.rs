@@ -180,9 +180,37 @@ pub(crate) fn mint_missing_native_bg(
         }
     }
 
+    // The mail-hold register can write `sid[..8]` before any beat mints, and
+    // both minters skip a held session: rename it here, or on a later beat.
+    let mut renames: Vec<(String, String)> = Vec::new();
+    for e in entries.iter().filter(|e| e.harness_name() == "claude") {
+        let Some(session) = e.harness_session_id.as_deref() else {
+            continue;
+        };
+        if !named_by_short_id(&e.name, session) {
+            continue;
+        }
+        if renames.len() >= BUDGET_PER_BEAT {
+            deferred = true;
+            break;
+        }
+        let record = crate::launch_record::claimed_edge(home.root(), session);
+        let handle = crate::identity::canonical_handle(session);
+        let listed = rows
+            .iter()
+            .find(|r| r.short_id == handle)
+            .and_then(|r| r.name.as_deref());
+        if let Some(name) =
+            worker_row_name(session, record.as_ref(), e.node.as_deref(), &e.cwd, listed)
+        {
+            renames.push((session.to_string(), name));
+        }
+    }
+
     let mut born: Vec<Value> = Vec::new();
     let mut filled: Vec<Value> = Vec::new();
     let mut parent_filled: Vec<Value> = Vec::new();
+    let mut renamed: Vec<Value> = Vec::new();
     let write = crate::state::update_registry(&home.registry_json(), |r| {
         for (child, parent, pid) in forks {
             if crate::session_report::find_row(&r.entries, "claude", &child, None).is_none() {
@@ -259,6 +287,20 @@ pub(crate) fn mint_missing_native_bg(
                 "spawned_by_session": e.spawned_by_session.clone(),
             }));
         }
+        for (session, name) in renames {
+            let Some(i) = r.entries.iter().position(|e| {
+                e.harness_session_id.as_deref() == Some(session.as_str())
+                    && named_by_short_id(&e.name, &session)
+            }) else {
+                continue;
+            };
+            let name = crate::native_adopt::unique_name(&r.entries, &name);
+            let e = &mut r.entries[i];
+            renamed.push(json!({"from": e.name.clone(), "name": name.clone()}));
+            // The old label keeps resolving, as `rename_agent` keeps it.
+            let old = std::mem::replace(&mut e.name, name);
+            e.aliases.push(old);
+        }
     });
     if let Err(e) = write {
         // A failed birth write surfaces as an event, never a silent zero:
@@ -300,6 +342,9 @@ pub(crate) fn mint_missing_native_bg(
     }
     for f in &parent_filled {
         let _ = emitter.emit("native_bg_parent_backfilled", f);
+    }
+    for f in &renamed {
+        let _ = emitter.emit("native_bg_renamed", f);
     }
     if deferred {
         let _ = emitter.emit(
@@ -404,6 +449,43 @@ fn listing_name_slug(name: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
+/// A row name that says nothing but the session's short id: the bare handle,
+/// its `-N` collision form, or the `t-<short>` fallback.
+fn named_by_short_id(name: &str, session: &str) -> bool {
+    let handle = crate::identity::canonical_handle(session);
+    let tail = name.strip_prefix("t-").unwrap_or(name);
+    match tail.strip_prefix(handle.as_str()) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('-')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
+}
+
+/// A claude worker row's name: the launch record's name (`fno agents spawn
+/// --name`), then the `agents.naming.worker` name of its node, then the
+/// listing's name (`claude --bg --name`, or the one claude drew). The
+/// template outranks the listing so a node worker reads the same however it
+/// was launched. `None` when all three are absent or say only the short id.
+fn worker_row_name(
+    session: &str,
+    record: Option<&crate::launch_record::Record>,
+    node: Option<&str>,
+    cwd: &str,
+    listed: Option<&str>,
+) -> Option<String> {
+    let names = |n: &String| !n.is_empty() && !named_by_short_id(n, session);
+    record
+        .and_then(|r| r.launch.name.clone())
+        .filter(names)
+        .or_else(|| {
+            let node = node.or_else(|| record.and_then(|r| r.launch.node.as_deref()))?;
+            crate::naming::node_worker_name(node, Path::new(cwd), session)
+        })
+        .or_else(|| listed.map(listing_name_slug).filter(names))
+}
+
 fn prepare_row(
     row: &crate::claude_roster::ClaudeAgentRow,
     session: &str,
@@ -422,16 +504,9 @@ fn prepare_row(
     };
     let node = record.and_then(|r| r.launch.node.clone()).or(node);
     RegistryEntry {
-        name: record
-            .and_then(|r| r.launch.name.clone())
-            .or_else(|| row.name.as_deref().map(listing_name_slug))
-            // A listing that shows only the short id names nothing.
-            .filter(|s| !s.is_empty() && *s != row.short_id)
+        name: worker_row_name(session, record, node.as_deref(), &cwd, row.name.as_deref())
             .unwrap_or_else(|| {
-                let node_name = node
-                    .as_deref()
-                    .and_then(|n| crate::naming::node_worker_name(n, Path::new(&cwd)));
-                crate::claude_adopt::synthesized_entry_name(session, &row.short_id, node_name)
+                crate::claude_adopt::synthesized_entry_name(session, &row.short_id, None)
             }),
         origin: Some(origin.into()),
         status: AgentStatus::Live,
@@ -579,12 +654,14 @@ mod tests {
             // beat mints it: no origin, no substrate, no parent. The claimed
             // record still parents it, so the reaper's spawn pipeline sees it.
             // A self-registered row no record names is the user's own and
-            // stays unproven.
+            // stays unproven. Each takes a name from its record or listing;
+            // a row nothing names keeps its short id.
             let raced = "cccccccc-0000-0000-0000-000000000003";
             let own = "dddddddd-0000-0000-0000-000000000004";
+            let bare = "eeeeeeee-0000-0000-0000-000000000005";
             claim_record(home, raced);
             crate::state::update_registry(&home.registry_json(), |r| {
-                for sid in [raced, own] {
+                for sid in [raced, own, bare] {
                     r.entries.push(RegistryEntry {
                         name: sid[..8].to_string(),
                         harness: Some("claude".into()),
@@ -596,6 +673,11 @@ mod tests {
                 }
             })
             .unwrap();
+            let mut own_listed = ClaudeAgentRow::new("dddddddd", Some("working"));
+            own_listed.session_id = Some(own.into());
+            own_listed.name = Some("Greeting checkout status".into());
+            let snapshot =
+                ClaudeAgentsSnapshot::known(vec![listing_row("tui-build", "working"), own_listed]);
             mint_missing_native_bg(home, &snapshot, &em);
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             let row = |sid: &str| {
@@ -610,6 +692,13 @@ mod tests {
             assert_eq!(row(raced).node.as_deref(), Some("x-aaaa"));
             assert_eq!(row(own).origin, None);
             assert_eq!(row(own).spawned_by_session, None);
+            assert_eq!(row(raced).name, "t-xaaaa-glm-2");
+            assert_eq!(row(own).name, "greeting-checkout-status");
+            assert_eq!(row(own).aliases, ["dddddddd"]);
+            assert_eq!(row(bare).name, "eeeeeeee");
+            assert!(named_by_short_id("t-eeeeeeee", bare));
+            assert!(named_by_short_id("eeeeeeee-3", bare));
+            assert!(!named_by_short_id("eeeeeeee-fix", bare));
         });
     }
 
