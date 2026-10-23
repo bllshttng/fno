@@ -1,0 +1,1 @@
+{"op": "overlay", "id": "ghost", "config": "[[accounts.records]]\nid = \"cx\"\nname = \"cx\"\nharness = \"codex\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n", "expect": {"error": "account 'ghost' is not registered. claude accounts: (none registered)"}}

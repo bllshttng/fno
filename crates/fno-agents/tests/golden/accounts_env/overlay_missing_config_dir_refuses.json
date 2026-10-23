@@ -1,0 +1,1 @@
+{"op": "overlay", "id": "alt", "config": "[[accounts.records]]\nid = \"alt\"\nname = \"alt\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{TMP}/alt\"\n", "expect": {"error": "account 'alt' config_dir <TMP>/alt does not exist; register a live login there first"}}

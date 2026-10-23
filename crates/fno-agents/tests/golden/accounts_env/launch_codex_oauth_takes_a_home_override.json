@@ -1,0 +1,1 @@
+{"op": "launch_env", "id": "cx", "config": "[[accounts.records]]\nid = \"cx\"\nname = \"cx\"\nharness = \"codex\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n", "dirs": ["creds"], "links": {"state/providers/cx/home/.codex": "creds"}, "expect": {"env": {"HOME": "<TMP>/state/providers/cx/home"}}}
