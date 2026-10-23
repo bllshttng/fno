@@ -10,7 +10,7 @@
 use super::models::{self, RoleRef, WorkOrderRef};
 use super::registry::{self, Discovered, DiscoveryInputError};
 use super::resolver::{self, Resolution, Unchecked};
-use crate::client_verbs::py_repr_str;
+use crate::client_commands::py_repr_str;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
