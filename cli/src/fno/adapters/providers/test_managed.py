@@ -887,7 +887,7 @@ class _FakeProc:
 
 
 # ---------------------------------------------------------------------------
-# CLI surface (register / use / list)
+# CLI surface (use)
 # ---------------------------------------------------------------------------
 
 
@@ -919,59 +919,24 @@ class TestCliSurface:
         monkeypatch.setattr(managed, "switch", lambda *args, **kwargs: result)
         return runner.invoke(providers_app, ["use", "cx-a"], catch_exceptions=False)
 
-    def test_register_then_list_marks_active(self, tmp_path, monkeypatch):
+    def _invoke_managed_use(self, monkeypatch, tmp_path, pins=()):
+        """``use work-a`` over a store seeded with work-a and work-b, slot on work-b."""
         slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("A0")
-        r1 = runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        assert r1.exit_code == 0, r1.output
-        slot["claude"] = _blob("B0")
-        r2 = runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        assert r2.exit_code == 0, r2.output
-        rl = runner.invoke(providers_app, ["list"], env=env, catch_exceptions=False)
-        assert rl.exit_code == 0
-        active = [ln for ln in rl.output.splitlines() if "work-b" in ln]
-        assert active and active[0].lstrip().startswith("*")
-        assert "snapshot=" in active[0]
-
-    def test_register_refuses_a_duplicate_credential(self, tmp_path, monkeypatch):
-        """AC3-ERR: capturing the SAME login under a second id is refused.
-
-        This is the guard that would have surfaced the live store defect on the
-        day it was created rather than ten days later.
-        """
-        slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("shared-secret-token")
-        r1 = runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        assert r1.exit_code == 0, r1.output
-
-        # The operator never signed into the second account: the slot still holds
-        # work-a's credential.
-        r2 = runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        assert r2.exit_code != 0
-        assert "work-a" in r2.output and "work-b" in r2.output
-        assert "--config-dir" in r2.output
-        # No blob was written under the refused id.
-        assert not (tmp_path / ".fno" / "providers" / "work-b" / "blob").exists()
-        # No token or fragment reaches the receipt.
-        assert "shared-secret-token" not in r2.output
-
-    def test_register_no_login_errors(self, tmp_path, monkeypatch):
-        _cli_slot(monkeypatch)  # slot empty
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        r = runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        assert r.exit_code == 1
-        assert "no current" in r.output
+        monkeypatch.setattr(managed, "store_root", lambda: tmp_path)
+        by_id = _register_two(slot, tmp_path)
+        config = ProvidersConfig(records=list(by_id.values()), active="work-b")
+        for name in ("load_providers", "load_scope_config"):
+            monkeypatch.setattr(
+                f"fno.adapters.providers.cli.{name}", lambda *args, **kwargs: config
+            )
+        monkeypatch.setattr(
+            "fno.adapters.providers.cli.save_providers", lambda *args, **kwargs: None
+        )
+        monkeypatch.setattr(managed, "pinning_sessions", lambda config_dir=None: list(pins))
+        return slot, runner.invoke(providers_app, ["use", "work-a"], catch_exceptions=False)
 
     def test_use_managed_materializes(self, tmp_path, monkeypatch):
-        slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("A0")
-        runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        slot["claude"] = _blob("B0")
-        runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        r = runner.invoke(providers_app, ["use", "work-a"], env=env, catch_exceptions=False)
+        slot, r = self._invoke_managed_use(monkeypatch, tmp_path)
         assert r.exit_code == 0, r.output
         assert slot["claude"] == _blob("A0")
         assert "Materialized managed account 'work-a' into the slot (verified)." in r.output
@@ -1033,18 +998,10 @@ class TestCliSurface:
         assert "slot is in an indeterminate state" in response.output
 
     def test_use_managed_live_pin_proceeds_with_warning(self, tmp_path, monkeypatch):
-        slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("A0")
-        runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        slot["claude"] = _blob("B0")
-        runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        monkeypatch.setattr(
-            managed, "pinning_sessions",
-            lambda config_dir=None: [managed.PinningSession(99, "claude")],
+        _, r = self._invoke_managed_use(
+            monkeypatch, tmp_path, pins=[managed.PinningSession(99, "claude")]
         )
-        r = runner.invoke(providers_app, ["use", "work-a"], env=env, catch_exceptions=False)
-        assert r.exit_code == 0
+        assert r.exit_code == 0, r.output
         assert "Materialized managed account 'work-a'" in r.output
         assert "warning: swapped under 1 live claude session(s)" in r.output
 
