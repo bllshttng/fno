@@ -1744,7 +1744,7 @@ fn squad_prune(args: &[OsString]) -> i32 {
     }
 
     let evidence = crate::squad_cascade::fold_cascade_verdicts(member_evidence());
-    let (tabs, live_cwds, answered_names, unreachable) = live_tabs(!dry_run);
+    let (tabs, live_cwds, answered_names, unreachable) = live_tabs();
     let scope = sweep_scope(answered_names.len(), &unreachable);
     // `--dead-only` ALONE skips the tab fold (store-only scope), but
     // the combined `--tabs-only --dead-only` scope runs BOTH halves - the
