@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|connections]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -95,6 +95,9 @@ pub enum ViewKind {
     /// The prefix+f navigator with the sideline's row menu (Ctrl-o) open on
     /// the first agent row.
     NavigatorMenu,
+    /// The connections overlay (prefix+A) on its Accounts tab, with the
+    /// reads the live open kicks run inline.
+    Connections,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -144,6 +147,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-pr" => Some(ViewKind::NavigatorPr),
         "navigator-model" => Some(ViewKind::NavigatorModel),
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
+        "connections" => Some(ViewKind::Connections),
         _ => None,
     }
 }
@@ -220,7 +224,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu or navigator-model")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -364,6 +368,14 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     let page = dir.join("shot.html");
     std::fs::write(&page, page_html(svg)).map_err(|e| format!("temp page: {e}"))?;
     let out_abs = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    // The png on disk is the success signal below, so an earlier shot at the
+    // same path would read as this one landing and pass off the stale image.
+    match std::fs::remove_file(&out_abs) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("{}: {e}", out_abs.display()));
+        }
+        _ => {}
+    }
     let mut cmd = std::process::Command::new(&chrome);
     // Chrome hangs on macOS under a HOME that is not the user's, and the demo
     // script sets one so paths read `~/...`. Hand it the passwd home back.
@@ -668,6 +680,37 @@ shoot a root seeded with questions, mail or backlog activity \
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
         }
+        Some(ViewKind::Connections) => {
+            view.open_connections();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
+            let cv = view
+                .connections
+                .as_mut()
+                .ok_or("connections overlay did not open")?;
+            // A throwaway root reaches no real account, so the live probe and
+            // identity legs only fail. Paint the cached reading the root seeds.
+            let mut cached = true;
+            while let Ok((_, outcome)) = rx.try_recv() {
+                use crate::connections_view::ReadOutcome as R;
+                match outcome {
+                    R::UsageFailed(_) | R::IdentityFailed(_) => {}
+                    R::Usage(_) if !cached => {}
+                    R::Usage(cells) => {
+                        cached = false;
+                        cv.apply_read(R::Usage(cells));
+                    }
+                    other => cv.apply_read(other),
+                }
+            }
+            if cv.accounts.is_empty() {
+                return Err(
+                    "connections view rendered empty: this root registers no accounts; \
+shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds them)"
+                        .into(),
+                );
+            }
+        }
         Some(ViewKind::OrgBlock) => {
             // The prefix+C fold runs expanded-only in a reading: flip the
             // same state the key flips, then run the fold and the gate
@@ -968,6 +1011,7 @@ mod tests {
             ("navigator-pr", ViewKind::NavigatorPr),
             ("navigator-model", ViewKind::NavigatorModel),
             ("navigator-menu", ViewKind::NavigatorMenu),
+            ("connections", ViewKind::Connections),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
@@ -982,7 +1026,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu or navigator-model"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model or connections"
             ),
             "{e}"
         );

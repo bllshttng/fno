@@ -143,6 +143,15 @@ impl View {
             put(cells, c, ch, cell_flags::BOLD);
             c += 1;
         }
+        // A fleet hold sits right after the session name: while it stands,
+        // spawns or tests wait, and the row says why and how to lift it.
+        if let Some(hold) = hold::current() {
+            for ch in format!(" {} ", hold.segment()).chars() {
+                put(cells, c, ch, cell_flags::INVERSE);
+                c += 1;
+            }
+            c += 1;
+        }
         // Active squad's name, only when there is more than one squad to be
         // ambiguous about - the always-visible answer to "which
         // squad?" when the sideline is toggled off or auto-hidden. BOLD: it

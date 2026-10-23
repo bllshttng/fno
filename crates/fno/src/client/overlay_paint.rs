@@ -151,11 +151,19 @@ pub(crate) fn layout_lines_overlay<S: AsRef<str>>(
     }
 }
 
+/// The widest line a lines overlay over `content_cols` shows unwrapped: the
+/// viewport less the side borders and the two pad columns.
+pub(crate) fn overlay_text_cols(content_cols: usize) -> usize {
+    content_cols
+        .saturating_sub(chrome::Chrome::FRAME_COLS + 2)
+        .max(1)
+}
+
 /// Wrap each line whose text would not fit `cap` body columns less the two
 /// pad columns, keeping its indent on every continuation. Returns the lines
 /// and, per line, the index of the source line it came from.
 fn wrap_overlay_lines<S: AsRef<str>>(lines: &[S], cap: usize) -> (Vec<String>, Vec<usize>) {
-    let text_w = cap.saturating_sub(2).max(1);
+    let text_w = overlay_text_cols(cap + chrome::Chrome::FRAME_COLS);
     let mut out = Vec::with_capacity(lines.len());
     let mut src = Vec::with_capacity(lines.len());
     for (i, line) in lines.iter().enumerate() {
