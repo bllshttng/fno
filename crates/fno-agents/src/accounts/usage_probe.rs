@@ -444,6 +444,10 @@ fn claude_candidates(ctx: &Ctx<'_>, record: &Record) -> Vec<String> {
 }
 
 fn get(ctx: &Ctx<'_>, url: &str, headers: &[(&str, &str)]) -> Result<(u16, String), ()> {
+    // A line break in a value would start a new curl config directive.
+    if headers.iter().any(|(_, v)| v.contains(['\n', '\r'])) {
+        return Err(());
+    }
     let esc = crate::claude_vault::curl_escape;
     let mut config = format!("url = \"{}\"\n", esc(url));
     for (name, value) in headers {
@@ -525,7 +529,8 @@ fn latest_codex_session(ctx: &Ctx<'_>, record: &Record) -> Option<PathBuf> {
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).ok()?.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            // Like `rglob`, never descend a symlinked dir: a link cycle would never end.
+            if entry.file_type().ok()?.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "jsonl") && path.is_file() {
                 let mtime = entry.metadata().ok()?.modified().ok()?;
