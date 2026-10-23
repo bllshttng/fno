@@ -282,7 +282,31 @@ mod tests {
         // replaces an operator stop.
         assert!(may_replace(RESERVE_ORIGIN, Some(RESERVE_AUTO_ORIGIN)));
         assert!(!may_replace(RESERVE_AUTO_ORIGIN, Some(RESERVE_ORIGIN)));
-        assert!(!may_replace(RESERVE_ORIGIN, None));
+        fleet_incident::write_transition_with_metadata(
+            &path,
+            "stopped",
+            Some("incident"),
+            Some("operator"),
+            vec![],
+            RecordMetadata::default(),
+        )
+        .unwrap();
+        let over = fleet_incident::write_transition_with_metadata(
+            &path,
+            "stopped",
+            Some("streaming"),
+            Some("user"),
+            preset_holds("stream").unwrap(),
+            RecordMetadata {
+                origin: Some(RESERVE_ORIGIN.to_string()),
+                ..RecordMetadata::default()
+            },
+        );
+        assert!(
+            over.is_err(),
+            "the writer refuses a reserve over an operator stop"
+        );
+        assert_eq!(auto_tick(&home, &cwd, &obs, now + 180), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

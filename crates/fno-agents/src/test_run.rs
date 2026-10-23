@@ -75,7 +75,9 @@ pub(crate) fn cached_fleet_share() -> Option<f64> {
 pub(crate) fn build_slot_reading() -> (usize, Option<f64>, f64) {
     let cwd = std::env::current_dir().unwrap_or_default();
     let ceiling = crate::agents_config::max_fleet_cpu_share(&cwd);
-    let share = cached_fleet_share();
+    // A pinned count reads nothing from the machine.
+    let pinned = std::env::var_os("FNO_TEST_BUILD_SLOTS").is_some();
+    let share = if pinned { None } else { cached_fleet_share() };
     (build_slot_cap(share, ceiling), share, ceiling)
 }
 

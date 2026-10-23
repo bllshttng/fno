@@ -5,8 +5,9 @@
 //! (AIMD: a sustained fleet CPU share breach cuts 25%, sustained calm decays
 //! +1 per window) and decays it back. The share is the spawn gate's own
 //! signal (`agents.max_fleet_cpu_share`), so the two never read the machine
-//! two ways: a load average counts process churn and the user's own apps. A missing or unreadable state file lowers
-//! nothing: every reader falls back to the ceiling and says so.
+//! two ways: a load average counts process churn and the user's own apps.
+//! A missing or unreadable state file lowers nothing: every reader falls
+//! back to the ceiling and says so.
 
 use std::io;
 use std::path::PathBuf;

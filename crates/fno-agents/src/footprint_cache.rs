@@ -34,10 +34,10 @@ pub(crate) fn persist_footprint_cache(raw: &str) {
 
 /// The persisted payload string when the cache row is readable and was
 /// written inside `max_age`; `None` on a miss, a stale row, a future-stamped
-/// row, or anything unparseable. Every failure mode degrades to the live
-/// probe.
+/// row, anything unparseable, or no agents home. Every failure mode degrades
+/// to the live probe, or to the build door's one-slot answer.
 pub(crate) fn fresh_footprint_cache(max_age: Duration) -> Option<String> {
-    let home = crate::paths::AgentsHome::from_env();
+    let home = crate::paths::AgentsHome::from_env_opt()?;
     let raw = std::fs::read_to_string(home.footprint_cache_json()).ok()?;
     let row: Value = serde_json::from_str(&raw).ok()?;
     let written = chrono::DateTime::parse_from_rfc3339(row.get("written_at")?.as_str()?).ok()?;
