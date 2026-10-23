@@ -66,12 +66,26 @@ pub fn classify(command: &str) -> Option<Group> {
             if matches!(
                 first,
                 Some("bg-spare" | "bg-pty-host" | "--bg-spare" | "--bg-pty-host")
-            ) =>
+            ) && !spare_claimed(&argv) =>
         {
             Some(Group::SparePool)
         }
         _ => None,
     }
+}
+
+/// True when a pool-shaped argv belongs to a claimed session: Claude Code
+/// removes a spare's claim socket (the token after its last `--bg-spare`,
+/// on the pty host's argv too) when a session takes the spare, and the
+/// process keeps the pre-warm argv. Measured 2026-10-22: 29 of 30 live
+/// `bg-spare` processes had no socket, and each was a working session. An
+/// argv with no socket token keeps its pool reading.
+pub fn spare_claimed(argv: &[&str]) -> bool {
+    argv.iter()
+        .rposition(|t| *t == "--bg-spare")
+        .and_then(|at| argv.get(at + 1))
+        .filter(|sock| sock.ends_with(".claim.sock"))
+        .is_some_and(|sock| !std::path::Path::new(sock).exists())
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -243,6 +257,26 @@ mod tests {
         for (command, want) in cases {
             assert_eq!(classify(command), want, "{command}");
         }
+        // A spare whose claim socket is gone is a claimed session, on its
+        // pty host too; a socket still on disk is the idle pool.
+        let dir = std::env::temp_dir().join(format!("fno-spare-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let idle = dir.join("a.claim.sock");
+        std::fs::write(&idle, "").unwrap();
+        let gone = dir.join("b.claim.sock");
+        let spare =
+            |sock: &std::path::Path| format!("claude bg-spare --bg-spare {}", sock.display());
+        let host = |sock: &std::path::Path| {
+            format!(
+                "claude bg-pty-host --bg-pty-host /d/b.pty.sock 200 50 -- /v/2.1 --bg-spare {}",
+                sock.display()
+            )
+        };
+        assert_eq!(classify(&spare(idle.as_path())), Some(Group::SparePool));
+        assert_eq!(classify(&host(idle.as_path())), Some(Group::SparePool));
+        assert_eq!(classify(&spare(gone.as_path())), None);
+        assert_eq!(classify(&host(gone.as_path())), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

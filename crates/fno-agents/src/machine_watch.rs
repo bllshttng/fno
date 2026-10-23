@@ -888,7 +888,8 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         // Whose load the box is in, from the one footprint answerer the
         // spawn CPU axis already reads: unreadable or fleet-majority keeps
         // today's path, a minority share is outside load.
-        let split = crate::spawn_gate::fleet_split();
+        let admission = crate::spawn_gate::fleet_admission();
+        let split = admission.as_ref().map(|a| (a.fleet_cores, a.machine_cores));
         let source = crate::machine_load::classify(split);
         let outcome = {
             let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1030,8 +1031,17 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         // The capacity loop reads the same sample the arm just took: one
         // machine, one reader, the AIMD state the gate and the gauges share.
         let now_epoch = chrono::Utc::now().timestamp();
-        if let Err(error) = crate::capacity::feed(&sample, &cwd, &home, now_epoch) {
+        let share = admission.as_ref().and_then(crate::spawn_gate::fleet_share);
+        if let Err(error) = crate::capacity::feed(&sample, share, &cwd, &home, now_epoch) {
             tracing::warn!(%error, "capacity state write failed");
+        }
+        // A stream or edit app reserves the machine; the running tests follow
+        // the record now, not at the next tick.
+        if let Some(line) = crate::reserve::auto_tick(&home, &cwd, &sample.procs, now_epoch) {
+            let _ = journal.append("reserve_auto", serde_json::json!({ "line": line }));
+            if let Err(error) = crate::test_hold::reconcile(&home) {
+                tracing::warn!(%error, "test hold reconcile failed");
+            }
         }
         crate::tick_ledger::emit_tick(
             &journal,

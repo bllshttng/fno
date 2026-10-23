@@ -2588,15 +2588,26 @@ pub fn machine_reading_notes() -> (Option<String>, Option<String>) {
     (footer, keeper)
 }
 
-/// The footprint payload's admission split, `(fleet_cores, machine_cores)`,
-/// as the one fleet-share answer for the machine arm and the spawn CPU
-/// axis alike. `None` when the probe or the parse fails, which classifies
-/// as fleet load.
-pub(crate) fn fleet_split() -> Option<(f64, f64)> {
-    let raw = footprint_cause_raw().ok()?;
-    let payload: FootprintCausePayload = serde_json::from_str(&raw).ok()?;
-    let admission = payload.admission?;
-    Some((admission.fleet_cores, admission.machine_cores))
+/// The decider's admission inside one raw footprint payload, `None` when
+/// the payload does not parse or carries none.
+pub(crate) fn admission_of(raw: &str) -> Option<AdmissionPayload> {
+    serde_json::from_str::<FootprintCausePayload>(raw)
+        .ok()?
+        .admission
+}
+
+/// The footprint admission from a live probe: the one fleet-share answer
+/// the machine arm's split and the capacity loop read in one tick. `None`
+/// when the probe or the parse fails, which classifies as fleet load.
+pub(crate) fn fleet_admission() -> Option<AdmissionPayload> {
+    admission_of(&footprint_cause_raw().ok()?)
+}
+
+/// The fleet's CPU share the spawn gate decides on, as one number: the
+/// upper bound, so an attribution gap reads as load, never as headroom.
+/// `None` on an unreadable instrument (axis `cpu_instrument`).
+pub(crate) fn fleet_share(admission: &AdmissionPayload) -> Option<f64> {
+    (admission.axis == "fleet_cpu_share").then_some(admission.share_high)
 }
 
 pub(crate) fn footprint_cause_raw() -> Result<String, String> {
