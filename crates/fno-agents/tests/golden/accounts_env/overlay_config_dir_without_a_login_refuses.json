@@ -1,0 +1,1 @@
+{"op": "overlay", "id": "alt", "config": "[[accounts.records]]\nid = \"alt\"\nname = \"alt\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{TMP}/alt\"\n", "dirs": ["alt"], "expect": {"error": "account 'alt' config_dir <TMP>/alt holds no claude login (run: CLAUDE_CONFIG_DIR=<TMP>/alt claude /login)"}}

@@ -1,0 +1,1 @@
+{"op": "overlay", "id": "k", "config": "[[accounts.records]]\nid = \"k\"\nname = \"k\"\nharness = \"claude\"\nauth = \"api_key\"\n[accounts.records.env]\nANTHROPIC_AUTH_TOKEN = \"${ENV:MY_TOKEN}\"\n", "env": {"MY_TOKEN": "env-token"}, "expect": {"overlay": {"account_id": "k", "env": {"ANTHROPIC_AUTH_TOKEN": "env-token"}, "lane": "api-key"}}}

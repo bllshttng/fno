@@ -200,6 +200,25 @@ pub(crate) fn scoped_verify_round(cwd: &Path, branch: &str, head: &str) -> i64 {
         .max(1)
 }
 
+/// The round an ordinary pass at `head` spends: the rounds already used, plus
+/// one unless the newest chain row is already this head (one reviewed head is
+/// one round, so a re-run at an unchanged head spends nothing).
+pub(crate) fn fresh_round(answer: &Value, head: &str) -> i64 {
+    let used = answer
+        .get("rounds_used")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let last_head = answer
+        .pointer("/last/head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !head.is_empty() && last_head == head {
+        used.max(1)
+    } else {
+        used + 1
+    }
+}
+
 /// Acquire the hold. Never blocks a review from starting: an error prints
 /// the not-registered receipt and the worktree layer still covers it.
 fn acquire_hold(
@@ -306,6 +325,7 @@ struct Args {
     level_source: String,
     flags_json: Option<String>,
     ttl_minutes: Option<f64>,
+    fresh: bool,
     cwd: PathBuf,
 }
 
@@ -324,6 +344,7 @@ impl Args {
             level_source: String::new(),
             flags_json: None,
             ttl_minutes: None,
+            fresh: false,
             cwd: default_cwd,
         };
         let mut it = rest.iter();
@@ -345,6 +366,7 @@ impl Args {
                 "--level" => a.level = it.next().cloned().unwrap_or_default(),
                 "--level-source" => a.level_source = it.next().cloned().unwrap_or_default(),
                 "--flags-json" => a.flags_json = it.next().cloned(),
+                "--fresh" => a.fresh = true,
                 "--ttl-minutes" => a.ttl_minutes = it.next().and_then(|v| v.parse().ok()),
                 "--repo" => {
                     if let Some(dir) = it.next() {
@@ -488,7 +510,11 @@ fn round_arm(a: &Args) -> (i32, String, String) {
     if !review_journals_present(&a.cwd) {
         return (1, String::new(), String::new());
     }
-    let round = scoped_verify_round(&a.cwd, branch, &a.head);
+    let round = if a.fresh {
+        fresh_round(&chain_answer(&a.cwd, branch, &a.head), &a.head)
+    } else {
+        scoped_verify_round(&a.cwd, branch, &a.head)
+    };
     (0, format!("{round}\n"), String::new())
 }
 
@@ -723,6 +749,15 @@ fn run_stdin_door() -> (i32, String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_round_counts_a_new_head_and_not_a_rerun() {
+        let none = json!({"rounds_used": 0, "last": null});
+        assert_eq!(fresh_round(&none, "aaa"), 1);
+        let one = json!({"rounds_used": 1, "last": {"head_sha": "aaa"}});
+        assert_eq!(fresh_round(&one, "bbb"), 2);
+        assert_eq!(fresh_round(&one, "aaa"), 1);
+    }
 
     #[test]
     fn ttl_clamps_into_claim_bounds() {
