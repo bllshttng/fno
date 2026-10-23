@@ -24,9 +24,12 @@ use crate::server::fno_bin;
 /// at load 63 they took 1.1 to 1.5 s each warm, so 1.5 s failed the first open.
 const READ_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// How often an open Accounts tab re-reads usage, so a number on screen is
-/// never older than this.
-const USAGE_TICK: Duration = Duration::from_secs(60);
+/// How often an idle, open Accounts tab re-measures usage: the usage cache's
+/// own 300 s freshness window. Each re-measure probes every claude account's
+/// usage endpoint, so a faster tick multiplies those calls while nobody
+/// presses a key. Opening the tab and R still re-measure at once, and the AGE
+/// column says how old each reading is.
+const USAGE_TICK: Duration = Duration::from_secs(300);
 
 /// Budget for the phase-2 identity read (plain `config accounts list`, whose
 /// last column is the identity cell). Wider than phase 1: the binding fold
