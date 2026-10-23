@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "c2", "name": "c", "harness": "codex", "auth": "oauth_dir", "credentials_source": "{dir}/empty"}, "files": [], "expect": {"snapshot": null, "reason": "probe-failed"}}

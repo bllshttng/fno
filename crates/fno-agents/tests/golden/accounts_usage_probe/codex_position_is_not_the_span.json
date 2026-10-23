@@ -1,0 +1,1 @@
+{"op": "codex_windows", "payload": {"timestamp": "t", "type": "event_msg", "payload": {"rate_limits": {"primary": {"used_percent": 12.5, "resets_at": 1789409000.0, "window_minutes": 10080}, "secondary": null}}}, "expect": [{"label": "weekly", "used_pct": 12.5, "resets_at": 1789409000.0}]}

@@ -1,0 +1,1 @@
+{"op": "codex_windows", "payload": {"a": [{"b": 1}, {"rate_limits": {"primary": {"used_percent": 3, "resets_at": 1789400000.0, "window_minutes": 4320}}}]}, "expect": [{"label": "3d", "used_pct": 3.0, "resets_at": 1789400000.0}]}

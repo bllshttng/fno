@@ -94,7 +94,7 @@ pub struct WindowProjection {
 }
 
 /// Python `float(v)` for a JSON value: numbers, booleans and numeric strings.
-fn py_float(v: &Value) -> Option<f64> {
+pub(crate) fn py_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
