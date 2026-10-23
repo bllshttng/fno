@@ -3,10 +3,11 @@
 //! identity behind a launch's credential ([binding]), the staged dir layout
 //! ([staging]), the launch env ([env]), the managed store with its shared
 //! credential slot ([store]), the provider error taxonomy ([error_class]),
-//! the runtime-state file ([state]) and the config write ([writer]).
+//! the runtime-state file ([state]), the usage probes ([usage_probe]) and
+//! the config write ([writer]).
 //! Ported from `fno.adapters.providers` (model.py, loader.py, binding.py,
-//! staging.py, dispatch.py, error_taxonomy.py, runtime_state.py and
-//! managed.py's store layer) and
+//! staging.py, dispatch.py, error_taxonomy.py, runtime_state.py, usage.py
+//! and managed.py's store layer) and
 //! `account_env.resolve_account_overlay`; the parity cases live in
 //! `tests/accounts_*_parity.rs`.
 //!
@@ -25,6 +26,7 @@ pub mod slot;
 pub mod staging;
 pub mod state;
 pub mod store;
+pub mod usage_probe;
 pub mod writer;
 
 const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]\n       fno-agents spawn-overlay accounts state <op>  (a JSON payload on stdin)";

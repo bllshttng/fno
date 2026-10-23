@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "z1", "name": "z", "harness": "claude", "auth": "api_key", "route": "zai/glm-4.6"}, "route_env": null, "http": [], "expect": {"snapshot": null, "reason": "probe-failed"}}

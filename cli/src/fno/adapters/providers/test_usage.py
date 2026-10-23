@@ -114,41 +114,12 @@ def _zai_record() -> ProviderRecord:
 # ---------------------------------------------------------------------------
 
 
-class TestUsageWindowClamp:
-    def test_in_range_preserved(self) -> None:
-        assert UsageWindow("5h", 42.0, 2000.0).used_pct == 42.0
-
-    def test_zero_and_hundred_exact(self) -> None:
-        assert UsageWindow("5h", 0.0, 2000.0).used_pct == 0.0
-        assert UsageWindow("5h", 100.0, 2000.0).used_pct == 100.0
-
-    def test_over_hundred_clamped(self) -> None:
-        assert UsageWindow("5h", 103.0, 2000.0).used_pct == 100.0
-
-    def test_negative_clamped(self) -> None:
-        assert UsageWindow("5h", -5.0, 2000.0).used_pct == 0.0
-
-
 # ---------------------------------------------------------------------------
 # probe_usage fail-open + crash containment (AC1-ERR, AC1-FR)
 # ---------------------------------------------------------------------------
 
 
 class TestProbeFailOpen:
-    def test_api_key_record_is_unknown(self) -> None:
-        rec = ProviderRecord(
-            id="api", name="Api", harness="claude", auth="api_key",
-            env={"ANTHROPIC_API_KEY": "x"},
-        )
-        assert probe_usage(rec) is None
-
-    def test_unknown_cli_is_unknown(self, tmp_path: Path) -> None:
-        rec = ProviderRecord(
-            id="gem", name="Gem", harness="gemini", auth="oauth_dir",
-            credentials_source=tmp_path,
-        )
-        assert probe_usage(rec) is None
-
     def test_missing_credentials_is_unknown(self, tmp_path: Path) -> None:
         # No .credentials.json in the dir -> bearer read fails -> None, no raise.
         assert probe_usage(_claude_record(tmp_path)) is None
@@ -165,113 +136,6 @@ class TestProbeFailOpen:
 
         monkeypatch.setitem(usage_mod._PROBES, "claude", boom)
         assert probe_usage(_claude_record(tmp_path)) is None
-
-    def test_claude_probe_parses_real_shape(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Verified /api/oauth/usage shape: top-level five_hour/seven_day
-        # objects with utilization (0-100) + an ISO-8601 resets_at string.
-        (tmp_path / ".credentials.json").write_text(
-            json.dumps({"claudeAiOauth": {"accessToken": "tok"}})
-        )
-        import fno.adapters.providers.usage as usage_mod
-
-        class _Resp:
-            def __enter__(self):  # noqa: ANN001
-                return self
-
-            def __exit__(self, *a):  # noqa: ANN001
-                return False
-
-            def read(self):  # noqa: ANN001
-                return json.dumps({
-                    "five_hour": {"utilization": 9.0, "resets_at": "2026-07-12T02:09:59+00:00"},
-                    "seven_day": {"utilization": 69.0, "resets_at": "2026-07-12T10:59:59+00:00"},
-                    "seven_day_opus": None,
-                }).encode()
-
-        monkeypatch.setattr(usage_mod.urllib.request, "urlopen", lambda *a, **k: _Resp())
-        snap = probe_usage(_claude_record(tmp_path), now=1000.0)
-        assert snap is not None
-        labels = {w.label: w.used_pct for w in snap.windows}
-        assert labels == {"5h": 9.0, "weekly": 69.0}
-        # resets_at parsed from ISO to epoch.
-        import datetime as _dt
-        assert snap.windows[0].resets_at == _dt.datetime.fromisoformat("2026-07-12T02:09:59+00:00").timestamp()
-
-    def test_claude_probe_includes_model_weekly_windows(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Review: a populated seven_day_opus must NOT be dropped - a maxed
-        # Opus weekly has to bind headroom even when the general weekly has room.
-        # Obfuscated promo buckets (tangelo) are excluded.
-        (tmp_path / ".credentials.json").write_text(
-            json.dumps({"claudeAiOauth": {"accessToken": "tok"}})
-        )
-        import fno.adapters.providers.usage as usage_mod
-
-        class _Resp:
-            def __enter__(self):  # noqa: ANN001
-                return self
-
-            def __exit__(self, *a):  # noqa: ANN001
-                return False
-
-            def read(self):  # noqa: ANN001
-                return json.dumps({
-                    "five_hour": {"utilization": 5.0, "resets_at": "2026-07-12T02:00:00+00:00"},
-                    "seven_day": {"utilization": 40.0, "resets_at": "2026-07-12T10:00:00+00:00"},
-                    "seven_day_opus": {"utilization": 100.0, "resets_at": "2026-07-12T11:00:00+00:00"},
-                    "seven_day_sonnet": None,
-                    "tangelo": {"utilization": 99.0, "resets_at": "2026-07-12T12:00:00+00:00"},
-                }).encode()
-
-        monkeypatch.setattr(usage_mod.urllib.request, "urlopen", lambda *a, **k: _Resp())
-        snap = probe_usage(_claude_record(tmp_path), now=1000.0)
-        assert snap is not None
-        labels = {w.label: w.used_pct for w in snap.windows}
-        # opus included (as weekly-opus); sonnet null skipped; tangelo excluded.
-        assert labels == {"5h": 5.0, "weekly": 40.0, "weekly-opus": 100.0}
-        # The maxed opus window binds: headroom would read it as the worst.
-        assert max(w.used_pct for w in snap.windows) == 100.0
-
-    def test_claude_probe_skips_stale_token_then_succeeds(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A stale scoped Keychain token 401s; the probe tries the next candidate.
-        import urllib.error
-
-        import fno.adapters.providers.usage as usage_mod
-
-        monkeypatch.setattr(
-            usage_mod, "credential_blobs",
-            lambda harness, root: [
-                json.dumps({"claudeAiOauth": {"accessToken": "stale"}}),
-                json.dumps({"claudeAiOauth": {"accessToken": "live"}}),
-            ],
-        )
-
-        class _Resp:
-            def __enter__(self):  # noqa: ANN001
-                return self
-
-            def __exit__(self, *a):  # noqa: ANN001
-                return False
-
-            def read(self):  # noqa: ANN001
-                return json.dumps({"five_hour": {"utilization": 5.0, "resets_at": "2026-07-12T02:00:00+00:00"}}).encode()
-
-        def _fetch(req, timeout):  # noqa: ANN001
-            if "stale" in req.headers.get("Authorization", ""):
-                raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
-            return _Resp()
-
-        # No file token (empty dir) so only the two keychain tokens are tried.
-        rec = ProviderRecord(id="c", name="c", harness="claude", auth="oauth_dir", credentials_source=tmp_path)
-        monkeypatch.setattr(usage_mod.urllib.request, "urlopen", _fetch)
-        snap = probe_usage(rec, now=1000.0)
-        assert snap is not None
-        assert snap.windows[0].used_pct == 5.0
 
     def test_config_dir_record_reads_only_its_own_scoped_item(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -431,219 +295,12 @@ class TestProbeFailOpen:
         else:
             assert snap is not None and snap.windows[0].used_pct == 7.0
 
-    def test_codex_probe_parses_real_shape(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Verified codex shape: an event_msg line with rate_limits at
-        # payload.rate_limits; each window has used_percent + an ABSOLUTE resets_at.
-        sessions = tmp_path / "sessions"
-        sessions.mkdir()
-        (sessions / "s.jsonl").write_text(json.dumps({
-            "timestamp": "2026-07-11T14:11:44",
-            "type": "event_msg",
-            "payload": {"rate_limits": {
-                "primary": {"used_percent": 4.0, "window_minutes": 300, "resets_at": 1783807404},
-                "secondary": {"used_percent": 5.0, "window_minutes": 10080, "resets_at": 1784372823},
-            }},
-        }) + "\n")
-        rec = ProviderRecord(id="cx", name="cx", harness="codex", auth="oauth_dir", credentials_source=tmp_path)
-        snap = probe_usage(rec, now=1000.0)
-        assert snap is not None
-        assert snap.source == "session-events"
-        got = {w.label: (w.used_pct, w.resets_at) for w in snap.windows}
-        assert got == {"5h": (4.0, 1783807404.0), "weekly": (5.0, 1784372823.0)}
-
-
 class TestZaiProbe:
     def test_zai_probe_is_registered_by_route_provider(self) -> None:
         """AC4-HP: the registry owns Z.AI beside Claude and Codex."""
         import fno.adapters.providers.usage as usage_mod
 
         assert usage_mod._PROBES.get("zai") is usage_mod._probe_zai
-
-    def test_zai_parser_maps_live_shaped_five_hour_limit(self) -> None:
-        """AC3-HP: Z.AI's integer quota fields become a reset-bearing 5h window."""
-        import fno.adapters.providers.usage as usage_mod
-
-        parse = getattr(usage_mod, "_parse_zai_windows", None)
-        if parse is None:
-            pytest.fail("Z.AI parser is not implemented")
-
-        payload = {
-            "success": True,
-            "code": 200,
-            "data": {
-                "limits": [
-                    {
-                        "type": "TOKENS_LIMIT",
-                        "unit": 3,
-                        "number": 5,
-                        "usage": 1000,
-                        "currentValue": 150,
-                        "remaining": 850,
-                        "percentage": 99,
-                        "nextResetTime": 1783807404000,
-                    }
-                ]
-            },
-        }
-
-        windows = parse(payload)
-
-        assert len(windows) == 1
-        assert windows[0].label == "5h"
-        assert windows[0].used_pct == 15.0
-        assert windows[0].resets_at == 1783807404.0
-
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            {},
-            {"success": False, "code": 200, "data": {"limits": []}},
-            {"success": True, "code": 200, "data": {"limits": []}},
-            {
-                "success": True,
-                "code": 200,
-                "data": {
-                    "limits": [
-                        {
-                            "type": "TOKENS_LIMIT",
-                            "unit": 3,
-                            "number": 5,
-                            "usage": "1000",
-                            "percentage": 20,
-                            "nextResetTime": 1783807404000,
-                        }
-                    ]
-                },
-            },
-        ],
-    )
-    def test_zai_parser_never_emits_percentage_only_success(self, payload) -> None:
-        """AC3-ERR: unknown/malformed Z.AI payloads have no positive window marker.
-
-        Every payload here carries at most ONE limit row, so a dropped row
-        leaves ``()`` and correctly reads unknown. That is why this control
-        stayed green through the false green: the defect needs a MIXED row
-        list, where a dropped row leaves a survivor to answer in its place.
-        The mixed cases live in ``test_usage_false_green.py``.
-
-        A reset-less row that is otherwise well-formed is no longer one of
-        these cases: it is RETAINED with ``resets_at = None`` and binds on its
-        percentage, because the endpoint reported the limit and its
-        utilization and only the reset is missing.
-        """
-        import fno.adapters.providers.usage as usage_mod
-
-        parse = getattr(usage_mod, "_parse_zai_windows", None)
-        if parse is None:
-            pytest.fail("Z.AI parser is not implemented")
-        assert parse(payload) == ()
-
-    def test_zai_probe_uses_route_bearer_and_returns_quota_snapshot(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import urllib.request
-
-        import fno.adapters.providers.usage as usage_mod
-
-        class _Response:
-            def __enter__(self):  # noqa: ANN204
-                return self
-
-            def __exit__(self, *args):  # noqa: ANN001
-                return False
-
-            def read(self) -> bytes:
-                return json.dumps({
-                    "success": True,
-                    "code": 200,
-                    "data": {"limits": [{
-                        "type": "TOKENS_LIMIT",
-                        "unit": 3,
-                        "number": 5,
-                        "percentage": 12,
-                        "nextResetTime": 1783807404000,
-                    }]},
-                }).encode()
-
-        seen: list[tuple[urllib.request.Request, float]] = []
-
-        def fake_urlopen(
-            request: urllib.request.Request, timeout: float
-        ) -> _Response:
-            seen.append((request, timeout))
-            return _Response()
-
-        dispatch_roots: list[Path | None] = []
-
-        def fake_dispatch(_provider_id: str, repo_root: Path | None = None) -> dict[str, str]:
-            dispatch_roots.append(repo_root)
-            return {
-                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "live-token",
-            }
-
-        monkeypatch.setattr(usage_mod, "dispatch_env", fake_dispatch)
-        monkeypatch.setattr(
-            usage_mod.urllib.request,
-            "urlopen",
-            fake_urlopen,
-        )
-
-        probe = getattr(usage_mod, "_probe_zai", None)
-        if probe is None:
-            pytest.fail("Z.AI probe is not implemented")
-        repo_root = Path("/project")
-        # The clock has to sit near the reset it is reading. A 300-minute
-        # window whose reset is 56 YEARS out describes a different span, and
-        # since the false-green fix that reset is dropped to None rather than published as
-        # this window's (AC9-ERR). One hour before the reset is coherent.
-        snapshot, reason = probe(
-            _zai_record(), now=1783807404.0 - 3600.0, repo_root=repo_root
-        )
-
-        assert reason is None
-        assert snapshot is not None
-        assert snapshot.source == "quota-endpoint"
-        assert snapshot.windows[0] == UsageWindow("5h", 12.0, 1783807404.0)
-        request, timeout = seen[0]
-        assert request.full_url == "https://api.z.ai/api/monitor/usage/quota/limit"
-        assert request.headers["Authorization"] == "Bearer live-token"
-        assert timeout == 10
-        assert dispatch_roots == [repo_root]
-
-    def test_zai_probe_http_failure_is_explicit_unknown(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from email.message import Message
-        import urllib.error
-
-        import fno.adapters.providers.usage as usage_mod
-
-        monkeypatch.setattr(
-            usage_mod,
-            "dispatch_env",
-            lambda _provider_id, **_kwargs: {
-                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                "ANTHROPIC_AUTH_TOKEN": "live-token",
-            },
-        )
-        monkeypatch.setattr(
-            usage_mod.urllib.request,
-            "urlopen",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                urllib.error.HTTPError("https://api.z.ai", 429, "limited", Message(), None)
-            ),
-        )
-
-        probe = getattr(usage_mod, "_probe_zai", None)
-        if probe is None:
-            pytest.fail("Z.AI probe is not implemented")
-        snapshot, reason = probe(_zai_record(), now=1000.0)
-
-        assert snapshot is None
-        assert reason == "probe-failed"
 
     def test_route_backed_api_key_selects_zai_probe(
         self, monkeypatch: pytest.MonkeyPatch
@@ -691,20 +348,6 @@ class TestZaiProbe:
 # ---------------------------------------------------------------------------
 
 
-def test_iso_to_epoch_handles_z_suffix() -> None:
-    # gemini review: Py<3.11 fromisoformat rejects a trailing 'Z'.
-    from datetime import datetime, timezone
-
-    from fno.adapters.providers.usage import _iso_to_epoch
-
-    expected = datetime(2026, 7, 12, 2, 0, 0, tzinfo=timezone.utc).timestamp()
-    assert _iso_to_epoch("2026-07-12T02:00:00Z") == expected
-    assert _iso_to_epoch("2026-07-12T02:00:00+00:00") == expected
-    assert _iso_to_epoch(1234567890) == 1234567890.0
-    assert _iso_to_epoch("garbage") is None
-    assert _iso_to_epoch(None) is None
-
-
 # ---------------------------------------------------------------------------
 # Typed refresh observation: a successful probe survives a failed cache
 # write, and every unknown names the boundary that produced it.
@@ -718,25 +361,6 @@ class TestProbeUnknownReason:
         """A managed record that is not its CLI's slot occupant."""
         rec = ProviderRecord(id="m", name="M", harness="claude", auth="managed")
         assert probe_usage_detail(rec) == (None, "unattributed")
-
-    def test_harness_without_a_probe(self, tmp_path: Path) -> None:
-        rec = ProviderRecord(
-            id="g", name="G", harness="gemini", auth="oauth_dir",
-            credentials_source=tmp_path,
-        )
-        assert probe_usage_detail(rec) == (None, "harness-unsupported")
-
-    def test_api_key_record_is_an_auth_gap_not_an_attribution_gap(self) -> None:
-        """An api_key record's credential IS its own; it just is not a bearer.
-
-        Reporting `unattributed` here would send an operator to repair an
-        account binding that is already correct.
-        """
-        rec = ProviderRecord(
-            id="k", name="K", harness="claude", auth="api_key",
-            env={"ANTHROPIC_API_KEY": "x"},
-        )
-        assert probe_usage_detail(rec) == (None, "auth-unsupported")
 
     def test_capability_is_classified_before_attribution(self) -> None:
         """An unsupported harness answers first, whatever its auth shape.

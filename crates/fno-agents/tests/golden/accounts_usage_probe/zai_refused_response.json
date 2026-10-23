@@ -1,0 +1,1 @@
+{"op": "zai_windows", "payload": {"success": false, "code": 200, "data": {"limits": [{"type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 1}]}}, "expect": {"windows": [], "partial": false}}

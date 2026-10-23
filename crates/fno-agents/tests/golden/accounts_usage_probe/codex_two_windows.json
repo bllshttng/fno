@@ -1,0 +1,1 @@
+{"op": "codex_windows", "payload": {"rate_limits": {"primary": {"used_percent": 40, "resets_at": 1789400100.0, "window_minutes": 300}, "secondary": {"used_percent": "7", "resets_at": "1789400900.0", "window_minutes": 10080}}}, "expect": [{"label": "5h", "used_pct": 40.0, "resets_at": 1789400100.0}, {"label": "weekly", "used_pct": 7.0, "resets_at": 1789400900.0}]}

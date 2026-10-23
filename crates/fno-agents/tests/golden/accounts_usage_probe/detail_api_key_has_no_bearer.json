@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "k1", "name": "k", "harness": "claude", "auth": "api_key", "env": {"ANTHROPIC_API_KEY": "sk"}}, "expect": {"snapshot": null, "reason": "auth-unsupported"}}
