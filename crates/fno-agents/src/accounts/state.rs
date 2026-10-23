@@ -951,6 +951,12 @@ pub fn run(args: &[String]) -> i32 {
     let text = |key: &str| payload.get(key).and_then(Value::as_str);
     let int = |key: &str| payload.get(key).and_then(py_int);
     let id = text("provider_id").unwrap_or_default();
+    // Every op is keyed by a provider; an empty id would land an entry the
+    // parser then drops, so refuse it before taking the lock.
+    if id.is_empty() {
+        eprintln!("accounts state {op}: provider_id is required");
+        return 2;
+    }
     let answer = match op.as_str() {
         "update-health" => {
             let rule = Rule {
