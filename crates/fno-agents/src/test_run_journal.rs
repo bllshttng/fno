@@ -11,9 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::events::EventEmitter;
-
 const COMMAND_CAP: usize = 400;
-
 pub(crate) struct Run<'a> {
     pub(crate) run_id: &'a str,
     pub(crate) argv: &'a [String],
