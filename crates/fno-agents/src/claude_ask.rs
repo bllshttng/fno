@@ -361,8 +361,7 @@ impl ClaudeHome {
     }
 
     /// A live claude process holds this session, so `claude --bg --resume`
-    /// on it would start a copy. Unlike [`Self::session_live`], an fno
-    /// command line that only names the id does not count.
+    /// would copy it. An fno command line naming the id does not count.
     pub fn session_held(&self, session_id: &str) -> bool {
         match &self.live_sessions {
             Some(sessions) => sessions.iter().any(|s| s == session_id),

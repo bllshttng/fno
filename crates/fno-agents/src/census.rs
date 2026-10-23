@@ -1317,8 +1317,7 @@ mod process_table_tests {
         assert!(found, "a live argv naming the needle is a witness");
         assert!(!absent, "a needle no process names is no witness");
         assert!(!empty, "an empty needle names nothing");
-        // The narrower holder test: the sh child names the needle but is no
-        // claude process, and only a claude argv's session flags hold.
+        // Only a claude argv's session flags hold; the sh child does not.
         assert!(!super::live_claude_holds_session(needle));
         let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
         let sid = "8789fe29-0e28-4d8e-aa00-8171920ce205";

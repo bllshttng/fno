@@ -1175,6 +1175,7 @@ mod tests {
             "aaaaaaaa",
             &["--settings", &dir.to_string_lossy()],
         );
+        let mut aliased = e.clone();
         let plan = resolve_reentry_with(
             &reg(vec![e]),
             "glm",
@@ -1219,13 +1220,7 @@ mod tests {
         // keeps the id. A path-string compare sent this to `--bg --resume`.
         let alias = std::env::temp_dir().join("reentry-test-route-a-alias.json");
         std::fs::copy(&dir, &alias).unwrap();
-        let mut aliased = row("glm");
-        aliased.harness_session_id = Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into());
-        aliased.short_id = "aaaaaaaa".into();
-        aliased.provider = Some("zai".into());
-        aliased.launch_account = Some("makers".into());
         aliased.route_settings_path = Some(alias.to_string_lossy().to_string());
-        aliased.cwd = std::env::temp_dir().to_string_lossy().to_string();
         let plan = resolve_reentry_with(
             &reg(vec![aliased.clone()]),
             "glm",

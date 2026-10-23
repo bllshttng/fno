@@ -190,18 +190,9 @@ pub(crate) fn fork_parent_in_argv(argv: &[String], session_id: &str) -> Option<S
     if !argv.iter().any(|a| a == "--fork-session") {
         return None;
     }
-    let mut iter = argv.iter();
-    while let Some(arg) = iter.next() {
-        let parent = match arg.strip_prefix("--resume=") {
-            Some(value) => Some(value.to_string()),
-            None if arg == "--resume" || arg == "-r" => iter.next().cloned(),
-            None => None,
-        };
-        if let Some(parent) = parent.filter(|p| !p.is_empty() && p != session_id) {
-            return Some(parent);
-        }
-    }
-    None
+    argv.windows(2)
+        .find(|pair| pair[0] == "--resume" && pair[1] != session_id)
+        .map(|pair| pair[1].clone())
 }
 
 /// The fork parent of a live claude bg session, from the argv of the pid
@@ -222,10 +213,9 @@ pub(crate) fn superseded(entries: &[RegistryEntry], session_id: &str) -> bool {
         .any(|e| e.predecessor_session_ids.iter().any(|id| id == session_id))
 }
 
-/// Bind a fork to the row that holds its parent. The copy carries the
-/// parent's history and does the parent's work, so it takes the parent's
-/// row (name, node, lineage) and the parent id moves to the predecessors.
-/// `None` when no row holds the parent: the caller mints as before.
+/// Bind a fork to the row that holds its parent: the copy does the parent's
+/// work, so it keeps that row and the parent id moves to the predecessors.
+/// `None` when no row holds the parent, and the caller mints as before.
 pub(crate) fn bind_fork_child(
     entries: &mut [RegistryEntry],
     parent: &str,
@@ -294,20 +284,16 @@ mod tests {
     /// parent's row, and the parent never mints a second one.
     #[test]
     fn a_forked_native_row_keeps_one_row() {
-        let argv: Vec<String> = [
-            "/Users/u/.local/share/claude/versions/2.1.309",
-            "--session-id",
-            CHILD,
-            "--fork-session",
-            "--resume",
-            PARENT,
-            "--settings",
-            "/Users/u/.fno/state/route-settings/lane-zai-flash.json",
-        ]
-        .map(str::to_string)
-        .to_vec();
-        assert_eq!(fork_parent_in_argv(&argv, CHILD).as_deref(), Some(PARENT));
-        let plain: Vec<String> = ["claude", "--resume", PARENT].map(str::to_string).to_vec();
+        let argv = |line: String| {
+            line.split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let forked = argv(format!(
+            "/u/claude/versions/2.1.309 --session-id {CHILD} --fork-session --resume {PARENT}"
+        ));
+        assert_eq!(fork_parent_in_argv(&forked, CHILD).as_deref(), Some(PARENT));
+        let plain = argv(format!("claude --resume {PARENT}"));
         assert_eq!(fork_parent_in_argv(&plain, PARENT), None);
 
         let mut worker =
