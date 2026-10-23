@@ -1,7 +1,7 @@
 """``fno mail send --force``: receipt vocabulary and the pane provenance row.
 
 Node x-3a64. ``--force`` changes only the TRANSPORT. Before it existed a
-live-miss made the sender switch verbs, and switching verbs is what lost the
+live-miss made the sender switch commands, and switching commands is what lost the
 envelope, the message id, the reply handle, and the outbox row.
 
 The receipt is the part that must not drift. `typed` is not `delivered`: bytes

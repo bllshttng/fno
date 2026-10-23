@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Contract tests for hooks/inject-control-drain-tool-boundary.sh: the shell
 # gate only. A stub fno-agents logs its argv, so no build is needed; the
-# verb's own render and cursor contract lives in mail_control_drain.rs.
+# command's own render and cursor contract lives in mail_control_drain.rs.
 
 set -uo pipefail
 
@@ -48,17 +48,17 @@ touch -t 209901010000 "$BUS/tool-boundary/$SID.stamp"
 run_hook "$TMP/nojq"
 called && ok "jq missing still drains a control flag" || bad "jq missing skipped the drain"
 
-# No flag, stamp ahead of the bus: the gate skips the verb.
+# No flag, stamp ahead of the bus: the gate skips the command.
 fresh
 mkdir -p "$BUS/tool-boundary"
 touch -t 209901010000 "$BUS/tool-boundary/$SID.stamp"
 run_hook ""
-called && bad "fresh stamp still ran the verb" || ok "fresh stamp skips the verb"
+called && bad "fresh stamp still ran the command" || ok "fresh stamp skips the command"
 
-# No flag, no stamp: the bus counts as changed, so the verb runs.
+# No flag, no stamp: the bus counts as changed, so the command runs.
 fresh
 run_hook ""
-called && ok "missing stamp runs the verb" || bad "missing stamp skipped the verb"
+called && ok "missing stamp runs the command" || bad "missing stamp skipped the command"
 
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

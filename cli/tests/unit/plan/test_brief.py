@@ -42,7 +42,7 @@ tasks:
       - cli/tests/unit/plan/test_brief.py
     verify: "uv run pytest cli/tests/unit/plan/test_brief.py -v"
     acceptance: [AC2-HP, AC2-ERR, AC2-UI, AC2-EDGE, AC2-FR]
-    notes: "Build the CLI verb for brief generation."
+    notes: "Build the CLI command for brief generation."
 """
 
 SAMPLE_AC_SECTION = """\

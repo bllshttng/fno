@@ -1,5 +1,5 @@
 """``fno agents lead ledger``: Python resolves the team and the paths; the
-native lead-rundown verb owns the page assembly (the lead-history split).
+native lead-rundown command owns the page assembly (the lead-history split).
 
 The renderer's own truth lives in the Rust tests; these pin the Python-side
 plumbing: the team gather + fold, the binary relay's argv, and the refusal

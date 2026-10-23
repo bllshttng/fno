@@ -135,7 +135,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/ci/check-python-static.sh
 
-      # The verb x harness doc is a projection of the capability table and
+      # The command x harness doc is a projection of the capability table and
       # skills/*/SKILL.md frontmatter, and since the renderer moved into the
       # fno-agents binary it takes one build from this checkout: the renderer
       # must be the same parser that validates the table, or the freshness
@@ -177,13 +177,13 @@ jobs:
         # byte-true until the Python leg deletes.
         run: fno-agents test-delta --base "$TEST_BASE" --max-net 22
 
-      - name: Verb matrix fresh
+      - name: Command matrix fresh
         if: ${{ !cancelled() }}
         working-directory: cli
         run: |
           set -euo pipefail
           uv run fno-py doctor harness-matrix --write
-          git diff --exit-code -- ../docs/harnesses/verb-matrix.md
+          git diff --exit-code -- ../docs/harnesses/command-matrix.md
 
       # hooks/write-gate.sh refuses edits only to generated copies
       # that generated-artifacts.tsv or skill-bundles.yaml names. The census
@@ -526,7 +526,7 @@ jobs:
         run: bash tests/ci/test_check_pytest_skips.sh
 
       # From plan-rung-authority.yml.
-      - name: One readiness authority (Python table, shell verb, Rust delegation)
+      - name: One readiness authority (Python table, shell command, Rust delegation)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash scripts/ci/check-plan-rung-authority.sh
@@ -558,9 +558,9 @@ jobs:
         timeout-minutes: 5
         run: bash tests/ci/test_check_file_budget.sh
 
-      # Law d-fe66560a: top-level verbs are not allowed at all, hidden ones
+      # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
       # included. The fno-agents binary's action list may only shrink; the
-      # verb ratchet reads all of fno-agents as ONE baseline leaf, so nothing
+      # command ratchet reads all of fno-agents as ONE baseline leaf, so nothing
       # else notices the list growing. Same base contract as the file budget
       # step above.
       - name: fno-agents action list is shrink-only
@@ -677,7 +677,7 @@ jobs:
       # The growth-studio pack declares its scenarios in plugin.yaml, and pack
       # verification only checks that each command is runnable - it never
       # executes one. So the pack's own behavior assertions ran nowhere, and a
-      # verb rename in SKILL.md left the activation gate asserting a string
+      # command rename in SKILL.md left the activation gate asserting a string
       # that no longer existed while every check stayed green.
       #
       # The commands are read from the manifest rather than hardcoded here: a
@@ -741,9 +741,9 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/ci/check-no-internal-refs.sh
 
-      # Not every fno command is a verb: an added line of user-facing text
-      # says "command". The self-test watches the gate fail first.
-      - name: No "verb" wording on added user-facing lines
+      # The fno concept is "command", in identifiers, paths and prose alike:
+      # the gate scans the whole tree. The self-test watches it fail first.
+      - name: No "verb" wording anywhere in the tree
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: |

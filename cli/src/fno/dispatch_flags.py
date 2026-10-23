@@ -1,4 +1,4 @@
-"""Shared ``--harness`` / ``--model`` flag resolution for dispatch verbs.
+"""Shared ``--harness`` / ``--model`` flag resolution for dispatch commands.
 
 Lives at the platform layer, not under ``fno.agents``, because its callers span
 every layer: the backlog CLI, target, mail, provenance and the agents CLI all
@@ -14,7 +14,7 @@ binary-less CI lints). The runtime capability table
 (``fno.agents.harness_map``) keeps its keys in sync with the name list,
 preserving the single-source-of-truth property.
 
-``resolve_dispatch_harness`` centralizes one precedence so every dispatch verb
+``resolve_dispatch_harness`` centralizes one precedence so every dispatch command
 defaults the harness the same way:
 
     explicit --harness  >  invoking-harness inference  >  builtin default (claude)
@@ -41,7 +41,7 @@ from __future__ import annotations
 import os
 from typing import Mapping, Optional
 
-from fno.config._dispatch_verbs import canonical_verb_key
+from fno.config._dispatch_commands import canonical_command_key
 from fno.harness_identity import resolve_harness_identity
 
 # decision_source vocabulary surfaced in the spawn receipt so a dispatch's
@@ -109,13 +109,13 @@ def resolve_dispatch_harness(
 def configured_dispatch_harness(
     settings: object = None,
     *,
-    verb: str = "target",
+    command: str = "target",
 ) -> tuple[Optional[str], Optional[str]]:
     """The config rung of the autonomous-dispatch harness axis, read once.
 
     Precedence inside the rung:
 
-      ``agents.profiles.<verb>.provider``  the stage table; the home
+      ``agents.profiles.<command>.provider``  the stage table; the home
       ``dispatch.harness``                 deprecated one release; fallback rung
 
     Both dispatch doors read the stage table for this axis: ``resolve_dispatch``
@@ -137,14 +137,14 @@ def configured_dispatch_harness(
             settings = load_settings()
         except Exception:  # noqa: BLE001 - a bad config must not brick resolution
             return None, None
-    profile, profile_verb = _stage_profile(settings, verb)
+    profile, profile_command = _stage_profile(settings, command)
     stage = (getattr(profile, "provider", "") or "").strip()
     legacy = (getattr(getattr(settings, "dispatch", None), "harness", "") or "").strip()
     if stage:
         if legacy and legacy != stage:
             note = (
                 f"harness=deprecated dispatch.harness={legacy!r} ignored; "
-                f"agents.profiles.{profile_verb}.provider={stage!r} is the home"
+                f"agents.profiles.{profile_command}.provider={stage!r} is the home"
             )
             return stage, note
         return stage, None
@@ -153,23 +153,23 @@ def configured_dispatch_harness(
     return None, None
 
 
-def _stage_profile(settings: object, verb: str) -> tuple[object, str]:
-    """The stage-table profile row for VERB plus its canonical name, one home
+def _stage_profile(settings: object, command: str) -> tuple[object, str]:
+    """The stage-table profile row for COMMAND plus its canonical name, one home
     for every reader. (None, "target") when unset."""
-    profile_verb = canonical_verb_key((verb or "target").strip()).lstrip("/")
+    profile_command = canonical_command_key((command or "target").strip()).lstrip("/")
     agents = getattr(settings, "agents", None)
     profiles = getattr(agents, "profiles", None) or {}
-    return (profiles.get(profile_verb) if profile_verb else None), profile_verb
+    return (profiles.get(profile_command) if profile_command else None), profile_command
 
 
 def configured_dispatch_route(
     settings: object = None,
     *,
-    verb: str = "target",
+    command: str = "target",
 ) -> str:
-    """The stage table's vendor route for the dispatch verb, read once.
+    """The stage table's vendor route for the dispatch command, read once.
 
-    ``agents.profiles.<verb>.route`` is the vendor/model lane (e.g.
+    ``agents.profiles.<command>.route`` is the vendor/model lane (e.g.
     ``zai,glm-5.3-flash[1m]``) beside the ``provider`` harness field
     :func:`configured_dispatch_harness` reads. The route is what selects a
     worker's route settings file (endpoint+auth+model as one unit): a dispatch
@@ -184,7 +184,7 @@ def configured_dispatch_route(
             settings = load_settings()
         except Exception:  # noqa: BLE001 - a bad config must not brick resolution
             return ""
-    profile, _profile_verb = _stage_profile(settings, verb)
+    profile, _profile_command = _stage_profile(settings, command)
     return (getattr(profile, "route", "") or "").strip()
 
 

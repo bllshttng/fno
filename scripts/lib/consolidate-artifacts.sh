@@ -32,7 +32,7 @@ set -uo pipefail
 # STATE_DIR is this worktree's slice of the repo's space (per-phase artifacts
 # are worktree-local); CONSOLIDATED_DIR sits at the SPACE root so consolidated
 # files persist across worktree archival - the job the old setup-worktree.sh
-# symlink did. Both resolve through the owning verb, with the legacy checkout
+# symlink did. Both resolve through the owning command, with the legacy checkout
 # path as the fallback for an fno predating it.
 _state_dir_default() {
     local p

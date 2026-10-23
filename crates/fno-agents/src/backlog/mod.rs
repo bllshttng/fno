@@ -2074,7 +2074,7 @@ mod tests {
                  "status": "idea", "priority": "p2", "domain": "code",
                  "created_at": "2026-09-11T00:00:00+00:00", "tags": [],
                  "locked_by": "holder-1", "locked_at": "2026-09-11T01:00:00+00:00",
-                 "dispatch_verb": "do",
+                 "dispatch_command": "do",
                  "source": "idea", "source_kind": "operator_request",
                  "supersession": {"successor": "ab-two", "reason": "merged"},
                  "sessions": [{"phase": "execute", "harness": "claude",

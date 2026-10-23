@@ -71,7 +71,7 @@ impl Core {
                             self.persist_remove(&name, &key);
                         }
                     }
-                    self.tab_areas.remove(&tid);
+                    self.sizing.areas.remove(&tid);
                 }
                 // Refuse every client attached onto the placeholder squad (the
                 // attacher, plus anyone who joined it during the window). A

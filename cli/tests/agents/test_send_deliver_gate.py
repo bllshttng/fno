@@ -294,7 +294,7 @@ def test_deliver_live_claude_switchboard_demotes_to_socket(
     from fno.agents.harnesses import claude as claude_mod
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
 
-    # The control.sock inject (mail-inject verb) is the socket-path successor; it
+    # The control.sock inject (mail-inject command) is the socket-path successor; it
     # succeeds here so the demote falls through to it.
     inject_calls: list = []
 

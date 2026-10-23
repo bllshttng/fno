@@ -1,0 +1,101 @@
+{
+  "apply_permission_builtin": true,
+  "argv": [
+    "spawn",
+    "--name",
+    "w33",
+    "--node",
+    "x-def",
+    "do the work"
+  ],
+  "config_toml": "[agents.profiles.target]\nlanes = [{provider = \"codex\", model = \"luna-n\"}]\n",
+  "env_node": null,
+  "expect": {
+    "argv": [
+      "spawn",
+      "--name",
+      "w33",
+      "--node",
+      "x-def",
+      "do the work"
+    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w33",
+        "verb": "role",
+        "seed": "do the work",
+        "fingerprint": "5166094190fd",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [
+          [
+            "grid",
+            "grid=no-inventory-declared",
+            "routing"
+          ]
+        ],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [
+      "fno agents spawn: applied grid=grid=no-inventory-declared (routing)"
+    ],
+    "stdout": null
+  },
+  "facts": {
+    "role_protected": null,
+    "role_resolves": false
+  },
+  "node": "x-def",
+  "node_row": {
+    "difficulty": "low",
+    "id": "x-def",
+    "priority": "p3"
+  },
+  "node_command": "target",
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": null,
+    "explicit_route": false,
+    "explicit_substrate": null,
+    "explicit_vendor": null,
+    "flag_node": "x-def",
+    "has_effort": false,
+    "has_harness": false,
+    "has_model": false,
+    "has_permission": false,
+    "model_value": null,
+    "name": "w33",
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "do the work",
+    "seed_form": "positional",
+    "seed_index": 5,
+    "spawn_tokens": [
+      "--name",
+      "w33",
+      "--node",
+      "x-def",
+      "do the work"
+    ],
+    "tab_flag_present": false
+  },
+  "verbose": true
+}

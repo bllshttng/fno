@@ -1,4 +1,4 @@
-//! The attach-refusal family (x-296f), beside the attach verb it exercises.
+//! The attach-refusal family (x-296f), beside the attach command it exercises.
 //! Parent helpers resolve through the glob.
 use serde_json::json;
 

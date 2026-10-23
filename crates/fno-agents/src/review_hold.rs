@@ -1,17 +1,17 @@
-//! The review-hold verb family, ported onto the `claim` verb.
+//! The review-hold command family, ported onto the `claim` command.
 //!
 //! Ports `cli/src/fno/pr/_review_hold.py` (deleted in the same change) and
-//! the verb body `pr/cli.py review_hold` carried. The hold is a TTL claim on
+//! the command body `pr/cli.py review_hold` carried. The hold is a TTL claim on
 //! `review:branch:<branch>` plus the derived worktree probe: layer 1 sees
 //! the window between "review dispatched" and "first edit", layer 2 covers
 //! every review footnote never dispatched. Absence is never the clear
 //! answer by itself: a missing hold clears only when the worktree probe
 //! also RAN and answered. A dead instrument blocks.
 //!
-//! Sub-token of `fno-agents claim` (d-fe66560a: no new top-level verb):
+//! Sub-token of `fno-agents claim` (d-fe66560a: no new top-level command):
 //! `claim review-hold check|acquire|release|metadata|round`, with argv
 //! flags mirroring the typer door one flag each, plus a stdin JSON door
-//! (no argv) so `verb_call(["claim", "review-hold"], {...})` reaches every
+//! (no argv) so `command_call(["claim", "review-hold"], {...})` reaches every
 //! action. Goldens: tests/golden/review_hold/ (Change 1).
 
 use serde_json::{json, Value};
@@ -75,7 +75,7 @@ fn configured_carry_interdiff(cwd: &Path) -> i64 {
 // ── the chain read the round-cap surfaces share ─────────────────────────────
 
 /// The attestation-chain answer, shared with the `review-coverage op chain`
-/// server so the verb door and the merge gate read ONE chain implementation
+/// server so the command door and the merge gate read ONE chain implementation
 /// (d-e11b2b3e: twins retire first; no second copy).
 pub(crate) fn chain_answer(cwd: &Path, branch: &str, head: &str) -> Value {
     crate::loopcheck::coverage_gate::chain_answer(cwd, branch, head)
@@ -200,6 +200,25 @@ pub(crate) fn scoped_verify_round(cwd: &Path, branch: &str, head: &str) -> i64 {
         .max(1)
 }
 
+/// The round an ordinary pass at `head` spends: the rounds already used, plus
+/// one unless the newest chain row is already this head (one reviewed head is
+/// one round, so a re-run at an unchanged head spends nothing).
+pub(crate) fn fresh_round(answer: &Value, head: &str) -> i64 {
+    let used = answer
+        .get("rounds_used")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let last_head = answer
+        .pointer("/last/head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !head.is_empty() && last_head == head {
+        used.max(1)
+    } else {
+        used + 1
+    }
+}
+
 /// Acquire the hold. Never blocks a review from starting: an error prints
 /// the not-registered receipt and the worktree layer still covers it.
 fn acquire_hold(
@@ -290,7 +309,7 @@ fn pr_head_ref_and_oid(cwd: &Path, pr: &str) -> Option<(String, String, String)>
     Some((branch, head, state.to_uppercase()))
 }
 
-// ── the verb body ────────────────────────────────────────────────────────────
+// ── the command body ────────────────────────────────────────────────────────────
 
 /// The parsed argv of one `claim review-hold` invocation.
 struct Args {
@@ -299,13 +318,14 @@ struct Args {
     branch: Option<String>,
     head: String,
     holder: Option<String>,
-    verb: String,
+    command: String,
     invocation_id: String,
     args_raw: String,
     level: String,
     level_source: String,
     flags_json: Option<String>,
     ttl_minutes: Option<f64>,
+    fresh: bool,
     cwd: PathBuf,
 }
 
@@ -317,13 +337,14 @@ impl Args {
             branch: None,
             head: String::new(),
             holder: None,
-            verb: String::new(),
+            command: String::new(),
             invocation_id: String::new(),
             args_raw: String::new(),
             level: String::new(),
             level_source: String::new(),
             flags_json: None,
             ttl_minutes: None,
+            fresh: false,
             cwd: default_cwd,
         };
         let mut it = rest.iter();
@@ -338,12 +359,14 @@ impl Args {
                 "--branch" => a.branch = it.next().cloned(),
                 "--head" => a.head = it.next().cloned().unwrap_or_default(),
                 "--holder" => a.holder = it.next().cloned(),
-                "--verb" => a.verb = it.next().cloned().unwrap_or_default(),
+                // An older hooks/review-hold.sh still passes the old flag.
+                "--command" | "--verb" => a.command = it.next().cloned().unwrap_or_default(), // verb-wording: allow
                 "--invocation-id" => a.invocation_id = it.next().cloned().unwrap_or_default(),
                 "--args-raw" => a.args_raw = it.next().cloned().unwrap_or_default(),
                 "--level" => a.level = it.next().cloned().unwrap_or_default(),
                 "--level-source" => a.level_source = it.next().cloned().unwrap_or_default(),
                 "--flags-json" => a.flags_json = it.next().cloned(),
+                "--fresh" => a.fresh = true,
                 "--ttl-minutes" => a.ttl_minutes = it.next().and_then(|v| v.parse().ok()),
                 "--repo" => {
                     if let Some(dir) = it.next() {
@@ -487,7 +510,11 @@ fn round_arm(a: &Args) -> (i32, String, String) {
     if !review_journals_present(&a.cwd) {
         return (1, String::new(), String::new());
     }
-    let round = scoped_verify_round(&a.cwd, branch, &a.head);
+    let round = if a.fresh {
+        fresh_round(&chain_answer(&a.cwd, branch, &a.head), &a.head)
+    } else {
+        scoped_verify_round(&a.cwd, branch, &a.head)
+    };
     (0, format!("{round}\n"), String::new())
 }
 
@@ -586,7 +613,7 @@ fn hold_metadata(a: &Args, flags: &Option<Vec<String>>) -> serde_json::Map<Strin
     let mut metadata = serde_json::Map::new();
     metadata.insert("head_sha".into(), json!(a.head));
     for (key, value) in [
-        ("verb", &a.verb), // verb-wording: allow (event metadata key)
+        ("verb", &a.command), // verb-wording: allow (event metadata key)
         ("invocation_id", &a.invocation_id),
         ("args_raw", &a.args_raw),
         ("level", &a.level),
@@ -623,8 +650,8 @@ fn review_journals_present(cwd: &Path) -> bool {
 }
 
 /// One JSON request on stdin, one JSON answer on stdout: the shape
-/// `verb_call(["claim", "review-hold"], {...})` expects. The answer carries
-/// the action result; nonzero exits surface through the raised VerbUnavailable
+/// `command_call(["claim", "review-hold"], {...})` expects. The answer carries
+/// the action result; nonzero exits surface through the raised CommandUnavailable
 /// with the same code, exactly as every other stdin door behaves.
 fn run_stdin_door() -> (i32, String, String) {
     use std::io::Read;
@@ -653,7 +680,7 @@ fn run_stdin_door() -> (i32, String, String) {
             let branch = parsed.get("branch").and_then(Value::as_str).unwrap_or("");
             let head = parsed.get("head").and_then(Value::as_str).unwrap_or("");
             let holder = parsed.get("holder").and_then(Value::as_str).unwrap_or("");
-            let verb = parsed.get("verb").and_then(Value::as_str).unwrap_or(""); // verb-wording: allow (door payload key)
+            let command = parsed.get("verb").and_then(Value::as_str).unwrap_or(""); // verb-wording: allow (door payload key)
             if branch.is_empty() || holder.is_empty() {
                 return (
                     1,
@@ -691,8 +718,8 @@ fn run_stdin_door() -> (i32, String, String) {
             let ttl = configured_ttl_ms(&cwd);
             let mut metadata = serde_json::Map::new();
             metadata.insert("head_sha".into(), json!(head));
-            if !verb.is_empty() {
-                metadata.insert("verb".into(), json!(verb)); // verb-wording: allow (event metadata key)
+            if !command.is_empty() {
+                metadata.insert("verb".into(), json!(command)); // verb-wording: allow (event metadata key)
             }
             if let Some(flags) = &flags {
                 metadata.insert("flags".into(), json!(flags));
@@ -722,6 +749,15 @@ fn run_stdin_door() -> (i32, String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_round_counts_a_new_head_and_not_a_rerun() {
+        let none = json!({"rounds_used": 0, "last": null});
+        assert_eq!(fresh_round(&none, "aaa"), 1);
+        let one = json!({"rounds_used": 1, "last": {"head_sha": "aaa"}});
+        assert_eq!(fresh_round(&one, "bbb"), 2);
+        assert_eq!(fresh_round(&one, "aaa"), 1);
+    }
 
     #[test]
     fn ttl_clamps_into_claim_bounds() {

@@ -185,32 +185,32 @@ class TestCensus:
         assert any("roster unreadable" in w for w in c.warnings)
 
 
-def _stub_verb(monkeypatch, answer=None, error=None):
-    """Stub the gate verb: a fixed JSON answer, or a failure."""
+def _stub_command(monkeypatch, answer=None, error=None):
+    """Stub the gate command: a fixed JSON answer, or a failure."""
     from fno import rust_binary
 
     if error is not None:
         def boom(*_a, **_k):
             raise error
-        monkeypatch.setattr(rust_binary, "verb_call", boom)
+        monkeypatch.setattr(rust_binary, "command_call", boom)
         return boom
 
-    def fake(verb, payload, **_kwargs):
-        assert verb == "spawn-gate", f"the transport must call the gate verb, got {verb}"
+    def fake(command, payload, **_kwargs):
+        assert command == "spawn-gate", f"the transport must call the gate command, got {command}"
         fake.payload = payload
         return answer
 
     fake.payload = None
-    monkeypatch.setattr(rust_binary, "verb_call", fake)
+    monkeypatch.setattr(rust_binary, "command_call", fake)
     return fake
 
 
 class TestTransport:
-    """The transport contract: run_gate asks the ONE gate verb and carries
+    """The transport contract: run_gate asks the ONE gate command and carries
     the answer out; the axes themselves are pinned in Rust."""
 
-    def test_admitted_answer_becomes_a_guard_holding_the_verbs_keys(self, monkeypatch):
-        stub = _stub_verb(
+    def test_admitted_answer_becomes_a_guard_holding_the_commands_keys(self, monkeypatch):
+        stub = _stub_command(
             monkeypatch,
             {
                 "status": "admitted",
@@ -226,7 +226,7 @@ class TestTransport:
         assert guard._route_provider is None
         assert guard._spawn_name == "w1"
         assert guard._substrate == "bg"
-        # The caller's pid travels in the payload: the verb's claims are
+        # The caller's pid travels in the payload: the command's claims are
         # owned by the CALLER across the process boundary (locked decision 3).
         assert stub.payload["holder_pid"] == os.getpid()
         assert stub.payload["mode"] == "gate"
@@ -244,7 +244,7 @@ class TestTransport:
             "count": 5,
             "current_count": 5,
         }
-        _stub_verb(
+        _stub_command(
             monkeypatch,
             {
                 "status": "refused",
@@ -269,13 +269,13 @@ class TestTransport:
         assert data["substrate"] == "pane"
 
     def test_missing_binary_refuses_exit_87_gate_unavailable(self, monkeypatch, capsys):
-        from fno.rust_binary import VerbUnavailable
+        from fno.rust_binary import CommandUnavailable
 
         events = []
         monkeypatch.setattr(
             spawn_gate, "_emit_gate_event", lambda kind, **data: events.append((kind, data))
         )
-        _stub_verb(monkeypatch, error=VerbUnavailable("the fno-agents binary was not found"))
+        _stub_command(monkeypatch, error=CommandUnavailable("the fno-agents binary was not found"))
         with pytest.raises(spawn_gate.GateRefused) as exc:
             spawn_gate.run_gate("w", "pane")
         assert exc.value.code == spawn_gate.EXIT_GATE_UNAVAILABLE
@@ -290,9 +290,9 @@ class TestTransport:
         )
 
     def test_probe_never_raises_on_an_unanswered_gate(self, monkeypatch):
-        from fno.rust_binary import VerbUnavailable
+        from fno.rust_binary import CommandUnavailable
 
-        _stub_verb(monkeypatch, error=VerbUnavailable("exited 1"))
+        _stub_command(monkeypatch, error=CommandUnavailable("exited 1"))
         answer = spawn_gate.probe_capacity()
         assert answer["verdict"] == "unknown"
         assert answer["reason"] == "gate_unavailable"

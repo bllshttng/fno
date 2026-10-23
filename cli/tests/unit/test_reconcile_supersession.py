@@ -1,7 +1,7 @@
 """Supersession verdicts and PR merge-state queries over the surviving reconcile defs.
 
 Split out of the retired test_pr_closure_producer.py: the closure producer
-module is gone (superseded by the fno-agents binary verbs), but the
+module is gone (superseded by the fno-agents binary commands), but the
 reconcile-side defs these tests cover live on in fno.graph._reconcile.
 """
 from __future__ import annotations
@@ -56,17 +56,17 @@ def test_truncated_evidence_blames_the_truncation_not_the_surface():
 
 
 def test_query_rest_timeout_is_retryable_availability_failure(monkeypatch):
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     from fno.graph._reconcile import ReconcileError, query_pr_merge_state
 
-    def _door(verb, payload, timeout=None):
-        raise VerbUnavailable(
+    def _door(command, payload, timeout=None):
+        raise CommandUnavailable(
             "fno-agents authorized-merge status-pr-info failed: "
             "timed out after 30.0s"
         )
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", _door)
+    monkeypatch.setattr("fno.rust_binary.command_call", _door)
     with pytest.raises(ReconcileError) as raised:
         query_pr_merge_state(5, repo="o/r")
 

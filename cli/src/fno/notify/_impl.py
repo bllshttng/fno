@@ -1,9 +1,9 @@
 """In-package OS notification dispatch (US2 internalization of notify.sh).
 
-The ``fno notify`` verb formerly sourced ``scripts/lib/notify.sh`` and called
-its ``notify`` bash function, so the verb 127-failed on a bare ``pip install
+The ``fno notify`` command formerly sourced ``scripts/lib/notify.sh`` and called
+its ``notify`` bash function, so the command 127-failed on a bare ``pip install
 fno`` where ``scripts/`` is absent. This module reimplements the same dispatch
-in-package so the verb runs from the installed wheel with no repo-root
+in-package so the command runs from the installed wheel with no repo-root
 dependency.
 
 Behavior parity with the former bash on the success path (the byte-for-byte
@@ -12,7 +12,7 @@ underlying tool's own failure is swallowed (the bash used ``|| true``). The one
 intentional divergence is the no-tool path: the bash silently returned 0 when
 neither tool was present, but AC2-FR requires a loud, non-zero, one-line
 degrade (never a silent no-op). ``scripts/lib/notify.sh`` is kept on disk for
-in-clone bash sourcers; only the Python verb is re-pointed here.
+in-clone bash sourcers; only the Python command is re-pointed here.
 
  adds the second leg: every notice is appended to the project journal as
 an ``operator_notice`` event, which a status sink with
@@ -183,7 +183,7 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     channel accepted the message - a local tool dispatched, or the journal row
     landed and an enabled status sink routes ``operator_notice`` - and
     ``(1, msg)`` when no channel exists, so the caller can degrade loudly
-    instead of no-opping silently (AC2-FR). ``pointer`` names the verb that
+    instead of no-opping silently (AC2-FR). ``pointer`` names the command that
     shows the durable state (e.g. ``fno inbox outstanding``); a notice is a
     pointer to the queue, never a copy of it.
     """

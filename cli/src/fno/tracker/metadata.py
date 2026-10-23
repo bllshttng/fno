@@ -2,7 +2,7 @@
 
 Not every graph field made it into the seam, on purpose. ``size``, ``type``,
 ``project``, ``dep``, the model pins, and the persistent ``slug`` are written
-only by footnote's own creation/mutation verbs - the same verbs that refuse on
+only by footnote's own creation/mutation commands - the same commands that refuse on
 an external backend (a node an external tracker owns was never sized, typed,
 or pinned by footnote). The five-field read contract deliberately does not
 carry them, and the sidecar deliberately does not mirror them

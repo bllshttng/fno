@@ -37,7 +37,6 @@ import os
 import random
 import re
 import sys
-import tempfile
 import time
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
@@ -69,7 +68,7 @@ from fno.harness_names import known_providers
 # AgentStatus vocabulary (mirrors crates/fno-agents/src/lib.rs AgentStatus and
 # the status-v1 schema); it accepts every valid projected status while still
 # rejecting garbage. Must stay in lockstep with the Rust strict reader
-# (crates/fno-agents/src/client_verbs.rs::KNOWN_STATUSES).
+# (crates/fno-agents/src/client_commands.rs::KNOWN_STATUSES).
 AgentStatus = Literal[
     "spawning",
     "ready",
@@ -758,9 +757,9 @@ def mint_agent_entry(
 
 # ---------------------------------------------------------------------------
 # Shared identifier resolver: every session-connecting `fno agents`
-# verb accepts the registry name, full harness session id, explicit transport
+# command accepts the registry name, full harness session id, explicit transport
 # short id, canonical handle, or legacy prefix. This function is the single
-# lookup choke point so no verb re-implements a name-only `.find`.
+# lookup choke point so no command re-implements a name-only `.find`.
 # ---------------------------------------------------------------------------
 
 # Exactly eight lowercase hex characters, used only when deciding whether a
@@ -774,7 +773,7 @@ class AgentResolutionError(RuntimeError):
 
     ``exit_code`` defaults to 2 (the lifecycle name-not-found convention) for a
     caller that maps the error straight through (``raise typer.Exit(exc.exit_code)``,
-    e.g. ``watch``). Verbs with their own convention still override it — resume
+    e.g. ``watch``). Commands with their own convention still override it — resume
     reports 13, trace/stop/rm map through their existing not-found path — so this
     default is the fallback, not a universal choke point.
 
@@ -804,9 +803,9 @@ class AgentResolutionError(RuntimeError):
 class ResolvedAgent:
     """The entry a token resolved to, plus which rule matched.
 
-    ``worker_short_id`` is the transport handle a session-connecting verb
+    ``worker_short_id`` is the transport handle a session-connecting command
     shells out with (``claude attach/logs <short>`` etc.); ``None`` when the
-    row recorded no short (a pre-heal claude row) so the verb can raise its own
+    row recorded no short (a pre-heal claude row) so the command can raise its own
     explicit "no short id on file" error instead of shelling an empty arg.
 
     ``matched_session_id`` is the exact id on the winning row the token named,
@@ -897,7 +896,7 @@ def resolve_agent_in(entries: list, token: str) -> ResolvedAgent:
     preserves case.
 
     ``getattr``-based, so both real ``AgentEntry`` rows and duck-typed rows (a
-    verb that injects its own registry loader) resolve identically. Raises
+    command that injects its own registry loader) resolve identically. Raises
     :class:`AgentResolutionError` (exit 2) on empty/unknown/ambiguous."""
     token = (token or "").strip()
     if not token:
@@ -936,7 +935,7 @@ def resolve_agent(
 
     Wraps :func:`resolve_agent_in`; a malformed/unreadable registry becomes a
     typed unavailable :class:`AgentResolutionError`, never a traceback leaking
-    to the verb. See ``resolve_agent_in`` for the matching rules.
+    to the command. See ``resolve_agent_in`` for the matching rules.
 
     A full session id and an ordinary name resolve from the registry directly.
     Every session-shaped short token is checked against the harness stores too:
@@ -997,7 +996,7 @@ def resolve_registered_agent_across_sources(entries: list, token: str) -> Resolv
     """Resolve a registry row while checking store-only collision candidates.
 
     A registry miss stays a miss and never adopts a store-only session. Registry-
-    gated read and delivery verbs use this to share the all-source ambiguity rule
+    gated read and delivery commands use this to share the all-source ambiguity rule
     without changing their established miss contract.
     """
     resolved = resolve_agent_in(entries, token)
@@ -1319,36 +1318,6 @@ def _validate_resolvable_handle(entry: AgentEntry) -> None:
     )
 
 
-class RegistryWriteRefused(RuntimeError):
-    """The shared-registry write guard, Python's mirror of ``registry_guard::check``."""
-
-
-def _refuse_probe_or_row_loss_write(target: Path, raw: Optional[dict], entries: list) -> None:
-    # Protect the shared runtime registry under the ambient home, even when
-    # config redirects writes. The Rust interop uses plain python3, and the
-    # declared-home branch matches the first resolution its fixtures seed.
-    sh = (paths.agents_home_dir() / "registry.json").resolve()
-    if sh != target.resolve() or sh.is_relative_to(Path(tempfile.gettempdir()).resolve()):
-        return  # another target is the caller's own store; a sandboxed HOME has no real registry
-    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("FNO_TEST_HERMETIC") == "1":
-        raise RegistryWriteRefused(
-            f"refusing {target}: a test or probe process never writes the shared registry; "
-            "pin its own home (FNO_AGENTS_HOME) instead."
-        )
-    if os.environ.get("FNO_REGISTRY_ALLOW_ROW_LOSS") == "1":
-        return
-    live = _OWNERSHIP_LIVE_STATUSES
-    before = sum(
-        r.get("status") in live for r in (raw or {}).get("agents", []) if isinstance(r, dict)
-    )
-    after = sum(e.status in live for e in entries)
-    if before >= 2 and after * 2 < before:
-        raise RegistryWriteRefused(
-            f"refusing {target}: this write drops live registry rows from {before} to {after}; "
-            "set FNO_REGISTRY_ALLOW_ROW_LOSS=1 when the drop is deliberate."
-        )
-
-
 def write_registry(
     entries: list[AgentEntry], path: Optional[Path] = None, *, revision: Optional[int] = None
 ) -> None:
@@ -1373,7 +1342,6 @@ def write_registry(
         raise RegistryRevisionConflict(f"revision_conflict: {target} moved past {revision}")
     revision = current
     _refuse_source_ahead_schema_bump(raw, target)
-    _refuse_probe_or_row_loss_write(target, raw, entries)
     existing = _existing_row_names(raw)
     for e in entries:
         _validate_single_live_ref(e)
@@ -1394,12 +1362,12 @@ def write_registry(
 #: Constructor keys of ``AgentEntry``, derived rather than listed so a new
 #: field never has to be remembered here. Used on the read-forward path, to
 #: drop keys a newer writer added after this fno was built, and by the repair
-#: verb, to decide which keys a rollback would be discarding.
+#: command, to decide which keys a rollback would be discarding.
 _INIT_FIELD_NAMES = frozenset(f.name for f in fields(AgentEntry) if f.init)
 
 
 class RegistryRepairRefused(RuntimeError):
-    """The repair verb refused rather than guessing. Never a partial write."""
+    """The repair command refused rather than guessing. Never a partial write."""
 
 
 @dataclass(frozen=True)
@@ -1422,7 +1390,7 @@ def _plan_registry_schema_repair(
         raise RegistryRepairRefused(
             f"refusing to repair {target}: it is absent, empty, or not a JSON "
             "object. A torn file is damage, not a version to roll back, and "
-            "this verb never guesses at what the rows were."
+            "this command never guesses at what the rows were."
         )
     on_disk = raw.get("schema_version")
     if not isinstance(on_disk, int):
@@ -1433,7 +1401,7 @@ def _plan_registry_schema_repair(
     if on_disk <= to_version:
         raise RegistryRepairRefused(
             f"refusing to repair {target}: on-disk schema_version={on_disk} is "
-            f"not above the requested --to {to_version}. This verb only rolls "
+            f"not above the requested --to {to_version}. This command only rolls "
             "a version DOWN; raising one is the deployed writer's job."
         )
     agents = raw.get("agents")
@@ -1495,7 +1463,7 @@ def repair_registry_schema(
 
     The script the operator ran by hand on 2026-08-28, and whose
     ``.bak.poison-repair`` sibling shows someone ran on 2026-08-09. Twice by
-    hand is a verb. Five steps, in this order, refusing rather than guessing at
+    hand is a command. Five steps, in this order, refusing rather than guessing at
     any of them:
 
     1. hold the registry-wide lock, so a live file is never repaired unlocked;
@@ -1504,8 +1472,8 @@ def repair_registry_schema(
     4. write a timestamped backup beside the file;
     5. drop the empty unknown keys, set the integer, replace atomically.
 
-    Step 3 is the point of the verb. Prevention (the write guard) drives this
-    verb's expected frequency toward zero, but prevention is not retroactive: a
+    Step 3 is the point of the command. Prevention (the write guard) drives this
+    command's expected frequency toward zero, but prevention is not retroactive: a
     worktree that already raised the shared file leaves a state only a hand edit
     clears.
 
@@ -1528,7 +1496,6 @@ def repair_registry_schema(
         raw, plan = _plan_registry_schema_repair(raw, target, to_version)
         if not apply:
             return plan
-        _refuse_probe_or_row_loss_write(target, raw, raw["agents"])
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = target.with_name(f"{target.name}.bak.schema-repair-{stamp}")
         backup.write_text(_json_dumps(raw, indent=2, sort_keys=False), encoding="utf-8")
@@ -1553,7 +1520,7 @@ def _is_identity_token(value: object) -> bool:
     alien harness (it degrades to durable routing, posture), and
     dispatch capability is gated separately at the spawn/ask seam. This still
     rejects genuine corruption -- empty, non-string, or whitespace-bearing
-    identity. Mirrors Rust ``client_verbs::is_identity_token``.
+    identity. Mirrors Rust ``client_commands::is_identity_token``.
     """
     return (
         isinstance(value, str)
@@ -2619,9 +2586,9 @@ SESSION_OBSERVATION_OUTCOMES = (
 
 def _flush_pending_session_row(entry: AgentEntry, session_id: str) -> None:
     from fno.paths import agents_registry_path, graph_json
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
     try:
-        verb_call("pending-session-row", {"action": "open", "name": entry.name,
+        command_call("pending-session-row", {"action": "open", "name": entry.name,
                  "session_id": session_id, "graph": str(graph_json()),
                  "registry": str(agents_registry_path())})
     except (Exception, SystemExit) as exc:  # noqa: BLE001 - never fail the stamp

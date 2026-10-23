@@ -6,7 +6,7 @@
 // driven with a stub context and a stub fno-agents binary on PATH so the
 // real node:child_process path is exercised hermetically. The shell fake
 // dispatches on the command it sees: `state path target-state` (the
-// space-resolved manifest verb), `loop-check`, and `distress-scan`.
+// space-resolved manifest command), `loop-check`, and `distress-scan`.
 
 import { describe, test, expect } from "bun:test"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, readdirSync } from "node:fs"
@@ -243,8 +243,8 @@ describe("opencode native stop-hook bridge", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  test("manifest verb path is used when it prints an existing file; legacy path is the fallback", async () => {
-    // (a) verb prints an existing file -> that path is the gate's --state.
+  test("manifest command path is used when it prints an existing file; legacy path is the fallback", async () => {
+    // (a) command prints an existing file -> that path is the gate's --state.
     const dirA = makeProject()
     const existing = join(dirA, "space-manifest.md")
     writeFileSync(existing, `session_id: "${FNO_SESSION_ID}"\n`)
@@ -259,7 +259,7 @@ describe("opencode native stop-hook bridge", () => {
     expect(gateA).toContain(`--state ${existing} `)
     rmSync(dirA, { recursive: true, force: true })
 
-    // (b) verb prints nothing -> the legacy in-repo path is the fallback.
+    // (b) command prints nothing -> the legacy in-repo path is the fallback.
     const dirB = makeProject()
     const clientB = fakeClient([assistantMsg("x")])
     const b = fakeShell({

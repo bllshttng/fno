@@ -79,7 +79,7 @@ async fn rm_absence_is_not_proof_on_a_warning_carrying_list() {
 
 /// Roster `blocked` is claude's "Needs input", not a model outage. rm runs
 /// its own `claude stop` first (AC4-ERR); when the roster still lists the
-/// row, the refusal says the stop ran and never advises a separate verb.
+/// row, the refusal says the stop ran and never advises a separate command.
 #[tokio::test]
 async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
     let home = short_home("rmblocked");
@@ -116,7 +116,7 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
     assert!(message.contains("rm ran `claude stop`"), "{message}");
     assert!(
         !message.contains("fno agents stop"),
-        "must not advise a separate stop verb: {message}"
+        "must not advise a separate stop command: {message}"
     );
     assert!(!message.contains("rotate"), "{message}");
     assert!(!message.contains("model outage"), "{message}");
@@ -132,7 +132,7 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
 
 /// A live row with a mux ref is ended by rm's own mux pane kill. When the
 /// kill fails, the row stays and the refusal quotes the kill's reason -
-/// never a stop verb (AC3-ERR's mux-arm shape).
+/// never a stop command (AC3-ERR's mux-arm shape).
 #[tokio::test]
 async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
     let home = short_home("rmpanekill");
@@ -302,7 +302,7 @@ async fn rm_refuses_a_row_the_roster_still_carries_and_names_no_force() {
 async fn rm_refusal_on_a_claude_row_without_a_row_id_names_no_stop_and_no_force() {
     // x-d19e + law d-81c6da7e: with no resolvable row id, rm cannot run
     // its claude stop either, so the refusal names that and the cost of
-    // forcing through - never the override flag, never a stop verb.
+    // forcing through - never the override flag, never a stop command.
     let home = short_home("rmnorowid");
     // short_id empty AND session id empty (a pid carries the handle
     // invariant instead): claude_row_id answers None, which is the arm

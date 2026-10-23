@@ -99,7 +99,7 @@ impl Core {
         Flow::Continue
     }
 
-    /// `ControlVerb::WorkspaceOrigin`: add or drop one folder on the open
+    /// `ControlCommand::WorkspaceOrigin`: add or drop one folder on the open
     /// workspace `workspace`. Adding a folder the workspace holds, or dropping
     /// one it lacks, changes nothing and still answers `Ok`. The edit reaches
     /// the store before the reply. If the write fails, the live origins revert

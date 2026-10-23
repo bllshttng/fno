@@ -1,4 +1,4 @@
-//! The `pr-watch install` verb: render the global LaunchAgent plist, gate on
+//! The `pr-watch install` command: render the global LaunchAgent plist, gate on
 //! human confirmation, write it, and bounce the agent - plus the
 //! non-interactive `ensure_activated` coupling the `pr_watch.enabled` config
 //! write fires. Port of the Python `install` / `ensure_activated` /
@@ -153,7 +153,7 @@ fn augment_path(install_path: &str) -> String {
 
 /// Write only when the bytes differ. Returns whether the file changed.
 /// Unused until the refresh wave lands: its only Rust caller is the refresh
-/// verb, so this sits quiet rather than moving twice.
+/// command, so this sits quiet rather than moving twice.
 #[allow(dead_code)]
 pub(crate) fn write_if_changed(plist_path: &Path, plist_text: &str) -> std::io::Result<bool> {
     if plist_path.is_file() && std::fs::read_to_string(plist_path)? == plist_text {
@@ -521,7 +521,7 @@ pub fn run(args: &[String]) -> i32 {
         println!("{word}");
         return 0;
     }
-    install_verb(
+    install_command(
         &launch_agents_dir(),
         &fno_binary,
         interval,
@@ -545,7 +545,7 @@ fn cfg_interval(cwd: &Path, interval: i64) -> i64 {
 
 /// The interactive install flow: render, print, gate, write, bounce, retire
 /// the legacy agents. Exit 1 on a declined gate, 0 otherwise.
-fn install_verb(
+fn install_command(
     launch_agents_dir: &Path,
     fno_binary: &str,
     interval: i64,

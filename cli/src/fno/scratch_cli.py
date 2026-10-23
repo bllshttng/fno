@@ -15,7 +15,7 @@ import typer
 scratch_app = typer.Typer(help="Scratch-shape sweep over job tmp dirs (Rust runtime).")
 
 
-def _route(verb: str, flags: list[str]) -> None:
+def _route(command: str, flags: list[str]) -> None:
     from fno.agents.rust_runtime import refuse_without_binary, route_to_rust, runtime_mode
     from fno.rust_binary import resolve_installed_binary
 
@@ -23,7 +23,7 @@ def _route(verb: str, flags: list[str]) -> None:
     if runtime_mode() == "python" or binary is None:
         refuse_without_binary("scratch")
     # os.execv never returns; the binary prints the state words itself.
-    route_to_rust(["scratch", verb, *flags], binary=binary)
+    route_to_rust(["scratch", command, *flags], binary=binary)
 
 
 @scratch_app.command("sweep")

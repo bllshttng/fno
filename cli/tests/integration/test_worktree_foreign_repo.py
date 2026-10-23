@@ -1,6 +1,6 @@
 """Integration tests for fno agents workspace worktree status/cleanup/archive in a foreign repo (x-05d7).
 
-Asserts that all three verbs resolve scripts/lib/worktree-lifecycle.sh from the
+Asserts that all three commands resolve scripts/lib/worktree-lifecycle.sh from the
 plugin root (CLAUDE_PLUGIN_ROOT, CODEX_PLUGIN_ROOT, ~/.fno/plugin-root, package root)
 rather than failing when executed in a scratch git repo that is not footnote.
 """
@@ -43,7 +43,7 @@ def plugin_root() -> Path:
 def test_worktree_archive_in_foreign_repo(
     foreign_git_repo: Path, plugin_root: Path, monkeypatch, capfd, tmp_path: Path
 ):
-    """The public archive verb refuses a generated unpushed commit by identity."""
+    """The public archive command refuses a generated unpushed commit by identity."""
     monkeypatch.chdir(foreign_git_repo)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
     monkeypatch.setenv("FNO_REPO_ROOT", str(foreign_git_repo))
@@ -109,8 +109,8 @@ def test_worktree_archive_in_foreign_repo(
     assert wt_dir.exists(), diag
 
 
-def test_worktree_verbs_resolve_via_persisted_pointer(foreign_git_repo: Path, plugin_root: Path, tmp_path: Path, monkeypatch, capfd):
-    """fno worktree verbs resolve via persisted ~/.fno/plugin-root pointer."""
+def test_worktree_commands_resolve_via_persisted_pointer(foreign_git_repo: Path, plugin_root: Path, tmp_path: Path, monkeypatch, capfd):
+    """fno worktree commands resolve via persisted ~/.fno/plugin-root pointer."""
     monkeypatch.chdir(foreign_git_repo)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.delenv("CODEX_PLUGIN_ROOT", raising=False)

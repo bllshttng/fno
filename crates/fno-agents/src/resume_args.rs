@@ -1,12 +1,12 @@
 //! The `fno agents resume` argv parser.
 //!
-//! LIVES OUTSIDE client_verbs for the same reason usage.rs does: the file
+//! LIVES OUTSIDE client_commands for the same reason usage.rs does: the file
 //! is over the 5,000-line budget and shrink-only, and this parser is what
 //! every wake touches. The row's recorded launch account stays the binding
 //! authority; `--account` parses so the seam's appended flag never exits 2
 //! at argv (run_resume validates the value it carries).
 
-use crate::client_verbs::{echo_extra, expand_eq};
+use crate::client_commands::{echo_extra, expand_eq};
 
 /// One resume invocation's parsed argv. A struct rather than a tuple since
 /// the substrate-conversion flags landed: nine positional elements is a
@@ -25,7 +25,7 @@ pub struct ResumeArgs {
     /// `--substrate thread`: convert this live pane into a persistent
     /// thread instead of re-entering it. `None` is an ordinary resume.
     /// `thread` is the only accepted value, because thread-to-pane is not
-    /// built and a pane-to-pane resume is what the bare verb already does.
+    /// built and a pane-to-pane resume is what the bare command already does.
     pub substrate: Option<String>,
     /// Print the conversion plan and change nothing.
     pub dry_run: bool,
@@ -41,7 +41,7 @@ pub struct ResumeArgs {
 
 /// Parse the argv and validate what argv alone can settle. The replacement
 /// cwd is checked HERE rather than in `run_resume` for the reason this
-/// module exists: client_verbs is over the line budget and shrink-only, and
+/// module exists: client_commands is over the line budget and shrink-only, and
 /// a check on a parsed field belongs beside the parser that produced it.
 pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
     let parsed = parse_resume_args(rest)?;
@@ -49,7 +49,7 @@ pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
         if !std::path::Path::new(path).is_dir() {
             eprintln!(
                 "fno agents resume: replacement cwd {} is not an existing directory.",
-                crate::client_verbs::py_repr_str(path)
+                crate::client_commands::py_repr_str(path)
             );
             return Err(13);
         }
@@ -57,7 +57,7 @@ pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
     Ok(parsed)
 }
 
-/// Expanded from client_verbs.rs where it lived beside `run_resume`; the
+/// Expanded from client_commands.rs where it lived beside `run_resume`; the
 /// move is mechanical, the shape unchanged.
 pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
     let mut parsed = ResumeArgs::default();
@@ -107,7 +107,7 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
                 // --substrate thread` converts a live pane into a persistent
                 // thread under its own session id. `thread` is the only
                 // member - thread-to-pane is unbuilt, and pane-to-pane is
-                // what the bare verb already does - so any other value
+                // what the bare command already does - so any other value
                 // refuses by name rather than resuming something the caller
                 // did not ask for.
                 let value = match iter.next() {
@@ -121,7 +121,7 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
                     eprintln!(
                         "fno-agents: resume --substrate takes only 'thread' (got {}); \
                          thread-to-pane conversion is not built, and a pane-to-pane \
-                         resume is the bare verb",
+                         resume is the bare command",
                         echo_extra(&value)
                     );
                     return Err(2);
@@ -229,8 +229,8 @@ pub fn reentry_argv_for_unpaned_conversion(
         return None;
     }
     let registry = home.registry_json();
-    let entries = crate::client_verbs::read_registry_entries(&registry).ok()?;
-    let entry = crate::client_verbs::resolve_entry_with_heal_scoped(
+    let entries = crate::client_commands::read_registry_entries(&registry).ok()?;
+    let entry = crate::client_commands::resolve_entry_with_heal_scoped(
         &entries,
         &parsed.name,
         &registry,

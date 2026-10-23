@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.agents.read.read_logs
 //!
-//! Characterization harness for the `logs` verb port. The goldens were
+//! Characterization harness for the `logs` command port. The goldens were
 //! captured from the Python leg (cli/src/fno/agents/read.py) while it still
 //! ran its own body, through the recipe in this directory (`capture.py` plus
 //! the README): one throwaway root per case, a registry seed, the empty

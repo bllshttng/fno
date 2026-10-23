@@ -1,4 +1,4 @@
-//! `fno-agents verify-evidence` verb — Rust port of
+//! `fno-agents verify-evidence` command — Rust port of
 //! `scripts/lib/verify-event-evidence.sh` (packaging EPIC,
 //! eliminate-don't-vendor leg).
 //!
@@ -917,12 +917,12 @@ pub(crate) fn hosted_ci_not_configured(
 
 // ── public dispatch entry ─────────────────────────────────────────────────────
 
-/// Internal: run the requested sub-verb, returning (code, stdout, stderr).
+/// Internal: run the requested sub-command, returning (code, stdout, stderr).
 fn run(args: &[String]) -> (i32, String, String) {
     let git_bin = std::env::var("FNO_VERIFY_GIT_BIN").unwrap_or_else(|_| "git".to_string());
 
     // With no sub-token, one JSON op on stdin: the shape
-    // `verb_call("verify-evidence", {"op": ...})` sends.
+    // `command_call("verify-evidence", {"op": ...})` sends.
     if args.is_empty() {
         return run_stdin_ops();
     }
@@ -1088,7 +1088,7 @@ fn run(args: &[String]) -> (i32, String, String) {
 }
 
 /// One JSON op on stdin, one JSON answer on stdout (plus the argv-form
-/// stderr line on equivalence): the shape `verb_call("verify-evidence",
+/// stderr line on equivalence): the shape `command_call("verify-evidence",
 /// {...})` sends. Ops mirror the sub-tokens: check, required, next-generation.
 fn run_stdin_ops() -> (i32, String, String) {
     use std::io::Read;
@@ -1122,7 +1122,7 @@ fn run_stdin_ops() -> (i32, String, String) {
                 .get("allow_equivalent")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            // Always exit 0: the caller (verb_call) raises on any nonzero
+            // Always exit 0: the caller (command_call) raises on any nonzero
             // exit, and an UNSATISFIED decision is a verdict to read, not a
             // transport failure - the ship lane wants the decision JSON.
             let decision = crate::receipt_policy::check_verification_evidence(&cwd, None, allow);

@@ -152,7 +152,7 @@ pub fn relaunched_row<'a>(
 /// operator reaches with `claude attach <short_id>`.
 ///
 /// Unlike the codex flip this KEEPS a short id and a pid, because a claude
-/// thread is a real process claude hosts itself, and both the attach verb
+/// thread is a real process claude hosts itself, and both the attach command
 /// and the liveness ladder address it through those two fields. The row's
 /// name, node and every other birth fact are left alone.
 pub fn to_claude_thread(
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn the_thread_flip_keeps_the_short_id_and_pid_the_attach_verb_needs() {
+    fn the_thread_flip_keeps_the_short_id_and_pid_the_attach_command_needs() {
         let mut entry = crate::state::RegistryEntry {
             name: "worker-one".to_string(),
             cwd: "/repo".to_string(),
@@ -252,7 +252,7 @@ mod tests {
 
         assert_eq!(entry.substrate.as_deref(), Some("thread"));
         // A claude thread IS a process, unlike a codex thread: the attach
-        // verb takes the short id and the liveness ladder takes the pid.
+        // command takes the short id and the liveness ladder takes the pid.
         assert_eq!(entry.short_id, "newshort");
         assert_eq!(entry.pid, Some(5150));
         assert!(entry.mux.is_none());

@@ -1,4 +1,4 @@
-//! Receipt emission for write verbs: print after the store commit, and
+//! Receipt emission for write commands: print after the store commit, and
 //! never let a closed stdout turn a landed write into a reported failure.
 //! A reader that closed the pipe (`fno backlog note | head`) cut the
 //! display on purpose; the receipt is the display, the store write is the

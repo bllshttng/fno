@@ -24,7 +24,7 @@ Promotion only ever moves **up** the ladder.
 
 You run the daily triage pass, or you cannot tell whether a captured thought deserves a graph node or an inbox row. This page owns the two-source picker and the promotion ladder from `fu-` inbox item to `ab-` node. Misreading it bloats the wrong store: a one-line follow-up becomes a graph node nobody will groom, or real work dies in an inbox nobody picks.
 
-Not for: the day-to-day verbs once a node exists. That is [backlog-usage.md](backlog-usage.md). Why the board ranks two nodes the way it does: [architecture/backlog-board-ordering.md](architecture/backlog-board-ordering.md).
+Not for: the day-to-day commands once a node exists. That is [backlog-usage.md](backlog-usage.md). Why the board ranks two nodes the way it does: [architecture/backlog-board-ordering.md](architecture/backlog-board-ordering.md).
 
 ## The picker
 
@@ -36,7 +36,7 @@ layer. It now carries both sources:
 - `inbox_count`: number of open inbox items.
 
 Each item is labelled by its id type so the reasoning step can route a chosen
-item to the right verb: graph nodes go through the normal triage
+item to the right command: graph nodes go through the normal triage
 `propose` / `validate` / `apply` loop; a selected inbox item routes to the
 promotion flow below.
 

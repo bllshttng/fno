@@ -1,5 +1,5 @@
 //! The scorecard's router: one verdict per candidate inventory row per kind
-//! under a stage verb, folded from the by-lane cells. It proposes and never
+//! under a stage command, folded from the by-lane cells. It proposes and never
 //! applies: the accept line prints and `fno config set` stays the user's
 //! hand, and every proposal names the live seat laws it would contradict.
 //! The decision constants and the accept line are the climb fold's, so one
@@ -113,10 +113,10 @@ pub(crate) fn declared_inventory() -> Option<(Vec<RowKey>, Value)> {
     Some((rows, inventory))
 }
 
-/// The lane the verb actually seats on one band: a declared lanes list
-/// routes the verb off the grid (the slot walk reads one lanes list for
+/// The lane the command actually seats on one band: a declared lanes list
+/// routes the command off the grid (the slot walk reads one lanes list for
 /// every band), so the seated list decides first, and the grid names the
-/// incumbent only for a verb that declares none. Either way the pick is
+/// incumbent only for a command that declares none. Either way the pick is
 /// declared-only: an empty capacity map reads every row
 /// unknown-permitted, so no live capacity read shapes the incumbent.
 fn incumbent_lane(stage: &str, difficulty: &str, inventory: &Value) -> Option<String> {
@@ -544,8 +544,8 @@ mod tests {
         assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
-        // A glm proposal names the temporary seat law it would contradict
-        // until that law lapses; after the cutoff a flash seat is the law.
+        // Until the temporary seat law lapses, a glm proposal names it. After
+        // that date glm is the standing seat and contradicts nothing.
         let laws: Vec<&str> = p["laws"]
             .as_array()
             .unwrap()
@@ -553,9 +553,9 @@ mod tests {
             .filter(|l| l["contradicted"] == json!(true))
             .filter_map(|l| l["id"].as_str())
             .collect();
-        let before_cutoff = chrono::Utc::now().date_naive()
-            < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
-        assert_eq!(laws.contains(&"d-e38d92cc"), before_cutoff, "{laws:?}");
+        let lapse = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        let seat_law_live = chrono::Utc::now().date_naive() < lapse;
+        assert_eq!(laws.contains(&"d-e38d92cc"), seat_law_live, "{laws:?}");
     }
 
     #[test]

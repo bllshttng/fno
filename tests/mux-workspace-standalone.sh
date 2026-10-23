@@ -102,7 +102,7 @@ PANES0=$("$FNO" mux pane ls --json 2>/dev/null | jq 'length')
 PA=$("$FNO" mux pane run --cwd "$TMP_ROOT/work" -- /bin/bash | tr -d '[:space:]')
 case "$PA" in ''|*[!0-9]*) fail "first pane id is not numeric: '$PA'";; esac
 
-# The split is the REAL PaneSplit verb on the existing pane, not a second
+# The split is the REAL PaneSplit command on the existing pane, not a second
 # run: the journey claims to prove split, so it must drive split. The split
 # receipt prints the new pane id; the ls that follows confirms it exists.
 PB=$("$FNO" mux pane split "$PA" --direction right | tr -d '[:space:]')

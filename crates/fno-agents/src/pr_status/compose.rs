@@ -305,7 +305,7 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
 }
 
 /// One human line for the payload; the fleet greps stderr for
-/// `"settled": true` on this verb, so stdout stays the machine contract.
+/// `"settled": true` on this command, so stdout stays the machine contract.
 pub(crate) fn verdict_line(payload: &Value) -> String {
     let checks = payload.get("checks").cloned().unwrap_or(json!({}));
     let unsettled = checks.get("unsettled").and_then(Value::as_i64);

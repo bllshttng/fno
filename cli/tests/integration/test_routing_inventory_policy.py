@@ -34,9 +34,9 @@ def _declare(monkeypatch: pytest.MonkeyPatch, rows: list) -> None:
 
 
 def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None):
-    """Pin the capacity readings the verb judges lanes with.
+    """Pin the capacity readings the command judges lanes with.
 
-    The Python capacity read was deleted: the verb computes it from
+    The Python capacity read was deleted: the command computes it from
     the runtime-state file, so a hermetic one rides in through env instead of
     a monkeypatched Python function. claude/codex pin one account record each
     (`cl-a` for claude, `cx-a` for codex); None leaves the harness with no
@@ -94,7 +94,7 @@ def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None)
 
 def _pin_policy(cfg, enforce: bool, access: str, rows: list) -> None:
     """Write the declared rows, the strict-routing policy and the two slot
-    lanes onto the pinned config FILE: the verb reads the file, a Python
+    lanes onto the pinned config FILE: the command reads the file, a Python
     stub is invisible to it."""
     with open(cfg, "a") as f:
         for row in rows:
@@ -105,9 +105,9 @@ def _pin_policy(cfg, enforce: bool, access: str, rows: list) -> None:
             f"\n[routing]\nenforce_inventory = {'true' if enforce else 'false'}\n"
             f'operator_access = "{access}"\n'
         )
-        for verb in ("target", "blueprint"):
+        for command in ("target", "blueprint"):
             f.write(
-                f"\n[agents.profiles.{verb}]\n"
+                f"\n[agents.profiles.{command}]\n"
                 'lanes = ["flash-zai"]\non_exhausted = "queue"\n'
             )
 
@@ -220,7 +220,7 @@ def test_audit_refuses_a_view_confirmed_under_an_old_config(tmp_path: Path) -> N
 
 def _inv(rows):
     """An Inventory declaring exactly ``rows`` (construction is all that
-    survives in Python; the fold is the verb's)."""
+    survives in Python; the fold is the command's)."""
     from fno import route_resolve as _rr
 
     built = {}

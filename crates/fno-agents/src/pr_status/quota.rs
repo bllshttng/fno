@@ -726,8 +726,8 @@ could not be resolved"
     result
 }
 
-/// The `graphql-exec` verb body: purpose flag + `--` passthrough, byte
-/// semantics of the Python verb (stdout plain, stderr on stderr, the
+/// The `graphql-exec` command body: purpose flag + `--` passthrough, byte
+/// semantics of the Python command (stdout plain, stderr on stderr, the
 /// broker's exit code).
 pub(crate) fn run_graphql_exec_args(purpose: &str, gh_args: &[String]) -> i32 {
     let result = execute_graphql(purpose, gh_args, None, None, None, Duration::from_secs(120));

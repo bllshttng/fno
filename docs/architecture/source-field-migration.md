@@ -5,7 +5,7 @@ one-shot migration script users run after the upgrade.
 
 ## Background
 
-An earlier change removed the user-facing `fno backlog adopt` verb and replaced
+An earlier change removed the user-facing `fno backlog adopt` command and replaced
 every in-tree caller with `intake`. It explicitly deferred two
 follow-ups: the private internals (`_adopt.py` and its helper
 symbols) and the `source: "adopt"` field literal stored on every
@@ -45,7 +45,7 @@ and synced volumes may carry the legacy spelling indefinitely.
 
 ### Output strings
 
-User-visible output from `fno backlog intake` switched verbs. The
+User-visible output from `fno backlog intake` switched commands. The
 single-path success line now reads
 `intake ab-XXXXXXXX -> backlog: "title"` instead of
 `adopted ab-XXXXXXXX into backlog`. Multi-path output, the tallies

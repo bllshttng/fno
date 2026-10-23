@@ -1,5 +1,5 @@
 //! Test-only git helpers. Two tests in this crate flip the process PATH
-//! (client_verbs, provider) and the board tests flip HOME under their own
+//! (client_commands, provider) and the board tests flip HOME under their own
 //! lock, so any test spawning `git` by bare name races a mid-flip env and
 //! loses at random (NotFound, or a temp HOME's git config). Everything here
 //! snapshots what it needs and pins what git reads.

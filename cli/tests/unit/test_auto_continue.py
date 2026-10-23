@@ -1,7 +1,7 @@
 """Tests for the config.auto_continue schema block.
 
 "Disabled by default" (AC2-HP) and "malformed fails safe" (AC2-ERR) are the
-load-bearing invariants. The arming resolver lives in the native advance verb
+load-bearing invariants. The arming resolver lives in the native advance command
 and carries its own tests there.
 """
 from __future__ import annotations

@@ -26,7 +26,7 @@ Read this for a from-idea or multi-phase run when you want the whole phase map a
    PR ready for merge (docs + browser verification included)
 ```
 
-`/think` is not in this diagram (operator ruling). It is a research verb outside the delivery path, never a pipeline phase and never a `/blueprint` prerequisite. `/blueprint` grounds a bare idea itself via the discovery gate above, which runs `fno do think inspect` for a receipt. When a question needs deeper investigation than that receipt gives, run `/think` beforehand, only as a deliberate choice, never automatically.
+`/think` is not in this diagram (operator ruling). It is a research command outside the delivery path, never a pipeline phase and never a `/blueprint` prerequisite. `/blueprint` grounds a bare idea itself via the discovery gate above, which runs `fno do think inspect` for a receipt. When a question needs deeper investigation than that receipt gives, run `/think` beforehand, only as a deliberate choice, never automatically.
 
 Docs and browser testing run BEFORE `/fno:ship pr create` so they ride in the same PR, get reviewed alongside the code, and are included in any auto-merge. Historic versions of this skill ran docs last, which led to docs landing in a follow-up PR whenever `auto_merge_approved: true` tripped immediately after external review.
 

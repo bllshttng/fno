@@ -84,7 +84,7 @@ def operator_turn(tmp_path: Path, monkeypatch, native_backlog_door):
 
 
 def _pin(monkeypatch, tmp_path: Path, rows: list[dict], session: str = "s-test") -> None:
-    """Point the verb at a fixture transcript through the env pins."""
+    """Point the command at a fixture transcript through the env pins."""
     tp = _transcript(tmp_path, rows)
     monkeypatch.setenv("FNO_OPERATOR_SESSION_ID", session)
     monkeypatch.setenv("FNO_OPERATOR_TRANSCRIPT", str(tp))

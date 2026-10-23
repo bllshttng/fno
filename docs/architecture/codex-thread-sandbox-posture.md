@@ -64,7 +64,7 @@ The pre-launch sandbox probe judges the worker's OWN requested posture (never a 
 
 ## The default scope (an operator decision, recorded open)
 
-Footnote reads no `~/.codex/config.toml` and writes none. The one key that sets a codex worker's default posture is `config.agents.defaults.harness.codex.permission_mode` (and its per-verb overlays), and it is UNSET by default: a worker launched with nothing named keeps the lane's bounded default, `workspace-write:never`. The key sits in the existing harness-overlay precedence line documented in [role-based-model-routing.md](role-based-model-routing.md).
+Footnote reads no `~/.codex/config.toml` and writes none. The one key that sets a codex worker's default posture is `config.agents.defaults.harness.codex.permission_mode` (and its per-command overlays), and it is UNSET by default: a worker launched with nothing named keeps the lane's bounded default, `workspace-write:never`. The key sits in the existing harness-overlay precedence line documented in [role-based-model-routing.md](role-based-model-routing.md).
 
 No default widens any existing posture. A configured `bypassPermissions` (a claude-only token) refused by name on a codex lane rather than degrading open to an unnamed posture. The machine-wide alternative - `sandbox_mode = "danger-full-access"` in `~/.codex/config.toml` - stays an open operator decision this project does not make for them.
 

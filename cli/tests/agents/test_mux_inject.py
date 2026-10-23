@@ -9,7 +9,7 @@ delivery this transport can make. Mail delivery now pastes unguarded and
 confirms by content against the recipient's own transcript
 (`test_mux_pane_guarded.py` in `tests/unit/` covers that confirm path in
 detail); this file keeps the `guarded=True` mechanism tests below because the
-underlying capability is still real (the rerun verb still wants it -- refusing
+underlying capability is still real (the rerun command still wants it -- refusing
 mid-turn is the conservative call for a rerun, unlike mail), just no longer
 what mail-delivery routing exercises. A guarded send does NOT hold the writer
 claim -- the server guard reads any live claim holder as `busy: relay`, so
@@ -64,10 +64,10 @@ def _mux_entry(name: str = "muxed", provider: str = "claude"):
 
 
 class FakeMux:
-    """Record `fno mux pane <verb> ...` calls; script per-verb exit codes.
+    """Record `fno mux pane <command> ...` calls; script per-command exit codes.
 
-    ``fail_stderr`` overrides the refusal text for a verb (the pane-claim gate
-    reads it); ``fail_times`` fails a verb for the first N calls (a held claim
+    ``fail_stderr`` overrides the refusal text for a command (the pane-claim gate
+    reads it); ``fail_times`` fails a command for the first N calls (a held claim
     that clears after a retry)."""
 
     # Captured at import, before any test patches subprocess.run for the whole
@@ -77,21 +77,21 @@ class FakeMux:
 
     def __init__(
         self,
-        fail_verbs: set[str] | None = None,
+        fail_commands: set[str] | None = None,
         fail_stderr: dict[str, str] | None = None,
         fail_times: dict[str, int] | None = None,
     ) -> None:
         self.calls: list[tuple[list[str], str | None]] = []
-        self.fail_verbs = fail_verbs or set()
+        self.fail_commands = fail_commands or set()
         self.fail_stderr = fail_stderr or {}
         self.fail_times = fail_times or {}
 
     def __call__(self, argv, input=None, **kwargs):
         # This stub replaces subprocess.run for the WHOLE process, so it sees
         # every shell-out the code under test makes, not only `fno mux pane
-        # <verb>`. It assumed otherwise twice over: it indexed argv[3]
+        # <command>`. It assumed otherwise twice over: it indexed argv[3]
         # unconditionally, and it recorded every call into `self.calls`, which
-        # every assertion here reads as "the pane verbs, in order". A second
+        # every assertion here reads as "the pane commands, in order". A second
         # caller appeared (the role read resolves the registry through the
         # config layer, which runs `git rev-parse`) and broke both.
         #
@@ -103,13 +103,13 @@ class FakeMux:
             return self._real_run(argv, input=input, **kwargs)
         if argv[1:3] != ["mux", "pane"] or len(argv) < 4:
             return subprocess.CompletedProcess(argv, 0, "", "")
-        verb = argv[3]
+        command = argv[3]
         self.calls.append((list(argv), input))
-        times = self.fail_times.get(verb)
+        times = self.fail_times.get(command)
         if times is not None and times > 0:
-            self.fail_times[verb] = times - 1
-        rc = 1 if verb in self.fail_verbs or (times is not None and times > 0) else 0
-        stderr = (self.fail_stderr.get(verb) or "boom") if rc else ""
+            self.fail_times[command] = times - 1
+        rc = 1 if command in self.fail_commands or (times is not None and times > 0) else 0
+        stderr = (self.fail_stderr.get(command) or "boom") if rc else ""
         return subprocess.CompletedProcess(argv, rc, "", stderr)
 
 
@@ -142,7 +142,7 @@ def test_guarded_dead_pane_fails_closed_with_no_cr(monkeypatch) -> None:
     # claims. Real behavior for the rerun caller; mail no longer reaches this.
     from fno.agents.dispatch import _mux_pane_send
 
-    fake = FakeMux(fail_verbs={"send"})
+    fake = FakeMux(fail_commands={"send"})
     _patch_mux(monkeypatch, fake)
     assert _mux_pane_send(_mux_entry(), "hi") is False
     assert [c[0][3] for c in fake.calls] == ["send"], "no CR, no claim/release"
@@ -167,14 +167,14 @@ def test_held_writer_claim_past_the_wait_demotes_without_pasting(monkeypatch) ->
     from fno.agents.dispatch import _mux_pane_send
 
     fake = FakeMux(
-        fail_verbs={"claim"},
+        fail_commands={"claim"},
         fail_stderr={"claim": "pane 7 writer claim held by pid 999"},
     )
     _patch_mux(monkeypatch, fake)
     monkeypatch.setattr(dispatch_mod, "_MUX_PANE_CLAIM_WAIT_S", 0.0)
     assert _mux_pane_send(_mux_entry(), "hi", guarded=False) is False
-    verbs = [c[0][3] for c in fake.calls]
-    assert verbs == ["claim"]
+    commands = [c[0][3] for c in fake.calls]
+    assert commands == ["claim"]
 
 
 def test_mux_pane_send_refuses_unpinned_submit_contract_without_writing(
@@ -329,7 +329,7 @@ def _capture_paste_argv(fake: FakeMux) -> list[str] | None:
 
 
 def test_mux_pane_send_leaves_the_audit_to_the_floor(monkeypatch) -> None:
-    """x-91ba moved the raw-inject row into the `fno mux pane send` verb
+    """x-91ba moved the raw-inject row into the `fno mux pane send` command
     itself, so this lane writes no row of its own: a second write would make
     every pane dispatch read as two. The unwrapped-vs-wrapped distinction
     moved with it -- the floor audits every payload identically and never

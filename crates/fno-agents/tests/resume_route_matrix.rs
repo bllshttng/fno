@@ -525,10 +525,22 @@ fn claude_print_command_keeps_reentry_settings_and_env_without_truth_or_side_eff
     .unwrap();
     let config_dir = fixture.root.path().join("claude-config");
     fs::create_dir_all(&config_dir).unwrap();
+    fs::write(config_dir.join(".credentials.json"), "{}").unwrap();
+    let fno_dir = fixture.root.path().join(".fno");
+    fs::create_dir_all(&fno_dir).unwrap();
+    fs::write(
+        fno_dir.join("config.toml"),
+        format!(
+            "[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{}\"\n",
+            config_dir.display()
+        ),
+    )
+    .unwrap();
+    // The account binding answers in process: an `fno` on PATH is never run.
     let account_log = fixture.root.path().join("fno-calls.log");
     write_executable(
         &fixture.bins.join("fno"),
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FNO_TEST_ACCOUNT_LOG\"\nif [ \"$1 $2 $3 $4 $5\" = 'config accounts show makers --print-binding' ]; then printf 'CLAUDE_CONFIG_DIR=%s\\n' \"$FNO_TEST_CLAUDE_CONFIG\"; exit 0; fi\nexit 17\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FNO_TEST_ACCOUNT_LOG\"\nexit 17\n",
     );
     let mut entries = fixture
         .rows
@@ -546,15 +558,27 @@ fn claude_print_command_keeps_reentry_settings_and_env_without_truth_or_side_eff
     fixture.write_registry_entries(&entries);
 
     let config_dir = config_dir.to_string_lossy().into_owned();
+    let account_log_path = account_log.clone();
     let account_log = account_log.to_string_lossy().into_owned();
+    let repo = fixture.root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let root_dir = repo.to_string_lossy().into_owned();
+    let state_dir = fixture
+        .root
+        .path()
+        .join("state")
+        .to_string_lossy()
+        .into_owned();
     let output = run_null_with_env(
         &fixture,
         &row,
         &["--print-command"],
         &fixture.bins,
         &[
-            ("FNO_TEST_CLAUDE_CONFIG", &config_dir),
             ("FNO_TEST_ACCOUNT_LOG", &account_log),
+            ("PWD", &root_dir),
+            ("FNO_REPO_ROOT", &root_dir),
+            ("FNO_STATE_DIR", &state_dir),
         ],
     );
     assert!(
@@ -582,10 +606,7 @@ fn claude_print_command_keeps_reentry_settings_and_env_without_truth_or_side_eff
     let claude_executable = stdout.rfind(" claude ").unwrap();
     assert!(config_env < claude_executable, "{stdout}");
     assert!(!stdout.contains("fake-executed"), "{stdout}");
-    assert_eq!(
-        fs::read_to_string(&account_log).unwrap(),
-        "config accounts show makers --print-binding\n"
-    );
+    assert!(!account_log_path.exists(), "fno ran: {account_log}");
     assert!(fixture.events().is_empty(), "{}", fixture.events());
 
     let entry = entries
@@ -600,8 +621,10 @@ fn claude_print_command_keeps_reentry_settings_and_env_without_truth_or_side_eff
         &["--print-command"],
         &fixture.bins,
         &[
-            ("FNO_TEST_CLAUDE_CONFIG", &config_dir),
             ("FNO_TEST_ACCOUNT_LOG", &account_log),
+            ("PWD", &root_dir),
+            ("FNO_REPO_ROOT", &root_dir),
+            ("FNO_STATE_DIR", &state_dir),
         ],
     );
     assert!(
@@ -625,10 +648,7 @@ fn claude_print_command_keeps_reentry_settings_and_env_without_truth_or_side_eff
     );
     assert!(!stdout.contains("--settings"), "{stdout}");
     assert!(!stdout.contains("fake-executed"), "{stdout}");
-    assert_eq!(
-        fs::read_to_string(&account_log).unwrap(),
-        "config accounts show makers --print-binding\n"
-    );
+    assert!(!account_log_path.exists(), "fno ran: {account_log}");
     assert!(fixture.events().is_empty(), "{}", fixture.events());
 }
 

@@ -1,5 +1,5 @@
 //! The control_roundtrip typed-error test, moved verbatim out of mux_cli.rs
-//! (file budget shrink; the v75 retire-session verb rides the same file).
+//! (file budget shrink; the v75 retire-session command rides the same file).
 //! Parent helpers resolve through the glob.
 use super::*;
 
@@ -23,7 +23,7 @@ fn control_roundtrip_surfaces_unanswered_not_a_flattened_string() {
     let result = control_roundtrip_with_timeouts(
         &sock,
         "test-session",
-        ControlVerb::PaneLs,
+        ControlCommand::PaneLs,
         Duration::from_millis(50),
         Duration::from_millis(150),
     );

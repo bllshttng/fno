@@ -3,7 +3,7 @@
 Read-only. The readers are deliberately tolerant: the ledger gets one retry on
 a parse error (AC5-FR: mid-append race) before it becomes a hard broken-input
 (AC5-ERR); the optional jsonl/graph sources skip a corrupt line rather than
-crash the whole verb. The one rule the whole file exists to enforce: a rate is
+crash the whole command. The one rule the whole file exists to enforce: a rate is
 never emitted without its coverage on the same dict, so a partial window is
 never mistaken for a real trend.
 """
@@ -2029,7 +2029,7 @@ def _probe_evidence(loop_check_events: list[dict], session_id: str | None) -> di
     for e in loop_check_events:
         data = e.get("data")
         if not isinstance(data, dict):
-            continue  # a corrupt event must skip, never crash the whole verb
+            continue  # a corrupt event must skip, never crash the whole command
         if data.get("session_id") != session_id:
             continue
         probes = data.get("done_probes")

@@ -1,7 +1,7 @@
 """x-c588: the CPU axis is read from one decider, never computed twice.
 
 The decision itself is ``cpu_admission`` in doctor_footprint, pinned against
-the shared fixture in test_footprint_verb.py. What lives here is the gate's
+the shared fixture in test_footprint_command.py. What lives here is the gate's
 own edge of that contract: ``_cpu_axis``'s mapping of a reading or an error
 to an Admission, and the platform-tolerance edges. The hold and debounce
 behavior lives in test_fleet_load_governor.py.

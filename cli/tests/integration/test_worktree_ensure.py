@@ -1,6 +1,6 @@
 """Integration tests for `fno worktree ensure` (node x-73ca).
 
-The verb is a mechanism-only primitive: given a repo MAIN checkout and a name,
+The command is a mechanism-only primitive: given a repo MAIN checkout and a name,
 it idempotently creates `<worktrees_base>/<repo>/<name>` (branched off
 origin/main, not the dispatcher's local HEAD) and prints the path on stdout.
 On any failure it exits non-zero and prints NOTHING on stdout, so a caller
@@ -256,7 +256,7 @@ def test_ensure_policy_never_returns_repo_root(main_repo: Path, tmp_path: Path) 
 
 
 def test_ensure_policy_misconfig_refuses_fail_closed(main_repo: Path, tmp_path: Path) -> None:
-    """A policy the verb cannot read refuses creation (empty stdout, non-zero):
+    """A policy the command cannot read refuses creation (empty stdout, non-zero):
     never auto-isolate on a misconfig, never report success in place.
 
     - an unparseable config.toml (AC1-ERR)

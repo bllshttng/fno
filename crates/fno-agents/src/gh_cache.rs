@@ -1,8 +1,8 @@
 //! Permanent rows for GitHub facts that do not change: merged-PR facts
-//! and repo metadata (the default branch). The `gh-cache` verb is
+//! and repo metadata (the default branch). The `gh-cache` command is
 //! transport-only (a client.rs early arm, like pr-worktree): JSON request
 //! on stdin, one row JSON on stdout. Python callers reach it through
-//! verb_call, which keeps cli/src/fno at glue. A missing or corrupt row is
+//! command_call, which keeps cli/src/fno at glue. A missing or corrupt row is
 //! a miss, never an error: the network read stays the truth.
 
 use serde_json::{json, Map, Value};

@@ -150,7 +150,7 @@ pub(super) fn build_row_menu_with(
     } else if agent.pane_id.is_some() {
         // Live pane row: already placed, so re-placement is a MOVE of the live
         // pane, never an attach. Same 2x2 grid geometry the paneless branch uses
-        // below, so the two menus read as one system; the verbs differ because
+        // below, so the two menus read as one system; the commands differ because
         // the operations do (move a running pane vs. place a new one).
         add(entry("→", "Focus"), &[MenuAction::Focus]);
         add(entry("◫", "Open in portal..."), &[MenuAction::PortalPicker]);
@@ -178,7 +178,7 @@ pub(super) fn build_row_menu_with(
             PopupRow::Grid(vec![cell("⬒", "Move Up"), cell("⬓", "Move Down")]),
             &[MenuAction::MoveDir(Dir::Up), MenuAction::MoveDir(Dir::Down)],
         );
-        // The viewer verb sits apart from the thread verbs (Stop and
+        // The viewer command sits apart from the thread commands (Stop and
         // Remove end the thread): closing the portal must not
         // touch the row. A bare stand-in seat row (portal set, pane now
         // gone) takes the same arm, so its menu offers Close portal too.
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn a_non_portal_pane_row_lists_no_close_portal() {
         // AC8-HP inverse. A pane row with portal: None lists no Close portal
-        // entry: the verb is the portal's, not the pane's.
+        // entry: the command is the portal's, not the pane's.
         let menu = build_row_menu(&portal_row(None), test_anchor());
         assert!(
             !menu.popup.rows.iter().any(|r| matches!(
@@ -497,10 +497,10 @@ mod tests {
 /// change, because a tab-bar cell sits in no pane rect and was never
 /// forwarded. Destructive items sit last, after a `Rule`.
 ///
-/// Save/apply layout are deliberately ABSENT: `ControlVerb::LayoutGet` /
+/// Save/apply layout are deliberately ABSENT: `ControlCommand::LayoutGet` /
 /// `LayoutApply` ride one-shot `ClientMsg::Control` connections (`fno mux
 /// pane ...`), which an attached TUI client cannot send, so a menu item for
-/// them would bind to a verb this socket can never carry. That needs a
+/// them would bind to a command this socket can never carry. That needs a
 /// `Command` surface and is filed rather than faked.
 pub(super) fn build_tab_menu(idx: usize, tab: &TabMeta, anchor: Anchor, viewed: bool) -> RowMenu {
     let mut rows: Vec<PopupRow> = Vec::new();
@@ -528,7 +528,7 @@ pub(super) fn build_tab_menu(idx: usize, tab: &TabMeta, anchor: Anchor, viewed: 
         &[],
     );
     add(PopupRow::Rule, &[]);
-    // Every tab verb answers a bare in-menu key from the same
+    // Every tab command answers a bare in-menu key from the same
     // registry its hint reads: n for New tab, the angle brackets for the
     // reorder pair - app vocabulary beside the prefix chords (prefix+c, and
     // prefix+< / prefix+> mean the same moves from outside the menu).
@@ -1081,21 +1081,21 @@ pub(super) async fn execute_row_menu_action(
         MenuAction::RenameAgent => {
             // The CURRENT label, re-resolved at execute above (a rename
             // between menu-open and pick addresses the live row), seeded so
-            // Enter with no edit lands on the verb's same-label no-op.
+            // Enter with no edit lands on the command's same-label no-op.
             view.open_rename_seeded(RenameTarget::Agent(a.name.clone()), a.name.clone());
         }
         MenuAction::ReleaseHold => {
-            // The by-session release verb (mail_hold.rs `--release`): the
+            // The by-session release command (mail_hold.rs `--release`): the
             // lift answers in microseconds; the held-mail delivery leg runs
             // detached, so the bounded wait below never sits on the
-            // transport. The verb's EXIT is the truth a stale paired binary
+            // transport. The command's EXIT is the truth a stale paired binary
             // cannot paper over: one that predates `--release` exits 2 on
             // the unknown flag, and the notice must say so, not "released".
             let Some(sid) = a.harness_session_id.clone() else {
                 view.set_notice("row carries no session id to release".into());
                 return Ok(());
             };
-            // The verb wait is a subprocess round trip on a loaded machine.
+            // The command wait is a subprocess round trip on a loaded machine.
             // It runs on a task and the notice lands through the
             // reply-notice channel, so the UI loop keeps draining keys while
             // it runs; on timeout the child stays alive detached and the

@@ -39,19 +39,19 @@ bundle_app = typer.Typer(
 )
 
 
-_VERB_TO_SCRIPT = {
+_COMMAND_TO_SCRIPT = {
     "build": Path("scripts") / "generate-skill-bundles.sh",
     "check": Path("scripts") / "lint" / "check-skill-bundles-fresh.sh",
     "lint": Path("scripts") / "lint" / "no-cross-skill-runtime-calls.sh",
 }
 
 
-def _script_path(verb: str) -> Path:
-    return resolve_repo_root() / _VERB_TO_SCRIPT[verb]
+def _script_path(command: str) -> Path:
+    return resolve_repo_root() / _COMMAND_TO_SCRIPT[command]
 
 
-def _forward(verb: str, extra_args: List[str]) -> int:
-    script = _script_path(verb)
+def _forward(command: str, extra_args: List[str]) -> int:
+    script = _script_path(command)
     if not script.is_file():
         # Capability-accurate degrade (US3 / AC3-ERR): bundling operates on the
         # plugin's `skills/` source tree, which a bare `pip install fno` does
@@ -59,7 +59,7 @@ def _forward(verb: str, extra_args: List[str]) -> int:
         # the install path, never a 127 or traceback. In a clone the script is
         # present and this branch never fires (AC3-HP, in-clone unchanged).
         typer.echo(
-            f"fno doctor bundle {verb}: needs the footnote plugin (skill sources), which "
+            f"fno doctor bundle {command}: needs the footnote plugin (skill sources), which "
             "a bare `pip install fno` does not ship - there is no skills/ tree "
             "to bundle.\n"
             "Install the plugin and run from its checkout:\n"
@@ -81,18 +81,18 @@ def _forward(verb: str, extra_args: List[str]) -> int:
     return result.returncode
 
 
-def _verdict(verb: str, rc: int) -> None:
+def _verdict(command: str, rc: int) -> None:
     """Terminal verdict line.
 
     The same code path that sets the exit code also emits a greppable last line
-    on stdout, so ``fno doctor bundle <verb> | tail`` cannot mask a drift/lint failure
+    on stdout, so ``fno doctor bundle <command> | tail`` cannot mask a drift/lint failure
     behind the pipe's exit code. An agent piping to bound output reads the
     verdict in the content; the exit code is no longer the only signal. Mirrors
     the ``PASS``/``FAIL`` line ``fno doctor test`` already prints.
     """
     outcome = "PASS" if rc == 0 else "FAIL"
     suffix = "" if rc == 0 else f" (rc={rc})"
-    typer.echo(f"fno doctor bundle {verb}: {outcome}{suffix}")
+    typer.echo(f"fno doctor bundle {command}: {outcome}{suffix}")
 
 
 @bundle_app.callback()

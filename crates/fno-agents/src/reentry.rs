@@ -2,7 +2,7 @@
 //!
 //! Every door that re-enters a Claude session (`fno agents attach`, the dead
 //! and live resume arms, the mux attach/ResumeAgent gestures, the recovery
-//! verb) must restore the SAME launch context the worker was spawned with or
+//! command) must restore the SAME launch context the worker was spawned with or
 //! refuse before launching anything. Before this module each door rebuilt its
 //! own provider argv, and the account binding dispatch applies at spawn was
 //! applied on none of them - a worker launched under one account was
@@ -19,10 +19,9 @@
 //! - Secrets never cross this boundary. The plan carries PATHS and ids; the
 //!   route-settings file is opened only to prove it still records a route,
 //!   and no value read from it is ever emitted.
-//! - Account truth lives in the Python account store, so account resolution
-//!   shells `fno config accounts show <id> --print-binding` (the same
-//!   shells-don't-reimplement rule the loop's account picker follows). The
-//!   ambient `CLAUDE_CONFIG_DIR` is never consulted.
+//! - Account resolution reads the `accounts show --print-binding`
+//!   projection in process (`accounts::show::binding`), the one account
+//!   reader. The ambient `CLAUDE_CONFIG_DIR` is never consulted.
 //! - A proven default row (`launch_account: "default"`, no route file) keeps
 //!   the historical bare behavior: no account prefix, no settings flag. A
 //!   ROUTED or non-Anthropic row with an UNKNOWN account refuses, because
@@ -151,36 +150,11 @@ impl ReentryPlan {
 /// carries the refusal receipt (unknown account, unresolvable record).
 pub type AccountBinding = dyn Fn(&str) -> Result<Option<String>, String>;
 
-/// The production account resolver: shells the one implementation of account
-/// truth (the Python store) and parses its secret-free `--print-binding`
-/// projection. Same rule as the loop's picker: never reimplement the store.
-pub fn shell_account_binding(account_id: &str) -> Result<Option<String>, String> {
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["config", "accounts", "show", account_id, "--print-binding"])
-        .output()
-        .map_err(|e| format!("could not run `fno config accounts show`: {e}"))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let reason = stderr
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .next_back()
-            .unwrap_or("no reason given");
-        return Err(reason.to_string());
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    for line in stdout.lines().map(str::trim) {
-        if let Some(dir) = line.strip_prefix("CLAUDE_CONFIG_DIR=") {
-            if !dir.is_empty() {
-                return Ok(Some(dir.to_string()));
-            }
-        }
-    }
-    // Exit 0 with no config-dir line: the account exists and rides the
-    // default namespace (an api-key lane). The id resolving is the fact; the
-    // namespace is the default slot.
-    Ok(None)
+/// The production account resolver: the `accounts show --print-binding`
+/// projection, answered in process.
+pub fn account_binding(account_id: &str) -> Result<Option<String>, String> {
+    let cwd = crate::accounts::show::pwd();
+    crate::accounts::show::binding(account_id, &cwd, &crate::accounts::env::Sources::system())
 }
 
 /// Prove the recorded route-settings file still records a route. Reads it,
@@ -844,7 +818,7 @@ pub fn resolve_reentry(
         name,
         transition,
         select_session,
-        &shell_account_binding,
+        &account_binding,
         &crate::claude_ask::ClaudeHome::from_env(),
         cwd_override,
     )?;

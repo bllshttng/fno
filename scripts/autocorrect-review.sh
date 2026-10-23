@@ -96,7 +96,7 @@ run_fno() {
 
 emit_run_event() {
   # One autocorrect_review_run row per run, through the existing emitter
-  # verb. The row is judged against the schema's event_types registry, so
+  # command. The row is judged against the schema's event_types registry, so
   # this dies loudly in dev if the type drifts; under launchd with no fno
   # substrate it is a skip.
   local rc="$1" outcome="failed" data

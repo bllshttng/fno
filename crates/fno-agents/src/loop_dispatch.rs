@@ -250,10 +250,10 @@ pub fn which_binary(name: &str) -> Option<PathBuf> {
 /// The single env var a picked account contributes to the driver's environment.
 const PICKED_ENV_KEY: &str = "CLAUDE_CONFIG_DIR";
 
-/// The exact verb this file shells, as one named constant.
+/// The exact command this file shells, as one named constant.
 ///
 /// It is a constant so a cross-language test can assert this argv still resolves
-/// to a real command. That check is not ceremony: this verb was spelled
+/// to a real command. That check is not ceremony: this command was spelled
 /// `fno providers pick` until the surface was renamed to `fno config accounts`,
 /// and because every failure here is advisory the loop would have degraded
 /// silently forever rather than failing loudly once.
@@ -266,10 +266,10 @@ type PickedEnv = Vec<(String, String)>;
 /// Interpret a `fno config accounts pick --if-armed --print-env` result.
 ///
 /// Pure, so the advisory contract is testable without a live `fno`. Success is
-/// exit 0 plus at least one `CLAUDE_CONFIG_DIR=<non-empty>` line; the verb also
+/// exit 0 plus at least one `CLAUDE_CONFIG_DIR=<non-empty>` line; the command also
 /// emits the auth vars to clear as `KEY=` and those are carried through, because
 /// applying half an overlay is what lets an inherited ANTHROPIC_API_KEY bill a
-/// different account than the receipt names. The verb's non-zero exits (3 = every
+/// different account than the receipt names. The command's non-zero exits (3 = every
 /// launchable candidate exhausted, 4 = no launchable candidate, 5 = picking not
 /// armed) are ordinary answers here, not errors.
 fn interpret_pick(ok: bool, stdout: &str, stderr: &str) -> Result<PickedEnv, String> {
@@ -296,7 +296,7 @@ fn interpret_pick(ok: bool, stdout: &str, stderr: &str) -> Result<PickedEnv, Str
         }
     }
     if !pinned {
-        // A drifted verb must never have its output half-applied: with nothing
+        // A drifted command must never have its output half-applied: with nothing
         // but clear-lines there is no account, only a scrubbed environment.
         // The pin is ANY value-carrying key, not CLAUDE_CONFIG_DIR specifically
         // - a claude api_key record's overlay is an ANTHROPIC_API_KEY and is
@@ -357,9 +357,9 @@ fn pick_would_undo_a_route_with(
 
 /// Ask `fno config accounts pick` which account the next iteration should launch on.
 ///
-/// Shells the verb rather than reimplementing the predicate: headroom, combo
+/// Shells the command rather than reimplementing the predicate: headroom, combo
 /// order, launchability AND the `pick_on_launch` opt-in have exactly one
-/// implementation, and it is not this one - `--if-armed` is what lets the verb
+/// implementation, and it is not this one - `--if-armed` is what lets the command
 /// honor the knob on this caller's behalf, so a default-off install can never
 /// have the loop change which account it bills. Every failure mode - a stale
 /// `fno`, an absent `fno`, a refusal - is an `Err` the caller logs and ignores,
@@ -519,7 +519,7 @@ impl Dispatcher for ShelloutDispatcher {
                 // ANTHROPIC_AUTH_TOKEN for a non-Anthropic endpoint, or a pinned
                 // model tier) is already committed to a provider. Applying a
                 // pick would scrub exactly those vars and silently move the run
-                // to a claude account mid-flight. The verb's own clear-list is
+                // to a claude account mid-flight. The command's own clear-list is
                 // what identifies them, so there is no second copy of it here -
                 // the mirror of the Python seam declining to pick for a --route
                 // or --role spawn.
@@ -547,7 +547,7 @@ impl Dispatcher for ShelloutDispatcher {
                         }
                     }
                     for (key, value) in &picked {
-                        // An empty value is the verb saying "clear this": an
+                        // An empty value is the command saying "clear this": an
                         // inherited ANTHROPIC_API_KEY or routed base URL outranks
                         // CLAUDE_CONFIG_DIR, so leaving one behind would bill an
                         // account the receipt does not name.
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn unparseable_output_is_declined_rather_than_guessed() {
-        // A drifted verb must not have its output half-applied: with no pinned
+        // A drifted command must not have its output half-applied: with no pinned
         // config dir there is no account, only a scrubbed environment.
         assert!(interpret_pick(true, "readyrule\n", "").is_err());
         assert!(interpret_pick(true, "CLAUDE_CONFIG_DIR=\n", "").is_err());

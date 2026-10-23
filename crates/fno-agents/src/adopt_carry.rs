@@ -43,14 +43,14 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let reg = dir.path().join("registry.json");
         let teamed = teamed_entry("thread-team");
-        crate::client_verbs::upsert_synthesized_row(&reg, teamed).unwrap();
+        crate::client_commands::upsert_synthesized_row(&reg, teamed).unwrap();
 
         let mut replacement = RegistryEntry::default();
         replacement.name = "lead".into();
         replacement.harness = Some("codex".into());
         replacement.harness_session_id = Some("thread-team".into());
         replacement.created_at = "t2".into();
-        crate::client_verbs::upsert_synthesized_row(&reg, replacement).unwrap();
+        crate::client_commands::upsert_synthesized_row(&reg, replacement).unwrap();
 
         let loaded = crate::state::load_registry(&reg).unwrap();
         let row = loaded
@@ -75,14 +75,14 @@ mod tests {
         bound.harness_session_id = Some("claude-basis".into());
         bound.node = Some("x-bbbb".into());
         bound.node_basis = Some("first-turn".into());
-        crate::client_verbs::upsert_synthesized_row(&reg, bound).unwrap();
+        crate::client_commands::upsert_synthesized_row(&reg, bound).unwrap();
 
         let mut replacement = RegistryEntry::default();
         replacement.name = "bound".into();
         replacement.harness = Some("claude".into());
         replacement.harness_session_id = Some("claude-basis".into());
         replacement.created_at = "t2".into();
-        crate::client_verbs::upsert_synthesized_row(&reg, replacement).unwrap();
+        crate::client_commands::upsert_synthesized_row(&reg, replacement).unwrap();
 
         let loaded = crate::state::load_registry(&reg).unwrap();
         let row = loaded

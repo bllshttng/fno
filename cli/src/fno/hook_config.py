@@ -5,7 +5,7 @@ snapshot for the session's life. A commit that deletes a script the previous
 release's config referenced leaves every pre-merge session holding a
 registration for a missing file; on the Bash PreToolUse matcher a hook that
 cannot launch fails the whole tool call, so one deletion removes every shell
-verb at once for those sessions. The ``hook-tombstones`` lint gate and the
+command at once for those sessions. The ``hook-tombstones`` lint gate and the
 doctor plugin-cache signal both ask this module the same question against a
 revision range: did it delete a script the base revision's config referenced?
 

@@ -1,5 +1,5 @@
 //! The paneless route-hint test, extracted from the parent's inline
-//! tests under the file-budget gate (the reseat verb lands in a sibling
+//! tests under the file-budget gate (the reseat command lands in a sibling
 //! child module and the parent stays shrink-only).
 use super::*;
 

@@ -48,8 +48,8 @@ class TestFireSkill:
         assert result.is_error is False
         assert result.rc == 82
 
-    def test_check_verb_fires_correct_skill(self, tmp_path):
-        """AC-HP: verb='check' -> /fno:ship pr check <n> in command."""
+    def test_check_command_fires_correct_skill(self, tmp_path):
+        """AC-HP: command='check' -> /fno:ship pr check <n> in command."""
         from fno.pr_watch._dispatch import fire_skill
 
         captured = {}

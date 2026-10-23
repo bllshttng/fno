@@ -3,14 +3,14 @@
 `fno doctor lint shellout-drift` is the regression backstop for the packaging epic
 (/). Once the shell-outs were eliminated (Group 1:
 folded into Rust or internalized into Python), the remaining risk is that a
-future `fno` verb shells out to a NEW repo-root script and silently reintroduces
+future `fno` command shells out to a NEW repo-root script and silently reintroduces
 the clean-install gap a bare `pip install fno` cannot satisfy.
 
-This guard scans ``cli/src/fno/`` for verbs that bash/sh-exec a script whose path
+This guard scans ``cli/src/fno/`` for commands that bash/sh-exec a script whose path
 is rooted at the SHARED resolvers ``resolve_repo_root()`` / ``resolve_plugin_script()``
 (the idiom 11 of 12 plugin-script call sites use). Every such script must be on the
 ``CLONE_ONLY_SCRIPTS`` allowlist (``scripts/lint/.clone-only-scripts.txt``), and the
-guard PROVES each allowlisted verb degrades on a bare install by invoking it in a
+guard PROVES each allowlisted command degrades on a bare install by invoking it in a
 no-script environment.
 
 Two remedies for a flagged shell-out (AC4-ERR): eliminate it (fold to Rust /
@@ -26,10 +26,10 @@ Scope boundaries (deliberate, documented so they are not silent gaps):
   ``scripts/lib/paths.sh`` but writes/reads it - never bash-execs it), and
   ``worktree.py``'s ``_run_setup_worktree_hook`` (roots ``setup-worktree.sh`` at an
   injected ``repo_root`` parameter, and already tolerates the script's absence).
-* A verb that roots a shell-out via a PRIVATE ``git rev-parse`` helper instead of
+* A command that roots a shell-out via a PRIVATE ``git rev-parse`` helper instead of
   the shared resolver is invisible to this guard (the ``(b)`` SIGNAL above fails).
   That is a hiding place, not a sanctioned exemption: the fix is to re-root the
-  verb on the shared resolver and add a degrade branch + an allowlist entry, which
+  command on the shared resolver and add a degrade branch + an allowlist entry, which
   is what ``fno doctor lint flock-pattern`` (-> ``scripts/lint-flock-pattern.sh``) now does
  - so it is in scope, listed, and degrade-proven.
 * SCAN_EXCLUDE: ``evals/runner.py`` is the in-repo-only efficacy-eval harness; it
@@ -97,7 +97,7 @@ class Violation:
 @dataclass(frozen=True)
 class DegradeFailure:
     relpath: str
-    verb: List[str]
+    command: List[str]
     reason: str
 
 
@@ -111,7 +111,7 @@ class Report:
 # Allowlist parsing.
 # --------------------------------------------------------------------------- #
 def parse_allowlist(path: Path) -> Dict[str, List[str]]:
-    """Parse ``relpath :: verb args`` lines into {relpath: [verb, args...]}.
+    """Parse ``relpath :: command args`` lines into {relpath: [command, args...]}.
 
     Raises GuardError on a malformed line (fail-closed: a broken allowlist must
     not silently pass).
@@ -126,17 +126,17 @@ def parse_allowlist(path: Path) -> Dict[str, List[str]]:
         if "::" not in line:
             raise GuardError(
                 f"{path}:{lineno}: malformed allowlist line (missing ' :: ' "
-                f"separator between script path and degrade verb): {raw!r}"
+                f"separator between script path and degrade command): {raw!r}"
             )
-        relpath_part, _, verb_part = line.partition("::")
+        relpath_part, _, command_part = line.partition("::")
         relpath = relpath_part.strip()
-        verb = verb_part.split()
-        if not relpath or not verb:
+        command = command_part.split()
+        if not relpath or not command:
             raise GuardError(
                 f"{path}:{lineno}: malformed allowlist line (empty script path "
-                f"or empty degrade verb): {raw!r}"
+                f"or empty degrade command): {raw!r}"
             )
-        entries[relpath] = verb
+        entries[relpath] = command
     return entries
 
 
@@ -371,7 +371,7 @@ _TRACEBACK = "Traceback (most recent call last)"
 
 def degrade_proof(entries: Dict[str, List[str]],
                   fno_cmd: Optional[List[str]] = None) -> List[DegradeFailure]:
-    """Invoke each allowlisted verb in a no-script env and require a graceful
+    """Invoke each allowlisted command in a no-script env and require a graceful
     degrade: exit != 0 and != 127, non-empty stderr, no traceback (AC4-EDGE)."""
     cmd_base = fno_cmd if fno_cmd is not None else _resolve_fno_cmd()
     failures: List[DegradeFailure] = []
@@ -380,17 +380,17 @@ def degrade_proof(entries: Dict[str, List[str]],
         env = dict(os.environ)
         env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["FNO_REPO_ROOT"] = str(empty)
-        # Isolate the home dir too, so probing the verbs cannot read the user's
+        # Isolate the home dir too, so probing the commands cannot read the user's
         # ~/.fno settings or write the persisted plugin-root pointer / history.
         # HOME + USERPROFILE cover Path.home() on POSIX and Windows; FNO_HOME is
         # fno's own override.
         env["FNO_HOME"] = str(empty)
         env["HOME"] = str(empty)
         env["USERPROFILE"] = str(empty)
-        for relpath, verb in entries.items():
+        for relpath, command in entries.items():
             try:
                 proc = subprocess.run(
-                    cmd_base + verb,
+                    cmd_base + command,
                     cwd=str(empty),
                     env=env,
                     capture_output=True,
@@ -398,22 +398,22 @@ def degrade_proof(entries: Dict[str, List[str]],
                     timeout=_DEGRADE_TIMEOUT,
                 )
             except subprocess.TimeoutExpired:
-                failures.append(DegradeFailure(relpath, verb, "timed out (hung instead of degrading)"))
+                failures.append(DegradeFailure(relpath, command, "timed out (hung instead of degrading)"))
                 continue
             except OSError as exc:
-                failures.append(DegradeFailure(relpath, verb, f"could not run verb: {exc}"))
+                failures.append(DegradeFailure(relpath, command, f"could not run command: {exc}"))
                 continue
             stderr = (proc.stderr or "").strip()
             combined = (proc.stderr or "") + (proc.stdout or "")
             rc = proc.returncode
             if rc == 0:
-                failures.append(DegradeFailure(relpath, verb, "verb exited 0 (did not fail when its script was absent)"))
+                failures.append(DegradeFailure(relpath, command, "command exited 0 (did not fail when its script was absent)"))
             elif rc == 127:
-                failures.append(DegradeFailure(relpath, verb, "verb exited 127 (shell command-not-found, not a graceful degrade)"))
+                failures.append(DegradeFailure(relpath, command, "command exited 127 (shell command-not-found, not a graceful degrade)"))
             elif not stderr:
-                failures.append(DegradeFailure(relpath, verb, f"verb exited {rc} but printed nothing to stderr (silent)"))
+                failures.append(DegradeFailure(relpath, command, f"command exited {rc} but printed nothing to stderr (silent)"))
             elif _TRACEBACK in combined:
-                failures.append(DegradeFailure(relpath, verb, f"verb exited {rc} with a Python traceback (panic, not a degrade)"))
+                failures.append(DegradeFailure(relpath, command, f"command exited {rc} with a Python traceback (panic, not a degrade)"))
     finally:
         shutil.rmtree(empty, ignore_errors=True)
     return failures
@@ -463,21 +463,21 @@ def run(
         )
         lines.append(
             "  Remedy 1 (preferred): eliminate the shell-out - fold the logic into "
-            "fno-agents (Rust) or internalize it into the package (Python), so the verb "
+            "fno-agents (Rust) or internalize it into the package (Python), so the command "
             "no longer needs a repo-root script at runtime."
         )
         lines.append(
-            f"  Remedy 2: if the verb is intentionally clone-only, add '{v.relpath}' to "
-            f"{ALLOWLIST_REL} with a degrade-proof verb, and make the verb exit non-zero "
+            f"  Remedy 2: if the command is intentionally clone-only, add '{v.relpath}' to "
+            f"{ALLOWLIST_REL} with a degrade-proof command, and make the command exit non-zero "
             "with an actionable message on a bare install."
         )
     for df in degrade_failures:
         lines.append(
-            f"shellout-drift: allowlist entry '{df.relpath}' (verb: fno {' '.join(df.verb)}) "
+            f"shellout-drift: allowlist entry '{df.relpath}' (command: fno {' '.join(df.command)}) "
             f"failed the degrade proof in a no-script env: {df.reason}."
         )
         lines.append(
-            "  An allowlisted clone-only verb MUST degrade with a non-empty actionable "
+            "  An allowlisted clone-only command MUST degrade with a non-empty actionable "
             "message (exit != 0 and != 127, no traceback). Add an is_file()/exists() guard "
             "before the subprocess that prints the install-the-plugin message and returns "
             "a non-zero code."
@@ -494,6 +494,6 @@ def run(
     lines.insert(
         0,
         "shellout-drift: ok - all repo-root shell-outs are on the CLONE_ONLY_SCRIPTS "
-        "allowlist and every allowlisted verb degrades gracefully.",
+        "allowlist and every allowlisted command degrades gracefully.",
     )
     return Report(0, lines)

@@ -1,14 +1,14 @@
 """`fno backlog reopen` - the inverse of `done`, and its refusals.
 
-The verb is native (backlog/workflows.rs), so these scenarios drive the door
+The command is native (backlog/workflows.rs), so these scenarios drive the door
 (the fno-agents binary against a sandboxed store), the way the golden
-receipts do. The refusals are the point of the verb, so most of this file is
+receipts do. The refusals are the point of the command, so most of this file is
 about the cases it declines rather than the case it permits. A correction
-verb that permits everything is a hand-edit with a nicer name, and
+command that permits everything is a hand-edit with a nicer name, and
 hand-editing the graph is what the PreToolUse hook already forbids.
 
 The wheel-level drive-audit receipt (`backlog_done_operator_initiated`)
-moved into the binary with the verb; a sandbox has no space dir for the
+moved into the binary with the command; a sandbox has no space dir for the
 event journal, so that tail is not door-observable and has no python
 monkeypatch surface left to pin.
 """
@@ -150,7 +150,7 @@ def test_the_cascade_still_fires_for_a_partial_id(tmp_path):
 
 
 def test_an_epic_closed_on_its_own_evidence_is_left_done_and_named(tmp_path):
-    """Silently reopening it would discard a judgment this verb never made."""
+    """Silently reopening it would discard a judgment this command never made."""
     root = sandbox(
         tmp_path,
         _node("ab-e0000000", type="epic", completion_note="closed by operator after review"),

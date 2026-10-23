@@ -3,7 +3,7 @@
 //! Rust port of the checker + bounded read runner that first shipped as
 //! Python `cli/src/fno/decide/evidence.py`, moved off the file-budget-gated
 //! Python tree. Contract: docs/architecture/decision-record.md.
-//! Transport is the hidden binary-direct `evidence-gate` verb: one JSON
+//! Transport is the hidden binary-direct `evidence-gate` command: one JSON
 //! request on stdin (lane, text, reads, root, timeout), one JSON answer on
 //! stdout. A refusal is DATA (`ok: false`), not a process error.
 
@@ -521,7 +521,7 @@ pub fn check_ruling_evidence(
 /// Note-lane gate: (rows, claims), each None when not applicable.
 ///
 /// A contradicted citation RAISES (a note is a fact on the node even when
-/// --quiet); a claim with no read only reports - the note verb advises,
+/// --quiet); a claim with no read only reports - the note command advises,
 /// never refuses a body.
 pub fn note_evidence(
     text: &str,
@@ -564,7 +564,7 @@ fn gate_answer(answer: Result<Value, GateRefusal>) -> Value {
 
 /// `fno-agents evidence-gate`: the hidden binary-direct transport behind the
 /// Python ruling/note evidence gates (same `matches!` treatment as
-/// `component-verdict`, so the routable-verb parity guard does not see it).
+/// `component-verdict`, so the routable-command parity guard does not see it).
 /// Reads one JSON request on stdin, prints one JSON answer on stdout, and
 /// exits 0 whenever an answer was computed - a refusal is data, not an
 /// error; exit 2 on malformed args or an unreadable request.
@@ -869,7 +869,7 @@ mod tests {
         .expect("write index");
         // AC2-HP: a live id on a JSONL-only store passes.
         assert!(check_decision_citations("per d-aaaa0001").is_empty());
-        // AC2-ERR: the unknown id is refused, named, with the check verb.
+        // AC2-ERR: the unknown id is refused, named, with the check command.
         let failures = check_decision_citations("per d-deadbeef");
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("d-deadbeef"), "{}", failures[0]);

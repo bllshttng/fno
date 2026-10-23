@@ -62,7 +62,7 @@ pub(crate) fn primary_index(entries: &[Value]) -> PrimaryIndex {
 ///
 /// An entry with no `url` matches neither rule 2 nor rule 3. Nothing here
 /// queries a live tracker: recording the state at merge time is the merge
-/// verb's job, and the sweep's settle pass reads one PR only for an entry
+/// command's job, and the sweep's settle pass reads one PR only for an entry
 /// these rules cannot settle.
 pub(crate) fn additional_pr_open(extra: &Value, node_id: &str, primaries: &PrimaryIndex) -> bool {
     if matches!(

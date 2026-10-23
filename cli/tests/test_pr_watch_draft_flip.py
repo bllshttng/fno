@@ -2,7 +2,7 @@
 
 The decision lives in the fno-agents binary (crates/fno-agents/src/
 pr_draft_ready.rs); the tick is the forwarder. These tests stub
-``fno.rust_binary.verb_call`` and pin the door payload; the guard's own
+``fno.rust_binary.command_call`` and pin the door payload; the guard's own
 decision table is tested in the Rust crate. No real gh, config, or decision
 index is touched.
 """
@@ -58,7 +58,7 @@ class _Claim:
         return False
 
 
-def _run_tick(tmp_path, monkeypatch, verb_calls, is_draft, **tick_kw):
+def _run_tick(tmp_path, monkeypatch, command_calls, is_draft, **tick_kw):
     import fno.rust_binary as rust_binary
     from fno.pr_watch._dispatch import tick
 
@@ -68,11 +68,11 @@ def _run_tick(tmp_path, monkeypatch, verb_calls, is_draft, **tick_kw):
     def read_state(cand, *, reviewers):
         return _obs(7, is_draft=is_draft)
 
-    def fake_verb(verb, payload, **kw):
-        verb_calls.append((verb, payload, kw))
+    def fake_command(command, payload, **kw):
+        command_calls.append((command, payload, kw))
         return {"outcome": "flipped", "receipt": "flipped", "journaled": True}
 
-    monkeypatch.setattr(rust_binary, "verb_call", fake_verb)
+    monkeypatch.setattr(rust_binary, "command_call", fake_command)
 
     kw = dict(
         graph_path=tmp_path / "graph.json",
@@ -121,8 +121,8 @@ def test_flip_leg_forwards_the_door_call(tmp_path, monkeypatch, is_draft, expect
     flips = [call for call in calls if call[0] == "graph-get"]
     assert len(flips) == expect_calls
     if expect_calls:
-        verb, payload, kw = flips[0]
-        assert verb == "graph-get"
+        command, payload, kw = flips[0]
+        assert command == "graph-get"
         flip = payload["pr_draft_ready"]["flip"]
         assert flip["pr"] == 7
         assert flip["repo"] == "owner/repo"

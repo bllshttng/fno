@@ -75,7 +75,7 @@ OVERRIDE_LOG = FNO_HOME / "logs" / "merge-gate-overrides.log"
 MARKER_TTL_SECONDS = 300
 # Push debounce: the timestamp of the last allowed push, one file per branch.
 # The folder itself answers from the Rust state door (_push_stamp_path), so
-# the hook never spells it and a fold retargets this side with the verb.
+# the hook never spells it and a fold retargets this side with the command.
 # The stamp covers the registration window; the probe covers a run that is
 # already visible after the stamp expires.
 PUSH_DEBOUNCE_SECONDS = 120
@@ -291,14 +291,14 @@ def _push_stamp_path(branch):
 def push_debounce_refusal(command, branch):
     """Refusal text when this push should wait, or None to allow.
 
-    The stamp handles the first 120 seconds, then the guarded verb asks
+    The stamp handles the first 120 seconds, then the guarded command asks
     GitHub whether a registered check is still running. Every probe failure
     allows. `FNO_PUSH_NOW=1` allows and leaves an event row, so a bypass is
     recoverable from the journal rather than invisible.
 
-    The verb's own internal push never re-enters this hook: the hook reads
+    The command's own internal push never re-enters this hook: the hook reads
     the Bash command string, and `fno do pr push` is not a `git push` at
-    position 0, so the verb is the one door that is never double-gated. A
+    position 0, so the command is the one door that is never double-gated. A
     rename to anything starting `git push` would silently deadlock it.
     """
     if os.environ.get("FNO_PUSH_NOW") == "1":
@@ -339,7 +339,7 @@ def push_debounce_refusal(command, branch):
 
 
 def _read_in_flight(branch):
-    """Ask the guarded push verb whether this branch's remote head is live.
+    """Ask the guarded push command whether this branch's remote head is live.
 
     The hook runs before the push, so a missing binary, usage error, malformed
     output, or timeout must allow the command rather than turn diagnostics into
@@ -459,7 +459,7 @@ def is_using_no_verify(command):
     return bool(re.search(r'--no-verify', command, re.IGNORECASE))
 
 def is_allowed_git_command(command):
-    """True when this segment is an ungated git verb.
+    """True when this segment is an ungated git command.
 
     POSITIONAL, not regex-over-the-string. Segments arrive shlex-rejoined with
     QUOTES STRIPPED, so a regex allowlist read argument text as if it were the
@@ -467,10 +467,10 @@ def is_allowed_git_command(command):
     pattern and waved the --no-verify commit straight through, while dropping the
     allowlist entirely made `git commit -m "fix: block git push origin main"`
     deny as a push to main. Both directions are the same root cause, and looking
-    at the verb's POSITION rather than its text fixes both: token[1] is the
+    at the command's POSITION rather than its text fixes both: token[1] is the
     subcommand no matter what the message says.
 
-    A --no-verify token anywhere disqualifies, so an allowlisted verb cannot
+    A --no-verify token anywhere disqualifies, so an allowlisted command cannot
     carry it past the gate below (the old pattern's negative lookahead).
     """
     parts = command.split()
@@ -823,16 +823,16 @@ _HOLD_PROBE_TIMEOUT = 5
 
 
 def _fno_veto_refusal(args, timeout, fallback):
-    """One fno-verb probe: deny on the verb's refusal exits, else open.
+    """One fno-command probe: deny on the command's refusal exits, else open.
 
     The shared scaffold of both merge vetoes (lineage, coverage): fail OPEN on
     every way the probe itself can die - a missing `fno`, a timeout, any exit
-    other than the verb's refusal code - because a guard whose own machinery
+    other than the command's refusal code - because a guard whose own machinery
     is down must not become a merge outage. That includes an unknown-command
-    exit from a `fno` deployment older than the verb (the rollout window): it
+    exit from a `fno` deployment older than the command (the rollout window): it
     is indistinguishable from any other usage error and fails open silently,
     which is why each veto's timeout stays well under the harness hook
-    budget. The refusal set is {3}: the ordinary refusal. The verb's retired
+    budget. The refusal set is {3}: the ordinary refusal. The command's retired
     exit 5 (the old round-cap lock) no longer exists - reaching the
     configured rounds now answers COVERED - so 3 is the whole set.
     """
@@ -879,11 +879,11 @@ def _coverage_refusal(command=""):
 
     Fails OPEN only on a named instrument failure: exit 4, a missing `fno`, a
     timeout, another repository - and on an unknown-command exit from a `fno`
-    deployment older than this verb (the rollout window), which the probe
+    deployment older than this command (the rollout window), which the probe
     cannot distinguish from any other usage error. A guard whose own machinery
     is down must not become a merge outage. An empty read is not a machinery
     failure - it is the answer that nothing attested this head, and it exits 3.
-    The verb's retired exit 5 (the old round-cap lock) no longer exists:
+    The command's retired exit 5 (the old round-cap lock) no longer exists:
     reaching the configured rounds answers COVERED.
     """
     pr_number = _parse_merge_pr(command)
@@ -915,10 +915,10 @@ def _dispatch_hold_refusal(command=""):
         # let a merge proceed against an active plan-level hold with the hold
         # check never running (round-12 finding 1). The sibling lineage and
         # coverage vetoes fail OPEN on this shape by documented policy - the
-        # sanctioned verb recomputes them - but this veto's own contract is
+        # sanctioned command recomputes them - but this veto's own contract is
         # fail-closed: an unanswerable hold state must not read as unheld.
         # Resolving the PR from the branch costs a network call this hook
-        # cannot afford, so the refusal names the sanctioned verb instead.
+        # cannot afford, so the refusal names the sanctioned command instead.
         return (
             "cannot determine which PR this bare `gh pr merge` targets, so its "
             "plan dispatch hold cannot be checked; refusing to assume unheld. "
@@ -933,7 +933,7 @@ def _dispatch_hold_refusal(command=""):
     try:
         # One probe, the front door. The retired in-process leg (the fno
         # package's hold reader plus the `python -m fno.cli` source fallback)
-        # was a latency fast path; the verb owns the worktree lookup and the
+        # was a latency fast path; the command owns the worktree lookup and the
         # hold read, and its refusal lines are the same sentences the fallback
         # returned. A missing `fno` or a probe failure reads held - the
         # veto's fail-closed contract.
@@ -1021,7 +1021,7 @@ def _review_hold_refusal(command=""):
 
 def _live_merge_switch_armed(repo_root, fm):
     """One authoritative posture for raw `gh pr merge` : the same
-    resolution the sanctioned verb (`fno do pr merge`) and `fno-agents
+    resolution the sanctioned command (`fno do pr merge`) and `fno-agents
     finalize` apply. Live config.auto_merge.enabled arms, or the run's
     explicit spawn-time grant (auto_merge_source: env-target-auto-merge) arms
     on its own.
@@ -1029,7 +1029,7 @@ def _live_merge_switch_armed(repo_root, fm):
     The manifest alone does NOT arm. It is a snapshot, and a snapshot whose
     `true` merely mirrored config must not outlive an operator flipping the
     live switch off mid-flight - without this read, the raw path was
-    the weaker gate, merging past a disarm the sanctioned verb refuses.
+    the weaker gate, merging past a disarm the sanctioned command refuses.
 
     The config answer comes from the shared resolver, never a local TOML
     parse: layer precedence and the legacy dispatch.auto_merge ->
@@ -1040,7 +1040,7 @@ def _live_merge_switch_armed(repo_root, fm):
     budget - a fresh independent wait here can push the hook past it, and a
     hook killed mid-run emits NO verdict, letting the raw merge proceed.
     A resolver unavailable, slow, or unreadable ->
-    fail closed (decline to authorize); the sanctioned verb remains available.
+    fail closed (decline to authorize); the sanctioned command remains available.
     """
     if (
         str(fm.get("auto_merge_approved", "")).lower() in ("true", "yes", "1")
@@ -1186,7 +1186,7 @@ _CMD_WRAPPERS = {"sudo", "env", "command", "time", "nice", "builtin", "exec",
 _SHELL_RUNNERS = {"sh", "bash", "zsh", "dash", "ksh"}
 # A wrapper option's value that is not dash-prefixed: `timeout 10`, `timeout 5m`.
 _DURATION_RE = re.compile(r'^\d+(\.\d+)?[smhd]?$')
-# Wrapper options whose value is a separate token, so the value is not the verb:
+# Wrapper options whose value is a separate token, so the value is not the command:
 # `sudo -u x git ...`, `nice -n 5 git ...`.
 _WRAPPER_VALUE_OPTS = {"-u", "-g", "-n", "-C", "-s", "-k", "-p", "--user",
                        "--group", "--chdir", "--signal", "--kill-after"}
@@ -1476,7 +1476,7 @@ def _segments_one_line(line):
 def _effective_argv(seg):
     """Strip a leading run of subshell `(`, env-assignments (NAME=value), and
     command wrappers (sudo/env/...) so the real executable token lands at
-    argv[0]. Keeps a wrapper prefix from hiding a gated verb."""
+    argv[0]. Keeps a wrapper prefix from hiding a gated command."""
     return _effective_argv_and_assignments(seg)[0]
 
 
@@ -1504,7 +1504,7 @@ def _effective_argv_and_assignments(seg):
         # Lowercased for the same reason the segment finders are: on a
         # case-insensitive filesystem `ENV git push origin main` and
         # `SUDO git push ...` resolve and run, and a case-sensitive wrapper test
-        # left the real verb buried at argv[1] so no gate ever saw it.
+        # left the real command buried at argv[1] so no gate ever saw it.
         if tok.rsplit("/", 1)[-1].lower() in _CMD_WRAPPERS:
             i += 1
             saw_wrapper = True
@@ -1523,7 +1523,7 @@ def _effective_argv_and_assignments(seg):
                 continue
         # A wrapper's OWN options, and their values: `env -i`, `nice -n 5`,
         # `timeout 10`, `sudo -u x`. Stopping at the first non-wrapper token let
-        # any optioned wrapper hide the verb entirely.
+        # any optioned wrapper hide the command entirely.
         if saw_wrapper and tok in _WRAPPER_VALUE_OPTS and i + 1 < n:
             i += 2          # option plus its value: `sudo -u x`, `nice -n 5`
             continue
@@ -1533,10 +1533,10 @@ def _effective_argv_and_assignments(seg):
         break
     argv = seg[i:]
     # A wrapper's argument is one quoted token holding a whole command, so the
-    # verb is inside it rather than at argv[0]: `eval "git push origin main"`
+    # command is inside it rather than at argv[0]: `eval "git push origin main"`
     # and `bash -c "git push origin main"` were invisible while the UNQUOTED
     # `eval git push ...` was caught - protection that only covered the form
-    # nobody writes. Re-tokenize so the real verb surfaces.
+    # nobody writes. Re-tokenize so the real command surfaces.
     if len(argv) == 1 and any(c.isspace() for c in argv[0]):
         try:
             inner = shlex.split(argv[0])
@@ -1747,9 +1747,9 @@ _BODY_FILE_CAP = 1 << 20  # a wrong path must never make the hook read something
 
 
 def _real_branch_node_ids(head_ref):
-    """Delimiter-bounded node ids in a branch name, from the fno-agents verb.
+    """Delimiter-bounded node ids in a branch name, from the fno-agents command.
 
-    The hook stays stdlib-only and graph-free: the verb owns the scanner.
+    The hook stays stdlib-only and graph-free: the command owns the scanner.
     Every failure (missing binary, timeout, nonzero exit, bad JSON) answers
     [] with one stderr line, so the hook fails open to the ALLOW it owes.
     """
@@ -1845,7 +1845,7 @@ def _closure_trailer_refusal(command="", hatch=False, head=None, body_files=(),
     Measured 2026-08-19: five PRs in one evening red on
     scripts/ci/check-pr-node-closure.sh for one reason - the generator
     (`fno do pr closure-trailer`) already existed and nothing ran it. The CLI
-    creation paths compose the trailer themselves via the fno-agents verbs;
+    creation paths compose the trailer themselves via the fno-agents commands;
     this covers the prose path, where an agent types the command.
 
     The ceiling, stated because it bounds the promise. A `--body` reaches gh
@@ -1887,7 +1887,7 @@ def _closure_trailer_refusal(command="", hatch=False, head=None, body_files=(),
     # This message NAMES candidates and never prescribes a trailer to paste.
     # A refusal is the highest-trust text a blocked agent reads, so advice here
     # is a PRODUCER of claims, and this producer has no graph to check against.
-    # The verb reads the id GRAMMAR, which ordinary English also fits:
+    # The command reads the id GRAMMAR, which ordinary English also fits:
     # on `fix-dead-code` it yields `fix-dead`. The old message told the author
     # to write `Backlog-Closure: fix-dead`, which greens CI and then makes
     # the merge-time bind refuse the WHOLE binding, so the real node
@@ -1939,7 +1939,7 @@ def _find_git_segments(segments):
 
 
 def _strip_gh_global_opts(argv):
-    """Return gh argv with repo/host-wide options removed before the verb."""
+    """Return gh argv with repo/host-wide options removed before the command."""
     def strip(tokens):
         while tokens:
             token = tokens[0]
@@ -2347,7 +2347,7 @@ def _evaluate_git_segment(command, has_approval, allowlist_ok=True):
             return ("deny", refusal)
         _stamp_push(branch)
 
-    # A git verb this hook does not gate is not this hook's business: it declines
+    # A git command this hook does not gate is not this hook's business: it declines
     # to opine and the normal permission system decides.
     return None
 
@@ -2477,7 +2477,7 @@ def main():
 
     # ==========================================
     # Git gates, evaluated per command-position segment so a compound command
-    # (`cd /tmp && git push origin main`) can't smuggle a git verb past a
+    # (`cd /tmp && git push origin main`) can't smuggle a git command past a
     # startswith('git') check. Evaluated exactly once - a deny writes state -
     # and the verdict is then applied in a fixed precedence below.
     # ==========================================
@@ -2568,7 +2568,7 @@ def main():
     # prior behaviour there; the marker override does not, since it needs parsed
     # segments to prove the merge stands alone (see its own guard below).
     # A shell runner disqualifies outright: _effective_argv re-tokenizes its
-    # quoted argument so the inner verb IS gated, but the outer command is still
+    # quoted argument so the inner command IS gated, but the outer command is still
     # ONE segment, so `bash -c "gh pr merge 42 && rm -rf /tmp/x"` counted as
     # standing alone while the unwrapped form was refused.
     wrapped = bool(_SHELL_RUNNER_RE.search(command))
@@ -2596,7 +2596,7 @@ def main():
         # That marker buys out the review ceremony; a base that no longer leads
         # to the default branch is not a ceremony, it is a merge that ships
         # nothing. The lineage check carries its own documented bypass
-        # (FNO_PR_BASE_LINEAGE_OK), which the CLI verb honours by exiting 0.
+        # (FNO_PR_BASE_LINEAGE_OK), which the CLI command honours by exiting 0.
         stacked = _stacked_base_refusal(merge_seg)
         if stacked:
             _emit("deny", f"[fno stacked-base] {stacked}")

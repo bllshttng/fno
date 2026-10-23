@@ -11,7 +11,7 @@
 #
 # The verdict itself is native and covered by the crate's unit tests, so the
 # stub here answers the receipt from STUB_BIND and records the argv the hook
-# sent. The stub is SELF-CONTAINED: every other verb is a benign success, so
+# sent. The stub is SELF-CONTAINED: every other command is a benign success, so
 # the proceed path needs no real fno (CI smoke has none on PATH).
 
 set -uo pipefail

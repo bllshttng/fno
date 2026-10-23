@@ -48,7 +48,7 @@ A phase that opens stamps its row's `started_at`, and a phase that closes stamps
 
 The closes that no session writes live in `crates/fno-agents/src/phase_close.rs`.
 
-A legacy row fills its gap only through `fno backlog session backfill`, never through the migration. The verb reads the session's transcript. A start is the first `/fno:<phase>` or `$fno:<phase>` call whose arguments name the node or its plan file. When the session holds that phase for one node only, the first call counts, named or not. A think, blueprint or review row ends at the last event before the next call of another phase or another node. A do row never ends there. The verb never overwrites a stamp. It is a dry run until `--apply`, and it counts the rows it cannot match (`crates/fno-agents/src/session_backfill.rs`).
+A legacy row fills its gap only through `fno backlog session backfill`, never through the migration. The command reads the session's transcript. A start is the first `/fno:<phase>` or `$fno:<phase>` call whose arguments name the node or its plan file. When the session holds that phase for one node only, the first call counts, named or not. A think, blueprint or review row ends at the last event before the next call of another phase or another node. A do row never ends there. The command never overwrites a stamp. It is a dry run until `--apply`, and it counts the rows it cannot match (`crates/fno-agents/src/session_backfill.rs`).
 
 ## Entities
 

@@ -38,7 +38,7 @@ use crate::backlog_view;
 use crate::proto::{
     bind_or_probe, check_attach_version, err_code, read_msg, write_msg, AgentBadge,
     AgentNoPaneReason, AnchoredLayoutSpec, BacklogCard, BindOutcome, BlockDir, BlockSel, CardState,
-    ClientMsg, Command, ControlVerb, Frame, LayoutBinding, LayoutScope, LayoutSlot, LayoutSpec,
+    ClientMsg, Command, ControlCommand, Frame, LayoutBinding, LayoutScope, LayoutSlot, LayoutSpec,
     LayoutTreeChild, LayoutTreeSpec, MouseButton, MouseEvent, MouseKind, PaneInfo, PanePlacement,
     PaneTarget, PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow,
     ServerMsg, SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
@@ -110,6 +110,8 @@ mod thread_pin;
 mod thread_workspace;
 mod truth_probe;
 mod visible_panes;
+mod window_size;
+use window_size::TabSizing;
 mod workspace_origin;
 mod workspace_restore;
 use self::session_guard::{ConnAlive, SocketGuard};
@@ -368,17 +370,10 @@ pub(crate) enum SearchOp {
 /// unknown badge (liveness-only, no fresh hook report / manifest verdict)
 /// refuses fail-closed, and false-ready is the forbidden direction.
 ///
-/// Refusing mid-turn is still the conservative call HERE, but not for the
-/// reason this comment used to give: node measured, from a live claude
-/// session's own transcript, that a busy recipient does not corrupt its
-/// composer on an injected turn - it enqueues the paste and processes it at
-/// the next turn boundary (`queue-operation`/`enqueue`, confirmed via
-/// `crates/fno-agents/src/mail_inject.rs`). That measurement is about a
-/// bracketed-paste MAIL turn landing through the harness's own input-queue
-/// feature; it says nothing about `BlockNavOp::Rerun`'s write below, which
-/// puts a raw re-typed command line directly onto the pane's live input state
-/// (`pty.write_input`), not a message the composer is designed to buffer. No
-/// measurement establishes that write is safe mid-turn, so the guard stays.
+/// A busy claude composer queues an injected MAIL paste safely
+/// (`crates/fno-agents/src/mail_inject.rs`), but this rerun writes a raw
+/// command line onto the live input (`pty.write_input`). Nothing shows that
+/// write is safe mid-turn, so the guard stays.
 ///
 /// `agents` is the WHOLE cross-session registry, so the row match is scoped to
 /// `session` on the FULL `(session, pane)` ref (the same filter `agent_rows`
@@ -629,7 +624,7 @@ pub(crate) enum CoreMsg {
     /// One non-claude row's resume argv, resolved OFF the core loop
     /// (`fno-agents resume-argv`), routed back so the pane spawn runs on the
     /// core loop as before. `Ok((argv, degraded))`: the argv to stage and
-    /// whether the verb failed (the fallback render, so the operator learns
+    /// whether the command failed (the fallback render, so the operator learns
     /// the worker resumes without its writable-roots grant). `Err` is the
     /// visible refusal: a timeout, a missing binary, an unknown harness - the
     /// handler starts NO pane on it.
@@ -670,13 +665,13 @@ pub(crate) enum CoreMsg {
         plans: HashMap<String, Result<ReentryVerdict, String>>,
         reply: ControlReply,
     },
-    /// (v71) `ControlVerb::SquadReload`: re-read `squads.json` into
+    /// (v71) `ControlCommand::SquadReload`: re-read `squads.json` into
     /// `squad_members` on the core loop, so an external prune survives the
     /// next `persist_squad`.
     SquadReload {
         reply: ControlReply,
     },
-    /// (v113) `ControlVerb::WorkspaceOrigin`: add or drop one folder on an
+    /// (v113) `ControlCommand::WorkspaceOrigin`: add or drop one folder on an
     /// open named workspace, then persist.
     WorkspaceOrigin {
         workspace: String,
@@ -684,7 +679,7 @@ pub(crate) enum CoreMsg {
         remove: bool,
         reply: ControlReply,
     },
-    /// (v75) `ControlVerb::RetireSession`: tombstone one (harness,
+    /// (v75) `ControlCommand::RetireSession`: tombstone one (harness,
     /// full session id) identity across every held squad and close only its
     /// attached panes. Idempotent; a repeat retires nothing.
     RetireSession {
@@ -698,7 +693,7 @@ pub(crate) enum CoreMsg {
     /// A pre-Attach `KillServer`: Bye clients, then the shared choke point
     /// captures before killing non-keeper children and exits 0.
     Kill,
-    // -- v4 control verbs (one-shot: reply on the oneshot, then the
+    // -- v4 control commands (one-shot: reply on the oneshot, then the
     // connection task closes). Snapshot reads and the spawn/kill mutations
     // reply inline on the core loop; `PaneWait` hands its reply to an
     // off-loop watcher so nothing blocking ever lands on the loop.
@@ -728,7 +723,7 @@ pub(crate) enum CoreMsg {
         claim: bool,
         placement: PanePlacement,
         worker: Option<String>,
-        /// (v117) The caller's preassigned session id; see `ControlVerb::PaneRun`.
+        /// (v117) The caller's preassigned session id; see `ControlCommand::PaneRun`.
         fno_id: Option<String>,
         reply: ControlReply,
     },
@@ -771,7 +766,7 @@ pub(crate) enum CoreMsg {
         pane: u64,
         reply: ControlReply,
     },
-    // -- v41 layout script verbs (all snapshot reads / inline
+    // -- v41 layout script commands (all snapshot reads / inline
     //    mutations, replying on the oneshot). --
     PaneSplit {
         pane: u64,
@@ -845,8 +840,8 @@ pub(crate) enum CoreMsg {
     },
     /// `fno agents attach` with a live mux: reach `name` through
     /// portal `portal` (the TUI reach's twin; see
-    /// [`ControlVerb::ThreadPane`]). `placement` is what a fresh
-    /// open honors; the verb's `portal` index wins over any portal field
+    /// [`ControlCommand::ThreadPane`]). `placement` is what a fresh
+    /// open honors; the command's `portal` index wins over any portal field
     /// inside it.
     ThreadPane {
         name: String,
@@ -856,7 +851,7 @@ pub(crate) enum CoreMsg {
         reply: ControlReply,
     },
     /// (v72) Re-seat a live pane-hosted worker into a portal seat, keeping the
-    /// PTY (see [`ControlVerb::ThreadReseat`]). The server moves the topology;
+    /// PTY (see [`ControlCommand::ThreadReseat`]). The server moves the topology;
     /// the registry `mux` flip is the caller's half, on this receipt.
     ReseatPane {
         pane: u64,
@@ -998,11 +993,11 @@ struct Client {
     /// on every layout push. Grids of unviewed panes are still fed; their
     /// frames never cross this client's wire (AC2-FR).
     visible: HashSet<u64>,
-    /// This client's own content-area (rows, cols) - one input to the
-    /// view-scoped smallest-client clamp (Locked 1).
+    /// This client's own content-area (rows, cols) - one input to the tab's
+    /// window-size pick (Locked 1; see `window_size.rs`).
     dims: (u16, u16),
     /// An observer client (attached with rows==0 && cols==0, e.g. the web
-    /// bridge): excluded from the smallest-client clamp so it never shrinks a
+    /// bridge): excluded from the window-size pick so it never resizes a
     /// PTY, and its `visible` set is EVERY live pane so the browser can pick
     /// any pane without an upstream message (read-only attach). Its
     /// `Resize` is ignored and it never spawns a squad.
@@ -1225,7 +1220,7 @@ fn sanitize_tab_name(raw: &str) -> String {
     sanitize_name(raw, MAX_TAB_NAME)
 }
 
-/// The layout script verbs' tab-name boundary: sanitize control bytes
+/// The layout script commands' tab-name boundary: sanitize control bytes
 /// and cap length exactly like `Command::RenameTab`, then drop an empty result
 /// to `None` (a blank name clears / stays unnamed). Applied by `tab_create`,
 /// `tab_rename`, and `pane_break` so a scripted name can never emit terminal
@@ -1235,7 +1230,7 @@ fn clean_tab_name(raw: Option<String>) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
-/// The location selector grammar for [`ControlVerb::TabWhere`]: the
+/// The location selector grammar for [`ControlCommand::TabWhere`]: the
 /// identifier an operator can read off the screen, in explicit or bare form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocSel {
@@ -1458,11 +1453,8 @@ pub(crate) struct Core {
     /// Monotonic, never reused (Locked Decision 6).
     next_pane_id: u64,
     next_squad_id: u64,
-    /// Each tab's last-applied content area (Locked 1's "no viewers -> keep
-    /// last size"). Written by the geometry pass for every viewed tab; read
-    /// as the fallback when a tab loses its last viewer. Purged when a tab
-    /// dies (ids are never reused, so stale entries would only accumulate).
-    tab_areas: HashMap<TabId, (u16, u16)>,
+    /// Tab content areas and the window-size policy that picks them.
+    sizing: TabSizing,
     /// This server's session name (the socket's file stem): the `Info`
     /// answer, and `FNO_SESSION` in every pane it spawns.
     session_name: String,
@@ -1890,7 +1882,7 @@ pub(crate) fn restore_member_cwd(
     }
 }
 
-// The registry rows the restore verb classifies against: the reader and its
+// The registry rows the restore command classifies against: the reader and its
 // test override live in `restore_gate`, next to the restore refusals.
 use crate::restore_gate::restore_registry_rows;
 
@@ -1971,7 +1963,7 @@ fn live_ids_from(reg_raw: Option<&str>, roster_raw: Option<&str>, now: u64) -> H
 }
 
 /// The live attach-id set read synchronously from the registry + roster files
-/// (the dead-set source for the mux squad prune verb). Free of `Server`
+/// (the dead-set source for the mux squad prune command). Free of `Server`
 /// so the standalone CLI computes the same liveness restore does, isolated
 /// rosters folded in: a worker live in an alt-account roster is live.
 /// `None`-ish semantics are the caller's - this returns the set it could read;
@@ -2032,7 +2024,7 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 /// Resolve the `fno` binary: `$FNO_BIN`, else the running executable itself (the
-/// mux server IS the `fno` binary - it forwards non-native verbs like `dispatch`
+/// mux server IS the `fno` binary - it forwards non-native commands like `dispatch`
 /// to Python), else bare `fno` on PATH.
 pub(crate) fn fno_bin() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_BIN") {
@@ -2053,7 +2045,7 @@ pub(crate) fn first_line_or(s: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// (native since the store port) Drive one reorder verb into the ported
+/// (native since the store port) Drive one reorder command into the ported
 /// graph store. The `fno` shell-out is retired FOR THE WRITE: the server is a
 /// store keeper client now ([`crate::store_client`]), so the write runs through
 /// the same bounded-lock, version-checked, atomically-published pipeline
@@ -2062,16 +2054,18 @@ pub(crate) fn first_line_or(s: &str, fallback: &str) -> String {
 /// that it did. The derived views (graph.md, board targets) are the keeper
 /// render trigger's job: a landed native write bumps the store counter and
 /// the trigger replays the views once, like every other write.
-async fn run_backlog_verb(node: &str, verb: crate::proto::BacklogVerb) -> String {
-    let label = verb.label();
+async fn run_backlog_command(node: &str, command: crate::proto::BacklogCommand) -> String {
+    let label = command.label();
     let graph = backlog_view::graph_path();
     let target = node.to_string();
-    let outcome = tokio::task::spawn_blocking(move || match verb {
-        crate::proto::BacklogVerb::RankTop => crate::store_client::rank_top(&graph, &target),
-        crate::proto::BacklogVerb::Defer => {
+    let outcome = tokio::task::spawn_blocking(move || match command {
+        crate::proto::BacklogCommand::RankTop => crate::store_client::rank_top(&graph, &target),
+        crate::proto::BacklogCommand::Defer => {
             crate::store_client::defer(&graph, &target, crate::proto::DEFER_REASON)
         }
-        crate::proto::BacklogVerb::EndMission => crate::store_client::end_mission(&graph, &target),
+        crate::proto::BacklogCommand::EndMission => {
+            crate::store_client::end_mission(&graph, &target)
+        }
     })
     .await;
     match outcome {
@@ -2126,19 +2120,19 @@ async fn run_agent_peek(name: &str) -> Vec<String> {
     body.lines().map(str::to_string).collect()
 }
 
-/// Shell `claude <verb> <attach_id>` for an external lifecycle action:
+/// Shell `claude <command> <attach_id>` for an external lifecycle action:
 /// `stop` preserves the conversation, `rm` deletes the session + worktree
 /// (Domain Pitfall 2 - they are not interchangeable). Bounded + argv-safe (the
 /// id is 8-hex validated at load, never a shell string). Returns `(ok, reason)`:
 /// the caller's `complete_external` maps `ok` to stopped/removed vs failed.
 async fn run_claude_lifecycle(
-    verb: &'static str,
+    command: &'static str,
     attach_id: &str,
     config_dir: Option<std::path::PathBuf>,
 ) -> (bool, Option<String>) {
     const CLAUDE_TIMEOUT: Duration = Duration::from_secs(20);
     let mut cmd = crate::process_admission::tokio_command("claude");
-    cmd.args([verb, attach_id]);
+    cmd.args([command, attach_id]);
     // Route the lifecycle action at the row's own daemon: an isolated
     // account lives in its own CLAUDE_CONFIG_DIR, so a bare `claude stop|rm`
     // under the default dir would miss it or hit a colliding id (codex P1).
@@ -2151,10 +2145,10 @@ async fn run_claude_lifecycle(
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_status(&mut cmd);
     match tokio::time::timeout(CLAUDE_TIMEOUT, fut).await {
-        Err(_) => (false, Some(format!("{verb} timed out"))),
+        Err(_) => (false, Some(format!("{command} timed out"))),
         Ok(Err(_)) => (false, Some("claude unavailable".to_string())),
         Ok(Ok(status)) if status.success() => (true, None),
-        Ok(Ok(_)) => (false, Some(format!("{verb} failed"))),
+        Ok(Ok(_)) => (false, Some(format!("{command} failed"))),
     }
 }
 
@@ -2292,35 +2286,6 @@ enum ResumeOutcome {
 }
 
 impl Core {
-    /// The view-scoped smallest-client clamp (Locked 1): a tab's content
-    /// area is the elementwise min over the dims of every client currently
-    /// viewing it; with no viewers it keeps its last-applied size, and a tab
-    /// that has never been sized falls back to the VT defaults.
-    fn tab_area(&self, tid: TabId) -> (u16, u16) {
-        let clamp = self
-            .clients
-            .iter()
-            // An observer (passive) client never enters the clamp reduce, so
-            // a phone-sized viewer can never shrink a real client's PTY
-            // (Locked Decision 4 / AC1-EDGE).
-            .filter(|c| c.view.1 == tid && !c.passive)
-            .map(|c| c.dims)
-            .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1)));
-        clamp
-            .or_else(|| self.tab_areas.get(&tid).copied())
-            .unwrap_or((crate::vt::DEFAULT_ROWS, crate::vt::DEFAULT_COLS))
-    }
-
-    fn tab_rect(&self, tid: TabId) -> Rect {
-        let (rows, cols) = self.tab_area(tid);
-        Rect {
-            x: 0,
-            y: 0,
-            rows,
-            cols,
-        }
-    }
-
     /// Spawn a pane's shell in `cwd` (codex P2: a long-lived server serves
     /// squads from MANY repos; inheriting the server process cwd would start
     /// every later squad's shell in the first client's directory). Empty /
@@ -2998,7 +2963,7 @@ impl Core {
         }
     }
 
-    /// List a squad's tabs for [`ControlVerb::TabLs`].
+    /// List a squad's tabs for [`ControlCommand::TabLs`].
     fn tab_ls(&self, squad: &PaneTarget) -> Result<Vec<TabInfo>, (u32, String)> {
         let sid = self.resolve_squad(squad)?;
         let sq = self.session.squad(sid).ok_or((
@@ -3019,7 +2984,7 @@ impl Core {
             .collect())
     }
 
-    /// Create a new tab (born with one shell leaf) for [`ControlVerb::TabCreate`].
+    /// Create a new tab (born with one shell leaf) for [`ControlCommand::TabCreate`].
     /// Returns the new leaf's pane id.
     fn tab_create(
         &mut self,
@@ -3050,7 +3015,7 @@ impl Core {
         Ok(pid)
     }
 
-    /// Rename a tab for [`ControlVerb::TabRename`]. A blank name clears it.
+    /// Rename a tab for [`ControlCommand::TabRename`]. A blank name clears it.
     fn tab_rename(
         &mut self,
         squad: &PaneTarget,
@@ -3104,7 +3069,7 @@ impl Core {
         true
     }
 
-    /// (v65) `ControlVerb::TabReorder`: the `fno mux tab move` door
+    /// (v65) `ControlCommand::TabReorder`: the `fno mux tab move` door
     /// onto the trunk the tab bar uses. Both selectors resolve through the
     /// shared grammar; the destination names a POSITION, so the delta is
     /// computed here and never shipped over the wire.
@@ -3135,7 +3100,7 @@ impl Core {
 
     /// Close one resolved tab after every pre-mutation guard has passed. This
     /// is the single cascade used by both the interactive command and the
-    /// script control verb, so reaping, member cleanup, persistence cleanup,
+    /// script control command, so reaping, member cleanup, persistence cleanup,
     /// template cleanup, and viewer re-anchoring cannot drift.
     fn close_tab_cascade(
         &mut self,
@@ -3176,7 +3141,7 @@ impl Core {
             // surviving topology here.
             self.persist_squad(sid);
         }
-        self.tab_areas.remove(&tid);
+        self.sizing.areas.remove(&tid);
         if matches!(outcome, RemoveOutcome::SessionEmpty) {
             self.template_specs.remove(&tid);
             return Some((tid, pids, outcome));
@@ -3230,7 +3195,7 @@ impl Core {
 
     /// The nested tree + per-pane geometry of one tab (Locked Decision 5).
     /// `agents` (Some) additionally fills the per-pane worker join for the
-    /// control-verb path; `None` keeps the machine shape unchanged.
+    /// control-command path; `None` keeps the machine shape unchanged.
     fn tab_layout(&self, tab: &Tab, agents: Option<&[RegistryAgent]>) -> TabLayout {
         let vp = self.tab_rect(tab.id);
         TabLayout {
@@ -3259,7 +3224,7 @@ impl Core {
         }
     }
 
-    /// Dump a [`LayoutScope`] for [`ControlVerb::LayoutGet`].
+    /// Dump a [`LayoutScope`] for [`ControlCommand::LayoutGet`].
     fn layout_get(
         &self,
         scope: &LayoutScope,
@@ -3296,8 +3261,8 @@ impl Core {
     }
 
     /// Point every attached (non-passive) viewer at `pane`, wherever it lives:
-    /// the [`ControlVerb::PaneFocus`] handler, and the inverse of every other
-    /// `Pane*` verb (those act ON a pane for an agent; this moves the OPERATOR).
+    /// the [`ControlCommand::PaneFocus`] handler, and the inverse of every other
+    /// `Pane*` command (those act ON a pane for an agent; this moves the OPERATOR).
     ///
     /// The actual focus is [`Command::FocusPane`] through [`Core::command`] - the
     /// one trunk the `-> Focus` menu entry and the navigator already end at. That
@@ -3410,7 +3375,7 @@ impl Core {
             // The source tab is gone: clear its cached area and re-anchor any
             // client that was viewing it, exactly as the CloseTab path does -
             // otherwise push_layout would skip that client with a blank view.
-            self.tab_areas.remove(&tid);
+            self.sizing.areas.remove(&tid);
             self.reanchor_views();
         } else {
             self.maybe_reflow(sid, tid);
@@ -3419,7 +3384,7 @@ impl Core {
         // tab, and its old tab may be gone), so refresh the persisted member
         // tab_names for a tracked workspace - else a restart before the next
         // persist restores the member to the old/removed tab. In the shared
-        // helper so the script (ControlVerb) and drag (Command) paths stay
+        // helper so the script (ControlCommand) and drag (Command) paths stay
         // consistent; a no-op for a squad with no recruited members.
         self.persist_squad_if_members(sid);
         self.push_layout(true);
@@ -3470,7 +3435,7 @@ impl Core {
         // re-anchor any client viewing it (the CloseTab contract) so push_layout
         // never leaves that viewer on a dangling tab.
         self.session.remove_tab(sid, src_ti);
-        self.tab_areas.remove(&src_tid);
+        self.sizing.areas.remove(&src_tid);
         self.reanchor_views();
         // The joined tab's members now live in the anchor's tab (their
         // hosting tab changed and the source tab is gone), so refresh the
@@ -3546,7 +3511,7 @@ impl Core {
         };
         if matches!(outcome, tree::DetachOutcome::TabEmptied) {
             self.session.remove_tab(src_sid, src_ti);
-            self.tab_areas.remove(&src_tid);
+            self.sizing.areas.remove(&src_tid);
             self.reanchor_views();
         } else {
             self.maybe_reflow(src_sid, src_tid);
@@ -3579,7 +3544,7 @@ impl Core {
         Ok(())
     }
 
-    /// Resolve an `fno_id` to its live location for [`ControlVerb::PaneWhere`],
+    /// Resolve an `fno_id` to its live location for [`ControlCommand::PaneWhere`],
     /// or one of the three distinct error codes. Never an empty-successful
     /// location (Locked Decision 4). REGISTRY_UNAVAILABLE is the CLI's to emit
     /// (it reads registry.json); the server's cache is always consultable, so
@@ -4063,7 +4028,7 @@ impl Core {
         Ok(tid)
     }
 
-    /// Realize a [`LayoutSpec`] onto a tab for [`ControlVerb::LayoutApply`]
+    /// Realize a [`LayoutSpec`] onto a tab for [`ControlCommand::LayoutApply`]
     ///. Arity + fit are checked pre-mutation (atomic top-level `Err`);
     /// past that, bound panes relocate in place, unbound/shell slots reuse a
     /// spare shell or spawn one, and dropped shells close. A live bound pane is
@@ -4672,17 +4637,17 @@ impl Core {
             self.reap_pane(p);
         }
         self.session.remove_tab(sid, ti);
-        self.tab_areas.remove(&tid);
+        self.sizing.areas.remove(&tid);
         self.reanchor_views();
     }
 
     /// Resolve a [`PaneTarget`] to a squad id, defaulting `CurrentRoute` to the
-    /// active squad, for the tab/layout verbs.
+    /// active squad, for the tab/layout commands.
     ///
     /// The pane-run path passes a DIFFERENT default for the same token: the
     /// squad owning the spawn's cwd (`find_by_cwd`). So `CurrentRoute` means
     /// "where the operator is looking" here and "where the work is" there. That
-    /// divergence is intended - a tab verb typed by hand should act on the
+    /// divergence is intended - a tab command typed by hand should act on the
     /// visible squad - but it means a caller who spawns a pane and then reads
     /// tabs unscoped gets two different squads. Scope such a read with
     /// `--workspace id:<n>` from the pane's own `squad_id` rather than relying
@@ -4756,7 +4721,7 @@ impl Core {
     /// liveness field says (and however stale). The row then reads
     /// LivePaneless - peek, do not resume; resuming would open a second
     /// writer on the live rollout. This join is also what removes the need
-    /// for a pane-to-registry bind verb: the pane's own argv names the
+    /// for a pane-to-registry bind command: the pane's own argv names the
     /// session the registry row carries.
     fn row_resume_disposition_in_session(&self, a: &RegistryAgent) -> RowResumeDisposition {
         if self.pane_resumes_session(a) {
@@ -4990,7 +4955,7 @@ impl Core {
     /// resolves it from `name` exactly as the gesture always did.
     /// `dry_run` walks the same gates and stops where the spawn would
     /// happen, returning [`ResumeOutcome::Planned`] - the load-bearing
-    /// classification behind the restore verb's `--dry-run`.
+    /// classification behind the restore command's `--dry-run`.
     fn resume_one(
         &mut self,
         name: &str,
@@ -5251,7 +5216,7 @@ impl Core {
     /// run to one harness's members. A member with no worker name records no
     /// resumable identity, so it is never a candidate. The same
     /// classifier the startup loop answers to drops the Gone members here,
-    /// so the verb and the startup path can never disagree about who is a
+    /// so the command and the startup path can never disagree about who is a
     /// corpse.
     fn restore_candidates(
         &self,
@@ -6114,7 +6079,7 @@ impl Core {
     /// off-loop 1s reader has populated `self.agents`, so a stale in-memory
     /// catalog would tombstone every member (AC1-HP). One-shot read per server
     /// lifetime, off the steady loop. Delegates to [`live_attach_ids_snapshot`]
-    /// so the mux squad prune verb computes the same liveness.
+    /// so the mux squad prune command computes the same liveness.
     fn live_attach_ids_now(&self) -> HashSet<String> {
         live_attach_ids_snapshot()
     }
@@ -7381,14 +7346,14 @@ impl Core {
         });
     }
 
-    /// Shell one `fno backlog` reorder verb OFF the core loop, mirroring
+    /// Shell one `fno backlog` reorder command OFF the core loop, mirroring
     /// `agent_action`. The notice is the CLI's verdict; the AUTHORITATIVE order
     /// change is the graph reader's next republish, never an optimistic local
-    /// reorder - so a verb that fails loudly leaves the rendered order truthful.
-    fn backlog_verb(&self, id: u64, node: String, verb: crate::proto::BacklogVerb) {
+    /// reorder - so a command that fails loudly leaves the rendered order truthful.
+    fn backlog_command(&self, id: u64, node: String, command: crate::proto::BacklogCommand) {
         let core_tx = self.self_tx.clone();
         tokio::spawn(async move {
-            let notice = run_backlog_verb(&node, verb).await;
+            let notice = run_backlog_command(&node, command).await;
             let _ = core_tx.send(CoreMsg::DispatchResult { id, notice }).await;
         });
     }
@@ -7463,12 +7428,12 @@ impl Core {
     /// the core loop, then durably record the completion under the
     /// captured `generation` (a stale generation is ignored by
     /// `complete_external`) and route the refreshed record set + outcome notice
-    /// back for the render update. `verb` is a fixed literal; `attach_id` was
+    /// back for the render update. `command` is a fixed literal; `attach_id` was
     /// 8-hex validated at load, so it can never be a shell injection.
     fn external_action(
         &self,
         client_id: u64,
-        verb: &'static str,
+        command: &'static str,
         attach_id: String,
         generation: u64,
         action: crate::squad_store::ExternalState,
@@ -7476,7 +7441,7 @@ impl Core {
         let core_tx = self.self_tx.clone();
         let (_acct, config_dir) = self.attach_account_ctx(&attach_id);
         tokio::spawn(async move {
-            let (ok, reason) = run_claude_lifecycle(verb, &attach_id, config_dir).await;
+            let (ok, reason) = run_claude_lifecycle(command, &attach_id, config_dir).await;
             let _ = crate::squad_store::complete_external(
                 &attach_id,
                 generation,
@@ -7485,11 +7450,15 @@ impl Core {
                 reason.clone(),
             );
             let records = crate::squad_store::load().external_lifecycle;
-            let past = if verb == "stop" { "stopped" } else { "removed" };
+            let past = if command == "stop" {
+                "stopped"
+            } else {
+                "removed"
+            };
             let notice = if ok {
                 format!("{past} {attach_id}")
             } else {
-                reason.unwrap_or_else(|| format!("{verb} {attach_id}: failed"))
+                reason.unwrap_or_else(|| format!("{command} {attach_id}: failed"))
             };
             let _ = core_tx
                 .send(CoreMsg::ExternalLifecycleSync {
@@ -7782,7 +7751,7 @@ impl Core {
                 continue;
             };
             let area = self.tab_area(tid);
-            self.tab_areas.insert(tid, area);
+            self.sizing.areas.insert(tid, area);
             let tab = &self.session.squad(sid).expect("find_tab hit").tabs[idx];
             let rects = tree::layout(
                 &tab.root,
@@ -9229,7 +9198,7 @@ impl Core {
                 Flow::Continue
             }
             Command::BreakPane { pane } => {
-                // The interactive twin of ControlVerb::PaneBreak: dispatch into
+                // The interactive twin of ControlCommand::PaneBreak: dispatch into
                 // the SAME pane_break (one tree-mutation site, Locked Decision 2).
                 // pane_break itself never touches a view; the gesture additionally
                 // repoints the ACTING client's focus onto the new tab (Locked
@@ -9250,7 +9219,7 @@ impl Core {
                 anchor_pane,
                 dir,
             } => {
-                // The interactive twin of ControlVerb::TabJoin, into the SAME
+                // The interactive twin of ControlCommand::TabJoin, into the SAME
                 // tab_join. The gesture picked up a concrete rendered cell, so it
                 // names a stable TabId; tab_join resolves a TabSel, so wrap it in
                 // Id. tab_join pushes the layout and re-anchors any viewer of the
@@ -9521,13 +9490,8 @@ impl Core {
                 // pre-v64 client's `thread_pane: true` lands in portal 0,
                 // exactly where it always did.
                 //
-                // The geometry refusal no longer lives here. This
-                // edge cannot see whether index N is occupied - only the slot
-                // lookup in `reach_portal` learns that - so one check here
-                // answered two cases that deserve opposite answers. The
-                // decision moved into the reach: a repoint keeps owning its
-                // geometry (ignored, visibly), a fresh open honors the
-                // caller's placement. This edge only resolves WHICH index.
+                // This edge only resolves WHICH index. Only `reach_portal`
+                // knows if index N is occupied, so it owns the geometry call.
                 if placement.view {
                     // The transient machine view: never a portal, never an
                     // entry in the map, never restored. A side effect's
@@ -10091,7 +10055,7 @@ impl Core {
                 }
                 self.session.squads.remove(pos);
                 for tid in tids {
-                    self.tab_areas.remove(&tid);
+                    self.sizing.areas.remove(&tid);
                 }
                 // The last squad ends the session (Locked Decision 8), exactly
                 // like closing its tabs one at a time.
@@ -10459,7 +10423,7 @@ impl Core {
             Command::ReapAgents => {
                 // Bulk-reap every exited fno-agent registry row. The
                 // requester is already known-interactive (the `mutating_sender`
-                // gate drops a passive client's Command upstream). The reap verb
+                // gate drops a passive client's Command upstream). The reap command
                 // owns the candidate set, so there is no per-row resolution and
                 // zero candidates is a visible successful `reaped 0`. Off-loop +
                 // bounded, mirroring `agent_action`; the registry poll owns the
@@ -10563,18 +10527,18 @@ impl Core {
                 }
                 Flow::Continue
             }
-            Command::BacklogVerb { node, verb } => {
-                // A reorder verb from the Backlog section. Fail closed on
+            Command::BacklogCommand { node, command } => {
+                // A reorder command from the Backlog section. Fail closed on
                 // a node the server's own card set does not hold: a card that
                 // raced out between menu-open and dispatch must launch no
                 // subprocess (the same stale-target stance as the lifecycle
-                // verbs). The argv is fixed by the `verb` enum, so nothing from
+                // commands). The argv is fixed by the `command` enum, so nothing from
                 // the wire composes a command line.
                 if !self.backlog.iter().any(|c| c.id == node) {
                     self.notice(client_id, format!("{node}: no longer in the backlog"));
                     return Flow::Continue;
                 }
-                self.backlog_verb(client_id, node, verb);
+                self.backlog_command(client_id, node, command);
                 Flow::Continue
             }
             Command::CopySelection => {
@@ -10696,6 +10660,25 @@ impl Core {
                 return Flow::Continue;
             }
         }
+        // The window-size policy follows the client that last acted. The peek
+        // refresh timer sends a Command with no human behind it, and a
+        // control-plane id is no client, so neither counts.
+        let acting = match &msg {
+            CoreMsg::Command {
+                cmd: Command::PeekAgent { .. },
+                ..
+            } => None,
+            _ => mutating_sender.filter(|id| self.clients.iter().any(|c| c.id == *id)),
+        };
+        if let Some(id) = acting {
+            // Re-tile only when the new owner changes the sender's tab size:
+            // an owner swap between equal-size windows pushes no Layout.
+            let tab = self.clients.iter().find(|c| c.id == id).map(|c| c.view.1);
+            let before = tab.map(|t| self.tab_area(t));
+            if self.sizing.note_activity(id) && tab.map(|t| self.tab_area(t)) != before {
+                self.push_layout(true);
+            }
+        }
         match msg {
             CoreMsg::Attach {
                 id,
@@ -10707,6 +10690,9 @@ impl Core {
                 dirty,
                 notify,
             } => {
+                if rows != 0 || cols != 0 {
+                    self.sizing.note_activity(id);
+                }
                 self.attach_or_hold(id, rows, cols, cwd, squad_key, reliable_tx, dirty, notify);
                 Flow::Continue
             }
@@ -10727,12 +10713,17 @@ impl Core {
                 // One client's terminal changed size: update ITS dims; the
                 // push recomputes every viewed tab's clamp (Locked 5's
                 // Resize event).
+                let mut resized = false;
                 if let Some(c) = self.clients.iter_mut().find(|c| c.id == id) {
                     // An observer never drives geometry: ignore its (never-sent)
                     // Resize so it cannot enter the clamp (Invariant).
                     if !c.passive {
+                        resized = c.dims != (rows, cols);
                         c.dims = (rows, cols);
                     }
+                }
+                if resized {
+                    self.sizing.note_activity(id);
                 }
                 self.resize_held_attach(id, rows, cols);
                 e2e_log(format_args!("resize client {id} -> {rows}x{cols}"));
@@ -11045,6 +11036,7 @@ impl Core {
                 // socket death take the identical path.
                 e2e_log(format_args!("client {id} gone"));
                 self.drop_held_attach(id);
+                self.sizing.forget(id);
                 self.clients.retain(|c| c.id != id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below
@@ -11055,8 +11047,8 @@ impl Core {
                 self.push_layout(true);
                 Flow::Continue
             }
-            // -- v4 control verbs. Each answers on its oneshot; a dropped
-            // receiver (client vanished mid-verb) makes the send a no-op.
+            // -- v4 control commands. Each answers on its oneshot; a dropped
+            // receiver (client vanished mid-command) makes the send a no-op.
             CoreMsg::PaneLs { agents, reply } => {
                 let _ = reply.send(self.pane_ls_from_fresh_agents(agents.as_deref()));
                 Flow::Continue
@@ -11273,7 +11265,7 @@ impl Core {
                 let _ = reply.send(ServerMsg::Ok);
                 Flow::Continue
             }
-            // -- v41 layout script verbs. All reply inline; none moves
+            // -- v41 layout script commands. All reply inline; none moves
             //    a viewer's focus (a script split's no_focus defaults true). --
             CoreMsg::PaneSplit {
                 pane,
@@ -11790,7 +11782,7 @@ async fn read_guard_agents() -> Option<Vec<RegistryAgent>> {
 /// lane only: same io, but the raw read goes through
 /// [`classify_guard_registry`], so a row-level malformation refuses the send
 /// instead of reading as "no row for that pane". The tolerant twin stays as-is
-/// on purpose - the display verbs render what they can read and must not blank
+/// on purpose - the display commands render what they can read and must not blank
 /// a whole sideline over one bad row.
 async fn read_guard_agents_for_send() -> Result<Vec<RegistryAgent>, &'static str> {
     let now = std::time::SystemTime::now()
@@ -11889,9 +11881,9 @@ fn flat_row(panes: &[u64]) -> Node {
     }
 }
 
-/// A one-shot v4 control connection: version-check, route the verb to the core
+/// A one-shot v4 control connection: version-check, route the command to the core
 /// loop with a oneshot reply, answer with exactly one message, close. A client
-/// that vanishes mid-verb drops the reply receiver, which the off-loop
+/// that vanishes mid-command drops the reply receiver, which the off-loop
 /// `PaneWait` watcher observes (`reply.closed()`) and abandons its watch.
 async fn handle_control(
     mut stream: UnixStream,
@@ -11899,9 +11891,9 @@ async fn handle_control(
     resolver: Arc<Mutex<Resolver>>,
     proto: u32,
     build: String,
-    verb: ControlVerb,
+    command: ControlCommand,
 ) {
-    // Control verbs are versioned (AC4-FR): refuse a skewed connection loudly,
+    // Control commands are versioned (AC4-FR): refuse a skewed connection loudly,
     // naming both versions, unlike the frozen Query/KillServer pair.
     if let Err(reason) = check_attach_version(proto, &build) {
         let _ = write_msg(
@@ -11915,8 +11907,8 @@ async fn handle_control(
         return;
     }
     let (reply_tx, reply_rx) = oneshot::channel();
-    let sent = match verb {
-        ControlVerb::PaneLs => {
+    let sent = match command {
+        ControlCommand::PaneLs => {
             let agents = read_guard_agents().await;
             core_tx
                 .send(CoreMsg::PaneLs {
@@ -11925,7 +11917,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneRead { pane, lines, block } => {
+        ControlCommand::PaneRead { pane, lines, block } => {
             let agents = read_guard_agents().await;
             core_tx
                 .send(CoreMsg::PaneRead {
@@ -11937,7 +11929,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneRun {
+        ControlCommand::PaneRun {
             cwd,
             argv,
             cols,
@@ -11963,7 +11955,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneSend {
+        ControlCommand::PaneSend {
             pane,
             bytes,
             guarded,
@@ -11999,7 +11991,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneWait {
+        ControlCommand::PaneWait {
             pane,
             quiet_ms,
             pattern,
@@ -12035,7 +12027,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneKill { pane, hand_off_to } => {
+        ControlCommand::PaneKill { pane, hand_off_to } => {
             core_tx
                 .send(CoreMsg::PaneKill {
                     pane,
@@ -12044,7 +12036,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneClaim { pane, holder_pid } => {
+        ControlCommand::PaneClaim { pane, holder_pid } => {
             core_tx
                 .send(CoreMsg::PaneClaim {
                     pane,
@@ -12053,7 +12045,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneRelease { pane } => {
+        ControlCommand::PaneRelease { pane } => {
             core_tx
                 .send(CoreMsg::PaneRelease {
                     pane,
@@ -12061,8 +12053,8 @@ async fn handle_control(
                 })
                 .await
         }
-        // -- v41 layout script verbs --
-        ControlVerb::PaneSplit {
+        // -- v41 layout script commands --
+        ControlCommand::PaneSplit {
             pane,
             direction,
             no_focus,
@@ -12076,7 +12068,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabLs { squad } => {
+        ControlCommand::TabLs { squad } => {
             core_tx
                 .send(CoreMsg::TabLs {
                     squad,
@@ -12084,7 +12076,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabCreate { squad, name } => {
+        ControlCommand::TabCreate { squad, name } => {
             core_tx
                 .send(CoreMsg::TabCreate {
                     squad,
@@ -12093,7 +12085,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabRename { squad, tab, name } => {
+        ControlCommand::TabRename { squad, tab, name } => {
             core_tx
                 .send(CoreMsg::TabRename {
                     squad,
@@ -12103,7 +12095,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabReorder { squad, tab, to } => {
+        ControlCommand::TabReorder { squad, tab, to } => {
             core_tx
                 .send(CoreMsg::TabReorder {
                     squad,
@@ -12113,7 +12105,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabClose { squad, tab, force } => {
+        ControlCommand::TabClose { squad, tab, force } => {
             let agents = if force {
                 None
             } else {
@@ -12129,7 +12121,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::LayoutGet { scope, workers } => {
+        ControlCommand::LayoutGet { scope, workers } => {
             let agents = read_guard_agents().await;
             core_tx
                 .send(CoreMsg::LayoutGet {
@@ -12140,7 +12132,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::AgentRowsGet => {
+        ControlCommand::AgentRowsGet => {
             let agents = read_guard_agents().await;
             core_tx
                 .send(CoreMsg::AgentRowsGet {
@@ -12149,7 +12141,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneWhere { fno_id } => {
+        ControlCommand::PaneWhere { fno_id } => {
             let agents = read_guard_agents().await;
             core_tx
                 .send(CoreMsg::PaneWhere {
@@ -12159,7 +12151,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabWhere { squad, sel } => {
+        ControlCommand::TabWhere { squad, sel } => {
             let agents = read_guard_agents().await;
             core_tx
                 .send(CoreMsg::TabWhere {
@@ -12170,7 +12162,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneBreak { pane, name } => {
+        ControlCommand::PaneBreak { pane, name } => {
             core_tx
                 .send(CoreMsg::PaneBreak {
                     pane,
@@ -12179,7 +12171,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::WorkspaceRestore {
+        ControlCommand::WorkspaceRestore {
             dry_run,
             harness,
             member_session,
@@ -12193,8 +12185,8 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::SquadReload => core_tx.send(CoreMsg::SquadReload { reply: reply_tx }).await,
-        ControlVerb::WorkspaceOrigin {
+        ControlCommand::SquadReload => core_tx.send(CoreMsg::SquadReload { reply: reply_tx }).await,
+        ControlCommand::WorkspaceOrigin {
             workspace,
             path,
             remove,
@@ -12208,8 +12200,8 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::ServerStats => core_tx.send(CoreMsg::ServerStats { reply: reply_tx }).await,
-        ControlVerb::Notify { title, body } => {
+        ControlCommand::ServerStats => core_tx.send(CoreMsg::ServerStats { reply: reply_tx }).await,
+        ControlCommand::Notify { title, body } => {
             core_tx
                 .send(CoreMsg::Notify {
                     title,
@@ -12218,7 +12210,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::RetireSession {
+        ControlCommand::RetireSession {
             harness,
             session_id,
         } => {
@@ -12230,7 +12222,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::PaneFocus { pane } => {
+        ControlCommand::PaneFocus { pane } => {
             core_tx
                 .send(CoreMsg::PaneFocus {
                     pane,
@@ -12238,7 +12230,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::ThreadPane {
+        ControlCommand::ThreadPane {
             name,
             portal,
             placement,
@@ -12256,7 +12248,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::ThreadReseat { pane, portal } => {
+        ControlCommand::ThreadReseat { pane, portal } => {
             core_tx
                 .send(CoreMsg::ReseatPane {
                     pane,
@@ -12265,7 +12257,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::TabJoin {
+        ControlCommand::TabJoin {
             src_tab,
             anchor_pane,
             direction,
@@ -12279,7 +12271,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::LayoutApply {
+        ControlCommand::LayoutApply {
             squad,
             tab,
             spec,
@@ -12295,7 +12287,7 @@ async fn handle_control(
                 })
                 .await
         }
-        ControlVerb::LayoutGraft {
+        ControlCommand::LayoutGraft {
             squad,
             anchor,
             spec,
@@ -12318,7 +12310,7 @@ async fn handle_control(
     // Await the reply, but abandon it the moment the client disconnects: the
     // select drops `reply_rx`, and a pending `PaneWait` watcher sees the
     // closed receiver and drops its watch (Failure Modes: disconnect drops
-    // the watch). A one-shot control client sends nothing after its verb, so
+    // the watch). A one-shot control client sends nothing after its command, so
     // the peer-read only ever resolves on EOF.
     tokio::select! {
         reply = reply_rx => {
@@ -12331,7 +12323,7 @@ async fn handle_control(
 }
 
 /// Recover enough of an undecodable `Control` envelope to answer a newer
-/// floor-compatible client instead of closing silently on an unknown verb.
+/// floor-compatible client instead of closing silently on an unknown command.
 fn unknown_control_refusal(value: &serde_json::Value) -> Option<ServerMsg> {
     let control = value.get("Control")?.as_object()?;
     let proto = u32::try_from(control.get("proto")?.as_u64()?).ok()?;
@@ -12342,7 +12334,7 @@ fn unknown_control_refusal(value: &serde_json::Value) -> Option<ServerMsg> {
             msg: reason,
         });
     }
-    let verb = control
+    let command = control
         .get("verb")
         .and_then(serde_json::Value::as_object)
         .and_then(|object| object.keys().next())
@@ -12351,7 +12343,7 @@ fn unknown_control_refusal(value: &serde_json::Value) -> Option<ServerMsg> {
     Some(ServerMsg::Err {
         code: err_code::BAD_REQUEST,
         msg: format!(
-            "unknown control verb {verb:?}; server {} speaks wire v{}",
+            "unknown control command {command:?}; server {} speaks wire v{}",
             crate::proto::BUILD_VERSION,
             crate::proto::PROTO_VERSION
         ),
@@ -12447,8 +12439,12 @@ async fn handle_client(
         // A v4 one-shot control connection (`fno mux pane ...`): versioned
         // like Attach, answered with exactly one reply, then closed. Never
         // registers a client, never splits into reader/writer tasks.
-        ClientMsg::Control { proto, build, verb } => {
-            handle_control(stream, core_tx, resolver, proto, build, verb).await;
+        ClientMsg::Control {
+            proto,
+            build,
+            command,
+        } => {
+            handle_control(stream, core_tx, resolver, proto, build, command).await;
             return;
         }
         // Liveness probes connect and vanish; malformed first messages and

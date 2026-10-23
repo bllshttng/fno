@@ -25,7 +25,7 @@ from fno.rust_binary import resolve_binary
 
 def _gate_binary():
     """THIS checkout's build first: a deployed fno-agents on PATH may predate
-    the verb and answer nothing, which would read as a code defect."""
+    the command and answer nothing, which would read as a code defect."""
     for cand in (
         REPO_ROOT / "crates" / "fno-agents" / "target" / "release" / "fno-agents",
         REPO_ROOT / "target" / "release" / "fno-agents",
@@ -184,7 +184,7 @@ def test_deletions_only_worktree_is_actually_removed(tmp_path: Path, native_back
     assert not repo.exists(), "predicate passed but the worktree is still on disk"
 
 
-def test_helper_fails_closed_when_the_verb_cannot_answer(tmp_path: Path, native_backlog_door) -> None:
+def test_helper_fails_closed_when_the_command_cannot_answer(tmp_path: Path, native_backlog_door) -> None:
     """A gate that cannot answer must never read as permission.
 
     An absence of "no" is not a yes. This drives the helper with a binary

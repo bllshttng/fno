@@ -403,7 +403,7 @@ fn emit_zero_coverage_escape(record: &MergeDriftRecord, events_path: &Path) -> b
         .get("coverage")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    gate_escape_verb(
+    gate_escape_command(
         GATE_ESCAPE_REASON_COVERAGE,
         record.pr_number,
         Some(&record.node_id),
@@ -413,11 +413,11 @@ fn emit_zero_coverage_escape(record: &MergeDriftRecord, events_path: &Path) -> b
     true
 }
 
-/// The shared emit: one `fno doctor event gate-escape` call. The verb, not
+/// The shared emit: one `fno doctor event gate-escape` call. The command, not
 /// this shell, computes the dedup bucket and owns the canonical log +
 /// durable failure-log, so a Rust-emitted and a Python-emitted escape in
 /// the same bucket still collapse to one.
-fn gate_escape_verb(
+fn gate_escape_command(
     reason: &str,
     pr: i64,
     node_id: Option<&str>,
@@ -448,7 +448,7 @@ fn gate_escape_verb(
 /// review bot never reviewed a PR which merged out-of-band. The
 /// zero-coverage escape fires first and short-circuits. A review-fetch
 /// failure fails OPEN (under-report, never a guess), and the fetch/resolve
-/// failure lands in the escape verb's durable failure log via the verb.
+/// failure lands in the escape command's durable failure log via the command.
 pub(crate) fn emit_gate_escape_for_record(
     record: &MergeDriftRecord,
     required_bots: &[String],
@@ -493,7 +493,7 @@ pub(crate) fn emit_gate_escape_for_record(
         v.sort();
         v
     };
-    gate_escape_verb(
+    gate_escape_command(
         GATE_ESCAPE_REASON_DEADBOT,
         record.pr_number,
         Some(&record.node_id),

@@ -41,7 +41,7 @@ We chose the three process-backed binaries in `stress-rust-e2e-concurrency.sh` f
 | `rm_reaps_registry_claude_and_mux_surfaces_in_one_call` | R | Keeper removes registry, Claude, and mux surfaces and records the audit event. |
 | `pinned_daemon_sheds_runtime_pin_before_spawning_an_rm_child` | R | Child observes `FNO_AGENTS_RUNTIME=python` is shed before the `rm` subprocess. |
 | `stop_keeps_non_pane_noop_receipt` | C | Folded into the pane-refusal keeper; preserve the Codex no-op receipt with `no_op=true` and `stopped=true`. |
-| `stop_refuses_a_pane_row_and_names_the_row_ref` | R | Keeper refuses stopping a pane row, names the session/pane and clearing verb, leaves the row live, and preserves the non-pane `no_op=true` and `stopped=true` receipt. |
+| `stop_refuses_a_pane_row_and_names_the_row_ref` | R | Keeper refuses stopping a pane row, names the session/pane and clearing command, leaves the row live, and preserves the non-pane `no_op=true` and `stopped=true` receipt. |
 | `restart_when_down_starts_fresh` | R | Restart with no incumbent creates a live successor and reports `old_pid=None`. |
 | `the_default_wrapper_exports_the_test_binary_owner` | R | The no-override wrapper arms its child on the test-binary owner; distinct from explicit-owner watchdog behavior. |
 | `a_restart_successor_dies_with_its_test_owner` | R | Killing the owner reaps the daemon successor created by the real wrapper path. |

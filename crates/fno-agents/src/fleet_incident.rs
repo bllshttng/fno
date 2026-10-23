@@ -30,7 +30,7 @@
 //! destroy the evidence; the operator removes the file by hand to start a
 //! fresh generation.
 //!
-//! Binary verb `fno-agents fleet-incident stop|clear|status|check|claim`, matched
+//! Binary command `fno-agents fleet-incident stop|clear|status|check|claim`, matched
 //! in `bin/client.rs` next to `test-run` (direct dispatch, no daemon RPC).
 //! The public surface is the thin Python adapter `fno agents incident`,
 //! which relays exit/stdout/stderr and decides nothing.
@@ -52,7 +52,7 @@ pub const SCOPES: &[&str] = &["spawns", "tests", "merges", "loops"];
 /// Their reach was spawns, tests, and loops; merges proceeded.
 pub const LEGACY_HOLDS: &[&str] = &["spawns", "tests", "loops"];
 
-/// Exit codes for the `check` verdict verb, distinct from every dispatch and
+/// Exit codes for the `check` verdict command, distinct from every dispatch and
 /// gate code in use - see the allocation table in
 /// `cli/src/fno/agents/spawn_gate.py` (gate band 75-77, 79, 82-84), plus the
 /// convention codes 2, 13-15, 18-19, 124, 127.

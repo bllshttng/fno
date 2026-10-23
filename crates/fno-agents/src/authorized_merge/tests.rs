@@ -890,7 +890,7 @@ fn the_retest_cap_binds_in_the_legacy_slot_window() {
 
 #[test]
 fn a_proven_or_retested_stale_preview_reads_no_ci_base_stale_blocker() {
-    // Preview parity: the merge verb merges both shapes, so pr status may
+    // Preview parity: the merge command merges both shapes, so pr status may
     // not hold them behind a fold that never runs.
     let proven = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
@@ -1160,7 +1160,7 @@ fn an_immediate_merge_never_passes_auto() {
     assert!(!calls[0].contains(&"--auto".to_string()));
     assert!(calls[0].contains(&"--match-head-commit".to_string()));
     // The owner's record: one merge_landed span for the run, naming the
-    // verb lane and the merged PR.
+    // command lane and the merged PR.
     let spans: Vec<_> = journal
         .rows()
         .into_iter()
@@ -1466,7 +1466,7 @@ fn hold_probe_fails_closed_on_every_non_success() {
 }
 
 #[test]
-fn the_verb_refuses_a_payload_that_names_no_effect() {
+fn the_command_refuses_a_payload_that_names_no_effect() {
     assert!(parse_request(&json!({"cwd": "/tmp"})).is_err());
     assert!(parse_request(&json!({"effect": "arm"})).is_err());
     assert!(parse_request(&json!({"cwd": "/tmp", "effect": "sideways"})).is_err());

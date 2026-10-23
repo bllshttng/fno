@@ -6,7 +6,7 @@
 //! alive/dead. This module restores a screen-read fallback: for each
 //! registry row that is mux-hosted AND hook-less, the daemon reads the pane's
 //! rendered screen through the mux script API (`fno mux pane ls/read --json`,
-//! the same one-shot control verbs scripts use - no mux proto change, no
+//! the same one-shot control commands scripts use - no mux proto change, no
 //! fno-agents<->fno crate dependency in either direction), evaluates the
 //! provider's detection manifest ([`crate::manifest`]) against it, and stores
 //! the verdict as [`state::ScreenStateReport`] on the row.
@@ -263,7 +263,7 @@ fn fno_py_in_tools_dir(base: &std::path::Path) -> Option<std::path::PathBuf> {
     is_executable_file(&script).then_some(script)
 }
 
-/// Exec the Python CLI (`fno_py`) with the verb words leading, stdio
+/// Exec the Python CLI (`fno_py`) with the command words leading, stdio
 /// inherited, exit code returned. Unix execs in place; elsewhere it spawns
 /// and waits. `label` names the caller in the refusal lines. Lifted from
 /// the backlog forward so the mail relay's verbatim forwards share one
@@ -559,9 +559,9 @@ pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked
     }
 }
 
-/// The hidden `fno-agents detect` debug verb (precedent: the hidden `claim`
-/// verb - matched with `matches!` in bin/client.rs, out of CLIENT_VERB_USAGE
-/// and the routable-verb parity guard). `detect explain <agent>` prints which
+/// The hidden `fno-agents detect` debug command (precedent: the hidden `claim`
+/// command - matched with `matches!` in bin/client.rs, out of CLIENT_COMMAND_USAGE
+/// and the routable-command parity guard). `detect explain <agent>` prints which
 /// authority currently badges the agent and, for screen-manifest, the matched
 /// rule + stored verdict + age. Read-only over the registry; no live
 /// re-evaluation in v1.

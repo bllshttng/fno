@@ -1,4 +1,4 @@
-//! The verify verb's user-visible surface: exit codes and the exact message
+//! The verify command's user-visible surface: exit codes and the exact message
 //! text the retired Python verify_cmd printed, pinned against the built
 //! worker binary so the strings cannot drift silently.
 

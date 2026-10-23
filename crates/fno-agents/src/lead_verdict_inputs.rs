@@ -100,7 +100,7 @@ fn window_display(window_secs: i64) -> String {
 #[derive(Debug)]
 pub(crate) struct VerdictInputs {
     pub scope: String,
-    /// The parsed manifest, carried so the verdict verb never re-reads it.
+    /// The parsed manifest, carried so the verdict command never re-reads it.
     pub manifest: crate::loopcheck::LeadManifest,
     pub manifest_path: PathBuf,
     pub harness: String,
@@ -128,7 +128,7 @@ pub(crate) struct VerdictInputs {
 /// refused when it names nothing); else the live registry row for this
 /// session's own identity, requiring a stamped team on a row the
 /// `row_verdict` door has not finished. Shared by the
-/// verdict, checkin and history verbs: the Rust reader tolerates unknown
+/// verdict, checkin and history commands: the Rust reader tolerates unknown
 /// keys, so a registry row carrying a field this binary predates no longer
 /// blinds the team resolution the way the strict Python reader did.
 pub(crate) fn resolve_scope(

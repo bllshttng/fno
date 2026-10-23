@@ -72,9 +72,9 @@ pub struct TmpReport {
 
 impl TmpReport {
     pub fn note(&self, apply: bool) -> String {
-        let verb = if apply { "removed" } else { "would remove" };
+        let command = if apply { "removed" } else { "would remove" };
         format!(
-            "{verb} {} orphaned .claude.json.tmp file(s), kept {} (live pid, fresh, or unparsable)",
+            "{command} {} orphaned .claude.json.tmp file(s), kept {} (live pid, fresh, or unparsable)",
             self.reaped.len(),
             self.kept
         )

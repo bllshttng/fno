@@ -107,10 +107,10 @@ class Rung(Enum):
 
     ``NONE`` and ``IDEA`` stay distinct even though both derive to graph status
     ``idea``: ``NONE`` (nothing on disk) is COLD-DISPATCHABLE - the derived
-    verb authors the plan (low -> ``/target``, medium/high -> ``/blueprint``)
+    command authors the plan (low -> ``/target``, medium/high -> ``/blueprint``)
     - while ``IDEA`` (a linked-but-undesigned decompose scaffold) needs warm
     inline-fill, so it stays gated behind ``--include-ideas``. See
-    :func:`is_cold_dispatchable` and ``harness_map.resolve_effective_verb``.
+    :func:`is_cold_dispatchable` and ``harness_map.resolve_effective_command``.
     """
 
     NONE = "none"  # no usable plan_path - nothing on disk
@@ -139,7 +139,7 @@ _STATUS_TO_RUNG: dict[str, Rung] = {
 }
 
 # Rungs a fresh-context worker may be launched against. Exactly the set
-# `handoff.sh` accepted before it delegated here, so the verb is a drop-in for
+# `handoff.sh` accepted before it delegated here, so the command is a drop-in for
 # its `grep | sed | tr` block rather than a new policy. Rung.NONE is NOT here:
 # a plan-less node has no plan to launch "against". It is instead COLD-dispatched
 # (the worker authors the plan via think -> blueprint) through the separate
@@ -283,7 +283,7 @@ def plan_rung(entry: object) -> Rung:
 
     An unrecognized-but-readable status is ``UNREADABLE``, not its own rung:
     an unknown word is exactly the case ``handoff.sh`` parked on before this
-    verb existed, and folding it here keeps that behavior. The cost is that a
+    command existed, and folding it here keeps that behavior. The cost is that a
     doc written by a NEWER binary (a vocabulary this one has not learned) is
     indistinguishable from a corrupt one. Both park, which is the safe answer
     in either case.
@@ -361,7 +361,7 @@ def is_cold_dispatchable(entry: object) -> bool:
     not ``_DISPATCHABLE`` - is what the four drain selectors OR into their status
     gate. Requires ``status == "idea"`` (so blocked / in_progress / done
     plan-less nodes are excluded) AND ``plan_rung`` is ``NONE`` (so a linked
-    decompose stub, ``Rung.IDEA``, stays excluded). The derived verb authors
+    decompose stub, ``Rung.IDEA``, stays excluded). The derived command authors
     the plan - low dispatches ``/target`` (think -> blueprint -> do);
     medium/high blueprint first - so a plan-less idea is dispatchable
     as-is either way.

@@ -2414,7 +2414,7 @@ fn git_policy_refusal_rows() {
             cwd: std::env::current_dir().unwrap().display().to_string(),
             current: Some("main".into()),
             branches: vec!["main".into()],
-            policy: Err("policy verb failed".into()),
+            policy: Err("policy command failed".into()),
         }];
     }
     v.launcher_catalog = Some(failed);

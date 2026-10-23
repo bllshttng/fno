@@ -19,12 +19,18 @@ struct TestDelta {
 impl TestDelta {
     fn from_diff(diff: &str) -> Self {
         let mut result = Self::default();
-        // The `+++ b/` header of the hunk in flight, so a matcher only sees
-        // its own language: a `# T1` comment in a Python file is prose, a
-        // `test_`-prefixed function in Rust is not a shell declaration.
+        // The file header of the hunk in flight, so a matcher only sees its
+        // own language: a `# T1` comment in a Python file is prose, a
+        // `test_`-prefixed function in Rust is not a shell declaration. A
+        // deleted file's header is `+++ /dev/null`, so its `--- a/` side
+        // names the language, or its removed tests count under the
+        // previous file's extension.
         let mut ext = "";
         for line in diff.lines() {
-            if let Some(path) = line.strip_prefix("+++ b/") {
+            if let Some(path) = line
+                .strip_prefix("--- a/")
+                .or_else(|| line.strip_prefix("+++ b/"))
+            {
                 ext = path.rsplit('.').next().unwrap_or("");
                 continue;
             }
@@ -512,13 +518,17 @@ mod tests {
             "-# T13 (x-f209): FNO_SERVER carries the server axis now\n",
             "+not_a_test() {\n",
             "+prose mentions T3 without a header, never counts\n",
+            // A deleted Python file: only its `--- a/` header names it.
+            "--- a/tests/test_gone.py\n",
+            "+++ /dev/null\n",
+            "-def test_gone_case():\n",
         );
         let delta = TestDelta::from_diff(diff);
         assert_eq!(
             delta.python,
             LanguageDelta {
                 added: 1,
-                removed: 1
+                removed: 2
             }
         );
         assert_eq!(
@@ -540,7 +550,7 @@ mod tests {
         );
         assert!(delta
             .markdown()
-            .contains("| **Total** | **6** | **6** | **+0** |"));
+            .contains("| **Total** | **6** | **7** | **-1** |"));
         // The cap spans all three languages: the ported shell deletions pay
         // for the Rust additions, so a port nets to its true delta.
         assert_eq!(over_cap(&delta, 0), None);

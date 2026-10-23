@@ -101,7 +101,7 @@ impl AdvanceResult {
         }
     }
 
-    /// The board verb's human stdout: the verdict line, then one `advance: `
+    /// The board command's human stdout: the verdict line, then one `advance: `
     /// line per spawn-seam note, so a dropped pin is named where the
     /// dispatch was reported.
     pub fn render(&self) -> Vec<String> {
@@ -120,7 +120,7 @@ impl AdvanceResult {
         lines
     }
 
-    /// The board verb's --json payload; notes ride beside the verdict.
+    /// The board command's --json payload; notes ride beside the verdict.
     pub fn json_receipt(&self) -> Value {
         json!({
             "decision": self.decision,
@@ -540,7 +540,7 @@ pub(crate) fn bounded_command_env(
 }
 
 /// The select-read door: one bounded exec of this binary's `select-read`
-/// verb. The door's own worst case is the select bound (120s default) plus
+/// command. The door's own worst case is the select bound (120s default) plus
 /// the enrich second exec (30s), so the caller waits a bounded 180s.
 pub fn select_read(kind: &str, args: &[String]) -> Result<Value, String> {
     let exe =
@@ -1324,7 +1324,7 @@ pub fn direct_dependents(
             "provider": e.get("provider"),
             "effort": e.get("effort"),
             "difficulty": e.get("difficulty"),
-            "dispatch_verb": e.get("dispatch_verb"),
+            "dispatch_command": e.get("dispatch_command"),
             "cross_project": e.get("project").and_then(Value::as_str).or(None)
                 != closed_project.or(None),
         }));
@@ -1357,7 +1357,7 @@ pub fn project_unblocked(node_ids: &[String]) {
         return;
     }
     // The projection owner is the plan projection pass; native callers reach
-    // it through the client verb so a plan-doc renderer keeps one owner.
+    // it through the client command so a plan-doc renderer keeps one owner.
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
@@ -2150,7 +2150,7 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
         model.as_deref(),
         eff_provider,
         failover_harness.as_deref(),
-        node.get("dispatch_verb").and_then(Value::as_str),
+        node.get("dispatch_command").and_then(Value::as_str),
         brief.text.as_deref(),
         failover_record.as_deref(),
         Some((dispatch_key.as_str(), holder.as_str())),
@@ -2226,7 +2226,7 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
     advance_emit(EVENT_DISPATCHED, dispatched, ev_path);
     if input.verbose {
         eprintln!(
-            "advance: dispatched {node_id} -> target worker {short_id} (verb={} source={} brief={})",
+            "advance: dispatched {node_id} -> target worker {short_id} (command={} source={} brief={})",
             spawn_receipt
                 .get("verb")
                 .and_then(Value::as_str)

@@ -177,7 +177,7 @@ fn store_root(store: &str) -> Option<PathBuf> {
     transcript_tail::transcript_store_root(store)
 }
 
-/// `--flag=value` splits into two args, the same shape the client verbs
+/// `--flag=value` splits into two args, the same shape the client commands
 /// accept before their walks.
 fn expand_eq(rest: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(rest.len() + 2);

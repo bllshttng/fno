@@ -204,7 +204,7 @@ fn agents_history_route_tag_compares_normalized_model_but_resumes_exact_request(
 }
 
 #[test]
-fn agents_history_routed_resume_hints_the_resume_verb() {
+fn agents_history_routed_resume_hints_the_resume_command() {
     let sources = specimen_sources(Some("zai"), "model'variant");
     let lines = card(SID, &sources, None).join("\n");
 

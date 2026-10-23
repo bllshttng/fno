@@ -90,9 +90,9 @@ fn a_focus_report_writes_no_witness_and_a_typed_enter_writes_one() {
     let mut h = ClientHarness::spawn_session(&scratch, "main");
     h.wait_screen(15, |s| !s.trim().is_empty());
 
-    // Focus it now that a client is attached: the focus verb moves the
+    // Focus it now that a client is attached: the focus command moves the
     // attached client's view, and its keystrokes route to this pane after.
-    // The verb refuses before the attach registers, so retry the refusal.
+    // The command refuses before the attach registers, so retry the refusal.
     let mut focused = String::new();
     for _ in 0..20 {
         let focus = pane(&scratch, &["focus", &pane_id.to_string()]);
@@ -105,7 +105,7 @@ fn a_focus_report_writes_no_witness_and_a_typed_enter_writes_one() {
     }
     assert!(
         !focused.is_empty() && !focused.contains("no attached client"),
-        "the focus verb never moved the attached client: {focused}"
+        "the focus command never moved the attached client: {focused}"
     );
     std::thread::sleep(Duration::from_millis(1500));
 

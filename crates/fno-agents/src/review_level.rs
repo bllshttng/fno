@@ -426,7 +426,7 @@ pub struct ReviewLevelArgs {
 
 /// Door argv: `[level] [--provider P] [--root PATH]`. The leaf's own front
 /// door had no `--root` (it used the cwd); the flag exists for the Python
-/// caller that replaces the sizing leg with this verb. Anything else - an
+/// caller that replaces the sizing leg with this command. Anything else - an
 /// unknown flag, a flag missing its value, a second positional - is a usage
 /// error, matching the typer door's exit 2 with empty stdout.
 pub fn parse_args(args: &[String]) -> Result<ReviewLevelArgs, String> {

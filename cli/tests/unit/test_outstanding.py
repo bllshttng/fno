@@ -1,7 +1,7 @@
 """Tests for `fno outstanding` - the operator-facing read of what is piled up.
 
 Two legs, both over stores that already exist: unharvested carve-outs and open
-operator questions. The verb exists because the carve-out ledger reached 39 rows
+operator questions. The command exists because the carve-out ledger reached 39 rows
 over 29 days with nothing ever asking a human to look at it - `consume_carveouts`
 was wired the whole time, but a wire nobody is told to pull is not a surface.
 
@@ -175,7 +175,7 @@ def test_a_plain_ask_is_refused_for_context_and_records_nothing(root: Path):
     assert len(_question_rows(root)) == 0, "the refused ask recorded nothing"
 
 
-def test_carveout_leg_names_the_verb_that_clears_it(root: Path):
+def test_carveout_leg_names_the_command_that_clears_it(root: Path):
     _write_carveouts(root, [_carveout("cv-1", "oos-bug")])
     result = runner.invoke(outstanding_app, [])
     assert result.exit_code == 0
@@ -198,7 +198,7 @@ def _open_fail_row() -> VerdictRow:
     )
 
 
-def test_an_open_fail_verdict_renders_with_node_claim_and_ruling_verb(
+def test_an_open_fail_verdict_renders_with_node_claim_and_ruling_command(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(
@@ -235,7 +235,7 @@ def test_unreadable_ledger_is_a_stated_failure_not_silence(root: Path):
     ledger = root / ".fno" / "carveouts.jsonl"
     ledger.parent.mkdir(parents=True, exist_ok=True)
     # Present but undecodable. read_carveouts raises rather than returning []
-    # for exactly this case; the new verb must not re-introduce the masquerade.
+    # for exactly this case; the new command must not re-introduce the masquerade.
     ledger.write_bytes(b"\xff\xfe not utf-8 at all\n")
 
     result = runner.invoke(outstanding_app, [])
@@ -1239,7 +1239,7 @@ def test_no_asker_gets_a_stated_posture_not_a_silent_drop(monkeypatch: pytest.Mo
     assert not sent
     assert "no asker on record" in line
     assert "d-9f" in line
-    assert "fno backlog decisions" in line, "the posture names the recovery verb"
+    assert "fno backlog decisions" in line, "the posture names the recovery command"
 
 
 def test_ambiguous_asker_is_never_guessed(monkeypatch: pytest.MonkeyPatch):

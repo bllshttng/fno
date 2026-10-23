@@ -286,7 +286,7 @@ def report_machine_blockers(*, echo_fn: Callable[[str], None]) -> list[str]:
 
     The wizard configures PREFERENCES; `fno doctor` knows the MACHINE. Nothing
     connected them, so a new user met every environmental hurdle later as an
-    unattributable mid-loop failure. Composition of two verbs that both exist.
+    unattributable mid-loop failure. Composition of two commands that both exist.
 
     Calls `fno.doctor.build_report()` and `fno.doctor._blockers()` in process
     -- never shells out. A subprocess resolves the DEPLOYED binary on PATH,
@@ -438,7 +438,7 @@ def offer_prompt_provenance(
 
 @app.command("wizard")
 def wizard_cmd() -> None:
-    """Retired: the one setup verb is ``fno config setup run``.
+    """Retired: the one setup command is ``fno config setup run``.
 
     Both layers (global and project) run from one step table there; the
     terminal wizard this command used to drive is deleted. ``--yes`` (or a

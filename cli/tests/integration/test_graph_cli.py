@@ -99,7 +99,7 @@ def _invoke(*args, input=None):
 
 
 def _door_graph(g: Path, *args: str) -> _NativeResult:
-    """The native door against the fixture's store (selection verbs answer
+    """The native door against the fixture's store (selection commands answer
     natively now). Claims stay hermetic via FNO_CLAIMS_ROOT and the roster
     stub answers an empty listing, so the fleet read never leaves the sandbox."""
     from tests.goldens._door import door, roster_stub
@@ -118,28 +118,28 @@ class _NativeResult:
         self.stderr = err
 
 
-def _native_verb(verb: str, *args: str) -> _NativeResult:
+def _native_command(command: str, *args: str) -> _NativeResult:
     """The native backlog door: execs the binary against the same store the
     fixture wired through FNO_CONFIG. The difficulty default rides only the
-    create verbs, where the retired add shim auto-appended it."""
+    create commands, where the retired add shim auto-appended it."""
     from tests._native_door import run_native
 
     argv = list(args)
-    if verb in ("add", "idea") and "--difficulty" not in argv:
+    if command in ("add", "idea") and "--difficulty" not in argv:
         argv.extend(["--difficulty", "medium"])
-    code, out, err = run_native("backlog", verb, *argv)
+    code, out, err = run_native("backlog", command, *argv)
     return _NativeResult(code, out, err)
 
 
-def _native_verb_at(cwd, verb: str, *args: str) -> _NativeResult:
+def _native_command_at(cwd, command: str, *args: str) -> _NativeResult:
     """The same door with a pinned child cwd (config candidates start at
     cwd/.fno, so isolation from the runner's real config needs the pin)."""
     from tests._native_door import run_native
 
     argv = list(args)
-    if verb in ("add", "idea") and "--difficulty" not in argv:
+    if command in ("add", "idea") and "--difficulty" not in argv:
         argv.extend(["--difficulty", "medium"])
-    code, out, err = run_native("backlog", verb, *argv, cwd=cwd)
+    code, out, err = run_native("backlog", command, *argv, cwd=cwd)
     return _NativeResult(code, out, err)
 
 
@@ -256,9 +256,9 @@ def test_ac1_hp_undispatched_external_backend_uses_tracker_join(tmp_graph, monke
     assert any(row["id"] == "x-external-undispatched" for row in data["rows"])
 
 
-def test_wheel_selection_verbs_tombstone_on_the_graph_backend(tmp_graph, monkeypatch):
+def test_wheel_selection_commands_tombstone_on_the_graph_backend(tmp_graph, monkeypatch):
     """The wheel keeps only the external-tracker bodies: on the graph backend
-    both selection verbs refuse, naming the native door (exit 2)."""
+    both selection commands refuse, naming the native door (exit 2)."""
     monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
     seed_graph(tmp_graph, [])
 
@@ -275,14 +275,14 @@ def test_queue_accepts_multiple_ids_space_and_comma_separated(tmp_graph):
     """fno backlog queue ab-X,ab-Y ab-Z queues all three atomically."""
     ids = []
     for title in ("Multi-A", "Multi-B", "Multi-C"):
-        r = _native_verb("add", title)
+        r = _native_command("add", title)
         # raw_decode tolerates trailing stderr (Multi-B/C resemble Multi-A, so the
         # filing-time dedup receipt mixes into r.output via CliRunner).
         ids.append(json.JSONDecoder().raw_decode(r.output)[0]["id"])
     # Mix comma and space separators.
-    r = _native_verb("queue", f"{ids[0]},{ids[1]}", ids[2], "--reason", "batch")
+    r = _native_command("queue", f"{ids[0]},{ids[1]}", ids[2], "--reason", "batch")
     assert r.exit_code == 0, r.output + r.stderr
-    queued_ids = {x["id"] for x in json.loads(_native_verb("queued").output)}
+    queued_ids = {x["id"] for x in json.loads(_native_command("queued").output)}
     assert queued_ids == set(ids)
     # Same reason on all three.
     for tid in ids:
@@ -292,9 +292,9 @@ def test_queue_accepts_multiple_ids_space_and_comma_separated(tmp_graph):
 
 def test_queue_batch_is_atomic_on_unknown_id(tmp_graph):
     """If any ID is unknown, no nodes are queued."""
-    r = _native_verb("add", "Real")
+    r = _native_command("add", "Real")
     real_id = json.loads(r.output)["id"]
-    r = _native_verb("queue", f"{real_id},ab-deadbeef")
+    r = _native_command("queue", f"{real_id},ab-deadbeef")
     assert r.exit_code != 0
     # Real node was NOT queued because the batch aborted.
     data = json.loads(_native_get(real_id))
@@ -312,7 +312,7 @@ def test_done_audit_tags_operator_when_driving(tmp_graph, monkeypatch):
         "emit_operator_initiated",
         lambda action_type, **kw: captured.update(type=action_type, kw=kw),
     )
-    nid = json.loads(_native_verb("add", "DriveDone").output)["id"]
+    nid = json.loads(_native_command("add", "DriveDone").output)["id"]
     _invoke("backlog", "done", nid, "--note", "drive fixture")
     assert captured.get("type") == "backlog_done_operator_initiated"
     assert captured["kw"]["task_id"] == nid
@@ -355,7 +355,7 @@ class _SnapshotFakeTracker:
 # --- rank (curated intra-lane ordering) ---
 
 def _add(title: str, *, project: str, priority: str) -> str:
-    r = _native_verb("add", title, "--project", project, "--priority", priority)
+    r = _native_command("add", title, "--project", project, "--priority", priority)
     assert r.exit_code == 0, r.output
     return json.loads(r.output)["id"]
 
@@ -420,9 +420,9 @@ def test_ac1_hp_graph_archive(tmp_graph):
     """
     from fno.graph.store import commit_rows_via_store, read_archive_entries
 
-    r = _native_verb("add", "ToArchive")
+    r = _native_command("add", "ToArchive")
     node_id = json.loads(r.output)["id"]
-    # Seed completed_at through the store rather than a CLI verb: closing is
+    # Seed completed_at through the store rather than a CLI command: closing is
     # merge-gated now, and archive only cares that the node reads done.
     commit_rows_via_store(tmp_graph, lambda rows: [
         {**row, "completed_at": "2026-01-01T00:00:00+00:00",
@@ -451,12 +451,12 @@ def test_ac1_hp_graph_archive(tmp_graph):
 
 def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
     """Every CLI birth path applies the p0 acknowledgment before mutation."""
-    refused = _native_verb("new", "Not actually broken", "--priority", "p0")
+    refused = _native_command("new", "Not actually broken", "--priority", "p0")
     assert refused.exit_code != 0
     assert "p0 blocks everything else, usually a bug" in refused.output + refused.stderr
     assert _read_graph(tmp_graph) == []
 
-    accepted = _native_verb(
+    accepted = _native_command(
         "new", "Broken service", "--priority", "p0", "--blocks-everything"
     )
     assert accepted.exit_code == 0, accepted.output + accepted.stderr
@@ -483,7 +483,7 @@ def test_priority_migration_on_mutation(tmp_graph):
 
     # Trigger a mutation; commit_rows_via_store runs recompute_statuses
     # which contains the backfill loop.
-    r = _native_verb("add", "Trigger mutation")
+    r = _native_command("add", "Trigger mutation")
     assert r.exit_code == 0, r.output
 
     entries = _read_graph(tmp_graph)
@@ -502,12 +502,12 @@ def test_priority_migration_on_mutation(tmp_graph):
 
 
 # The unpatched transport, captured at collection: the note-evidence stubs
-# below delegate every non-gate verb to it.
-from fno.rust_binary import verb_call as _real_verb_call  # noqa: E402
+# below delegate every non-gate command to it.
+from fno.rust_binary import command_call as _real_command_call  # noqa: E402
 
 
 def _note_node():
-    node_id = json.loads(_native_verb("add", "NoteTarget").output)["id"]
+    node_id = json.loads(_native_command("add", "NoteTarget").output)["id"]
     return node_id
 
 
@@ -515,15 +515,15 @@ def test_note_citing_a_contradicted_line_refuses_before_append(tmp_graph, monkey
     """AC18-ERR: exit 1, nothing appended, nothing mailed."""
     node_id = _note_node()
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kwargs: (
+        "fno.rust_binary.command_call",
+        lambda command, payload, **kwargs: (
             {
                 "ok": False,
                 "kind": "citation",
                 "message": "cli/src/fno/law.py:99999: the file has 250 lines.",
             }
-            if verb == "evidence-gate"
-            else _real_verb_call(verb, payload, **kwargs)
+            if command == "evidence-gate"
+            else _real_command_call(command, payload, **kwargs)
         ),
     )
 
@@ -538,14 +538,14 @@ def test_note_citing_a_contradicted_line_refuses_before_append(tmp_graph, monkey
 
 
 def test_note_with_an_unmeasured_claim_appends_and_warns(tmp_graph, monkeypatch):
-    """AC19-HP: the note verb advises, never refuses a body."""
+    """AC19-HP: the note command advises, never refuses a body."""
     node_id = _note_node()
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kwargs: (
+        "fno.rust_binary.command_call",
+        lambda command, payload, **kwargs: (
             {"ok": True, "rows": None, "claims": ["167 lines"]}
-            if verb == "evidence-gate"
-            else _real_verb_call(verb, payload, **kwargs)
+            if command == "evidence-gate"
+            else _real_command_call(command, payload, **kwargs)
         ),
     )
 
@@ -563,8 +563,8 @@ def test_note_with_a_read_stores_rows_and_prints_no_warning(tmp_graph, monkeypat
     """AC20-HP: executed reads land beside the note they measure."""
     node_id = _note_node()
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kwargs: (
+        "fno.rust_binary.command_call",
+        lambda command, payload, **kwargs: (
             {
                 "ok": True,
                 "rows": [
@@ -573,8 +573,8 @@ def test_note_with_a_read_stores_rows_and_prints_no_warning(tmp_graph, monkeypat
                 ],
                 "claims": None,
             }
-            if verb == "evidence-gate"
-            else _real_verb_call(verb, payload, **kwargs)
+            if command == "evidence-gate"
+            else _real_command_call(command, payload, **kwargs)
         ),
     )
 
@@ -614,15 +614,15 @@ def test_quiet_still_refuses_a_contradicted_citation(tmp_graph, monkeypatch):
     """AC21-EDGE: a silent annotation is still a fact on the node."""
     node_id = _note_node()
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kwargs: (
+        "fno.rust_binary.command_call",
+        lambda command, payload, **kwargs: (
             {
                 "ok": False,
                 "kind": "citation",
                 "message": "cli/src/fno/law.py:99999: the file has 250 lines.",
             }
-            if verb == "evidence-gate"
-            else _real_verb_call(verb, payload, **kwargs)
+            if command == "evidence-gate"
+            else _real_command_call(command, payload, **kwargs)
         ),
     )
 
@@ -658,7 +658,7 @@ def test_done_cascade_closes_all_done_parent_epic(tmp_graph):
          "artifact_url": "https://example.test/artifact"},
     ]
     _seed_graph_text(tmp_graph, json.dumps({"entries": entries}) + "\n")
-    r = _native_verb("done", "ab-clast002")
+    r = _native_command("done", "ab-clast002")
     assert r.exit_code == 0, r.output + r.stderr
     nodes = _by_id(tmp_graph)
     assert nodes["ab-clast002"]["completed_at"]               # child closed
@@ -730,7 +730,7 @@ def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
 
     # cwd pins the child into the tmp dir so its config walk (cwd/.fno first)
     # cannot pick up a runner's real work-map ahead of the fixture's.
-    r = _native_verb_at(
+    r = _native_command_at(
         tmp_path,
         "new", "New unscoped with explicit project",
         "--project", "fno",
@@ -745,15 +745,15 @@ def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
     assert entries[0]["cwd"] == work_root
 
 
-# --- US3: per-node dispatch verb + brief -----------------------------------
+# --- US3: per-node dispatch command + brief -----------------------------------
 
 
 def test_dispatch_fields_default_absent(tmp_graph):
-    """A node with no dispatch overrides carries null verb/brief (built-in path)."""
-    r = _native_verb("add", "Plain node")
+    """A node with no dispatch overrides carries null command/brief (built-in path)."""
+    r = _native_command("add", "Plain node")
     nid = json.loads(r.output)["id"]
     node = next(n for n in _read_graph(tmp_graph) if n["id"] == nid)
-    assert node.get("dispatch_verb") is None
+    assert node.get("dispatch_command") is None
     assert node.get("dispatch_brief") is None
 
 

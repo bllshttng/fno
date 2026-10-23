@@ -28,7 +28,7 @@ check_contains() {
 
 # Sandbox with a stubbed `fno` whose `do target status --json` reports $1 as the
 # manifest-live verdict, and whose `do state archive` moves the file like the real
-# verb. Returns the sandbox dir.
+# command. Returns the sandbox dir.
 make_sandbox() {
     local verdict="$1" dir
     dir="$(mktemp -d)"

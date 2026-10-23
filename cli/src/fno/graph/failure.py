@@ -1,6 +1,6 @@
 """Failure-streak derivation from the walker's events.
 
-Pure, IO-light helpers for the Python verbs that still read a streak (the epic
+Pure, IO-light helpers for the Python commands that still read a streak (the epic
 status view). The streak is DERIVED from the walker's existing events, not a
 new walker write or a persistent counter field.
 

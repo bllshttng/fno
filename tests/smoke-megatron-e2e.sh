@@ -7,7 +7,7 @@
 #
 # The recursion is REAL: the debug fno-agents binary dispatches each project
 # by re-invoking ITSELF with --driver megawalk --cwd <project> --mission <id>
-# --termination-key <key>. Only `fno` (mission verbs + backlog + claims) and
+# --termination-key <key>. Only `fno` (mission commands + backlog + claims) and
 # the driver lib are stubs.
 #
 # Scenarios:

@@ -1,7 +1,7 @@
 //! The merge-gate probes the status read used to shell the Python CLI for,
 //! in process: base lineage and the merge result. The verdict vocabulary is
-//! the verbs' own (`ok|stale|unknown`, exit 0|3|4) so the walk's blockers
-//! read the same either way, and the verbs stay for the operator CLI.
+//! the commands' own (`ok|stale|unknown`, exit 0|3|4) so the walk's blockers
+//! read the same either way, and the commands stay for the operator CLI.
 
 use crate::authorized_merge::{PrFacts, ProbeOutcome};
 use crate::gh_cache;
@@ -112,9 +112,9 @@ const PROBE_FAILED: i64 = -1;
 
 /// `(verdict, reason)` for merging a PR whose declared base is `base_ref`,
 /// the Python `lineage_verdict` in process. `base_ref` rides the facts the
-/// caller already holds, so the base REST read the spawned verb paid for is
+/// caller already holds, so the base REST read the spawned command paid for is
 /// gone. `stale` honors the operator bypass env, recording the same
-/// gate-escape the verb records.
+/// gate-escape the command records.
 pub(crate) fn base_lineage(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeOutcome {
     let (verdict, reason) = lineage(cwd, facts, run);
     match verdict.as_str() {
@@ -419,9 +419,9 @@ fn lineage_decision(
     )
 }
 
-/// Whether `tool` resolves on PATH. The Python verb answered a missing `gh`
+/// Whether `tool` resolves on PATH. The Python command answered a missing `gh`
 /// with exit 127 naming the tool; without this check the probe seam would
-/// answer `None` and the verb would print `unknown` (4) instead - the one
+/// answer `None` and the command would print `unknown` (4) instead - the one
 /// caller-visible contract the probe seam cannot express.
 pub(crate) fn tool_on_path(tool: &str) -> bool {
     std::env::var_os("PATH")
@@ -429,14 +429,14 @@ pub(crate) fn tool_on_path(tool: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `fno-agents pr-base-lineage-check <pr>`: the verb door over `lineage`,
+/// `fno-agents pr-base-lineage-check <pr>`: the command door over `lineage`,
 /// the same verdict `fno do pr merge` obeys. One REST read fills the base
 /// ref (the Python `_base_ref` ask); a miss leaves it empty and `lineage`
 /// answers its own unknown for the unreadable base. Output is the Python
-/// verb's exact format: stdout `base-lineage: ok|bypassed ... - <reason>`
+/// command's exact format: stdout `base-lineage: ok|bypassed ... - <reason>`
 /// at 0, stderr `REFUSED` plus the bypass hint at 3, `unknown` at 4, and a
 /// missing `gh` at 127.
-pub fn run_base_lineage_verb(argv: &[String]) -> i32 {
+pub fn run_base_lineage_command(argv: &[String]) -> i32 {
     const USAGE: &str = "usage: fno-agents pr-base-lineage-check <pr-number>";
     let number = match argv.first().map(String::as_str).map(str::parse::<u64>) {
         Some(Ok(number)) => number,
@@ -506,7 +506,7 @@ pub fn run_base_lineage_verb(argv: &[String]) -> i32 {
 /// The merge-result probe in process: the cheap ancestry answer first (the
 /// head already contains its base, so CI on the head IS the merge result),
 /// then the race-guarded pull-head fetch and the repo-wide script, exactly
-/// the spawned verb's order.
+/// the spawned command's order.
 pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeOutcome {
     let (verdict, reason) = merge_result_verdict(cwd, facts, run);
     match verdict.as_str() {
@@ -516,8 +516,8 @@ pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeO
     }
 }
 
-/// The same walk in the verb's own vocabulary (`ok|red|unknown` plus the
-/// reason the Python verb printed), so the standalone verb and the in-process
+/// The same walk in the command's own vocabulary (`ok|red|unknown` plus the
+/// reason the Python command printed), so the standalone command and the in-process
 /// gate share one implementation.
 pub(crate) fn merge_result_verdict(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
     let base = facts.base_ref.as_str();
@@ -587,8 +587,8 @@ pub(crate) fn merge_result_verdict(cwd: &Path, facts: &PrFacts, run: RunProbe) -
 }
 
 /// The static step: the repo's own `check-merge-result.sh` (merge-tree +
-/// repo-wide ruff + mypy on the merged tree), bounded at the verb's 180s and
-/// resolved against the canonical checkout's `cli/` the way the verb does.
+/// repo-wide ruff + mypy on the merged tree), bounded at the command's 180s and
+/// resolved against the canonical checkout's `cli/` the way the command does.
 fn run_merge_script(top: &str, base_rev: &str, head_oid: &str, cwd: &Path) -> (String, String) {
     let script = PathBuf::from(top)
         .join("scripts")
@@ -657,7 +657,7 @@ pub(crate) fn run_probe(mut cmd: Command) -> Option<Run> {
 
 /// The dispatch-hold probe in process: the PR's bound nodes (branch name,
 /// closure trailer, graph back-references), each walked up the hold ladder,
-/// first positive wins. The spawned verb's fail-closed contract: a graph
+/// first positive wins. The spawned command's fail-closed contract: a graph
 /// read failure is `dispatch-hold-invalid` prose, never an assumed unheld.
 pub(crate) fn dispatch_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
@@ -742,10 +742,10 @@ pub(crate) fn dispatch_hold_rows(root: &Path, facts: &PrFacts, entries: &[Value]
         }
     }
     // The backref key needs a comparable URL; a url-less node bound by bare
-    // PR number is the one shape the keys miss, and the spawned verb found
+    // PR number is the one shape the keys miss, and the spawned command found
     // it. Same repo scope, so a cross-repo same-numbered node stays invisible.
     // Several same-number nodes with no url discriminating them must refuse
-    // to assume unheld; the spawned verb failed closed there too.
+    // to assume unheld; the spawned command failed closed there too.
     let mut bare: Vec<&Value> = Vec::new();
     for e in entries {
         let Some(id) = crate::graph_store::entry_id(e) else {

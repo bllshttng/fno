@@ -144,15 +144,15 @@ def test_newer_schema_write_refuses_when_registry_commit_door_is_unavailable(
     before = path.read_bytes()
     calls: list[tuple[str, dict]] = []
 
-    def unavailable(verb: str, payload: dict, **_kwargs: object) -> dict:
-        calls.append((verb, payload))
-        raise rust_binary.VerbUnavailable("registry-commit is unavailable")
+    def unavailable(command: str, payload: dict, **_kwargs: object) -> dict:
+        calls.append((command, payload))
+        raise rust_binary.CommandUnavailable("registry-commit is unavailable")
 
-    monkeypatch.setattr(rust_binary, "verb_call", unavailable)
+    monkeypatch.setattr(rust_binary, "command_call", unavailable)
     with pytest.raises(reg.RegistryVersionError, match="registry-commit"):
         reg.update_registry(lambda entries: entries, path)
 
-    assert [verb for verb, _payload in calls] == ["registry-commit"]
+    assert [command for command, _payload in calls] == ["registry-commit"]
     assert calls[0][1]["path"] == str(path)
     assert path.read_bytes() == before
 

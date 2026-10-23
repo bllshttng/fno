@@ -125,7 +125,7 @@ def roster_live(short_id: str) -> bool:
     hyphen segment (mirrors ``spawn_gate.census``). Lenient by design: a
     missing, torn, or type-drifted roster returns ``False`` and never raises --
     a strict read once zeroed the whole roster (``procStart`` drift). This is a
-    cheap PRE-check for the control.sock ask fallback; the ``mail-inject`` verb's
+    cheap PRE-check for the control.sock ask fallback; the ``mail-inject`` command's
     own connect is the authoritative liveness gate, so roster PRESENCE (not
     pid-liveness) is enough here."""
     try:

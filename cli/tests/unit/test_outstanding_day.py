@@ -1,6 +1,6 @@
 """Unit tests for the `fno inbox day` relay and the durable boundary row.
 
-The fold and the append live in the native `day` verb. These cover the
+The fold and the append live in the native `day` command. These cover the
 relay's contract (registration, exit-code relay) and a parity guard: the
 Rust-built row shape passes the Python event validator, and a malformed
 kind is refused.

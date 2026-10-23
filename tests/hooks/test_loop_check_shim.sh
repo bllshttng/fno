@@ -192,7 +192,7 @@ log "T2: no fno-agents binary -> one stderr line, exit 0 (AC15-EDGE)"
         fail "T2: expected empty stdout, got: $HOOK_STDOUT"
         t2_ok=false
     fi
-    if ! echo "$HOOK_STDERR" | grep -q "no fno-agents could answer the hook verb"; then
+    if ! echo "$HOOK_STDERR" | grep -q "no fno-agents could answer the hook command"; then
         fail "T2: expected the one stderr line; got: $HOOK_STDERR"
         t2_ok=false
     fi

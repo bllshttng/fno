@@ -7,7 +7,7 @@
 //! `loop_check_question_gate` row with `gate: held_on_question`, and the
 //! second fire (the same question still open) terminates `HeldOnQuestion`
 //! with a digest naming the user-side clear. Only the user closes the
-//! question, so neither text names the decide verb. The held state is the
+//! question, so neither text names the decide command. The held state is the
 //! journal itself, never the fingerprint.
 
 use serde_json::Value;
@@ -39,7 +39,7 @@ pub(crate) struct UnrecordedDecision {
 /// Fold the question/decision family across a UNION of journals.
 ///
 /// A question can be asked and closed in one journal while the decision lands
-/// in another (the operator verbs write to the canonical root's journal; a
+/// in another (the operator commands write to the canonical root's journal; a
 /// worktree stop gate reads its own cwd's), so membership is only decidable
 /// after every journal is folded - checking per-file would hold a session
 /// whose record sits one path away.
@@ -294,7 +294,7 @@ pub(crate) enum QuestionGateStop {
 /// The stop gate's question family, in order: a decided question left
 /// without a decision record blocks (step 3b), then a node held on an open
 /// question blocks once and terminates on the second fire (step 3c). The
-/// journals fold as a UNION (operator verbs write to the canonical root's
+/// journals fold as a UNION (operator commands write to the canonical root's
 /// journal; a worktree stop gate reads its own cwd's), and the gate's own
 /// loop_check_question_gate/termination rows land through `emit`, so the
 /// held state the second fire reads is the journal itself, never the

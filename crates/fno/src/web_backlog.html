@@ -9,7 +9,7 @@
   free text any session writes, so every node string lands through
   textContent: no HTML is ever built from data. When the serving bridge
   stamps the body element writable, the panel adds act controls that POST
-  the same verbs the agents run (the write_guard gates them server-side);
+  the same commands the agents run (the write_guard gates them server-side);
   on a read-only bridge the page runs nothing and shows each session's
   attach or resume command to copy.
 -->
@@ -1621,7 +1621,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     p.set("id", id);
     return p.toString();
   }
-  // One backlog act: POST the JSON body, then show the verb's own last
+  // One backlog act: POST the JSON body, then show the command's own last
   // line (or the refusal body). Every act control disables for the flight;
   // on a landed write the board and the open node re-read. The answer
   // outlives that re-read: openNode re-renders the panel and would wipe the

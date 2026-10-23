@@ -2,18 +2,18 @@
 //!
 //! When a positional target carries `@`, the invocation is cross-host:
 //! `agents mail send <name>@<host> ...` and `agents peek <handle>@<host>
-//! ...` exec the sibling `fno-agents mail-remote` verb. A `mail send` target
+//! ...` exec the sibling `fno-agents mail-remote` command. A `mail send` target
 //! that is a plain name is claimed too: the relay resolves it (local live-row
 //! check first, then the shared store's name-to-host binding) and forwards
-//! byte-verbatim when nothing binds, so the local verb's ladder, holds, and
+//! byte-verbatim when nothing binds, so the local command's ladder, holds, and
 //! refusal voice stay the only path for a name it knows. `org promote` with
-//! an `@host` target execs the sibling `org-remote` verb, the cross-machine
-//! hand-off. Every other argv forwards byte-verbatim, so the Python verbs
+//! an `@host` target execs the sibling `org-remote` command, the cross-machine
+//! hand-off. Every other argv forwards byte-verbatim, so the Python commands
 //! change nothing.
 
 use std::ffi::OsString;
 
-/// The full argv, `agents` leading. The claimed tail runs from the verb
+/// The full argv, `agents` leading. The claimed tail runs from the command
 /// onward (`send|peek` first), the shape `mail_remote::run` routes on;
 /// `None` forwards byte-verbatim.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
@@ -23,7 +23,7 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     // The relay's own same-host forward (the twin const lives in
     // mail_remote.rs): claiming it again recursed every send until the
     // machine ran out of processes. Clear it so a daemon or session the
-    // local verb starts never inherits the bypass.
+    // local command starts never inherits the bypass.
     if std::env::var_os("FNO_MAIL_LOCAL_FORWARD").is_some() {
         std::env::remove_var("FNO_MAIL_LOCAL_FORWARD");
         return None;
@@ -91,14 +91,14 @@ pub fn is_plain_name_target(token: &str) -> bool {
 }
 
 /// The cross-machine hand-off claim: `agents org promote <name>@<host> ...`
-/// execs the sibling `org-remote` verb (the same relay pattern as mail).
-/// Targets without `@` forward to the local verb, today's behavior.
+/// execs the sibling `org-remote` command (the same relay pattern as mail).
+/// Targets without `@` forward to the local command, today's behavior.
 pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
     }
     // The ssh hop's remote leg lands here too: `agents org-remote
-    // record-succession ...` execs the sibling verb directly.
+    // record-succession ...` execs the sibling command directly.
     if args.get(1)?.to_str()? == "org-remote" {
         return Some(args[2..].to_vec());
     }
@@ -109,7 +109,7 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
     if !target.contains('@') {
         return None;
     }
-    // The tail keeps the verb: org_remote::run routes on it.
+    // The tail keeps the command: org_remote::run routes on it.
     Some(args[2..].to_vec())
 }
 
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn classify_claims_only_at_host_targets() {
         // A mail send with an @host target is claimed; the tail runs from
-        // the verb onward, the shape mail_remote::run routes on.
+        // the command onward, the shape mail_remote::run routes on.
         let argv = classify(&os(&["agents", "mail", "send", "nemo@mbp3", "hello"]))
             .expect("@host send is claimed");
         assert_eq!(argv, os(&["send", "nemo@mbp3", "hello"]));
@@ -135,7 +135,7 @@ mod tests {
         // Bare targets forward byte-verbatim.
         assert!(classify(&os(&["agents", "mail", "send", "nemo", "hello"])).is_some());
         assert!(classify(&os(&["agents", "peek", "nemo"])).is_none());
-        // Other agents verbs and other mail subcommands forward.
+        // Other agents commands and other mail subcommands forward.
         assert!(classify(&os(&["agents", "claim", "status"])).is_none());
         assert!(classify(&os(&["agents", "mail", "list"])).is_none());
         // A plain-name send is claimed; a session-shaped target is not.
@@ -152,7 +152,7 @@ mod tests {
         ]))
         .is_none());
         // The org claim fires only for promote with an @host target, and
-        // carries the tail WITHOUT the group word (the verb routes on
+        // carries the tail WITHOUT the group word (the command routes on
         // `promote` first). The ssh hop's remote leg execs `agents
         // org-remote ...` directly.
         let argv = classify_org(&os(&[

@@ -257,7 +257,7 @@ pub(crate) fn acquire_lock(path: &Path) -> Option<std::fs::File> {
 
 /// Non-blocking variant: `None` = someone else holds it, try again later.
 /// The upgrade transaction takes this so a busy lock reads lock-busy instead
-/// of parking the restart verb behind another transaction.
+/// of parking the restart command behind another transaction.
 pub(crate) fn try_acquire_lock(path: &Path) -> Option<std::fs::File> {
     lock_with(path, libc::LOCK_EX | libc::LOCK_NB)
 }

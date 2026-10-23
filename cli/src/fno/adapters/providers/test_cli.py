@@ -101,7 +101,7 @@ class TestListEmpty:
         result = _invoke(["list"], cwd=tmp_path, home=tmp_path)
         assert result.exit_code == 0
         assert "No accounts configured" in result.output
-        # The remedy it names must be a verb that still exists (AC5 removed
+        # The remedy it names must be a command that still exists (AC5 removed
         # `fno providers`), or the empty state teaches a command that exits 2.
         assert "fno config accounts add" in result.output
 
@@ -345,57 +345,6 @@ class TestListDisarmedFooter:
 # ---------------------------------------------------------------------------
 # Show
 # ---------------------------------------------------------------------------
-
-class TestShow:
-    def test_show_existing_prints_fields(self, tmp_path: Path):
-        """fno providers show <id> prints all fields for the record."""
-        settings_path = tmp_path / ".fno" / "config.toml"
-        _write_settings(settings_path, _two_record_config())
-        result = _invoke(["show", "claude-primary"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code == 0
-        assert "claude-primary" in result.output
-        assert "claude" in result.output   # cli value
-        assert "oauth_dir" in result.output  # auth value
-
-    def test_show_nonexistent_exits_nonzero(self, tmp_path: Path):
-        """fno providers show nonexistent exits 1 with stderr message."""
-        result = _invoke(["show", "nonexistent"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code != 0
-
-    def test_show_print_binding_is_secret_free(self, tmp_path: Path):
-        """--print-binding is the machine projection the Rust re-entry
-        resolver consumes: identity, lane, config dir - never the record's
-        env or credentials."""
-        cfg_dir = tmp_path / ".claude-alt"
-        cfg_dir.mkdir()
-        (cfg_dir / ".credentials.json").write_text("{}", encoding="utf-8")
-        config = _two_record_config()
-        config["config"]["providers"]["records"].append(
-            {
-                "id": "alt",
-                "name": "Alt",
-                "harness": "claude",
-                "auth": "api_key",
-                "env": {"ANTHROPIC_API_KEY": "super-secret-key"},
-                "config_dir": str(cfg_dir),
-                "priority": 30,
-            }
-        )
-        settings_path = tmp_path / ".fno" / "config.toml"
-        _write_settings(settings_path, config)
-        result = _invoke(["show", "alt", "--print-binding"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code == 0
-        assert "ACCOUNT_ID=alt" in result.output
-        assert "LANE=config-dir" in result.output
-        assert f"CLAUDE_CONFIG_DIR={cfg_dir}" in result.output
-        # The projection never carries the record's credential env.
-        assert "super-secret-key" not in result.output
-
-    def test_show_print_binding_unknown_account_exits_nonzero(self, tmp_path: Path):
-        result = _invoke(
-            ["show", "ghost", "--print-binding"], cwd=tmp_path, home=tmp_path
-        )
-        assert result.exit_code != 0
 
 
 # ---------------------------------------------------------------------------
@@ -1180,7 +1129,7 @@ class TestCombosListActiveField:
 
 
 # ---------------------------------------------------------------------------
-# x-84d7 task 1.1: atomic `combos update` verb (kills the remove+add hazard)
+# x-84d7 task 1.1: atomic `combos update` command (kills the remove+add hazard)
 # ---------------------------------------------------------------------------
 
 class TestCombosUpdate:
@@ -1792,7 +1741,7 @@ class TestPickOptInAndOverlay:
 
 
 class TestReconcileSlot:
-    """`doctor` could report a tainted slot but never repair one, and no verb
+    """`doctor` could report a tainted slot but never repair one, and no command
     could. The repair is deliberately not a blind `clear-taint`: it acts only on
     proven identity, so its refusals are as load-bearing as its successes."""
 
@@ -2332,7 +2281,7 @@ class TestUsageRefreshContract:
         assert payload["readyrule"] == {"state": "unknown", "reason": "not-probed"}
 
 
-class TestWindowVerb:
+class TestWindowCommand:
     """AC3 at the CLI boundary: a projection, and an honest unknown."""
 
     def test_ac3_edge_a_probeless_record_prints_unknown_and_keeps_the_key(

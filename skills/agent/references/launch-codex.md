@@ -35,7 +35,7 @@ On spawn, `-Y` maps to codex `--dangerously-bypass-approvals-and-sandbox`. On th
 
 ## Known refusals
 
-- The footnote plugin is `missing` or `wrong-channel` in the codex home. Spawn refuses a verb-shaped seed. Run `fno config plugin install codex`, then launch again.
+- The footnote plugin is `missing` or `wrong-channel` in the codex home. Spawn refuses a command-shaped seed. Run `fno config plugin install codex`, then launch again.
 - `--permission-mode` on a thread or headless spawn. Use `-Y`, or run the native line in a pane.
 - `--agent` is rejected. codex reaches sub-agents through its own project agents.
 

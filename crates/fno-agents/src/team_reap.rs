@@ -1,7 +1,7 @@
 //! The dead-team sweep: a manifest-only team whose holder session is
 //! proven dead leaves its territory. The org (`org_vacancies`) DETECTS
 //! these teams; this module is the REMEDY, run by the daemon retire arm and
-//! the manual `fno agents reap` verb. A vacate hands territory back, so it
+//! the manual `fno agents reap` command. A vacate hands territory back, so it
 //! refuses over guessing: holder death and territory emptiness are both
 //! re-checked under the manifest flock and the registry lock before anything
 //! is removed.
@@ -442,7 +442,7 @@ fn inheritor_for(
 
 /// Production transcript-age seam: seconds since the session's claude
 /// transcript was last written. `None` is "no transcript", never "fresh".
-/// Public: the `fno-agents` bin client's `reap` verb runs the sweep with it.
+/// Public: the `fno-agents` bin client's `reap` command runs the sweep with it.
 pub fn transcript_age_now(session: &str) -> Option<i64> {
     let path = crate::claude_drive::find_transcript(session)?;
     let modified = fs::metadata(path).ok()?.modified().ok()?;
@@ -452,7 +452,7 @@ pub fn transcript_age_now(session: &str) -> Option<i64> {
         .map(|d| d.as_secs() as i64)
 }
 
-/// The daemon arm and manual verb entry: resolve the spaces root, registry
+/// The daemon arm and manual command entry: resolve the spaces root, registry
 /// and events paths from `home`, the window from `cwd`'s config.
 pub fn production_sweep(home: &crate::paths::AgentsHome, cwd: &Path, apply: bool) -> TeamReap {
     let events = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");

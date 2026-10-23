@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# confirm-decision.sh - deterministic confirm-posture decision for /fno:agent (spawn verb).
+# confirm-decision.sh - deterministic confirm-posture decision for /fno:agent (spawn command).
 #
 # The agents SKILL derives whether to show the billed-launch confirm prompt
 # from normalize.sh's emitted fields plus the config knob `config.agents.confirm`.

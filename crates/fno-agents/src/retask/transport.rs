@@ -104,11 +104,11 @@ pub fn run_payload() -> i32 {
         Some(path) if !path.is_empty() => PathBuf::from(path),
         _ => crate::paths::AgentsHome::from_env().registry_json(),
     };
-    let rows = match crate::client_verbs::load_registry_entries(&registry_path) {
+    let rows = match crate::client_commands::load_registry_entries(&registry_path) {
         Ok(rows) => rows,
         Err(message) => return fail(format!("registry read failed: {message}")),
     };
-    let row_value = match crate::client_verbs::find_agent_entry(&rows, &worker) {
+    let row_value = match crate::client_commands::find_agent_entry(&rows, &worker) {
         Ok(row) => row.clone(),
         Err(error) => return fail(format!("cannot resolve worker {worker:?}: {error:?}")),
     };

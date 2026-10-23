@@ -22,8 +22,8 @@ Every receipt names its writer. `removed_by` carries the SURFACE that took the r
 |---|---|---|
 | The scheduled retirement sweep and `fno-agents reap --apply` | `gc-sweep` | `unattended` |
 | The roster sweep for harness rows no fno row names | `roster-reap` | `unattended` |
-| The registry choke point (`update_registry` reached by `rm` and every save that drops rows), Rust leg | the bounded argv verb (`state::invocation_verb()`) | `unattended` when the daemon binary invoked it, `session` otherwise |
-| The same choke point, Python leg (`fno.agents.registry`) | the bounded argv verb, overridden by the remover the spawn-axes ask carries | `session`, stamped by the shared builder |
+| The registry choke point (`update_registry` reached by `rm` and every save that drops rows), Rust leg | the bounded argv command (`state::invocation_command()`) | `unattended` when the daemon binary invoked it, `session` otherwise |
+| The same choke point, Python leg (`fno.agents.registry`) | the bounded argv command, overridden by the remover the spawn-axes ask carries | `session`, stamped by the shared builder |
 
 A receipt with an empty `removed_by` predates the required field. It ages out on the 7-day retention clock. The merge reaper (`merge-reaper`) is part of the writer vocabulary. Today it emits events only, and its cleanup writes no receipt yet. When its cleanup grows a receipt, the `Writer` enum already names it. `reap --verify` audits `gc-sweep` and empty-stamp receipts. Every other stamp skips as a removal receipt, which carries no effect records by contract.
 

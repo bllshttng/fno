@@ -3,7 +3,7 @@
 //! With a shared primary set, the daemon pulls the pending `fno_mail_bus`
 //! rows addressed to this host in seq order and hands each payload to the
 //! receiver's own local send, so lane selection, holds, and receipts stay
-//! the local verb's. Two maintenance legs ride the same beat: the flush
+//! the local command's. Two maintenance legs ride the same beat: the flush
 //! that drains the sender's local outbox once the primary answers again
 //! (edge 7), and the expire that flips rows past their TTL (edge 2). With
 //! no primary set, the beat returns at once and opens no socket.

@@ -203,7 +203,7 @@ fn built_in_subagents(provider: &str) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------------
-// Pane liveness: one seam crossing, through the pane owner's own verb
+// Pane liveness: one seam crossing, through the pane owner's own command
 // ---------------------------------------------------------------------------
 
 /// Exact pane liveness for a registry row's mux ref: `Ok(true/false)` decided,
@@ -1082,7 +1082,7 @@ pub(crate) fn check_account_quota_lock(
 /// The auth wall beside the quota lock: a spawn naming an account whose
 /// config dir cannot log in is refused before launch, so the node is not
 /// counted as dispatched while nobody works on it. Claude-only: codex and
-/// opencode status verbs read local state and cannot see a server-side
+/// opencode status commands read local state and cannot see a server-side
 /// expiry, so a probe built on them could only ever say yes. The rules and
 /// their order live in [`check_account_login_with`]; this wrapper binds the
 /// production reader and probe so tests can inject both.
@@ -1094,7 +1094,7 @@ pub(crate) fn check_account_login(
     check_account_login_with(
         route_provider,
         account,
-        crate::reentry::shell_account_binding,
+        crate::reentry::account_binding,
         crate::claude_login::probe_config_dir,
         crate::claude_login::record_verdict_ambient,
         warnings,

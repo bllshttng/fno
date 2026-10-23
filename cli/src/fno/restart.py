@@ -3,7 +3,7 @@
 `fno doctor update && fno agents restart` is the reboot loop: `update` installs new binaries,
 `restart` swaps the RUNNING processes onto them.
 
-The verb itself lives in the Rust `fno-agents restart`; this module is a pass-through
+The command itself lives in the Rust `fno-agents restart`; this module is a pass-through
 that execs it, so the flag spellings and the receipt cannot drift between the doors.
 """
 

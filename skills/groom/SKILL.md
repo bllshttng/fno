@@ -28,7 +28,7 @@ Work it with the levers below; anything it proposes that you cannot decide from 
 
 ## The levers (allowlist - nothing else)
 
-You may use ONLY these verbs.
+You may use ONLY these commands.
 Each is reversible or additive, which is what makes an unattended daily pass safe.
 
 | Lever | Use it for |
@@ -111,7 +111,7 @@ A row with `source_kind: external_request` holds visitor text from the public bo
 ## Boundaries
 
 - **Empty delta day** - nothing changed since the last pass: report "no action", exit 0.
-- **Dies mid-run** - every lever is an atomic CLI verb, so a partial run leaves only completed mutations, each with its receipt. Report what completed; do not attempt to unwind.
+- **Dies mid-run** - every lever is an atomic CLI command, so a partial run leaves only completed mutations, each with its receipt. Report what completed; do not attempt to unwind.
 - **Second run same day** - `fno backlog groom` dedups on a daily claim, so this should not happen. If you were invoked anyway, check the day's report was already sent before acting.
 
 ## Known Limitations and Deferred Work
