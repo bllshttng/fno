@@ -20,14 +20,21 @@ use super::*;
 /// across every OTHER portal. Copies of this comparison drifting apart is
 /// how a duplicate viewer gets minted.
 pub(super) fn row_matches_portal_key(row: &RegistryAgent, key: &str, portal_key: &str) -> bool {
-    portal_key == key || row.attach_id.as_deref() == Some(portal_key) || portal_key == row.name
+    portal_key == key
+        || row.attach_id.as_deref() == Some(portal_key)
+        || portal_key == row.name
+        || super::agent_harness_session_id(row) == Some(portal_key)
 }
 
 /// The live-paneless-row match, shared by every door: the reach's
 /// resolution, the control door's ambiguity check, and the held-seat
 /// focus fill must agree on who answers a key.
 pub(super) fn row_answers_key(a: &RegistryAgent, key: &str) -> bool {
-    a.mux.is_none() && !a.exited && (a.attach_id.as_deref() == Some(key) || a.name == key)
+    a.mux.is_none()
+        && !a.exited
+        && (a.attach_id.as_deref() == Some(key)
+            || super::agent_harness_session_id(a) == Some(key)
+            || a.name == key)
 }
 
 /// The session a claude viewer's OSC title names: the title minus one

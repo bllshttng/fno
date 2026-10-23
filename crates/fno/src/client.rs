@@ -6378,7 +6378,13 @@ fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
             // The default gesture names portal 0, which is exactly
             // where the single thread pane always landed. `P` opens the next
             // free portal beside it; nothing about this path changed.
-            let id = a.attach_id.clone().unwrap_or_else(|| a.name.clone());
+            // A picked row sends its unique key; a bare name is a typed
+            // door's key, and two live rows can share one.
+            let id = a
+                .attach_id
+                .clone()
+                .or_else(|| a.harness_session_id.clone())
+                .unwrap_or_else(|| a.name.clone());
             ChromeHit::Cmds(vec![Command::AttachAgent {
                 id,
                 placement: PanePlacement {

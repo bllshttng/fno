@@ -893,6 +893,38 @@ fn thread_pane_ctl_rows() {
 }
 
 #[test]
+fn sideline_reach_by_session_id_lands_on_the_picked_namesake() {
+    // Two live paneless rows share a name; the sideline sends the picked
+    // row's session id, so the reach lands on it instead of refusing.
+    set_peek_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let mut first = bg_row("fnh", "/tmp/seen", None);
+    first.harness = Some("codex".into());
+    first.harness_session_id = Some("sess-aaaa".into());
+    let mut second = bg_row("fnh", "/tmp/seen", None);
+    second.harness = Some("codex".into());
+    second.harness_session_id = Some("sess-bbbb".into());
+    core.agents = vec![first, second];
+
+    core.command(client_id, thread_reach_cmd("sess-bbbb"));
+    let notices = drain_notices(&mut rx);
+    assert!(
+        !notices.iter().any(|t| t.contains("more than one row")),
+        "a unique key never refuses: {notices:?}"
+    );
+    assert_eq!(core.portals.len(), 1, "the reach opened the picked row");
+    assert_eq!(core.portals[&0].row_key, "sess-bbbb");
+
+    core.command(client_id, thread_reach_cmd("fnh"));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("more than one row")),
+        "a typed bare name still refuses"
+    );
+}
+
+#[test]
 fn thread_pane_tier_rows() {
     // A paneless codex row (Follow) tails its transcript; a gemini row
     // (Locate) renders the self-teaching screen. Both reach by NAME -
