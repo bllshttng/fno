@@ -4,7 +4,7 @@
 ``gh pr merge`` or the web button mints nothing, so its worktree waited on
 the 6h sweep instead of the 30-minute grace. The tick is the detector that
 sees the merged arm, so it mints through the native ``pr-watch
-merge-cleanup-mint`` verb, gated once per merge by a journal check. The test
+merge-cleanup-mint`` command, gated once per merge by a journal check. The test
 pins the default mint's gates: a standing request, a checkout with no .git,
 no checkout, and an open PR each hold the mint.
 """
@@ -73,11 +73,11 @@ class TestDefaultEnsureMergeCleanup:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        def fake_mint(verb, payload, timeout=None):
-            assert verb == ["pr-watch", "merge-cleanup-mint"], verb
+        def fake_mint(command, payload, timeout=None):
+            assert command == ["pr-watch", "merge-cleanup-mint"], command
             minted.append(payload)
 
-        monkeypatch.setattr("fno.rust_binary.verb_call", fake_mint)
+        monkeypatch.setattr("fno.rust_binary.command_call", fake_mint)
         return journal
 
     def test_every_closed_gate_holds_the_mint(self, tmp_path, monkeypatch):

@@ -4,7 +4,7 @@ The defect this closes is a write that succeeds while the communication fails
 and nothing reports it. So the tests that matter assert a POSITIVE receipt:
 every bound reader class produces a named line, nobody-bound REFUSES before
 the append with every arm reading, and a run where no send confirms costs the
-verb its exit code, because a silent success is indistinguishable from
+command its exit code, because a silent success is indistinguishable from
 delivery from where the author stands.
 
 Every prover is injected or patched. `claim_status` walks a real lockfile tree
@@ -272,7 +272,7 @@ def test_an_unreadable_registry_refuses_before_the_append(tmp_path, monkeypatch)
     )
 
 
-def test_an_unknown_node_refuses_with_the_verb_text(tmp_path) -> None:
+def test_an_unknown_node_refuses_with_the_command_text(tmp_path) -> None:
     got = readers_before_append("x-ffff", _graph(tmp_path, [{"id": "x-0d08"}]))
     assert isinstance(got, Refused)
     assert got.message == "Error: no node resolves to 'x-ffff'"
@@ -280,7 +280,7 @@ def test_an_unknown_node_refuses_with_the_verb_text(tmp_path) -> None:
 
 
 def test_a_wedged_send_is_bounded_and_reported_unconfirmed(monkeypatch) -> None:
-    """A live inject can outlast any writer's patience; the note verb cannot."""
+    """A live inject can outlast any writer's patience; the note command cannot."""
     import threading
 
     monkeypatch.setattr(note_notify, "_SEND_TIMEOUT_SECONDS", 0.2)
@@ -322,7 +322,7 @@ def test_no_confirmed_delivery_costs_the_exit_code(monkeypatch, capsys) -> None:
     )
 
 
-# --- the verb: refuse before the append, deliver by default --------------------
+# --- the command: refuse before the append, deliver by default --------------------
 
 
 def _stubbed_receipt(node_id: str) -> dict:
@@ -370,7 +370,7 @@ def _run(monkeypatch, argv: list[str], readers=None, refused=None, send=None):
     return CliRunner().invoke(graph_cli.cli, argv), written
 
 
-def test_the_verb_delivers_by_default(monkeypatch) -> None:
+def test_the_command_delivers_by_default(monkeypatch) -> None:
     readers = NoteReaders("x-0d08", [("sess-worker", "holder of x-0d08")], None, [])
     result, appended = _run(
         monkeypatch,
@@ -385,7 +385,7 @@ def test_the_verb_delivers_by_default(monkeypatch) -> None:
 
 
 def test_a_flag_shaped_body_refuses_before_the_write(monkeypatch) -> None:
-    """`note <id> --list` is a mistyped read verb, never a note body."""
+    """`note <id> --list` is a mistyped read command, never a note body."""
     result, appended = _run(monkeypatch, ["note", "x-0d08", "--list", "--quiet"])
     assert result.exit_code != 0
     assert appended == []

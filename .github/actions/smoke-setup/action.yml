@@ -81,8 +81,8 @@ runs:
         restore-keys: |
           ${{ runner.os }}-cargo-journey-
 
-    - name: Build the fno-agents front (verb-surface ratchet)
-      # `fno doctor lint verb-ratchet` still cross-checks the fno-agents client
+    - name: Build the fno-agents front (command-surface ratchet)
+      # `fno doctor lint command-ratchet` still cross-checks the fno-agents client
       # against its source and fails closed when it is unreachable, so the smoke
       # job supplies it by explicit path (FNO_AGENTS_FRONT) rather than adding
       # it to PATH, where it could shadow another step's entry point.

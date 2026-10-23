@@ -25,7 +25,7 @@ mail:
   - hidden: true
 mcp:
   - fno.mcp.cli:mcp_app
-  - MCP sidecar client verbs.
+  - MCP sidecar client commands.
   - hidden: true
 restart:
   - fno.restart:restart_command

@@ -550,7 +550,7 @@ fn best_scope(votes: &BTreeMap<String, (usize, String)>) -> Option<String> {
         .map(|(scope, _)| scope.clone())
 }
 
-/// The hidden `fno-agents mail-threads` verb: `--format json` (the only
+/// The hidden `fno-agents mail-threads` command: `--format json` (the only
 /// form) prints the projection; `details --session <id>` prints that
 /// session's token counters and ledger cost. Hidden from help, like
 /// `team-fold` (ruling d-aef0ed7b).

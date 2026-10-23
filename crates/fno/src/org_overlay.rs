@@ -31,11 +31,11 @@ pub const ORG_TTL: Duration = Duration::from_secs(60);
 /// Ten seconds, and the number is MEASURED rather than reasoned.
 ///
 /// `time fno doctor lanes --json` on this machine at 1-minute load 107:
-/// **8.07s**. The verb's own `macmon` sample is bounded at 5.0s, so a read
+/// **8.07s**. The command's own `macmon` sample is bounded at 5.0s, so a read
 /// over five seconds is its designed worst case, not a fault. A budget under
 /// that guarantees a degrade exactly when the machine is busy, which is the
 /// only time a person opens this panel. The plan for this change proposed
-/// 2500ms on reasoning, and it failed against the live verb on the first
+/// 2500ms on reasoning, and it failed against the live command on the first
 /// run. Setting a budget against a read nobody timed is the defect this
 /// whole change was filed about.
 ///
@@ -1161,7 +1161,7 @@ pub async fn fold_now() -> Option<Org> {
     parse(&output.stdout)
 }
 
-/// Parse the verb's JSON payload. Fails quiet (returns `None`) on
+/// Parse the command's JSON payload. Fails quiet (returns `None`) on
 /// unparseable output so a torn stdout degrades the overlay, not crashes it.
 fn parse(stdout: &[u8]) -> Option<Org> {
     serde_json::from_slice(stdout).ok()

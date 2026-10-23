@@ -1,6 +1,6 @@
 """``fno agents lead history`` - native-read relay.
 
-Scan owner: the native ``lead-history`` verb, which resolves the caller's
+Scan owner: the native ``lead-history`` command, which resolves the caller's
 role scope itself; contract: docs/architecture/lead.md.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ class HistoryUnreadable(Exception):
 def run_native(events_paths: list[Path], scope: str, as_json: bool) -> tuple[int, str, str]:
     """Relay to the native ``lead-history`` read; ``(code, stdout, stderr)``.
 
-    ``--scope`` rides the argv only when set; when empty the native verb
+    ``--scope`` rides the argv only when set; when empty the native command
     resolves the caller's role from the registry.
     """
     from fno.agents.rust_runtime import refuse_without_binary

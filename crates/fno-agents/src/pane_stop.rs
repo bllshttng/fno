@@ -469,7 +469,7 @@ fn holder_from_lsof(reads: &[(std::path::PathBuf, LsofRead)]) -> SessionHolder {
                 .map(|p| p.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let (subject, verb) = if pids.len() == 1 {
+            let (subject, command) = if pids.len() == 1 {
                 (format!("pid {names}"), "holds")
             } else {
                 (format!("pids {names}"), "hold")
@@ -477,7 +477,7 @@ fn holder_from_lsof(reads: &[(std::path::PathBuf, LsofRead)]) -> SessionHolder {
             return SessionHolder::Held {
                 pid: pids.first().copied().filter(|_| pids.len() == 1),
                 proven: false,
-                why: format!("{subject} {verb} codex rollout {file}"),
+                why: format!("{subject} {command} codex rollout {file}"),
             };
         }
     }
@@ -590,7 +590,7 @@ pub(crate) struct FnoRun {
 /// in-process path replace every caller at once.
 ///
 /// A launch failure is an Err. A nonzero exit is `ok: false` with the
-/// stderr, because several callers treat "the verb refused" as data rather
+/// stderr, because several callers treat "the command refused" as data rather
 /// than as a failure of their own.
 pub(crate) fn run_fno(args: &[&str]) -> Result<FnoRun, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())

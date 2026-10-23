@@ -131,7 +131,7 @@ fn plan(tasks: &str, waves: &str) -> String {
     format!("---\ndifficulty: high\nstatus: ready\n---\n## Execution Strategy\n```yaml\ntasks:\n{tasks}\nwaves:\n{waves}\n```\n")
 }
 fn row(id: &str, extra: Value) -> Value {
-    let mut r = json!({"id":id,"title":id,"slug":id,"type":"task","project":"fixture","priority":"p2","status":"ready","dispatch_verb":"/target","difficulty":"high","created_at":chrono::Utc::now().to_rfc3339()});
+    let mut r = json!({"id":id,"title":id,"slug":id,"type":"task","project":"fixture","priority":"p2","status":"ready","dispatch_command":"/target","difficulty":"high","created_at":chrono::Utc::now().to_rfc3339()});
     r.as_object_mut()
         .unwrap()
         .extend(extra.as_object().unwrap().clone());

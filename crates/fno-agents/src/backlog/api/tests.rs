@@ -498,7 +498,7 @@ fn api_pr_session_dispatch_and_encounter_mutations_agree() {
             store,
             "ab-one",
             Some(Dispatch {
-                verb: Some("do".into()),
+                command: Some("do".into()),
                 brief: None,
                 model: Some("test-model".into()),
             }),
@@ -506,10 +506,10 @@ fn api_pr_session_dispatch_and_encounter_mutations_agree() {
         .unwrap();
         assert!(payload.success);
         let one = node(store, "ab-one").unwrap().unwrap();
-        assert_eq!(one.dispatch.verb.as_deref(), Some("do"));
+        assert_eq!(one.dispatch.command.as_deref(), Some("do"));
         dispatch_set(store, "ab-one", None).unwrap();
         let one = node(store, "ab-one").unwrap().unwrap();
-        assert_eq!(one.dispatch.verb, None);
+        assert_eq!(one.dispatch.command, None);
         let payload = encounter_create(
             store,
             "ab-one",

@@ -2,9 +2,9 @@
 //! list over REST through the conditional door; review threads stay on
 //! GraphQL because REST carries no resolved or outdated state), the
 //! review-coverage row (journal reads plus at one recompute through the
-//! producer verb), the review-lane predicate, and review activity (the
+//! producer command), the review-lane predicate, and review activity (the
 //! claims hold plus the worktree probe). The optional-review aggregation
-//! lives here now, and the module serves the merge and review verbs that
+//! lives here now, and the module serves the merge and review commands that
 //! import its survivors.
 
 use crate::loopcheck::{resolve_review_inputs, ReviewInputs};
@@ -599,7 +599,7 @@ fn split_pin_note(note: &str) -> (String, String) {
 }
 
 /// The `review_coverage` verdict for a PR: the latest event row, shaped
-/// against the head, recomputed at most ONCE through the producer verb when
+/// against the head, recomputed at most ONCE through the producer command when
 /// `recompute` is set and the row is absent, head-mismatched, unknown, or
 /// overtaken. Event-read failures degrade to the unknown sentinel.
 pub(crate) fn read_review_coverage(
@@ -921,11 +921,14 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
     }
     let key = format!("review:branch:{branch}");
     // A direct store read, not `claims::status`: the wrapper eprints the
-    // claim-status verb's diagnostic on a failed read, and this probe stays
+    // claim-status command's diagnostic on a failed read, and this probe stays
     // silent, the way the Python claim_status never printed on the way to
     // Corrupted (the review_hold check_corrupted_hold golden is one line).
     let (state, record) = match crate::claim_store::read(&key, None) {
-        Ok(Some(record)) => (crate::claim_verbs::status_verdict(&record).0, Some(record)),
+        Ok(Some(record)) => (
+            crate::claim_commands::status_verdict(&record).0,
+            Some(record),
+        ),
         Ok(None) => (crate::claims::ClaimState::Free, None),
         Err(_) => (crate::claims::ClaimState::Corrupted, None),
     };

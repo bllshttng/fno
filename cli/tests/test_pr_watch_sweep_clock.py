@@ -67,8 +67,8 @@ def _make_tick_deps(tmp_path: Path, candidates=None, obs_map: Optional[dict] = N
             return obs_map[candidate.pr_number]
         return _make_obs(pr_number=candidate.pr_number)
 
-    def fake_fire_skill(verb, pr_number, repo_dir, *, node_id=None, runner=None, model=None, env_seam=None):
-        fired.append({"verb": verb, "pr": pr_number})
+    def fake_fire_skill(command, pr_number, repo_dir, *, node_id=None, runner=None, model=None, env_seam=None):
+        fired.append({"verb": command, "pr": pr_number})
         return DispatchResult(ok=True, rc=0, is_error=False, raw='{"is_error":false}')
 
     def fake_emit(event_type: str, data: dict):

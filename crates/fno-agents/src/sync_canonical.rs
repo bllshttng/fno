@@ -1,10 +1,10 @@
 //! `sync-canonical`: the post-merge canonical sync, its catch-up sweep, and
-//! its staleness alarm in one native verb. One JSON payload on stdin
+//! its staleness alarm in one native command. One JSON payload on stdin
 //! (`{"action":"sync"|"catchup"|"staleness","cwd":...,"pr":N?,"fetch":bool?}`),
 //! one JSON answer on stdout: always `exit`, `stdout` lines, `stderr` lines;
 //! `catchup` adds `outcome`/`pr_number`/`swept`/`detail`/`stale`; `staleness`
 //! adds `state`/`markerless`/`behind`/`detail`. The Python module
-//! `cli/src/fno/pr/_sync_canonical.py` is the transport around this verb.
+//! `cli/src/fno/pr/_sync_canonical.py` is the transport around this command.
 //!
 //! Ported from `_sync_canonical.py` with receipt strings kept verbatim (tests
 //! and operators grep them). The merged-PR list reads the REST endpoint, not
@@ -1286,7 +1286,7 @@ fn compute_staleness(deps: &Deps, cwd: &Path, fetch: bool) -> Staleness {
     if behind.unwrap_or(0) > 0 || ahead.unwrap_or(0) > 0 {
         stale = true;
     }
-    // The verb's notes ride even when the verdict stays fresh (naming the
+    // The command's notes ride even when the verdict stays fresh (naming the
     // dirt is doctor's job); they never flip it by themselves.
     let notes: Vec<&str> = answer
         .get("notes")
@@ -1458,14 +1458,14 @@ pub(crate) fn run_catchup(deps: &Deps, cwd: &Path) -> CatchupOut {
 }
 
 // ---------------------------------------------------------------------------
-// Verb entry
+// Command entry
 // ---------------------------------------------------------------------------
 
-/// The verb entry: one JSON payload on stdin, one JSON answer on stdout, exit
+/// The command entry: one JSON payload on stdin, one JSON answer on stdout, exit
 /// 0 (the answer carries the real `exit`); malformed stdin prints
 /// `sync-canonical: bad payload: <e>` and exits 2 (same contract as
 /// `canonical-check`).
-pub fn run_sync_canonical_verb(_args: &[String]) -> i32 {
+pub fn run_sync_canonical_command(_args: &[String]) -> i32 {
     use std::io::Read;
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
@@ -1532,7 +1532,7 @@ pub fn run_sync_canonical_verb(_args: &[String]) -> i32 {
 }
 
 /// The in-process sync leg the `do pr` dispatcher rides: parse the payload
-/// (the verb's own shape), run the sync, return the triple the verb prints.
+/// (the command's own shape), run the sync, return the triple the command prints.
 pub(crate) fn run_sync_payload(parsed: &Value) -> (i32, Vec<String>, Vec<String>) {
     let deps = Deps::real();
     let cwd = PathBuf::from(parsed.get("cwd").and_then(|v| v.as_str()).unwrap_or("."));

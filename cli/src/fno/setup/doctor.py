@@ -273,12 +273,12 @@ def check_agent_profiles(settings: object) -> list[str]:
         return raw.strip() if isinstance(raw, str) else ""
 
     problems: list[str] = []
-    for verb, profile in profiles.items():
+    for command, profile in profiles.items():
         lanes = getattr(profile, "lanes", [])
         targets = (
-            [(lane, f"agents.profiles.{verb}.lanes[{index}]") for index, lane in enumerate(lanes)]
+            [(lane, f"agents.profiles.{command}.lanes[{index}]") for index, lane in enumerate(lanes)]
             if isinstance(lanes, list) and lanes
-            else [(profile, f"agents.profiles.{verb}")]
+            else [(profile, f"agents.profiles.{command}")]
         )
         for target, path in targets:
             provider = value(target, "provider") or value(profile, "provider") or value(defaults, "provider")

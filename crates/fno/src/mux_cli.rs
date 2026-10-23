@@ -1,20 +1,20 @@
-//! The scriptable `fno mux` verbs: `ls`, `kill-server`, `shell-init`, `doctor`,
-//! the `pane` control-verb family, and the `block` porcelain (`block pipe`).
+//! The scriptable `fno mux` commands: `ls`, `kill-server`, `shell-init`, `doctor`,
+//! the `pane` control-command family, and the `block` porcelain (`block pipe`).
 //! Plain client-process code - they run and exit, no TUI, no raw mode, no
 //! attach - so every probe is bounded by a read/write timeout and a bad
 //! session can never hang the listing (AC4-ERR).
 //!
 //! ## Exit-code table (US6, the one authority; asserted by tests)
 //!
-//! Every verb returns one of [`EXIT_OK`] (0), [`EXIT_ERROR`] (1, an io/dead/skew
+//! Every command returns one of [`EXIT_OK`] (0), [`EXIT_ERROR`] (1, an io/dead/skew
 //! failure), [`EXIT_USAGE`] (2, malformed args), or - for `pane wait`/`read`
 //! and `block pipe` - the distinct `EXIT_WAIT_*`/`EXIT_BLOCK_UNAVAILABLE`/
 //! [`EXIT_TARGET_NOT_IDLE`] codes (10-15). The constants below carry the
 //! canonical comment per code.
 //!
-//! ## `--json` envelope (US6; every verb accepts `--json`)
+//! ## `--json` envelope (US6; every command accepts `--json`)
 //!
-//! Each verb emits a stable, documented JSON shape on stdout under `--json`;
+//! Each command emits a stable, documented JSON shape on stdout under `--json`;
 //! errors stay one-line on stderr (never mixed into the json). The shapes:
 //! - `ls`: array of `{session, state: live|stale|unqueryable|unprobeable,
 //!   clients?, squads?, panes?, error?}` (`[]` when empty). A `live` row also
@@ -27,7 +27,7 @@
 //! - `shell-init`: `{shell, snippet}` (the raw snippet without `--json`).
 //! - `doctor`: `{ok: bool, checks: [{check, verdict: ok|warn|fail|n/a, detail,
 //!   remedy}]}`.
-//! - `pane` verbs (the list lives in [`PANE_VERBS`], named once): the
+//! - `pane` commands (the list lives in [`PANE_COMMANDS`], named once): the
 //!   per-reply shapes in [`render_reply`].
 
 mod completion;
@@ -53,9 +53,9 @@ use crate::server::lifecycle_target::pane_table_host;
 pub(crate) use crate::mux_rows::{pid_from_sidecar, read_wire_version};
 use crate::pane_send_audit::{pane_send_is_control_only, PaneSendAudit};
 use crate::proto::{
-    self, err_code, read_msg_sync, write_msg_sync, BlockSel, ClientMsg, ControlVerb, LayoutScope,
-    PanePlacement, PaneTarget, PlacementFallback, ServerMsg, SquadLayout, TabPaneOccupant, TabSel,
-    WaitOutcome, BUILD_VERSION, DEFAULT_SESSION, PROTO_VERSION,
+    self, err_code, read_msg_sync, write_msg_sync, BlockSel, ClientMsg, ControlCommand,
+    LayoutScope, PanePlacement, PaneTarget, PlacementFallback, ServerMsg, SquadLayout,
+    TabPaneOccupant, TabSel, WaitOutcome, BUILD_VERSION, DEFAULT_SESSION, PROTO_VERSION,
 };
 use crate::review_invocation::{append_review_invocation, review_invocation_command};
 use crate::tree::Dir;
@@ -381,7 +381,7 @@ pub fn ls(json: bool) -> i32 {
         }
     };
     // Any config warning recorded during resolution reaches stderr via
-    // main.rs's exit_mux wrapper, which covers every non-TUI mux verb.
+    // main.rs's exit_mux wrapper, which covers every non-TUI mux command.
     if json {
         // Stable per-row envelope: `state` is always present; live rows carry
         // the counts. An empty listing is `[]` (never the "no sessions" prose).
@@ -800,7 +800,7 @@ impl KillOutcome {
 /// wedged one never will: under a wedge SIGKILL is the EXPECTED rung, not a
 /// last resort.
 const SIGTERM_GRACE: Duration = Duration::from_secs(3);
-/// How long a SIGKILL'd holder gets to disappear before the verb reports
+/// How long a SIGKILL'd holder gets to disappear before the command reports
 /// Unrecoverable. SIGKILL is immediate; this only bounds a slow reap.
 const SIGKILL_GRACE: Duration = Duration::from_secs(1);
 
@@ -979,7 +979,7 @@ fn escalate(session: &str, sock: &Path, context: &str) -> KillOutcome {
         .and_then(|s| proto::parse_pid_sidecar(&s));
     let (pid, recorded_start) = match parsed {
         // Refuse init and ourselves outright: a signal to either is never
-        // the recovery this verb owes.
+        // the recovery this command owes.
         Some((p, start)) if p > 1 && p as u32 != std::process::id() => (p, start),
         _ => {
             return refusal(
@@ -1132,7 +1132,7 @@ fn holder_gone(pid: i32, sock: &Path, grace: Duration) -> bool {
 //
 // Checks socket dir + perms, every session's server/client protocol match, and
 // the terminal's copy/color capabilities. Read-only by construction: it probes
-// with `Query` and the read-only `PaneLs` control verb and never unlinks a
+// with `Query` and the read-only `PaneLs` control command and never unlinks a
 // socket, kills a server, or scaffolds state (AC6-ERR "touches nothing",
 // AC6-FR no side effects). Exit is `EXIT_ERROR` iff some check FAILs (a version
 // skew); a degraded-but-usable state is a `Warn` and stays exit 0, so a box
@@ -1171,7 +1171,7 @@ struct Check {
 
 /// What a version probe against one session's socket learned.
 enum VersionVerdict {
-    /// The server accepted our versioned control verb: protocols match.
+    /// The server accepted our versioned control command: protocols match.
     Ok,
     /// The server refused with `VERSION_SKEW`; `String` is its message, which
     /// already names both versions and the restart remedy (AC6-ERR).
@@ -1185,7 +1185,7 @@ enum VersionVerdict {
 
 /// Probe one session's socket over the VERSIONED control path (a plain `Query`
 /// is frozen and version-independent, so it cannot detect skew). Sends the
-/// read-only `PaneLs` verb - lists panes, mutates nothing - so doctor stays
+/// read-only `PaneLs` command - lists panes, mutates nothing - so doctor stays
 /// side-effect free (AC6-ERR).
 fn version_probe(session: &str, sock: &Path) -> VersionVerdict {
     // Bounded connect: a wedged server (never accepts) reads as Unqueryable
@@ -1201,7 +1201,7 @@ fn version_probe(session: &str, sock: &Path) -> VersionVerdict {
     let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
     match send_control(
         stream,
-        ControlVerb::PaneLs,
+        ControlCommand::PaneLs,
         PROBE_TIMEOUT,
         // A doctor probe wants its own tight bound respected, not the
         // extended window: no extra time past PROBE_TIMEOUT.
@@ -1375,7 +1375,7 @@ fn socket_dir_check() -> Check {
 }
 
 /// The fix doctor advertises for orphaned store residue. One const for both
-/// emitters, so the advertised spelling cannot drift from the verb that exists.
+/// emitters, so the advertised spelling cannot drift from the command that exists.
 const PRUNE_REMEDY: &str = "fno mux workspace prune";
 
 /// The squad-store orphan verdict (US3), pure so the ok/warn/Na rendering
@@ -1525,7 +1525,7 @@ pub fn stats(json: bool) -> i32 {
 // `fno mux workspace prune` - reap dead-origin residue
 // ---------------------------------------------------------------------------
 
-/// `fno mux workspace restore`: one verb brings the stored
+/// `fno mux workspace restore`: one command brings the stored
 /// workspaces' worker members back. Every live, non-tombstoned member
 /// resumes through its own harness's declared `interactive_resume` argv in a
 /// pane at its stored cwd; a member that cannot resume is named with its
@@ -1692,8 +1692,8 @@ fn unreachable_notice(unreachable: &[String]) -> String {
 
 /// `fno mux workspace prune [--dry-run] [--include-named] [--tabs-only]
 /// [--dead-only] [--include-used-shells] [--json]`: remove squads
-/// whose every recorded origin is gone and which host no live member or pane
-///. Named squads require `--include-named`. The predicate is
+/// whose every recorded origin is gone and which host no live member or pane.
+/// Named squads require `--include-named`. The predicate is
 /// re-evaluated under the store lock against fresh fs state, and the receipt is
 /// built from the locked closure's actual removals - never the pre-lock
 /// candidate list (AC1-UI). `--dry-run` writes nothing. `--tabs-only` runs the
@@ -1703,28 +1703,20 @@ fn unreachable_notice(unreachable: &[String]) -> String {
 /// squad-row pass, so the sweep modal's "both" can never remove a squad row
 /// the modal never offered to remove.
 ///
-/// `--include-used-shells` is the one tab-fold widening, and it is
-/// OPT-IN: a tab of spent bare shells (every pane `cmd: None`, no `fno_id`,
-/// measured idle now) closes only when this flag names the category. Without
-/// the flag the receipt still counts that population (`tabs_used_shells`)
-/// and splits every kept tab by reason, so the operator can see the size of
-/// the choice before making it. The receipt names each tab it would close
-/// (dry-run) or closed (apply) in `tabs_close_named`.
+/// `--include-used-shells` is the one OPT-IN tab-fold widening: a tab of
+/// spent bare shells (every pane `cmd: None`, no `fno_id`, idle now) closes
+/// only under it. Without it the receipt still counts them
+/// (`tabs_used_shells`) and splits every kept tab by reason. `tabs_close_named`
+/// names each tab closed (or, on dry-run, to close).
 ///
-/// An orphaned worker tab (v71) - its stored member judged Dead by the
-/// server - closes under the DEFAULT flags, ahead of the pristine test. So
-/// does a spawned-name pane: the pane carries the worker name the
-/// spawn captured (`unresolved:spawned-name`), and once the shared evidence
-/// fold judges that name dead the pane routes by the orphan verdict under
-/// default flags too. `--include-used-shells` stays the opt-in for shells
-/// with no worker history at all.
+/// An orphaned worker tab (its stored member judged Dead) closes under the
+/// DEFAULT flags, ahead of the pristine test. So does a spawned-name pane
+/// (`unresolved:spawned-name`) once the evidence fold judges that name dead.
 ///
-/// Two arms run in ONE call and they must not contradict each other. The tab arm
-/// folds surplus pristine tabs; the squad arm decides store rows, and a live pane
-/// protects a squad's row inside the grace window. Since the server de-persists a
-/// squad whose last tab closes, the tab arm never touches a workspace's only tab -
-/// otherwise the fold would delete the very row the squad arm had just kept, and
-/// the receipt would report `pruned_count: 0` over a row that is gone.
+/// The tab arm folds surplus pristine tabs; the squad arm decides store rows,
+/// and a live pane protects a squad's row inside the grace window. The server
+/// de-persists a squad whose last tab closes, so the tab arm never touches a
+/// workspace's only tab: it would delete the row the squad arm just kept.
 fn squad_prune(args: &[OsString]) -> i32 {
     let mut dry_run = false;
     let mut include_named = false;
@@ -1908,10 +1900,10 @@ fn squad_prune(args: &[OsString]) -> i32 {
             &reload,
         );
     } else {
-        let verb = if applied { "pruned" } else { "would prune" };
+        let command = if applied { "pruned" } else { "would prune" };
         for sq in &removed {
             println!(
-                "{verb} {} origins={} members={} - {}",
+                "{command} {} origins={} members={} - {}",
                 prune_sync::prune_identity(sq),
                 sq.origins.join(","),
                 sq.members,
@@ -1942,7 +1934,7 @@ fn squad_prune(args: &[OsString]) -> i32 {
             println!("dry-run: no changes written");
         }
         prune_sync::print_prune_summary(
-            verb,
+            command,
             removed.len(),
             kept_unknown,
             skipped_named,
@@ -1965,7 +1957,7 @@ fn squad_prune(args: &[OsString]) -> i32 {
 // `fno mux pane ls | read | run | send | wait | kill` - the v4 script API
 // ---------------------------------------------------------------------------
 
-/// The one exit-code table for the pane verbs (asserted by tests). `wait`
+/// The one exit-code table for the pane commands (asserted by tests). `wait`
 /// outcomes are distinct so a script can tell a settle from a match from a
 /// timeout from an exit (AC4-EDGE); everything else is the usual ok/error/usage
 /// trio. The server's [`WaitOutcome`] maps here in [`wait_exit_code`].
@@ -1982,7 +1974,7 @@ pub const EXIT_NOT_FOUND: i32 = 16; // where: the fno_id is not in the registry
 pub const EXIT_NOT_PANE_HOSTED: i32 = 17; // where: in registry but hosts no live pane
 pub const EXIT_REGISTRY_UNAVAILABLE: i32 = 18; // where: the registry could not be read
 pub const EXIT_NO_CLIENT: i32 = 19; // pane focus: no attached viewer to move
-pub const EXIT_CONTROL_UNANSWERED: i32 = 20; // verb sent, no reply; outcome unknown
+pub const EXIT_CONTROL_UNANSWERED: i32 = 20; // command sent, no reply; outcome unknown
 pub const EXIT_NO_SERVER: i32 = 24; // thread: no live mux server to drive
 
 /// The shared exit-17 line for a paneless row: the peek route every
@@ -1992,7 +1984,7 @@ pub const EXIT_NO_SERVER: i32 = 24; // thread: no live mux server to drive
 /// saying different things about the same row. The absence of a pane is not
 /// evidence of headlessness and not evidence of death; the line that reports
 /// it is the right place to say what does reach the row.
-fn paneless_route_hint(verb: &str, row: &crate::agents_view::RegistryAgent) -> String {
+fn paneless_route_hint(command: &str, row: &crate::agents_view::RegistryAgent) -> String {
     let name = &row.name;
     // The state rides in the line: unresolved and absent no longer
     // collapse into one string, which is what kept the pane-table
@@ -2008,16 +2000,16 @@ fn paneless_route_hint(verb: &str, row: &crate::agents_view::RegistryAgent) -> S
         // its own (agents_view.rs's own doc comment on attach_id) - an
         // exited Drive-tier row falls through to the plain follow hint.
         crate::proto::Reach::Drive if !row.exited => format!(
-            "{verb}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow, or drive it: fno agents attach {name}"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow, or drive it: fno agents attach {name}"
         ),
         // Locate never has a transcript reader (that's the whole reason it's
         // Locate, not Follow) - a peek --follow hint here is a route
         // guaranteed to fail. Point at the one route that actually works.
         crate::proto::Reach::Locate => format!(
-            "{verb}: {name} hosts no live pane (fno_id_state: {state}); open it with: fno agents attach {name}"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); open it with: fno agents attach {name}"
         ),
         _ => format!(
-            "{verb}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow"
         ),
     }
 }
@@ -2042,7 +2034,7 @@ const RAW_PANE_SEND_CAP_BYTES: usize = 8192;
 
 /// The shared refusal for an over-cap pane paste. Used by both paste entry
 /// points (`pane send --raw` and `block pipe`), so the bound is a property of
-/// the transport, not of one verb.
+/// the transport, not of one command.
 fn paste_cap_refusal(len: usize) -> String {
     format!(
         "payload is {len} bytes (cap {RAW_PANE_SEND_CAP_BYTES}); it would be \
@@ -2065,19 +2057,19 @@ pub(crate) const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
 /// says when the client stops believing an answer is still coming. A read that
 /// consumed nothing leaves the frame boundary intact (proto::read_fill), so
 /// polling again is safe - it is the ONE thing that is safe here, because the
-/// verb has already reached the server and must never be sent twice.
+/// command has already reached the server and must never be sent twice.
 pub(crate) const CONTROL_REPLY_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The reply deadline for `dispatch()`'s own `send_control` call. `pane
 /// wait`'s read timeout is the CALLER's stated patience (`--timeout` plus
 /// 2s), and exceeding it is a real answer, so it gets no extra window - `
-/// is_wait` must come from matching the verb's TYPE (`ControlVerb::PaneWait`),
+/// is_wait` must come from matching the command's TYPE (`ControlCommand::PaneWait`),
 /// never inferred from `read_timeout`'s value: a duration-equality check
 /// misclassified `pane wait --timeout 8` (whose read timeout computes to
-/// exactly `CONTROL_TIMEOUT`) as a non-wait verb and gave it 30s instead of
+/// exactly `CONTROL_TIMEOUT`) as a non-wait command and gave it 30s instead of
 /// respecting its 10s bound. Every other call site in this module passes the
 /// fixed `CONTROL_REPLY_DEADLINE` directly; only `dispatch()` has more than
-/// one verb behind one code path, so only it needs this split named.
+/// one command behind one code path, so only it needs this split named.
 fn reply_deadline_for(is_wait: bool, read_timeout: Duration) -> Duration {
     if is_wait {
         read_timeout
@@ -2162,7 +2154,7 @@ fn parse_focus_target(raw: Option<&String>) -> Result<(FocusTarget, Option<Strin
     }
 }
 
-/// A parsed `pane` verb (the wire-facing subset; `--session`/`--json` ride
+/// A parsed `pane` command (the wire-facing subset; `--session`/`--json` ride
 /// alongside on [`ParsedPane`]). Public so the agents daemon's tests can feed
 /// a refusal's printed command to this real parser (crates/fno-agents);
 /// closing that visibility again breaks that round-trip test by design.
@@ -2189,7 +2181,7 @@ pub enum PaneCmd {
         pane: u64,
         name: Option<String>,
     },
-    /// `pane focus <pane>`: move the OPERATOR's view to a pane; every other `pane` verb acts for an
+    /// `pane focus <pane>`: move the OPERATOR's view to a pane; every other `pane` command acts for an
     /// agent. A digit argument is a pane id, else a registry selector; `--fzf` opens the picker.
     Focus {
         target: FocusTarget,
@@ -2229,7 +2221,7 @@ pub enum PaneCmd {
         /// (v51) The pane-captured identity the caller addressed.
         expected_identity: Option<String>,
         /// `--style-exception <reason>`: the reasoned one-send exception the
-        /// mail verbs honor, threaded to the Python renderer so the escape
+        /// mail commands honor, threaded to the Python renderer so the escape
         /// hatch keeps one shape across every enveloped lane. A raw send
         /// never renders, so the flag beside `--raw` has no effect.
         style_exception: Option<String>,
@@ -2268,7 +2260,7 @@ pub enum PaneCmd {
     },
     /// `pane keeper list`: read the keeper sockets DIRECTLY - no server is
     /// consulted, because the question this answers is "did the keeper
-    /// survive the server's death". Named in PANE_VERBS so the dispatcher's
+    /// survive the server's death". Named in PANE_COMMANDS so the dispatcher's
     /// refusal teaches it; the root menu stays the advertisement surface.
     KeeperList {
         json: bool,
@@ -2334,17 +2326,7 @@ fn parse_block_sel(s: &str) -> Result<BlockSel, String> {
     }
 }
 
-/// Parse the tokens after `mux pane`. Pure, so the whole grammar (verbs, flags,
-/// the exit-code-bearing outcomes) is unit-testable without a socket, and the
-/// agents daemon's tests can feed a refusal's printed command to this real
-/// parser rather than a copy of its grammar.
-/// The `pane` verbs, named ONCE. Three surfaces quote this list - the
-/// missing-verb message, the unknown-verb one, and the `main.rs` usage line -
-/// and the first two had already drifted before the constant existed:
-/// `split` and `break` shipped without reaching the first, so an operator who
-/// typed a bare `fno mux pane` to discover the surface was told verbs that
-/// exist do not.
-/// `fno mux pane <verb> ...`: parse, resolve the session, run the verb over a
+/// `fno mux pane <command> ...`: parse, resolve the session, run the command over a
 /// one-shot v4 control connection, print machine-readable output, return the
 /// exit code. `env_session` is `FNO_SESSION` (set in every pane).
 pub fn pane(op: crate::cli_args::PaneOp, env_session: Option<&str>) -> i32 {
@@ -2409,13 +2391,13 @@ fn parse_duration(value: &str) -> Result<std::time::Duration, String> {
 }
 
 /// Resolve `--session`/env, connect to the EXISTING server, run one control
-/// verb, render the reply. The shared spine of the `tab`/`layout` porcelains
+/// command, render the reply. The shared spine of the `tab`/`layout` porcelains
 ///; `where` has its own registry-first path.
 fn run_on_existing_server(
     session_flag: Option<&str>,
     env_session: Option<&str>,
     json: bool,
-    verb: ControlVerb,
+    command: ControlCommand,
 ) -> i32 {
     let session = resolve_session(session_flag, env_session);
     let sock = match proto::socket_path(&session) {
@@ -2434,7 +2416,7 @@ fn run_on_existing_server(
     };
     match send_control(
         stream,
-        verb,
+        command,
         CONTROL_TIMEOUT,
         CONTROL_REPLY_DEADLINE,
         &session,
@@ -2459,9 +2441,9 @@ fn run_on_existing_server(
 ///
 /// `id:<n>` addresses a squad by the id `fno mux pane ls` reports, so a caller
 /// holding a pane's own `squad_id` can scope a tab read to the squad that pane
-/// actually landed in. Without it the two verbs cannot be composed: `pane ls`
+/// actually landed in. Without it the two commands cannot be composed: `pane ls`
 /// answers with an id and `tab` accepted only a name, so a tab read fell back to
-/// `CurrentRoute` - which for the tab verbs means the squad the operator happens
+/// `CurrentRoute` - which for the tab commands means the squad the operator happens
 /// to be LOOKING at, not the one the spawn routed to by cwd. A bare name keeps
 /// its meaning; a malformed `id:` value is a name, since a squad may legitimately
 /// be called something starting with `id:` and refusing here would be a new way
@@ -2571,11 +2553,11 @@ pub fn tab(op: crate::cli_args::TabOp, args: &[OsString], env_session: Option<&s
         i += 1;
     }
 
-    let verb = match op {
-        crate::cli_args::TabOp::Ls(_) => ControlVerb::TabLs {
+    let command = match op {
+        crate::cli_args::TabOp::Ls(_) => ControlCommand::TabLs {
             squad: squad_target(squad),
         },
-        crate::cli_args::TabOp::Create(_) => ControlVerb::TabCreate {
+        crate::cli_args::TabOp::Create(_) => ControlCommand::TabCreate {
             squad: squad_target(squad),
             name: name.filter(|n| !n.trim().is_empty()),
         },
@@ -2584,7 +2566,7 @@ pub fn tab(op: crate::cli_args::TabOp, args: &[OsString], env_session: Option<&s
                 eprintln!("fno mux tab rename: needs --tab <sel> and --name <s>");
                 return EXIT_USAGE;
             };
-            ControlVerb::TabRename {
+            ControlCommand::TabRename {
                 squad: squad_target(squad),
                 tab,
                 name,
@@ -2595,7 +2577,7 @@ pub fn tab(op: crate::cli_args::TabOp, args: &[OsString], env_session: Option<&s
                 eprintln!("fno mux tab join: needs --src <sel> --at <pane> --dir <dir>");
                 return EXIT_USAGE;
             };
-            ControlVerb::TabJoin {
+            ControlCommand::TabJoin {
                 src_tab,
                 anchor_pane,
                 direction,
@@ -2606,7 +2588,7 @@ pub fn tab(op: crate::cli_args::TabOp, args: &[OsString], env_session: Option<&s
                 eprintln!("fno mux tab close: needs --tab <sel> (bulk close: {PRUNE_REMEDY})");
                 return EXIT_USAGE;
             };
-            ControlVerb::TabClose {
+            ControlCommand::TabClose {
                 squad: squad_target(squad),
                 tab,
                 force,
@@ -2620,14 +2602,14 @@ pub fn tab(op: crate::cli_args::TabOp, args: &[OsString], env_session: Option<&s
                 eprintln!("fno mux tab move: needs --tab <sel> and --to <ordinal>");
                 return EXIT_USAGE;
             };
-            ControlVerb::TabReorder {
+            ControlCommand::TabReorder {
                 squad: squad_target(squad),
                 tab,
                 to,
             }
         }
     };
-    run_on_existing_server(session.as_deref(), env_session, json, verb)
+    run_on_existing_server(session.as_deref(), env_session, json, command)
 }
 
 /// A `--template <name>` -> [`TemplateName`]. Names match the wire
@@ -2749,7 +2731,7 @@ pub fn layout(op: crate::cli_args::LayoutOp, args: &[OsString], env_session: Opt
         session.as_deref(),
         env_session,
         json,
-        ControlVerb::LayoutGet {
+        ControlCommand::LayoutGet {
             scope,
             // The per-pane worker join rides the reply only for the HUMAN
             // rendering; `--json` stays byte-shape identical to the pre-v51
@@ -2830,7 +2812,7 @@ fn layout_apply_cli(
         session,
         env_session,
         json,
-        ControlVerb::LayoutApply {
+        ControlCommand::LayoutApply {
             squad: squad_target(squad),
             tab: tab.unwrap_or(TabSel::Active),
             spec,
@@ -2870,7 +2852,7 @@ fn layout_graft_cli(
     json: bool,
     rest: &[String],
 ) -> i32 {
-    use crate::proto::{AnchoredLayoutSpec, ControlVerb, LayoutSlot};
+    use crate::proto::{AnchoredLayoutSpec, ControlCommand, LayoutSlot};
     use crate::templates::template_to_tree;
 
     let mut at_raw: Option<String> = None;
@@ -2980,7 +2962,7 @@ fn layout_graft_cli(
         session,
         env_session,
         json,
-        ControlVerb::LayoutGraft {
+        ControlCommand::LayoutGraft {
             squad: squad_target(squad),
             anchor,
             spec,
@@ -3134,9 +3116,9 @@ fn resolve_selector(
 }
 
 /// The refusal listing: one line per candidate.
-fn print_candidates(verb: &str, selector: &str, candidates: &[Candidate]) {
+fn print_candidates(command: &str, selector: &str, candidates: &[Candidate]) {
     eprintln!(
-        "{verb}: ambiguous selector {selector:?} matches {} agents",
+        "{command}: ambiguous selector {selector:?} matches {} agents",
         candidates.len()
     );
     for c in candidates {
@@ -3152,15 +3134,15 @@ fn print_candidates(verb: &str, selector: &str, candidates: &[Candidate]) {
 /// Read the agent registry into derived rows. The shared head of
 /// every selector door; a read failure is EXIT_REGISTRY_UNAVAILABLE, never a
 /// silent "not found" (the rule `where` already shipped with).
-fn registry_rows_or(verb: &str) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
+fn registry_rows_or(command: &str) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
     let raw = match crate::registry_read::registry_text(&crate::agents_view::registry_path()) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("{verb}: no agent registry");
+            eprintln!("{command}: no agent registry");
             return Err(EXIT_REGISTRY_UNAVAILABLE);
         }
         Err(e) => {
-            eprintln!("{verb}: registry unreadable: {e}");
+            eprintln!("{command}: registry unreadable: {e}");
             return Err(EXIT_REGISTRY_UNAVAILABLE);
         }
     };
@@ -3171,7 +3153,7 @@ fn registry_rows_or(verb: &str) -> Result<(Vec<crate::agents_view::RegistryAgent
     match crate::agents_view::derive_rows(&raw, now) {
         Some(rows) => Ok((rows, now)),
         None => {
-            eprintln!("{verb}: registry malformed");
+            eprintln!("{command}: registry malformed");
             Err(EXIT_REGISTRY_UNAVAILABLE)
         }
     }
@@ -3180,18 +3162,18 @@ fn registry_rows_or(verb: &str) -> Result<(Vec<crate::agents_view::RegistryAgent
 /// Resolve a selector to one row, printing the refusal and its exit code on
 /// any non-Found outcome.
 fn resolve_row_or_print(
-    verb: &str,
+    command: &str,
     selector: &str,
 ) -> Result<crate::agents_view::RegistryAgent, i32> {
-    let (rows, now) = registry_rows_or(verb)?;
+    let (rows, now) = registry_rows_or(command)?;
     match resolve_selector(&rows, selector, now) {
         Resolution::Found(row) => Ok(*row),
         Resolution::Ambiguous(candidates) => {
-            print_candidates(verb, selector, &candidates);
+            print_candidates(command, selector, &candidates);
             Err(EXIT_AMBIGUOUS)
         }
         Resolution::NotFound => {
-            eprintln!("{verb}: no agent matches {selector:?}");
+            eprintln!("{command}: no agent matches {selector:?}");
             Err(EXIT_NOT_FOUND)
         }
     }
@@ -3202,24 +3184,24 @@ fn resolve_row_or_print(
 /// performs the move without printing the receipt - for a caller that has
 /// already put ONE JSON document on stdout and must not add a second
 /// unparsable one.
-fn focus_pane(verb: &str, session: &str, pane: u64, render: bool, json: bool) -> i32 {
+fn focus_pane(command: &str, session: &str, pane: u64, render: bool, json: bool) -> i32 {
     let sock = match proto::socket_path(session) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             return EXIT_USAGE;
         }
     };
     let stream = match proto::connect_unix_timeout(&sock, PROBE_TIMEOUT) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{verb}: cannot reach session {session:?}: {e}");
+            eprintln!("{command}: cannot reach session {session:?}: {e}");
             return EXIT_ERROR;
         }
     };
     match send_control(
         stream,
-        ControlVerb::PaneFocus { pane },
+        ControlCommand::PaneFocus { pane },
         CONTROL_TIMEOUT,
         CONTROL_REPLY_DEADLINE,
         session,
@@ -3231,15 +3213,15 @@ fn focus_pane(verb: &str, session: &str, pane: u64, render: bool, json: bool) ->
             render_reply(reply, json, false, None)
         }
         Err(ControlError::Unanswered(e)) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             EXIT_CONTROL_UNANSWERED
         }
         Err(ControlError::Fatal(e)) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             EXIT_ERROR
         }
         Err(ControlError::FatalCode { msg, .. }) => {
-            eprintln!("{verb}: {msg}");
+            eprintln!("{command}: {msg}");
             EXIT_ERROR
         }
     }
@@ -3249,8 +3231,8 @@ fn focus_pane(verb: &str, session: &str, pane: u64, render: bool, json: bool) ->
 /// hint rather than an attach (Locked Decision 1: attaching creates a pane,
 /// and the server's fd ceiling makes that a wave-blocking side effect), then
 /// move the viewer. An explicit --session overrides the host like `where`.
-fn focus_by_selector(verb: &str, selector: &str, session_flag: Option<&str>, json: bool) -> i32 {
-    let row = match resolve_row_or_print(verb, selector) {
+fn focus_by_selector(command: &str, selector: &str, session_flag: Option<&str>, json: bool) -> i32 {
+    let row = match resolve_row_or_print(command, selector) {
         Ok(r) => r,
         Err(code) => return code,
     };
@@ -3262,11 +3244,11 @@ fn focus_by_selector(verb: &str, selector: &str, session_flag: Option<&str>, jso
         .clone()
         .or_else(|| pane_table_host(&row, &resolve_session(session_flag, None)));
     let Some((host_session, pane)) = hosted else {
-        eprintln!("{}", paneless_route_hint(verb, &row));
+        eprintln!("{}", paneless_route_hint(command, &row));
         return EXIT_NOT_PANE_HOSTED;
     };
     let session = resolve_session(session_flag, Some(&host_session));
-    focus_pane(verb, &session, pane, true, json)
+    focus_pane(command, &session, pane, true, json)
 }
 
 /// One pickable pane-hosted row for the interactive picker.
@@ -3460,13 +3442,13 @@ fn run_focus_picker(rows: Vec<PaneRow>) -> Option<(String, u64)> {
 /// The `--fzf` door shared by `view` and `pane focus`: refuse a
 /// non-TTY stdin (a picker on a pipe would hang), refuse an empty roster,
 /// then run the picker. Esc is a clean exit 0 that focused nothing.
-fn view_picker(verb: &str, json: bool, url: bool) -> i32 {
+fn view_picker(command: &str, json: bool, url: bool) -> i32 {
     use crossterm::tty::IsTty;
     if !std::io::stdin().is_tty() {
-        eprintln!("{verb}: --fzf needs an interactive terminal (stdin is not a TTY)");
+        eprintln!("{command}: --fzf needs an interactive terminal (stdin is not a TTY)");
         return EXIT_USAGE;
     }
-    let (rows, now) = match registry_rows_or(verb) {
+    let (rows, now) = match registry_rows_or(command) {
         Ok(r) => r,
         Err(code) => return code,
     };
@@ -3475,15 +3457,15 @@ fn view_picker(verb: &str, json: bool, url: bool) -> i32 {
         .filter_map(|a| PaneRow::from_agent(a, now))
         .collect();
     if pane_rows.is_empty() {
-        eprintln!("{verb}: no pane-hosted agents to pick");
+        eprintln!("{command}: no pane-hosted agents to pick");
         return EXIT_NOT_PANE_HOSTED;
     }
     match run_focus_picker(pane_rows) {
         Some((session, pane)) => {
             if url {
-                crate::web::print_pane_url(verb, &session, pane)
+                crate::web::print_pane_url(command, &session, pane)
             } else {
-                focus_pane(verb, &session, pane, true, json)
+                focus_pane(command, &session, pane, true, json)
             }
         }
         None => EXIT_OK,
@@ -3504,10 +3486,10 @@ fn short_handle(session_id: &str) -> String {
 
 /// Split a `--workspace <name>` (alias `--squad`/`-s`) pair out of an
 /// already-parsed `rest`, returning the value and the remaining
-/// tokens. Used by the selector verbs whose workspace qualification is a
+/// tokens. Used by the selector commands whose workspace qualification is a
 /// location concern, so their selector loop never sees the flag.
 fn take_workspace_flag(
-    verb: &str,
+    command: &str,
     rest: Vec<String>,
 ) -> Result<(Option<String>, Vec<String>), i32> {
     let mut workspace = None;
@@ -3518,7 +3500,7 @@ fn take_workspace_flag(
             match it.next() {
                 Some(v) => workspace = Some(v),
                 None => {
-                    eprintln!("{verb}: {tok} needs a value");
+                    eprintln!("{command}: {tok} needs a value");
                     return Err(EXIT_USAGE);
                 }
             }
@@ -3538,7 +3520,7 @@ fn take_workspace_flag(
 /// nonzero through `render_reply`.
 #[allow(clippy::too_many_arguments)]
 fn location_lookup(
-    verb: &str,
+    command: &str,
     sel: &str,
     workspace: Option<&str>,
     session_flag: Option<&str>,
@@ -3549,26 +3531,26 @@ fn location_lookup(
 ) -> i32 {
     // A location has no registry row to name its host session, so the ambient
     // FNO_SESSION is the right default beside the explicit flag - the same
-    // precedence every session-taking verb uses. `where`'s agent path ignores
+    // precedence every session-taking command uses. `where`'s agent path ignores
     // the env on purpose (the row names the host); this branch cannot.
     let session = resolve_session(session_flag, env_session);
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             return EXIT_USAGE;
         }
     };
     let stream = match proto::connect_unix_timeout(&sock, PROBE_TIMEOUT) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{verb}: cannot reach session {session:?} for a location lookup: {e}");
+            eprintln!("{command}: cannot reach session {session:?} for a location lookup: {e}");
             return EXIT_ERROR;
         }
     };
     let reply = match send_control(
         stream,
-        ControlVerb::TabWhere {
+        ControlCommand::TabWhere {
             squad: squad_target(workspace.map(str::to_string)),
             sel: sel.to_string(),
         },
@@ -3578,15 +3560,15 @@ fn location_lookup(
     ) {
         Ok(r) => r,
         Err(ControlError::Unanswered(e)) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             return EXIT_CONTROL_UNANSWERED;
         }
         Err(ControlError::Fatal(e)) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             return EXIT_ERROR;
         }
         Err(ControlError::FatalCode { msg, .. }) => {
-            eprintln!("{verb}: {msg}");
+            eprintln!("{command}: {msg}");
             return EXIT_ERROR;
         }
     };
@@ -3597,7 +3579,7 @@ fn location_lookup(
             // URL on stdout, never the client move - the same precedence the
             // agent-matched path of `view` gives the flag.
             if url {
-                return crate::web::print_pane_url(verb, &session, pane);
+                return crate::web::print_pane_url(command, &session, pane);
             }
             // JSON stdout carries exactly ONE document: this receipt. The
             // focus action still runs, but its own receipt is suppressed for
@@ -3607,7 +3589,7 @@ fn location_lookup(
             if code != EXIT_OK {
                 return code;
             }
-            return focus_pane(verb, &session, pane, !json, json);
+            return focus_pane(command, &session, pane, !json, json);
         }
     }
     render_reply(reply, json, false, None)
@@ -3619,7 +3601,7 @@ fn location_lookup(
 /// keep their own exit class.
 #[allow(clippy::too_many_arguments)]
 fn resolve_row_or_location(
-    verb: &str,
+    command: &str,
     selector: &str,
     workspace: Option<&str>,
     session_flag: Option<&str>,
@@ -3628,15 +3610,15 @@ fn resolve_row_or_location(
     focus: bool,
     url: bool,
 ) -> Result<crate::agents_view::RegistryAgent, i32> {
-    let (rows, now) = registry_rows_or(verb)?;
+    let (rows, now) = registry_rows_or(command)?;
     match resolve_selector(&rows, selector, now) {
         Resolution::Found(row) => Ok(*row),
         Resolution::Ambiguous(candidates) => {
-            print_candidates(verb, selector, &candidates);
+            print_candidates(command, selector, &candidates);
             Err(EXIT_AMBIGUOUS)
         }
         Resolution::NotFound => Err(location_lookup(
-            verb,
+            command,
             selector,
             workspace,
             session_flag,
@@ -3655,16 +3637,16 @@ fn resolve_row_or_location(
 /// that hosts no pane degrades to a `peek` hint (Locked Decision 1). A
 /// selector that names no agent is retried as a tab LOCATION.
 pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
-    let verb = "fno mux view";
+    let command = "fno mux view";
     let (common, rest) = match MuxCommon::take(args) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("{verb}: {e}");
+            eprintln!("{command}: {e}");
             return EXIT_USAGE;
         }
     };
     let (session_flag, json) = (common.server.or(common.session), common.json);
-    let (workspace, rest) = match take_workspace_flag(verb, rest) {
+    let (workspace, rest) = match take_workspace_flag(command, rest) {
         Ok(t) => t,
         Err(code) => return code,
     };
@@ -3676,17 +3658,17 @@ pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
             "--url" => url = true,
             "--fzf" => fzf = true,
             other if other.starts_with("--") => {
-                eprintln!("{verb}: unknown flag: {other}");
+                eprintln!("{command}: unknown flag: {other}");
                 return EXIT_USAGE;
             }
             other => {
                 if selector.is_some() {
-                    eprintln!("{verb}: takes one selector");
+                    eprintln!("{command}: takes one selector");
                     return EXIT_USAGE;
                 }
                 let s = other.trim().to_string();
                 if s.is_empty() {
-                    eprintln!("{verb}: selector is empty");
+                    eprintln!("{command}: selector is empty");
                     return EXIT_USAGE;
                 }
                 selector = Some(s);
@@ -3695,17 +3677,19 @@ pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
     }
     if fzf {
         if selector.is_some() {
-            eprintln!("{verb}: --fzf takes no selector");
+            eprintln!("{command}: --fzf takes no selector");
             return EXIT_USAGE;
         }
-        return view_picker(verb, json, url);
+        return view_picker(command, json, url);
     }
     let Some(selector) = selector else {
-        eprintln!("{verb}: needs a selector (a node id, slug, name, or tab ordinal/id), or --fzf");
+        eprintln!(
+            "{command}: needs a selector (a node id, slug, name, or tab ordinal/id), or --fzf"
+        );
         return EXIT_USAGE;
     };
     let row = match resolve_row_or_location(
-        verb,
+        command,
         &selector,
         workspace.as_deref(),
         session_flag.as_deref(),
@@ -3725,29 +3709,29 @@ pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
         .clone()
         .or_else(|| pane_table_host(&row, &resolve_session(session_flag.as_deref(), env_session)));
     let Some((host_session, pane)) = hosted else {
-        eprintln!("{}", paneless_route_hint(verb, &row));
+        eprintln!("{}", paneless_route_hint(command, &row));
         return EXIT_NOT_PANE_HOSTED;
     };
     if url {
-        return crate::web::print_pane_url(verb, &host_session, pane);
+        return crate::web::print_pane_url(command, &host_session, pane);
     }
     let session = resolve_session(session_flag.as_deref(), Some(&host_session));
-    focus_pane(verb, &session, pane, true, json)
+    focus_pane(command, &session, pane, true, json)
 }
 
-// The `fno mux thread` verb, same child-module pattern.
-mod thread_verb;
-pub use thread_verb::thread;
+// The `fno mux thread` command, same child-module pattern.
+mod thread_command;
+pub use thread_command::thread;
 pub mod web_ctl;
 // (v71) The prune aftermath (reload live servers + the receipt), same rule.
 mod prune_sync;
 // (v71) The live-tab fold, same rule; its tests moved with it.
 mod tab_prune;
 use tab_prune::{live_tabs, prune_live_tabs_measuring_named, TabPruneOutcome};
-// (v72) The `fno mux thread reseat` verb, same child-module pattern.
-mod reseat_verb;
-pub use reseat_verb::reseat;
-// (v75) The `fno mux retire-session` verb, same child-module pattern.
+// (v72) The `fno mux thread reseat` command, same child-module pattern.
+mod reseat_command;
+pub use reseat_command::reseat;
+// (v75) The `fno mux retire-session` command, same child-module pattern.
 mod retire_session;
 pub use retire_session::retire_session;
 
@@ -3857,7 +3841,7 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
     };
     match send_control(
         stream,
-        ControlVerb::PaneWhere { fno_id },
+        ControlCommand::PaneWhere { fno_id },
         CONTROL_TIMEOUT,
         CONTROL_REPLY_DEADLINE,
         &session,
@@ -3878,7 +3862,7 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
     }
 }
 
-/// Resolve `PaneCmd` -> a control verb + the read deadline, then run it.
+/// Resolve `PaneCmd` -> a control command + the read deadline, then run it.
 pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
     // `pane ls --fno-id` filters the listing client-side over the
     // reply's PaneInfo.fno_id, so capture the filter before `cmd` is consumed.
@@ -3887,33 +3871,35 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
         _ => None,
     };
     // `pane run` self-spawns a server for a script-only session (AC1-EDGE);
-    // every other verb operates on an existing server. `pane ls` against no
+    // every other command operates on an existing server. `pane ls` against no
     // server is "no panes" (exit 0); the rest are an error (nothing to act on).
     let mut review_command = None;
     // The pane-send audit row, staged where the exact bytes are
     // known; emitted once the outcome (exit code) is known - inline on the
     // submit path, in the shared tail on the paste path.
     let mut pane_send_audit: Option<PaneSendAudit> = None;
-    let (verb, read_timeout) = match cmd {
+    let (command, read_timeout) = match cmd {
         // pane() intercepts the keeper read before dispatch; it needs no
         // server and this arm exists to keep the match total.
         PaneCmd::KeeperList { .. } => unreachable!("keeper list never reaches dispatch"),
-        PaneCmd::Ls { .. } => (ControlVerb::PaneLs, CONTROL_TIMEOUT),
+        PaneCmd::Ls { .. } => (ControlCommand::PaneLs, CONTROL_TIMEOUT),
         PaneCmd::Split {
             pane,
             direction,
             focus,
         } => (
-            ControlVerb::PaneSplit {
+            ControlCommand::PaneSplit {
                 pane,
                 direction,
                 no_focus: !focus,
             },
             CONTROL_TIMEOUT,
         ),
-        PaneCmd::Break { pane, name } => (ControlVerb::PaneBreak { pane, name }, CONTROL_TIMEOUT),
+        PaneCmd::Break { pane, name } => {
+            (ControlCommand::PaneBreak { pane, name }, CONTROL_TIMEOUT)
+        }
         PaneCmd::Focus { target } => match target {
-            FocusTarget::Pane(pane) => (ControlVerb::PaneFocus { pane }, CONTROL_TIMEOUT),
+            FocusTarget::Pane(pane) => (ControlCommand::PaneFocus { pane }, CONTROL_TIMEOUT),
             // A selector/picker focus is resolved against the registry in
             // `pane()` before any socket is opened, so only a concrete pane
             // can reach dispatch.
@@ -3923,7 +3909,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             FocusTarget::Pick => unreachable!("--fzf must be run in pane() first"),
         },
         PaneCmd::Read { pane, lines, block } => (
-            ControlVerb::PaneRead { pane, lines, block },
+            ControlCommand::PaneRead { pane, lines, block },
             CONTROL_TIMEOUT,
         ),
         PaneCmd::Run {
@@ -3937,7 +3923,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
         } => {
             let cwd = resolve_run_cwd(cwd, std::env::current_dir().ok());
             (
-                ControlVerb::PaneRun {
+                ControlCommand::PaneRun {
                     cwd,
                     argv,
                     cols: size.map(|s| s.0),
@@ -4062,7 +4048,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
                 return code;
             }
             (
-                ControlVerb::PaneSend {
+                ControlCommand::PaneSend {
                     pane,
                     bytes,
                     guarded,
@@ -4079,7 +4065,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             timeout_ms,
             command_done,
         } => (
-            ControlVerb::PaneWait {
+            ControlCommand::PaneWait {
                 pane,
                 quiet_ms,
                 pattern,
@@ -4088,27 +4074,28 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             },
             Duration::from_millis(timeout_ms) + Duration::from_secs(2),
         ),
-        PaneCmd::Kill { pane, hand_off_to } => {
-            (ControlVerb::PaneKill { pane, hand_off_to }, CONTROL_TIMEOUT)
-        }
+        PaneCmd::Kill { pane, hand_off_to } => (
+            ControlCommand::PaneKill { pane, hand_off_to },
+            CONTROL_TIMEOUT,
+        ),
         PaneCmd::Claim { pane, pid } => (
-            ControlVerb::PaneClaim {
+            ControlCommand::PaneClaim {
                 pane,
                 holder_pid: pid,
             },
             CONTROL_TIMEOUT,
         ),
-        PaneCmd::Release { pane } => (ControlVerb::PaneRelease { pane }, CONTROL_TIMEOUT),
+        PaneCmd::Release { pane } => (ControlCommand::PaneRelease { pane }, CONTROL_TIMEOUT),
     };
 
-    let is_run = matches!(verb, ControlVerb::PaneRun { .. });
-    let is_ls = matches!(verb, ControlVerb::PaneLs);
-    // Named explicitly from the verb, never inferred from read_timeout's
+    let is_run = matches!(command, ControlCommand::PaneRun { .. });
+    let is_ls = matches!(command, ControlCommand::PaneLs);
+    // Named explicitly from the command, never inferred from read_timeout's
     // VALUE: `pane wait --timeout 8` computes a 10s read_timeout (timeout_ms
     // + 2s) that collides with the CONTROL_TIMEOUT constant, and a duration
     // equality check would misread that as "not a wait" and hand it the 30s
     // extended window instead of respecting its own 10s bound.
-    let is_wait = matches!(verb, ControlVerb::PaneWait { .. });
+    let is_wait = matches!(command, ControlCommand::PaneWait { .. });
     let stream = if is_run {
         match crate::client::connect_or_spawn(sock, false) {
             Ok(s) => s,
@@ -4150,15 +4137,15 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
     // Whether the caller asked for --command-done: used to note the markerless
     // degradation when the server answers Quiet/Timeout instead of CommandDone.
     let command_done_requested = matches!(
-        &verb,
-        ControlVerb::PaneWait {
+        &command,
+        ControlCommand::PaneWait {
             command_done: true,
             ..
         }
     );
     let code = match send_control(
         stream,
-        verb,
+        command,
         read_timeout,
         reply_deadline_for(is_wait, read_timeout),
         session,
@@ -4203,7 +4190,7 @@ pub(crate) enum ControlError {
     Fatal(String),
     /// The server refused with an actionable protocol error code.
     FatalCode { code: u32, msg: String },
-    /// The verb reached the server and no reply came back inside the deadline.
+    /// The command reached the server and no reply came back inside the deadline.
     /// The server's side of the exchange is UNKNOWN, not failed.
     Unanswered(String),
 }
@@ -4217,15 +4204,15 @@ impl std::fmt::Display for ControlError {
     }
 }
 
-/// Write the control verb, read exactly one reply. A closed connection with no
+/// Write the control command, read exactly one reply. A closed connection with no
 /// reply means the server could not parse a v4 Control - almost certainly a
 /// pre-v4 server (AC4-FR): report it loudly, naming this client's proto. A
 /// read that times out with nothing consumed is polled again up to
-/// `reply_deadline`: the verb has already reached the server, so re-sending it
+/// `reply_deadline`: the command has already reached the server, so re-sending it
 /// (rather than continuing to read) would risk a second pane (LD1).
 pub(crate) fn send_control(
     stream: std::os::unix::net::UnixStream,
-    verb: ControlVerb,
+    command: ControlCommand,
     read_timeout: Duration,
     reply_deadline: Duration,
     session: &str,
@@ -4238,10 +4225,10 @@ pub(crate) fn send_control(
         &ClientMsg::Control {
             proto: PROTO_VERSION,
             build: BUILD_VERSION.to_string(),
-            verb,
+            command,
         },
     )
-    .map_err(|e| ControlError::Fatal(format!("could not send the control verb: {e}")))?;
+    .map_err(|e| ControlError::Fatal(format!("could not send the control command: {e}")))?;
     let mut r = stream;
     let _ = r.set_read_timeout(Some(read_timeout));
 
@@ -4251,7 +4238,7 @@ pub(crate) fn send_control(
             Ok(msg) => return Ok(msg),
             Err(crate::proto::ProtoError::Closed) => {
                 return Err(ControlError::Fatal(format!(
-                    "no response from the server; it may predate v4 control verbs \
+                    "no response from the server; it may predate v4 control commands \
                      (this client speaks proto {PROTO_VERSION}). Restart the server \
                      (fno mux kill-server) and retry."
                 )))
@@ -4259,7 +4246,7 @@ pub(crate) fn send_control(
             Err(crate::proto::ProtoError::Io(e)) if crate::proto::is_retryable(&e) => {
                 // Nothing of the frame was consumed, so the stream is still
                 // positioned at a boundary and the reply may yet land. Never
-                // re-send the verb (LD1): the server may already be acting on it.
+                // re-send the command (LD1): the server may already be acting on it.
                 if Instant::now() < deadline {
                     continue;
                 }
@@ -4828,7 +4815,7 @@ fn render_reply(
 
 /// Data-integrity gate on the source block's metadata: an open (still
 /// running) or byte-cap-truncated block must never pipe - partial text is
-/// worse than no pipe (the verb's contract). Distinct from the idle guard:
+/// worse than no pipe (the command's contract). Distinct from the idle guard:
 /// `--force` does NOT bypass this (an incomplete block does not become
 /// complete because a human insists; wait or use `pane read` directly).
 fn pipe_block_gate(meta: Option<&proto::BlockMeta>) -> Result<(), String> {
@@ -4847,7 +4834,7 @@ fn pipe_block_gate(meta: Option<&proto::BlockMeta>) -> Result<(), String> {
     // A markerless pane has no command boundaries, so `--block last` degrades
     // to the whole-scrollback implicit block - which reports complete=true
     // even while a command is still running (there is no D marker to prove
-    // otherwise). block pipe is a TYPED-block verb (the node's contract), so
+    // otherwise). block pipe is a TYPED-block command (the node's contract), so
     // refuse the implicit block rather than pipe unbounded, possibly
     // mid-command screen text at exit 0.
     if m.implicit {
@@ -4860,34 +4847,40 @@ fn pipe_block_gate(meta: Option<&proto::BlockMeta>) -> Result<(), String> {
     Ok(())
 }
 
-/// One control round-trip on a fresh one-shot connection (the pane verbs'
+/// One control round-trip on a fresh one-shot connection (the pane commands'
 /// connect + [`send_control`], factored so `block pipe` can do two in a row).
 /// Timeouts are parameters, not the hardcoded constants, so a test can force
 /// `Unanswered` in milliseconds instead of waiting out `CONTROL_REPLY_DEADLINE`.
 pub(crate) fn control_roundtrip_with_timeouts(
     sock: &Path,
     session: &str,
-    verb: ControlVerb,
+    command: ControlCommand,
     read_timeout: Duration,
     reply_deadline: Duration,
 ) -> Result<ServerMsg, ControlError> {
     let stream = std::os::unix::net::UnixStream::connect(sock)
         .map_err(|e| ControlError::Fatal(format!("cannot reach session {session:?}: {e}")))?;
-    send_control(stream, verb, read_timeout, reply_deadline, session)
+    send_control(stream, command, read_timeout, reply_deadline, session)
 }
 
 pub(crate) fn control_roundtrip(
     sock: &Path,
     session: &str,
-    verb: ControlVerb,
+    command: ControlCommand,
 ) -> Result<ServerMsg, ControlError> {
-    control_roundtrip_with_timeouts(sock, session, verb, CONTROL_TIMEOUT, CONTROL_REPLY_DEADLINE)
+    control_roundtrip_with_timeouts(
+        sock,
+        session,
+        command,
+        CONTROL_TIMEOUT,
+        CONTROL_REPLY_DEADLINE,
+    )
 }
 
 /// `fno mux block pipe --from <pane> --to <pane> [--block last|<seq>] [--json]
 /// [--force]`: read a COMPLETED block from the source pane and land its text
 /// in the target pane's input. Porcelain over `pane read --block` + `pane
-/// send` - no new capability, one verb. Trailing newlines are stripped so the
+/// send` - no new capability, one command. Trailing newlines are stripped so the
 /// pipe fills the input line and never submits it.
 fn block_pipe(args: &[OsString], env_session: Option<&str>) -> i32 {
     let parsed = match parse_block_args(args) {
@@ -4911,7 +4904,7 @@ fn block_pipe(args: &[OsString], env_session: Option<&str>) -> i32 {
     let (text, meta) = match control_roundtrip(
         &sock,
         &session,
-        ControlVerb::PaneRead {
+        ControlCommand::PaneRead {
             pane: parsed.from,
             lines: None,
             block: Some(parsed.block),
@@ -4973,7 +4966,7 @@ fn block_pipe(args: &[OsString], env_session: Option<&str>) -> i32 {
     match control_roundtrip(
         &sock,
         &session,
-        ControlVerb::PaneSend {
+        ControlCommand::PaneSend {
             pane: parsed.to,
             bytes,
             guarded: !parsed.force,
@@ -5072,7 +5065,7 @@ fn block_annotate(args: &[OsString], env_session: Option<&str>) -> i32 {
     let (text, meta) = match control_roundtrip(
         &sock,
         &session,
-        ControlVerb::PaneRead {
+        ControlCommand::PaneRead {
             pane: parsed.from,
             lines: None,
             block: Some(parsed.block),
@@ -5117,7 +5110,7 @@ fn block_annotate(args: &[OsString], env_session: Option<&str>) -> i32 {
     //    review) and there is nothing to clean up.
     let excerpt = cap_excerpt(&text, ANNOTATE_EXCERPT_CAP);
 
-    // 3. Shell the note verb (`fno backlog note <node> --blocking`) via this
+    // 3. Shell the note command (`fno backlog note <node> --blocking`) via this
     //    binary's own `fno` entrypoint, so the finding recording + claim-holder
     //    delivery ladder lives in one place. The excerpt rides stdin
     //    (`--block-excerpt-file -`), never a temp file. The findings store is
@@ -5170,7 +5163,7 @@ fn cap_excerpt(text: &str, cap: usize) -> String {
     format!("{}\n... [truncated to {cap} bytes]", &text[..end])
 }
 
-/// `fno mux block <verb> ...`: route the block verb family. `pipe`
+/// `fno mux block <command> ...`: route the block command family. `pipe`
 /// pipes a completed block into another pane's input; `annotate`
 /// records it as an operator review finding.
 pub fn block(op: crate::cli_args::BlockOp, args: &[OsString], env_session: Option<&str>) -> i32 {
@@ -5193,20 +5186,20 @@ mod tests {
     mod paneless_hint_tests;
 
     // The reseat registry-half tests, same reason.
-    #[path = "reseat_verb_tests.rs"]
-    mod reseat_verb_tests;
+    #[path = "reseat_command_tests.rs"]
+    mod reseat_command_tests;
 
     // (v75) The control_roundtrip typed-error test, moved out under the same
-    // rule as the retire-session verb landed beside it.
+    // rule as the retire-session command landed beside it.
     #[path = "control_roundtrip_tests.rs"]
     mod control_roundtrip_tests;
 
     #[test]
     fn squad_target_reads_the_id_spelling_pane_ls_reports() {
-        // `pane ls` answers with a squad id; before this the tab verbs took only
+        // `pane ls` answers with a squad id; before this the tab commands took only
         // a name, so a caller holding a pane's own squad_id had to fall back to
         // CurrentRoute - which resolves by GAZE on the tab path and by CWD on the
-        // pane path. Two defaults for one token is what split the two verbs.
+        // pane path. Two defaults for one token is what split the two commands.
         assert_eq!(squad_target(Some("id:5".into())), PaneTarget::SquadId(5));
         assert_eq!(squad_target(Some("id:0".into())), PaneTarget::SquadId(0));
         // A bare name keeps its meaning.
@@ -5256,7 +5249,7 @@ mod tests {
     fn pane_positional_parse_rows_session_and_cmd_pairs() {
         // The daemon's pane-worker refusals print exactly `main:76`; the
         // parser must accept its own instrument's remedy. One grammar covers
-        // selector, --session override and bare id across the reference verbs.
+        // selector, --session override and bare id across the reference commands.
         let rows: &[(&[&str], Option<&str>, PaneCmd)] = &[
             (
                 &["kill", "main:76"],
@@ -5306,7 +5299,7 @@ mod tests {
 
     #[test]
     fn pane_help_names_the_two_pane_reference_forms() {
-        // The verb-position help request renders the pane group's help now
+        // The command-position help request renders the pane group's help now
         // (clap); its after_help carries the pane reference line. The run
         // tail's own -h reaches the same text, plus the worker flag contract.
         let group = crate::cli_args::pane_group_help();
@@ -5324,7 +5317,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_positional_session_colon_parity_covers_every_pane_reference_verb() {
+    fn pane_positional_session_colon_parity_covers_every_pane_reference_command() {
         let cases: &[&[&str]] = &[
             &["read", "3"],
             &["split", "3", "--direction", "left"],
@@ -5341,7 +5334,7 @@ mod tests {
             qualified[1] = "main:3";
             let bare = pane_args(bare).expect("bare pane ref must parse");
             let qualified = pane_args(&qualified).expect("qualified pane ref must parse");
-            assert_eq!(bare.cmd, qualified.cmd, "verb {:?}", bare.cmd);
+            assert_eq!(bare.cmd, qualified.cmd, "command {:?}", bare.cmd);
             assert_eq!(bare.session, None);
             assert_eq!(qualified.session.as_deref(), Some("main"));
         }
@@ -5349,7 +5342,7 @@ mod tests {
 
     #[test]
     fn pane_malformed_selector_names_the_raw_token() {
-        // Same refusal shape for every verb and every malformed spelling.
+        // Same refusal shape for every command and every malformed spelling.
         let rows: &[(&[&str], &str)] = &[
             (
                 &["kill", "main:x"],
@@ -5368,7 +5361,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_selector_serves_every_pane_positional_verb() {
+    fn pane_selector_serves_every_pane_positional_command() {
         // One grammar for every pane positional, not a kill-only special case.
         let parsed = pane_args(&["send", "work:9", "--text", "hi"]).expect("must parse");
         assert_eq!(parsed.session.as_deref(), Some("work"));
@@ -5965,7 +5958,7 @@ mod tests {
         holder.wait().unwrap();
     }
 
-    // -- pane verb parsing (the socket-free grammar) -----------------------
+    // -- pane command parsing (the socket-free grammar) -----------------------
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
@@ -6191,7 +6184,7 @@ mod tests {
                 hold_pass: false,
             }
         );
-        // A valueless flag and a non-send verb are usage errors, mirroring
+        // A valueless flag and a non-send command are usage errors, mirroring
         // `--raw`: a silently ignored flag would read as "the exception held".
         assert!(parse_pane_args(&op_of("send"), &os(&["2", "--style-exception"])).is_err());
         assert!(parse_pane_args(&op_of("read"), &os(&["2", "--style-exception", "why"])).is_err());
@@ -6223,15 +6216,15 @@ mod tests {
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         let connections = std::sync::Arc::new(AtomicU32::new(0));
         let connections_srv = connections.clone();
-        let received: std::sync::Arc<Mutex<Option<ControlVerb>>> =
+        let received: std::sync::Arc<Mutex<Option<ControlCommand>>> =
             std::sync::Arc::new(Mutex::new(None));
         let received_srv = received.clone();
         let server = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             connections_srv.fetch_add(1, AtomicOrdering::SeqCst);
             let msg: ClientMsg = read_msg_sync(&mut s).unwrap();
-            if let ClientMsg::Control { verb, .. } = msg {
-                *received_srv.lock().unwrap() = Some(verb);
+            if let ClientMsg::Control { command, .. } = msg {
+                *received_srv.lock().unwrap() = Some(command);
             }
             write_msg_sync(&mut s, &ServerMsg::Ok).unwrap();
         });
@@ -6291,7 +6284,7 @@ mod tests {
         // tail expression it would outlive `received` (E0597).
         let arrived = received.lock().unwrap().take();
         match arrived {
-            Some(ControlVerb::PaneSend { bytes, .. }) => assert_eq!(
+            Some(ControlCommand::PaneSend { bytes, .. }) => assert_eq!(
                 bytes, payload,
                 "raw must deliver the byte-identical payload"
             ),
@@ -6327,15 +6320,15 @@ mod tests {
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         let connections = std::sync::Arc::new(AtomicU32::new(0));
         let connections_srv = connections.clone();
-        let received: std::sync::Arc<Mutex<Option<ControlVerb>>> =
+        let received: std::sync::Arc<Mutex<Option<ControlCommand>>> =
             std::sync::Arc::new(Mutex::new(None));
         let received_srv = received.clone();
         let server = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             connections_srv.fetch_add(1, AtomicOrdering::SeqCst);
             let msg: ClientMsg = read_msg_sync(&mut s).unwrap();
-            if let ClientMsg::Control { verb, .. } = msg {
-                *received_srv.lock().unwrap() = Some(verb);
+            if let ClientMsg::Control { command, .. } = msg {
+                *received_srv.lock().unwrap() = Some(command);
             }
             write_msg_sync(&mut s, &ServerMsg::Ok).unwrap();
         });
@@ -6373,7 +6366,7 @@ mod tests {
         );
         let arrived = received.lock().unwrap().take();
         match arrived {
-            Some(ControlVerb::PaneSend { bytes, .. }) => assert_eq!(
+            Some(ControlCommand::PaneSend { bytes, .. }) => assert_eq!(
                 bytes, small,
                 "the delivered raw payload is the small one, byte for byte"
             ),
@@ -6447,7 +6440,7 @@ mod tests {
     }
 
     #[test]
-    fn mux_pane_parse_rejects_bad_verbs_flags_and_ids() {
+    fn mux_pane_parse_rejects_bad_commands_flags_and_ids() {
         assert!(parse_pane_args(&op_of("read"), &os(&["notanumber"])).is_err());
         assert!(parse_pane_args(&op_of("read"), &os(&["7", "--nope"])).is_err());
         assert!(
@@ -6751,8 +6744,8 @@ mod tests {
 
     #[test]
     fn block_pipe_usage_errors() {
-        // Missing --from / --to, an unknown flag, and an unknown verb are all
-        // parse errors (exit 2 at the verb), never a partial pipe.
+        // Missing --from / --to, an unknown flag, and an unknown command are all
+        // parse errors (exit 2 at the command), never a partial pipe.
         assert!(parse_block_args(&os(&["pipe", "--to", "2"])).is_err());
         assert!(parse_block_args(&os(&["--from", "4"])).is_err());
         assert!(parse_block_args(&os(&["--from", "4", "--to", "2", "--oops"])).is_err());
@@ -6783,7 +6776,7 @@ mod tests {
         let err = pipe_block_gate(Some(&meta(Some(7), true, true, false))).unwrap_err();
         assert!(err.contains("truncated"), "{err}");
         // A markerless implicit block (whole scrollback, complete=true even
-        // mid-command) is refused: block pipe is a typed-block verb.
+        // mid-command) is refused: block pipe is a typed-block command.
         let err = pipe_block_gate(Some(&meta(None, true, false, true))).unwrap_err();
         assert!(err.contains("no command markers"), "{err}");
     }
@@ -6793,12 +6786,12 @@ mod tests {
         // `pane wait --timeout 8` computes read_timeout = 8s + 2s = 10s,
         // exactly CONTROL_TIMEOUT. A duration-equality check would misread
         // this as "not a wait" and hand it the 30s extended window; is_wait
-        // must come from the verb's type, so this stays bounded at its own
+        // must come from the command's type, so this stays bounded at its own
         // 10s regardless of the coincidence.
         let collided = Duration::from_secs(8) + Duration::from_secs(2);
         assert_eq!(collided, CONTROL_TIMEOUT);
         assert_eq!(reply_deadline_for(true, collided), collided);
-        // A non-wait verb always gets the fixed extended window.
+        // A non-wait command always gets the fixed extended window.
         assert_eq!(
             reply_deadline_for(false, CONTROL_TIMEOUT),
             CONTROL_REPLY_DEADLINE
@@ -6839,7 +6832,7 @@ mod tests {
         let started = Instant::now();
         let result = send_control(
             stream,
-            ControlVerb::PaneLs,
+            ControlCommand::PaneLs,
             Duration::from_millis(200),
             Duration::from_secs(2),
             "test-session",
@@ -6864,7 +6857,7 @@ mod tests {
     fn control_send_gives_up_honestly_when_nothing_ever_arrives() {
         // A fake server that reads the Control frame and never replies. The
         // client must give up as UNKNOWN, not fatal, and must never re-send
-        // the verb (LD1) - asserted by the server counting exactly one frame.
+        // the command (LD1) - asserted by the server counting exactly one frame.
         let sock = control_test_sock("unanswered");
         let _ = std::fs::remove_file(&sock);
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -6882,7 +6875,7 @@ mod tests {
         let started = Instant::now();
         let result = send_control(
             stream,
-            ControlVerb::PaneLs,
+            ControlCommand::PaneLs,
             Duration::from_millis(100),
             Duration::from_millis(500),
             "test-session",
@@ -6905,7 +6898,7 @@ mod tests {
         assert_eq!(
             frames_read.load(std::sync::atomic::Ordering::SeqCst),
             1,
-            "LD1: the verb must never be re-sent while a reply may still be coming"
+            "LD1: the command must never be re-sent while a reply may still be coming"
         );
     }
 
@@ -6926,7 +6919,7 @@ mod tests {
         let stream = std::os::unix::net::UnixStream::connect(&sock).unwrap();
         let result = send_control(
             stream,
-            ControlVerb::PaneLs,
+            ControlCommand::PaneLs,
             Duration::from_millis(50),
             Duration::from_millis(150),
             "test-session",

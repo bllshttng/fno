@@ -1162,7 +1162,7 @@ fn is_open_do_row(row: &Value) -> bool {
 }
 
 /// Best-effort release of the `node:<id>` lockfile. Releases stale or own
-/// holders; keeps a LIVE foreign holder. Never fails the verb.
+/// holders; keeps a LIVE foreign holder. Never fails the command.
 pub(crate) fn release_node_lockfile(node_id: &str) -> String {
     let key = format!("node:{node_id}");
     let roots: Vec<Option<PathBuf>> = {
@@ -1406,7 +1406,7 @@ pub fn run_retract(tail: &[String]) -> i32 {
 
 /// The shared defer write: validate every id, warn on dependents, stamp
 /// status + deferred_reason (+ kind) per node, one locked mutation.
-fn defer_batch(ids_raw: &[String], reason: &str, kind: Option<&str>, verb: &str) -> i32 {
+fn defer_batch(ids_raw: &[String], reason: &str, kind: Option<&str>, command: &str) -> i32 {
     let graph = settings::graph_path();
     let Ok(rows) = graph_store::read_rows(&graph) else {
         eprintln!("Error: the backlog graph could not be read");
@@ -1491,7 +1491,7 @@ fn defer_batch(ids_raw: &[String], reason: &str, kind: Option<&str>, verb: &str)
         return 1;
     }
     for id in &ids {
-        println!("{verb} {id}: \"{reason}\"");
+        println!("{command} {id}: \"{reason}\"");
     }
     project_plans_for(&ids);
     0
@@ -1663,7 +1663,7 @@ pub fn run_undefer(tail: &[String]) -> i32 {
 
 /// The reversal-form ruling lines (`{prefix}: {id} is rejected by {by} in
 /// {plan}: {reason}`), over the decisions door's own scan. `anchor_cwd`
-/// pins the plans probe to the target node's project (the deleted verb's
+/// pins the plans probe to the target node's project (the deleted command's
 /// `plans_content_dir(Path(node.cwd))`); None anchors on the invoking cwd.
 fn ruling_lines_for(node_id: &str, prefix: &str, anchor_cwd: Option<&str>) -> Vec<String> {
     let dir = match anchor_cwd {
@@ -2168,7 +2168,7 @@ pub fn run_ready(tail: &[String]) -> i32 {
 
 const REMOVE_HELP: &str = "Usage: fno backlog remove TASK_ID [--force]
 
-Delete a node from the graph permanently. This verb exists and works.
+Delete a node from the graph permanently. This command exists and works.
 
 Options:
   -F, --force  Skip cascade warning

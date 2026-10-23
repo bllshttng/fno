@@ -43,7 +43,7 @@ done
 # ab-18563bcc US7: the hook prefers the published PyPI platform wheel BY NAME
 # (binary-complete), guards it against the name collision / reserved placeholder
 # via a version match, falls back to the bundled source, and reports which path
-# it took so the user knows whether daemon-backed verbs will work. The version
+# it took so the user knows whether daemon-backed commands will work. The version
 # source is plugin.json - release.yml stamps it per channel, and it is the one
 # version field the plugin channels keep distinct (x-503d).
 for needle in \

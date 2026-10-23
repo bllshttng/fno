@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 requires_rust = pytest.mark.dev_build
 
@@ -49,7 +49,7 @@ def _binding_request(tmp_path: Path, body: str = "plan bytes\n") -> dict:
 
 def _write_bound_binding(tmp_path: Path, binding_file: Path) -> dict:
     request = _binding_request(tmp_path)
-    answer = verb_call("task-context-prepare", {"binding": request})
+    answer = command_call("task-context-prepare", {"binding": request})
     assert answer["ok"] is True, answer
     bound = dict(request)
     bound["binding_digest"] = answer["binding_digest"]
@@ -61,7 +61,7 @@ def _gate(node: str, root: str, env: dict | None = None) -> dict:
     request = {"node": node, "root": root}
     if env is not None:
         request["env"] = env
-    return verb_call("task-context-gate", request)
+    return command_call("task-context-gate", request)
 
 
 @requires_rust
@@ -97,7 +97,7 @@ def _minimal_receipt(**kwargs):
         worktree="/wt/x-59b0",
         branch="feature/x-59b0",
         head="b48ba4b8cfff",
-        next_verb="/fno:target",
+        next_command="/fno:target",
         next_target="x-59b0",
         written_at="2026-09-12T00:00:00Z",
     )
@@ -151,7 +151,7 @@ def test_write_with_malformed_task_context_file_refuses_by_name(tmp_path, monkey
             "--worktree", str(tmp_path),
             "--branch", "feature/x-59b0",
             "--head", "b48ba4b8cfff",
-            "--next-verb", "/fno:target",
+            "--next-command", "/fno:target",
             "--next-target", "x-59b0",
         ],
         env={"FNO_TASK_CONTEXT_FILE": str(bad)},

@@ -3,7 +3,7 @@
 //! payload shape (the env map, an optional sandbox block, the foreign-endpoint
 //! tool denies), the sha256[:16] content address, the 0600 atomic publish and
 //! the stable `lane-<row>.json` alias a routing row's native line prints. The
-//! door verb reads the composed env on STDIN - it carries
+//! door command reads the composed env on STDIN - it carries
 //! `ANTHROPIC_AUTH_TOKEN`, which must never ride argv - and answers
 //! `{"path", "alias_path"}` on stdout.
 

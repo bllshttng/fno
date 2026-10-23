@@ -1411,7 +1411,7 @@ pub fn resolve_targets(config_cwd: &Path, registry_path: &Path) -> Vec<ResolvedT
 
 /// The drain-target receipt, computed natively from the territory fact set
 /// (`territory::resolve_territories` + the `active_backlog` config block) -
-/// the same JSON shape the Python `fno config active-backlog --json` verb
+/// the same JSON shape the Python `fno config active-backlog --json` command
 /// prints, so the supervisor and the passthroughs read one contract. An
 /// unreadable source is the Err naming it; never an empty list read as
 /// "nothing enabled".
@@ -2382,7 +2382,7 @@ mod tests {
     }
 
     /// Like [`stub_fno`], but `backlog get` answers with `node_json` on stdout so
-    /// a test can control whether the node carries a PR ref. Every other verb
+    /// a test can control whether the node carries a PR ref. Every other command
     /// records its argv and exits 0.
     fn stub_fno_get(dir: &std::path::Path, record: &std::path::Path, node_json: &str) -> String {
         std::fs::create_dir_all(dir).unwrap();
@@ -2736,7 +2736,7 @@ mod tests {
     }
 
     /// `backlog advance --epic` answers `advance_json`; `backlog get` answers
-    /// `node_json`; every other verb appends its argv to `record`. For the
+    /// `node_json`; every other command appends its argv to `record`. For the
     /// synchronous-child tests, which read graph state AND fire defers.
     fn stub_fno_advance_and_get(
         dir: &std::path::Path,
@@ -2859,7 +2859,7 @@ mod tests {
         );
     }
 
-    /// A stub `fno` that answers the drain's three verbs AND records EVERY
+    /// A stub `fno` that answers the drain's three commands AND records EVERY
     /// argv, so a paused cycle is proven silent against a recorder the clear
     /// cycle proves live (the positive control).
     fn stub_fno_drain_recorder(

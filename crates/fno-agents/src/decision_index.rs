@@ -1,6 +1,6 @@
 //! One shared read of the machine decision store: graph.db decisions plus
 //! the legacy `decisions.jsonl` rows the db lacks (the same merge the
-//! Python owner `_read_index` applies). The Python verb (`list_decisions`)
+//! Python owner `_read_index` applies). The Python command (`list_decisions`)
 //! stays the format owner; this module mirrors its flatten and lifecycle
 //! derivation for the Rust readers that cannot shell out under fleet load -
 //! `prove_it_verdicts` measured ~25s per Python call, and the session-start
@@ -270,7 +270,7 @@ pub fn read_store_live(graph: &Path, jsonl: &Path) -> Result<Index, String> {
 }
 
 /// `read_store_live` over the machine's default paths, resolved the way
-/// every other client-side verb resolves them.
+/// every other client-side command resolves them.
 pub fn default_store_live() -> Result<Index, String> {
     read_store_live(
         &crate::graph_get::default_graph_path(),

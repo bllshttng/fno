@@ -18,7 +18,7 @@ from fno.roles.models import (
     RoleLayer,
     _RoleModel,
 )
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 _LAYER_ORDER = {layer: index for index, layer in enumerate(RoleLayer)}
 
@@ -94,7 +94,7 @@ def discover_role_definitions(
 ) -> tuple[DiscoveredRoleDefinition, ...]:
     """Read sorted JSON definitions from the layered root; fno-agents walks it."""
     payload = {"kind": "roles-discover", "root": None if root is None else str(root)}
-    answer = verb_call("spawn-overlay", {**payload, "sources": list(source_specs)})
+    answer = command_call("spawn-overlay", {**payload, "sources": list(source_specs)})
     if "input_error" in answer:
         raise DiscoveryInputError(answer["input_error"])
     return tuple(

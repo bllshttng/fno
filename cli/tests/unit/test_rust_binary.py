@@ -154,7 +154,7 @@ def test_installed_resolve_excludes_cargo_dev(monkeypatch, tmp_path) -> None:
     assert rust_binary.resolve_installed_binary() is None
 
 
-def test_verb_call_attaches_returncode(monkeypatch) -> None:
+def test_command_call_attaches_returncode(monkeypatch) -> None:
     """A clean non-zero exit carries its code as a structured field.
 
     The gh budget's admit gate refuses on a signalled reader (negative code or
@@ -165,15 +165,15 @@ def test_verb_call_attaches_returncode(monkeypatch) -> None:
 
     import pytest
 
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     proc = subprocess.CompletedProcess(
         ["fno-agents", "fleet-incident"], returncode=1, stdout="", stderr="no ledger"
     )
     monkeypatch.setattr(rust_binary, "find_dev_binary", lambda: "/dev/null/fno-agents")
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: proc)
-    with pytest.raises(VerbUnavailable) as excinfo:
-        rust_binary.verb_call("fleet-incident", {})
+    with pytest.raises(CommandUnavailable) as excinfo:
+        rust_binary.command_call("fleet-incident", {})
     assert excinfo.value.returncode == 1
     assert "exited 1" in str(excinfo.value)
 
@@ -186,12 +186,12 @@ def test_delivered_terminals_reads_once_and_refuses_closed(monkeypatch) -> None:
     three contracts (content, cache identity, fail-closed refusal)."""
     import pytest
 
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     monkeypatch.setattr(
         rust_binary,
         "call_binary_json",
-        lambda verb, **k: (None, {"delivered": ["DonePRGreen", "DoneBatched"]}),
+        lambda command, **k: (None, {"delivered": ["DonePRGreen", "DoneBatched"]}),
     )
     rust_binary.delivered_terminals.cache_clear()
     assert rust_binary.delivered_terminals() == frozenset({"DonePRGreen", "DoneBatched"})
@@ -200,10 +200,10 @@ def test_delivered_terminals_reads_once_and_refuses_closed(monkeypatch) -> None:
     monkeypatch.setattr(
         rust_binary,
         "call_binary_json",
-        lambda verb, **k: ("fno-agents binary not found", None),
+        lambda command, **k: ("fno-agents binary not found", None),
     )
     rust_binary.delivered_terminals.cache_clear()
-    with pytest.raises(VerbUnavailable, match="fno doctor update"):
+    with pytest.raises(CommandUnavailable, match="fno doctor update"):
         rust_binary.delivered_terminals()
     rust_binary.delivered_terminals.cache_clear()
 
@@ -221,7 +221,7 @@ def test_a_silent_law_door_raises_a_named_timeout_not_a_raw_one(monkeypatch):
     monkeypatch.setattr(subprocess, "run", hang)
     with pytest.raises(rust_binary.FrontTimeout) as caught:
         rust_binary.call_front_json({"mode": "decisions"}, timeout=60)
-    assert isinstance(caught.value, rust_binary.VerbUnavailable)
+    assert isinstance(caught.value, rust_binary.CommandUnavailable)
     assert "gave no answer in 60s (machine load" in str(caught.value)
 
 

@@ -1,4 +1,4 @@
-//! The merge-hold writer behind the `authorized-merge` verb's `op` field.
+//! The merge-hold writer behind the `authorized-merge` command's `op` field.
 //!
 //! A team or worker pipes `{"op": "hold-set"|"hold-release", ...}` straight
 //! into `fno-agents authorized-merge` (taught in the lead and blueprint
@@ -7,7 +7,7 @@
 //! proven by the same reader ready selection uses, and a failed readback
 //! restores the original bytes. A release of a hold the user set, or of one
 //! naming a question, must cite a live superuser-lane ruling at the held
-//! node or at the question it names. Rides an existing verb rather than a
+//! node or at the question it names. Rides an existing command rather than a
 //! new top-level root, and keeps the writer out of the Python tree the file
 //! budget caps.
 
@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Run one hold op from an `authorized-merge` payload. Always answers with a
-/// JSON receipt (`outcome`, `exit_code` inside); the verb's exit status
+/// JSON receipt (`outcome`, `exit_code` inside); the command's exit status
 /// answers only whether the op RAN.
 pub fn run(op: &str, payload: &Value) -> String {
     let node = payload.get("node").and_then(Value::as_str).unwrap_or("");

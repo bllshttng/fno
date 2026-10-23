@@ -1,6 +1,6 @@
 """fno.config.writer — the `fno config set` write path (US7).
 
-A small write verb alongside the read-only `get` / `doctor`, so toggles like
+A small write command alongside the read-only `get` / `doctor`, so toggles like
 ``config.agents.a2a.auto`` are settable without hand-editing the config file. The
 value is coerced to the schema field's type and validated by constructing the
 changed *block* in isolation (so a field validator like

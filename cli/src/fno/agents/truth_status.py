@@ -49,7 +49,7 @@ _TAIL_BYTES = 256 * 1024
 # Canonical and pre-cutover names both parse via parse_dispatch_agent_name
 # (the binary owns the legacy target-/think- window). A mis-parse fails
 # quiet (AC7).
-_VERB_TO_MISSION = {"t": "target", "f": "target", "bp": "think", "r": "think", "th": "think"}
+_COMMAND_TO_MISSION = {"t": "target", "f": "target", "bp": "think", "r": "think", "th": "think"}
 
 _HOLDER_PREFIX = "target-session:"
 
@@ -76,7 +76,7 @@ def parse_worker_mission(name: Optional[str]) -> Optional[tuple[str, str]]:
     parsed = parse_dispatch_agent_name(name)
     if parsed is None or not parsed.node:
         return None
-    kind = _VERB_TO_MISSION.get(parsed.verb)
+    kind = _COMMAND_TO_MISSION.get(parsed.command)
     return (parsed.node, kind) if kind else None
 
 

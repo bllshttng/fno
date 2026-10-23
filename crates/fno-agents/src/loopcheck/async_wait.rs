@@ -175,7 +175,7 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
     // The watcher must WAIT on the actual blocker (codex P2): a review wait
     // has CI already green, so a checks watcher returns instantly and the
     // session just re-blocks. Both waits are the sanctioned `fno do pr wait`
-    // verb, one plain command per wait: it polls REST at a 60s interval
+    // command, one plain command per wait: it polls REST at a 60s interval
     // (`gh pr checks --watch` / `gh pr view` are GraphQL, and a fleet of 60s
     // GraphQL watchers is exactly what exhausts the per-USER quota the merge
     // guard needs), it greps for the POSITIVE settled marker so a

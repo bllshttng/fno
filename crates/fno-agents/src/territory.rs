@@ -55,124 +55,16 @@ pub(crate) fn compile_territory(
     projects: &Result<HashMap<String, String>, String>,
 ) -> Result<(String, HashSet<String>), String> {
     use crate::org_board::s_str;
-    let canonical_scope = |scopes: &[String]| {
-        let mut sorted: Vec<String> = scopes.to_vec();
-        sorted.sort();
-        sorted.dedup();
-        sorted.join(",")
-    };
-    let members: Vec<String> = scope
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if members.is_empty() {
-        return Err("a team needs a scope: name an epic or a project".to_string());
-    }
-    // An unreadable project map means no alias is known, which is the Python
-    // resolver's answer too. A member the graph names as an epic needs no map.
-    let (projects, map_error) = match projects {
-        Ok(map) => (map.clone(), None),
-        Err(e) => (HashMap::new(), Some(e.clone())),
-    };
-    let not_found = |m: &str| {
-        let mut text = format!(
-            "{m:?} is neither a configured project nor a backlog node; \
-             nothing to lead over (check for a typo)"
-        );
-        if let Some(e) = &map_error {
-            text.push_str(&format!(
-                ". The project map could not be read ({e}), so a project name \
-                 cannot resolve on this machine"
-            ));
-        }
-        text
-    };
+    let members: Vec<String> = scope.split(',').map(str::to_string).collect();
+    let entry_by_id = |id: &str| entries.iter().find(|e| s_str(e, "id") == Some(id));
+    let (rung, canonical) = resolve_role(&members, entry_by_id, entries.is_empty(), projects)?;
 
-    let entry_by_id = |id: &str| {
-        entries
-            .iter()
-            .find(|e| s_str(e, "id").map(|i| i == id).unwrap_or(false))
-    };
-
-    // resolve_team: the (level, canonical) pair, derived together. A
-    // multi-member scope is a project portfolio OR a rung-2 SET of epics -
-    // the Python twin (lead/scope.py) rules both; mixed is a refusal, and an
-    // epic-set member must be a live epic exactly as a single-epic scope must.
-    let (level_two, canonical): (bool, String) = if members.len() > 1 {
-        let mut project_members: Vec<String> = Vec::new();
-        let mut epic_members: Vec<String> = Vec::new();
-        for m in &members {
-            match projects.get(m.as_str()) {
-                Some(canon) => project_members.push(canon.clone()),
-                None => epic_members.push(m.clone()),
-            }
-        }
-        if !project_members.is_empty() && !epic_members.is_empty() {
-            return Err(format!(
-                "a multi-scope team rules PROJECTS or EPICS, never both at once: {}. \
-                 Name projects only (a portfolio) or epics only (a set).",
-                members
-                    .iter()
-                    .map(|m| match projects.get(m.as_str()) {
-                        Some(canon) => format!("{canon} (a project)"),
-                        None => match entry_by_id(m) {
-                            Some(e) if s_str(e, "type") == Some("epic") => {
-                                format!("{m} (an epic)")
-                            }
-                            Some(e) => format!(
-                                "{m} (a {}, not an epic)",
-                                s_str(e, "type").unwrap_or("node")
-                            ),
-                            None => format!("{m} (not a configured project or a known node)"),
-                        },
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if !epic_members.is_empty() {
-            for m in &epic_members {
-                match entry_by_id(m) {
-                    None => return Err(member_not_found(m, entries, not_found(m))),
-                    Some(entry) => {
-                        if s_str(entry, "type") != Some("epic") {
-                            return Err(format!(
-                                "{m:?} is a {}, not an epic. Implementers get no teams - \
-                                 a single node is work, not a territory. Team the epic \
-                                 above it, or its project.",
-                                s_str(entry, "type").unwrap_or("node")
-                            ));
-                        }
-                    }
-                }
-            }
-            (true, canonical_scope(&epic_members))
-        } else {
-            (false, canonical_scope(&project_members))
-        }
-    } else {
-        let raw = members[0].as_str();
-        if let Some(canon) = projects.get(raw) {
-            (false, canon.clone())
-        } else {
-            match entry_by_id(raw) {
-                None => return Err(member_not_found(raw, entries, not_found(raw))),
-                Some(entry) => {
-                    if s_str(entry, "type") != Some("epic") {
-                        return Err(format!("team scope {raw:?} is not an epic in the graph"));
-                    }
-                    (true, raw.to_string())
-                }
-            }
-        }
-    };
-
-    if level_two {
-        let mut ids: HashSet<String> = HashSet::new();
+    if rung == 2 {
         // descendants_of: BFS over parent links, cycle-safe. A rung-2 scope
         // is a SET: the board sees the nodes under EVERY member, so the walk
-        // starts from each root, not just the first.
+        // starts from each root, not just the first. resolve_role already
+        // proved every root is an epic in `entries`.
+        let mut ids: HashSet<String> = HashSet::new();
         let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
         for e in entries {
             if let (Some(id), Some(parent)) = (s_str(e, "id"), s_str(e, "parent")) {
@@ -180,26 +72,7 @@ pub(crate) fn compile_territory(
             }
         }
         let mut frontier: Vec<&str> = Vec::new();
-        for root_id in canonical
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            match entry_by_id(root_id) {
-                None => {
-                    return Err(member_not_found(
-                        root_id,
-                        entries,
-                        format!("team scope {root_id:?} is not an epic in the graph"),
-                    ))
-                }
-                Some(entry) if s_str(entry, "type") != Some("epic") => {
-                    return Err(format!(
-                        "team scope {root_id:?} is not an epic in the graph"
-                    ));
-                }
-                _ => {}
-            }
+        for root_id in canonical.split(',') {
             ids.insert(root_id.to_string());
             if let Some(next) = children.get(root_id) {
                 frontier.extend(next.iter().copied());
@@ -218,6 +91,7 @@ pub(crate) fn compile_territory(
         return Ok((canonical, ids));
     }
 
+    let projects = projects.as_ref().ok();
     let project_set: HashSet<String> = canonical
         .split(',')
         .map(|s| s.trim().to_string())
@@ -229,12 +103,148 @@ pub(crate) fn compile_territory(
             continue;
         };
         let project = s_str(e, "project").unwrap_or("").to_string();
-        let canonical_project = projects.get(project.as_str()).unwrap_or(&project);
+        let canonical_project = projects
+            .and_then(|map| map.get(project.as_str()))
+            .unwrap_or(&project);
         if project_set.contains(canonical_project) {
             ids.insert(id.to_string());
         }
     }
     Ok((canonical, ids))
+}
+
+/// The org ladder: the rung a team scope implies and its canonical stored
+/// form, derived together so the two cannot disagree. Rung 0 is a portfolio
+/// (2+ canonical projects), 1 one project, 2 a set of epics. Aliases resolve
+/// before the count, so `alpha` and its short name `a` read as one project.
+/// A non-epic node is work, not territory, and is refused, as is a scope that
+/// mixes projects and epics. `graph_empty` says the graph read behind
+/// `entry_of` returned no rows, so a missing member is unknown, not absent.
+pub(crate) fn resolve_role<'a>(
+    members: &[String],
+    entry_of: impl Fn(&str) -> Option<&'a Value>,
+    graph_empty: bool,
+    projects: &Result<HashMap<String, String>, String>,
+) -> Result<(u8, String), String> {
+    use crate::org_board::s_str;
+    let canonical = canonical_scope(&members.join(","));
+    let members: Vec<&str> = canonical.split(',').filter(|m| !m.is_empty()).collect();
+    if members.is_empty() {
+        return Err("a team needs a scope: name an epic or a project".to_string());
+    }
+    // An unreadable project map means no alias is known. A member the graph
+    // names as an epic needs no map.
+    let alias = |m: &str| projects.as_ref().ok().and_then(|map| map.get(m)).cloned();
+    let not_found = |m: &str| {
+        if graph_empty {
+            return format!("the graph read returned 0 nodes, so {m:?} is unknown, not absent");
+        }
+        let mut text = format!(
+            "{m:?} is neither a configured project nor a backlog node; \
+             nothing to lead over (check for a typo)"
+        );
+        if let Err(e) = projects {
+            text.push_str(&format!(
+                ". The project map could not be read ({e}), so a project name \
+                 cannot resolve on this machine"
+            ));
+        }
+        text
+    };
+    let resolved: Vec<(&str, Option<String>)> = members.iter().map(|&m| (m, alias(m))).collect();
+    let project_names: Vec<String> = resolved.iter().filter_map(|(_, c)| c.clone()).collect();
+    let epics: Vec<&str> = resolved
+        .iter()
+        .filter(|(_, c)| c.is_none())
+        .map(|(m, _)| *m)
+        .collect();
+
+    if epics.is_empty() {
+        let scope = canonical_scope(&project_names.join(","));
+        // One project named twice collapses to one project, not a portfolio.
+        let rung = if scope.contains(',') { 0 } else { 1 };
+        return Ok((rung, scope));
+    }
+    if !project_names.is_empty() {
+        let named: Vec<String> = resolved
+            .iter()
+            .map(|&(m, ref canon)| match (canon, entry_of(m)) {
+                (Some(canon), _) => format!("{canon} (a project)"),
+                (None, Some(e)) if s_str(e, "type") == Some("epic") => format!("{m} (an epic)"),
+                (None, Some(e)) => {
+                    format!(
+                        "{m} (a {}, not an epic)",
+                        s_str(e, "type").unwrap_or("node")
+                    )
+                }
+                (None, None) => format!("{m} (not a configured project or a known node)"),
+            })
+            .collect();
+        return Err(format!(
+            "a multi-scope team rules PROJECTS or EPICS, never both at once: {}. \
+             Name projects only (a portfolio) or epics only (a set).",
+            named.join(", ")
+        ));
+    }
+    // One message set for a single epic and an epic set alike: a member of a
+    // set that is a typo or a non-epic node gets the remedy it would get alone.
+    for &m in &epics {
+        match entry_of(m) {
+            None => return Err(not_found(m)),
+            Some(e) if s_str(e, "type") == Some("epic") => {}
+            Some(e) => {
+                return Err(format!(
+                    "{m:?} is a {}, not an epic. Implementers get no teams - a single \
+                     node is work, not a territory. If {m} IS meant to be an epic: \
+                     fno backlog update {m} type=epic. Otherwise team the epic above \
+                     it, or its project.",
+                    s_str(e, "type").unwrap_or("node")
+                ))
+            }
+        }
+    }
+    Ok((2, epics.join(",")))
+}
+
+/// The `role-resolve` spawn-overlay kind: [`resolve_role`] served to Python.
+/// A payload `projects` alias map and `entries` member rows stand in for this
+/// machine's reads, so a caller keeps its own sources. An absent field reads
+/// `project_map` and `graph_entries` from the cwd; an unreadable graph counts
+/// as an empty one. Answer: `{"level", "scope"}` or `{"refusal"}`.
+pub(crate) fn resolve_role_kind(payload: &Value) -> Result<Value, String> {
+    use crate::org_board::s_str;
+    let scopes: Vec<String> = payload
+        .get("scopes")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let projects = match payload.get("projects").and_then(Value::as_object) {
+        Some(map) => Ok(map
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|c| (k.clone(), c.to_string())))
+            .collect()),
+        None => project_map(&cwd),
+    };
+    let (entries, graph_empty) = match payload.get("entries").and_then(Value::as_array) {
+        Some(rows) => (rows.clone(), false),
+        None => {
+            let rows = graph_entries(&cwd).unwrap_or_default();
+            let empty = rows.is_empty();
+            (rows, empty)
+        }
+    };
+    let entry_of = |id: &str| entries.iter().find(|e| s_str(e, "id") == Some(id));
+    Ok(
+        match resolve_role(&scopes, entry_of, graph_empty, &projects) {
+            Ok((level, scope)) => json!({"level": level, "scope": scope}),
+            Err(refusal) => json!({"refusal": refusal}),
+        },
+    )
 }
 
 /// The canonical comma-joined form of a raw scope spelling: members split on
@@ -819,7 +829,7 @@ pub(crate) fn live_held_in(node_ids: &HashSet<String>, held: &HashSet<String>) -
 /// One readout row per territory: scope, membership state, rung, leadless
 /// state, team holder, mission, and live count against the cap. The
 /// projection the status payload, the hidden config
-/// verb, the lead check-in, and the operational probe share, so none of them
+/// command, the lead check-in, and the operational probe share, so none of them
 /// can disagree. Fail-safe per row: an unreadable source shrinks that row's
 /// answer (membership "unknown", live null), never the whole
 /// projection.

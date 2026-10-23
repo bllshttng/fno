@@ -20,7 +20,7 @@ fn the_python_surface_forwards_byte_verbatim() {
 }
 
 #[test]
-fn typed_native_verbs_parse_and_refuse() {
+fn typed_native_commands_parse_and_refuse() {
     assert_eq!(
         cli_args::classify(&[OsString::from("version"), OsString::from("--json")]),
         cli_args::FrontDoor::Version { json: true }
@@ -66,7 +66,7 @@ fn pane_run_payload_stays_verbatim() {
         other => panic!("run expected, got {other:?}"),
     }
     // The flags BEFORE the payload still work, and a payload `--json` does
-    // not leak into the pane verb's own output flag.
+    // not leak into the pane command's own output flag.
     let argv: Vec<OsString> = ["--json", "--", "claude", "--json"]
         .iter()
         .map(OsString::from)

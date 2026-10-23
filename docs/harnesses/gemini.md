@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Gemini Provider Guide
 
 > **Deprecated upstream.** Google has deprecated the Gemini CLI; its successor, Antigravity (`agy`), is a separate harness with its own adapter (see [HARNESSES.md](../HARNESSES.md)). Gemini remains supported here in sequential mode, but it receives no new capability work.

@@ -25,10 +25,10 @@ def install(tmp_path, monkeypatch):
             rows = rows + [entry]
         rows = [e for e in rows if isinstance(e, dict) and e.get("id")]
 
-        def seeded_call(verb, args, *, timeout=None):
+        def seeded_call(command, args, *, timeout=None):
             payload = _json.loads(args[0])
             payload["entries"] = rows
-            return _real_call(verb, [_json.dumps(payload)], timeout=15)
+            return _real_call(command, [_json.dumps(payload)], timeout=15)
 
         monkeypatch.setattr("fno.rust_binary.call_binary_json", seeded_call)
         if not isinstance(entry, dict) or not entry.get("id"):

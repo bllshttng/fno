@@ -1,4 +1,4 @@
-//! Pure field logic shared by the backlog write verbs: the work-difficulty
+//! Pure field logic shared by the backlog write commands: the work-difficulty
 //! band vocabulary, the canonical difficulty write, tag normalization, and
 //! the dispatch-override write gate. The Python twins live in
 //! `cli/src/fno/graph/_constants.py` and `cli/src/fno/backlog/dispatch_overrides.py`;
@@ -71,34 +71,34 @@ pub fn normalize_tag(raw: &str) -> Result<String, String> {
     Ok(tag)
 }
 
-/// The write-side dispatch-verb gate: `(refusal, warning)`. Three checks in
+/// The write-side dispatch-command gate: `(refusal, warning)`. Three checks in
 /// order - shape (one bare token), the static name vocabulary, then the
 /// configured allowlist/registry. A refusal exits 2 and aborts the write;
 /// a warning rides back to the caller, who echoes it once after the write.
-pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
+pub fn dispatch_command_gate(value: &str) -> (Option<String>, Option<String>) {
     let accepted_static = || -> Vec<String> { naming::word_code_words() };
     if value.trim() != value || value.chars().any(char::is_whitespace) {
         let accepted = accepted_static().join(", ");
         return (
             Some(format!(
-                "Error: dispatch_verb='{value}' refused at write: not one bare verb word. \
-                 The field takes a single verb token; a verb with an argument fails every \
+                "Error: dispatch_command='{value}' refused at write: not one bare command word. \
+                 The field takes a single command token; a command with an argument fails every \
                  drain at name mint. accepted: {accepted} (bare or '/fno:'-prefixed)"
             )),
             None,
         );
     }
-    if crate::naming::verb_code_for(Some(value)).is_ok() {
+    if crate::naming::command_code_for(Some(value)).is_ok() {
         return (None, None);
     }
-    let (allowed, registry) = settings::dispatch_verbs_from_config();
-    let chosen = canonical_verb_key(value);
+    let (allowed, registry) = settings::dispatch_commands_from_config();
+    let chosen = canonical_command_key(value);
     if allowed.iter().any(|a| a == &chosen) || registry.iter().any(|r| r == &chosen) {
         return (
             None,
             Some(format!(
-                "warning: dispatch verb '{value}' resolves only in \
-                 config.dispatch.allowed_verbs/verb_registry; the drain's worker-name mint \
+                "warning: dispatch command '{value}' resolves only in \
+                 config.dispatch.allowed_commands/command_registry; the drain's worker-name mint \
                  knows only {} and may refuse the dispatch",
                 accepted_static().join(", ")
             )),
@@ -111,10 +111,10 @@ pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
     accepted.dedup();
     (
         Some(format!(
-            "Error: dispatch_verb='{value}' refused at write: unknown dispatch verb. \
-             The field takes one bare verb word; accepted here: {} \
-             (bare or '/fno:'-prefixed), extend config.dispatch.allowed_verbs or \
-             verb_registry for an outside verb",
+            "Error: dispatch_command='{value}' refused at write: unknown dispatch command. \
+             The field takes one bare command word; accepted here: {} \
+             (bare or '/fno:'-prefixed), extend config.dispatch.allowed_commands or \
+             command_registry for an outside command",
             accepted.join(", "),
         )),
         None,
@@ -123,8 +123,8 @@ pub fn dispatch_verb_gate(value: &str) -> (Option<String>, Option<String>) {
 
 /// Leading `/`, `/fno:x`, `$fno:x` and `$x` -> `/x`; keys the parser rejects
 /// keep the legacy strip.
-pub fn canonical_verb_key(key: &str) -> String {
-    if let Some((body, _)) = crate::provider::parse_verb_token(key.trim()) {
+pub fn canonical_command_key(key: &str) -> String {
+    if let Some((body, _)) = crate::provider::parse_command_token(key.trim()) {
         return format!("/{body}");
     }
     let k = key.trim().strip_prefix('/').unwrap_or(key.trim());
@@ -141,28 +141,28 @@ pub fn canonical_verb_key(key: &str) -> String {
 /// aborts the write.
 pub fn apply_dispatch_overrides(
     obj: &mut Map<String, Value>,
-    dispatch_verb: Option<&str>,
+    dispatch_command: Option<&str>,
     dispatch_brief: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let mut warnings: Vec<String> = Vec::new();
-    if let Some(raw) = dispatch_verb {
+    if let Some(raw) = dispatch_command {
         if raw.eq_ignore_ascii_case("null") {
-            obj.insert("dispatch_verb".into(), Value::Null);
+            obj.insert("dispatch_command".into(), Value::Null);
         } else {
-            let (refusal, warning) = dispatch_verb_gate(raw);
+            let (refusal, warning) = dispatch_command_gate(raw);
             if let Some(message) = refusal {
                 return Err(message);
             }
             if let Some(w) = warning {
                 warnings.push(w);
             }
-            let mut verb_val = raw.to_string();
-            if let Some((body, namespaced)) = crate::provider::parse_verb_token(raw) {
+            let mut command_val = raw.to_string();
+            if let Some((body, namespaced)) = crate::provider::parse_command_token(raw) {
                 if namespaced {
-                    verb_val = format!("/fno:{body}");
+                    command_val = format!("/fno:{body}");
                 }
             }
-            obj.insert("dispatch_verb".into(), json!(verb_val));
+            obj.insert("dispatch_command".into(), json!(command_val));
         }
     }
     if let Some(raw) = dispatch_brief {
@@ -205,8 +205,10 @@ mod tests {
     }
 
     #[test]
-    fn the_verb_gate_refuses_a_not_bare_token() {
-        let (refusal, _) = dispatch_verb_gate("target now");
-        assert!(refusal.expect("refusal").contains("not one bare verb word"));
+    fn the_command_gate_refuses_a_not_bare_token() {
+        let (refusal, _) = dispatch_command_gate("target now");
+        assert!(refusal
+            .expect("refusal")
+            .contains("not one bare command word"));
     }
 }

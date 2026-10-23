@@ -163,7 +163,7 @@ jobs:
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
           case "$files" in
-            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*mux-demo-snapshot.sh*)
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
               echo "shoot=1" >> "$GITHUB_ENV"
               echo "the bell surface changed: shooting"
               ;;
@@ -184,7 +184,7 @@ jobs:
         if: env.shoot == '1'
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
-          # The demo root seeds claims, and the client routes those verbs to
+          # The demo root seeds claims, and the client routes those commands to
           # the fno-agents binary; a runner builds neither by default.
           FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
           # The bootstrap validates the pin at <source>/cli/pyproject.toml,
@@ -202,6 +202,12 @@ jobs:
           for size in 200x56 120x40; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
           done
+          # Two windows on one tab: the active big window fills, the same
+          # window under the smallest policy letterboxes, and a small
+          # observer crops a tab the big peer sized.
+          bash scripts/ops/mux-demo-snapshot.sh --window-size latest --peer 120x40 --out shots/two-client-latest-big.png --format png --size 200x56
+          bash scripts/ops/mux-demo-snapshot.sh --window-size smallest --peer 120x40 --out shots/two-client-smallest-big.png --format png --size 200x56
+          bash scripts/ops/mux-demo-snapshot.sh --window-size latest --peer 200x56 --no-fit --out shots/two-client-latest-small.png --format png --size 120x40
 
       - name: Upload the shots
         if: env.shoot == '1'

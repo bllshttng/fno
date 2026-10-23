@@ -14,7 +14,7 @@ use super::*;
 /// (60s), the reapable probe plus four `branch_merged` git calls (300s) and
 /// `git worktree remove` (60s) - and most of it runs after the registry row is
 /// already gone. Run inline, that occupies a runtime worker thread for the
-/// whole span and every other verb queues behind it.
+/// whole span and every other command queues behind it.
 ///
 /// `spawn_blocking` is not available here: the handler borrows injected
 /// `&dyn Fn` test seams, which its `'static` bound rejects. `block_in_place`

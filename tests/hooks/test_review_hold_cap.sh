@@ -9,7 +9,7 @@
 # Fixture: a real git repo on a FEATURE branch (the hook rightly ignores the
 # protected branch) whose journal carries two spent rounds with the real
 # base sha, so the interdiff carveout measures real patches; the hook runs
-# for real with FNO pointed at a wrapper that serves the two verbs the hook
+# for real with FNO pointed at a wrapper that serves the two commands the hook
 # drives: the review-hold door answers natively now (the worker binary; the
 # Python front no longer carries the surface), and every other argv still
 # rides the checkout CLI (fno-py: the deployed cargo shim shadows the source

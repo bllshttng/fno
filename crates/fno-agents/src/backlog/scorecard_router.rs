@@ -1,5 +1,5 @@
 //! The scorecard's router: one verdict per candidate inventory row per kind
-//! under a stage verb, folded from the by-lane cells. It proposes and never
+//! under a stage command, folded from the by-lane cells. It proposes and never
 //! applies: the accept line prints and `fno config set` stays the user's
 //! hand, and every proposal names the live seat laws it would contradict.
 //! The decision constants and the accept line are the climb fold's, so one
@@ -114,10 +114,10 @@ pub(crate) fn declared_inventory() -> Option<(Vec<RowKey>, Value)> {
     Some((rows, inventory))
 }
 
-/// The lane the verb actually seats on one band: a declared lanes list
-/// routes the verb off the grid (the slot walk reads one lanes list for
+/// The lane the command actually seats on one band: a declared lanes list
+/// routes the command off the grid (the slot walk reads one lanes list for
 /// every band), so the seated list decides first, and the grid names the
-/// incumbent only for a verb that declares none. Either way the pick is
+/// incumbent only for a command that declares none. Either way the pick is
 /// declared-only: an empty capacity map reads every row
 /// unknown-permitted, so no live capacity read shapes the incumbent.
 fn incumbent_lane(stage: &str, difficulty: &str, inventory: &Value) -> Option<String> {

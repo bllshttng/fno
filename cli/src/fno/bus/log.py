@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
-from fno.rust_binary import VerbUnavailable, chats_verb
+from fno.rust_binary import CommandUnavailable, chats_command
 from fno.time_budget import validate_timeout_budget
 
 
@@ -373,8 +373,8 @@ def append(env: Envelope) -> None:
         # The live path rides argv so the door writes wherever THIS
         # resolver points: config.paths.bus_dir and both env legs stay
         # Python's single source (the door has no settings reader).
-        chats_verb(["bus-append", str(bus_log_path())], json.loads(to_json_line(env)))
-    except VerbUnavailable as exc:
+        chats_command(["bus-append", str(bus_log_path())], json.loads(to_json_line(env)))
+    except CommandUnavailable as exc:
         if "bus lock timeout" in str(exc):
             raw = os.environ.get("FNO_BUS_LOCK_TIMEOUT_SECS")
             try:
@@ -423,11 +423,11 @@ def stage_before_live(**fields: Any) -> None:
     The bus row is the body's only home, so a confirmed inject can never
     outlive it, and a miss leaves the row deliverable exactly as a durable
     copy. The envelope contract lives in the door: the Rust ``chats stage``
-    verb (crates/fno-agents/src/chats.rs) validates the fields, mints the row,
+    command (crates/fno-agents/src/chats.rs) validates the fields, mints the row,
     and records chats fail-closed before the bus write. ``id`` is required;
     the receipt row (:func:`record_hosted_delivery`) shares it on confirmation
     and supersedes the staged twin at the drain."""
-    chats_verb(
+    chats_command(
         ["stage", str(bus_log_path())],
         {k: v for k, v in fields.items() if v is not None},
     )
@@ -583,7 +583,7 @@ def withdrawn_ids(msgs: list[Envelope]) -> set[str]:
 
     A tombstone counts only when it retracts a message the same sender sent to
     the same address. That check lives here, at the read side, rather than only
-    at the write verb: the write verb is one reachable path, and a hand-appended
+    at the write command: the write command is one reachable path, and a hand-appended
     or replayed line must not be able to retract someone else's mail.
     """
     by_id = {m.id: m for m in msgs}

@@ -303,7 +303,7 @@ pub(super) fn local_refused_verdicts(events_text: &str, head_sha: &str) -> Vec<R
             continue;
         }
         let mut name = val
-            .pointer("/data/verb")
+            .pointer("/data/command")
             .and_then(|v| v.as_str())
             .unwrap_or("review")
             .trim_start_matches('/')
@@ -397,7 +397,7 @@ pub(super) fn local_latest_attestations(
         // recording it as Stale would pool every PR's legacy passes into
         // every coverage read (the cross-PR leak this node deletes). The
         // refusal's action for that cohort is the generic one: re-run the
-        // review verb at HEAD, which emits a branch-scoped event.
+        // review command at HEAD, which emits a branch-scoped event.
         let line_branch = val
             .pointer("/data/branch")
             .and_then(|v| v.as_str())
@@ -434,7 +434,7 @@ pub(super) fn local_latest_attestations(
         // which keeps its name key (the config.review.reviewers gate).
         // A retraction names ONE pass, by head. When the pair's entry already
         // describes a different (newer) head, the named pass is superseded and
-        // the retraction must not touch it: the verb emits the retraction after
+        // the retraction must not touch it: the command emits the retraction after
         // any newer pass, so an unconditional insert would revoke a live pass
         // nobody asked to revoke. Same-head (and first-entry) inserts keep
         // today's semantics.

@@ -82,7 +82,7 @@ fn padded(message: &str) -> String {
 
 /// Rewrite the legacy bare token to the flag in a /target-family command.
 /// Scoped to the two positions the legacy injectors actually produced
-/// (round 12): directly after the verb, or trailing. A MID-STRING token is
+/// (round 12): directly after the command, or trailing. A MID-STRING token is
 /// left alone on purpose: a /target argument is free text, and rewriting the
 /// word anywhere would mutate prompt text the operator typed.
 pub fn normalize_legacy_no_merge(command: &str) -> String {
@@ -104,7 +104,7 @@ pub fn normalize_legacy_no_merge(command: &str) -> String {
 }
 
 /// Insert the carrier flag into a /target-family command, right after the
-/// verb token. Skipped when a standalone flag is already present. Non-family
+/// command token. Skipped when a standalone flag is already present. Non-family
 /// commands pass through untouched.
 pub fn inject_no_merge(command: &str) -> String {
     let flag = table().flag.as_str();

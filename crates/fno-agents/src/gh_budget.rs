@@ -21,12 +21,12 @@
 //! the operator's breaker (`fno agents incident`), and a disk fault must not
 //! refuse every gh call on the machine.
 //!
-//! Verb surface: the ops ride the EXISTING `fleet-incident` action as its
+//! Command surface: the ops ride the EXISTING `fleet-incident` action as its
 //! `gh-budget` argument (law d-fe66560a allows no new client action):
 //! `fno-agents fleet-incident gh-budget <<< '{"op":"admit","argv":[...]}'`.
-//! One JSON payload on stdin (the `rust_binary.verb_call` door convention),
+//! One JSON payload on stdin (the `rust_binary.command_call` door convention),
 //! one JSON object on stdout. All three ops exit 0; the refusal is carried
-//! in the payload, never in the exit code, because `verb_call` raises on a
+//! in the payload, never in the exit code, because `command_call` raises on a
 //! nonzero exit.
 use serde_json::{json, Value};
 use std::ffi::OsStr;
@@ -646,7 +646,7 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
 
 /// The admit op's origin judgment. An agent-origin caller (a spawned worker,
 /// or an unattended claude thread whose supervisor stripped the identity) is
-/// held by the budget like any transport; the user's own typed verb is never
+/// held by the budget like any transport; the user's own typed command is never
 /// held, and its verdict is read off the ledger without writing it. An
 /// override names an injected test ledger; None reads the real one.
 fn admit_for_origin(
@@ -1073,10 +1073,10 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
 
 /// Binary entry under the `fleet-incident` action (law d-fe66560a allows no
 /// new client action): `fno-agents fleet-incident gh-budget [status]`, or the
-/// stdin door `verb_call("fleet-incident", {"op": ...})` takes. One JSON
-/// payload on stdin (the `rust_binary.verb_call` door convention), one JSON
+/// stdin door `command_call("fleet-incident", {"op": ...})` takes. One JSON
+/// payload on stdin (the `rust_binary.command_call` door convention), one JSON
 /// object on stdout. All three ops exit 0; the refusal is carried in the
-/// payload, never in the exit code, because `verb_call` raises on a nonzero
+/// payload, never in the exit code, because `command_call` raises on a nonzero
 /// exit. The bare `status` word answers without stdin, so the refusal prose
 /// can name a copy-pasteable command.
 pub fn run_gh_budget(args: &[String]) -> i32 {
@@ -1099,7 +1099,7 @@ pub fn run_gh_budget(args: &[String]) -> i32 {
     dispatch_op(&payload)
 }
 
-/// The stdin door verb_call takes: `fno-agents fleet-incident` with the ops
+/// The stdin door command_call takes: `fno-agents fleet-incident` with the ops
 /// payload on stdin and NO argv. A payload naming a budget op dispatches
 /// here; anything else (a bare interactive `fno-agents fleet-incident`, a
 /// tty stdin, non-JSON stdin) falls through to the incident breaker's own
@@ -1914,13 +1914,13 @@ mod tests {
             //   auto-merge disarm must reach GitHub even under a fleet hold;
             //   an armed queue merging server-side is the outcome the hold
             //   exists to prevent.
-            // - fno-agents/src/merge_verb/mod.rs disarm_queued_auto_merge:
+            // - fno-agents/src/merge_command/mod.rs disarm_queued_auto_merge:
             //   the check-stage port of the same emergency stop, same reason.
             let allowlist = [
                 ("fno/src/setup_run.rs", "step_gh_auth"),
                 ("fno-agents/src/merge_hold.rs", "disarm_automerge"),
                 (
-                    "fno-agents/src/merge_verb/mod.rs",
+                    "fno-agents/src/merge_command/mod.rs",
                     "disarm_queued_auto_merge",
                 ),
             ];

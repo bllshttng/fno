@@ -59,7 +59,7 @@ from fno.agents.sender_provenance import (
 from fno.agents import launch_provenance
 from fno.agents.context import EventContext, build_context
 from fno.agents.harness_map import DispatchResolveError, render_seed
-from fno.config._dispatch_verbs import is_verb_seed
+from fno.config._dispatch_commands import is_command_seed
 from fno.agents.lane_heal import lane_heal as _lane_heal
 from fno.agents.lock import AgentLockTimeout, hold_agent_lock
 from fno.agents.harnesses import KNOWN_PROVIDERS
@@ -1409,7 +1409,7 @@ def _claude_create_path(
     """Spawn a new claude agent under the per-agent flock.
 
     Extracted from the old ask dispatcher's inline create block so
-    Task 1.2 (the new ``spawn`` verb) could call the same machinery
+    Task 1.2 (the new ``spawn`` command) could call the same machinery
     directly. Runs INSIDE the per-agent flock.
 
     The CALLER emits ``agent_ask_started`` (dispatch_spawn does, under its
@@ -1547,7 +1547,7 @@ def _claude_create_path(
     # _capture_spawn_trigger's own docstring for what that mislabels).
     spawn_trigger = _capture_spawn_trigger()
 
-    # A promoted spawn TYPES the term verb as the payload's first line, so the
+    # A promoted spawn TYPES the term command as the payload's first line, so the
     # lead's first turn is the skill itself, not a hand-improvised ritual.
     from fno.agents.team_thread import lead_typed_message
 
@@ -1983,7 +1983,7 @@ def _claude_create_path(
 
 
 # ---------------------------------------------------------------------------
-# Task 1.2: spawn verb (US2 Python fallback runtime)
+# Task 1.2: spawn command (US2 Python fallback runtime)
 # ---------------------------------------------------------------------------
 
 
@@ -2460,7 +2460,7 @@ def dispatch_spawn(
         )
 
     effective_message: Optional[str] = None
-    if is_verb_seed(message):
+    if is_command_seed(message):
         try:
             message = render_seed(message, harness)
         except DispatchResolveError as exc:
@@ -3007,7 +3007,7 @@ def dispatch_spawn(
 
 
 # ---------------------------------------------------------------------------
-# US4-lifecycle: stop / rm / reconcile / attach (write + read verbs)
+# US4-lifecycle: stop / rm / reconcile / attach (write + read commands)
 # ---------------------------------------------------------------------------
 
 
@@ -3076,7 +3076,7 @@ def _resolve_registry_entry(name: str, *, registry_path: Optional[Path] = None) 
     """Load the registry and return the entry for ``name``.
 
     Raises :class:`DispatchAskError`(exit_code=2) when the entry is
-    missing - the convention for lifecycle verbs (AC1-UI / AC2-UI /
+    missing - the convention for lifecycle commands (AC1-UI / AC2-UI /
     AC7-UI). Raises (exit_code=12) on registry-read failures so the
     operator gets a distinct "registry busted" signal.
 
@@ -3998,7 +3998,7 @@ def reconcile_agents(
 
 
 # ---------------------------------------------------------------------------
-# G2 Task 2.1 — send verb (async, durable-first)
+# G2 Task 2.1 — send command (async, durable-first)
 # ---------------------------------------------------------------------------
 
 #: Body size cap enforced before any envelope write (AC3-EDGE).
@@ -4143,7 +4143,7 @@ _SWITCHBOARD_FIRST_HOP_READ_TIMEOUT = _SWITCHBOARD_READ_TIMEOUT
 # the connect fast and demote, rather than burn the 3s default before the
 # existing MCP/socket path runs.
 _SWITCHBOARD_CONNECT_TIMEOUT = 1.0
-# A pre-identity daemon rejects this verb before it can act on the message body.
+# A pre-identity daemon rejects this command before it can act on the message body.
 _SWITCHBOARD_RPC_METHOD = "agent.switchboard_v2"
 
 
@@ -4599,7 +4599,7 @@ def _switchboard_exchange(
     return True
 
 
-# Subprocess budget for the mail-inject verb. It polls the recipient transcript
+# Subprocess budget for the mail-inject command. It polls the recipient transcript
 # for ~10s (40 * 250ms) before reporting not-confirmed; give it headroom.
 _MAIL_INJECT_TIMEOUT_S = 60.0
 
@@ -4690,7 +4690,7 @@ def _mux_pane_send(
     """Live-inject to a mux-hosted agent via ``fno mux pane send``.
 
     ``guarded`` rides the server-side turn-taken interlock (no fno caller opts
-    in; the rerun verb uses the verb directly). ``guarded=False`` holds the
+    in; the rerun command uses the command directly). ``guarded=False`` holds the
     best-effort writer claim across the text-then-CR burst; a failed send
     fails closed -> durable. ``confirm`` polls the recipient's own transcript
     for the injected content (claude only: other harnesses have no
@@ -4803,7 +4803,7 @@ def _mux_pane_send(
             return False
 
     # Audit floor: the row this pane write leaves is written by the
-    # Rust verb itself (`fno mux pane send`), one layer below, so it covers a
+    # Rust command itself (`fno mux pane send`), one layer below, so it covers a
     # direct caller too. This lane only DECLARES its provenance (--source) so
     # the floor's row joins the bus record; it must not write a second row of
     # its own, or every pane dispatch reads as two.
@@ -4812,7 +4812,7 @@ def _mux_pane_send(
     pane = str(pane_id)
 
     def _run(args: list[str], stdin_text: Optional[str] = None):
-        """Run one ``fno mux pane`` verb; return its CompletedProcess, or None
+        """Run one ``fno mux pane`` command; return its CompletedProcess, or None
         on spawn failure. A non-zero code's stderr detail is surfaced, never
         swallowed. The process (not a bare code) is the return so the claim
         gate can read the refusal reason without a second wrapper."""
@@ -4987,7 +4987,7 @@ def _mux_pane_send(
         return proc.stdout or ""
 
     def _send_pane_key(key: str):
-        """One raw control key at the pane; the caller classifies the verb's
+        """One raw control key at the pane; the caller classifies the command's
         process. A control key is a byte, never a message: always --raw."""
         return _run(
             [
@@ -5188,7 +5188,7 @@ def _mux_pane_send(
 
 
 def mail_inject_probe(recipient: str) -> tuple[bool, str]:
-    """Ask the ``fno-agents mail-inject --probe`` verb whether an injection path to
+    """Ask the ``fno-agents mail-inject --probe`` command whether an injection path to
     ``recipient`` EXISTS, without injecting anything.
 
     Returns ``(injectable, reason)``. The probe resolves through the same
@@ -5378,17 +5378,17 @@ def _mail_inject_keeper(
     reason_out: Optional[list] = None,
 ) -> bool:
     """Inject ``text`` into a keeper-hosted lane-B thread via the
-    ``fno-agents mail-inject --harness <hosted>`` verb.
+    ``fno-agents mail-inject --harness <hosted>`` command.
 
     ``harness`` is the hosted harness from the recipient's row. It names the
     lane (the Rust side routes a keeper-lane harness to the keeper socket and
-    refuses every other name) and the settle-delay table row: the verb
+    refuses every other name) and the settle-delay table row: the command
     defaults ``--enter-delay-ms`` from that row itself, so this side passes no
-    delay and the one fact stays single-sourced. The verb resolves the
+    delay and the one fact stays single-sourced. The command resolves the
     recipient's registry row, pastes the envelope as one keeper ``Input``
     frame plus the wire-level CR, and confirms by content in the hosted
     harness's own transcript store. Returns True only on that confirmed
-    landing; any miss returns False with the verb's reason token in
+    landing; any miss returns False with the command's reason token in
     ``reason_out`` so the durable demotion names why.
 
     Unlike ``_mail_inject_claude`` there is no claude fallback for an unknown
@@ -5427,11 +5427,11 @@ def _mail_inject_claude(
     self_send: bool = False,
 ) -> bool:
     """Inject ``text`` into a live claude session over the daemon
-    ``control.sock`` via the ``fno-agents mail-inject`` verb. Returns True
-    only when the verb confirms the turn landed in the recipient transcript;
+    ``control.sock`` via the ``fno-agents mail-inject`` command. Returns True
+    only when the command confirms the turn landed in the recipient transcript;
     any miss (binary absent, recipient not on the roster, not confirmed
     within the poll budget) returns False so the caller writes the durable
-    fallback. ``reason_out``, when a non-empty list, receives the verb's own
+    fallback. ``reason_out``, when a non-empty list, receives the command's own
     reason token as a side-channel rather than a second return value, so the
     many callers and test mocks that read this as a plain bool are
     unaffected. ``sender`` is the invoking session's mail handle for the
@@ -5529,7 +5529,7 @@ def _roster_entry_for_session(session_uuid: str) -> Optional["AgentEntry"]:
 
 
 def _respawn_claude_session(short_id: str) -> int:
-    """Shell the public ``claude respawn <shortid>`` verb - the identity-
+    """Shell the public ``claude respawn <shortid>`` command - the identity-
     PRESERVING revival (same uuid, one roster row). A bare ``--bg --resume``
     without a target id mints a fresh one: the fork rung's job, not this
     one's. Returns the honest exit code; claude absent or timeout is non-zero.
@@ -5926,7 +5926,7 @@ def _mail_inject_codex(
     origin: Optional[str] = None,
 ) -> bool:
     """Inject ``text`` into a live codex session over the app-server daemon socket
-    via the ``fno-agents mail-inject --harness codex`` verb (US8, node).
+    via the ``fno-agents mail-inject --harness codex`` command (US8, node).
 
     ``reason_out``, when a non-empty list, receives the live lane's
     cause on a miss -- the same side-channel contract as
@@ -6087,7 +6087,7 @@ def _deliver_live(
     transport below carries the same wrapped turn, ``agy`` mux entries included.
 
     For claude peers the ``control.sock`` inject via the ``fno-agents
-    mail-inject`` verb (G1) is the live primitive (the switchboard / MCP fast
+    mail-inject`` command (G1) is the live primitive (the switchboard / MCP fast
     lanes still apply first for stream-json / MCP-routed peers); for
     codex/gemini peers the daemon ``agent.deliver`` RPC carries the envelope,
     and its failure demotes to durable with a stderr notice.
@@ -6199,11 +6199,11 @@ def _deliver_live(
 
     # Keeper-hosted lane-B thread: the row has neither a pane above
     # nor a lane-A socket below - its keeper unix socket IS the live
-    # transport. The same mail-inject verb drives it with --harness naming the
+    # transport. The same mail-inject command drives it with --harness naming the
     # hosted harness (which owns the settle delay and the confirm store); the
-    # verb resolves the row by harness session id, pastes the envelope as one
+    # command resolves the row by harness session id, pastes the envelope as one
     # Input frame plus the wire-level CR, and confirms by content in the
-    # hosted harness's transcript store. Any miss demotes with the verb's own
+    # hosted harness's transcript store. Any miss demotes with the command's own
     # reason token (no-keeper-listener / not-confirmed / not-injectable), so
     # the durable receipt names the cause instead of a bare live-miss.
     from fno.agents.harness_map import thread_lane_or_none
@@ -6295,7 +6295,7 @@ def _deliver_live(
         return True
 
     # Live inject over control.sock: the SOLE claude live lane since the
-    # PTY worker.sock and MCP-channel lanes retired. The mail-inject verb
+    # PTY worker.sock and MCP-channel lanes retired. The mail-inject command
     # resolves the handle via ClaudeRoster (uuid or 8-hex short id) and
     # confirms transcript growth before reporting delivered; mcp_channel_id
     # (minted 1:1 from short_id) stays the fallback for a cleared short_id.
@@ -7356,14 +7356,13 @@ def resolve_to_project(
     on a missing/malformed config, so resolution always works off the registry
     alone (AC6-FR).
     """
+    # A malformed block reads as {} natively; this guard catches a failed run.
     try:
-        from fno.inbox.settings import read_peer_projects
-
-        # read_peer_projects already degrades to {} on a malformed config shape
-        # (with its own stderr warning), so this outer guard only catches an
-        # UNEXPECTED error in the hint path - log it rather than silently
-        # masking a real bug as "no hints".
-        peer_projects = read_peer_projects()
+        from fno.rust_binary import resolve_binary
+        argv = [str(resolve_binary()), "compaction", "inbox-peers", "--json"]
+        proc = subprocess.run(argv, capture_output=True, text=True, check=True)
+        sys.stderr.write(proc.stderr)
+        peer_projects = json.loads(proc.stdout)["projects"]
     except Exception as exc:  # noqa: BLE001 - the hint is best-effort; never fatal
         print(
             f"warning: --to-project peer hint unavailable ({type(exc).__name__}: "

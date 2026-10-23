@@ -1,4 +1,4 @@
-"""Unit tests for `fno help [verb...]` — git-style help subcommand."""
+"""Unit tests for `fno help [command...]` — git-style help subcommand."""
 from __future__ import annotations
 
 import os
@@ -23,12 +23,12 @@ def test_help_root_matches_dashdash_help():
     via_dashdash = runner.invoke(app, ["--help"])
     assert via_help.exit_code == 0
     assert via_dashdash.exit_code == 0
-    # Advertised verbs appear in both curated catalogs (x-71b6 tiering).
+    # Advertised commands appear in both curated catalogs (x-71b6 tiering).
     # `setup` moved under `config` (unit 6, x-9d6c) and left the menu.
     for needle in ("backlog", "agents", "config", "doctor"):
         assert needle in via_help.output, f"missing {needle} in `fno help` output"
         assert needle in via_dashdash.output, f"missing {needle} in `fno --help` output"
-    # Hidden verbs are reachable only through the full-surface door. Moved
+    # Hidden commands are reachable only through the full-surface door. Moved
     # spellings render nowhere in it (x-6233: the block is gone and each
     # alias prints its new home on use), so the needles are real roots.
     via_all = runner.invoke(app, ["help", "--all"])
@@ -42,7 +42,7 @@ def test_help_root_matches_dashdash_help():
 
 
 def test_help_subcommand_works_in_module_mode():
-    """AC-FR: `python -m fno.cli help <verb>` works (codex P2 fix).
+    """AC-FR: `python -m fno.cli help <command>` works (codex P2 fix).
 
     Regression for chatgpt-codex-connector P2 on PR #250: the original
     implementation forwarded via `sys.argv[0]`, which is the module file
@@ -73,7 +73,7 @@ def test_help_subcommand_works_in_module_mode():
         f"expected rc=0, got rc={result.returncode}.\n"
         f"stdout={result.stdout}\nstderr={result.stderr}"
     )
-    # `fno agents claim --help` output mentions the subcommand verbs the claim
+    # `fno agents claim --help` output mentions the subcommand commands the claim
     # app registers (acquire, release, ...). ("gate" died with ab-d0337fbc.)
     assert "acquire" in result.stdout
     assert "release" in result.stdout

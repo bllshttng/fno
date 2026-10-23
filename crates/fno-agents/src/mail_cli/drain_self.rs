@@ -1,7 +1,7 @@
 //! `mail drain-self`: drain every unread message addressed to any form of the
 //! caller's identity, then ack per address form.
 //!
-//! Port of the Python drain-self verb. Forward-only + inject-before-ack: the
+//! Port of the Python drain-self command. Forward-only + inject-before-ack: the
 //! bodies render and flush BEFORE any cursor advances, so a crash re-surfaces
 //! the message next SessionStart (a harmless repeat), never a loss. No harness
 //! identity in env is a silent no-op (`[]` under `--json`), never an error, so
@@ -10,13 +10,13 @@
 //!
 //! Two documented divergences from the Python leg, both output-only:
 //! - The ambiguous-identity case prints one fixed sentence instead of the
-//!   dynamic multi-line ambiguity report (hold-verb wording, hook-safe exit 0).
+//!   dynamic multi-line ambiguity report (hold-command wording, hook-safe exit 0).
 //! - The held-job manifest reader rejects the literal `"null"` placeholder at
 //!   the call site, because the shared `scan_manifest_field` only rejects
 //!   empty values where the Python field reader rejects both.
 
 use crate::mail_control_drain::{present_mail_ids, unread_messages};
-use crate::mail_notify_self::advance_main_cursor;
+use crate::mail_notify_self::{advance_main_cursor, read_bus};
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{json, Value};
@@ -376,15 +376,6 @@ fn bus_dir(home: &AgentsHome) -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
     crate::intel::bus_dir_of(&root)
-}
-
-fn read_bus(bus: &Path) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(bus.join("messages.jsonl")) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .collect()
 }
 
 fn str_field(m: &Value, key: &str, blank: &str) -> String {

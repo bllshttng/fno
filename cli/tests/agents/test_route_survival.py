@@ -506,7 +506,7 @@ def test_the_account_picker_never_fires_on_a_revive(tmp_path, monkeypatch, capsy
 # One row per door that re-enters or re-launches a Claude session:
 #
 #   door                 owned by                      wired in
-#   attach (inline)      crates/fno-agents client_verbs run_attach (reentry.rs plan; no Python leg)
+#   attach (inline)      crates/fno-agents client_commands run_attach (reentry.rs plan; no Python leg)
 #   resume live wake     resume_cli wake arm           2.1
 #   resume dead          resume_cli --resume arm       2.1
 #   mux attach           crates/fno server AttachAgent 2.2 (cargo matrix)

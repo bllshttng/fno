@@ -8,7 +8,7 @@ unaccounted messages (AC2-HP, AC3-ERR).
 
 W1.1 (added alongside): the drain-self leaf (the Rust mail front) emits
 ``agent_mail_drained`` at the ack point and the dead-letter sweep prefers that
-marker over cursor inference. Its drain-verb tests live in the Rust parity
+marker over cursor inference. Its drain-command tests live in the Rust parity
 suite now; these keep the manual-ack receipt and the sweep honest.
 
 Mocking strategy mirrors cli/tests/agents/test_send.py: ``use_tmpdir`` +

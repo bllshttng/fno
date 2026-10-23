@@ -1,5 +1,5 @@
 """The Python side of the authoritative event store: a thin client of the
-native ``fno doctor event`` storage verbs.
+native ``fno doctor event`` storage commands.
 
 Python never opens an event journal for append. Every write rides the native
 binary's SQL transaction (WAL, FULL sync, positive readback), so one commit
@@ -71,7 +71,7 @@ def native_rows(
     """One native read pass: import, then committed envelope lines.
 
     The whole reader contract lives in the binary; this is the transport.
-    ``legacy_fallback`` moves the pre-store raw-journal read behind the verb
+    ``legacy_fallback`` moves the pre-store raw-journal read behind the command
     too: a journal with no store answers its raw lines. None means the native
     side was unavailable and the caller degrades.
     """
@@ -108,7 +108,7 @@ def native_rows(
 
 
 def _native_json(cmd_tail: list[str], what: str) -> Any:
-    """Run one native event verb and parse its JSON stdout. A failure raises
+    """Run one native event command and parse its JSON stdout. A failure raises
     with the native diagnostic; it never reads as an empty result."""
     try:
         proc = subprocess.run([resolve_native_bin(), "doctor", "event", *cmd_tail],
@@ -128,7 +128,7 @@ def read_committed_lines(events_path: Path) -> list[str]:
     """Committed envelope lines, never importing.
 
     A read with no side effects: retention pruning rides the import the
-    rows verb runs, so callers asserting exact store contents (gc, parity)
+    rows command runs, so callers asserting exact store contents (gc, parity)
     use this and stay out of the retention business.
     """
     return _native_json(

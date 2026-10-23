@@ -111,7 +111,7 @@ const FEATURE_KEYS: [&str; 11] = [
 ];
 /// The four states a feature claim may DECLARE. `native` means a wired lane
 /// exists TODAY: the harness's own surface where it exposes one, otherwise a
-/// lane fno hosts itself - opencode ships no attach verb and `fno agents
+/// lane fno hosts itself - opencode ships no attach command and `fno agents
 /// attach` still lands, through the daemon-kept portal. Exposure and
 /// reachability are different answers, and conflating them is the defect
 /// this dimension exists to delete. `capable` is the load-bearing third
@@ -325,18 +325,18 @@ pub struct HarnessCapabilities {
     pub command_surface: String,
     #[serde(default)]
     pub slash_prefix: String,
-    /// This harness's own TUI slash verbs, measured. The verb normalizer
+    /// This harness's own TUI slash commands, measured. The command normalizer
     /// rewrites a leading-slash token only when it names a shipped footnote
-    /// verb absent from this list; absent means the harness declares none.
+    /// command absent from this list; absent means the harness declares none.
     #[serde(default)]
     pub native_verbs: Vec<String>,
-    /// Per-verb teaching metadata keyed by the roster verb: when to reach
+    /// Per-command teaching metadata keyed by the roster command: when to reach
     /// for it and the risk class the raw-mail guard enforces. `use_when`
     /// lines marked name-derived in the TOML comments say so there; the
     /// risk class is the guard's authority either way. `default` keeps an
     /// older packaged copy parseable.
     #[serde(default)]
-    pub native_verb_meta: BTreeMap<String, VerbMeta>,
+    pub native_verb_meta: BTreeMap<String, CommandMeta>,
     /// The subset the mail lane maps to a structured review RPC on a daemon
     /// thread; empty when the harness has no such transport.
     #[serde(default)]
@@ -417,39 +417,42 @@ pub struct ProviderAction {
     pub proof: String,
 }
 
-/// The raw-mail guard's risk vocabulary for a native verb. A
-/// `session-ending` or `context-destroying` verb is refused on
-/// `mail send --raw` unless the send names it with `--ack-verb-risk`.
+/// The raw-mail guard's risk vocabulary for a native command. A
+/// `session-ending` or `context-destroying` command is refused on
+/// `mail send --raw` unless the send names it with `--ack-command-risk`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum VerbRisk {
+pub enum CommandRisk {
     Safe,
     ContextDestroying,
     SessionEnding,
 }
 
-impl VerbRisk {
+impl CommandRisk {
     pub fn as_str(self) -> &'static str {
         match self {
-            VerbRisk::Safe => "safe",
-            VerbRisk::ContextDestroying => "context-destroying",
-            VerbRisk::SessionEnding => "session-ending",
+            CommandRisk::Safe => "safe",
+            CommandRisk::ContextDestroying => "context-destroying",
+            CommandRisk::SessionEnding => "session-ending",
         }
     }
 
-    /// True when the raw-mail lane refuses the verb without an explicit ack.
+    /// True when the raw-mail lane refuses the command without an explicit ack.
     pub fn is_guarded(self) -> bool {
-        matches!(self, VerbRisk::ContextDestroying | VerbRisk::SessionEnding)
+        matches!(
+            self,
+            CommandRisk::ContextDestroying | CommandRisk::SessionEnding
+        )
     }
 }
 
-/// One verb's row in `[harness.<name>.native_verb_meta]`.
+/// One command's row in `[harness.<name>.native_verb_meta]`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct VerbMeta {
-    /// One line: when an agent reaches for this verb.
+pub struct CommandMeta {
+    /// One line: when an agent reaches for this command.
     pub use_when: String,
-    pub risk: VerbRisk,
+    pub risk: CommandRisk,
     /// opencode only: a user-defined command can override a built-in by
     /// name, so the roster names built-ins and a custom override is
     /// invisible to this table by construction.
@@ -735,20 +738,20 @@ impl LaunchTemplate {
     }
 }
 
-/// One feature claim: `state` is the claim, and `verbs` names the
-/// harness's own verbs that exercise it, measured. The vocabulary and
+/// One feature claim: `state` is the claim, and `commands` names the
+/// harness's own commands that exercise it, measured. The vocabulary and
 /// the probe coupling are the contract.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeatureClaim {
     /// One of [`FEATURE_STATES`].
     pub state: String,
-    /// The harness's own verbs that exercise this feature, measured.
-    /// Absent means the claim has no verb surface (an fno-hosted lane
+    /// The harness's own commands that exercise this feature, measured.
+    /// Absent means the claim has no command surface (an fno-hosted lane
     /// included), which the consuming lane states in its refusal
     /// instead of implying one.
-    #[serde(default)]
-    pub verbs: Vec<String>,
+    #[serde(default, alias = "verbs")] // verb-wording: allow (the capability table's key)
+    pub commands: Vec<String>,
     /// What settled this claim: the reader that ran, the harness version it
     /// ran against, and the date. A claim without one keeps its state and
     /// its comment, and the matrix renders the cell unmeasured rather than
@@ -1903,24 +1906,24 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// Roster and teaching metadata cannot drift apart: every native verb
-    /// carries a meta row (the render verb promises one line per verb) and
-    /// every meta key names a roster verb (a stale meta row would render a
-    /// verb the harness does not declare).
+    /// Roster and teaching metadata cannot drift apart: every native command
+    /// carries a meta row (the render command promises one line per command) and
+    /// every meta key names a roster command (a stale meta row would render a
+    /// command the harness does not declare).
     #[test]
     fn contract_rows() {
         let contract = HarnessContract::packaged().unwrap();
         for (name, caps) in &contract.harness {
-            for verb in &caps.native_verbs {
+            for command in &caps.native_verbs {
                 assert!(
-                    caps.native_verb_meta.contains_key(verb),
-                    "{name}: roster verb {verb} has no native_verb_meta row"
+                    caps.native_verb_meta.contains_key(command),
+                    "{name}: roster command {command} has no native_verb_meta row"
                 );
             }
-            for verb in caps.native_verb_meta.keys() {
+            for command in caps.native_verb_meta.keys() {
                 assert!(
-                    caps.native_verbs.iter().any(|v| v == verb),
-                    "{name}: native_verb_meta row {verb} is not in the roster"
+                    caps.native_verbs.iter().any(|v| v == command),
+                    "{name}: native_verb_meta row {command} is not in the roster"
                 );
             }
         }
@@ -1929,7 +1932,7 @@ mod tests {
         let claude = contract.capabilities("claude").unwrap();
         assert_eq!(
             claude.native_verb_meta["/clear"].risk,
-            VerbRisk::ContextDestroying
+            CommandRisk::ContextDestroying
         );
         assert!(claude.native_verb_meta["/clear"].risk.is_guarded());
         assert!(!claude.native_verb_meta["/compact"].risk.is_guarded());

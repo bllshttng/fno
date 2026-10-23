@@ -1,7 +1,7 @@
 //! `fno agents mail send <id> <body>` execs the sibling leaf with the send
 //! word intact. The classifier hands `Role::MailSend` the tail WITHOUT the
-//! verb, so the exec prefix must re-add it: dropping it made an 8-hex or
-//! UUID target read as the leaf's verb ("unknown verb <id>", exit 2) while
+//! command, so the exec prefix must re-add it: dropping it made an 8-hex or
+//! UUID target read as the leaf's command ("unknown command <id>", exit 2) while
 //! plain names, which route through the Python leg, kept working. The
 //! machine-mail door (`fno backlog note` notify, events push) rides the
 //! same front leg with a flag-led send. The pin reads the argv a stub leaf
@@ -82,7 +82,7 @@ impl Drop for LeafStub {
 }
 
 /// An 8-hex short id reaches the leaf as the target of `mail send`, not as
-/// the verb: the recorded argv opens with the `mail send` pair.
+/// the command: the recorded argv opens with the `mail send` pair.
 #[test]
 fn hex_target_reaches_leaf_with_send_intact() {
     let s = LeafStub::new("hex");
@@ -123,7 +123,7 @@ fn uuid_target_keeps_the_tail_verbatim() {
 /// front with a flag-led send: `agents mail send --from-name <sender> --
 /// <recipient> <body>`. The flag-led target claims the native leg, so the
 /// reconstruction must still open with the send pair; dropping it made the
-/// leaf read `--from-name` as the verb.
+/// leaf read `--from-name` as the command.
 #[test]
 fn flag_led_machine_mail_send_reconstructs_the_send_pair() {
     let s = LeafStub::new("flagled");

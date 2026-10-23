@@ -1,4 +1,4 @@
-//! The portal reach: the `fno mux thread` control verb (`portal_ctl`) and the
+//! The portal reach: the `fno mux thread` control command (`portal_ctl`) and the
 //! AttachAgent portal arm it drives (`reach_portal`), extracted from the
 //! parent under the file-budget gate - the code the change touched moves with
 //! it.
@@ -190,7 +190,7 @@ pub(super) fn fill_held_portal_seat(
 }
 
 /// The fill by portal INDEX: the one body behind the focus door
-/// ([`fill_held_portal_seat`]) and the restore verb, so the two doors cannot
+/// ([`fill_held_portal_seat`]) and the restore command, so the two doors cannot
 /// disagree about what fills a held seat. The seat's own leaf wins
 /// (`portal_explicit = false`); the reach repoints the stand-in in place.
 /// A seat whose row resolves to zero or several live paneless rows keeps
@@ -270,7 +270,7 @@ pub(super) fn fill_held_portal_at(
     ))
 }
 
-/// What the restore verb would do with portal `idx` right now. One
+/// What the restore command would do with portal `idx` right now. One
 /// classifier behind both callers - `workspace_restore_start` collects the
 /// claude plans to resolve off-loop, `workspace_restore_apply` turns each
 /// verdict into the report row - so the two halves cannot disagree about
@@ -339,7 +339,7 @@ pub(super) fn locate_tier_notice(row: &RegistryAgent) -> Option<String> {
     })
 }
 
-/// The passive client id a restore-verb fill rides: the verb has no
+/// The passive client id a restore-command fill rides: the command has no
 /// focused client, so the seat's own tab rect and this id stand in.
 pub(super) const RESTORE_CLIENT: u64 = u64::MAX;
 
@@ -1212,7 +1212,7 @@ impl Core {
         // answers the key, the rows reach_portal serves. Another session's row
         // is that server's to view - saying so beats the reach's no-row
         // refusal, which would lie about a row the registry knows (the inline
-        // attach this verb replaced attached it regardless of hosting session).
+        // attach this command replaced attached it regardless of hosting session).
         if live_row.is_none() {
             let hosted = self.agents.iter().find(|a| {
                 (a.name == name || a.attach_id.as_deref() == Some(name)) && a.mux.is_some()
@@ -1297,7 +1297,7 @@ impl Core {
         // the reach's notice is the payload, and an empty buffer guarantees it
         // is never the message a full channel drops.
         while rx.try_recv().is_ok() {}
-        // The verb's index is the authoritative portal; the decoded
+        // The command's index is the authoritative portal; the decoded
         // placement carries only geometry. Overwriting the portal trio keeps
         // the reach's addressing in exactly one field, the way every pre-v66
         // caller already sent it. `portal` is the resolved index by

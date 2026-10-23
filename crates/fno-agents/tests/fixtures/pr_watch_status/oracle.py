@@ -2,7 +2,7 @@
 """The capture-mode oracle for the pr-watch status parity test.
 
 Runs the Python leg (`liveness_report_live` / `status`) over the same
-fixture the Rust verb reads, with the load state injected the way the
+fixture the Rust command reads, with the load state injected the way the
 Python tests monkeypatch `_launchctl_is_loaded`. Captured goldens freeze
 its bytes; the Python leg was deleted in the same change that landed the
 port, so capture mode refuses once the leg is gone.

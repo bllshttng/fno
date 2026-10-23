@@ -1,6 +1,6 @@
 //! The daemon's worktree sweep: one report per repo on a 6h floor.
 //! Report-only until a merge proof stands - a minted cleanup order, or the
-//! verb's own dry-run judgment for an outside merge - then applying.
+//! command's own dry-run judgment for an outside merge - then applying.
 //! Moved out of daemon.rs (shrink-only file) with its tests; the event
 //! carries `enumerated` and `judged` alongside the judged-bucket counts so a
 //! truncated read cannot be told from a partial sweep.
@@ -61,7 +61,7 @@ pub(crate) fn registry_repo_roots(home: &AgentsHome) -> Vec<String> {
     seen.into_iter().collect()
 }
 
-/// One repo's worktree-sweep reading, parsed from the verb's `Summary:` line.
+/// One repo's worktree-sweep reading, parsed from the command's `Summary:` line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorktreeSweepReport {
     pub eligible: usize,
@@ -102,7 +102,7 @@ impl From<bool> for WorktreeSweepOrderRead {
 /// which is indistinguishable from a clean machine: an absence has two
 /// explanations and a count must only ever come from a real reading.
 ///
-/// The verb differs by mode (`would archive` dry-run vs `archived` apply), so
+/// The command differs by mode (`would archive` dry-run vs `archived` apply), so
 /// the eligible count reads from whichever the line carries. `enumerated` /
 /// `judged` are Option: a summary from an older script carries neither, and
 /// an absent token is never a fabricated zero.
@@ -137,7 +137,7 @@ pub fn parse_worktree_sweep(stdout: &str) -> Option<WorktreeSweepReport> {
 ///
 /// A pending `merge_cleanup_requested` envelope is the fno-merge proof. An
 /// outside merge (`gh pr merge`, the web button) mints no envelope, so with
-/// none standing the verb's own dry-run summary is the same proof in git
+/// none standing the command's own dry-run summary is the same proof in git
 /// form: a tree it would archive reads merged-or-done and clean, and the
 /// `--apply` pass re-judges every guard tree by tree. An unreadable or
 /// empty dry-run authorizes nothing: a probe that cannot read never
@@ -157,7 +157,7 @@ pub fn apply_authority(pending: bool, dry_run_summary: Option<&str>) -> bool {
 /// ritual, as its second mint site) writes the `merge_cleanup_requested`
 /// envelope, and while a pending request stands for a repository (`orders`
 /// injects that scoped read) that repository's pass runs with `--apply`. An
-/// outside merge mints no envelope, so `orders` may also read the verb's own
+/// outside merge mints no envelope, so `orders` may also read the command's own
 /// dry-run judgment there (`apply_authority` carries that policy). The
 /// primary consumer is the merge reaper (merge_reap.rs), which stops the
 /// harness, drops the rows, and takes the tree; this sweep only catches what

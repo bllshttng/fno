@@ -5,14 +5,14 @@
 //! (`compose_spawn_argv`). Split in two: [`gather`] reads the world into
 //! [`Inputs`]; [`compose`] is pure, so the characterization goldens
 //! (`tests/fixtures/spawn_compose/`) feed it parsed TOML and never touch the
-//! environment. Reached as payload kind `compose` on the spawn-overlay verb.
+//! environment. Reached as payload kind `compose` on the spawn-overlay command.
 
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-const ROLE_VERBS: [&str; 3] = ["lead", "term", "fno-me"];
+const ROLE_COMMANDS: [&str; 3] = ["lead", "term", "fno-me"];
 /// Keep the old spelling on the canonical profile key for one release.
-const VERB_ALIASES: [(&str, &str); 1] = [("do", "execute")];
+const COMMAND_ALIASES: [(&str, &str); 1] = [("do", "execute")];
 /// A lane is a COMPLETE coordinate: route/model stop at the lane.
 const LANE_EXCLUSIVE: [&str; 2] = ["route", "model"];
 /// The one built-in answer for an unattended worker's permission mode.
@@ -25,11 +25,11 @@ pub struct Inputs {
     pub defaults: toml::Value,
     /// `agents.profiles` (empty table when unset).
     pub profiles: toml::Value,
-    /// `dispatch.verbs` registry (empty table when unset).
-    pub dispatch_verbs: toml::Value,
-    /// The shipped footnote verb roster.
+    /// `dispatch.commands` registry (empty table when unset).
+    pub dispatch_commands: toml::Value,
+    /// The shipped footnote command roster.
     pub roster: Vec<String>,
-    pub node_verb: Option<String>,
+    pub node_command: Option<String>,
     pub env_node: Option<String>,
     /// The resolved ambient harness (Python's `resolve_dispatch_harness`
     /// builtin default is claude).
@@ -88,17 +88,32 @@ pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
             .unwrap_or(true),
         argv,
         defaults: cfg(&["agents", "defaults"]),
-        dispatch_verbs: cfg(&["dispatch", "verbs"]),
+        // The registered-command table. The leg this ports read a
+        // dispatch key no config model defines, so it never fired.
+        dispatch_commands: crate::agents_config::config_value_deep(
+            cwd,
+            &["dispatch", "command_registry"],
+        )
+        .or_else(|| {
+            crate::agents_config::config_value_deep(
+                cwd,
+                &[
+                    "dispatch",
+                    crate::backlog::settings::LEGACY_COMMAND_REGISTRY_KEY,
+                ],
+            )
+        })
+        .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new())),
         env_node,
         facts: ask.get("facts").cloned().unwrap_or_else(|| json!({})),
         node,
         node_row,
-        node_verb: ask
-            .get("node_verb")
+        node_command: ask
+            .get("node_command")
             .and_then(Value::as_str)
             .map(str::to_string),
         profiles: cfg(&["agents", "profiles"]),
-        roster: crate::provider::footnote_verbs().into_iter().collect(),
+        roster: crate::provider::footnote_commands().into_iter().collect(),
         scan,
         verbose: ask.get("verbose").and_then(Value::as_bool).unwrap_or(false),
     }
@@ -150,19 +165,19 @@ pub(crate) fn graph_row_for(node_id: &str) -> Option<Value> {
     crate::graph_get::find_entry(&rows, node_id).cloned()
 }
 
-/// The first verb-shaped token anywhere in the seed, sigil and namespace
-/// stripped (Python `_verb_token`).
-fn verb_token(seed: Option<&str>) -> Option<String> {
+/// The first command-shaped token anywhere in the seed, sigil and namespace
+/// stripped (Python `_command_token`).
+fn command_token(seed: Option<&str>) -> Option<String> {
     let seed = seed?;
     for tok in seed.split_whitespace() {
-        if let Some((verb, _)) = crate::provider::parse_verb_token(tok) {
-            return Some(verb.to_string());
+        if let Some((command, _)) = crate::provider::parse_command_token(tok) {
+            return Some(command.to_string());
         }
     }
     None
 }
 
-/// Whether the seed's verb token carried the `fno:` namespace - the one
+/// Whether the seed's command token carried the `fno:` namespace - the one
 /// marker that PROVES the seed names a footnote stage (Python
 /// `_carries_fno_namespace`).
 fn carries_namespace(seed: Option<&str>, tok: &str) -> bool {
@@ -170,10 +185,10 @@ fn carries_namespace(seed: Option<&str>, tok: &str) -> bool {
         return false;
     };
     seed.split_whitespace()
-        .any(|t| matches!(crate::provider::parse_verb_token(t), Some((v, true)) if v == tok))
+        .any(|t| matches!(crate::provider::parse_command_token(t), Some((v, true)) if v == tok))
 }
 
-fn known_verb_keys(inputs: &Inputs) -> (Vec<String>, bool) {
+fn known_command_keys(inputs: &Inputs) -> (Vec<String>, bool) {
     let mut known: Vec<String> = inputs
         .profiles
         .as_table()
@@ -181,9 +196,9 @@ fn known_verb_keys(inputs: &Inputs) -> (Vec<String>, bool) {
         .unwrap_or_default();
     let roster_ok = !inputs.roster.is_empty();
     known.extend(inputs.roster.iter().cloned());
-    if let Some(registry) = inputs.dispatch_verbs.as_table() {
+    if let Some(registry) = inputs.dispatch_commands.as_table() {
         for key in registry.keys() {
-            let canon = crate::backlog::fields::canonical_verb_key(key);
+            let canon = crate::backlog::fields::canonical_command_key(key);
             let canon = canon.trim_start_matches('/').to_string();
             if !canon.is_empty() && !known.iter().any(|k| k == &canon) {
                 known.push(canon);
@@ -193,19 +208,19 @@ fn known_verb_keys(inputs: &Inputs) -> (Vec<String>, bool) {
     (known, roster_ok)
 }
 
-/// The seed's profile key (Python `_profile_key`): a resolvable verb token
-/// names its canonical profile; a lead verb or no token names `role`; an
+/// The seed's profile key (Python `_profile_key`): a resolvable command token
+/// names its canonical profile; a lead command or no token names `role`; an
 /// unknown `fno:`-namespaced token refuses (None).
 fn profile_key(seed: Option<&str>, known: Option<&[String]>) -> Option<String> {
-    let Some(tok) = verb_token(seed) else {
+    let Some(tok) = command_token(seed) else {
         return Some("role".to_string());
     };
-    let key = VERB_ALIASES
+    let key = COMMAND_ALIASES
         .iter()
         .find(|(old, _)| *old == tok)
         .map(|(_, new)| new.to_string())
         .unwrap_or_else(|| tok.clone());
-    if ROLE_VERBS.contains(&key.as_str()) {
+    if ROLE_COMMANDS.contains(&key.as_str()) {
         return Some("role".to_string());
     }
     match known {
@@ -275,16 +290,16 @@ fn scan_of(scan: &Value) -> Axes {
     }
 }
 
-fn profile_table<'a>(inputs: &'a Inputs, verb: &str) -> Option<(&'a toml::Table, String)> {
+fn profile_table<'a>(inputs: &'a Inputs, command: &str) -> Option<(&'a toml::Table, String)> {
     let profiles = inputs.profiles.as_table()?;
-    let direct = profiles.get(verb);
+    let direct = profiles.get(command);
     if let Some(t) = direct.and_then(toml::Value::as_table) {
-        return Some((t, verb.to_string()));
+        return Some((t, command.to_string()));
     }
-    // The legacy alias: the canonical verb keeps the old spelling's row.
-    let legacy = VERB_ALIASES
+    // The legacy alias: the canonical command keeps the old spelling's row.
+    let legacy = COMMAND_ALIASES
         .iter()
-        .find(|(_, new)| *new == verb)
+        .find(|(_, new)| *new == command)
         .map(|(old, _)| old.to_string());
     let old = legacy?;
     let table = profiles.get(&old)?.as_table()?;
@@ -309,7 +324,7 @@ fn field_read(
     lane: Option<&Value>,
     lane_index: Option<usize>,
     profile: Option<&toml::Table>,
-    profile_verb: &str,
+    profile_command: &str,
     defaults: &toml::Table,
     name: &str,
 ) -> Field {
@@ -318,7 +333,7 @@ fn field_read(
         if !value.is_empty() {
             return Field(
                 value,
-                Some(format!("agents.profiles.{profile_verb}.lanes[{index}]")),
+                Some(format!("agents.profiles.{profile_command}.lanes[{index}]")),
             );
         }
         if LANE_EXCLUSIVE.contains(&name) {
@@ -327,7 +342,7 @@ fn field_read(
     }
     let pv = cfg_str(profile, name);
     if !pv.is_empty() {
-        return Field(pv, Some(format!("agents.profiles.{profile_verb}")));
+        return Field(pv, Some(format!("agents.profiles.{profile_command}")));
     }
     let dv = cfg_str(Some(defaults), name);
     if !dv.is_empty() {
@@ -417,8 +432,8 @@ impl Seam {
 struct Stage<'a> {
     inputs: &'a Inputs,
     scan: Axes,
-    verb: String,
-    profile_verb: String,
+    command: String,
+    profile_command: String,
     profile: Option<&'a toml::Table>,
     defaults: toml::Table,
     lane: Option<Value>,
@@ -576,7 +591,7 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
             return;
         }
     }
-    let (verb, profile_verb, profile) = match resolve_profile(inputs, &scan) {
+    let (command, profile_command, profile) = match resolve_profile(inputs, &scan) {
         Ok(found) => found,
         Err(lines) => {
             for line in lines {
@@ -591,8 +606,8 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
     let mut stage = Stage {
         inputs,
         scan,
-        verb,
-        profile_verb,
+        command,
+        profile_command,
         profile: profile.as_ref(),
         defaults,
         lane: None,
@@ -631,17 +646,17 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
     assemble(&mut stage, seam);
 }
 
-/// Profile-key resolution: the seed's verb names the profile; an unknown
+/// Profile-key resolution: the seed's command names the profile; an unknown
 /// `fno:`-namespaced token refuses with the two lines Python printed.
 fn resolve_profile(
     inputs: &Inputs,
     scan: &Axes,
 ) -> Result<(String, String, Option<toml::Table>), Vec<String>> {
-    let (known, roster_ok) = known_verb_keys(inputs);
+    let (known, roster_ok) = known_command_keys(inputs);
     let mut profile_seed = scan.seed.clone();
     if profile_seed.is_none() {
-        if let Some(node_verb) = &inputs.node_verb {
-            profile_seed = Some(format!("/{node_verb}"));
+        if let Some(node_command) = &inputs.node_command {
+            profile_seed = Some(format!("/{node_command}"));
         }
     }
     let known_ref = if roster_ok {
@@ -649,34 +664,34 @@ fn resolve_profile(
     } else {
         None
     };
-    let verb = profile_key(profile_seed.as_deref(), known_ref).ok_or_else(|| {
-        let tok = verb_token(scan.seed.as_deref()).unwrap_or_default();
+    let command = profile_key(profile_seed.as_deref(), known_ref).ok_or_else(|| {
+        let tok = command_token(scan.seed.as_deref()).unwrap_or_default();
         vec![
             format!(
-                "fno agents spawn: seed {} names verb-shaped token {} but no \
-                 shipped footnote verb or configured profile answers it",
+                "fno agents spawn: seed {} names command-shaped token {} but no \
+                 shipped footnote command or configured profile answers it",
                 crate::spawn_axes::repr(scan.seed.as_deref().unwrap_or("")),
                 crate::spawn_axes::repr(&tok)
             ),
             "fno agents spawn: refusing; no worker launched".to_string(),
         ]
     })?;
-    let (profile, profile_verb) = match profile_table(inputs, &verb) {
+    let (profile, profile_command) = match profile_table(inputs, &command) {
         Some((table, name)) => (Some(table.clone()), name),
-        None => (None, verb.clone()),
+        None => (None, command.clone()),
     };
-    Ok((verb, profile_verb, profile))
+    Ok((command, profile_command, profile))
 }
 
 /// Where a scalar field's value would come from with no lane in play.
 fn scalar_rung(
     profile: Option<&toml::Table>,
-    profile_verb: &str,
+    profile_command: &str,
     defaults: &toml::Table,
     name: &str,
 ) -> Option<String> {
     if !cfg_str(profile, name).is_empty() {
-        return Some(format!("agents.profiles.{profile_verb}"));
+        return Some(format!("agents.profiles.{profile_command}"));
     }
     if !cfg_str(Some(defaults), name).is_empty() {
         return Some("agents.defaults".to_string());
@@ -701,8 +716,18 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
                 .and_then(toml::Value::as_table)
                 .is_some_and(|t| !t.is_empty())
     });
-    let model_rung = scalar_rung(stage.profile, &stage.profile_verb, &stage.defaults, "model");
-    let route_rung = scalar_rung(stage.profile, &stage.profile_verb, &stage.defaults, "route");
+    let model_rung = scalar_rung(
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "model",
+    );
+    let route_rung = scalar_rung(
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "route",
+    );
     let model_occupied = scan.has_model
         || scan.explicit_vendor_present
         || scan.explicit_route
@@ -731,7 +756,7 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
     if !(lanes_present || grid_node_entry.is_some() || enforced) {
         return;
     }
-    let grid_role = if stage.verb == "blueprint" || stage.verb == "think" {
+    let grid_role = if stage.command == "blueprint" || stage.command == "think" {
         Some("planning".to_string())
     } else {
         None
@@ -742,7 +767,7 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
         .or_else(|| Some(cfg_str(stage.profile, "provider")))
         .filter(|v| !v.trim().is_empty());
     let ask = json!({
-        "rung_base": format!("agents.profiles.{}", stage.profile_verb),
+        "rung_base": format!("agents.profiles.{}", stage.profile_command),
         "lanes_raw": lanes_payload(stage.profile),
         "profile": crate::route_gather::profile_fields_for(stage.profile),
         "node": grid_node_entry,
@@ -754,7 +779,7 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
         "role": grid_role,
         "protected_role": stage.inputs.facts.get("role_protected"),
         "model_occupied": model_occupied,
-        "work_verb": stage.verb,
+        "work_command": stage.command,
         "explicit_model_value": if scan.has_model { scan.model_value.clone() } else { None },
         "explicit_route_value": if scan.explicit_route { scan.route_value.clone() } else { None },
         "explicit_vendor_value": if scan.explicit_vendor_present {
@@ -874,7 +899,7 @@ fn read_fields(stage: &Stage) -> Fields {
             view.0,
             view.1,
             view.2,
-            &stage.profile_verb,
+            &stage.profile_command,
             &stage.defaults,
             name,
         )
@@ -1072,7 +1097,7 @@ fn pin_harness_model(
     true
 }
 
-/// A lane pick (`agents.profiles.<verb>.lanes`) with a model and no route
+/// A lane pick (`agents.profiles.<command>.lanes`) with a model and no route
 /// pins that model the same way a grid pick does.
 fn lane_model_pin(stage: &Stage, seam: &mut Seam) {
     let Some(candidate) = stage.slot_candidate.as_ref() else {
@@ -1163,7 +1188,7 @@ fn billing_axes(stage: &mut Stage, seam: &mut Seam) {
     }
 }
 
-/// The pane group and the harness bundle: the verb's placement judgment,
+/// The pane group and the harness bundle: the command's placement judgment,
 /// then the axes answer that lands the bundle behind the `--` fence at the
 /// argv TAIL (a boundary the caller already typed displaces it).
 fn pane_bundle_stage(stage: &mut Stage, seam: &mut Seam) {
@@ -1319,7 +1344,7 @@ fn fence_model(argv: &[String], bundle: &mut Vec<String>, model: String, stderr:
 }
 
 /// The spawn_defaults_applied receipt, through the journal op (the WRITE
-/// belongs to the verb; the caller passes the resolved path). Never fails
+/// belongs to the command; the caller passes the resolved path). Never fails
 /// the spawn.
 fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
     let path = match non_empty_env("FNO_EVENTS_PATH") {
@@ -1345,7 +1370,7 @@ fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
         "path": path,
         "event": {
             "name": stage.scan.name,
-            "verb": stage.profile_verb,
+            "verb": stage.profile_command,
             // A preview, not the text: the receipt's readers key on name and
             // fingerprint, and one full seed once made a 500 KB row.
             "seed": stage.scan.seed.as_deref().map(|s| s.chars().take(200).collect::<String>()),
@@ -1368,7 +1393,7 @@ fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// One spawn-defaults block as the overlay verb's JSON view (Python
+/// One spawn-defaults block as the overlay command's JSON view (Python
 /// `_overlay_payload`): the typed dump carries every scalar plus the harness
 /// table.
 fn overlay_payload(table: &toml::Table) -> Value {
@@ -1449,7 +1474,7 @@ fn overlay_stage(stage: &mut Stage, seam: &mut Seam) {
     let harness = resolved_harness(stage).unwrap_or_default();
     let ask = json!({
         "kind": "overlay",
-        "verb": stage.profile_verb,
+        "verb": stage.profile_command,
         "harness": harness,
         "defaults": overlay_payload(&stage.defaults),
         "profile": stage.profile.map(overlay_payload),
@@ -1695,9 +1720,9 @@ mod tests {
                     .collect(),
                 defaults: toml::Value::Table(toml::map::Map::new()),
                 profiles: toml::Value::Table(toml::map::Map::new()),
-                dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
+                dispatch_commands: toml::Value::Table(toml::map::Map::new()),
                 roster: vec!["target".to_string()],
-                node_verb: None,
+                node_command: None,
                 env_node: None,
                 ambient_harness: "claude".to_string(),
                 apply_permission_builtin: true,
@@ -1828,9 +1853,9 @@ mod tests {
             ],
             defaults: toml::Value::Table(toml::map::Map::new()),
             profiles: toml::Value::Table(toml::map::Map::new()),
-            dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
             roster: vec!["target".to_string()],
-            node_verb: None,
+            node_command: None,
             env_node: None,
             ambient_harness: "claude".to_string(),
             apply_permission_builtin: true,

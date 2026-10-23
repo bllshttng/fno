@@ -99,7 +99,7 @@ FNO_ORPHANS_SKIP_PROBE=cwd  fno agents fleet orphans; echo "exit=$?"
 
 Read that exit code directly. Never through a `| tail`. A tail reports its own status, and that has hidden a failing gate here before.
 
-Read the printed line too, not only the code. A deployed `fno` older than this verb answers `No such command 'orphans'` and exits 2, which is the same code a failing arm uses. All three commands above then look like the falsifier working. The healthy run is what separates them: it exits 0 on a current binary and 2 on a stale one. `fno doctor` names the staleness, and `fno doctor --fix` updates it.
+Read the printed line too, not only the code. A deployed `fno` older than this command answers `No such command 'orphans'` and exits 2, which is the same code a failing arm uses. All three commands above then look like the falsifier working. The healthy run is what separates them: it exits 0 on a current binary and 2 on a stale one. `fno doctor` names the staleness, and `fno doctor --fix` updates it.
 
 **What the live control does not prove**, stated so nobody reads it as covering more than it does. Three arms stay unproven: the uid test, the census exclusion, and the reap age gate. The probe is ours, is not a census row, and is seconds old. Unit tests cover those three against a fabricated process table in `cli/tests/agents/test_orphans.py`.
 
@@ -113,7 +113,7 @@ The rename requirement is not decoration either. `fno-agents-daemon` runs at PPI
 
 **Expect the sweep to report far more than it kills.** Every orphan that predates the guard carries whatever name it was born with. A name-gated reap can never touch it. Those are exactly the processes nobody has license to kill unattended. Read the gap as the guard's install date, not as a broken reap.
 
-A clean machine here still reports third-party daemons at PPID 1 whose cwd is the repo. `--quiet-unless-new` reports each once and then stays silent. That is what the SessionStart hook uses. The bare verb always prints everything.
+A clean machine here still reports third-party daemons at PPID 1 whose cwd is the repo. `--quiet-unless-new` reports each once and then stays silent. That is what the SessionStart hook uses. The bare command always prints everything.
 
 The quiet gate keys on pid, name and start time, so it mutes a process, never a kind of process. A harness that starts a fresh `node` or `bash` per session mints a new key each time, and the sweep speaks again. That is correct and it is also the noisiest thing here. Read a repeat as a new process, not as a broken gate.
 

@@ -5,7 +5,7 @@
 //!
 //! The projection itself lives in `fno-agents` (`feed.rs`): it joins
 //! questions.jsonl and graph.json into ordered rows, so no second
-//! implementation of the join can drift from the verb's. This module only
+//! implementation of the join can drift from the command's. This module only
 //! carries the row shape the client renders and the one bounded call that
 //! fetches it - off the UI loop, and a typed [`FeedError`] instead of a bare
 //! `None` so the client can say WHICH failure fired.

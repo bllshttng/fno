@@ -64,7 +64,7 @@ Entry page: `docs/quickstart.md`. It takes the first-feature half of `getting-st
 
 ### Stage 4: Daily driver
 
-The reader uses fno every day on one project. The question: which verb do I run for this task, and which key changes that behavior?
+The reader uses fno every day on one project. The question: which command do I run for this task, and which key changes that behavior?
 
 Touchpoints: `/fno:think`, `/fno:blueprint`, `/fno:review`, `/fno:ship`, `/fno:fix`, `fno backlog`, `fno config`.
 
@@ -72,7 +72,7 @@ Docs that answer today: `docs/backlog-usage.md`, `docs/guides/pr-lifecycle.md`, 
 
 Pain points: `docs/guides/execution-modes.md` names "do" and "operator" modes, and `skills/` has neither. `docs/guides/utilities.md` names a debug skill, and `skills/` has `fix`, not `debug`. `docs/README.md` links `architecture/megawalk-pipeline.md` as "the multi-feature loop", while `docs/guides/megawalk-walker.md` says that walker is deleted. `docs/api-reference.md` says 24 skills and 17 agents. Two pages a daily user opens often are long: `configuration-guide.md` is 76 KB and `backlog-usage.md` is 47 KB.
 
-Entry page: `docs/workflows.md`. It lists the task, the verb, and the guide, in the style of the Claude Code "Common workflows" page.
+Entry page: `docs/workflows.md`. It lists the task, the command, and the guide, in the style of the Claude Code "Common workflows" page.
 
 ### Stage 5: Fleet
 
@@ -123,7 +123,7 @@ docs/
 ### Page kinds
 
 - entry: one per stage. A short page that answers the stage question and links onward.
-- guide: one task, in steps, with the verb to run.
+- guide: one task, in steps, with the command to run.
 - reference: a lookup table or schema. Often generated.
 - concept: explains a model a user must hold to use a feature well.
 - contributor: design notes, rules and gates for people who change fno.

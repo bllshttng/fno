@@ -1,8 +1,8 @@
-"""Tests for the `fno cost` verb (ab-18563bcc, resolves cv-cea90c09).
+"""Tests for the `fno cost` command (ab-18563bcc, resolves cv-cea90c09).
 
 `fno cost` is a thin passthrough to the in-package
 ``fno.cost._session_cost.main`` argparse CLI (the former
-scripts/metrics/session-cost.py). These pin that the verb is registered, runs
+scripts/metrics/session-cost.py). These pin that the command is registered, runs
 from in-package Python, and propagates the underlying exit code - without a
 repo-root script.
 """
@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 
 def test_cost_forwards_args_to_session_cost_main(monkeypatch) -> None:
-    # The verb must delegate to the in-package main with the args verbatim,
+    # The command must delegate to the in-package main with the args verbatim,
     # not shell out to a script.
     import sys
 

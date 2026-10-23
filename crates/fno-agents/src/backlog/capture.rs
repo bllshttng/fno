@@ -1384,7 +1384,7 @@ fn assemble(head: Vec<String>, digest: Vec<String>, timeline: Vec<String>) -> St
 
 /// Run one idempotent tidy pass over the inbox. Eject (completed filed
 /// nodes) -> archive; dedup (report-only); separator normalize; rebuild the
-/// pinned digest. Serialized by the same inbox lock the other write verbs
+/// pinned digest. Serialized by the same inbox lock the other write commands
 /// use so a concurrent add/promote append never races the read-modify-write.
 fn tidy_pass(
     path: &Path,

@@ -76,7 +76,7 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 
 **Observing = `fno agents session peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents session logs <name>` is registry-scoped.
 
-**You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-verb seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
+**You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-command seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
 
 A harness can also launch its own way. The [native launch table](../../docs/HARNESSES.md) holds each harness's own line.
 

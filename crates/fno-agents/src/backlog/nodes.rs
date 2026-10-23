@@ -791,7 +791,7 @@ pub fn save(connection: &Connection, node: &Node) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
     let dispatch = &node.dispatch;
-    if dispatch.verb.is_some() || dispatch.brief.is_some() || dispatch.model.is_some() {
+    if dispatch.command.is_some() || dispatch.brief.is_some() || dispatch.model.is_some() {
         connection
             .execute(
                 "INSERT INTO node_dispatch (node_id, verb, brief, model)
@@ -800,7 +800,7 @@ pub fn save(connection: &Connection, node: &Node) -> Result<(), String> {
                      brief = excluded.brief, model = excluded.model
                  WHERE (node_dispatch.verb, node_dispatch.brief, node_dispatch.model)
                    IS NOT (excluded.verb, excluded.brief, excluded.model)",
-                params![node.id, dispatch.verb, dispatch.brief, dispatch.model],
+                params![node.id, dispatch.command, dispatch.brief, dispatch.model],
             )
             .map_err(|error| error.to_string())?;
     } else {
@@ -1708,7 +1708,7 @@ pub(crate) type SupersessionParts = (
 
 fn map_dispatch_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dispatch> {
     Ok(Dispatch {
-        verb: row.get(0)?,
+        command: row.get(0)?,
         brief: row.get(1)?,
         model: row.get(2)?,
     })

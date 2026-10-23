@@ -1,4 +1,4 @@
-"""Spawn verb contracts on the Python leg.
+"""Spawn command contracts on the Python leg.
 
   codex --once: creates and exchanges, stdout carries the reply, the teardown
           receipt names the peer, and the registry has no row afterward;
@@ -253,7 +253,7 @@ def test_spawn_claude_plain(workdir_claude) -> None:
     assert entry.short_id == receipt["short_id"]
 
 
-def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
+def test_spawn_refuses_a_payload_whose_command_the_shell_ate(workdir) -> None:
     """zsh turns a double-quoted `$fno:target x-1` into `arget x-1`. The spawn
     refuses it before launching anything, instead of seeding a worker with prose."""
     from fno.agents.cli import agents_app
@@ -277,7 +277,7 @@ def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
 def test_spawn_codex_plain_no_once_requires_runtime(workdir, monkeypatch) -> None:
     """Codex thread spawn refuses on a missing runtime before any dispatch.
 
-    The gate is a binary verb now: with no fno-agents on the machine the gate
+    The gate is a binary command now: with no fno-agents on the machine the gate
     transport cannot even be asked, and the spawn refuses fail-closed at the
     gate (87, gate_unavailable) instead of reaching the lane's own exit-13
     check. 13 remains the lane's own code for a readable gate whose worker
@@ -496,7 +496,7 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
     monkeypatch.setattr(dispatch_mod, "_opencode_serve_spawn", _fake_serve)
     monkeypatch.setattr(
         "fno.graph.store.read_nodes_by_ids",
-        lambda path, tokens: {"entries": [{"id": "x-abcd", "slug": "serve", "dispatch_verb": "/target", "difficulty": "low"}], "missing": []},
+        lambda path, tokens: {"entries": [{"id": "x-abcd", "slug": "serve", "dispatch_command": "/target", "difficulty": "low"}], "missing": []},
     )
     # The composed node seed is target-family; this machine may lack the
     # opencode loop extension. The gate has its own test file.

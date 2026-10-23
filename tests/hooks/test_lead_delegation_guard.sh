@@ -8,10 +8,10 @@
 #
 # The policy moved into crates/fno-agents/src/hook/lead_guard.rs and
 # the script became a probe-and-relay wrapper (never exec: a candidate that
-# lacks the hook verb falls through instead of refusing every tool), so the
+# lacks the hook command falls through instead of refusing every tool), so the
 # fixtures are real files the native guard reads (registry.json under
 # FNO_AGENTS_HOME, the org manifest under the space's leads/, config.toml at
-# the payload cwd) instead of stubbed verb outputs. Every pre-port case keeps
+# the payload cwd) instead of stubbed command outputs. Every pre-port case keeps
 # its semantics; the stub positive control became a no-subprocess canary (the
 # native guard must spawn no `fno`).
 set -uo pipefail
@@ -144,7 +144,7 @@ if [[ $RC -eq 0 ]] && echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecisio
    && printf '%s' "$REASON" | grep -qF "inside the repo" \
    && ! printf '%s' "$REASON" | grep -qiE "spawn|advance" \
    && echo "$OUT" | jq -e '.decision == "block"' >/dev/null 2>&1; then
-  pass "AC1: teamed org Edit denied, reason names the path + the source rule, no delegation verbs"
+  pass "AC1: teamed org Edit denied, reason names the path + the source rule, no delegation commands"
 else
   fail "AC1: rc=$RC out=${OUT:0:300} err=$(cat "$TMP/stderr.txt")"
 fi
@@ -268,7 +268,7 @@ ERR="$(cat "$TMP/stderr.txt")"
   && pass "AC3: unreadable registry allows with a stderr line" \
   || fail "AC3: unreadable registry rc=$RC out=$OUT err=$ERR"
 
-# ── Guard's own Bash floor: source writes refused, verb calls allowed ────────
+# ── Guard's own Bash floor: source writes refused, command calls allowed ────────
 registry_fixture "$TEAMED"
 manifest_fixture org
 OUT="$(run_guard "$(bash_payload "echo x > $TMP/repo/src/evil.py")")"; RC=$?
@@ -284,8 +284,8 @@ echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/nul
   || fail "Bash floor: cp rc=$RC out=${OUT:0:300}"
 
 OUT="$(run_guard "$(bash_payload "fno agents mail send hi --to-self")")"; RC=$?
-[[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "Bash floor: mail verb allowed" \
-  || fail "Bash floor: mail verb rc=$RC out=$OUT"
+[[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "Bash floor: mail command allowed" \
+  || fail "Bash floor: mail command rc=$RC out=$OUT"
 
 # tee writes EVERY FILE operand; a first-operand-only floor reads a plan path
 # and approves while the second operand overwrites source.
@@ -365,7 +365,7 @@ OUT="$(run_guard "$(bash_payload "cat > \"$TMP/plans/plan;.md\"")")"; RC=$?
 [[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "glue: quoted plan;.md in plans allows" \
   || fail "glue quoted rc=$RC out=$OUT"
 
-# The node's live specimen shape: a read verb with a thrown-away dup chain.
+# The node's live specimen shape: a read command with a thrown-away dup chain.
 OUT="$(run_guard "$(bash_payload "fno backlog session close x-1 --launch '/fno:target x-1' 2>&1; echo done")")"; RC=$?
 [[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "glue: session close with 2>&1; chain allows" \
   || fail "glue session close rc=$RC out=$OUT"
@@ -398,7 +398,7 @@ REASON="$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.permissionDecisionReas
 if echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 \
    && printf '%s' "$REASON" | grep -qF "repo/src/evil.py" \
    && ! printf '%s' "$REASON" | grep -qiE "spawn|advance"; then
-  pass "vault: cp into the repo denied, reason names the path, no delegation verbs"
+  pass "vault: cp into the repo denied, reason names the path, no delegation commands"
 else
   fail "vault cp in-repo rc=$RC out=${OUT:0:300}"
 fi
@@ -549,14 +549,14 @@ echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/nul
   && pass "limb: orphaned open spawn with later tool_use denied" \
   || fail "limb orphan rc=$RC out=${OUT:0:300}"
 
-# ── Stale-binary fallthrough: a binary without the hook verb must never ──────
+# ── Stale-binary fallthrough: a binary without the hook command must never ──────
 # wedge the session. Live outage 2026-09-17: 19 worktree builds
-# predated the verb; the old exec answered "unknown verb" and refused every
+# predated the command; the old exec answered "unknown command" and refused every
 # tool in those sessions.
 mkdir -p "$TMP/stalebin"
 cat > "$TMP/stalebin/fno-agents" <<'STALE'
 #!/usr/bin/env bash
-printf '%s\n' "fno-agents: unknown verb: hook (expected --emit-schema|...)"
+printf '%s\n' "fno-agents: unknown command: hook (expected --emit-schema|...)"
 exit 2
 STALE
 chmod +x "$TMP/stalebin/fno-agents"
@@ -569,7 +569,7 @@ manifest_fixture org
 export FNO_AGENTS_BIN="$BIN"
 OUT="$(PATH="$TMP/stalebin:$PATH" run_guard "$(edit_payload "$SRC_FILE")")"; RC=$?
 echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 \
-  && pass "stale: unknown-verb PATH binary falls through, org Edit still denied" \
+  && pass "stale: unknown-command PATH binary falls through, org Edit still denied" \
   || fail "stale fallthrough rc=$RC out=${OUT:0:300}"
 unset FNO_AGENTS_BIN
 

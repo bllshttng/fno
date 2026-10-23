@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from fno.paths import StateFile
 
 # Mounted as ``fno config accounts``: accounts ARE config
-# (``config.accounts.records``), so the verb path mirrors the config path. This
+# (``config.accounts.records``), so the command path mirrors the config path. This
 # replaced the top-level ``fno providers``, which was hidden and therefore
 # discoverable by nobody; as a `fno config` subcommand it shows up in
 # `fno config --help` and gets its own page.
@@ -32,11 +32,11 @@ if TYPE_CHECKING:
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     "accounts": ("fno.adapters.providers.cli:cli", "Manage account records."),
     # Folded under config (unit 6). The old top-level spellings stay
-    # one-release shims (fno.verb_moves); these mounts are the canonical
+    # one-release shims (fno.command_moves); these mounts are the canonical
     # homes. Lazy for the same reason `accounts` is: `fno config get` runs
     # from shell dozens of times per phase and must not pay for their imports.
     # Hidden: the menu cap is 12 and config already curates nine visible
-    # verbs; `fno help config --all` lists these.
+    # commands; `fno help config --all` lists these.
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "plugins": (
         "fno.plugins.cli:plugins_app",
@@ -397,11 +397,11 @@ def _report_review_capability(json_out: bool = False) -> int:
     from dataclasses import asdict
 
     from fno.config import load_settings, resolvable_reviewers
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
     review = load_settings().review
     reviewers = list(review.reviewers or [])
-    answer = verb_call(
+    answer = command_call(
         ["review-level", "capability", "reviewers"],
         {
             "reviewers": reviewers,
@@ -517,7 +517,7 @@ def _report_gates() -> None:
     from dataclasses import asdict
 
     from fno.config import load_settings, resolvable_reviewers
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
     settings = load_settings()
     probes = list(settings.done_probes or [])
@@ -532,7 +532,7 @@ def _report_gates() -> None:
     if not probes:
         typer.echo("  probe: none declared in config (a plan may still declare its own)")
     if reviewers:
-        answer = verb_call(
+        answer = command_call(
             ["review-level", "capability", "reviewers"],
             {
                 "reviewers": reviewers,
@@ -806,7 +806,7 @@ def _report_deprecated_active_backlog_mission() -> None:
 def _report_deprecated_dispatch_harness() -> None:
     """Name every config file still setting the deprecated ``dispatch.harness``.
 
-    The stage table (``agents.profiles.<verb>.provider``) is the home for the
+    The stage table (``agents.profiles.<command>.provider``) is the home for the
     harness axis; this key reads as the fallback rung beneath it for one
     release. Same contract as :func:`_report_deprecated_auto_merge`: name the
     file, print the exact migration, and when a same-file stage-table provider
@@ -843,21 +843,21 @@ def _report_deprecated_dispatch_harness() -> None:
 
 def _report_band_routing() -> None:
     """Say when band routing is routing nothing, and why. Silent once any
-    verb's slot would take a lane; ``model_routing.roles`` is a DIFFERENT
+    command's slot would take a lane; ``model_routing.roles`` is a DIFFERENT
     axis and reads as already on."""
     from fno import route_resolve
 
     inventory = route_resolve.resolve_inventory()
-    read_verbs = route_resolve.slot_verbs()
-    # Silent once any verb's slot would take a lane: routing is armed, and
-    # the unconfigured verbs are a per-verb choice, not a dead router.
-    empty_verbs = [
-        verb for verb in read_verbs
+    read_commands = route_resolve.slot_commands()
+    # Silent once any command's slot would take a lane: routing is armed, and
+    # the unconfigured commands are a per-command choice, not a dead router.
+    empty_commands = [
+        command for command in read_commands
         if not str(route_resolve.slot_states(
-            verb
-        ).get("would_take", "")).startswith(f"agents.profiles.{verb}.lanes")
+            command
+        ).get("would_take", "")).startswith(f"agents.profiles.{command}.lanes")
     ]
-    if len(empty_verbs) < len(read_verbs):
+    if len(empty_commands) < len(read_commands):
         return
     settings = None
     try:
@@ -871,11 +871,11 @@ def _report_band_routing() -> None:
     declared_count = len(getattr(routing, "models", None) or [])
     typer.echo(
         f"band routing inactive: config.routing.models declares {declared_count} "
-        "row(s), and no verb slot has a lane that resolves: "
-        f"{', '.join(empty_verbs)}\n"
+        "row(s), and no command slot has a lane that resolves: "
+        f"{', '.join(empty_commands)}\n"
         f"      The built-in rows keep a tier request answerable: "
         f"{', '.join(sorted(inventory.rows)) or 'none'}\n"
-        "      Declare [[routing.models]] rows plus [agents.profiles.<verb>] "
+        "      Declare [[routing.models]] rows plus [agents.profiles.<command>] "
         "lanes to activate "
         "(docs/architecture/role-based-model-routing.md)"
         + (
@@ -892,7 +892,7 @@ def _report_harness_overlays() -> None:
 
     The spawn seam degrades open on config values by design, so this readout
     is where an operator hears a value will be skipped on some harness.
-    Resolution rides the spawn-overlay verb (the spawn seam's own rungs);
+    Resolution rides the spawn-overlay command (the spawn seam's own rungs);
     silent when every pair maps.
     """
     from fno.agents.harnesses import READABLE_PROVIDERS
@@ -911,12 +911,12 @@ def _report_harness_overlays() -> None:
     rows: list = [(v, p) for v, p in (getattr(agents, "profiles", None) or {}).items()]
     rows.append(("", None))
     seen: set = set()
-    for verb, prof in rows:
+    for command, prof in rows:
         try:
             answer = spawn_overlay_call(
                 {
                     "kind": "overlay",
-                    "verb": verb,
+                    "verb": command,
                     "defaults": _overlay_payload(defaults),
                     "profile": _overlay_payload(prof) if prof is not None else None,
                     "harnesses": list(READABLE_PROVIDERS),
@@ -926,7 +926,7 @@ def _report_harness_overlays() -> None:
             typer.echo(f"config doctor: harness-overlay readout unavailable: {exc}")
             return
         if answer.get("refusal"):
-            # The verb's own guards refused the config (unknown harness
+            # The command's own guards refused the config (unknown harness
             # key, a ranking field in an overlay); that IS the finding.
             typer.echo(answer["refusal"])
             return
@@ -939,7 +939,7 @@ def _report_harness_overlays() -> None:
                 if not entry:
                     continue
                 value, rung = entry["value"], entry["rung"]
-                # One line per unique (rung, field): every harness and verb
+                # One line per unique (rung, field): every harness and command
                 # resolves the same scalar beneath it, and the defect is one.
                 key = (rung, name, value)
                 if key in seen:
@@ -1267,7 +1267,7 @@ def set_cmd(
             items.append((k, v))
 
     # A dangling accounts.active bricks every loader call (and every accounts
-    # verb loads first), so the pointer is validated against declared record
+    # command loads first), so the pointer is validated against declared record
     # ids here rather than repaired after the fact. Scope-aware: a GLOBAL
     # pointer must name a globally declared record (a local-only id would
     # brick every other project), while a project pointer may name anything
@@ -1353,7 +1353,7 @@ def _check_overridden_writes(results: list) -> None:
 
     from fno.config import _load_settings_at, load_settings, resolve_source
 
-    # The verb just rewrote a config file at the SAME declaration key; the
+    # The command just rewrote a config file at the SAME declaration key; the
     # keyed cache would serve the pre-write entry without this clear.
     _load_settings_at.cache_clear()
     root = load_settings()

@@ -1,6 +1,7 @@
 //! The shared-registry write guard: the two refusals every Rust registry
 //! write routes through at [`crate::state::update_registry`], and Python's
-//! `write_registry` mirrors in `cli/src/fno/agents/registry.py`.
+//! Python's registry writers commit through `registry-commit`, which runs the
+//! same check over the before and after documents.
 //!
 //! 2026-09-27 a worker's probe called Python's `write_registry` with no
 //! pinned state dir and replaced the live `~/.fno/agents/registry.json` with
@@ -14,13 +15,16 @@
 //!    philosophy as the source-ahead fence.
 //! 2. A write that drops most live rows is a fixture or a bug, not a roster
 //!    update. Refused unless `FNO_REGISTRY_ALLOW_ROW_LOSS=1` names the drop
-//!    deliberate.
+//!    deliberate. Loss is by identity, never by status: a live row the write
+//!    flips to exited is still present, and a row the reaper retires with a
+//!    persisted receipt is declared, so neither counts.
 //!
 //! The guard stands down unless the target IS the ambient shared registry
 //! and the home is not a tempdir sandbox: a pinned `FNO_AGENTS_HOME` or a
 //! hermetic `HOME` is the caller's own store, which keeps every existing
 //! test's writes legal.
 
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -42,8 +46,17 @@ pub struct GuardInputs<'a> {
     pub pytest_current_test: bool,
     pub hermetic_claim: bool,
     pub row_loss_override: bool,
+    pub loss: LiveLoss,
+}
+
+/// A write's live-row loss. `lost` counts the rows live before whose
+/// identity is gone after and was not declared retiring; `after_live` is the
+/// status count the refusal prints beside it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveLoss {
     pub before_live: usize,
     pub after_live: usize,
+    pub lost: usize,
 }
 
 /// Decide the write. `Ok(())` proceeds; the `Err` text names the remedy.
@@ -66,53 +79,76 @@ pub fn check(inp: GuardInputs) -> Result<(), String> {
     if inp.row_loss_override {
         return Ok(());
     }
-    if inp.before_live >= 2 && inp.after_live * 2 < inp.before_live {
+    let LiveLoss {
+        before_live,
+        after_live,
+        lost,
+    } = inp.loss;
+    if before_live >= 2 && lost * 2 > before_live {
         return Err(format!(
             "refusing a write of the shared registry at {} that drops live \
-             rows from {} to {}: a write this destructive is a fixture or a \
-             bug, not a roster update. Set {ROW_LOSS_OVERRIDE_ENV}=1 when the \
-             drop is deliberate.",
+             rows from {before_live} to {after_live} ({lost} live rows gone): \
+             a write this destructive is a fixture or a bug, not a roster \
+             update. Set {ROW_LOSS_OVERRIDE_ENV}=1 when the drop is deliberate.",
             shared.display(),
-            inp.before_live,
-            inp.after_live
         ));
     }
     Ok(())
 }
 
 /// The env-reading entry [`crate::state::update_registry`] calls.
-pub fn check_env(target: &Path, before_live: usize, after_live: usize) -> Result<(), String> {
+pub fn check_env(target: &Path, loss: LiveLoss) -> Result<(), String> {
     check(GuardInputs {
         target,
         home: std::env::var_os("HOME").as_deref(),
         cfg_test: cfg!(test),
         pytest_current_test: std::env::var_os("PYTEST_CURRENT_TEST").is_some(),
         hermetic_claim: std::env::var_os("FNO_TEST_HERMETIC").as_deref() == Some(OsStr::new("1")),
-        row_loss_override: std::env::var_os(ROW_LOSS_OVERRIDE_ENV).as_deref()
+        row_loss_override: std::env::var_os("FNO_REGISTRY_ALLOW_ROW_LOSS").as_deref()
             == Some(OsStr::new("1")),
-        before_live,
-        after_live,
+        loss,
     })
 }
 
-/// Live rows by the `OWNERSHIP_LIVE_STATUSES` vocabulary, the same six
-/// statuses Python's mirror counts. A row that moved to a terminal status is
-/// not a loss; a row removed while still owning a session is.
-pub fn count_live(entries: &[RegistryEntry]) -> usize {
-    entries
-        .iter()
-        .filter(|e| {
-            matches!(
-                e.status,
-                AgentStatus::Spawning
-                    | AgentStatus::Ready
-                    | AgentStatus::Idle
-                    | AgentStatus::Busy
-                    | AgentStatus::Live
-                    | AgentStatus::Restarting
-            )
-        })
-        .count()
+/// Live rows by the `OWNERSHIP_LIVE_STATUSES` vocabulary.
+fn is_live(e: &RegistryEntry) -> bool {
+    matches!(
+        e.status,
+        AgentStatus::Spawning
+            | AgentStatus::Ready
+            | AgentStatus::Idle
+            | AgentStatus::Busy
+            | AgentStatus::Live
+            | AgentStatus::Restarting
+    )
+}
+
+/// The row's identity: its harness session id, else its name.
+fn identity(e: &RegistryEntry) -> &str {
+    match e.harness_session_id.as_deref() {
+        Some(sid) if !sid.is_empty() => sid,
+        _ => &e.name,
+    }
+}
+
+/// Measure a write's live-row loss. A row live before is lost when no row
+/// after carries its identity, whatever status the survivor holds, unless
+/// its name is in `declared` (rows the writer retires on purpose).
+pub fn live_loss(
+    before: &[RegistryEntry],
+    after: &[RegistryEntry],
+    declared: &BTreeSet<String>,
+) -> LiveLoss {
+    let present: HashSet<&str> = after.iter().map(identity).collect();
+    let live_before: Vec<&RegistryEntry> = before.iter().filter(|e| is_live(e)).collect();
+    LiveLoss {
+        before_live: live_before.len(),
+        after_live: after.iter().filter(|e| is_live(e)).count(),
+        lost: live_before
+            .iter()
+            .filter(|e| !present.contains(identity(e)) && !declared.contains(&e.name))
+            .count(),
+    }
 }
 
 /// Canonicalized-equal, tolerating an absent file (a fresh install) by
@@ -128,7 +164,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn inputs(target: &Path, before: usize, after: usize) -> GuardInputs<'_> {
+    fn inputs(target: &Path, loss: LiveLoss) -> GuardInputs<'_> {
         GuardInputs {
             target,
             home: Some(OsStr::new("/home/operator")),
@@ -136,8 +172,7 @@ mod tests {
             pytest_current_test: false,
             hermetic_claim: false,
             row_loss_override: false,
-            before_live: before,
-            after_live: after,
+            loss,
         }
     }
 
@@ -148,12 +183,38 @@ mod tests {
             .join("registry.json")
     }
 
+    /// The guard over a real before/after pair on the shared root.
+    fn guard(
+        before: &[RegistryEntry],
+        after: &[RegistryEntry],
+        declared: &BTreeSet<String>,
+    ) -> Result<(), String> {
+        check(inputs(&shared_target(), live_loss(before, after, declared)))
+    }
+
+    fn fleet(n: usize) -> Vec<RegistryEntry> {
+        (0..n)
+            .map(|i| RegistryEntry {
+                name: format!("t-s{i}"),
+                harness_session_id: Some(format!("s{i}")),
+                status: AgentStatus::Live,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    const MASS_DROP: LiveLoss = LiveLoss {
+        before_live: 33,
+        after_live: 1,
+        lost: 32,
+    };
+
     #[test]
     fn a_cargo_test_process_refuses_the_shared_root() {
         let target = shared_target();
         let err = check(GuardInputs {
             cfg_test: true,
-            ..inputs(&target, 33, 1)
+            ..inputs(&target, MASS_DROP)
         })
         .unwrap_err();
         assert!(err.contains("test or probe marker"), "{err}");
@@ -161,41 +222,40 @@ mod tests {
     }
 
     #[test]
-    fn a_mass_live_row_drop_refuses_without_the_override() {
-        let target = shared_target();
-        let err = check(inputs(&target, 33, 1)).unwrap_err();
-        assert!(err.contains("drops live rows from 33 to 1"), "{err}");
-        assert!(err.contains(ROW_LOSS_OVERRIDE_ENV), "{err}");
-    }
-
-    #[test]
     fn the_override_admits_a_deliberate_drop() {
         let target = shared_target();
         assert!(check(GuardInputs {
             row_loss_override: true,
-            ..inputs(&target, 33, 1)
+            ..inputs(&target, MASS_DROP)
         })
         .is_ok());
     }
 
     #[test]
-    fn count_live_matches_the_six_status_vocabulary() {
-        let rows = [
-            AgentStatus::Spawning,
-            AgentStatus::Ready,
-            AgentStatus::Idle,
-            AgentStatus::Busy,
-            AgentStatus::Live,
-            AgentStatus::Restarting,
-            AgentStatus::Exited,
-            AgentStatus::Orphaned,
-            AgentStatus::Failed,
-            AgentStatus::PermanentDead,
-        ]
-        .map(|status| RegistryEntry {
-            status,
-            ..Default::default()
-        });
-        assert_eq!(count_live(&rows), 6);
+    fn a_status_flip_to_exited_is_not_loss() {
+        let before = fleet(96);
+        let mut after = before.clone();
+        for e in after.iter_mut().take(74) {
+            e.status = AgentStatus::Exited;
+        }
+        assert!(guard(&before, &after, &BTreeSet::new()).is_ok());
+    }
+
+    #[test]
+    fn a_fixture_replacing_the_fleet_refuses() {
+        let mut fixture = fleet(1);
+        fixture[0].harness_session_id = Some("fixture".into());
+        let err = guard(&fleet(5), &fixture, &BTreeSet::new()).unwrap_err();
+        assert!(err.contains("drops live rows from 5 to 1"), "{err}");
+        assert!(err.contains(ROW_LOSS_OVERRIDE_ENV), "{err}");
+    }
+
+    #[test]
+    fn declared_retirements_are_not_loss() {
+        let before = fleet(96);
+        let after = &before[54..];
+        assert!(guard(&before, after, &BTreeSet::new()).is_err());
+        let declared = before[..54].iter().map(|e| e.name.clone()).collect();
+        assert!(guard(&before, after, &declared).is_ok());
     }
 }

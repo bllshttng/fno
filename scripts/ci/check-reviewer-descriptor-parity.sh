@@ -14,8 +14,8 @@
 #
 # Compared per reviewer: the invocation string, whether it is a self-cert
 # (Python `asserts == "self-cert"`, Rust's third tuple element), and the
-# per-harness verb overrides (Python `invocations` map, Rust's fourth element
-# encoded `"harness=verb;..."`).
+# per-harness command overrides (Python `invocations` map, Rust's fourth element
+# encoded `"harness=command;..."`).
 #
 # A name added on one side is a reviewer the other cannot explain. A drifted
 # invocation is worse: the blocked reason then tells a wedged session to run a
@@ -80,7 +80,7 @@ def read(path, label):
 
 
 def _normalize_per_harness(value):
-    """Coerce a per-harness map to a plain {harness: verb} dict, {} if absent."""
+    """Coerce a per-harness map to a plain {harness: command} dict, {} if absent."""
     if not isinstance(value, dict):
         return {}
     return {str(k): str(v) for k, v in value.items()}
@@ -131,7 +131,7 @@ def extract_python(src, path):
 
 
 def _parse_per_harness(s):
-    """Parse Rust's `"harness=verb;harness=verb"` encoding to a {harness: verb} dict."""
+    """Parse Rust's `"harness=command;harness=command"` encoding to a {harness: command} dict."""
     out = {}
     for pair in s.split(";"):
         pair = pair.strip()
@@ -213,7 +213,7 @@ for name in sorted(set(py) | set(rs)):
         )
     elif py[name][2] != rs[name][2]:
         problems.append(
-            f"  {name}: per-harness verbs differ\n"
+            f"  {name}: per-harness commands differ\n"
             f"    Python: {py[name][2]!r}\n"
             f"    Rust  : {rs[name][2]!r}"
         )
@@ -333,7 +333,7 @@ EOF
     printf '# no table here\n' > "$tmp/nopy.py"
     _case "missing Python table rejected" 1 "$tmp/nopy.rs" "$tmp/nopy.py"
 
-    # Case 6: per-harness verbs declared on one side only -> reject. A
+    # Case 6: per-harness commands declared on one side only -> reject. A
     # positional literal-pairing extractor would never see the map at all.
     _rust "$tmp/per.rs" "/fno:review sigma"
     cat > "$tmp/per.py" <<'EOF'
@@ -353,7 +353,7 @@ _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
     ),
 }
 EOF
-    _case "drifted per-harness verbs rejected" 1 "$tmp/per.rs" "$tmp/per.py"
+    _case "drifted per-harness commands rejected" 1 "$tmp/per.rs" "$tmp/per.py"
 
     if [[ "$fails" -gt 0 ]]; then
         echo "reviewer-descriptor-parity selftest: $fails failure(s)" >&2

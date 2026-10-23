@@ -37,7 +37,7 @@ run_sync() {
     rc=$?
     if [ "$rc" -ne 0 ]; then
         # The runner exits 0 on its own error paths; a nonzero here is an old
-        # binary that does not know the verb. Name the remedy, keep the hook clean.
+        # binary that does not know the command. Name the remedy, keep the hook clean.
         echo "fno: context-run exited $rc (stale fno-agents binary?); run fno doctor --fix" >&2
     fi
 }

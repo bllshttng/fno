@@ -1,6 +1,6 @@
 """The stale-row lane after the fleet-task port: the fold moved to
 ``crates/fno-agents/src/fleet_task.rs`` and ``reconcile_channel`` is ONE
-transport call through ``verb_call("fleet-task", ...)``.
+transport call through ``command_call("fleet-task", ...)``.
 
 The fold's behavior (asked / duplicate / superseded / closed, the rows it
 writes, the legacy retire) is characterized in Rust:
@@ -66,12 +66,12 @@ def test_reconcile_channel_sends_the_fleet_task_payload(
 
     captured: dict = {}
 
-    def fake_verb_call(verb, payload, *args, **kwargs):
-        captured["verb"] = verb
+    def fake_command_call(command, payload, *args, **kwargs):
+        captured["verb"] = command
         captured["payload"] = payload
         return {"outcome": "asked", "id": "ft-1234abcd"}
 
-    monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
+    monkeypatch.setattr(fno.rust_binary, "command_call", fake_command_call)
 
     outcome, qid = _reconcile_pairs(tmp_path, ["i2", "i1"])
 

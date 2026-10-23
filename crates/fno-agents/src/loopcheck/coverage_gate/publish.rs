@@ -116,7 +116,7 @@ pub(crate) fn publish(cwd: &Path, pr: u64, head: Option<&str>) -> (bool, String)
             (
                 "pending",
                 truncate_description(&format!(
-                    "coverage read unavailable at {}; retry the review verb{}",
+                    "coverage read unavailable at {}; retry the review command{}",
                     short_sha(&head),
                     detail
                 )),

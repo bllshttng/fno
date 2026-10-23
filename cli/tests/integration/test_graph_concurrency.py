@@ -39,7 +39,7 @@ def _child_env(tmp_path: Path, worker: str) -> dict:
 
 
 def _run_backlog(env: dict, *args: str, timeout: float = 300.0) -> subprocess.CompletedProcess:
-    # The create verb is native; the child is the binary, not the Python app.
+    # The create command is native; the child is the binary, not the Python app.
     from fno.rust_binary import find_dev_binary
 
     binary = find_dev_binary()

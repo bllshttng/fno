@@ -1,11 +1,11 @@
-"""fno agents claim - Typer surface for the work-claim verbs.
+"""fno agents claim - Typer surface for the work-claim commands.
 
 Exit codes: 0 success; 1 held/contention retry exhaustion (also reap's own
 archive-confirm failure, a distinct overload of 1, not a retry signal); 2
 validation or input error; 3 corruption or race; 4 holder mismatch. The full
-table lives in docs/architecture/claim-verbs-do-provenance.md. Structured
-output uses --json on each verb; without it, output is a human-friendly
-summary on stdout and errors always go to stderr. The claim verbs also write
+table lives in docs/architecture/claim-commands-do-provenance.md. Structured
+output uses --json on each command; without it, output is a human-friendly
+summary on stdout and errors always go to stderr. The claim commands also write
 the node's `do` provenance rows; that contract lives in the same doc.
 """
 
@@ -172,7 +172,7 @@ def acquire(
 
     With ``--lane <id> --max-lanes N`` this acquires a lane SLOT instead, which
     is the same operation against a different claim space; it was a separate
-    ``lane-acquire`` verb whose name was its own flag.
+    ``lane-acquire`` command whose name was its own flag.
     """
     return _forward_acquire(
         key, holder, lane, max_lanes, reason, ttl, metadata, pid,
@@ -297,7 +297,7 @@ def release(
 ) -> None:
     """Release a claim we own. Silent success if already released.
 
-    Three modes that were three verbs, because two of the names were flags:
+    Three modes that were three commands, because two of the names were flags:
     the default releases a claim we hold, ``--lane <id>`` releases a lane slot,
     and ``--force`` drops a claim regardless of owner.
     """
@@ -436,7 +436,7 @@ def _stamp_do_on_acquire(key: str, claim, holder: str) -> None:
     marker precedence would launder an inherited foreign marker into the row
 , so it is only a fallback when the owned values are absent.
 
-    Two reachable acquire paths both call this: the CLI ``claim acquire`` verb
+    Two reachable acquire paths both call this: the CLI ``claim acquire`` command
     (the init-script cold start) and the native target-start takeover, whose
     in-process ``claims::acquire`` emits its own audit event. Both must stamp,
     or a killed session on either path loses its row.
@@ -1210,7 +1210,7 @@ def session_pid(
 
     The walk is native: this command fronts the fno-agents binary, which owns
     the one implementation (`spawn_context::session_identity_ambient`). The
-    Python module `session_pid` is a SHIM over this very verb, so importing it
+    Python module `session_pid` is a SHIM over this very command, so importing it
     here would recurse.
     """
     import subprocess as _subprocess
@@ -1229,7 +1229,7 @@ def session_pid(
     if json_output:
         cmd.append("--json")
     try:
-        result = _subprocess.run(  # noqa: S603 - resolved binary, fixed verb
+        result = _subprocess.run(  # noqa: S603 - resolved binary, fixed command
             cmd, capture_output=True, text=True, check=False
         )
     except OSError:

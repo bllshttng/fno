@@ -218,7 +218,7 @@ pass "post-claim: the message reports the release"
 # worker did no work, so the row must come back out or the node reads as
 # permanently in progress. The flag is the only thing that removes it, and it
 # lives on THIS release call - asserting the row-removal logic in Python proves
-# the verb works, not that init asks for it.
+# the command works, not that init asks for it.
 grep -q -- "--rollback-do" "$TMP_POST/release-calls.log" \
   || fail "post-claim: release did not pass --rollback-do - the open do row survives a refusal that earned no work (got: $(cat "$TMP_POST/release-calls.log"))"
 grep -q -- "--stamp-do" "$TMP_POST/release-calls.log" \
@@ -334,7 +334,7 @@ grep -q "node:x-261c" "$_MANIFEST_PATH" \
 pass "shared plan: resolved to the delivery unit"
 
 # ── A BROKEN post-claim gate must say so, not degrade silently ──
-# Only rc 9 refuses, but a crash or a stale fno without the verb must not look
+# Only rc 9 refuses, but a crash or a stale fno without the command must not look
 # identical to "checked, and it is fine" - and here it happens with the claim
 # already held. The pre-claim gate has said this for its own rc all along.
 log "post-claim: broken gate (rc 1) => note and proceed, claim kept"

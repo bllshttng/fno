@@ -687,7 +687,7 @@ pub(crate) fn reapable_opts_with(
     verdict
 }
 
-/// The direct client verb: `fno-agents worktree-reapable <path>
+/// The direct client command: `fno-agents worktree-reapable <path>
 /// [--allow-unborn] [--done-node]`. Prints the receipt line; exit 0 yes,
 /// 1 no. Beside `reclaim` in `bin/client.rs`, the same daemon-free direct
 /// dispatch.

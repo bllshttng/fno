@@ -89,7 +89,7 @@ async fn workspace_section_menu_offers_rename() {
             super::MenuAction::MoveSquad(1),
             super::MenuAction::RemoveSquad
         ],
-        "no dead rows -> the five standing workspace verbs"
+        "no dead rows -> the five standing workspace commands"
     );
     let mut buf: Vec<u8> = Vec::new();
     row_menu_execute_selected(&mut v, &mut buf).await.unwrap();

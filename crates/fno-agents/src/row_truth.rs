@@ -12,11 +12,11 @@ use crate::state;
 /// absence.
 pub(crate) fn fold_positive_death(
     e: &state::RegistryEntry,
-) -> Option<crate::client_verbs::RowLiveness> {
+) -> Option<crate::client_commands::RowLiveness> {
     e.pid
         .map(|p| !crate::daemon::pid_is_ours(p, e.pid_start_time))
         .unwrap_or(false)
-        .then_some(crate::client_verbs::RowLiveness::Dead)
+        .then_some(crate::client_commands::RowLiveness::Dead)
 }
 
 /// The claude-uuid candidate handles for the sweep's ONE truth batch: the

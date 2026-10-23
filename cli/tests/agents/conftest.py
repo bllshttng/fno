@@ -58,7 +58,7 @@ def _isolate_session_discovery(monkeypatch, tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _force_python_runtime(monkeypatch):
     """Default the agents tests to ``FNO_AGENTS_RUNTIME=python`` so in-process
-    ``CliRunner`` invocations of routable verbs stay on the Python dispatch
+    ``CliRunner`` invocations of routable commands stay on the Python dispatch
     instead of ``os.execv``-replacing the pytest process with a real binary that
     happens to be on the developer's PATH (e.g. ``~/.cargo/bin/fno-agents``).
 
@@ -74,7 +74,7 @@ def _force_python_runtime(monkeypatch):
     Routing tests (``test_rust_runtime.py``) override this per-test via their own
     ``monkeypatch.delenv``/``setenv`` of ``FNO_AGENTS_RUNTIME`` (monkeypatch
     applies in order, so the test-local override wins). Parity tests
-    (``test_rust_verb_parity.py``, ``test_ask_e2e_dispatch.py``) invoke the
+    (``test_rust_command_parity.py``, ``test_ask_e2e_dispatch.py``) invoke the
     compiled binary directly via ``subprocess``; the binary ignores the env var,
     so they are unaffected.
     """

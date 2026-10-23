@@ -1,6 +1,6 @@
 //! The decide door: the `fno inbox decide` / `fno backlog decide`
-//! record verb, its provenance lanes, and the decide-reindex recovery
-//! verb, ported from the deleted Python decide family. Shared law-door
+//! record command, its provenance lanes, and the decide-reindex recovery
+//! command, ported from the deleted Python decide family. Shared law-door
 //! helpers stay in `law_match`; this module reaches them through
 //! `crate::law_match`.
 
@@ -452,7 +452,7 @@ fn decide_graduation_or_guidance(
     }
 }
 
-/// The decide-reindex verb, ported from `reindex` (cli/src/fno/decide/
+/// The decide-reindex command, ported from `reindex` (cli/src/fno/decide/
 /// __init__.py, deleted): compact damaged rows out of the raw index and
 /// recover any journaled row the index store lacks, without minting ids.
 /// The machine-wide project-roots walk the Python engine paid is not
@@ -541,7 +541,7 @@ pub fn run_decide_reindex(_argv: &[String]) -> i32 {
 }
 
 /// The decide door entry: parse, then the gated write. The argv is the
-/// `fno inbox decide` / `fno backlog decide` command line minus its verb
+/// `fno inbox decide` / `fno backlog decide` command line minus its command
 /// tokens.
 pub fn run_decide_door(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -635,7 +635,7 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
     };
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator (an attended terminal;
-    // the waiver verb inherits this).
+    // the waiver command inherits this).
     let mut read_rows: Option<Vec<Value>> = None;
     if provenance.authority_source.as_deref() != Some("operator") {
         let text = format!(

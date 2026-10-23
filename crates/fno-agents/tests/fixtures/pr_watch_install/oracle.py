@@ -4,7 +4,7 @@
 Runs the Python pr-watch legs (``_install.install`` composed with
 ``heal_status_line`` and ``ensure_activated`` in install/ensure modes, and
 ``_install.uninstall`` / ``_install.unload_only`` in uninstall mode) over the
-same fixture the Rust verb reads, with launchctl answered by the stub both
+same fixture the Rust command reads, with launchctl answered by the stub both
 legs share through PATH. Captured goldens freeze its bytes; the Python
 functions were deleted in the same change that landed each port, so capture
 mode refuses once the leg is gone.
@@ -41,7 +41,7 @@ def main() -> int:
 
     # The typer leaf resolved the config interval before calling the module
     # leg; the oracle composes the same way, so the frozen bytes are the
-    # verb's observable contract and not the module default.
+    # command's observable contract and not the module default.
     interval = args.interval
     if interval <= 0:
         from fno.config import load_settings

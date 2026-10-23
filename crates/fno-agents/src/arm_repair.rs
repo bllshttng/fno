@@ -1,8 +1,8 @@
-//! Why a red arm is red, the one verb that repairs it, and who runs that verb.
+//! Why a red arm is red, the one command that repairs it, and who runs that command.
 //!
 //! One cause table for every reader (`fno agents status`, the arm_watch
 //! notice, the lead check-in). `annotate` classifies each red row and ends its
-//! line with `repair: <verb>` and `heal=auto|operator`. `heal` runs the
+//! line with `repair: <command>` and `heal=auto|operator`. `heal` runs the
 //! `heal=auto` repairs from the arm_watch tick, before anything pages.
 
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ const WATCH_STATUS: &str = "fno do pr watch status";
 const SCHEDULER_DOWN_HINT: &str =
     "every arm on this scheduler is silent; the job is not running, the arm is fine";
 
-/// The cause table: hint, repair verb, heal owner. An owner of `None` means
+/// The cause table: hint, repair command, heal owner. An owner of `None` means
 /// no automatic action is safe or useful for this cause.
 fn entry(
     cause: &str,
@@ -80,7 +80,7 @@ fn entry(
             Some(AUTO),
         ),
         "parent_gone" => (
-            "the verb's parent process exited under it",
+            "the command's parent process exited under it",
             Some("fno backlog reconcile --json"),
             Some(OPERATOR),
         ),
@@ -153,11 +153,11 @@ pub fn hint(cause: &str) -> &'static str {
     entry(cause, None).0
 }
 
-/// The front-door release verb for one claim. The root prefix is printed
-/// whenever the claim is not under `$HOME`: the verb is pasted into another
+/// The front-door release command for one claim. The root prefix is printed
+/// whenever the claim is not under `$HOME`: the command is pasted into another
 /// shell, which may not carry the reader's `FNO_CLAIMS_ROOT`. No root means
 /// the global root.
-pub fn release_verb(key: &str, holder: &str, root: Option<&Path>) -> String {
+pub fn release_command(key: &str, holder: &str, root: Option<&Path>) -> String {
     let prefix = match root {
         Some(r) if std::env::var_os("HOME").as_deref() != Some(r.as_os_str()) => {
             format!("FNO_CLAIMS_ROOT={} ", r.display())
@@ -231,7 +231,7 @@ pub fn explain(
     annotate(rows, &RepairFacts::live(&findings));
 }
 
-/// Classify every red row: a cause, a repair verb, and an owner, all printed
+/// Classify every red row: a cause, a repair command, and an owner, all printed
 /// on the row's line. Run once per read, after `explain`.
 pub fn annotate(rows: &mut [ArmStatus], facts: &RepairFacts) {
     for row in rows.iter_mut() {
@@ -286,15 +286,15 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
         return;
     }
     // A paused row is held on purpose, not attention-worthy: it still
-    // carries a read verb, never an action, and never a heal owner.
+    // carries a read command, never an action, and never a heal owner.
     if let Some(cause) = row
         .cause
         .as_deref()
         .filter(|c| matches!(*c, "fleet_stop" | "loops_paused"))
         .map(str::to_string)
     {
-        let (hint, verb, _) = entry(&cause, row.scheduler.as_deref());
-        row.repair = verb.map(str::to_string);
+        let (hint, command, _) = entry(&cause, row.scheduler.as_deref());
+        row.repair = command.map(str::to_string);
         if row.line.is_empty() {
             row.line = format!("{} cause={cause} ({hint})", render_row(row));
         }
@@ -303,7 +303,7 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
     }
     // The two vocabulary words: neither is a fault, so neither ends in
     // `heal=auto`. An unarmed row names the switch that turns the loop on; a
-    // starved row names the verb that reads the loop's own detail.
+    // starved row names the command that reads the loop's own detail.
     if crate::tick_ledger::row_is_unarmed(row) {
         let key = row.arm_key.clone().unwrap_or_default();
         row.cause = Some("unarmed".to_string());
@@ -343,19 +343,19 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
     let on_tier = matches!(sched.as_deref(), Some(SCHED_LAUNCHD) | Some(SCHED_DAEMON));
     let skip = row.skip_reason.clone().unwrap_or_default();
     let detail = row.detail.clone().unwrap_or_default();
-    let (cause, repair) = if let Some((verb, held_for_s)) = held_dead {
+    let (cause, repair) = if let Some((command, held_for_s)) = held_dead {
         row.failing = true;
         row.failing_for_s = Some(held_for_s);
-        ("dead_holder".to_string(), verb)
+        ("dead_holder".to_string(), command)
     } else if facts.install_off_main && on_tier {
         ("stale_build".to_string(), None)
     } else if let Some(cause) = row.cause.clone() {
         // `explain` already named the cause and its hint: add only the repair.
-        let (hint, verb, heal) = entry(&cause, sched.as_deref());
+        let (hint, command, heal) = entry(&cause, sched.as_deref());
         row.repair = if cause == "select_unmeasured" {
             Some(select_unmeasured_repair(&detail))
         } else {
-            verb.map(str::to_string)
+            command.map(str::to_string)
         };
         row.heal = heal.map(str::to_string);
         if row.line.is_empty() {
@@ -388,9 +388,9 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
     } else {
         ("unclassified".to_string(), None)
     };
-    let (hint, verb, heal) = entry(&cause, sched.as_deref());
+    let (hint, command, heal) = entry(&cause, sched.as_deref());
     row.cause = Some(cause.clone());
-    row.repair = repair.or_else(|| verb.map(str::to_string));
+    row.repair = repair.or_else(|| command.map(str::to_string));
     row.heal = heal.map(str::to_string);
     row.line = format!("{} cause={cause} ({hint}){}", render_row(row), suffix(row));
 }
@@ -422,8 +422,8 @@ fn cwd_not_checkout_repair(detail: &str) -> String {
 
 fn suffix(row: &ArmStatus) -> String {
     let mut out = String::new();
-    if let Some(verb) = &row.repair {
-        out.push_str(&format!(" repair: {verb}"));
+    if let Some(command) = &row.repair {
+        out.push_str(&format!(" repair: {command}"));
     }
     if let Some(owner) = &row.heal {
         out.push_str(&format!(" heal={owner}"));
@@ -431,7 +431,7 @@ fn suffix(row: &ArmStatus) -> String {
     out
 }
 
-/// A `skip=held` row whose holder pid is gone: the release verb (when the key
+/// A `skip=held` row whose holder pid is gone: the release command (when the key
 /// is known) and how long the scope has been held. The detail shapes are the
 /// merge_close receipt: `flight <key> held by <holder> for <n>s`, or the
 /// keyless `flight held by <holder> for <n>s`.
@@ -461,13 +461,13 @@ fn held_dead_holder(row: &ArmStatus, facts: &RepairFacts) -> Option<(Option<Stri
         .dead_holds
         .iter()
         .find(|(k, h, _)| h == holder && (key.is_empty() || k == key));
-    let verb = match (key.is_empty(), known) {
-        (_, Some((k, h, Some(root)))) => Some(release_verb(k, h, Some(root))),
-        (false, _) => Some(release_verb(key, holder, None)),
-        // A keyless receipt: the stuck-work block prints the exact verb.
+    let command = match (key.is_empty(), known) {
+        (_, Some((k, h, Some(root)))) => Some(release_command(k, h, Some(root))),
+        (false, _) => Some(release_command(key, holder, None)),
+        // A keyless receipt: the stuck-work block prints the exact command.
         (true, _) => Some("fno agents status".to_string()),
     };
-    Some((verb, held_for_s))
+    Some((command, held_for_s))
 }
 
 /// The heal lane. Runs the `heal=auto` repairs and returns the token the
@@ -605,7 +605,7 @@ fn release_dead(key: &str, holder: &str, root: &Path) -> bool {
 }
 
 /// The production runner for `heal`: the launchd refresh in process (each
-/// launchctl step inside the verb is timeout-guarded), and the install
+/// launchctl step inside the command is timeout-guarded), and the install
 /// spawned detached from the canonical checkout.
 pub fn run_repair(action: &str, cwd: &Path) -> bool {
     match action {
@@ -708,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn unarmed_rows_carry_the_config_verb_and_never_heal_auto() {
+    fn unarmed_rows_carry_the_config_command_and_never_heal_auto() {
         let mut r = row("heal", SCHED_LAUNCHD);
         r.arm_key = Some("auto_heal.enabled".to_string());
         r.arm_value = Some("false".to_string());
@@ -784,9 +784,9 @@ mod tests {
         );
     }
 
-    // AC2: a held row whose holder pid is dead reads FAIL dead_holder with a release verb.
+    // AC2: a held row whose holder pid is dead reads FAIL dead_holder with a release command.
     #[test]
-    fn a_held_row_with_a_dead_holder_fails_with_a_release_verb() {
+    fn a_held_row_with_a_dead_holder_fails_with_a_release_command() {
         let mut mc = row("merge_close", SCHED_DAEMON);
         mc.skip_reason = Some("held".into());
         mc.detail = Some("flight flight:k held by single-flight:42:x for 2400s".into());
@@ -818,7 +818,7 @@ mod tests {
         assert!(rows[0].cause.is_none());
     }
 
-    // AC3: an unknown failure keeps its skip token and names no verb.
+    // AC3: an unknown failure keeps its skip token and names no command.
     #[test]
     fn failure_classes_distinguish_unknown_operator_from_queue_timeout() {
         let mut mc = row("merge_close", SCHED_DAEMON);

@@ -547,7 +547,7 @@ struct StatusView<'a> {
 
 /// Python's `json.dumps(value, indent=2)`: serde's pretty form with every
 /// non-ASCII char escaped, the way the default `ensure_ascii` writes it.
-fn python_json(value: &impl Serialize) -> String {
+pub(crate) fn python_json(value: &impl Serialize) -> String {
     let pretty = serde_json::to_string_pretty(value).unwrap_or_default();
     let mut out = String::with_capacity(pretty.len());
     for ch in pretty.chars() {

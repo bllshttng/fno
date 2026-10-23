@@ -8,7 +8,7 @@ use fno_agents::harness_matrix::BLIND_REFUSAL_MARKER;
 fn claim(state: &str) -> FeatureClaim {
     FeatureClaim {
         state: state.to_string(),
-        verbs: vec![],
+        commands: vec![],
         measured_by: None,
     }
 }
@@ -16,7 +16,7 @@ fn claim(state: &str) -> FeatureClaim {
 fn measured(state: &str, reader: &str, version: &str, date: &str) -> FeatureClaim {
     FeatureClaim {
         state: state.to_string(),
-        verbs: vec![],
+        commands: vec![],
         measured_by: Some(MeasuredBy {
             reader: reader.to_string(),
             version: version.to_string(),

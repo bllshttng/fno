@@ -2,15 +2,15 @@
 """Phase 01 measurement harness: quantify fno CLI overhead in target phases.
 
 This script answers: what fraction of a target phase's wall time is spent in
-`fno <verb>` subprocess calls? If the fraction is low (<15%), a daemon adds
+`fno <command>` subprocess calls? If the fraction is low (<15%), a daemon adds
 minimal value and a simpler lazy-imports refactor is preferred.
 
 Methodology:
   1. Sample 5 representative sessions from ledger.json that include the 'do'
      phase and have real wall-time data (duration_minutes).
-  2. Estimate per-session fno call count from known verb frequencies in target
+  2. Estimate per-session fno call count from known command frequencies in target
      skill scripts. All fno calls share a common subprocess startup cost.
-  3. Time each key fno verb (N=20 runs each) to get a median latency.
+  3. Time each key fno command (N=20 runs each) to get a median latency.
   4. Compute fno_wall_seconds = call_count * median_latency_s per session.
   5. Compute ratio = sum(fno_wall_seconds) / sum(phase_wall_seconds).
   6. Write cli/benchmarks/fno_in_target_results.json.
@@ -83,14 +83,14 @@ DEFAULT_LEDGER = _resolve_default_ledger()
 DEFAULT_OUTPUT = SCRIPT_DIR / "fno_in_target_results.json"
 
 # ---------------------------------------------------------------------------
-# Known fno verb frequencies per full target execution session
+# Known fno command frequencies per full target execution session
 # Derived from grep of skills/target/, hooks/, and observed session patterns.
 # A "full" session runs: do + review + validate + ship + external + docs.
-# Verbs are the subprocess-startup cost carriers; arg differences are minor.
+# Commands are the subprocess-startup cost carriers; arg differences are minor.
 # ---------------------------------------------------------------------------
 
-# (verb_family, expected_calls_per_full_session)
-FNO_VERB_FREQUENCIES: list[tuple[str, int]] = [
+# (command_family, expected_calls_per_full_session)
+FNO_COMMAND_FREQUENCIES: list[tuple[str, int]] = [
     ("gate set",        4),   # set quality_check_passed, output_validated, etc.
     ("gate transition", 4),   # emit-gate-transition per phase
     ("pr rebase",       2),   # pre-ship rebase check
@@ -103,7 +103,7 @@ FNO_VERB_FREQUENCIES: list[tuple[str, int]] = [
     ("inbox send",      1),   # cross-project notify at ship
 ]
 
-TOTAL_CALLS_PER_FULL_SESSION = sum(c for _, c in FNO_VERB_FREQUENCIES)
+TOTAL_CALLS_PER_FULL_SESSION = sum(c for _, c in FNO_COMMAND_FREQUENCIES)
 
 # Phases that contribute to TOTAL_CALLS_PER_FULL_SESSION. A session that
 # completed only `do` should not be charged for review/validate/ship/
@@ -472,7 +472,7 @@ def run_measurement(
         "methodology": (
             "fno_wall_seconds estimated as (calls_per_session * median_fno_latency_ms). "
             "phase_wall_seconds from ledger.json duration_minutes field. "
-            "Verb call count derived from grep of skills/target/ + hooks/ for `fno ` invocations."
+            "Command call count derived from grep of skills/target/ + hooks/ for `fno ` invocations."
         ),
     }
 
@@ -508,7 +508,7 @@ def main() -> None:
         "--timing-runs",
         type=int,
         default=20,
-        help="Number of timing runs per fno verb (default: 20)",
+        help="Number of timing runs per fno command (default: 20)",
     )
     parser.add_argument(
         "--max-sessions",

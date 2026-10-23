@@ -1,8 +1,8 @@
-# Workflows: which verb for which task
+# Workflows: which command for which task
 
 ## Is this page for you?
 
-You use fno every day on one project. This page maps each task to the verb you run and the guide that covers it. Each verb is a skill (`/fno:<verb>` in Claude Code, `$fno:<verb>` in Codex) or a CLI verb (`fno <verb>` in any terminal).
+You use fno every day on one project. This page maps each task to the command you run and the guide that covers it. Each command is a skill (`/fno:<command>` in Claude Code, `$fno:<command>` in Codex) or a CLI command (`fno <command>` in any terminal).
 
 Not for: a first run. That is the [quickstart](quickstart.md). For several agents at once, go to [fleet](fleet.md).
 
@@ -35,7 +35,7 @@ Size profiles set how much ceremony target runs. `S` is build and PR only. `M` (
 
 ## Review and ship the PR
 
-The PR has a lifecycle, and there is a verb for each step. Full walkthrough: [the PR lifecycle guide](guides/pr-lifecycle.md).
+The PR has a lifecycle, and there is a command for each step. Full walkthrough: [the PR lifecycle guide](guides/pr-lifecycle.md).
 
 | Command | What it's for |
 |---------|---------------|
@@ -44,7 +44,7 @@ The PR has a lifecycle, and there is a verb for each step. Full walkthrough: [th
 | `/fno:ship pr check` | Poll for the external review bot, then implement its feedback. |
 | `/fno:ship pr merged` | The post-merge ritual: reconcile the backlog, run the retro, and file any follow-up work. Run it after a PR merges. |
 
-`target` runs review, `pr create`, and (by default) `pr check` for you. To drive by hand or pick up a PR mid-flight, reach for the individual verbs.
+`target` runs review, `pr create`, and (by default) `pr check` for you. To drive by hand or pick up a PR mid-flight, reach for the individual commands.
 
 ## Fix and investigate
 

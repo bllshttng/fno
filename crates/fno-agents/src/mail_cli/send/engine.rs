@@ -171,7 +171,7 @@ pub(super) fn select_provider(
 
 /// Python `_resolve_sender_entry`: the sender's registry row by handle.
 pub(super) fn resolve_sender_entry(rows: &[Value], from_name: &str) -> Option<Value> {
-    crate::client_verbs::find_agent_entry(rows, from_name)
+    crate::client_commands::find_agent_entry(rows, from_name)
         .ok()
         .cloned()
 }
@@ -509,7 +509,7 @@ pub(super) fn wake_rung(
 pub(super) fn daemon_rpc(method: &str, params: Value) -> Option<Value> {
     let owned = method.to_string();
     // block_on panics under an ambient runtime - the client main block_ons
-    // every verb - so the one-shot current-thread runtime runs on a fresh
+    // every command - so the one-shot current-thread runtime runs on a fresh
     // thread there (same guard as `codex_inject`).
     if tokio::runtime::Handle::try_current().is_ok() {
         return std::thread::spawn(move || daemon_rpc_inner(&owned, params))
@@ -594,7 +594,7 @@ pub(super) fn resolve_pane_entry(
     token: Option<&str>,
 ) -> Option<Value> {
     let registry = AgentsHome::shared_registry_json();
-    let rows = crate::client_verbs::load_registry_entries(&registry).ok()?;
+    let rows = crate::client_commands::load_registry_entries(&registry).ok()?;
     let mut candidates: Vec<&str> = Vec::new();
     if let Some(r) = resolved {
         candidates.push(r.session_id.as_str());
@@ -629,7 +629,7 @@ pub(super) fn resolve_pane_entry(
 
 pub(super) fn row_hosts_keeper_thread(session_id: &str) -> bool {
     let registry = AgentsHome::shared_registry_json();
-    let Ok(rows) = crate::client_verbs::load_registry_entries(&registry) else {
+    let Ok(rows) = crate::client_commands::load_registry_entries(&registry) else {
         return false;
     };
     for row in rows.iter() {
@@ -832,7 +832,7 @@ pub(super) fn deliver_live(
                 let (verdict, _reason, _pane) = lane_heal(&sid);
                 if verdict == "rebound-thread" {
                     let registry = AgentsHome::shared_registry_json();
-                    if let Ok(rows) = crate::client_verbs::load_registry_entries(&registry) {
+                    if let Ok(rows) = crate::client_commands::load_registry_entries(&registry) {
                         let rebound = rows.iter().find(|r| {
                             opt_str_field(r, "harness_session_id").as_deref() == Some(sid.as_str())
                         });
@@ -1144,7 +1144,7 @@ pub(super) fn load_and_resolve_target(
     requested_name: &str,
 ) -> Result<(Vec<Value>, Value), (String, i32)> {
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(exc) => {
             emit_event(
@@ -1154,7 +1154,7 @@ pub(super) fn load_and_resolve_target(
             return Err((format!("registry read failed: {exc}"), 12));
         }
     };
-    let existing = match crate::client_verbs::find_agent_entry(&rows, requested_name) {
+    let existing = match crate::client_commands::find_agent_entry(&rows, requested_name) {
         Ok(entry) => entry.clone(),
         Err(_) => {
             emit_event(
@@ -1759,12 +1759,12 @@ pub(super) fn resolve_to_project(
 ) -> Result<(Option<String>, Vec<String>, bool), (String, i32)> {
     // (recipient, live_candidates, durable)
     let registry = AgentsHome::shared_registry_json();
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(exc) => return Err((format!("registry read failed: {exc}"), 12)),
     };
     let hints = std::env::current_dir()
-        .map(|cwd| peer_project_hints(&cwd))
+        .map(|cwd| crate::inbox_peers::read(&cwd).projects)
         .unwrap_or_default();
     let mut live_names: Vec<String> = Vec::new();
     let mut live_rows: Vec<Value> = Vec::new();
@@ -1774,7 +1774,7 @@ pub(super) fn resolve_to_project(
         }
         let hinted = hints
             .get(str_field(row, "name"))
-            .is_some_and(|p| p == project);
+            .is_some_and(|p| p.as_str() == Some(project));
         if hinted || project_serves(row, project) {
             live_names.push(str_field(row, "name").to_string());
             live_rows.push(row.clone());
@@ -1806,45 +1806,6 @@ pub(super) fn resolve_to_project(
     }
     let winner = best.map(|(_, name)| name).unwrap_or_default();
     Ok((Some(winner), live_names, false))
-}
-
-/// Python `read_peer_projects`: `inbox.peers.<name>.project` from the first
-/// `.fno` config at or above `start`. A hint only adds a peer to a project,
-/// and a missing or malformed block adds nothing.
-pub(super) fn peer_project_hints(start: &Path) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    let mut search = start.to_path_buf();
-    loop {
-        let fno = search.join(".fno");
-        let found = [fno.join("config.toml"), fno.join("settings.yaml")]
-            .into_iter()
-            .find(|p| p.is_file());
-        if let Some(path) = found {
-            let doc = std::fs::read_to_string(&path).ok().and_then(|text| {
-                toml::from_str::<toml::Value>(&text)
-                    .ok()
-                    .and_then(|v| serde_json::to_value(v).ok())
-                    .or_else(|| serde_yaml_ng::from_str::<Value>(&text).ok())
-            });
-            let peers = doc.as_ref().and_then(|d| {
-                d.get("config")
-                    .and_then(|c| c.get("inbox"))
-                    .or_else(|| d.get("inbox"))
-                    .and_then(|i| i.get("peers"))
-                    .and_then(Value::as_object)
-            });
-            for (name, block) in peers.into_iter().flatten() {
-                let project = block.get("project").and_then(Value::as_str);
-                if let Some(p) = project.filter(|p| !p.is_empty()) {
-                    out.insert(name.clone(), p.to_string());
-                }
-            }
-            return out;
-        }
-        if !search.pop() {
-            return out;
-        }
-    }
 }
 
 /// Python `_entry_projects`' cwd leg: the registry mapping resolves through

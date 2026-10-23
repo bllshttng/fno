@@ -2,7 +2,7 @@
 
 The gate parses AGENTS.md's `## Pitfalls corpus (capped)` section and fails on
 an over-cap corpus, a missing field, a stale entry, or a title that names a
-shipped `fno` verb as the trap. Output is captured via subprocess (not piped
+shipped `fno` command as the trap. Output is captured via subprocess (not piped
 through a tee) so the asserted returncode is the real one.
 
 The resolution pass is tested too: a `graduates-to:` value must resolve to a
@@ -141,9 +141,9 @@ def _one_entry(tmp_path: Path, title: str, body: str = "trap.") -> Path:
     return path
 
 
-def test_title_naming_shipped_verb_fails(tmp_path: Path) -> None:
+def test_title_naming_shipped_command_fails(tmp_path: Path) -> None:
     # The exact entry this check exists to prevent re-acquiring: a trap titled
-    # for the verb that already fixes it, so the verb IS the graduating carrier.
+    # for the command that already fixes it, so the command IS the graduating carrier.
     path = _one_entry(tmp_path, "`fno doctor test` can report a false green")
     r = _run(path)
     assert r.returncode == 1
@@ -183,19 +183,19 @@ def _transplant(tmp_path: Path, registry_text: str | None) -> Path:
     return lint
 
 
-def test_a_registry_that_yields_no_verbs_fails_loud(tmp_path: Path) -> None:
-    """An empty verb list makes every title match nothing.
+def test_a_registry_that_yields_no_commands_fails_loud(tmp_path: Path) -> None:
+    """An empty command list makes every title match nothing.
 
     The gate would then pass on the exact entry it exists to reject, which is
     the absence trap it is written to enforce against. A PRESENT registry that
-    parses to nothing is a broken read, not a CLI without verbs.
+    parses to nothing is a broken read, not a CLI without commands.
     """
     target = _one_entry(tmp_path, "fno backlog silently drops a node")
     lint = _transplant(tmp_path, "# a registry with no lazy-subcommand rows\n")
 
     r = _run(target, lint=lint)
     assert r.returncode == 1
-    assert "read 0 verbs" in r.stderr
+    assert "read 0 commands" in r.stderr
     assert "broken read" in r.stderr
 
 

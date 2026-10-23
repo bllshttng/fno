@@ -1,14 +1,15 @@
-//! The hold front verbs: `hold` (alias `dnd`) and `hold-release`.
+//! The hold front commands: `hold` (alias `dnd`) and `hold-release`.
 //!
 //! Port of the Python hold front onto the native mail-hold clock and the
 //! registry delivery stamp. The receipt and help name do-not-disturb (DND);
-//! the verb stays `hold` with `dnd` accepted as an alias everywhere the
+//! the command stays `hold` with `dnd` accepted as an alias everywhere the
 //! front dispatches.
 
 use crate::mail_header::{render_held_release, HeldMessage, HeldRelease};
 use crate::mail_hold::{
     clock_description, hold_sidecar_path, identity_key, read_clock, row_matches_token,
 };
+use crate::mail_notify_self::read_bus;
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{json, Value};
@@ -18,7 +19,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The identity refusal shared by both verbs: hold stamps a delivery policy
+/// The identity refusal shared by both commands: hold stamps a delivery policy
 /// on a registry row, so an unprovable self is a hard stop, not a default.
 /// The ambiguous case prints its own detail; the generic line is the
 /// missing-identity message only, matching the Python leg's per-case output.
@@ -157,7 +158,7 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("hold: {exc}");
         return 1;
     }
-    crate::mail_hold::record_stamp("hold_verb", &session_id);
+    crate::mail_hold::record_stamp("hold_verb", &session_id); // verb-wording: allow (event writer enum value)
 
     let mut arm = vec![
         "--arm".to_string(),
@@ -524,15 +525,6 @@ fn bus_dir(home: &AgentsHome) -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
     crate::intel::bus_dir_of(&root)
-}
-
-fn read_bus(bus: &PathBuf) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(bus.join("messages.jsonl")) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .collect()
 }
 
 fn str_field(m: &Value, key: &str, blank: &str) -> String {

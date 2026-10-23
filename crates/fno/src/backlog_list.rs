@@ -53,7 +53,7 @@ const LIST_HELP: &str = "Query the node board in the shared search grammar\n\nUs
 struct Hit<'a> {
     card: crate::backlog_model::Card,
     row: Option<&'a Value>,
-    /// The premise mark off the freshness verb's batch arm, when the verb
+    /// The premise mark off the freshness command's batch arm, when the command
     /// answered and the verdict is one the node names (changed,
     /// partly_shipped, shipped). holds and unmeasured carry None.
     stale: Option<(String, String)>,
@@ -187,7 +187,7 @@ impl SortValue {
     }
 }
 
-/// The premise marks for the shown rows, read from the freshness verb's
+/// The premise marks for the shown rows, read from the freshness command's
 /// batch arm. Fail-open: any spawn, timeout or parse failure returns None
 /// and the list answers exactly as before. Node ids are `<prefix>-<hex>`,
 /// so comma splitting is safe.
@@ -366,7 +366,7 @@ pub fn run(tail: &[String]) -> i32 {
         return 0;
     }
     // The premise marks attach once, before output: the ids go to the
-    // freshness verb's batch arm in one shell-out, and a failure leaves
+    // freshness command's batch arm in one shell-out, and a failure leaves
     // every row unmarked. --count returns above; it shows no rows.
     if !hits.is_empty() {
         let ids: Vec<&str> = hits.iter().map(|h| h.card.id.as_str()).collect();

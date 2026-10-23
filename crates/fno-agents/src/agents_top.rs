@@ -323,7 +323,7 @@ fn truth_handle(w: &Worker, entry: Option<&RegistryEntry>) -> String {
 /// Per-provider lane occupancy from the gate's own lane reading, never a
 /// second registry walk. An unreadable lane renders unreadable, never 0.
 fn lane_rows(cwd: &Path, registry: &Path, warnings: &mut Vec<String>) -> Vec<Value> {
-    let lanes = match crate::spawn_gate_verb::lanes_answer(cwd, registry, None, warnings) {
+    let lanes = match crate::spawn_gate_command::lanes_answer(cwd, registry, None, warnings) {
         Ok(lanes) => lanes,
         Err(fault) => {
             return vec![json!({

@@ -153,7 +153,7 @@ fn table_rows() {
     assert_eq!(job_id("https://example.test/build/7"), None);
 }
 
-// ── the verb: push discipline ───────────────────────────────────────────
+// ── the command: push discipline ───────────────────────────────────────────
 // Stub `gh` and `git`, not a real remote: exactly one push, never a push
 // over a run in flight, provable rather than argued.
 
@@ -507,7 +507,7 @@ echo '[]'
 
 /// A stub `fno` logging every invocation. Heal files fleet tasks by
 /// writing the store directly, so the inbox lanes are gone; the stub
-/// exists for the verbs the seams still shell (`do pr push`, `backlog`).
+/// exists for the commands the seams still shell (`do pr push`, `backlog`).
 fn stub_fno(dir: &Path) {
     write_exec(
         dir,
@@ -1084,7 +1084,7 @@ fn detach_rows() {
     let calls = spawned.borrow();
     assert_eq!(calls.len(), 1, "one spawn: {calls:?}");
     let child = &calls[0];
-    assert_eq!(child[1], "pr-heal", "the child argv re-adds the verb");
+    assert_eq!(child[1], "pr-heal", "the child argv re-adds the command");
     assert!(
         !child.iter().any(|s| s == "--detach"),
         "the child runs the real loop: {child:?}"

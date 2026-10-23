@@ -41,7 +41,7 @@ pub(super) enum ResumeArgvError {
     /// The door refuses by name - a routed codex row whose route cannot ride
     /// an argv-only pane spawn. Never fail-open.
     Refused(String),
-    /// The verb is missing, timed out, or answered malformed. Fail-open to
+    /// The command is missing, timed out, or answered malformed. Fail-open to
     /// the declared form, flagged degraded, as before.
     Unavailable(String),
 }
@@ -51,7 +51,7 @@ pub(super) enum ResumeArgvError {
 /// implementation of the codex resume argv the gestures consume - this
 /// server never rebuilds it. Every failure shape (timeout, missing binary,
 /// unparseable JSON) is a typed `Unavailable` the caller fail-opens to the
-/// declared-form render; exit 3 from the verb is a `Refused`: the
+/// declared-form render; exit 3 from the command is a `Refused`: the
 /// reason names the restoring door, and nothing spawns.
 pub(super) async fn run_resume_argv(
     harness: &str,
@@ -123,15 +123,15 @@ pub(super) async fn run_resume_argv(
     }
 }
 
-/// Shell `fno-agents <verb> <name>` for a sideline lifecycle gesture,
+/// Shell `fno-agents <command> <name>` for a sideline lifecycle gesture,
 /// bounded + fail-open (the `run_dispatch_one` idiom): a short outcome notice,
 /// never a wedge. The registry poll owns the row's truth, so a lost/failed
 /// notice degrades to "the row updates a beat later or stays put", not a silent
-/// mutation. `verb` is always a fixed literal; the argv is never a shell string.
-/// The raw outcome of one `fno-agents <verb> <name>` lifecycle shell. The
-/// captured output rides along so a caller composing several verbs into one
+/// mutation. `command` is always a fixed literal; the argv is never a shell string.
+/// The raw outcome of one `fno-agents <command> <name>` lifecycle shell. The
+/// captured output rides along so a caller composing several commands into one
 /// notice can quote what the daemon actually said.
-struct AgentVerbResult {
+struct AgentCommandResult {
     ok: bool,
     stdout: String,
     stderr: String,
@@ -141,29 +141,33 @@ struct AgentVerbResult {
     unavailable: bool,
 }
 
-async fn run_agent_verb(verb: &str, name: &str, timeout: Duration) -> AgentVerbResult {
+async fn run_agent_command(
+    command_name: &str,
+    name: &str,
+    timeout: Duration,
+) -> AgentCommandResult {
     let mut command = mux_command(crate::digest_overlay::fno_agents_bin());
     command
-        .args([verb, name])
+        .args([command_name, name])
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
     match tokio::time::timeout(timeout, fut).await {
-        Err(_) => AgentVerbResult {
+        Err(_) => AgentCommandResult {
             ok: false,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
             unavailable: false,
         },
-        Ok(Err(_)) => AgentVerbResult {
+        Ok(Err(_)) => AgentCommandResult {
             ok: false,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
             unavailable: true,
         },
-        Ok(Ok(out)) => AgentVerbResult {
+        Ok(Ok(out)) => AgentCommandResult {
             ok: out.status.success(),
             stdout: String::from_utf8_lossy(&out.stdout).to_string(),
             stderr: String::from_utf8_lossy(&out.stderr).to_string(),
@@ -173,31 +177,35 @@ async fn run_agent_verb(verb: &str, name: &str, timeout: Duration) -> AgentVerbR
     }
 }
 
-/// The one-verb notice text. Failure now quotes the daemon's reason instead
+/// The one-command notice text. Failure now quotes the daemon's reason instead
 /// of a bare "failed": a refusal that names itself is the difference between
 /// a row the operator can act on and one they press `x` at again blindly.
-fn render_agent_verb(verb: &str, name: &str, r: &AgentVerbResult) -> String {
-    let past = if verb == "stop" { "stopped" } else { "removed" };
+fn render_agent_command(command: &str, name: &str, r: &AgentCommandResult) -> String {
+    let past = if command == "stop" {
+        "stopped"
+    } else {
+        "removed"
+    };
     if r.timed_out {
-        return format!("{verb} {name}: timed out");
+        return format!("{command} {name}: timed out");
     }
     if r.unavailable {
-        return format!("{verb} {name}: unavailable");
+        return format!("{command} {name}: unavailable");
     }
     if r.ok {
         return format!("{past} {name}");
     }
     match r.stderr.trim() {
-        "" => format!("{verb} {name}: failed"),
-        reason => format!("{verb} {name}: failed: {reason}"),
+        "" => format!("{command} {name}: failed"),
+        reason => format!("{command} {name}: failed: {reason}"),
     }
 }
 
-pub(super) async fn run_agent_action(verb: &str, name: &str) -> String {
-    render_agent_verb(
-        verb,
+pub(super) async fn run_agent_action(command: &str, name: &str) -> String {
+    render_agent_command(
+        command,
         name,
-        &run_agent_verb(verb, name, Duration::from_secs(20)).await,
+        &run_agent_command(command, name, Duration::from_secs(20)).await,
     )
 }
 
@@ -205,7 +213,7 @@ pub(super) async fn run_agent_action(verb: &str, name: &str) -> String {
 /// refusal. Its receipt is the useful notice; keep the longer bound for the
 /// claude background-resume confirmation poll.
 pub(super) async fn run_resume(name: &str) -> String {
-    let result = run_agent_verb("resume", name, Duration::from_secs(60)).await;
+    let result = run_agent_command("resume", name, Duration::from_secs(60)).await;
     render_resume_notice(name, &result)
 }
 
@@ -221,7 +229,7 @@ fn resume_output_line(output: &str, last: bool) -> Option<String> {
     }
 }
 
-fn render_resume_notice(name: &str, result: &AgentVerbResult) -> String {
+fn render_resume_notice(name: &str, result: &AgentCommandResult) -> String {
     if result.timed_out {
         return format!("resume {name}: timed out");
     }
@@ -254,23 +262,23 @@ fn daemon_verdict(stdout: &str) -> Option<&str> {
 /// The remove leg: rm alone. Since law d-81c6da7e the daemon's rm
 /// ends a live row's process itself, so the gesture never composes a stop.
 pub(super) async fn run_remove(name: &str) -> String {
-    let rm = run_agent_verb("rm", name, Duration::from_secs(20)).await;
+    let rm = run_agent_command("rm", name, Duration::from_secs(20)).await;
     measure_remove_notice(name, &rm)
 }
 
 /// Pure; the testable half of [`run_remove`]. Both notice shapes
 /// name the row, so the client's row stamp resolves against the notice.
-fn measure_remove_notice(name: &str, rm: &AgentVerbResult) -> String {
+fn measure_remove_notice(name: &str, rm: &AgentCommandResult) -> String {
     if !rm.ok {
-        return render_agent_verb("rm", name, rm);
+        return render_agent_command("rm", name, rm);
     }
     match daemon_verdict(&rm.stdout) {
         Some(v) => format!("removed {name} ({v})"),
-        None => render_agent_verb("rm", name, rm),
+        None => render_agent_command("rm", name, rm),
     }
 }
 
-/// Map `fno-agents reap --json` stdout to the `reaped N` notice. The verb
+/// Map `fno-agents reap --json` stdout to the `reaped N` notice. The command
 /// exited zero, so the reap ran; unparseable output still reports a success
 /// with an unknown count rather than a false failure (the row-vanish is the
 /// authoritative truth, this notice is advisory).
@@ -296,7 +304,7 @@ pub(super) async fn run_reap() -> String {
         // --no-mux keeps this gesture on its registry-row contract:
         // the 20s bound kills only the direct child, so a mux tab sweep that
         // outlives it would keep closing visible tabs detached. That half
-        // needs the operator verb, which has no fixed bound.
+        // needs the operator command, which has no fixed bound.
         .args(["reap", "--json", "--no-mux"])
         // The bounded caller reads partial stderr on a timeout; the
         // env asks the sweep for its per-row progress lines. A sweep run
@@ -367,7 +375,7 @@ fn notice_formatters_keep_their_facts() {
     assert_eq!(reap_notice(r#"{"reaped":[],"kept_dirty":[]}"#), "reaped 0");
     // A missing `reaped` key (schema drift) reads as zero reaped.
     assert_eq!(reap_notice(r#"{"kept_dirty":[]}"#), "reaped 0");
-    // The verb exited zero, so unparseable stdout still reports success (the
+    // The command exited zero, so unparseable stdout still reports success (the
     // row-vanish is authoritative), never a false failure.
     assert_eq!(reap_notice("not json"), "reap: done");
 
@@ -443,7 +451,7 @@ fn reap_progress_note(stderr: &str) -> String {
 }
 
 /// Shell `fno-agents rename <token> --name <new>` off-loop with the same 20s
-/// bound as [`run_agent_action`]. The SUCCESS notice is the verb's OWN printed
+/// bound as [`run_agent_action`]. The SUCCESS notice is the command's OWN printed
 /// line ("renamed <old> -> <new>", resolved under the registry lock), never a
 /// caller-side reconstruction: a rename racing between resolve and shell must
 /// not be reported with a label the row no longer carried. A refusal surfaces
@@ -670,16 +678,16 @@ impl super::Core {
         });
     }
 
-    /// Shell `fno-agents <verb> <name>` OFF the core loop, mirroring
+    /// Shell `fno-agents <command> <name>` OFF the core loop, mirroring
     /// `dispatch_next`: the one-line outcome routes back as a `DispatchResult`
     /// notice, but the AUTHORITATIVE row change is the registry poll's exited
-    /// flip / row vanish, not this notice. `verb` is a fixed literal
+    /// flip / row vanish, not this notice. `command` is a fixed literal
     /// (`"stop"`/`"rm"`), never operator text; `name` was catalog-validated by
     /// the caller.
-    pub(super) fn agent_action(&self, id: u64, verb: &'static str, name: String) {
+    pub(super) fn agent_action(&self, id: u64, command: &'static str, name: String) {
         let core_tx = self.self_tx.clone();
         tokio::spawn(async move {
-            let notice = run_agent_action(verb, &name).await;
+            let notice = run_agent_action(command, &name).await;
             let _ = core_tx
                 .send(super::CoreMsg::DispatchResult { id, notice })
                 .await;
@@ -687,7 +695,7 @@ impl super::Core {
     }
 
     /// Rename a row's label off-loop: the `agent_action` mirror with the new
-    /// label as a second argv token. The notice is the verb's own report.
+    /// label as a second argv token. The notice is the command's own report.
     pub(super) fn agent_rename_action(&self, id: u64, token: String, new_name: String) {
         let core_tx = self.self_tx.clone();
         tokio::spawn(async move {
@@ -718,7 +726,7 @@ impl super::Core {
 /// fail-closed-per-job shape as [`run_reentry_plan`]: the restore walk just
 /// spawned the row's pane, and this is what moves its registry row onto it
 /// (mux ref, pid, Live) instead of leaving it orphaned on the dead pane. The
-/// receipt line the verb prints is the notice the restore row carries. The
+/// receipt line the command prints is the notice the restore row carries. The
 /// bound sits under the client's 10s control timeout because the restore
 /// reply waits for every receipt.
 pub(super) async fn run_pane_rebind(
@@ -755,7 +763,7 @@ pub(super) async fn run_pane_rebind(
         Err(_) => Err("registry row rebind: timed out".to_string()),
         Ok(Err(e)) => Err(spawn_failure("registry row rebind", &bin, &e)),
         Ok(Ok(o)) if o.status.success() => {
-            // The verb's receipt is authoritative (it ran under the registry
+            // The command's receipt is authoritative (it ran under the registry
             // lock); the notice names the pane and pid it joined.
             let stdout = String::from_utf8_lossy(&o.stdout);
             let v: serde_json::Value = serde_json::from_str(stdout.trim())
@@ -780,7 +788,7 @@ pub(super) async fn run_pane_rebind(
     }
 }
 
-/// Resolve the restore verb's claude re-entry plans OFF the core/// loop: squad members resolve their `resume` transition, held portals their
+/// Resolve the restore command's claude re-entry plans OFF the core/// loop: squad members resolve their `resume` transition, held portals their
 /// `attach` transition (keyed `portal:<name>` so one row that is both a
 /// member and a held portal resolves each transition it actually needs).
 /// Every failure shape is that row's visible refusal, the same typed `Err`
@@ -823,8 +831,8 @@ mod tests {
 
     // -- corpse-safe stop + honest reap timeout -----------------------
 
-    fn verb_result(ok: bool, stdout: &str, stderr: &str) -> AgentVerbResult {
-        AgentVerbResult {
+    fn command_result(ok: bool, stdout: &str, stderr: &str) -> AgentCommandResult {
+        AgentCommandResult {
             ok,
 
             stdout: stdout.into(),
@@ -839,28 +847,31 @@ mod tests {
 
     #[test]
 
-    fn render_agent_verb_quotes_daemon_reason_on_failure() {
+    fn render_agent_command_quotes_daemon_reason_on_failure() {
         // a bare "stop X: failed" is the same silence the reap timeout
 
         // used to end with; the daemon's reason is the operator's next action.
 
-        let r = verb_result(false, "", "agent corpse is a pane worker; kill the pane");
+        let r = command_result(false, "", "agent corpse is a pane worker; kill the pane");
 
         assert_eq!(
-            render_agent_verb("stop", "corpse", &r),
+            render_agent_command("stop", "corpse", &r),
             "stop corpse: failed: agent corpse is a pane worker; kill the pane"
         );
 
-        let ok = verb_result(true, "", "");
+        let ok = command_result(true, "", "");
 
-        assert_eq!(render_agent_verb("stop", "corpse", &ok), "stopped corpse");
+        assert_eq!(
+            render_agent_command("stop", "corpse", &ok),
+            "stopped corpse"
+        );
     }
 
     #[test]
     fn measure_remove_notice_quotes_the_daemon_verdict() {
         // rm ok with a daemon verdict: the notice quotes it
         // verbatim and names the row, so the client's row stamp resolves.
-        let rm = verb_result(
+        let rm = command_result(
             true,
             "removed: corpse (fno; claude row already absent)\n",
             "",
@@ -879,7 +890,7 @@ mod tests {
         // notice names the row and the reason, failure-marked, so the row
         // stays stamped with why. The quoted reason is rm's own claude
         // refusal shape: rm ran its stop, the roster still lists.
-        let rm = verb_result(
+        let rm = command_result(
             false,
             "",
             "agent corpse is still live. rm ran `claude stop`, and its harness row \
@@ -1165,7 +1176,7 @@ mod tests {
 
     #[tokio::test]
     async fn resume_timeout_uses_the_sixty_second_bound() {
-        // AC4-EDGE: resume waits longer than the ordinary lifecycle verbs,
+        // AC4-EDGE: resume waits longer than the ordinary lifecycle commands,
         // then reports its fixed timeout notice.
         let _serial = fno_env_lock();
         let (tmp, _env) = resume_fixture(
@@ -1258,7 +1269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mux_row_gestures_stamp_child_and_map_to_one_cli_verb() {
+    async fn mux_row_gestures_stamp_child_and_map_to_one_cli_command() {
         let _serial = fno_env_lock();
         let _home_guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
             .lock()

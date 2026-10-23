@@ -1,4 +1,4 @@
-//! `fno-agents loop-check` verb (Task 1.1, ).
+//! `fno-agents loop-check` command (Task 1.1, ).
 //!
 //! Single entry-point decision-maker for the target stop hook. Reads external
 //! state (manifest, transcript, git, gh, events, ledger) and returns a JSON
@@ -164,7 +164,7 @@ mod local_attestation;
 mod plan_fidelity;
 mod posture;
 mod pr_read;
-mod review_coverage_verb;
+mod review_coverage_command;
 mod review_findings;
 pub(crate) mod review_inputs;
 pub(crate) mod self_review_floor;
@@ -262,7 +262,7 @@ use posture::{
 use pr_read::manifest_node_pr_selector;
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
-pub use review_coverage_verb::{run_review_coverage, run_review_coverage_capture};
+pub use review_coverage_command::{run_review_coverage, run_review_coverage_capture};
 use review_findings::{
     build_findings_block_reason, demote_unmeasured_coverage, open_findings_from_store,
     review_journal_text,
@@ -303,7 +303,7 @@ pub(crate) fn loopcheck_fno_bin() -> String {
 }
 
 /// `$HOME/.fno/events.jsonl`, the global-log fallback every direct-dispatch
-/// verb reaches for when no `--global-events` override is given. Hand-built
+/// command reaches for when no `--global-events` override is given. Hand-built
 /// (no Rust resolver for events.jsonl exists yet, debt this file
 /// already carries) rather than a new duplicate of the same literal in
 /// every caller.
@@ -555,7 +555,7 @@ pub(crate) fn decide_with_payload(
     }
 
     // Resolve paths + settings + reviewer sets through the ONE shared resolver
-    //: the standalone review-coverage verb resolves exactly these,
+    //: the standalone review-coverage command resolves exactly these,
     // from the same overlay, so there is no second precedence implementation.
     let inputs = resolve_review_inputs(
         &cwd,
@@ -647,7 +647,7 @@ pub(crate) fn decide_with_payload(
     //     // ── Step 1: cancel sentinel ────────────────────────────
     // F6: a self-cancel the SESSION wrote through its own assistant is a
     // stuck signal, not a stop. The transcript is the truth: the newest
-    // user entry carrying the cancel verb proves a user typed it. The
+    // user entry carrying the cancel command proves a user typed it. The
     // sentinel's own `via:` is advisory (the command writes it best-effort);
     // the loop re-derives from the transcript at honor time.
     if let Some(hit) = check_cancel_sentinel(&cwd, &state_path, &manifest.created_at, "target") {
@@ -1411,11 +1411,11 @@ pub(crate) fn decide_with_payload(
             || !required_reviewers.is_empty();
         let self_review_required = settings.self_review_required.unwrap_or(true);
         // The floor applies where a session can satisfy it: a harness with a
-        // self-review verb (claude /code-review, codex /review, opencode
+        // self-review command (claude /code-review, codex /review, opencode
         // /review-changes), or a harness that could not be attributed at all -
-        // ambiguity is not permission. A KNOWN verbless harness
+        // ambiguity is not permission. A KNOWN commandless harness
         // (gemini/agy) stays unfloored: the floor would demand an attestation no
-        // verb there produces, wedging the loop; route 3 (a spawned reviewer) is
+        // command there produces, wedging the loop; route 3 (a spawned reviewer) is
         // those harnesses' path and is deferred.
         let floor_applies =
             self_review_floor_applies(author_harness.as_deref(), inputs.author_harness_pinned_none);
@@ -1430,7 +1430,7 @@ pub(crate) fn decide_with_payload(
         }
         //: DoneUnreviewed applies only when review is required. A stock
         // install that opts out (self_review_required=false AND no lane, or a
-        // harness with no self-review verb) has zero coverage as its configured
+        // harness with no self-review command) has zero coverage as its configured
         // state, not a defect - those green PRs still reach DonePRGreen.
         let review_required = lane_configured || self_review_floor.is_some();
 
@@ -2923,7 +2923,7 @@ mod tests {
     mod plan_fidelity_tests;
     mod posture_tests;
     mod pr_read_tests;
-    mod review_coverage_verb_tests;
+    mod review_coverage_command_tests;
     mod review_findings_tests;
     mod self_review_floor_tests;
     mod settings_tests;

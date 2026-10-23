@@ -1,7 +1,7 @@
-//! The `fno agents roles <op>` verbs, nested under the existing
+//! The `fno agents roles <op>` commands, nested under the existing
 //! `spawn-overlay` door as `fno-agents spawn-overlay roles <op>`: the
 //! fno-agents root sits at its menu cap, so the roles ops add no root
-//! verb. The `fno` front classifies each ported op and execs this door.
+//! command. The `fno` front classifies each ported op and execs this door.
 //!
 //! The group options precede the op, as the Python group's callback read
 //! them: `--json`/`-J`, `--root PATH` and the repeatable

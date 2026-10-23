@@ -267,7 +267,7 @@ fn command_status_exit_code(status: &str) -> i32 {
 }
 
 fn pane_infos(sock: &Path, session: &str) -> Result<Vec<proto::PaneInfo>, String> {
-    match control_roundtrip(sock, session, ControlVerb::PaneLs)
+    match control_roundtrip(sock, session, ControlCommand::PaneLs)
         .map_err(|error| format!("portal pane list unreadable: {error}"))?
     {
         ServerMsg::PaneList { panes } => Ok(panes),
@@ -303,7 +303,7 @@ impl Drop for OwnedView {
         match control_roundtrip(
             &self.sock,
             &self.session,
-            ControlVerb::PaneKill {
+            ControlCommand::PaneKill {
                 pane: self.pane,
                 hand_off_to: None,
             },
@@ -348,7 +348,7 @@ fn open_command_view(
     let landing = match control_roundtrip(
         &sock,
         &session,
-        ControlVerb::ThreadPane {
+        ControlCommand::ThreadPane {
             name: row_name.to_string(),
             portal: None,
             placement,

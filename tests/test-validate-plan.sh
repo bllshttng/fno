@@ -1000,7 +1000,7 @@ created: 2099-01-01
 
 | File | Action |
 |------|--------|
-| `cli/src/fno/mail/cli.py` | Port: the send verb moves to crates |
+| `cli/src/fno/mail/cli.py` | Port: the send command moves to crates |
 | `crates/fno-agents/src/mail.rs` | Modify |
 EOF
 OUTPUT=$(bash "$VALIDATE" "$PLAN_NNPY_B" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
@@ -1957,7 +1957,7 @@ code_index:
 
 | Claim | Kind | Verdict | Evidence |
 |---|---|---|---|
-| the send verb exists | code | exists at src/m.rs:1 | `fno send` answers |
+| the send command exists | code | exists at src/m.rs:1 | `fno send` answers |
 
 ## Files to Modify
 

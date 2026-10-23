@@ -679,7 +679,7 @@ def _lookup_mux_pane(
     ``session_id`` stays null until reconcile backfills it. A pane worker is
     still a fully-registered row, so the registry resolves it directly. This
     closes the asymmetry that made the default substrate unobservable through
-    the documented observe verb.
+    the documented observe command.
 
     Returns ``(mux_session, pane_id, name)`` for a row carrying a ``mux`` ref,
     else None. A read/parse failure or a non-mux row is None, never raised.
@@ -1153,7 +1153,7 @@ def peek(
             # snapshot, never a live pwd. Unlabelled, it reported two recovered
             # sessions as sitting in canonical main; one of them then named its
             # own pwd inside its feature worktree. Do not read the live pwd
-            # here - that costs a pid resolution per call on a hot verb, and
+            # here - that costs a pid resolution per call on a hot command, and
             # the label removes the ambiguity for free.
             f"peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}\n"
         )

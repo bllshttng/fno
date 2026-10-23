@@ -82,11 +82,11 @@ STRIP_VARS = [
 HEAD_SHA = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c"
 
 DEFAULT_ANSWERS = {
-    # The PR head read (verb_call authorized-merge op=pr-head). The value
+    # The PR head read (command_call authorized-merge op=pr-head). The value
     # rides the __HEAD_SHA__ placeholder so substitute_placeholders aligns it
     # with the seeded commit the planted rows name.
     "pr-head": {"json": {"head": "__HEAD_SHA__"}},
-    # The sized self-review invocation render (verb_call review-level).
+    # The sized self-review invocation render (command_call review-level).
     "review-level": {"json": {"invocation": "fno do review --level medium --reviewer code-review"}},
 }
 
@@ -151,10 +151,10 @@ def resolve_op(argv):
             data = None
         if isinstance(data, dict):
             payload = data
-    verb = argv[0] if argv else ""
+    command = argv[0] if argv else ""
     if payload is None:
-        return verb, None
-    return payload.get("op") or verb, None
+        return command, None
+    return payload.get("op") or command, None
 
 
 def append_event(row):

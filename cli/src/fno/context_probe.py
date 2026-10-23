@@ -59,7 +59,7 @@ def context_command(
 
     Hidden: hooks are handed a ``transcript_path`` and probe THAT file rather
     than whatever this process's env resolves to, which ``fno whoami`` cannot
-    do without a flag that makes no sense on an orientation verb. Not a second
+    do without a flag that makes no sense on an orientation command. Not a second
     model-facing surface; it is what makes the number reachable from a codex,
     agy, or opencode worker and from every hook. Exits 3 when unreadable,
     matching the shell probe's contract.

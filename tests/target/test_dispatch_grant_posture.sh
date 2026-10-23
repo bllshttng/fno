@@ -19,7 +19,7 @@ mkdir -p "$MOCKBIN" "$NODES_JSON"
 cat > "$MOCKBIN/fno" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "${1:-} ${2:-} ${3:-}" in
   "agents admit guard") set -- agents spawn-guard "${@:4}" ;;
   "agents registry name") set -- agents name "${@:4}" ;;

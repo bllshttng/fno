@@ -6,7 +6,7 @@ This document records the strategic decision made by the fno-daemon plan's Phase
 
 ## The decision
 
-The aggregate ratio of `fno <verb>` wall time to target phase wall time, measured across eight representative target sessions, is **0.22%** — 70x below the 15% threshold that would have justified building a resident Python daemon for the `fno` CLI.
+The aggregate ratio of `fno <command>` wall time to target phase wall time, measured across eight representative target sessions, is **0.22%** — 70x below the 15% threshold that would have justified building a resident Python daemon for the `fno` CLI.
 
 Per the plan's decision rule:
 
@@ -28,11 +28,11 @@ Phase 0 took roughly one target iteration. The measurement harness lives at `cli
 
 There were no `fno_invoked` or `fno_completed` events in `.fno/events.jsonl` to support retroactive measurement, so the harness instrumented fresh subprocess timings:
 
-1. **Per-verb wall-time measurement.** The harness times `fno --help` (a zero-side-effect probe that exercises the full subprocess startup path including `__init__.py` import chains) 20 times and uses the median. Argument parsing is negligible; startup cost dominates.
+1. **Per-command wall-time measurement.** The harness times `fno --help` (a zero-side-effect probe that exercises the full subprocess startup path including `__init__.py` import chains) 20 times and uses the median. Argument parsing is negligible; startup cost dominates.
 
 2. **Probe hardening.** Each subprocess invocation runs with `timeout=10s`. Probes that return non-zero, time out, or signal-kill (negative returncode) are dropped from the sample rather than averaged in as fast 0ms runs. If more than 25% of probes fail the run aborts with a clear `RuntimeError`. This guard was added after sigma-review caught the silent-failure mode.
 
-3. **Per-session estimation.** The harness multiplies the median per-call latency by the per-verb expected count per phase, tallied by grepping `skills/target/`, `skills/operator/`, `hooks/`, and the do/check-pr/sigma-review skill bodies for `fno <verb>` invocations.
+3. **Per-session estimation.** The harness multiplies the median per-call latency by the per-command expected count per phase, tallied by grepping `skills/target/`, `skills/operator/`, `hooks/`, and the do/check-pr/sigma-review skill bodies for `fno <command>` invocations.
 
 4. **Session sample.** Sampled sessions come from `.fno/ledger.json`, filtered to those with the `do` phase and duration greater than 3 minutes. Eight sessions met the criteria, ranging from 3.4 min to 121 min total wall time.
 
@@ -46,7 +46,7 @@ The raw per-session timings are committed at `cli/benchmarks/fno_in_target_resul
 
 The decision should be revisited if any of the following change materially:
 
-- The `fno` CLI gains many new verbs or one or more verbs become substantially slower (e.g., a new verb that does heavy IO becomes hot-path).
+- The `fno` CLI gains many new commands or one or more commands become substantially slower (e.g., a new command that does heavy IO becomes hot-path).
 - Target's call mix shifts toward more `fno` invocations per phase.
 - Python subprocess startup cost increases (e.g., the lazy-imports refactor lands and the baseline per-call latency changes).
 - The wall-time denominator shifts because target phases get faster overall (the ratio matters in proportion to phase work, not absolute call time).

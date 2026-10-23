@@ -1,7 +1,7 @@
 //! The kill-server session policy: the unkept-pane refusal, the preserved
 //! and ended receipt, and the `--stale-idle` / `--all` selectors. Child of
 //! `mux_cli` (the parent is shrink-only) - the row partition is a PURE
-//! function over `mux ls` rows, so the restart verb consumes the same logic
+//! function over `mux ls` rows, so the restart command consumes the same logic
 //! and the two never disagree about who is spared.
 
 use super::*;
@@ -48,12 +48,12 @@ impl PaneSnapshot {
 
 /// Measure the session's panes: one `pane ls` control round trip + the
 /// keeper sockets behind it. `Err` = UNMEASURABLE (the server holds its
-/// socket but answers no control verb): the caller keeps the escalation
-/// ladder and says the pane set was unmeasured - a recovery verb must not
+/// socket but answers no control command): the caller keeps the escalation
+/// ladder and says the pane set was unmeasured - a recovery command must not
 /// depend on the subsystem it recovers.
 pub(crate) fn measure_panes(session: &str) -> Result<Vec<PaneSnapshot>, String> {
     let sock = proto::socket_path(session)?;
-    let panes = match control_roundtrip(&sock, session, ControlVerb::PaneLs) {
+    let panes = match control_roundtrip(&sock, session, ControlCommand::PaneLs) {
         Ok(ServerMsg::PaneList { panes }) => panes,
         _ => return Err("the server answered no pane ls".into()),
     };
@@ -130,7 +130,7 @@ impl LsRow {
 }
 
 /// The one partition pass over `mux ls` rows. Buckets mirror the restart
-/// verb's contract: a stale-wire live server heals automatically only when
+/// command's contract: a stale-wire live server heals automatically only when
 /// it hosts no live pane; one with live panes is spared because killing it
 /// closes their ptys (`--all` is the deliberate break-glass lever). A wedged
 /// server holds its socket but never accepts: a broken server, NOT a benign
@@ -278,7 +278,7 @@ mod tests {
     }
 }
 
-// The verb bodies: the named kill and the selector kill. They live beside
+// The command bodies: the named kill and the selector kill. They live beside
 // the policy they enforce.
 
 /// `fno mux kill-server [<name>]`: shut one session down. A live server Byes
@@ -286,7 +286,7 @@ mod tests {
 /// the socket); a stale socket is unlinked here with a message (exit 0); no
 /// socket at all is "no server" (exit 1). A wedged holder - one that never
 /// accepted, or accepted and never answered - is escalated through SIGTERM
-/// and SIGKILL to unlink: a recovery verb must not depend on the
+/// and SIGKILL to unlink: a recovery command must not depend on the
 /// subsystem it recovers. Every run prints which rung ended it, and an
 /// unrecoverable state names the next action instead of leaving a dead `&&`
 /// chain with no hint.
@@ -305,7 +305,7 @@ pub fn kill_server(session: &str, json: bool, end_unkept: bool) -> i32 {
     // Measure BEFORE any signal: the refusal must fire while every pane is
     // still live. A wedged server answers no `pane ls` and cannot be
     // measured - keep today's escalation ladder for it and say the pane set
-    // was unmeasured. A recovery verb must not depend on the subsystem it
+    // was unmeasured. A recovery command must not depend on the subsystem it
     // recovers.
     let measured = kill_policy::measure_panes(session).ok();
     if let Some(panes) = &measured {
@@ -392,9 +392,9 @@ pub fn kill_server(session: &str, json: bool, end_unkept: bool) -> i32 {
 }
 
 /// The work of `kill-server`, returning the rung taken instead of printing.
-/// Both dead ends of the old verb - a connect that timed out, and a graceful
+/// Both dead ends of the old command - a connect that timed out, and a graceful
 /// request the connected server never answered - enter the same escalation
-/// ladder instead of refusing, because that is exactly the state the verb
+/// ladder instead of refusing, because that is exactly the state the command
 /// exists for.
 /// `fno mux kill-server --stale-idle | --all`: partition every live session
 /// with the shared pure partition, then kill each target with the SAME
@@ -450,7 +450,7 @@ pub fn kill_selector(selector: kill_policy::Selector, json: bool) -> i32 {
     if !spared.is_empty() {
         // A spared stale-wire server with live panes is an unrestored
         // fleet: the selector reports it and FAILS, exactly like the
-        // restart verb's floor always did.
+        // restart command's floor always did.
         exit = EXIT_ERROR;
     }
     for session in &targets {
@@ -520,7 +520,7 @@ pub fn kill_selector(selector: kill_policy::Selector, json: bool) -> i32 {
     }
     // The human narratives ride stderr in BOTH modes: --json keeps stdout
     // to one object, and the spared/wedged/refused lines are exactly what
-    // an operator (or the restart verb relaying) must see.
+    // an operator (or the restart command relaying) must see.
     for (name, panes) in &spared {
         eprintln!(
             "fno: mux session '{name}' has {panes} live pane(s); its stale-wire server \

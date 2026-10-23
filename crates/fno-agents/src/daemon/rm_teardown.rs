@@ -1,9 +1,9 @@
 //! The process-end legs `fno agents rm` owns since (law d-81c6da7e:
 //! remove needs no prior stop).
 //!
-//! Two legs moved out of daemon.rs so the lifecycle verbs share them: the
+//! Two legs moved out of daemon.rs so the lifecycle commands share them: the
 //! codex thread's interrupt-settle-shutdown-actor-drop (shared with the stop
-//! verb, which stamps and emits around it) and the claude background
+//! command, which stamps and emits around it) and the claude background
 //! thread's bounded stop, which rm now runs itself before it re-reads the
 //! roster.
 
@@ -34,7 +34,7 @@ pub(crate) async fn end_codex_thread_confirmed(
 }
 
 /// Interrupt the codex thread's in-flight turn, shut the actor down, and
-/// drop it from the map. Shared by the stop verb and rm: the caller that
+/// drop it from the map. Shared by the stop command and rm: the caller that
 /// keeps the row stamps and emits around the answer.
 ///
 /// `Ok(report)` names the settled outcome (`no-turn`, `actor-gone`, an

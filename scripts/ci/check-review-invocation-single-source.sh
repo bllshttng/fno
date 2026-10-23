@@ -7,9 +7,9 @@
 # other surface (skill prose, docs, Rust fixtures, test payloads) defers to it
 # with the `<level>` placeholder. Before this check, three surfaces shipped
 # three different answers (prose said `medium --fix`, the runtime verdict said a
-# bare verb, the uncalled builder said `medium --comment --fix`) and the one
+# bare command, the uncalled builder said `medium --comment --fix`) and the one
 # test asserting the right string passed green while every caller drifted.
-# A concrete level spelled next to the verb anywhere outside
+# A concrete level spelled next to the command anywhere outside
 # the allowlist is a fourth answer waiting to ship.
 #
 # `ultra` sits in the pattern on purpose: it is billed separately, so any

@@ -1,6 +1,6 @@
 """``fno doctor observer`` - skill eval over a recorded corpus.
 
-Two verbs over the pure fold in :mod:`fno.observer.fold`:
+Two commands over the pure fold in :mod:`fno.observer.fold`:
 
 - ``sweep`` - retrospective, read-only. Folds ledger/graph/events/postmortems
   into a corpus, scores each attributable item, emits one ``skill_eval_finding``
@@ -447,16 +447,16 @@ def _review_evidence(items: list[dict], by_id: dict) -> dict:
            "evidence_line": "evidence: unread (fno-agents review-summary --evidence failed)"}
     payload = [{"node": n.get("id"), "pr_number": n.get("pr_number")}
                for n in (by_id.get(i.get("graph_node_id")) or {} for i in items)]
-    out = _judge_via_rust(["--evidence"], verb="review-summary", stdin_payload=payload, timeout=120)
+    out = _judge_via_rust(["--evidence"], command="review-summary", stdin_payload=payload, timeout=120)
     if isinstance(out, dict) and len(out.get("items", [])) == len(items):
         return out
     return gap
 
 
 def _judge_via_rust(
-    argv: list[str], *, verb: str = "judge", stdin_payload=None, timeout=None
+    argv: list[str], *, command: str = "judge", stdin_payload=None, timeout=None
 ) -> Optional[dict]:
-    """One fno-agents verb round-trip: JSON out, None on any fault (a coverage gap, never a fabricated verdict)."""
+    """One fno-agents command round-trip: JSON out, None on any fault (a coverage gap, never a fabricated verdict)."""
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
         typer.echo("fno-agents binary not found; run `fno doctor update --rust`", err=True)
@@ -466,17 +466,17 @@ def _judge_via_rust(
         timeout = 14400 if "--labels" in argv else 3600
     try:
         result = subprocess.run(
-            [str(binary), verb, *argv],
+            [str(binary), command, *argv],
             input=json.dumps(stdin_payload) if stdin_payload is not None else None,
             capture_output=True, text=True, timeout=timeout,
         )
         out = json.loads(result.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         detail = f"bad output (stdout={result.stdout[:200]!r} stderr={result.stderr[:200]!r})" if isinstance(exc, ValueError) else str(exc)
-        typer.echo(f"{verb} fault: {detail}", err=True)
+        typer.echo(f"{command} fault: {detail}", err=True)
         return None
     if isinstance(out, dict) and out.get("error"):
-        typer.echo(f"{verb} fault: {out['error']}", err=True)
+        typer.echo(f"{command} fault: {out['error']}", err=True)
         return None
     return out
 

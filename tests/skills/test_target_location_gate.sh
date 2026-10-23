@@ -8,7 +8,7 @@
 # and runs before `fno do target init` (the only thing that resolves
 # attendance), so the branch had no machine input and the model defaulted to
 # asking. The fix deletes the offer/refuse fork entirely and routes through
-# `fno do target start <node>`, the one-verb cold start, for attended and
+# `fno do target start <node>`, the one-command cold start, for attended and
 # unattended alike.
 #
 # Positive-marker discipline (AGENTS.md pitfalls corpus): asserting only an
@@ -49,7 +49,7 @@ else
   pass "location-gate section extracted (${#SECTION} bytes)"
 fi
 
-# AC1-HP: the fixed text routes through the one-verb cold start.
+# AC1-HP: the fixed text routes through the one-command cold start.
 if [[ -n "$SECTION" ]] && grep -q 'fno do target start' <<<"$SECTION"; then
   pass "section names 'fno do target start'"
 else
