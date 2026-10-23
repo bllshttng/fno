@@ -163,10 +163,8 @@ pub(crate) fn mint_missing_native_bg(
         }
     }
 
-    // A row still named by its short id: the mail-hold register writes
-    // `sid[..8]` before any beat mints, and both minters then skip the held
-    // session, so no later step named it. The listing and the record still
-    // know the session's name; a row nothing names waits for a later beat.
+    // The mail-hold register can write `sid[..8]` before any beat mints, and
+    // both minters skip a held session: rename it here, or on a later beat.
     let mut renames: Vec<(String, String)> = Vec::new();
     for e in entries.iter().filter(|e| e.harness_name() == "claude") {
         let Some(session) = e.harness_session_id.as_deref() else {
@@ -632,8 +630,7 @@ mod tests {
             // beat mints it: no origin, no substrate, no parent. The claimed
             // record still parents it, so the reaper's spawn pipeline sees it.
             // A self-registered row no record names is the user's own and
-            // stays unproven. Both lose their short-id names: the record's
-            // name for the child, the listing's name for the user's own, and
+            // stays unproven. Each takes a name from its record or listing;
             // a row nothing names keeps its short id.
             let raced = "cccccccc-0000-0000-0000-000000000003";
             let own = "dddddddd-0000-0000-0000-000000000004";

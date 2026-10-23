@@ -556,9 +556,8 @@ const WORKER_NAME_CAP: usize = 32;
 /// `agents.naming.worker` when the config sets none.
 pub const DEFAULT_WORKER_TEMPLATE: &str = "t-{slug}";
 
-/// What a worker name template draws on. A token whose fact is absent
-/// leaves the whole template unrendered, so the caller falls to its next
-/// naming source and never prints a half-filled name.
+/// What a worker name template draws on. A token with no fact leaves the
+/// template unrendered: the caller falls to its next name source.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WorkerFacts<'a> {
     pub node: Option<&'a str>,
