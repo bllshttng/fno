@@ -355,7 +355,7 @@ pub fn reset_epoch_from(body: &str, tz: Option<&str>, now: f64) -> Option<f64> {
     parse_reset_stamp(body, tz, now).0
 }
 
-/// The span of the window `body` NAMES ("usage limit reached for 5 hour"),
+/// The span of the window `body` NAMES (a "for 5 hour" clause),
 /// in seconds. The name is the offset-free half of a vendor message, so
 /// `now + span` is a bound that needs no timezone guess. `None` when no
 /// window is named or it exceeds the horizon.
