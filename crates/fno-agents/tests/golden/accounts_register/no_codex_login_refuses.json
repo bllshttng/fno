@@ -1,0 +1,1 @@
+{"args": ["cx", "-H", "codex"], "now": 1800000000.0, "expect": {"code": 1, "stdout": "", "stderr": "error: no current codex login to snapshot for 'cx' (sign in first, then register)\n", "global": null, "project": null, "store": {}}}

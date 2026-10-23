@@ -537,7 +537,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.06x | 34 | 32 | `cli/src/fno/graph/_intake.py:533` | `detect_project_from_settings` |
 | 1.06x | 17 | 16 | `cli/src/fno/graph/collision.py:238` | `_load_thresholds` |
 | 1.06x | 38 | 36 | `cli/src/fno/worktree.py:286` | `create` |
-| 1.05x | 63 | 60 | `cli/src/fno/adapters/providers/managed.py:1430` | `register_slot_snapshot` |
 | 1.05x | 22 | 21 | `cli/src/fno/agents/harnesses/claude.py:1858` | `mcp_channel_reachable` |
 | 1.04x | 25 | 24 | `cli/src/fno/graph/cli.py:6301` | `_cascade_close_parents` |
 | 1.04x | 25 | 24 | `cli/src/fno/relay/roundtrip.py:737` | `submit_via_control_reply` |

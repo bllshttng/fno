@@ -887,7 +887,7 @@ class _FakeProc:
 
 
 # ---------------------------------------------------------------------------
-# CLI surface (register / use / list)
+# CLI surface (use)
 # ---------------------------------------------------------------------------
 
 
@@ -919,59 +919,24 @@ class TestCliSurface:
         monkeypatch.setattr(managed, "switch", lambda *args, **kwargs: result)
         return runner.invoke(providers_app, ["use", "cx-a"], catch_exceptions=False)
 
-    def test_register_then_list_marks_active(self, tmp_path, monkeypatch):
+    def _invoke_managed_use(self, monkeypatch, tmp_path, pins=()):
+        """``use work-a`` over a store seeded with work-a and work-b, slot on work-b."""
         slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("A0")
-        r1 = runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        assert r1.exit_code == 0, r1.output
-        slot["claude"] = _blob("B0")
-        r2 = runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        assert r2.exit_code == 0, r2.output
-        rl = runner.invoke(providers_app, ["list"], env=env, catch_exceptions=False)
-        assert rl.exit_code == 0
-        active = [ln for ln in rl.output.splitlines() if "work-b" in ln]
-        assert active and active[0].lstrip().startswith("*")
-        assert "snapshot=" in active[0]
-
-    def test_register_refuses_a_duplicate_credential(self, tmp_path, monkeypatch):
-        """AC3-ERR: capturing the SAME login under a second id is refused.
-
-        This is the guard that would have surfaced the live store defect on the
-        day it was created rather than ten days later.
-        """
-        slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("shared-secret-token")
-        r1 = runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        assert r1.exit_code == 0, r1.output
-
-        # The operator never signed into the second account: the slot still holds
-        # work-a's credential.
-        r2 = runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        assert r2.exit_code != 0
-        assert "work-a" in r2.output and "work-b" in r2.output
-        assert "--config-dir" in r2.output
-        # No blob was written under the refused id.
-        assert not (tmp_path / ".fno" / "providers" / "work-b" / "blob").exists()
-        # No token or fragment reaches the receipt.
-        assert "shared-secret-token" not in r2.output
-
-    def test_register_no_login_errors(self, tmp_path, monkeypatch):
-        _cli_slot(monkeypatch)  # slot empty
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        r = runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        assert r.exit_code == 1
-        assert "no current" in r.output
+        monkeypatch.setattr(managed, "store_root", lambda: tmp_path)
+        by_id = _register_two(slot, tmp_path)
+        config = ProvidersConfig(records=list(by_id.values()), active="work-b")
+        for name in ("load_providers", "load_scope_config"):
+            monkeypatch.setattr(
+                f"fno.adapters.providers.cli.{name}", lambda *args, **kwargs: config
+            )
+        monkeypatch.setattr(
+            "fno.adapters.providers.cli.save_providers", lambda *args, **kwargs: None
+        )
+        monkeypatch.setattr(managed, "pinning_sessions", lambda config_dir=None: list(pins))
+        return slot, runner.invoke(providers_app, ["use", "work-a"], catch_exceptions=False)
 
     def test_use_managed_materializes(self, tmp_path, monkeypatch):
-        slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("A0")
-        runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        slot["claude"] = _blob("B0")
-        runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        r = runner.invoke(providers_app, ["use", "work-a"], env=env, catch_exceptions=False)
+        slot, r = self._invoke_managed_use(monkeypatch, tmp_path)
         assert r.exit_code == 0, r.output
         assert slot["claude"] == _blob("A0")
         assert "Materialized managed account 'work-a' into the slot (verified)." in r.output
@@ -1033,18 +998,10 @@ class TestCliSurface:
         assert "slot is in an indeterminate state" in response.output
 
     def test_use_managed_live_pin_proceeds_with_warning(self, tmp_path, monkeypatch):
-        slot = _cli_slot(monkeypatch)
-        env = {"HOME": str(tmp_path), "PWD": str(tmp_path)}
-        slot["claude"] = _blob("A0")
-        runner.invoke(providers_app, ["register", "work-a"], env=env, catch_exceptions=False)
-        slot["claude"] = _blob("B0")
-        runner.invoke(providers_app, ["register", "work-b"], env=env, catch_exceptions=False)
-        monkeypatch.setattr(
-            managed, "pinning_sessions",
-            lambda config_dir=None: [managed.PinningSession(99, "claude")],
+        _, r = self._invoke_managed_use(
+            monkeypatch, tmp_path, pins=[managed.PinningSession(99, "claude")]
         )
-        r = runner.invoke(providers_app, ["use", "work-a"], env=env, catch_exceptions=False)
-        assert r.exit_code == 0
+        assert r.exit_code == 0, r.output
         assert "Materialized managed account 'work-a'" in r.output
         assert "warning: swapped under 1 live claude session(s)" in r.output
 
@@ -1564,29 +1521,6 @@ class TestReconcileCommitsOnlyWhatItProved:
         assert not missing.exists()
 
 
-class TestForcedRebindNeverLeavesAStalePrincipal:
-    def test_a_failed_reprove_drops_the_previous_binding(self, fake_slot, tmp_path):
-        """Re-registering an id points it at whoever is signed in NOW, while
-        write_snapshot preserves the old principal for capture-before-overwrite.
-        If the reprove fails, keeping that binding would claim the new
-        credential belongs to the old account."""
-        record = _rec("work-a")
-        fake_slot["claude"] = _blob("A0")
-        managed.snapshot_current(record, root=tmp_path)
-        _bind("work-a", "acct-old", tmp_path)
-
-        # A different account is signed in now, and the profile call fails
-        # (the autouse fixture disables the network).
-        fake_slot["claude"] = _blob("SOMEONE_ELSE")
-        managed.snapshot_current(record, root=tmp_path)
-        assert managed.record_principal("work-a", tmp_path) is not None  # preserved
-        managed._clear_record_principal("work-a", tmp_path)
-
-        assert managed.record_principal("work-a", tmp_path) is None
-        # The rest of the metadata survives.
-        assert managed.read_meta("work-a", tmp_path)["harness"] == "claude"
-
-
 class TestTaintWriterIdentity:
     """A pid is not an identity. Pids get reused, and a recycled one wearing the
     number of a long-gone session would hold the repair open forever - a
@@ -1750,80 +1684,6 @@ class TestOrganizationScopedIdentity:
         ).outcome == "ambiguous-slot"
 
 
-class TestRegisterCapturesOneCredential:
-    """Proving one read and snapshotting another is how account A's identity
-    ends up bound to account B's credential."""
-
-    def test_the_proved_bytes_are_the_stored_bytes(self, tmp_path, monkeypatch):
-        """An ambient CLAUDE_CONFIG_DIR redirects `_read_slot_blob` but must not
-        reach the capture, which reads the canonical slot once."""
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("CANONICAL")]
-        )
-        monkeypatch.setattr(
-            managed, "_read_slot_blob",
-            lambda cli, config_dir=None: pytest.fail("re-read the slot after proving"),
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure is None and principal["account_uuid"] == "acct-a"
-        assert (adir / "blob").read_text() == _blob("CANONICAL")
-        assert managed.record_principal("work-a", tmp_path)["account_uuid"] == "acct-a"
-
-    def test_an_ambiguous_slot_writes_nothing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("A"), _blob("B")]
-        )
-        who = {_blob("A"): "acct-a", _blob("B"): "acct-b"}
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile(who[blob])), None),
-        )
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure == "ambiguous-slot" and principal is None
-        assert not (tmp_path / "work-a" / "blob").exists()
-
-    def test_an_unprovable_identity_still_registers_but_unbound(
-        self, tmp_path, monkeypatch
-    ):
-        """Registration must work offline; the record is then simply unbound and
-        `doctor` says so."""
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("OFFLINE")]
-        )
-        adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-        assert principal is None and failure == "profile-unavailable"
-        assert (adir / "blob").read_text() == _blob("OFFLINE")
-        assert managed.record_principal("work-a", tmp_path) is None
-
-    def test_it_serializes_against_a_switch(self, tmp_path, monkeypatch):
-        import filelock
-
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("X")]
-        )
-        held = filelock.FileLock(str(managed._switch_lock_path(tmp_path)), timeout=1)
-        held.acquire()
-        try:
-            with pytest.raises(managed.SwitchDeferred):
-                managed.register_slot_snapshot(_rec("work-a"), tmp_path, lock_timeout=0.2)
-        finally:
-            held.release()
-
-
 class TestReconcileProvesItsOwnCapture:
     def test_only_the_captured_bytes_are_ever_proven(
         self, fake_slot, tmp_path, monkeypatch
@@ -1885,185 +1745,6 @@ class TestReconcileProvesItsOwnCapture:
         assert proven == [_blob("B0")]  # proved once, over the capture
 
 
-class TestRegisterRejectsADuplicatePrincipal:
-    """`duplicate_credential_holder` compares TOKENS, which rotate. The same
-    account registered again after a rotation slips past it, creating two
-    records for one quota pool that reconciliation can then never tell apart."""
-
-    @staticmethod
-    def _arm(monkeypatch, uuid):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("ROTATED")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile(uuid)), None),
-        )
-
-    def test_a_rotated_token_for_a_known_principal_is_refused(
-        self, tmp_path, monkeypatch
-    ):
-        _bind("work-a", "acct-a", tmp_path)
-        self._arm(monkeypatch, "acct-a")
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a-again"), tmp_path
-        )
-
-        assert failure == "duplicate-principal:work-a" and principal is None
-        assert not (tmp_path / "work-a-again" / "blob").exists()
-
-    def test_a_new_principal_registers(self, tmp_path, monkeypatch):
-        _bind("work-a", "acct-a", tmp_path)
-        self._arm(monkeypatch, "acct-new")
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-b"), tmp_path
-        )
-
-        assert failure is None and principal["account_uuid"] == "acct-new"
-
-    def test_re_registering_the_same_id_is_not_a_duplicate(
-        self, tmp_path, monkeypatch
-    ):
-        _bind("work-a", "acct-a", tmp_path)
-        self._arm(monkeypatch, "acct-a")
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure is None and principal["account_uuid"] == "acct-a"
-
-    def test_the_active_stamp_is_written_inside_the_lock(
-        self, tmp_path, monkeypatch
-    ):
-        """Releasing first would let a concurrent switch install and stamp
-        another account before this stamp overwrote it."""
-        self._arm(monkeypatch, "acct-a")
-        stamped: list[str] = []
-        real_stamp = managed.stamp_active_slot
-
-        def _stamp(cli, record_id, root=None):
-            lock = managed._switch_lock_path(root)
-            assert lock.exists(), "stamped outside the switch lock"
-            stamped.append(record_id)
-            real_stamp(cli, record_id, root)
-
-        monkeypatch.setattr(managed, "stamp_active_slot", _stamp)
-        managed.register_slot_snapshot(_rec("work-a"), tmp_path)
-        assert stamped == ["work-a"]
-        assert managed.active_slot_id("claude", tmp_path) == "work-a"
-
-
-class TestRegisterCommitOrder:
-    @staticmethod
-    def _arm(monkeypatch, uuid="acct-a", blob_token="LIVE"):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob(blob_token)]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile(uuid)), None),
-        )
-
-    def test_a_failed_config_save_leaves_no_stamp(self, tmp_path, monkeypatch):
-        """Stamping an unconfigured orphan would make every configured shared
-        account unattributable behind it."""
-        self._arm(monkeypatch)
-
-        def _boom() -> None:
-            raise OSError("disk full")
-
-        with pytest.raises(OSError):
-            managed.register_slot_snapshot(_rec("work-a"), tmp_path, persist=_boom)
-
-        assert managed.active_slot_id("claude", tmp_path) is None
-
-    def test_persist_runs_inside_the_lock(self, tmp_path, monkeypatch):
-        """Releasing before the save would let a switch land between them."""
-        self._arm(monkeypatch)
-        seen: list[bool] = []
-
-        def _persist() -> None:
-            seen.append(managed._switch_lock_path(tmp_path).exists())
-
-        managed.register_slot_snapshot(_rec("work-a"), tmp_path, persist=_persist)
-        assert seen == [True]
-        assert managed.active_slot_id("claude", tmp_path) == "work-a"
-
-    def test_the_token_duplicate_check_runs_against_the_captured_blob(
-        self, fake_slot, tmp_path, monkeypatch
-    ):
-        """A check made outside the lock can be invalidated by a concurrent
-        switch, and with the profile endpoint down the principal check cannot
-        cover for it."""
-        fake_slot["claude"] = _blob("SHARED")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("SHARED")]
-        )
-        # Endpoint unavailable, so only the digest can catch this.
-        monkeypatch.setattr(
-            managed, "slot_principal", lambda blob: (None, "profile-unavailable")
-        )
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-b"), tmp_path
-        )
-
-        assert failure == "duplicate-credential:work-a" and principal is None
-        assert not (tmp_path / "work-b" / "blob").exists()
-        assert managed.active_slot_id("claude", tmp_path) is None
-
-
-class TestRegisterCommitSafety:
-    def test_a_login_during_the_profile_request_refuses(self, tmp_path, monkeypatch):
-        """The profile request is a network round trip; an out-of-band login
-        during it would otherwise stamp the account we proved while the slot
-        holds the one that replaced it."""
-        reads = {"n": 0}
-
-        def _blobs(cli):
-            reads["n"] += 1
-            return [_blob("A")] if reads["n"] == 1 else [_blob("B")]
-
-        monkeypatch.setattr(managed, "canonical_slot_blobs", _blobs)
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure == "slot-changed" and principal is None
-        assert not (tmp_path / "work-a" / "blob").exists()
-        assert managed.active_slot_id("claude", tmp_path) is None
-
-    def test_a_failed_save_leaves_no_store_residue(self, tmp_path, monkeypatch):
-        """Store residue from a failed registration is what a later attempt
-        reads as a duplicate credential and refuses."""
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("LIVE")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        def _boom() -> None:
-            raise OSError("disk full")
-
-        with pytest.raises(OSError):
-            managed.register_slot_snapshot(_rec("work-a"), tmp_path, persist=_boom)
-
-        assert not (tmp_path / "work-a" / "blob").exists()
-        assert managed.record_principal("work-a", tmp_path) is None
-        assert managed.active_slot_id("claude", tmp_path) is None
-
-
 class TestUnreadableSlotIsARefusal:
     def test_a_keychain_timeout_is_typed_not_raised(self, tmp_path, monkeypatch):
         """`security` can time out or be denied; an operator command must report
@@ -2099,110 +1780,10 @@ class TestUnreadableSlotIsARefusal:
         assert got.reason == "credential-unreadable"
 
 
-class TestRegisterPostWriteSlotMove:
-    def test_a_login_during_the_writes_taints_the_stamp(self, tmp_path, monkeypatch):
-        """The writes take time. An out-of-band login during them would leave an
-        UNTAINTED stamp naming this record while the slot holds someone else,
-        and the next switch would capture that credential into this snapshot."""
-        reads = {"n": 0}
-
-        def _blobs(cli):
-            reads["n"] += 1
-            # Reads 1 and 2 are the capture and its pre-commit re-check; the
-            # third is the post-write look, by which time someone has logged in.
-            return [_blob("A")] if reads["n"] <= 2 else [_blob("B")]
-
-        monkeypatch.setattr(managed, "canonical_slot_blobs", _blobs)
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        # Registered, but the stamp is explicitly not trusted.
-        assert failure == "slot-moved-after-write"
-        assert principal["account_uuid"] == "acct-a"
-        assert (adir / "blob").read_text() == _blob("A")
-        assert managed.active_slot_id("claude", tmp_path) == "work-a"
-        assert managed.slot_tainted("claude", tmp_path)
-
-    def test_a_stable_slot_leaves_the_stamp_trusted(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("A")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        _adir, _principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure is None
-        assert not managed.slot_tainted("claude", tmp_path)
-
-
 class TestProvisionalTaintSpansTheCommit:
     """A stamp exists but is unverified for the length of the commit. The taint
     has to cover that whole window, or a crash - or a Keychain read that fails
     at the end - leaves an unverified stamp fully trusted."""
-
-    def test_registration_taints_before_writing_and_clears_after(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("A")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-        tainted_when_stamped: list[bool] = []
-        real_stamp = managed.stamp_active_slot
-
-        def _stamp(cli, record_id, root=None):
-            tainted_when_stamped.append(managed.slot_tainted(cli, root))
-            real_stamp(cli, record_id, root)
-
-        monkeypatch.setattr(managed, "stamp_active_slot", _stamp)
-
-        _adir, _principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure is None
-        assert tainted_when_stamped == [True]  # covered while unverified
-        assert not managed.slot_tainted("claude", tmp_path)  # cleared once settled
-
-    def test_a_failed_final_read_leaves_the_stamp_untrusted(
-        self, tmp_path, monkeypatch
-    ):
-        """A look we could not take counts as unsettled, not as settled."""
-        reads = {"n": 0}
-
-        def _blobs(cli):
-            reads["n"] += 1
-            if reads["n"] >= 3:
-                raise managed.KeychainError("`security` timed out")
-            return [_blob("A")]
-
-        monkeypatch.setattr(managed, "canonical_slot_blobs", _blobs)
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        _adir, _principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure == "slot-moved-after-write"
-        assert managed.active_slot_id("claude", tmp_path) == "work-a"
-        assert managed.slot_tainted("claude", tmp_path)
 
     def test_an_untainted_drift_repair_is_tainted_while_it_commits(
         self, fake_slot, tmp_path, monkeypatch
@@ -2257,135 +1838,6 @@ class TestProvisionalTaintSpansTheCommit:
 
         assert result.outcome == "slot-changed"
         assert managed.slot_tainted("claude", tmp_path)
-
-
-class TestEveryCandidateMustProve:
-    """No candidate is set aside, whatever the reason it did not prove. A 401
-    rejects an ACCESS token while its refresh token may still be live, so claude
-    can refresh that account straight back into the slot it reads first."""
-
-    def test_an_unprovable_candidate_blocks_the_slot(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs",
-            lambda cli: [_blob("REJECTED"), _blob("LIVE")],
-        )
-
-        def _principal(blob):
-            if blob == _blob("REJECTED"):
-                return None, "credential-rejected"
-            return managed.principal_fingerprint(_profile("acct-live")), None
-
-        monkeypatch.setattr(managed, "slot_principal", _principal)
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure == "credential-rejected" and principal is None
-        # Registered unbound rather than bound to a slot we cannot vouch for.
-        assert (tmp_path / "work-a" / "blob").exists()
-
-    def test_one_candidate_that_proves_is_stored_and_bound(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("LIVE")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-live")), None),
-        )
-
-        adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure is None and principal["account_uuid"] == "acct-live"
-        assert (adir / "blob").read_text() == _blob("LIVE")
-
-    def test_a_codex_slot_registers_without_a_principal(self, tmp_path, monkeypatch):
-        """Only claude has a principal endpoint. Running a codex auth blob
-        through the claude parser reported it as a dead credential and refused a
-        registration that had already been written."""
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_codex_blob("cx")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: pytest.fail("resolved a claude principal for a codex slot"),
-        )
-
-        adir, principal, failure = managed.register_slot_snapshot(
-            _rec("cx-a", "codex"), tmp_path
-        )
-
-        assert failure is None and principal is None
-        assert adir is not None and (adir / "blob").read_text() == _codex_blob("cx")
-
-    def test_a_duplicate_is_caught_on_the_blob_that_will_be_stored(
-        self, fake_slot, tmp_path, monkeypatch
-    ):
-        fake_slot["claude"] = _blob("LIVE")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("LIVE")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-live")), None),
-        )
-
-        adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-b"), tmp_path
-        )
-
-        assert failure == "duplicate-credential:work-a" and principal is None
-        assert adir is None  # nothing written, reported structurally
-        assert not (tmp_path / "work-b" / "blob").exists()
-
-
-class TestRegisterRespectsALiveTaintWriter:
-    def test_a_live_writer_blocks_registration(self, tmp_path, monkeypatch):
-        """The provisional taint would otherwise discard the recorded writer,
-        and it can still overwrite the slot after the final read."""
-        import os
-
-        managed._set_slot_taint("claude", tmp_path, True, [os.getpid()])
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("LIVE")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure.startswith("slot-pinned:") and str(os.getpid()) in failure
-        assert principal is None
-        assert not (tmp_path / "work-a" / "blob").exists()
-        assert _pids(tmp_path) == (os.getpid(),)
-
-    def test_a_dead_writer_does_not_block(self, tmp_path, monkeypatch):
-        managed._set_slot_taint("claude", tmp_path, True, [999_999])
-        monkeypatch.setattr(managed.psutil, "pid_exists", lambda pid: False)
-        monkeypatch.setattr(managed, "_process_started_at", lambda pid: None)
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("LIVE")]
-        )
-        monkeypatch.setattr(
-            managed, "slot_principal",
-            lambda blob: (managed.principal_fingerprint(_profile("acct-a")), None),
-        )
-
-        _adir, principal, failure = managed.register_slot_snapshot(
-            _rec("work-a"), tmp_path
-        )
-
-        assert failure is None and principal["account_uuid"] == "acct-a"
-        assert not managed.slot_tainted("claude", tmp_path)
 
 
 class TestCredentialFileIsACandidate:

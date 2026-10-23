@@ -505,6 +505,23 @@ def test_build_pane_argv_codex_strip_drops_the_user_grant_too(tmp_path: Path) ->
     assert argv[-2:] == ["--", "seed text"]
 
 
+def _happy_on_path(monkeypatch, found: Optional[str]) -> None:
+    """Answer `shutil.which("happy")` with `found`; every other lookup stays real.
+
+    mux_spawn.shutil is the global module, so a patch that answered for every
+    binary would also answer the spawn gate's fno-agents lookup and become
+    github_cli's import-time `_WHICH` for every later test.
+    """
+    import fno.agents.mux_spawn as mux_spawn
+
+    real_which = mux_spawn.shutil.which
+    monkeypatch.setattr(
+        mux_spawn.shutil,
+        "which",
+        lambda b, *a, **k: found if b == "happy" else real_which(b, *a, **k),
+    )
+
+
 def _stub_harness_bin(monkeypatch, tmp_path: Path, name: str) -> Path:
     """A stub CLI binary on a tmp PATH under a name no roster knows."""
     bin_dir = tmp_path / "stub-bin"
@@ -1257,7 +1274,7 @@ def test_happy_pane_wrapped_argv_holds_the_union_invariant(monkeypatch) -> None:
     from fno.agents.account_env import SECRET_ROUTE_VARS
     import fno.agents.mux_spawn as mux_spawn
 
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     wrapped = _wrapped_happy_argv(_ROUTE)
 
     env1 = _env1_assignments(wrapped)
@@ -1310,7 +1327,7 @@ def test_explicit_happy_monitor_refuses_when_happy_is_absent_before_runner(
     from fno.agents.model_routing import resolve_explicit_route
 
     monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda binary: None)
+    _happy_on_path(monkeypatch, None)
     route = resolve_explicit_route("zai", "glm-5.2")
     assert route is not None
     runner = FakeRunner()
@@ -1420,7 +1437,7 @@ def _happy_spawn(monkeypatch, tmp_path, **kwargs):
     """
     import fno.agents.mux_spawn as mux_spawn
 
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     registration = kwargs.pop("registration", ("happy-proven-sid", ""))
     monkeypatch.setattr(
         mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: registration
@@ -1516,7 +1533,7 @@ def test_routed_claude_pane_launches_through_happy_when_enabled(
     import fno.agents.mux_spawn as mux_spawn
 
     monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     monkeypatch.setattr(
         mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: ("happy-sid", "")
     )
@@ -1587,7 +1604,7 @@ def test_happy_pane_failure_reaps_and_raises_not_silent(
     from fno.agents.registry import load_registry
 
     monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/usr/local/bin/happy")
+    _happy_on_path(monkeypatch, "/usr/local/bin/happy")
     monkeypatch.setattr(
         mux_spawn,
         "_await_pane_registration",
@@ -1673,7 +1690,7 @@ def test_ac3_passthrough_hits_the_happy_refusals(
 
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda _b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     route = resolve_explicit_route("zai", "glm-5.2")
     assert route is not None
     runner = FakeRunner()

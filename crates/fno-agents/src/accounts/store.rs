@@ -228,6 +228,34 @@ pub fn switch_lock_path(root: &Path) -> PathBuf {
     root.join(".switch.lock")
 }
 
+/// The switch mutex `managed.switch` holds: an exclusive flock on
+/// `<store>/.switch.lock`, polled until `timeout`.
+pub fn lock_switch(root: &Path, timeout: Duration) -> Option<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(switch_lock_path(root))
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: flock on a descriptor this function owns; dropping the
+        // returned file releases it.
+        if unsafe {
+            libc::flock(
+                std::os::fd::AsRawFd::as_raw_fd(&file),
+                libc::LOCK_EX | libc::LOCK_NB,
+            )
+        } == 0
+        {
+            return Some(file);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn write_private(path: &Path, content: &str) -> std::io::Result<()> {
     crate::claude_vault::atomic_write(path, content)
 }
