@@ -1424,6 +1424,17 @@ pub struct AgentRowReceipt {
     pub resumable: Option<bool>,
 }
 
+impl AgentRow {
+    /// The key a picked row sends to reach its portal: attach id, else
+    /// harness session id, else the name. Two live rows can share a name,
+    /// so a name is the last resort, never the first choice.
+    pub fn reach_key(&self) -> String {
+        (self.attach_id.clone())
+            .or_else(|| self.harness_session_id.clone())
+            .unwrap_or_else(|| self.name.clone())
+    }
+}
+
 /// (v11, x-dddd) One work-queue card for the sideline backlog lane, derived
 /// read-only from `~/.fno/graph.json` (backlog_view). The mux needs four fields
 /// per node, not the whole graph model; the FILE is the contract.

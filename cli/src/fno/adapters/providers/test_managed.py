@@ -9,7 +9,6 @@ Run: cd cli && uv run pytest src/fno/adapters/providers/test_managed.py -v
 from __future__ import annotations
 
 import json
-import stat
 import subprocess
 
 import pytest
@@ -102,92 +101,6 @@ def fake_slot(monkeypatch):
 # ---------------------------------------------------------------------------
 # US1: register / snapshot
 # ---------------------------------------------------------------------------
-
-
-class TestRegister:
-    def test_snapshot_creates_store_with_private_modes(self, fake_slot, tmp_path):
-        """AC1-HP: register captures the current login into a 700 dir / 600 blob."""
-        fake_slot["claude"] = _blob("A0")
-        adir = managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        assert adir == tmp_path / "work-a"
-        assert stat.S_IMODE(adir.stat().st_mode) == 0o700
-        blob_path = tmp_path / "work-a" / "blob"
-        assert blob_path.read_text() == _blob("A0")
-        assert stat.S_IMODE(blob_path.stat().st_mode) == 0o600
-        meta = managed.read_meta("work-a", root=tmp_path)
-        assert meta["harness"] == "claude" and meta["account_id"] == "work-a"
-
-    def test_snapshot_refuses_when_no_login(self, fake_slot, tmp_path):
-        """US1 boundary: never store an empty blob when there is no current login."""
-        fake_slot.pop("claude", None)
-        with pytest.raises(managed.ManagedStoreError):
-            managed.snapshot_current(_rec("work-a"), root=tmp_path)
-
-    def test_reregister_refreshes_snapshot(self, fake_slot, tmp_path):
-        """US1: registering again refreshes the stored blob (idempotent)."""
-        fake_slot["claude"] = _blob("A0")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        fake_slot["claude"] = _blob("A1")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        assert (tmp_path / "work-a" / "blob").read_text() == _blob("A1")
-
-
-class TestDuplicateCredential:
-    """The store must never describe one account as two (Evidence 2)."""
-
-    def test_finds_the_other_holder_of_the_same_credential(self, fake_slot, tmp_path):
-        fake_slot["claude"] = _blob("A0")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        assert (
-            managed.duplicate_credential_holder(
-                _blob("A0"), exclude_id="work-b", root=tmp_path
-            )
-            == "work-a"
-        )
-
-    def test_a_distinct_credential_is_not_a_duplicate(self, fake_slot, tmp_path):
-        fake_slot["claude"] = _blob("A0")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        assert (
-            managed.duplicate_credential_holder(
-                _blob("B0"), exclude_id="work-b", root=tmp_path
-            )
-            is None
-        )
-
-    def test_reregistering_the_same_id_is_not_a_duplicate(self, fake_slot, tmp_path):
-        # Refreshing one account's own snapshot must stay idempotent.
-        fake_slot["claude"] = _blob("A0")
-        managed.snapshot_current(_rec("work-a"), root=tmp_path)
-        assert (
-            managed.duplicate_credential_holder(
-                _blob("A0"), exclude_id="work-a", root=tmp_path
-            )
-            is None
-        )
-
-    def test_digest_is_not_the_secret(self):
-        # The comparison must never carry token material anywhere it could be
-        # logged, printed, or persisted.
-        digest = managed.credential_digest(_blob("super-secret-token"))
-        assert digest is not None
-        assert "super-secret-token" not in digest
-        assert len(digest) == 64
-
-    def test_codex_blobs_compare_by_whole_payload(self, tmp_path):
-        # A codex auth.json carries no claudeAiOauth.accessToken; identical
-        # payloads are still the same credential.
-        a = managed.credential_digest(_codex_blob("T0"))
-        assert a == managed.credential_digest(_codex_blob("T0"))
-        assert a != managed.credential_digest(_codex_blob("T1"))
-
-    def test_empty_blob_has_nothing_to_compare(self, tmp_path):
-        assert managed.credential_digest(None) is None
-        assert managed.credential_digest("   ") is None
-        assert (
-            managed.duplicate_credential_holder(None, exclude_id="x", root=tmp_path)
-            is None
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -476,16 +389,6 @@ class TestAtomicWrite:
         assert list(tmp_path.glob(".blob.*.tmp")) == []
 
 
-class TestLooksLikeClaude:
-    def test_whitespace_only_cmdline_part_no_indexerror(self):
-        # A whitespace-only arg used to crash on part.split()[0]; now safe.
-        assert managed._looks_like_claude(None, ["   ", ""]) is False
-
-    def test_matches_claude_binary(self):
-        assert managed._looks_like_claude("claude", []) is True
-        assert managed._looks_like_claude(None, ["/opt/homebrew/bin/claude --resume"]) is True
-
-
 # ---------------------------------------------------------------------------
 # Real file-backed slot (codex auth.json) - exercises the un-mocked backend
 # ---------------------------------------------------------------------------
@@ -506,143 +409,6 @@ def _register_codex_pair(tmp_path, monkeypatch):
 
 
 class TestCodexFileBackend:
-    @pytest.mark.parametrize(
-        "blob",
-        [
-            json.dumps({"OPENAI_API_KEY": "sk-test"}),
-            _codex_blob("token"),
-            json.dumps({"personal_access_token": "pat"}),
-            json.dumps({"auth_mode": "agentIdentity", "agent_identity": "header.payload.sig"}),
-            json.dumps(
-                {
-                    "auth_mode": "agentIdentity",
-                    "agent_identity": {
-                        "agent_runtime_id": "runtime",
-                        "agent_private_key": "private",
-                        "account_id": "account",
-                        "chatgpt_user_id": "user",
-                        "plan_type": "pro",
-                        "chatgpt_account_is_fedramp": False,
-                    }
-                }
-            ),
-            json.dumps({"bedrock_api_key": {"api_key": "key", "region": "us-east-1"}}),
-            json.dumps(
-                {
-                    "auth_mode": "chatgptAuthTokens",
-                    "tokens": {
-                        "access_token": "access",
-                        "refresh_token": "",
-                        "id_token": "header.payload.signature",
-                    },
-                }
-            ),
-            json.dumps(
-                {
-                    "OPENAI_API_KEY": None,
-                    "tokens": json.loads(_codex_blob("legacy"))["tokens"],
-                }
-            ),
-            json.dumps(
-                {
-                    "personal_access_token": None,
-                    "bedrock_api_key": {"api_key": "key", "region": "us-east-1"},
-                }
-            ),
-            json.dumps(
-                {
-                    "personal_access_token": None,
-                    "bedrock_api_key": None,
-                    "OPENAI_API_KEY": "sk-fallback",
-                }
-            ),
-        ],
-    )
-    def test_codex_auth_requires_supported_credential_material(self, blob):
-        assert managed._codex_auth_present(blob) is True
-
-    @pytest.mark.parametrize(
-        "blob",
-        [
-            "not-json",
-            "[]",
-            "{}",
-            json.dumps({"foo": "bar"}),
-            json.dumps({"OPENAI_API_KEY": " "}),
-            json.dumps({"tokens": {"access_token": "only"}}),
-            json.dumps({"agent_identity": "header.payload.signature"}),
-            json.dumps({"agent_identity": {"agent_runtime_id": "only"}}),
-            json.dumps({"bedrock_api_key": {"api_key": "only"}}),
-            json.dumps(
-                {
-                    "auth_mode": "chatgpt",
-                    "OPENAI_API_KEY": "sk-inactive",
-                    "tokens": None,
-                }
-            ),
-            json.dumps({"personal_access_token": "", "OPENAI_API_KEY": "sk-inactive"}),
-            json.dumps({"auth_mode": "headers", "tokens": json.loads(_codex_blob("token"))["tokens"]}),
-            json.dumps({"auth_mode": "unknown", "OPENAI_API_KEY": "sk-inactive"}),
-        ],
-    )
-    def test_codex_auth_rejects_malformed_or_tokenless_blobs(self, blob):
-        assert managed._codex_auth_present(blob) is False
-
-    def test_codex_login_status_uses_slot_home_and_exit_code(self, tmp_path, monkeypatch):
-        auth = tmp_path / ".codex" / "auth.json"
-        monkeypatch.setattr(managed, "_codex_slot_auth_path", lambda: auth)
-        for name in managed._CODEX_AUTH_ENV_VARS:
-            monkeypatch.setenv(name, "ambient-credential")
-        calls = []
-
-        def _run(argv, **kwargs):
-            calls.append((argv, kwargs))
-            return subprocess.CompletedProcess(argv, 0, stdout="Logged in", stderr="")
-
-        monkeypatch.setattr(managed.subprocess, "run", _run)
-        result = managed._codex_login_ok()
-
-        assert result.ok is True and result.reason is None
-        assert calls[0][0] == ["codex", "login", "status"]
-        assert calls[0][1]["env"]["CODEX_HOME"] == str(auth.parent)
-        assert all(name not in calls[0][1]["env"] for name in managed._CODEX_AUTH_ENV_VARS)
-        assert calls[0][1]["timeout"] == 5
-
-        monkeypatch.setattr(
-            managed.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1),
-        )
-        assert managed._codex_login_ok().ok is False
-
-    @pytest.mark.parametrize(
-        ("error", "reason"),
-        [
-            (FileNotFoundError("codex"), "codex-login-status-missing"),
-            (
-                subprocess.TimeoutExpired(cmd=["codex", "login", "status"], timeout=5),
-                "codex-login-status-timeout",
-            ),
-        ],
-    )
-    def test_codex_login_status_unavailable_degrades(self, monkeypatch, error, reason):
-        def _raise(*args, **kwargs):
-            raise error
-
-        monkeypatch.setattr(managed.subprocess, "run", _raise)
-        result = managed._codex_login_ok()
-        assert result.ok is None and result.reason == reason
-
-    def test_file_slot_round_trip(self, tmp_path, monkeypatch):
-        """The codex file backend reads/writes auth.json (0600) via the real
-        _read_slot_blob/_write_slot_blob path (not the fake-slot seam)."""
-        auth = tmp_path / ".codex" / "auth.json"
-        monkeypatch.setattr(managed, "_codex_slot_auth_path", lambda: auth)
-        assert managed._read_slot_blob("codex") is None  # no login yet
-        managed._write_slot_blob("codex", _codex_blob("cx"))
-        assert managed._read_slot_blob("codex") == _codex_blob("cx")
-        assert stat.S_IMODE(auth.stat().st_mode) == 0o600
-
     def test_codex_switch_captures_and_materializes(self, tmp_path, monkeypatch):
         a, b = _register_codex_pair(tmp_path, monkeypatch)
         # switch to A: captures B's current slot, materializes A0, verifies.
@@ -1118,77 +884,6 @@ class _FakeProc:
         if self._environ_raises:
             raise PermissionError("denied")
         return self._environ
-
-
-class TestLooksLikeCodex:
-    def test_matches_codex_binary(self):
-        assert managed._looks_like_codex("codex", []) is True
-        assert managed._looks_like_codex(None, ["/opt/homebrew/bin/codex exec"]) is True
-
-    def test_non_codex_is_false(self):
-        assert managed._looks_like_codex("claude", []) is False
-        assert managed._looks_like_codex(None, ["   ", ""]) is False
-
-    def test_codex_as_later_arg_does_not_match(self):
-        # 'codex' in a non-argv[0] position (grep target, commit message) must
-        # NOT match - else a random command spuriously defers a switch.
-        assert managed._looks_like_codex(None, ["grep", "codex"]) is False
-        assert managed._looks_like_codex(None, ["git", "commit", "-m", "codex fix"]) is False
-        assert managed._looks_like_codex(None, ["nano", "codex.json"]) is False
-
-    def test_matches_argv0_joined_or_split(self):
-        assert managed._looks_like_codex(None, ["/opt/homebrew/bin/codex", "exec"]) is True
-        assert managed._looks_like_codex(None, ["/opt/homebrew/bin/codex exec"]) is True
-
-
-class TestCodexPinningSessions:
-    def _iter(self, monkeypatch, proc):
-        monkeypatch.setattr(managed.psutil, "process_iter", lambda attrs=None: iter([proc]))
-
-    def test_codex_home_at_slot_pins(self, tmp_path, monkeypatch):
-        auth = tmp_path / ".codex" / "auth.json"
-        monkeypatch.setattr(managed, "_codex_slot_auth_path", lambda: auth)
-        self._iter(monkeypatch, _FakeProc(
-            4242, "codex", ["codex", "exec"], environ={"CODEX_HOME": str(tmp_path / ".codex")}
-        ))
-        assert [p.pid for p in managed.codex_pinning_sessions()] == [4242]
-
-    def test_codex_home_elsewhere_does_not_pin(self, tmp_path, monkeypatch):
-        auth = tmp_path / ".codex" / "auth.json"
-        monkeypatch.setattr(managed, "_codex_slot_auth_path", lambda: auth)
-        self._iter(monkeypatch, _FakeProc(
-            1, "codex", ["codex"], environ={"CODEX_HOME": str(tmp_path / "other")}
-        ))
-        assert managed.codex_pinning_sessions() == []
-
-    def test_unreadable_env_is_conservative_pin(self, tmp_path, monkeypatch):
-        auth = tmp_path / ".codex" / "auth.json"
-        monkeypatch.setattr(managed, "_codex_slot_auth_path", lambda: auth)
-        self._iter(monkeypatch, _FakeProc(7, "codex", ["codex"], environ_raises=True))
-        assert [p.pid for p in managed.codex_pinning_sessions()] == [7]
-
-    def test_non_codex_process_ignored(self, tmp_path, monkeypatch):
-        auth = tmp_path / ".codex" / "auth.json"
-        monkeypatch.setattr(managed, "_codex_slot_auth_path", lambda: auth)
-        self._iter(monkeypatch, _FakeProc(
-            9, "claude", ["claude"], environ={"CODEX_HOME": str(tmp_path / ".codex")}
-        ))
-        assert managed.codex_pinning_sessions() == []
-
-
-class TestPinningSessionsFor:
-    def test_dispatches_claude_and_codex(self, monkeypatch):
-        monkeypatch.setattr(managed, "pinning_sessions", lambda config_dir=None: ["C"])
-        monkeypatch.setattr(managed, "codex_pinning_sessions", lambda auth_path=None: ["X"])
-        assert managed.pinning_sessions_for("claude") == ["C"]
-        assert managed.pinning_sessions_for("codex") == ["X"]
-
-    def test_unsupported_cli_refuses_before_mutation(self):
-        # A cli with no managed matcher must fail loud with a receipt, not fall
-        # back to the claude scan (which would let the switch corrupt the claude
-        # slot via the downstream slot ops).
-        with pytest.raises(managed.ManagedStoreError, match="not supported for cli 'gemini'"):
-            managed.pinning_sessions_for("gemini")
 
 
 # ---------------------------------------------------------------------------
@@ -1908,18 +1603,6 @@ class TestTaintWriterIdentity:
             lambda blob: (managed.principal_fingerprint(_profile("acct-b")), None),
         )
         return by_id
-
-    def test_the_start_time_is_recorded_alongside_the_pid(
-        self, fake_slot, tmp_path, monkeypatch
-    ):
-        import os
-
-        self._arm(fake_slot, tmp_path, monkeypatch, [os.getpid()])
-        writers = managed.tainting_writers("claude", tmp_path)
-        assert writers is not None and writers[0][0] == os.getpid()
-        assert writers[0][1] == pytest.approx(
-            managed._process_started_at(os.getpid())
-        )
 
     def test_a_recycled_pid_does_not_hold_the_repair(
         self, fake_slot, tmp_path, monkeypatch

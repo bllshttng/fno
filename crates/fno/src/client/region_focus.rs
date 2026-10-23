@@ -50,6 +50,73 @@ impl View {
     }
 }
 
+/// Whether a modal that shows text holds the pointer: the provenance modal,
+/// the question page, the Messages session details.
+fn text_modal_open(view: &View) -> bool {
+    view.feed_detail.is_some()
+        || view.question_detail.is_some()
+        || view
+            .messages_board
+            .as_ref()
+            .is_some_and(|b| b.detail.is_some())
+}
+
+/// Route one report through the modal text selection. `None` means the
+/// selection took it; `Some` is the report the modal's own handler sees: the
+/// original, or the press a click-without-drag is replayed as, with the
+/// release queued behind it so no handler is left holding half a click.
+fn modal_selection(
+    view: &mut View,
+    rep: crate::mouse::MouseReport,
+    queue: &mut std::collections::VecDeque<crate::mouse::MouseReport>,
+) -> Option<crate::mouse::MouseReport> {
+    use crate::modal_select::{self, Press, Release};
+    if !text_modal_open(view) {
+        return Some(rep);
+    }
+    let (row, col) = (rep.row as usize, rep.col as usize);
+    match rep.kind {
+        MouseKind::Press(MouseButton::Left) => {
+            match modal_select::press(row, col, std::time::Instant::now()) {
+                Press::Pass => Some(rep),
+                Press::Armed => None,
+                Press::Word(text) => {
+                    feed_detail::copy_selection(view, text);
+                    None
+                }
+            }
+        }
+        MouseKind::Drag(MouseButton::Left) => {
+            if modal_select::drag(row, col) {
+                None
+            } else {
+                Some(rep)
+            }
+        }
+        MouseKind::Release(MouseButton::Left) => match modal_select::release() {
+            Release::Pass => Some(rep),
+            Release::Click(row, col) => {
+                queue.push_front(rep);
+                Some(crate::mouse::MouseReport {
+                    row: row as u16,
+                    col: col as u16,
+                    kind: MouseKind::Press(MouseButton::Left),
+                    ..rep
+                })
+            }
+            Release::Copy(text) => {
+                feed_detail::copy_selection(view, text);
+                None
+            }
+        },
+        MouseKind::WheelUp | MouseKind::WheelDown => {
+            modal_select::clear();
+            Some(rep)
+        }
+        _ => Some(rep),
+    }
+}
+
 /// The mouse pre-pass: reports route first (see the caller for the chunk
 /// split), and a left press against a visible region sets `region_owner`
 /// before the caller hands the chunk's remaining bytes to the key scanner,
@@ -60,7 +127,8 @@ pub(super) async fn mouse_pre_pass(
     reports: Vec<crate::mouse::MouseReport>,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
-    for rep in reports {
+    let mut reports: std::collections::VecDeque<crate::mouse::MouseReport> = reports.into();
+    while let Some(rep) = reports.pop_front() {
         // DIAGNOSTIC (header right-click toggle): log every mouse event one stdin
         // chunk produces, so a single operator right-click can be COUNTED. Inert
         // unless FNO_MUX_MOUSE_TRACE is set; drop once the event pair is read.
@@ -133,6 +201,12 @@ pub(super) async fn mouse_pre_pass(
         {
             view.link_hover.clear();
         }
+        // A modal's text is selectable: a drag selects, the release copies, a
+        // double-click takes the word. A press that never moves comes back
+        // here as the click it was.
+        let Some(rep) = modal_selection(view, rep, &mut reports) else {
+            continue;
+        };
         // The feed's provenance modal, the top surface, owns the pointer:
         // hover selects, a click runs the row's action, off-popup dismisses.
         if view.feed_detail.is_some() {

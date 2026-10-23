@@ -111,6 +111,8 @@ The user sometimes needs the machine: a live stream, a video edit. `fno agents i
 
 The daemon tick arms the same preset while OBS (`stream`), Final Cut Pro, Premiere Pro or DaVinci Resolve (`edit`) runs. The app is matched on its bundle path in argv[0], so a prompt that names the path is no app. The daemon's reserve lasts 30 minutes and renews while the app runs, so a stopped daemon cannot hold the machine for long. It lifts on the first tick after the app quits. It never replaces a reserve the user named. When a person clears it while the app runs, it stays cleared until that app starts again. `agents.reserve_auto = false` turns the arm off. Each change writes a `reserve_auto` event.
 
+The mux shows a standing hold without a command. The status row reads `fleet-stop.json` and names what holds, the reason, and the end time, for example `⏸ held: spawns,tests · OBS is running · until 23:40`. prefix+U and a `lift hold` row in the sideline menu clear a hold whose origin is `reserve`, `reserve_auto` or `machine_watch`, through `fno-agents fleet-incident clear --by mux`. A stop a person armed shows the clear command instead, because lifting it is that person's call. The settings modal toggles `agents.reserve_auto` in the config fno-agents reads. If a project config already sets the key, the toggle refuses and names that file.
+
 ## The machine band never gates
 
 The `machine` object is computed on every spawn's own footprint reading and rides that payload to every consumer, but it never decides a spawn. The fleet's attributed CPU share is the only CPU axis that gates. It reads the machine only through the attribution gap: a gap widens the share interval. With no gap, the machine's own cores reach no verdict at all.

@@ -104,8 +104,7 @@ jobs:
           # hard-fails if any is missing (a partial set never ships).
           cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
              "cli/src/fno/_bin/fno"
-          for b in fno-agents fno-agents-daemon fno-agents-worker \
-                   fno-gh-proxy fno-gh-loopcheck fno-gh-coverage; do
+          for b in fno-agents fno-agents-daemon fno-agents-worker; do
             cp "crates/fno-agents/target/${{ matrix.target.rust-target }}/release/${b}" \
                "cli/src/fno/_bin/${b}"
           done

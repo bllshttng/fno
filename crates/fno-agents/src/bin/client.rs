@@ -131,6 +131,10 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // First, so a proxied gh call pays no other arm; transport-only.
+    if let Some(code) = fno_agents::pr_status::adapter::gh_transport_door(&args) {
+        std::process::exit(code);
+    }
     if args.first().map(String::as_str) == Some("backlog") {
         std::process::exit(fno_agents::backlog::cli::run(&args[1..]));
     }

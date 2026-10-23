@@ -2101,13 +2101,12 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    // The family's one env seam outranks the sibling lookup: a staged fake
-    // must win over the real adapter the cargo build places beside this
-    // binary, exactly as it does for loop-check and review-coverage.
+    // The family's one env seam outranks the built-in adapter: a staged fake
+    // must win, exactly as it does for loop-check and review-coverage.
     let gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| crate::pr_status::quota::helper_bin("fno-gh-coverage"));
+        .unwrap_or_else(|| "fno-gh-coverage".to_string());
     let mut cmd = Command::new(gh_bin);
     cmd.args([
         "pr",

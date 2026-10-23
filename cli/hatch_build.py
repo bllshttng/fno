@@ -39,12 +39,6 @@ _BINARY_BASENAMES = (
     "fno-agents",
     "fno-agents-daemon",
     "fno-agents-worker",
-    # The gh transport trio, native since pr port 7: the Python modules they
-    # replaced are deleted, so the wheel's binary-complete-or-refuse hook now
-    # stages these from the same cargo output.
-    "fno-gh-proxy",
-    "fno-gh-loopcheck",
-    "fno-gh-coverage",
 )
 #: Windows appends .exe; os.name reflects the BUILD machine, which is the correct
 #: platform for the wheel being produced, so the hook probes the right names on

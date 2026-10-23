@@ -1295,8 +1295,8 @@ pub(crate) mod seams;
 #[cfg(test)]
 mod tests;
 pub(crate) mod wait;
-// The two the binaries exec through: fno-gh-loopcheck / fno-gh-coverage /
-// fno-gh-proxy, and the pr namespace dispatcher in client.rs's main.
+// The two client.rs's main execs through: the `gh` / `gh-adapter` transport
+// arms, and the pr namespace dispatcher.
 pub mod adapter;
 pub mod proxy;
 pub mod quota;

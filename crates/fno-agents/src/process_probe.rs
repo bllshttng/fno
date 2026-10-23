@@ -75,3 +75,32 @@ pub fn process_bsd(_pid: u32) -> Option<(u64, bool)> {
 pub fn process_start_time(pid: u32) -> Option<u64> {
     process_bsd(pid).map(|(start, _)| start)
 }
+
+/// A process's start as epoch seconds, the reading psutil's `create_time`
+/// gives, so it compares against start times Python wrote. This is its own
+/// field, not the [`process_start_time`] token: macOS's BSD start is already
+/// epoch microseconds, Linux's ticks since boot need the boot time added.
+#[cfg(target_os = "macos")]
+pub fn process_started_epoch(pid: u32) -> Option<f64> {
+    process_bsd(pid).map(|(micros, _)| micros as f64 / 1_000_000.0)
+}
+
+#[cfg(target_os = "linux")]
+pub fn process_started_epoch(pid: u32) -> Option<f64> {
+    let ticks = process_bsd(pid)?.0 as f64;
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    let btime = stat
+        .lines()
+        .find_map(|line| line.strip_prefix("btime "))?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    // SAFETY: sysconf reads a constant and has no preconditions.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    (hz > 0).then(|| btime + ticks / hz as f64)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_started_epoch(_pid: u32) -> Option<f64> {
+    None
+}

@@ -197,9 +197,12 @@ fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<backlog_style::BLine> {
     super::node_detail::backlog_md::md_lines(&question_page(d.item(), d, now), w)
 }
 
-/// The page's wrapped width: the framed pane's inner width at any terminal.
+/// The page's wrapped width: the framed pane's text width at any terminal.
+/// The frame spends two cells on side pad inside the body, and the body row
+/// clips whatever runs past that, so a line wrapped any wider loses its last
+/// two cells.
 fn page_width(cols: usize) -> usize {
-    cols.saturating_sub(chrome::Chrome::FRAME_COLS).max(10)
+    cols.saturating_sub(chrome::Chrome::FRAME_COLS + 2).max(10)
 }
 
 /// Draw the question page over the content viewport: one framed pane, the

@@ -649,6 +649,7 @@ pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<BLi
         roles: Vec::new(),
         default_role: BRole::Body,
         band: false,
+        join: crate::chrome::Join::Line,
     };
     for (i, part) in text.split(" \u{b7} ").enumerate() {
         if i > 0 {

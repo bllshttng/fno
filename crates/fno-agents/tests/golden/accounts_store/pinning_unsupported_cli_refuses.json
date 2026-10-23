@@ -1,0 +1,1 @@
+{"op": "pinning", "args": {"cli": "gemini"}, "now": 1800000000.0, "expect": {"result": null, "error": {"type": "ManagedStoreError", "message": "managed account switching is not supported for cli 'gemini' (only claude and codex have a managed credential slot)"}, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}
