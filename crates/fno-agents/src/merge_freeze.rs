@@ -8,8 +8,9 @@
 //! pr-watch merge arm and the finalize auto-merge arm. The pr-watch pre-check
 //! in Python asks the `freeze-check` op for its early skip.
 //!
-//! Only the user lifts a freeze: a live superuser-lane ruling (operator or
-//! chat_attested) at `merge-freeze:<repo>@<pin key>`. A team set with a new pin
+//! Only the user lifts a freeze: a live `operator` ruling at
+//! `merge-freeze:<repo>@<pin key>`. Any harness session can mint a
+//! `chat_attested` row, so that lane never lifts. A team set with a new pin
 //! over a lifted one re-arms the freeze, because the new pin has its own lift
 //! subject and no ruling there. A PR on the pin's PR list merges normally: the
 //! freeze scopes a release window, it is not a full stop. An unreadable record
@@ -219,15 +220,18 @@ fn read_record(store: &Store) -> Result<Option<Record>, String> {
     }))
 }
 
-/// A live superuser-lane row at `subject`.
+/// A live operator row at `subject`: the one row that lifts.
+fn is_operator_lift(row: &Value, subject: &str) -> bool {
+    decision_index::is_law(row)
+        && row.get("authority_source").and_then(Value::as_str) == Some("operator")
+        && row
+            .get("subject")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.eq_ignore_ascii_case(subject))
+}
+
 fn lift_row<'a>(index: &'a Index, subject: &str) -> Option<&'a Value> {
-    index.rows.iter().find(|row| {
-        decision_index::is_law(row)
-            && row
-                .get("subject")
-                .and_then(Value::as_str)
-                .is_some_and(|s| s.eq_ignore_ascii_case(subject))
-    })
+    index.rows.iter().find(|row| is_operator_lift(row, subject))
 }
 
 /// `Ok(true)` when the user lifted this record's pin.
@@ -267,7 +271,7 @@ fn verdict_for_in(store: &Store, pr: Option<u64>, repo: Option<&str>, laws: Laws
 fn lift_doors(lift: &str) -> String {
     format!(
         "only the user lifts it: `fno inbox decide '{lift}' 'lift' --authority operator` \
-         at a terminal, or `/fno:law` in chat with that subject"
+         at their own terminal; a chat-attested row does not lift it"
     )
 }
 
@@ -542,7 +546,7 @@ fn disarm_off_pin(gh: GhRun, repo: &str, pin_prs: &[u64]) -> (Vec<u64>, Vec<Stri
     (disarmed, failed)
 }
 
-/// Removes the record only on a live superuser ruling at its lift subject,
+/// Removes the record only on a live operator ruling at its lift subject,
 /// named by decision id. The lift itself already clears every gate read;
 /// this op only tidies the file.
 fn clear_in(store: &Store, payload: &Value, laws: Laws) -> String {
@@ -582,18 +586,13 @@ fn clear_in(store: &Store, payload: &Value, laws: Laws) -> String {
                 .and_then(Value::as_str)
                 .is_some_and(|id| id.eq_ignore_ascii_case(evidence))
     });
-    let lawful = row.is_some_and(|r| {
-        decision_index::is_law(r)
-            && r.get("subject")
-                .and_then(Value::as_str)
-                .is_some_and(|s| s.eq_ignore_ascii_case(&lift))
-    });
+    let lawful = row.is_some_and(|r| is_operator_lift(r, &lift));
     if !lawful {
         return receipt(
             "refused",
             3,
             format!(
-                "clear needs --evidence naming a live superuser ruling at {lift}, got \
+                "clear needs --evidence naming a live operator ruling at {lift}, got \
                  '{evidence}'; {}",
                 lift_doors(&lift)
             ),
@@ -698,7 +697,7 @@ mod tests {
             "{frozen:?}"
         );
 
-        // AC2: only a superuser row at this pin's subject lifts it.
+        // AC2: only an operator row at this pin's subject lifts it.
         let team = store(vec![row("d-1", &lift, "team")]);
         assert!(matches!(
             verdict_for_in(&home, Some(8), Some("o/r"), &team),
@@ -718,11 +717,12 @@ mod tests {
             verdict_for_in(&home, Some(8), Some("o/r"), &lifted),
             Verdict::Clear
         );
+        // Any harness session can mint a chat_attested row, so it holds.
         let chat = store(vec![row("d-4", &lift, "chat_attested")]);
-        assert_eq!(
+        assert!(matches!(
             verdict_for_in(&home, Some(8), Some("o/r"), &chat),
-            Verdict::Clear
-        );
+            Verdict::Frozen { .. }
+        ));
 
         // AC4: an unreadable store fails closed.
         let broken = || -> Result<Index, String> { Err("gone".to_string()) };
@@ -740,9 +740,17 @@ mod tests {
             &no_gh,
         );
         assert!(
-            free.contains("--authority operator") && free.contains("/fno:law"),
+            free.contains("--authority operator") && !free.contains("/fno:law"),
             "{free}"
         );
+        let by_chat = run_in(
+            &home,
+            "freeze-clear",
+            &json!({"evidence": "d-4"}),
+            &chat,
+            &no_gh,
+        );
+        assert!(by_chat.contains("\"refused\""), "{by_chat}");
         assert!(home.file.exists());
         let again = set(&home, SHA, &empty);
         assert!(
