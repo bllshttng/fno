@@ -35,33 +35,54 @@ fn build_slot_keys() -> Vec<String> {
     BUILD_SLOT_KEYS.iter().map(|k| k.to_string()).collect()
 }
 
-/// How many agent cargos may compile at once at this 1-minute load: 3 under
-/// 30, 2 up to 60, 1 up to 150, and none above, where only the user's cargo
-/// compiles. An unreadable load admits one, the old one-at-a-time door.
-/// `FNO_TEST_BUILD_SLOTS` pins the count so admission tests do not depend on
-/// the load of the machine that runs them.
-pub(crate) fn build_slot_cap(load: Option<f64>) -> usize {
+/// How many agent cargos may compile at once at this fleet CPU share,
+/// against the spawn gate's `agents.max_fleet_cpu_share` ceiling `c`: 3 at
+/// or under c/2, 2 up to c, 1 up to 1.5c, and none above, where only the
+/// user's cargo compiles. One signal for every door: a load average counts
+/// process churn and the user's own apps. An unreadable share admits one,
+/// the old one-at-a-time door. `FNO_TEST_BUILD_SLOTS` pins the count so
+/// admission tests do not depend on the machine that runs them.
+pub(crate) fn build_slot_cap(share: Option<f64>, ceiling: f64) -> usize {
     if let Some(pinned) = std::env::var("FNO_TEST_BUILD_SLOTS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
     {
         return pinned.min(BUILD_SLOT_KEYS.len());
     }
-    match load {
+    match share {
         None => 1,
-        Some(l) if l < 30.0 => 3,
-        Some(l) if l <= 60.0 => 2,
-        Some(l) if l <= 150.0 => 1,
+        Some(s) if s <= ceiling / 2.0 => 3,
+        Some(s) if s <= ceiling => 2,
+        Some(s) if s <= ceiling * 1.5 => 1,
         Some(_) => 0,
     }
 }
 
-/// What a waiter names when no cargo holds the slot it waits for: the load
-/// cap alone keeps it out.
-const NO_HOLDER: &str = "no holder; the load caps the compile slots";
+/// What a waiter names when no cargo holds the slot it waits for: the fleet
+/// share cap alone keeps it out.
+const NO_HOLDER: &str = "no holder; the fleet CPU share caps the compile slots";
+
+/// The fleet share from the persisted footprint answer the daemon tick and
+/// every spawn refresh. Never a live probe: each crate runs a fresh door,
+/// and a probe's measurement window per crate would be the burst it guards.
+pub(crate) fn cached_fleet_share() -> Option<f64> {
+    crate::footprint_cache::fresh_footprint_cache(crate::footprint_cache::FOOTPRINT_CACHE_FRESH)
+        .and_then(|raw| crate::spawn_gate::admission_of(&raw))
+        .and_then(|a| crate::spawn_gate::fleet_share(&a))
+}
+
+/// `(cap, share, ceiling)` for this machine right now.
+pub(crate) fn build_slot_reading() -> (usize, Option<f64>, f64) {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let ceiling = crate::agents_config::max_fleet_cpu_share(&cwd);
+    // A pinned count reads nothing from the machine.
+    let pinned = std::env::var_os("FNO_TEST_BUILD_SLOTS").is_some();
+    let share = if pinned { None } else { cached_fleet_share() };
+    (build_slot_cap(share, ceiling), share, ceiling)
+}
 
 fn build_slot_cap_now() -> usize {
-    build_slot_cap(crate::machine_sample::load_average().map(|(one, _, _)| one))
+    build_slot_reading().0
 }
 
 /// Whether `holder` holds a Live compile slot.
@@ -1078,6 +1099,67 @@ fn suite_wait_fields(
     fields
 }
 
+/// The local test slot keys: one per seat of `test.max_local_runs`.
+pub(crate) fn local_slot_keys(cwd: &Path) -> Vec<String> {
+    let cap = crate::agents_config::max_local_runs(cwd) as usize;
+    (0..cap).map(|i| format!("test:local-run:{i}")).collect()
+}
+
+const LOCAL_SLOTS_BUSY_LINE: &str = "[test slots] every local test slot is busy: commit, push with `fno do pr push`, and CI runs the tests. The slots are a try-lock, never a queue; a queue strands the turn (idle turn end, reap, lost node).";
+
+/// Take one local test slot for a direct-set run, or refuse at once. The
+/// pool is a try-lock, never a queue (the 2026-09-25 ruling bars waiting on
+/// a test door): a full pool answers with the CI route, the state an agent
+/// already parks on. The slot is keyed to this owner's pid, so it frees when
+/// the run ends however it ends. `Ok(None)` when the run takes no slot: the
+/// user's run, the install build, or a `test:priority` checkout.
+fn take_local_slot(
+    run_id: &str,
+    holder: &str,
+    root: Option<&Path>,
+    worktree: Option<&Path>,
+) -> Result<Option<String>, i32> {
+    if install_build() || !crate::spawn_gate_admission::gate_agent_origin() {
+        return Ok(None);
+    }
+    if let Some(w) = worktree {
+        if priority_lane(root).is_some_and(|p| p.worktree.as_path() == w) {
+            return Ok(None);
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let keys = local_slot_keys(&cwd);
+    for key in &keys {
+        let opts = crate::claims::AcquireOpts {
+            pid: Some(std::process::id()),
+            pid_provenance: Some(crate::claims::HOLDER_PROCESS.to_string()),
+            reason: Some("test-run local slot".to_string()),
+            root: root.map(PathBuf::from),
+            ..Default::default()
+        };
+        match crate::claims::acquire(key, holder, opts) {
+            crate::claims::AcquireOutcome::Acquired(_) => return Ok(Some(key.clone())),
+            crate::claims::AcquireOutcome::HeldByOther { .. } => {}
+            // A claim-store failure is breakage, not saturation: the run
+            // goes ahead with no slot, the fail-open every door keeps.
+            crate::claims::AcquireOutcome::Error(error) => {
+                emit(run_id, "local_slot_unavailable", &[("error", error)]);
+                return Ok(None);
+            }
+        }
+    }
+    emit(
+        run_id,
+        "suite_refused",
+        &[
+            ("reason", "local-slots-full".to_string()),
+            ("slots", keys.len().to_string()),
+        ],
+    );
+    eprintln!("{LOCAL_SLOTS_BUSY_LINE}");
+    Err(SLOT_BUSY)
+}
+
 fn acquire_suite_claim(
     run_id: &str,
     holder: &str,
@@ -1353,7 +1435,7 @@ fn run_build_admit(args: &[String]) -> i32 {
                 };
                 wait.poll_held(
                     rows,
-                    Some((build_slot_cap_now(), "compile slots at this load")),
+                    Some((build_slot_cap_now(), "compile slots at this fleet share")),
                     pos,
                     Some(&mut scan),
                     w,
@@ -1575,12 +1657,14 @@ pub(crate) fn cargo_slot_keys(worktree: &Path) -> Vec<String> {
 }
 
 /// Every claim key that marks a test run at this checkout: the suite door
-/// plus one run slot per cargo seat. `test:priority` is a lane marker, not
+/// plus one run slot per cargo seat and one local test slot per seat of
+/// `test.max_local_runs`. `test:priority` is a lane marker, not
 /// a run, so it stays out. One owner of the spellings, shared with the
 /// session-cost test feed.
 pub(crate) fn test_door_keys(worktree: &Path) -> Vec<String> {
     let mut keys = vec![SUITE_CLAIM_KEY.to_string()];
     keys.extend(cargo_slot_keys(worktree));
+    keys.extend(local_slot_keys(worktree));
     keys
 }
 
@@ -2524,6 +2608,26 @@ pub fn run_test_run(args: &[String]) -> i32 {
             return code;
         }
     }
+    // A direct-set run holds one local test slot. Cargo runs pass: their
+    // test binaries meet the run slots at the cargo doors.
+    let local_slot = if nested.is_none() && !whole && cargo_test_args_start(&opts.argv).is_none() {
+        match take_local_slot(
+            &run_id,
+            &holder,
+            claims_root.as_deref(),
+            worktree.as_deref(),
+        ) {
+            Ok(slot) => slot,
+            Err(code) => return code,
+        }
+    } else {
+        None
+    };
+    let release_local = || {
+        if let Some(key) = &local_slot {
+            let _ = crate::claims::release(key, &holder, claims_root.as_deref(), None);
+        }
+    };
     let admitted = Instant::now();
     let run_deadline = admitted + opts.timeout;
 
@@ -2544,6 +2648,7 @@ pub fn run_test_run(args: &[String]) -> i32 {
                 let _ =
                     crate::claims::release(SUITE_CLAIM_KEY, &holder, claims_root.as_deref(), None);
             }
+            release_local();
             return 2;
         }
     };
@@ -2623,6 +2728,7 @@ pub fn run_test_run(args: &[String]) -> i32 {
         let _ = crate::claims::release(SUITE_CLAIM_KEY, &holder, claims_root.as_deref(), None);
         emit(&run_id, "suite_released", &[]);
     }
+    release_local();
 
     let exit_code = match wait_result {
         Ok(code) => code,
@@ -2928,6 +3034,85 @@ mod tests {
             proc_row(101, 100, "/t/bin/rustc --crate-name a"),
         ];
         assert_eq!(holder_compiling(&rows, 100), Some(true));
+    }
+
+    /// The compile cap reads the spawn gate's fleet share against its
+    /// ceiling, from the payload the gate parses: an unreadable instrument
+    /// is no share, and no share admits one.
+    #[test]
+    fn compile_slots_follow_the_fleet_share_against_the_spawn_ceiling() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let pinned = std::env::var_os("FNO_TEST_BUILD_SLOTS");
+        std::env::remove_var("FNO_TEST_BUILD_SLOTS");
+        let share = |raw: &str| {
+            crate::spawn_gate::admission_of(raw).and_then(|a| crate::spawn_gate::fleet_share(&a))
+        };
+        let fleet = share(
+            r#"{"admission":{"verdict":"hold","axis":"fleet_cpu_share","reason":"r","share_low":0.6,"share_high":0.7}}"#,
+        );
+        assert_eq!(fleet, Some(0.7), "the upper bound decides");
+        let blind =
+            share(r#"{"admission":{"verdict":"refuse","axis":"cpu_instrument","reason":"r"}}"#);
+        assert_eq!(blind, None);
+        for (reading, want) in [
+            (None, 1),
+            (Some(0.25), 3),
+            (Some(0.5), 2),
+            (fleet, 1),
+            (Some(0.9), 0),
+        ] {
+            assert_eq!(build_slot_cap(reading, 0.5), want, "{reading:?}");
+        }
+        if let Some(v) = pinned {
+            std::env::set_var("FNO_TEST_BUILD_SLOTS", v);
+        }
+    }
+
+    /// The local pool is a try-lock: a free seat admits, a full pool refuses
+    /// at once with the CI route, and the user's own run takes no seat.
+    #[test]
+    fn a_full_local_test_pool_refuses_at_once_and_the_user_takes_no_slot() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("fno-localpool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("config.toml"), "[test]\nmax_local_runs = 1\n").unwrap();
+        let saved: Vec<_> = ["FNO_CONFIG", "FNO_AGENT_SELF", "CLAUDECODE"]
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect();
+        std::env::set_var("FNO_CONFIG", root.join("config.toml"));
+        std::env::remove_var("CLAUDECODE");
+        std::env::set_var("FNO_AGENT_SELF", "local-pool-test");
+        assert_eq!(
+            take_local_slot("r1", "test-run:a", Some(&root), None),
+            Ok(Some("test:local-run:0".to_string()))
+        );
+        let asked = Instant::now();
+        assert_eq!(
+            take_local_slot("r2", "test-run:b", Some(&root), None),
+            Err(SLOT_BUSY)
+        );
+        assert!(
+            asked.elapsed() < Duration::from_secs(5),
+            "a full pool never waits"
+        );
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert_eq!(
+            take_local_slot("r3", "test-run:c", Some(&root), None),
+            Ok(None)
+        );
+        for (key, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

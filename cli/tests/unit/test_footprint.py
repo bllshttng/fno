@@ -162,7 +162,8 @@ def test_ac8_hp_top_consumers_name_the_process_and_the_worktree() -> None:
 #: Measured 2026-09-07: the Claude Code background daemon's pre-warm pool
 #: under both spellings it uses. Neither is an fno process, so neither is
 #: fleet-attributable; they are counted only so a load refusal can name them.
-_BG_SPARE = "claude bg-spare --bg-spare /tmp/cc-daemon-501/608d3bdb/spare/235506db.claim.sock"
+#: An idle spare's claim socket exists; a claimed one's is gone.
+_BG_SPARE = "claude bg-spare --bg-spare {sock}"
 _BG_PTY_HOST = (
     "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/608d3bdb/spare/235506db.pty.sock 200 50"
 )
@@ -184,17 +185,25 @@ def test_is_claude_spare_pool_edge_a_prompt_naming_it_is_not_the_pool() -> None:
     assert not is_claude_spare_pool("cargo build --release")
 
 
-def test_ac_hp_spare_pool_rows_are_counted_but_never_fleet_attributed() -> None:
+def test_ac_hp_spare_pool_rows_are_counted_but_never_fleet_attributed(tmp_path) -> None:
     """A snapshot with pool rows yields a nonzero pool count, and those rows
     are not counted as fno-attributable fleet CPU (they are not fno processes
-    at all, so `parse_footprint` never attributed them either)."""
+    at all, so `parse_footprint` never attributed them either). A spare
+    whose claim socket is gone is a claimed session, not the pool."""
+    idle = tmp_path / "idle.claim.sock"
+    idle.touch()
     reading = parse_footprint(
         """\
         PID PPID ELAPSED %CPU RSS COMMAND
         100 1 01:00:00 20.0 1024 fno-agents-worker --run
         300 1 00:05:00 15.0 118784 {bg_spare}
         301 1 00:05:00 12.0 118784 {bg_pty_host}
-        """.format(bg_spare=_BG_SPARE, bg_pty_host=_BG_PTY_HOST),
+        302 1 00:05:00 30.0 118784 {claimed}
+        """.format(
+            bg_spare=_BG_SPARE.format(sock=idle),
+            bg_pty_host=_BG_PTY_HOST,
+            claimed=_BG_SPARE.format(sock=tmp_path / "gone.claim.sock"),
+        ),
     )
 
     assert reading.spare_pool_process_count == 2
@@ -204,15 +213,17 @@ def test_ac_hp_spare_pool_rows_are_counted_but_never_fleet_attributed() -> None:
     assert reading.process_count == 1
 
 
-def test_a_claimed_spare_that_a_live_session_owns_is_not_the_pool() -> None:
+def test_a_claimed_spare_that_a_live_session_owns_is_not_the_pool(tmp_path) -> None:
     """A claimed spare keeps its bg-spare argv while it runs a session."""
+    sock = tmp_path / "idle.claim.sock"
+    sock.touch()
     reading = parse_footprint(
         """\
         PID PPID ELAPSED %CPU RSS COMMAND
         300 1 00:05:00 15.0 118784 {bg_spare}
         301 1 00:05:00 12.0 118784 {bg_spare}
         302 300 00:05:00 10.0 118784 {bg_spare}
-        """.format(bg_spare=_BG_SPARE),
+        """.format(bg_spare=_BG_SPARE.format(sock=sock)),
         attributed_root_pids={300},
     )
 

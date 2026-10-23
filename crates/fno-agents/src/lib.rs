@@ -452,6 +452,7 @@ pub mod release_notes;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
+pub mod reserve;
 pub(crate) mod resolve_tier;
 pub mod restart_run;
 pub mod resume_args;
