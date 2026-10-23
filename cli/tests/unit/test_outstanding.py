@@ -79,8 +79,8 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
 
     # The provenance resolver is a native door now; its hermetic default here
-    # is the state the fixture's identity patch used to produce: a bare
-    # operator shell at a terminal, claiming no authority by silence. The
+    # is a resolved provenance that claims no authority, the shape a relayed
+    # name or a sub-operator origin produces at a terminal. The
     # listing read answers an empty law set, so the ask gate stays inert
     # unless a test stubs its own rows.
     def _door(payload):
@@ -756,9 +756,9 @@ def test_clear_with_answer_emits_operator_decision(root: Path):
 def test_clear_with_answer_records_operator_authority_when_stated_at_a_terminal(
     root: Path, monkeypatch
 ):
-    """The superuser lane stays reachable on this path; only the silent default
-    closed. An agent clearing a question on the operator's behalf must not be
-    indistinguishable from the operator answering it."""
+    """The superuser lane stays reachable on this path. An agent clearing a
+    question on the operator's behalf must not be indistinguishable from the
+    operator answering it."""
     def operator_at_a_terminal(payload):
         assert payload["mode"] == "resolve-provenance"
         return {
