@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::events::EventEmitter;
+use crate::hook::test_run_guard::basename;
 const COMMAND_CAP: usize = 400;
 pub(crate) struct Run<'a> {
     pub(crate) run_id: &'a str,
@@ -21,10 +22,6 @@ pub(crate) struct Run<'a> {
 fn events_path() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     crate::state_path::resolve("events", &cwd).unwrap_or_else(|| crate::paths::events_path(&cwd))
-}
-
-fn basename(tok: &str) -> &str {
-    tok.rsplit('/').next().unwrap_or(tok)
 }
 
 /// The grouping key for a command: the tool, its crate or selector when it
