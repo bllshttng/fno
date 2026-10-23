@@ -74,6 +74,9 @@ def _operator_shell_identity(monkeypatch):
 
     for name in AMBIENT_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
+    # A mux worker pane exports the claude theme; a bg_create test must not
+    # inherit a settings file from the shell that ran pytest.
+    monkeypatch.delenv("FNO_CLAUDE_THEME", raising=False)
 
 
 @pytest.fixture(autouse=True)
