@@ -1886,17 +1886,25 @@ def resolve_plugin_script(relpath: str) -> Path:
 
     Order: env hint (CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT / FNO_REPO_ROOT, authoritative) ->
     package-relative -> persisted ~/.fno/install/plugin-root pointer -> repo."""
+    hinted: "Path | None" = None
     for env_name in ("CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"):
         root = os.environ.get(env_name)
         if root:
-            base = Path(root).expanduser()
-            return base / relpath
+            candidate = Path(root).expanduser() / relpath
+            if candidate.exists():
+                return candidate
+            if hinted is None:
+                hinted = candidate
+    # A hint that names a root without this script (FNO_REPO_ROOT is the
+    # active project in a foreign repo) must not shadow the installed plugin.
     pkg_root = Path(__file__).resolve().parents[3]
-    if _is_plugin_root(pkg_root):
+    if _is_plugin_root(pkg_root) and ((pkg_root / relpath).exists() or hinted is None):
         return pkg_root / relpath
     persisted = _read_persisted_plugin_root()
     if persisted is not None and (persisted / relpath).exists():
         return persisted / relpath
+    if hinted is not None:
+        return hinted
     return resolve_repo_root() / relpath
 
 
