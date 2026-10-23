@@ -368,6 +368,14 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     let page = dir.join("shot.html");
     std::fs::write(&page, page_html(svg)).map_err(|e| format!("temp page: {e}"))?;
     let out_abs = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    // The png on disk is the success signal below, so an earlier shot at the
+    // same path would read as this one landing and pass off the stale image.
+    match std::fs::remove_file(&out_abs) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("{}: {e}", out_abs.display()));
+        }
+        _ => {}
+    }
     let mut cmd = std::process::Command::new(&chrome);
     // Chrome hangs on macOS under a HOME that is not the user's, and the demo
     // script sets one so paths read `~/...`. Hand it the passwd home back.
