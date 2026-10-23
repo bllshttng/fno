@@ -475,7 +475,8 @@ fn probe_claude(ctx: &Ctx<'_>, record: &Record, now: f64) -> Probed {
             ("anthropic-beta", "oauth-2025-04-20"),
             ("User-Agent", CLAUDE_USER_AGENT),
         ];
-        let Ok((status, body)) = get(ctx, &format!("{ANTHROPIC_API}/api/oauth/usage"), &headers) else {
+        let Ok((status, body)) = get(ctx, &format!("{ANTHROPIC_API}/api/oauth/usage"), &headers)
+        else {
             return (None, Some("probe-failed"));
         };
         if status == 401 || status == 403 {

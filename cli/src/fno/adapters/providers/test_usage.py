@@ -725,9 +725,14 @@ class TestRequiredBotHeadroomCheck:
         assert warnings[0]["bot"] == "chatgpt-codex-connector"
         assert warnings[0]["provider"] == "codex-pro"
         # AC3-HP: one decision event emitted naming bot + provider + reset.
-        from tests._event_rows import event_rows
+        # The src tree is its own pytest root, so `tests` is not importable here.
+        import importlib.util
 
-        rows = event_rows(tmp_path / ".fno" / "events.jsonl")
+        helper = Path(__file__).parents[4] / "tests" / "_event_rows.py"
+        spec = importlib.util.spec_from_file_location("_event_rows", helper)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        rows = mod.event_rows(tmp_path / ".fno" / "events.jsonl")
         ev = [r for r in rows if r["type"] == "quota_required_bot_exhausted"]
         assert len(ev) == 1
         assert ev[0]["data"]["bot"] == "chatgpt-codex-connector"
