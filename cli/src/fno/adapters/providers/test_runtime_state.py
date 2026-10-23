@@ -24,11 +24,9 @@ from fno.adapters.providers.runtime_state import (
     MAX_BACKOFF_MS,
     PROVIDER_HEALTH_TTL_SECONDS,
     ProviderHealth,
-    ProviderRuntimeState,
     _compute_exponential_cooldown_ms,
     HeadroomState,
     headroom,
-    is_in_cooldown,
     read_state,
     reset_provider_health,
     update_provider_health,
@@ -69,30 +67,6 @@ class TestComputeExponentialCooldown:
         # Defensive: if a caller passes 16 (shouldn't happen in practice)
         # we still cap; the function is pure so this is safe to test.
         assert _compute_exponential_cooldown_ms(20) == MAX_BACKOFF_MS
-
-
-class TestReadState:
-    """read_state returns ProviderRuntimeState; missing/empty is OK."""
-
-    def test_empty_when_file_missing(self, state_path: Path) -> None:
-        assert not state_path.exists()
-        state = read_state()
-        assert isinstance(state, ProviderRuntimeState)
-        assert state.provider_health == {}
-
-    def test_empty_when_file_zero_bytes(self, state_path: Path) -> None:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text("", encoding="utf-8")
-        state = read_state()
-        assert state.provider_health == {}
-
-    def test_empty_on_json_parse_error(self, state_path: Path) -> None:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text("not json {{{", encoding="utf-8")
-        state = read_state()
-        # Malformed JSON: log warning, treat as empty, do NOT delete.
-        assert state.provider_health == {}
-        assert state_path.exists()  # corrupt file preserved per Failure Modes
 
 
 class TestUpdateProviderHealth:
@@ -329,49 +303,6 @@ class TestDiskCleanupOnWrite:
         )
 
 
-class TestIsInCooldown:
-    """is_in_cooldown is a lock-free convenience read."""
-
-    def test_returns_false_for_unknown_provider(self, state_path: Path) -> None:
-        assert is_in_cooldown("X") is False
-
-    def test_returns_true_when_rate_limited_until_in_future(
-        self, state_path: Path
-    ) -> None:
-        rule = ErrorRule(text="rate limit", backoff=True)
-        update_provider_health("X", rule)
-        assert is_in_cooldown("X") is True
-
-    def test_returns_false_when_rate_limited_until_passed(
-        self, state_path: Path
-    ) -> None:
-        # Plant an entry whose rate_limited_until is already in the past.
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": 1,
-            "provider_health": {
-                "X": {
-                    "provider_id": "X",
-                    "backoff_level": 1,
-                    "rate_limited_until": time.time() - 5,  # 5s ago
-                    "last_error_at": time.time() - 10,
-                }
-            },
-        }
-        state_path.write_text(json.dumps(payload), encoding="utf-8")
-        assert is_in_cooldown("X") is False
-
-    def test_stale_future_lock_is_not_in_cooldown(self, state_path: Path) -> None:
-        now = time.time()
-        update_provider_health(
-            "X", ErrorRule(status=429, backoff=True),
-            now=now - PROVIDER_HEALTH_TTL_SECONDS - 1,
-            resets_at=now + 3600,
-        )
-
-        assert is_in_cooldown("X", now=now) is False
-
-
 def _race_worker(state_path_str: str) -> None:
     # Run inside a separate process - import module fresh and override
     # path via env var so the parent-process monkeypatch doesn't leak.
@@ -477,31 +408,6 @@ class TestProviderHealthValidation:
     def test_rejects_above_max_backoff_level(self) -> None:
         with pytest.raises(ValueError, match="backoff_level"):
             ProviderHealth(provider_id="X", backoff_level=MAX_BACKOFF_LEVEL + 1)
-
-
-class TestParsePayloadClamps:
-    """A corrupt or hand-edited backoff_level on disk is clamped, not crashed."""
-
-    def test_disk_value_above_max_is_clamped_on_read(
-        self, state_path: Path
-    ) -> None:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": 1,
-            "provider_health": {
-                "X": {
-                    "provider_id": "X",
-                    "backoff_level": 99,
-                    "rate_limited_until": None,
-                    "last_error_at": time.time() - 60,
-                }
-            },
-        }
-        state_path.write_text(json.dumps(payload), encoding="utf-8")
-
-        state = read_state()
-        # Clamped to MAX_BACKOFF_LEVEL, not dropped, not raised.
-        assert state.provider_health["X"].backoff_level == MAX_BACKOFF_LEVEL
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -642,72 +548,6 @@ class TestUpdateProviderHealthWithModel:
         # Sanity: both reflect the opus lock from the first write.
         assert "opus" in h1.model_locks
         assert "opus" in h2.model_locks
-
-
-class TestIsInCooldownWithModel:
-    """is_in_cooldown two-level lookup: model lock then provider lock."""
-
-    def test_ac3_1_opus_locked_sonnet_free(self, state_path: Path) -> None:
-        # AC3.1-HP: headline scenario. opus locked, sonnet free.
-        rule = ErrorRule(text="rate limit", backoff=True)
-        update_provider_health("X", rule, model="claude-opus-4-7")
-
-        assert not is_in_cooldown("X", "claude-sonnet-4-6")
-
-    def test_ac3_2_correct_model_locked(self, state_path: Path) -> None:
-        # AC3.2-HP: querying the actually-locked model returns True.
-        rule = ErrorRule(text="rate limit", backoff=True)
-        update_provider_health("X", rule, model="claude-opus-4-7")
-
-        assert is_in_cooldown("X", "claude-opus-4-7")
-
-    def test_ac3_3_provider_lock_no_model_arg(self, state_path: Path) -> None:
-        # AC3.3-EDGE: provider-level lock fires when no model is queried.
-        rule = ErrorRule(text="rate limit", backoff=True)
-        update_provider_health("X", rule)
-
-        assert is_in_cooldown("X")
-
-    def test_ac3_4_provider_lock_with_model_query(
-        self, state_path: Path
-    ) -> None:
-        # AC3.4-EDGE: provider-level lock catches even when a specific model is queried.
-        rule = ErrorRule(text="rate limit", backoff=True)
-        update_provider_health("X", rule)  # provider-level lock
-
-        assert is_in_cooldown("X", "claude-opus-4-7")
-
-    def test_ac3_5_no_health_record_returns_false(
-        self, state_path: Path
-    ) -> None:
-        # AC3.5-FR: nonexistent provider does not raise; returns False.
-        assert not is_in_cooldown("X", "any-model")
-
-    def test_expired_model_lock_returns_false(
-        self, state_path: Path
-    ) -> None:
-        # Lock in the past: not in cooldown.
-        rule = ErrorRule(text="rate limit", backoff=True)
-        # Force a past timestamp by passing now far in the past.
-        update_provider_health("X", rule, model="opus", now=time.time() - 3600)
-        # ProviderHealth's last_error_at is 1h ago; would normally TTL-stale.
-        # But model lock expiry is also 1h+ ago, so this check returns False
-        # regardless of staleness behavior.
-        assert not is_in_cooldown("X", "opus")
-
-    def test_model_lock_blocks_only_queried_model(
-        self, state_path: Path
-    ) -> None:
-        # Two model locks on same provider; querying neither -> False.
-        rule = ErrorRule(text="rate limit", backoff=True)
-        update_provider_health("X", rule, model="opus")
-        update_provider_health("X", rule, model="sonnet")
-
-        assert is_in_cooldown("X", "opus")
-        assert is_in_cooldown("X", "sonnet")
-        assert not is_in_cooldown("X", "haiku")
-        # Provider-level: False (rate_limited_until never set)
-        assert not is_in_cooldown("X")
 
 
 class TestModelLocksTTL:
@@ -1402,133 +1242,3 @@ class TestMachineWideStatePath:
         state = read_state()
         assert state.provider_health["acct"].backoff_level == 3  # newer wins
 
-
-class TestLockAuthoritativeHeadroom:
-    """The provider lock decides; the usage window only refines ok to low."""
-
-    def _write(self, path: Path, *, lock=None, usage=None) -> None:
-        payload: dict = {"schema_version": 2}
-        if lock is not None:
-            payload["provider_health"] = {
-                "acct": {"provider_id": "acct", "backoff_level": 1,
-                         "rate_limited_until": lock, "last_error_at": lock,
-                         "model_locks": {}},
-            }
-        if usage is not None:
-            probed, windows = usage
-            payload["usage"] = {
-                "acct": {"probed_at": probed, "source": "test", "windows": windows},
-            }
-        path.write_text(json.dumps(payload), encoding="utf-8")
-
-    def test_stale_window_beside_live_lock_verdict_comes_from_the_lock(self, state_path):
-        """AC18-EDGE: a 30-day-old 100% window is TTL-nulled; the live lock
-        decides EXHAUSTED and the stale window contributes nothing."""
-        now = time.time()
-        self._write(
-            state_path,
-            lock=now + 3600,
-            usage=(now - 30 * 86400,
-                   [{"label": "weekly", "used_pct": 100.0, "resets_at": now + 86400}]),
-        )
-        verdict = headroom("acct")
-        assert verdict.state is HeadroomState.EXHAUSTED
-        assert verdict.source == "lock"
-
-    def test_absent_window_routes_from_the_lock_alone(self, state_path):
-        """AC20-EDGE: no usage window on disk at all - the lock alone decides."""
-        now = time.time()
-        self._write(state_path, lock=now + 3600)
-        verdict = headroom("acct")
-        assert verdict.state is HeadroomState.EXHAUSTED
-        assert verdict.resets_at == pytest.approx(now + 3600)
-        assert verdict.source == "lock"
-
-    def test_a_fresh_fully_consumed_window_is_exhausted(self, state_path):
-        """A FRESH window at 100% is a positive marker a probe measured, so it
-        still reads EXHAUSTED and rotation failover keeps skipping the provider.
-        Only a STALE or ABSENT window contributes nothing; sub-100 windows only
-        refine ok to LOW."""
-        now = time.time()
-        self._write(state_path, usage=(now, [
-            {"label": "weekly", "used_pct": 100.0, "resets_at": now + 86400},
-        ]))
-        verdict = headroom("acct")
-        assert verdict.state is HeadroomState.EXHAUSTED
-        assert verdict.source == "window"
-        self._write(state_path, usage=(now, [
-            {"label": "weekly", "used_pct": 95.0, "resets_at": now + 86400},
-        ]))
-        verdict = headroom("acct")
-        assert verdict.state is HeadroomState.LOW
-
-    def test_absent_window_and_no_lock_is_unknown_not_ok(self, state_path):
-        now = time.time()
-        self._write(state_path, usage=(now, []))
-        verdict = headroom("acct")
-        assert verdict.state is HeadroomState.UNKNOWN
-
-    def test_ac1_hp_fresh_usage_beats_a_future_lock(self, state_path: Path) -> None:
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-        now = time.time()
-        update_provider_health(
-            "acct", ErrorRule(status=429, backoff=True), now=now,
-            resets_at=now + 9 * 3600,
-        )
-        write_usage_snapshot(
-            UsageSnapshot("acct", (UsageWindow("5h", 9.0, now + 3600),), now + 1, "probe"),
-            now=now + 1,
-        )
-        verdict = headroom("acct", now=now + 1)
-        assert verdict.state is HeadroomState.OK
-
-    def test_ac2_edge_ttl_drops_a_stale_entry_even_when_its_lock_is_future(
-        self, state_path: Path
-    ) -> None:
-        now = time.time()
-        old = now - PROVIDER_HEALTH_TTL_SECONDS - 1
-        update_provider_health(
-            "stale-acct", ErrorRule(status=429, backoff=True), now=old,
-            resets_at=now + 9 * 3600,
-        )
-        assert "stale-acct" not in read_state(now=now).provider_health
-        assert headroom("stale-acct", now=now).state is HeadroomState.UNKNOWN
-
-    def test_a_stale_window_is_unknown_never_exhausted(self, state_path):
-        """The 300s probe TTL already decays a stale 100% window: the verdict
-        is UNKNOWN with source=stale, never EXHAUSTED. Pinning this so a later
-        change cannot quietly remove the decay."""
-        now = time.time()
-        self._write(
-            state_path,
-            usage=(now - 30 * 86400,
-                   [{"label": "weekly", "used_pct": 100.0, "resets_at": now + 86400}]),
-        )
-        verdict = headroom("acct")
-        assert verdict.state is HeadroomState.UNKNOWN
-        assert verdict.source == "stale"
-        assert verdict.observed_at is None
-
-    def test_the_verdict_carries_when_its_evidence_was_observed(self, state_path):
-        """observed_at travels with the verdict: the lock's stamp on a lock
-        verdict, the probe time on a window verdict, None when nothing was
-        observed. Without it the age is computed and thrown away."""
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-
-        now = time.time()
-        update_provider_health(
-            "acct", ErrorRule(status=429, backoff=True), now=now,
-            resets_at=now + 3600,
-        )
-        verdict = headroom("acct", now=now)
-        assert verdict.source == "lock"
-        assert verdict.observed_at == pytest.approx(now)
-        write_usage_snapshot(
-            UsageSnapshot("acct", (UsageWindow("5h", 9.0, now + 3600),), now + 1, "probe"),
-            now=now + 1,
-        )
-        verdict = headroom("acct", now=now + 1)
-        assert verdict.source == "window"
-        assert verdict.observed_at == pytest.approx(now + 1)

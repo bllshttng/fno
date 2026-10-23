@@ -11,10 +11,8 @@
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-use crate::fallback_chain::{
-    headroom, health_from_map, parse_provider_health, parse_usage, snapshot_from_map, Snapshot,
-    Verdict,
-};
+use crate::accounts::state::{parse_health, parse_usage};
+use crate::fallback_chain::{headroom, Verdict};
 
 /// The harnesses the Python default named, plus every inventory row's harness.
 pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
@@ -24,29 +22,11 @@ pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "o
 /// at most once per call.
 pub(crate) const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The provider runtime-state payload: `$FNO_RUNTIME_STATE_PATH`, else the
-/// configured state root's `state/provider-runtime-state.json`, reading the
-/// legacy root spelling while it exists (the Python writer renames it on its
-/// first resolve). An unreadable file is an empty payload (unlocked),
-/// matching the Python reader's None arm.
+/// The provider runtime-state payload at `provider_cap::runtime_state_path`.
+/// An unreadable file is an empty payload (unlocked), matching the Python
+/// reader's None arm.
 pub(crate) fn runtime_state_payload(config_cwd: &Path) -> Value {
-    let path: PathBuf = match std::env::var_os("FNO_RUNTIME_STATE_PATH") {
-        Some(override_) => PathBuf::from(override_),
-        None => {
-            let root =
-                crate::agents_config::state_dir(config_cwd).unwrap_or_else(default_state_dir);
-            let new = root.join("state").join("provider-runtime-state.json");
-            let legacy = root.join("provider-runtime-state.json");
-            if !new.exists() && legacy.exists() {
-                legacy
-            } else {
-                new
-            }
-        }
-    };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+    crate::accounts::state::read_raw(&crate::provider_cap::runtime_state_path(config_cwd))
         .unwrap_or(Value::Null)
 }
 
@@ -187,7 +167,7 @@ pub(crate) fn capacity(
         }
     }
     let raw = runtime_state_payload(cwd);
-    let health = parse_provider_health(&raw);
+    let health = parse_health(&raw);
     let usage = parse_usage(&raw);
     let roots = providers_root(cwd);
     let mut out = Map::new();
@@ -205,7 +185,7 @@ pub(crate) fn capacity(
                 match refreshed.and_then(|m| m.get(account)) {
                     // The in-memory observation wins over the disk read.
                     Some(row) if row.get("windows").is_some() => {
-                        let snap = Snapshot::from_refresh_row(row);
+                        let snap = crate::accounts::state::parse_snapshot(row);
                         let hv = headroom(None, snap.as_ref(), now);
                         (
                             word(hv.verdict).to_string(),
@@ -229,11 +209,7 @@ pub(crate) fn capacity(
                         )
                     }
                     None => {
-                        let hv = headroom(
-                            health_from_map(health.get(account)).as_ref(),
-                            snapshot_from_map(usage.get(account)).as_ref(),
-                            now,
-                        );
+                        let hv = headroom(health.get(account), usage.get(account), now);
                         (
                             word(hv.verdict).to_string(),
                             hv.source.to_string(),

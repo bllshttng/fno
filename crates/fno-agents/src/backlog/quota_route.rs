@@ -138,201 +138,14 @@ pub struct AutonomousRoute {
     pub defer_fallback: bool,
 }
 
-/// One usage window read off the persisted snapshot.
-struct UsageWindow {
-    used_pct: f64,
-    resets_at: Option<f64>,
-}
-
-struct UsageSnapshot {
-    windows: Vec<UsageWindow>,
-    probed_at: f64,
-    partial: bool,
-}
-
-fn clamp_pct(v: f64) -> f64 {
-    v.clamp(0.0, 100.0)
-}
-
-/// The persisted runtime state: usage snapshots plus the provider locks,
-/// machine-wide (the file both languages answer).
-fn read_state_payload(node_cwd: Option<&str>) -> Option<Value> {
-    let cwd = node_cwd.map(Path::new).unwrap_or(Path::new("."));
-    let path = crate::provider_cap::runtime_state_path(cwd);
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-/// The cached usage snapshot for `provider_id`, or None when absent or older
-/// than the TTL (treated as absent: the snapshot only makes dispatch smarter,
-/// never gates it).
-fn read_usage(
-    provider_id: &str,
-    ttl_seconds: f64,
-    now: f64,
-    node_cwd: Option<&str>,
-) -> Option<UsageSnapshot> {
-    let raw = read_state_payload(node_cwd)?;
-    let entry = raw.get("usage")?.get(provider_id)?.as_object()?;
-    let raw_windows = entry.get("windows")?.as_array()?;
-    let mut windows = Vec::new();
-    for w in raw_windows {
-        let obj = w.as_object()?;
-        let used_pct = clamp_pct(obj.get("used_pct")?.as_f64()?);
-        let resets_at = match obj.get("resets_at") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_f64()?),
-        };
-        windows.push(UsageWindow {
-            used_pct,
-            resets_at,
-        });
-    }
-    let probed_at = entry.get("probed_at")?.as_f64()?;
-    if probed_at < now - ttl_seconds {
-        return None;
-    }
-    let partial = entry
-        .get("partial")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Some(UsageSnapshot {
-        windows,
-        probed_at,
-        partial,
-    })
-}
-
-/// The provider-level lock: `health.<id>.rate_limited_until`, plus the
-/// `last_error_at` that dates it.
-fn read_lock(provider_id: &str, node_cwd: Option<&str>) -> (Option<f64>, Option<f64>) {
-    let Some(raw) = read_state_payload(node_cwd) else {
-        return (None, None);
-    };
-    let Some(health) = raw
-        .get("health")
-        .and_then(|h| h.get(provider_id))
-        .and_then(Value::as_object)
-    else {
-        return (None, None);
-    };
-    let rlu = match health.get("rate_limited_until") {
-        None | Some(Value::Null) => None,
-        Some(v) => v.as_f64(),
-    };
-    let last_error_at = match health.get("last_error_at") {
-        None | Some(Value::Null) => None,
-        Some(v) => v.as_f64(),
-    };
-    (rlu, last_error_at)
-}
-
-struct Headroom {
-    state: HeadroomState,
-    resets_at: Option<f64>,
-}
-
-/// The headroom verdict from a snapshot and a lock. Fresh usage is the
-/// strongest account evidence; the lock is the fallback when no fresh usable
-/// usage window exists. A window whose reset is already past never binds.
-fn headroom_from(
-    snap: Option<&UsageSnapshot>,
-    rlu: Option<f64>,
-    lock_at: Option<f64>,
-    now: f64,
-    threshold_pct: f64,
-) -> Headroom {
-    if rlu.is_some() && lock_at.is_some() {
-        if let Some(snap) = snap {
-            if snap.probed_at <= lock_at.unwrap_or(f64::INFINITY) {
-                // A death recorded after the probe is the newer fact; the
-                // window cannot speak for it. The lock decides until a newer
-                // probe replaces it.
-                return Headroom {
-                    state: HeadroomState::Exhausted,
-                    resets_at: rlu,
-                };
-            }
-        }
-    }
-    let Some(snap) = snap else {
-        if rlu.is_some() {
-            return Headroom {
-                state: HeadroomState::Exhausted,
-                resets_at: rlu,
-            };
-        }
-        return Headroom {
-            state: HeadroomState::Unknown,
-            resets_at: None,
-        };
-    };
-    let binding: Vec<&UsageWindow> = snap
-        .windows
-        .iter()
-        .filter(|w| w.resets_at.map_or(true, |r| r > now))
-        .collect();
-    let exhausted: Vec<&&UsageWindow> = binding.iter().filter(|w| w.used_pct >= 100.0).collect();
-    if !snap.windows.is_empty() {
-        if !exhausted.is_empty() {
-            let resets: Vec<Option<f64>> = exhausted.iter().map(|w| w.resets_at).collect();
-            return Headroom {
-                state: HeadroomState::Exhausted,
-                resets_at: resets
-                    .into_iter()
-                    .flatten()
-                    .fold(None, |acc: Option<f64>, r| {
-                        Some(acc.map_or(r, |a| a.min(r)))
-                    }),
-            };
-        }
-        if snap.partial {
-            // A partial response has a missing window, so never answer OK
-            // from it; the reset is the soonest one actually observed.
-            let soonest: Vec<Option<f64>> = binding.iter().map(|w| w.resets_at).collect();
-            return Headroom {
-                state: HeadroomState::Low,
-                resets_at: soonest
-                    .into_iter()
-                    .flatten()
-                    .fold(None, |acc: Option<f64>, r| {
-                        Some(acc.map_or(r, |a| a.min(r)))
-                    }),
-            };
-        }
-        if binding.is_empty() {
-            return Headroom {
-                state: HeadroomState::Ok,
-                resets_at: None,
-            };
-        }
-        if let Some(worst) = binding.iter().max_by(|a, b| {
-            a.used_pct
-                .partial_cmp(&b.used_pct)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            if worst.used_pct >= threshold_pct {
-                return Headroom {
-                    state: HeadroomState::Low,
-                    resets_at: worst.resets_at,
-                };
-            }
-        }
-        return Headroom {
-            state: HeadroomState::Ok,
-            resets_at: None,
-        };
-    }
-    if rlu.is_some() {
-        return Headroom {
-            state: HeadroomState::Exhausted,
-            resets_at: rlu,
-        };
-    }
-    // A snapshot that reported no windows is not evidence of headroom.
-    Headroom {
-        state: HeadroomState::Unknown,
-        resets_at: None,
+/// The verdict word the route speaks, from the one headroom verdict.
+fn state_of(v: crate::fallback_chain::Verdict) -> HeadroomState {
+    use crate::fallback_chain::Verdict;
+    match v {
+        Verdict::Ok => HeadroomState::Ok,
+        Verdict::Low => HeadroomState::Low,
+        Verdict::Exhausted => HeadroomState::Exhausted,
+        Verdict::Unknown => HeadroomState::Unknown,
     }
 }
 
@@ -376,8 +189,10 @@ pub fn evaluate_quota_signal(
     }
     // Probe-on-stale is the Python leg: a stale snapshot reads as absent
     // here, and absent is UNKNOWN - which proceeds.
-    let snap = read_usage(provider_id, quota.probe_ttl_seconds, now, node_cwd);
-    let Some(snap) = snap else {
+    use crate::accounts::state;
+    let path = crate::provider_cap::runtime_state_path(node_cwd.map_or(Path::new("."), Path::new));
+    let ttl = quota.probe_ttl_seconds;
+    let Some(snap) = state::read_usage(&path, provider_id, ttl, now) else {
         return signal(
             HeadroomState::Unknown,
             None,
@@ -386,24 +201,25 @@ pub fn evaluate_quota_signal(
             "probe-unavailable-native",
         );
     };
-    let (rlu, _lock_at) = read_lock(provider_id, node_cwd);
-    let mut h = headroom_from(Some(&snap), rlu, _lock_at, now, quota.defer_threshold_pct);
-    if h.state == HeadroomState::Unknown && !snap.windows.is_empty() {
+    let threshold = quota.defer_threshold_pct;
+    let mut hv = state::headroom(&path, provider_id, now, ttl, threshold);
+    if hv.verdict == crate::fallback_chain::Verdict::Unknown && !snap.windows.is_empty() {
         // The probe SAW the provider but the read-back did not bind: trust
         // the in-hand observation over the disk that failed to keep it.
-        h = headroom_from(Some(&snap), None, None, now, quota.defer_threshold_pct);
+        hv = crate::fallback_chain::headroom_at(None, Some(&snap), now, ttl, threshold);
     }
+    let (h_state, h_resets) = (state_of(hv.verdict), hv.resets_at);
     if !quota.defer_dispatch {
         // Observation-only: neither verdict fires.
-        return signal(h.state, h.resets_at, false, false, "observed");
+        return signal(h_state, h_resets, false, false, "observed");
     }
     let defer;
     let cutover;
-    if h.state == HeadroomState::Exhausted {
+    if h_state == HeadroomState::Exhausted {
         defer = true;
         cutover = true;
-    } else if h.state == HeadroomState::Low {
-        if let Some(resets_at) = h.resets_at {
+    } else if h_state == HeadroomState::Low {
+        if let Some(resets_at) = h_resets {
             let horizon = quota.defer_horizon_minutes * 60.0;
             defer = horizon > 0.0 && resets_at <= now + horizon;
             let after = cutover_low_after_minutes * 60.0;
@@ -416,7 +232,7 @@ pub fn evaluate_quota_signal(
         defer = false;
         cutover = false;
     }
-    signal(h.state, h.resets_at, defer, cutover, "probed")
+    signal(h_state, h_resets, defer, cutover, "probed")
 }
 
 /// Whether any explicit launch intent pins the route: a provider or model

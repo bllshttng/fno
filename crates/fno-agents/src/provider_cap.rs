@@ -417,51 +417,39 @@ pub fn reset_epoch_from_excerpt(text: &str, tz: Option<&str>, now: i64) -> Optio
     (epoch <= now as f64 + MAX_RESET_HORIZON_S).then_some(epoch as i64)
 }
 
-/// Pure core of the runtime-state resolution so tests never race process env.
-fn runtime_state_path_from(
-    env_path: Option<&std::ffi::OsStr>,
-    state_dir: Option<PathBuf>,
-    home: Option<&std::ffi::OsStr>,
-) -> PathBuf {
-    if let Some(v) = env_path {
-        return PathBuf::from(v);
-    }
-    if let Some(dir) = state_dir {
-        if dir.is_absolute() {
-            return dir.join("provider-runtime-state.json");
-        }
-    }
-    PathBuf::from(home.unwrap_or_else(|| std::ffi::OsStr::new(".")))
-        .join(".fno")
-        .join("provider-runtime-state.json")
-}
-
-/// Where the quota lock lives. Ports Python's `paths.runtime_state_json()`
-/// (paths.py:1108): `FNO_RUNTIME_STATE_PATH` when set; else the configured
-/// `state_dir` when its RAW value is absolute (a relative one falls back to
-/// `$HOME/.fno` in Python, never the cwd); else `$HOME/.fno`. Before
-/// this defaulted to `runtime-state.json`, a file nobody writes, so every
-/// reset read as unknown. The non-override answers run through
-/// [`migrate_runtime_state_to_state_dir`], the same move ladder Python's
-/// `paths.state_runtime_file` runs, so both languages answer one file.
+/// Where the quota lock lives. Ports Python's `paths.runtime_state_json()`:
+/// `FNO_RUNTIME_STATE_PATH` when set; else `FNO_STATE_DIR`; else the
+/// configured `state_dir` when its RAW value is absolute (a relative one
+/// falls back to `$HOME/.fno` in Python, never the cwd); else `$HOME/.fno`.
+/// The non-override answers run through [`migrate_runtime_state_to_state_dir`],
+/// the same move ladder Python's `paths.state_runtime_file` runs, so both
+/// languages answer one file.
 pub fn runtime_state_path(cwd: &Path) -> PathBuf {
     // The env override names one explicit file: the ladder must never rename
     // or relocate a caller-pinned path, so it is answered verbatim.
     if let Some(v) = std::env::var_os("FNO_RUNTIME_STATE_PATH") {
         return PathBuf::from(v);
     }
-    let raw = crate::agents_config::config_lookup(cwd, &["state_dir"])
-        .and_then(|v| v.as_str().map(str::to_string));
-    let dir = raw.map(|raw| match raw.strip_prefix("~/") {
-        Some(rest) => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest)),
-        None => Some(PathBuf::from(&raw)),
-    });
-    let base = runtime_state_path_from(
-        None,
-        dir.flatten().filter(|d| d.is_absolute()),
-        std::env::var_os("HOME").as_deref(),
-    );
-    migrate_runtime_state_to_state_dir(&base)
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    let expand = |raw: &str| match raw.strip_prefix("~/") {
+        Some(rest) => home().map(|h| h.join(rest)),
+        None => Some(PathBuf::from(raw)),
+    };
+    let dir = match std::env::var("FNO_STATE_DIR")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        // Python resolves the carrier against the process cwd, so a relative
+        // one still names a root rather than falling back to ~/.fno.
+        Some(root) => expand(&root).and_then(|d| std::env::current_dir().ok().map(|c| c.join(d))),
+        None => crate::agents_config::config_lookup(cwd, &["state_dir"])
+            .and_then(|v| v.as_str().map(str::to_string))
+            .and_then(|raw| expand(&raw)),
+    };
+    let root = dir
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| home().unwrap_or_else(|| PathBuf::from(".")).join(".fno"));
+    migrate_runtime_state_to_state_dir(&root.join("provider-runtime-state.json"))
 }
 
 /// The `state/` spelling of a state-root runtime file: rename the legacy

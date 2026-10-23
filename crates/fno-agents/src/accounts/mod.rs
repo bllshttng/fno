@@ -2,10 +2,11 @@
 //! their validation ([records]), the managed slot stamp ([slot]), the proven
 //! identity behind a launch's credential ([binding]), the staged dir layout
 //! ([staging]), the launch env ([env]), the managed store with its shared
-//! credential slot ([store]), the provider error taxonomy ([error_class])
-//! and the config write ([writer]). Ported from `fno.adapters.providers`
-//! (model.py, loader.py, binding.py, staging.py, dispatch.py,
-//! error_taxonomy.py and managed.py's store layer) and
+//! credential slot ([store]), the provider error taxonomy ([error_class]),
+//! the runtime-state read side ([state]) and the config write ([writer]).
+//! Ported from `fno.adapters.providers` (model.py, loader.py, binding.py,
+//! staging.py, dispatch.py, error_taxonomy.py, the read side of
+//! runtime_state.py and managed.py's store layer) and
 //! `account_env.resolve_account_overlay`; the parity cases live in
 //! `tests/accounts_*_parity.rs`.
 //!
@@ -21,6 +22,7 @@ pub mod records;
 pub mod show;
 pub mod slot;
 pub mod staging;
+pub mod state;
 pub mod store;
 pub mod writer;
 
