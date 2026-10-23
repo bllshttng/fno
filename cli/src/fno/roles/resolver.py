@@ -25,7 +25,7 @@ from fno.roles.models import (
     canonical_digest as _digest,
 )
 from fno.roles.registry import DiscoveredRoleDefinition, RegistryError, RoleRegistry
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 _AUTHORITY_RANK = {
     AuthorityCeiling.ADVISORY: 0,
@@ -203,7 +203,7 @@ def resolve_role(
          "has_definition": r.definition is not None, "error": r.error}
         for r in unchecked_definitions
     ]
-    answer = verb_call("spawn-overlay", {
+    answer = command_call("spawn-overlay", {
         "kind": "roles-resolve",
         "role": role.model_dump(mode="json"),
         "definitions": [d.model_dump(mode="json") for d in definitions],

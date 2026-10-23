@@ -4,7 +4,7 @@
 //! Characterization for `fno agents roles resolve`, on the Rust door as
 //! `fno-agents spawn-overlay roles resolve`, and so for the resolver behind
 //! the `roles-resolve` kind. The goldens under tests/golden/roles_resolve/
-//! were captured from the Python verb and its resolver on this same fixture
+//! were captured from the Python command and its resolver on this same fixture
 //! before both were deleted (step 2 of the port protocol,
 //! docs/architecture/dual-implementation-inventory.md). Capture mode now
 //! refuses: a golden can only be captured while the old leg runs.
