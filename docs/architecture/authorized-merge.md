@@ -140,6 +140,8 @@ The `freeze-clear` op only tidies the record. It removes the primary row and the
 
 A new pin re-arms the freeze. While the current pin is unlifted, a set refuses. After the user lifts it, a set with the same pin refuses, and a set with a new pin writes the record. The new pin has its own lift subject and no ruling there, so it holds again.
 
+The pr-nudge ladder pauses on a frozen PR, so its owner gets no merge retry while the freeze holds.
+
 The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agents incident stop --hold merges`) stays separate.
 
 ## The effect

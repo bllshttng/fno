@@ -275,6 +275,22 @@ fn lift_doors(lift: &str) -> String {
     )
 }
 
+/// True when a live freeze holds this PR. The pr-nudge ladder reads it so
+/// a frozen PR gets no "drive it to merge" retry. An unreadable record
+/// reads false here: the merge owner still fails closed on its own read.
+pub(crate) fn holds_pr(home: &AgentsHome, pr: u64, repo: Option<&str>) -> bool {
+    let store = crate::store_remote::configured().map(|primary| Store {
+        file: record_path(&home.root()),
+        primary,
+    });
+    store.is_ok_and(|store| {
+        matches!(
+            verdict_for_in(&store, Some(pr), repo, &decision_index::default_store_live),
+            Verdict::Frozen { .. }
+        )
+    })
+}
+
 /// The merge owner's probe. Frozen refuses (the owner's fail_closed reads it
 /// as held, because the user's lift clears it) and disarms an armed queue, which
 /// would otherwise merge server side with no fno read. Unavailable is
