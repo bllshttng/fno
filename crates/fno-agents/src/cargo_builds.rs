@@ -44,8 +44,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
     }
     let cwd = std::env::current_dir().unwrap_or_default();
     let now = crate::claims::now_ms();
-    let load = crate::machine_sample::load_average().map(|(one, _, _)| one);
-    let cap = crate::test_run::build_slot_cap(load);
+    let (cap, share, ceiling) = crate::test_run::build_slot_reading();
     let mut keys: Vec<String> = crate::test_run::BUILD_SLOT_KEYS
         .iter()
         .map(|k| k.to_string())
@@ -144,7 +143,8 @@ pub(crate) fn run(args: &[String]) -> i32 {
             .map(|(name, n)| ((*name).to_string(), *n))
             .collect();
         let out = serde_json::json!({
-            "load": load,
+            "fleet_cpu_share": share,
+            "max_fleet_cpu_share": ceiling,
             "compile_slots": cap,
             "queued": lanes,
             "jobs": rows,
@@ -153,8 +153,11 @@ pub(crate) fn run(args: &[String]) -> i32 {
         return 0;
     }
     println!(
-        "compile slots for agents: {cap} at load {} (3 under 30, 2 to 60, 1 to 150, user only above)",
-        load.map_or("unreadable".to_string(), |l| format!("{l:.0}"))
+        "compile slots for agents: {cap} at fleet CPU share {} (3 to {:.0}%, 2 to {:.0}%, 1 to {:.0}%, user only above)",
+        share.map_or("unreadable".to_string(), |s| format!("{:.0}%", s * 100.0)),
+        ceiling * 50.0,
+        ceiling * 100.0,
+        ceiling * 150.0
     );
     if !queued.is_empty() {
         let lanes = queued
