@@ -555,8 +555,8 @@ mod tests {
         assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
-        // On the pinned eve of the lapse, a glm proposal names the temporary
-        // seat law it would contradict.
+        // On the pinned day the temporary seat law is live, so a glm proposal
+        // names it. The assertion reads the same pinned day, never the clock.
         let laws: Vec<&str> = p["laws"]
             .as_array()
             .unwrap()
