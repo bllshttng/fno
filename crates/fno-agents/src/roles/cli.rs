@@ -7,7 +7,10 @@
 //! them: `--json`/`-J`, `--root PATH` and the repeatable
 //! `--source LAYER=PATH`. Refusals keep the click wording and exit 2.
 
+use super::models::{self, RoleRef, WorkOrderRef};
 use super::registry::{self, Discovered, DiscoveryInputError};
+use super::resolver::{self, Resolution, Unchecked};
+use crate::client_commands::py_repr_str;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
@@ -32,6 +35,23 @@ Arguments:
 Options:
   -J, --json  Emit stable structured JSON.
   --help      Show this message and exit.
+";
+
+const RESOLVE_HELP: &str = "Usage: fno agents roles resolve [OPTIONS] ROLE
+
+  Resolve exactly one immutable role or one typed blocked result.
+
+Arguments:
+  ROLE  ROLE or FUNCTION/ROLE.  [required]
+
+Options:
+  --work-order TEXT    Authorized graph node identity.  [required]
+  --attempt TEXT       Immutable attempt identity.  [required]
+  --capabilities PATH  Read-only JSON array of CapabilityFact observations.
+  --context PATH       Read-only JSON array of ContextReference observations.
+  --snapshot TEXT      Expected input snapshot revision.
+  -J, --json           Emit stable structured JSON.
+  --help               Show this message and exit.
 ";
 
 #[derive(Default)]
@@ -122,6 +142,7 @@ pub fn run(args: &[String]) -> i32 {
     match op {
         Some("ls") => ls(options, tail),
         Some("show") => show(options, tail),
+        Some("resolve") => resolve(options, tail),
         Some(other) => usage_error(
             GROUP,
             "[OPTIONS] COMMAND [ARGS]...",
@@ -346,4 +367,266 @@ fn show(mut options: GroupOptions, tail: &[String]) -> i32 {
         println!("  raw: {}", python_compact_json(&row["raw_definition"]));
     }
     0
+}
+
+const RESOLVE_USAGE: &str = "[OPTIONS] ROLE";
+const RESOLVE_VALUES: [&str; 5] = [
+    "--work-order",
+    "--attempt",
+    "--capabilities",
+    "--context",
+    "--snapshot",
+];
+
+/// The requested role: `FUNCTION/ROLE` as given, or `ROLE` in the one
+/// function that defines it (`unavailable` when none does).
+fn role_ref(command: &str, token: &str, records: &[Discovered]) -> Result<RoleRef, i32> {
+    let refuse = |message: String| {
+        usage_error(
+            command,
+            RESOLVE_USAGE,
+            &format!("Invalid value for role: {message}"),
+        )
+    };
+    let (requested, role_id) = token_parts(token).map_err(|m| refuse(m.to_string()))?;
+    if let Some(function_id) = requested {
+        return Ok(RoleRef {
+            id: role_id.to_string(),
+            function_id: function_id.to_string(),
+        });
+    }
+    let mut functions: Vec<&str> = records
+        .iter()
+        .filter_map(|r| r.role.as_ref())
+        .filter(|r| r.id == role_id)
+        .map(|r| r.function_id.as_str())
+        .collect();
+    functions.sort_unstable();
+    functions.dedup();
+    if functions.len() > 1 {
+        return Err(refuse(format!(
+            "role {} exists in multiple functions; use FUNCTION/ROLE",
+            py_repr_str(role_id)
+        )));
+    }
+    Ok(RoleRef {
+        id: role_id.to_string(),
+        function_id: functions
+            .first()
+            .copied()
+            .unwrap_or("unavailable")
+            .to_string(),
+    })
+}
+
+/// A read-only JSON array of observations, or the usage error naming it.
+fn read_models<T>(
+    command: &str,
+    path: Option<&String>,
+    parse: fn(&Value, &str) -> Result<T, String>,
+) -> Result<Vec<T>, i32> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let fail = |error: String| {
+        usage_error(
+            command,
+            RESOLVE_USAGE,
+            &format!("Invalid value for {path}: cannot validate {path}: {error}"),
+        )
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| fail(e.to_string()))?;
+    let raw: Value = serde_json::from_str(&text).map_err(|e| fail(e.to_string()))?;
+    let items = raw
+        .as_array()
+        .ok_or_else(|| fail("input should be a valid tuple".into()))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| parse(item, &i.to_string()))
+        .collect::<Result<Vec<T>, String>>()
+        .map_err(fail)
+}
+
+/// Resolve exactly one immutable role or one typed blocked result. A
+/// blocked result exits 1.
+fn resolve(mut options: GroupOptions, tail: &[String]) -> i32 {
+    let command = format!("{GROUP} resolve");
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut values: std::collections::HashMap<&str, String> = Default::default();
+    let mut options_done = false;
+    let mut i = 0;
+    while i < tail.len() {
+        let arg = tail[i].as_str();
+        i += 1;
+        if options_done || !arg.starts_with('-') || arg == "-" {
+            positionals.push(arg);
+            continue;
+        }
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_string())),
+            _ => (arg, None),
+        };
+        match flag {
+            "--" => options_done = true,
+            "--json" | "-J" => options.json = true,
+            "--help" => {
+                print!("{RESOLVE_HELP}");
+                return 0;
+            }
+            _ if RESOLVE_VALUES.contains(&flag) => {
+                let value = match inline {
+                    Some(value) => value,
+                    None => match tail.get(i) {
+                        Some(value) => {
+                            i += 1;
+                            value.clone()
+                        }
+                        None => {
+                            return usage_error(
+                                &command,
+                                RESOLVE_USAGE,
+                                &format!("Option '{flag}' requires an argument."),
+                            )
+                        }
+                    },
+                };
+                values.insert(flag, value);
+            }
+            _ => return usage_error(&command, RESOLVE_USAGE, &format!("No such option: {arg}")),
+        }
+    }
+    let token = match positionals.as_slice() {
+        [] => return usage_error(&command, RESOLVE_USAGE, "Missing argument 'ROLE'."),
+        [token] => *token,
+        [_, extras @ ..] => {
+            let plural = if extras.len() > 1 { "s" } else { "" };
+            return usage_error(
+                &command,
+                RESOLVE_USAGE,
+                &format!(
+                    "Got unexpected extra argument{plural} ({})",
+                    extras.join(" ")
+                ),
+            );
+        }
+    };
+    for required in ["--work-order", "--attempt"] {
+        if !values.contains_key(required) {
+            return usage_error(
+                &command,
+                RESOLVE_USAGE,
+                &format!("Missing option '{required}'."),
+            );
+        }
+    }
+    let records = match discover(&options, &command, RESOLVE_USAGE) {
+        Ok(records) => records,
+        Err(code) => return code,
+    };
+    let role = match role_ref(&command, token, &records) {
+        Ok(role) => role,
+        Err(code) => return code,
+    };
+    let definitions: Vec<models::DefinitionSource> = records
+        .iter()
+        .filter(|r| r.role.as_ref() == Some(&role))
+        .filter_map(|r| r.definition.as_ref())
+        .filter_map(|d| models::definition_source(d).ok())
+        .collect();
+    let snapshot_revision = values.get("--snapshot").cloned().unwrap_or_else(|| {
+        definitions
+            .first()
+            .map_or("unavailable".into(), |d| d.snapshot_revision.clone())
+    });
+    let capability_facts = match read_models(
+        &command,
+        values.get("--capabilities"),
+        models::capability_fact,
+    ) {
+        Ok(facts) => facts,
+        Err(code) => return code,
+    };
+    let context_catalog =
+        match read_models(&command, values.get("--context"), models::context_reference) {
+            Ok(catalog) => catalog,
+            Err(code) => return code,
+        };
+    let work_order = models::work_order_ref(
+        &json!({
+            "node_id": values["--work-order"],
+            "attempt_id": values["--attempt"],
+            "role_id": role.id,
+        }),
+        "WorkOrderRef",
+    );
+    let work_order: WorkOrderRef = match work_order {
+        Ok(work_order) => work_order,
+        Err(message) => {
+            return usage_error(
+                &command,
+                RESOLVE_USAGE,
+                &format!("Invalid value for --work-order: {message}"),
+            )
+        }
+    };
+    let request = resolver::Request {
+        role: role.clone(),
+        definitions,
+        capability_facts,
+        context_catalog,
+        work_order,
+        clock: chrono::Utc::now().fixed_offset(),
+        snapshot_revision,
+        bounds: models::ContextBundleBounds {
+            max_references: 32,
+            max_bytes: 10_000_000,
+            max_sensitivity: "sensitive".into(),
+            max_combinations: 4096,
+        },
+        unchecked: records.iter().map(Unchecked::from).collect(),
+    };
+    let resolution = resolver::resolve(&request);
+    if options.json {
+        let sorted = crate::backlog::decisions_cli::sort_keys(&resolution.to_json());
+        println!("{}", python_json(&sorted));
+    } else {
+        match &resolution {
+            Resolution::Blocked(blocked) => {
+                println!(
+                    "blocked role={}/{} reason={} source={}",
+                    role.function_id,
+                    role.id,
+                    blocked.reason,
+                    blocked.source_id.as_deref().unwrap_or("<unavailable>")
+                );
+                if let Some(detail) = blocked.detail.as_deref().filter(|d| !d.is_empty()) {
+                    println!("  detail: {detail}");
+                }
+            }
+            Resolution::Resolved(value) => {
+                let text = |v: &Value, key: &str| v[key].as_str().unwrap_or_default().to_string();
+                println!(
+                    "resolved role={}/{} manifest={} context={}",
+                    role.function_id,
+                    role.id,
+                    text(value, "manifest_digest"),
+                    text(&value["context_bundle"], "digest")
+                );
+                for source in value["source_chain"].as_array().into_iter().flatten() {
+                    println!(
+                        "  {} {} {} status={}",
+                        text(source, "layer"),
+                        text(source, "source_id"),
+                        text(source, "disposition"),
+                        text(source, "status")
+                    );
+                }
+            }
+        }
+    }
+    match resolution {
+        Resolution::Blocked(_) => 1,
+        Resolution::Resolved(_) => 0,
+    }
 }

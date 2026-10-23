@@ -27,6 +27,9 @@ from fno.roles import (
     resolve_role,
 )
 
+# Role resolution runs in fno-agents (spawn-overlay kind roles-resolve).
+pytestmark = pytest.mark.dev_build
+
 NOW = datetime(2026, 8, 2, 12, tzinfo=UTC)
 REVISION = "snapshot-7"
 ROLE = RoleRef(id="arbitrary-owner", function_id="arbitrary-function")

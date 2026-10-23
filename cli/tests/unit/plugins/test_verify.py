@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from fno.company.contracts import EvidenceResult, RoleRef
@@ -14,6 +15,9 @@ from fno.plugins.verify import (
     verify_pack,
 )
 from tests.unit.plugins.test_manifest import _full_pack, _materialize_declared_sources
+
+# Role resolution runs in fno-agents (spawn-overlay kind roles-resolve).
+pytestmark = pytest.mark.dev_build
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 _PACK = REPO_ROOT / "plugins" / "growth-studio"

@@ -185,6 +185,7 @@ def role_root(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.dev_build
 def test_pack_verification_runs_but_the_journey_carries_conformance() -> None:
     report = verify_pack(PACK, installed={})
     assert report.ok, [condition.name for condition in report.conditions if not condition.ok]

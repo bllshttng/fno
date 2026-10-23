@@ -1,0 +1,3 @@
+resolved role=marketing/owner manifest=1d005afe225170472537168f22a2b5f69237da19288abf0b812fd4bec8b723cf context=cacd3b877ee6cbc40247dd0ed8e371a1933238baa63d6028d0d76d7bc173e610
+  built-in built-in/owner.json shadowed status=valid
+  company company/owner.json contributing status=valid
