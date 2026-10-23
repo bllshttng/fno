@@ -1,1 +1,1 @@
-error: --force types into a mux pane and HEX8 has none. Send without --force (it queues durable), or spawn the recipient with --substrate pane.
+error: --force types into a mux pane and HEX8 has none. A thread worker hosts no pane. Send without --force (it queues durable). To correct an underway worker, write it on its node: `fno backlog note <node> --body-file <file>` mails the node's holder a pointer.

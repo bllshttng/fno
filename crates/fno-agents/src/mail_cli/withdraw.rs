@@ -190,6 +190,11 @@ pub fn run(args: &[String]) -> i32 {
     // The cursor read above and this append are not one atomic step: a drain
     // in flight may already hold the body, so the receipt names the boundary
     // the tombstone actually guarantees.
-    println!("withdrew {msg_id} (to {to}); no drain will deliver it from now on. A drain already in flight when this ran may have delivered it: `fno agents peek {to}` to check.");
+    let refund = if super::send::release_budget_by_id(&msg_id) > 0 {
+        " Its words no longer count against the pair budget."
+    } else {
+        ""
+    };
+    println!("withdrew {msg_id} (to {to}); no drain will deliver it from now on. A drain already in flight when this ran may have delivered it: `fno agents peek {to}` to check.{refund}");
     0
 }

@@ -381,8 +381,9 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         let Some(entry) = entry else {
             release_budget(&reservation);
             eprintln!(
-                "error: --force needs a registry row naming the recipient's pane, and none resolves for {}. Send without --force to reach the durable bus.",
-                py_repr(&recipient)
+                "error: --force needs a registry row naming the recipient's pane, and none resolves for {}. Send without --force to reach the durable bus. {}",
+                py_repr(&recipient),
+                super::CORRECTION_HINT
             );
             return Err(1);
         };
@@ -1886,7 +1887,8 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
     let Some(pane_num) = pane_id else {
         release_budget(&reservation);
         eprintln!(
-            "error: --force types into a mux pane and {recipient} has none. Send without --force (it queues durable), or spawn the recipient with --substrate pane."
+            "error: --force types into a mux pane and {recipient} has none. A thread worker hosts no pane. Send without --force (it queues durable). {}",
+            super::CORRECTION_HINT
         );
         return Err(1);
     };
