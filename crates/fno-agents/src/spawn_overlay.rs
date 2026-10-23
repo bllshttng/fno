@@ -33,6 +33,11 @@
 //!   scope's rung and canonical form, the one resolver the board and the
 //!   promote path share.
 //!
+//! - kinds `credentials`, `state-root-seal`, `account-overlay`,
+//!   `dispatch-account`, `account-for-env` and `login-present`: the account
+//!   answers a Python spawn seam reads (`accounts::credentials`,
+//!   `accounts::launch`).
+//!
 //! The `fno config accounts` commands ride the same action as argv ops,
 //! `spawn-overlay accounts <command>` (see `accounts::run`).
 
@@ -184,8 +189,13 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         Some("roles-discover") => crate::roles::registry::discover_kind(&payload),
+        Some("credentials") => crate::accounts::credentials::compose_kind(&payload),
+        Some("state-root-seal") => crate::accounts::credentials::seal_kind(&payload),
+        Some(kind @ ("account-overlay" | "dispatch-account" | "account-for-env" | "login-present")) => {
+            crate::accounts::launch::resolve_kind(kind, &payload)
+        }
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover|credentials|state-root-seal|account-overlay|dispatch-account|account-for-env|login-present"
         )),
     }
 }

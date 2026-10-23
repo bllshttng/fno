@@ -7,6 +7,7 @@
 //! `ANTHROPIC_AUTH_TOKEN`, which must never ride argv - and answers
 //! `{"path", "alias_path"}` on stdout.
 
+use crate::accounts::credentials::{SCRUB_AUTH_VARS, SECRET_ROUTE_VARS};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -93,26 +94,6 @@ fn digest_of(payload: &[u8]) -> String {
     full.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-/// The scrub floor's var list: one list with Python's
-/// `account_env.SCRUB_AUTH_VARS` (the route stamp included, the model tiers
-/// folded in), which a Python test pins to this copy.
-fn scrub_auth_vars() -> Vec<&'static str> {
-    let mut vars: Vec<&'static str> = vec![
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_AUTH_TOKEN",
-        "FNO_ROUTE_PROVIDER",
-    ];
-    vars.extend(crate::model_env_scrub::MODEL_ENV_KEYS);
-    vars
-}
-
-/// The subset of a route whose VALUE is a credential; a self-authed route
-/// drops the account secrets it does not name, else an api-key account's
-/// vendor key rides the file against the route's endpoint.
-const SECRET_ROUTE_VARS: [&str; 2] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
-
 const ENV_FALSY_WORDS: [&str; 5] = ["", "0", "false", "no", "off"];
 
 /// The inherited model claims worth flooring, read from the spawn's own
@@ -171,7 +152,7 @@ pub fn compose_env(
     spawn_env: &Map<String, Value>,
 ) -> Map<String, Value> {
     let mut merged: Map<String, Value> = Map::new();
-    for var in scrub_auth_vars() {
+    for var in SCRUB_AUTH_VARS {
         merged.insert(var.to_string(), Value::String(String::new()));
     }
     for (key, value) in account_env {

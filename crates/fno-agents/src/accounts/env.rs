@@ -1,7 +1,7 @@
 //! The launch env for one account: `dispatch.py` (`resolve_env_value`,
-//! `dispatch_env` and its per-auth arms) and the `--account` overlay of
-//! `account_env.resolve_account_overlay`. Both refuse a pin whose credential
-//! root provably serves another account, from the one binding.
+//! `dispatch_env` and its per-auth arms) and the `--account` overlay, the
+//! one owner of the four lanes. Both refuse a pin whose credential root
+//! provably serves another account, from the one binding.
 
 use crate::accounts::binding::{self, BindingRequest, SlotProbe, MISMATCH, PRINCIPAL_TTL_S};
 use crate::accounts::records::{self, Record};
@@ -250,10 +250,9 @@ pub struct Overlay {
     pub lane: &'static str,
 }
 
-/// `account_env._login_present`: a credential specific to `dir`, on disk or
-/// in its scoped Keychain item. `.claude.json` is metadata a logged-out dir
-/// also holds, so it never counts.
-fn login_present(dir: &Path, src: &Sources<'_>) -> bool {
+/// A credential specific to `dir`, on disk or in its scoped Keychain item.
+/// `.claude.json` is metadata a logged-out dir also holds, so it never counts.
+pub(crate) fn login_present(dir: &Path, src: &Sources<'_>) -> bool {
     if dir.join(".credentials.json").exists() {
         return true;
     }
@@ -269,9 +268,8 @@ fn home_slot() -> PathBuf {
         .join(".claude")
 }
 
-/// `account_env.resolve_account_overlay`: the env overlay for a claude
-/// `--account <id>` launch, or the refusal receipt. It reads the slot stamp
-/// and never writes it.
+/// The env overlay for a claude `--account <id>` launch, or the refusal
+/// receipt. It reads the slot stamp and never writes it.
 pub fn overlay(
     account_id: &str,
     repo_root: Option<&Path>,
