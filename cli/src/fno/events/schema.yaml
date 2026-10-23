@@ -3131,6 +3131,49 @@ event_types:
         pid:
           type: integer
 
+  - name: test_run
+    retention: durable
+    description: >
+      One local test run through the `fno doctor test` door, written by
+      `fno-agents test-run`. A started row lands when the child spawns and a
+      finished row when it ends; both carry the same run_id. A started row
+      with no finished row names a runner that was killed, never a duration.
+      A refused run spawns nothing and writes no row.
+    sources: [agents]
+    data:
+      required: [run_id, stage]
+      properties:
+        run_id:
+          type: string
+          description: "Join id minted by the runner for this run."
+        stage:
+          type: string
+          enum: [started, finished]
+        command:
+          type: string
+          description: "The argv as run, capped at 400 characters."
+        command_key:
+          type: string
+          description: "Normalized grouping key: tool, crate, selector, and (whole) when no target narrowed the run."
+        whole:
+          type: boolean
+        pid:
+          type: integer
+          description: "The child's pid, on started rows."
+        node_id:
+          type: string
+        session_id:
+          type: string
+        worktree:
+          type: string
+        exit_code:
+          type: integer
+          description: "On finished rows: the child's code, 124 on timeout, 128+signal when signalled."
+        duration_ms:
+          type: integer
+          description: "On finished rows: wall time from admission to exit."
+    consumers: [fno-agents test-run stats]
+
   - name: orphan_test_binary_reaped
     description: "An orphaned cargo deps/ test binary (parentless or holding 20+ zombie children, CACHEDIR.TAG-confirmed) was SIGKILLed by the daemon's 300s reap sweep, past the config.test.orphan_min_elapsed_seconds age guard. The payload is the reap row: pid, command, zombie count, elapsed_seconds."
     sources: [daemon]

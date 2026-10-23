@@ -581,6 +581,7 @@ pub mod territory;
 pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
+mod test_run_journal;
 pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
