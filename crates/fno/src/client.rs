@@ -86,7 +86,7 @@ use crate::vt::ShellActivity;
 use crate::wordmark;
 use overlay_paint::{
     draw_lines_overlay, draw_overlay_layout, draw_popup_overlay, layout_lines_overlay,
-    OverlayAnchor, OverlayLayout,
+    overlay_text_cols, OverlayAnchor, OverlayLayout,
 };
 use theme_ground::LaunchTheme;
 // Re-exported for the test module's glob; the layout fns are the only callers.
@@ -5023,7 +5023,7 @@ impl View {
                 overlay_origin,
                 overlay_dims,
                 &chrome,
-                &conn.render_with(&self.layout.agents),
+                &conn.render_with(&self.layout.agents, overlay_text_cols(overlay_dims.1)),
                 &self.theme,
                 None,
             );
@@ -5236,7 +5236,7 @@ impl View {
             origin,
             dims,
             &chrome,
-            &conn.render_with(&self.layout.agents),
+            &conn.render_with(&self.layout.agents, overlay_text_cols(dims.1)),
             None,
             OverlayAnchor::Center,
         )

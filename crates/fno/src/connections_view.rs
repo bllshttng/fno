@@ -1163,12 +1163,13 @@ impl ConnectionsView {
     /// inverse-video block is a clean rectangle (draw_lines_overlay does no
     /// padding of its own).
     pub fn render(&self) -> Vec<String> {
-        self.render_with(&[])
+        self.render_with(&[], usize::MAX)
     }
 
     /// [`Self::render`] with the live layout rows, so each account names how
-    /// many running workers bill it.
-    pub fn render_with(&self, agents: &[crate::proto::AgentRow]) -> Vec<String> {
+    /// many running workers bill it, and the overlay's text width, which the
+    /// accounts table fits.
+    pub fn render_with(&self, agents: &[crate::proto::AgentRow], max_cols: usize) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         out.push(self.tab_bar());
         out.push(String::new());
@@ -1185,7 +1186,7 @@ impl ConnectionsView {
                     self.render_combo_input(ci, &mut out);
                 } else {
                     match self.tab {
-                        Tab::Accounts => self.render_accounts(&mut out, agents),
+                        Tab::Accounts => self.render_accounts(&mut out, agents, max_cols),
                         Tab::Order => self.render_order(&mut out),
                     }
                 }
@@ -1213,15 +1214,17 @@ impl ConnectionsView {
         format!("connections   {a}{o}")
     }
 
-    fn render_accounts(&self, out: &mut Vec<String>, agents: &[crate::proto::AgentRow]) {
+    fn render_accounts(
+        &self,
+        out: &mut Vec<String>,
+        agents: &[crate::proto::AgentRow],
+        max_cols: usize,
+    ) {
         if self.accounts.is_empty() && self.pending.is_empty() {
             out.push("no accounts registered - press a to add".to_string());
             return;
         }
-        // One width per column, shared by the header and every row, so the
-        // body reads as a table. A column with no values still gets its
-        // header's width (AC4-EDGE). The name column is as wide as the
-        // longest name; the overlay wraps a row too wide for the screen.
+        // The name column is as wide as the longest name.
         let name_w = |id: &str| crate::chrome::str_cols(id);
         let w_name = self
             .accounts
@@ -1262,72 +1265,33 @@ impl ConnectionsView {
             .iter()
             .map(|a| self.identity_cell(a))
             .collect();
-        let w = |label: &str, cells: &[String]| -> usize {
-            cells
-                .iter()
-                .map(|c| c.chars().count())
-                .max()
-                .unwrap_or(0)
-                .max(label.chars().count())
-        };
-        let w_cli = w("CLI", &clis);
-        let w_auth = w("AUTH", &auths);
-        let w_head = w("USAGE", &headrooms);
-        let w_age = w("AGE", &ages);
+        let w_cli = clis
+            .iter()
+            .map(|c| crate::chrome::str_cols(c))
+            .max()
+            .unwrap_or(0);
         // LOGIN is the stored credential's age (`cred-snapshot`), never the
         // usage reading's: AGE is that one.
-        let w_snap = w("LOGIN", &snaps);
-        let w_ride = w("WORKERS", &riders);
-        // Header is inert: no cursor row ever points at it (selection clamps
-        // to data rows), so nothing routes a keypress here.
-        out.push(format!(
-            "    {name:<wname$}  {cli:<wcli$}  {auth:<wauth$}  {head:<whead$}  {age:<wage$}  {snap:<wsnap$}  {ride:<wride$}  {ident}",
-            name = "ACCOUNT",
-            wname = w_name,
-            cli = "CLI",
-            wcli = w_cli,
-            auth = "AUTH",
-            wauth = w_auth,
-            head = "USAGE",
-            whead = w_head,
-            age = "AGE",
-            wage = w_age,
-            snap = "LOGIN",
-            wsnap = w_snap,
-            ride = "WORKERS",
-            wride = w_ride,
-            ident = "IDENTITY",
-        ));
-        for (i, a) in self.accounts.iter().enumerate() {
-            let cursor = if i == self.acct_sel { ">" } else { " " };
-            let badge = if a.active { "●" } else { " " };
-            // A distinct billing marker for the active-for-spawns
-            // account, kept separate from the global-active `●` (Locked
-            // Decision 1). Always a column so alignment never shifts.
-            let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
-                "$"
-            } else {
-                " "
-            };
-            out.push(format!(
-                "{cursor}{badge}{spawn} {name:<wname$}  {cli:<wcli$}  {auth:<wauth$}  {head:<whead$}  {age:<wage$}  {snap:<wsnap$}  {ride:<wride$}  {ident}",
-                name = crate::client::pad_to(&names[i], w_name),
-                wname = w_name,
-                cli = a.harness,
-                wcli = w_cli,
-                auth = a.auth,
-                wauth = w_auth,
-                head = headrooms[i],
-                whead = w_head,
-                age = ages[i],
-                wage = w_age,
-                snap = snaps[i],
-                wsnap = w_snap,
-                ride = riders[i],
-                wride = w_ride,
-                ident = idents[i],
-            ));
+        let mut cols: Vec<(&str, Vec<String>, usize)> = vec![
+            ("CLI", clis[..self.accounts.len()].to_vec(), w_cli),
+            ("AUTH", auths, 0),
+            ("USAGE", headrooms, 0),
+            ("AGE", ages, 0),
+            ("LOGIN", snaps, 0),
+            ("WORKERS", riders, 0),
+            ("IDENTITY", idents, 0),
+        ];
+        // A row wider than the overlay wraps and loses its alignment, so the
+        // table drops the columns read least, in this order, until it fits.
+        for drop in ["AUTH", "IDENTITY", "LOGIN", "AGE", ""] {
+            let rows = self.account_rows(&names, w_name, &cols);
+            if drop.is_empty() || rows.iter().all(|r| crate::chrome::str_cols(r) <= max_cols) {
+                out.extend(rows);
+                break;
+            }
+            cols.retain(|(label, _, _)| *label != drop);
         }
+        let w_cli = w_cli.max("CLI".len());
         // Session-local pending logins render after the real records; `r`
         // registers the selected one into a managed account.
         for (j, _p) in self.pending.iter().enumerate() {
@@ -1341,6 +1305,55 @@ impl ConnectionsView {
                 wcli = w_cli,
             ));
         }
+    }
+
+    /// The accounts table's header and one line per record, over the shown
+    /// columns. One width per column, shared by the header and every row, so
+    /// the body reads as a table; a column with no values still gets its
+    /// header's width (AC4-EDGE).
+    fn account_rows(
+        &self,
+        names: &[String],
+        w_name: usize,
+        cols: &[(&str, Vec<String>, usize)],
+    ) -> Vec<String> {
+        use crate::chrome::str_cols;
+        let widths: Vec<usize> = cols
+            .iter()
+            .map(|(label, cells, min)| {
+                cells
+                    .iter()
+                    .map(|c| str_cols(c))
+                    .fold((*min).max(label.len()), usize::max)
+            })
+            .collect();
+        let line = |lead: String, name: &str, cell: &dyn Fn(usize) -> String| {
+            let mut s = lead + &crate::client::pad_to(name, w_name);
+            for (k, w) in widths.iter().enumerate() {
+                s.push_str("  ");
+                s.push_str(&crate::client::pad_to(&cell(k), *w));
+            }
+            s.trim_end().to_string()
+        };
+        // Header is inert: no cursor row ever points at it (selection clamps
+        // to data rows), so nothing routes a keypress here.
+        let mut rows = vec![line("    ".into(), "ACCOUNT", &|k| cols[k].0.to_string())];
+        for (i, a) in self.accounts.iter().enumerate() {
+            let cursor = if i == self.acct_sel { ">" } else { " " };
+            let badge = if a.active { "●" } else { " " };
+            // A distinct billing marker for the active-for-spawns
+            // account, kept separate from the global-active `●` (Locked
+            // Decision 1). Always a column so alignment never shifts.
+            let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
+                "$"
+            } else {
+                " "
+            };
+            rows.push(line(format!("{cursor}{badge}{spawn} "), &names[i], &|k| {
+                cols[k].1[i].clone()
+            }));
+        }
+        rows
     }
 
     /// The usage cell for one row: the latest reading, or the list's headroom
@@ -1937,11 +1950,31 @@ mod tests {
         ];
         let workers: Vec<usize> = v.accounts.iter().map(|a| workers_on(a, &rows)).collect();
         assert_eq!(workers, vec![2, 1, 0]);
-        let out = v.render_with(&rows).join("\n");
+        let out = v.render_with(&rows, usize::MAX).join("\n");
         assert!(
             out.contains("WORKERS") && out.contains("LOGIN") && out.contains("AGE"),
             "{out}"
         );
+        // An overlay one column narrower than the table drops AUTH first and
+        // keeps every table row on one line, so the overlay never wraps it.
+        let cols = |l: &str| crate::chrome::str_cols(l.trim_end());
+        let table = |lines: &[String]| -> Vec<String> {
+            lines
+                .iter()
+                .filter(|l| {
+                    l.contains("ACCOUNT") || v.accounts.iter().any(|a| l.contains(a.id.as_str()))
+                })
+                .cloned()
+                .collect()
+        };
+        let full = table(&v.render_with(&rows, usize::MAX));
+        let fit = full.iter().map(|l| cols(l)).max().unwrap() - 1;
+        let narrow = table(&v.render_with(&rows, fit));
+        assert!(
+            !narrow[0].contains("AUTH") && narrow[0].contains("WORKERS"),
+            "{narrow:?}"
+        );
+        assert!(narrow.iter().all(|l| cols(l) <= fit), "{narrow:?}");
 
         v.apply_read(ReadOutcome::Ok {
             accounts: sample_accounts(),
