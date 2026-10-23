@@ -100,6 +100,16 @@ event_types:
         spawned_by_session: { type: string, description: "The launcher session the claimed record names" }
     consumers: [operator]
 
+  - name: native_bg_renamed
+    description: "A claude registry row still named by its short id took a real name: the launch record's, the agents.naming.worker name of its node, or the claude agents listing's. The old name stays in aliases. One row per rename."
+    sources: [daemon]
+    data:
+      required: [name, from]
+      properties:
+        name: { type: string, description: "The row's new name" }
+        from: { type: string, description: "The short-id name it replaced" }
+    consumers: [operator]
+
   - name: native_bg_mint_deferred
     description: "The native-bg roster adopt hit its per-beat budget; the remaining candidates wait for later beats."
     sources: [daemon]
