@@ -363,14 +363,6 @@ class ResolvedRole(_RoleModel):
         return self
 
 
-class ManifestRoutingResolution(_RoleModel):
-    """Routing-only projection of a validated business-role manifest chain."""
-
-    role: RoleRef
-    source_digest: Sha256Digest
-    routing_projection: RoutingHint | None = None
-
-
 class RoleResolutionBlocked(_RoleModel):
     role: RoleRef
     reason: RoleResolutionReason

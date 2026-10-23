@@ -32,6 +32,8 @@
 //! - kind `roles-resolve`: business-role resolution
 //!   (`roles::resolver::resolve_kind`), the one leg the Python
 //!   `resolve_role` calls.
+//! - kind `business-role`: the business-role lookup model routing reads
+//!   (`roles::routing::business_role_kind`).
 //! - kind `role-resolve`: the org ladder (`territory::resolve_role`), a
 //!   scope's rung and canonical form, the one resolver the board and the
 //!   promote path share.
@@ -192,8 +194,9 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         Some("roles-discover") => crate::roles::registry::discover_kind(&payload),
         Some("roles-resolve") => crate::roles::resolver::resolve_kind(&payload),
+        Some("business-role") => crate::roles::routing::business_role_kind(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover|roles-resolve"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover|roles-resolve|business-role"
         )),
     }
 }

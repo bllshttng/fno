@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "not_found",
+  "reference": "ghost",
+  "role": {
+    "function_id": "unavailable",
+    "id": "ghost"
+  },
+  "source_id": null,
+  "source_layer": null
+}

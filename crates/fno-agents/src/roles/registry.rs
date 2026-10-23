@@ -59,7 +59,7 @@ fn source_id(path: &Path, root: &Path) -> String {
 
 /// The exception class name, a colon and the message, as Python printed
 /// the OSError it raised on the same path.
-fn os_error_text(err: &io::Error, path: &Path) -> String {
+pub(crate) fn os_error_text(err: &io::Error, path: &Path) -> String {
     let Some(code) = err.raw_os_error() else {
         return format!("OSError: {err}");
     };

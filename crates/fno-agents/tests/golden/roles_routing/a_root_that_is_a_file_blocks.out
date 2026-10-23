@@ -1,0 +1,11 @@
+{
+  "detail": "role root exists but is not a directory",
+  "reason": "invalid_manifest",
+  "reference": "publisher",
+  "role": {
+    "function_id": "unavailable",
+    "id": "publisher"
+  },
+  "source_id": "<FIXTURE>/file",
+  "source_layer": null
+}
