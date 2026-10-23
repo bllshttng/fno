@@ -123,6 +123,8 @@
 #      shared ~/.claude slot to read and write the credential claude reads,
 #      and to tell which live claude pins it. Footnote's own store stays
 #      under the state dir.
+#      accounts/reconcile.rs ports reconcile-slot: it names the canonical
+#      ~/.claude slot in its sign-in remedy text, for the reason above.
 #      test_run.rs's hold-marker tests build fixture checkouts under a
 #      TempDir, including a nested `.claude/worktrees/x` path, to prove a
 #      nested checkout never reads its parent's hold. Fixture paths only;
@@ -322,6 +324,7 @@ crates/fno-agents/src/accounts/binding.rs
 crates/fno-agents/src/accounts/env.rs
 crates/fno-agents/src/accounts/staging.rs
 crates/fno-agents/src/accounts/store.rs
+crates/fno-agents/src/accounts/reconcile.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs

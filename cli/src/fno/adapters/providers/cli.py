@@ -1471,13 +1471,17 @@ def reconcile_slot_cmd(
     Keychain directly and tells footnote nothing, so the stamp is the state
     known to drift, and the live credential is the only thing that can correct it.
     """
-    config = _load()
-    result = managed.reconcile_slot(harness_name, by_id=config.by_id)
-    if result.ok:
-        typer.echo(f"reconcile-slot: {result.detail}")
-        return
-    typer.echo(f"reconcile-slot: refused ({result.outcome}): {result.detail}", err=True)
-    raise typer.Exit(1)
+    # Transport only: `fno-agents spawn-overlay accounts reconcile-slot` owns the command.
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
+        raise typer.Exit(127)
+    argv = [str(binary), "spawn-overlay", "accounts", "reconcile-slot", harness_name]
+    raise typer.Exit(subprocess.run(argv).returncode)
 
 
 # ---------------------------------------------------------------------------

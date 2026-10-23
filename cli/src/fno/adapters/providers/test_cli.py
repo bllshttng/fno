@@ -1519,51 +1519,6 @@ class TestReconcileSlot:
         root.mkdir(parents=True, exist_ok=True)
         return tmp_path
 
-    def test_success_names_the_matched_record_and_no_credential(
-        self, store: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """AC1-HP: a non-secret receipt naming the record reconciliation proved."""
-        from fno.adapters.providers import managed
-
-        monkeypatch.setattr(
-            managed, "reconcile_slot",
-            lambda cli, **kw: managed.ReconcileResult(
-                "matched", record_id="readyrule",
-                detail="the live claude slot belongs to 'readyrule'; taint cleared",
-            ),
-        )
-        result = _invoke(["reconcile-slot", "claude"], cwd=store, home=store)
-        assert result.exit_code == 0, result.output
-        assert "readyrule" in result.output
-        assert "token" not in result.output.lower()
-
-    @pytest.mark.parametrize(
-        "outcome",
-        ["profile-unavailable", "malformed-profile", "zero-match",
-         "ambiguous-match", "lock-timeout", "no-slot-credential"],
-    )
-    def test_every_refusal_exits_nonzero_and_names_its_type(
-        self, store: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
-    ) -> None:
-        """AC3-ERR: US3 - an outage must be loud, and say which way it failed."""
-        from fno.adapters.providers import managed
-
-        monkeypatch.setattr(
-            managed, "reconcile_slot",
-            lambda cli, **kw: managed.ReconcileResult(outcome, detail="why it refused"),
-        )
-        result = _invoke(["reconcile-slot", "claude"], cwd=store, home=store)
-        assert result.exit_code != 0, result.output
-        assert outcome in result.output
-        assert "why it refused" in result.output
-
-    def test_unknown_harness_refuses_without_touching_the_store(
-        self, store: Path
-    ) -> None:
-        result = _invoke(["reconcile-slot", "gemini"], cwd=store, home=store)
-        assert result.exit_code != 0
-        assert "claude" in result.output
-
     def test_doctor_names_the_repair_command_for_a_tainted_slot(
         self, store: Path
     ) -> None:
