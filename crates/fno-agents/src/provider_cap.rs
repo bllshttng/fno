@@ -431,14 +431,20 @@ pub fn runtime_state_path(cwd: &Path) -> PathBuf {
         return PathBuf::from(v);
     }
     let home = || std::env::var_os("HOME").map(PathBuf::from);
-    let dir = match std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
-        Some(root) => Some(PathBuf::from(root)),
+    let expand = |raw: &str| match raw.strip_prefix("~/") {
+        Some(rest) => home().map(|h| h.join(rest)),
+        None => Some(PathBuf::from(raw)),
+    };
+    let dir = match std::env::var("FNO_STATE_DIR")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        // Python resolves the carrier against the process cwd, so a relative
+        // one still names a root rather than falling back to ~/.fno.
+        Some(root) => expand(&root).and_then(|d| std::env::current_dir().ok().map(|c| c.join(d))),
         None => crate::agents_config::config_lookup(cwd, &["state_dir"])
             .and_then(|v| v.as_str().map(str::to_string))
-            .and_then(|raw| match raw.strip_prefix("~/") {
-                Some(rest) => home().map(|h| h.join(rest)),
-                None => Some(PathBuf::from(&raw)),
-            }),
+            .and_then(|raw| expand(&raw)),
     };
     let root = dir
         .filter(|d| d.is_absolute())
