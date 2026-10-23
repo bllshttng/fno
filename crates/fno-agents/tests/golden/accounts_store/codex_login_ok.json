@@ -1,0 +1,1 @@
+{"op": "codex_login", "args": {}, "codex_login": "ok", "env": {"CODEX_HOME": "{TMP}/codex"}, "now": 1800000000.0, "expect": {"result": {"ok": true, "reason": null, "home": "<TMP>/codex"}, "error": null, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}

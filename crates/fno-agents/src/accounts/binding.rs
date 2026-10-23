@@ -134,7 +134,7 @@ pub fn keychain_service(dir: &Path) -> Option<String> {
 
 /// `managed._token_present`: a usable credential (access or refresh token);
 /// an opaque non-JSON blob counts, a logged-out residue does not.
-fn token_present(blob: &str) -> bool {
+pub(crate) fn token_present(blob: &str) -> bool {
     let Ok(data) = serde_json::from_str::<Value>(blob) else {
         return !blob.trim().is_empty();
     };
@@ -257,10 +257,6 @@ pub fn record_principal(record_id: &str, root: &Path) -> Option<Principal> {
     crate::claude_vault::principal_from_meta(&meta)
 }
 
-fn principal_cache_path(harness: &str, root: &Path) -> PathBuf {
-    root.join(format!(".active-{harness}.principal"))
-}
-
 /// `managed.cached_slot_principal`: the identity last proven for exactly this
 /// credential, and when, while still fresh. Successful proofs only.
 pub fn cached_slot_principal(
@@ -271,7 +267,9 @@ pub fn cached_slot_principal(
     ttl: f64,
 ) -> Option<(String, f64)> {
     let digest = credential_digest(credential)?;
-    let data = crate::claude_vault::read_json(&principal_cache_path(harness, root))?;
+    let data = crate::claude_vault::read_json(&crate::accounts::store::principal_cache_path(
+        root, harness,
+    ))?;
     if data.get("credential").and_then(Value::as_str) != Some(digest.as_str()) {
         return None;
     }
@@ -286,8 +284,10 @@ pub fn note_slot_principal(harness: &str, root: &Path, identity: &str, credentia
         return;
     };
     let body = json!({ "account_uuid": identity, "credential": digest, "at": now });
-    let _ =
-        crate::claude_vault::atomic_write(&principal_cache_path(harness, root), &body.to_string());
+    let _ = crate::claude_vault::atomic_write(
+        &crate::accounts::store::principal_cache_path(root, harness),
+        &body.to_string(),
+    );
 }
 
 /// `managed.bearer_principal_verdict`: does `bearer` belong to `record_id`?

@@ -1,0 +1,1 @@
+{"op": "still_live", "args": {"cli": "claude"}, "processes": [{"pid": 500, "name": null, "cmdline": ["/usr/local/bin/claude", "--resume"], "env": {}, "started": null}], "now": 1800000000.0, "expect": {"result": [], "error": null, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}

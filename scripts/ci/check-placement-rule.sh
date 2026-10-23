@@ -119,6 +119,10 @@
 #      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
 #      it onto the shared slot. test_managed.py is its test and asserts on
 #      exactly that path, again under tmp_path.
+#      accounts/store.rs ports managed.py's store layer: it names the same
+#      shared ~/.claude slot to read and write the credential claude reads,
+#      and to tell which live claude pins it. Footnote's own store stays
+#      under the state dir.
 #      test_run.rs's hold-marker tests build fixture checkouts under a
 #      TempDir, including a nested `.claude/worktrees/x` path, to prove a
 #      nested checkout never reads its parent's hold. Fixture paths only;
@@ -317,6 +321,7 @@ crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/accounts/binding.rs
 crates/fno-agents/src/accounts/env.rs
 crates/fno-agents/src/accounts/staging.rs
+crates/fno-agents/src/accounts/store.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs

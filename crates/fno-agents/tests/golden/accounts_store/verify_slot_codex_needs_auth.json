@@ -1,0 +1,1 @@
+{"platform": "darwin", "op": "verify_slot", "args": {"record": {"id": "cx", "harness": "codex", "account_id": ""}, "expected": "{\"tokens\": {}}"}, "env": {"CODEX_HOME": "{TMP}/codex"}, "files": {"codex": "{\"tokens\": {}}"}, "now": 1800000000.0, "expect": {"result": false, "error": null, "store": {}, "modes": {}, "files": {"codex": "{\"tokens\": {}}"}, "keychain_writes": []}}

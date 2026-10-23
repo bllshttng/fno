@@ -112,20 +112,17 @@ fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String>
 /// attribution owner alone answers, never credentials.
 fn identity_evidence(harness: &str, accounts: &[String], root: &Path) -> Map<String, Value> {
     let mut out = Map::new();
-    let text = std::fs::read_to_string(root.join(format!(".active-{harness}"))).ok();
-    let tainted = root.join(format!(".active-{harness}.tainted")).exists();
-    let Some(active) = text
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .filter(|_| !tainted)
+    let active = crate::accounts::slot::active_slot_id(harness, Some(root), root)
+        .ok()
+        .flatten();
+    let Some(active) = active.filter(|_| !crate::accounts::store::slot_tainted(root, harness))
     else {
         return out;
     };
     for a in accounts {
         out.insert(
             a.clone(),
-            json!(if a == active { "proven" } else { "mismatch" }),
+            json!(if *a == active { "proven" } else { "mismatch" }),
         );
     }
     out
