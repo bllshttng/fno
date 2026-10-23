@@ -23,6 +23,7 @@ fn test_run(root: &std::path::Path) -> Command {
     cmd.args(["test-run", "--claims-root"]).arg(root);
     cmd.env_remove("FNO_TEST_OWNER_PID");
     cmd.env_remove("FNO_TEST_OWNER_BIRTH");
+    cmd.env("FNO_EVENTS_PATH", root.join("events.jsonl"));
     cmd
 }
 
@@ -208,6 +209,7 @@ fn normal_exit_still_reaps_a_backgrounded_group_mate() {
     let status = Command::new(bin())
         .args(["test-run", "--timeout", "30", "--claims-root"])
         .arg(&root)
+        .env("FNO_EVENTS_PATH", root.join("events.jsonl"))
         .arg("--")
         .arg("/bin/sh")
         .arg("-c")
@@ -250,6 +252,7 @@ fn timeout_kills_the_hung_leader() {
     let child = Command::new(bin())
         .args(["test-run", "--timeout", "1", "--claims-root"])
         .arg(&root)
+        .env("FNO_EVENTS_PATH", root.join("events.jsonl"))
         .arg("--")
         .arg("sleep")
         .arg("30")

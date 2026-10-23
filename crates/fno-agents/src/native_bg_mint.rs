@@ -105,12 +105,19 @@ pub(crate) fn mint_missing_native_bg(
     }
 
     // A row an earlier beat birthed with no parent: the launch record its
-    // child claimed still names the spawner.
+    // child claimed still names the spawner. The mail-hold register can win
+    // the birth race and write the child's row first with no origin and no
+    // substrate; both minters then skip the held session, so the record is
+    // the only witness left. Without it the reaper keeps the row as not-spawn
+    // for the process's whole life.
     let mut parented: Vec<(String, crate::launch_record::Record)> = Vec::new();
     for e in entries.iter().filter(|e| {
         e.harness_name() == "claude"
-            && e.substrate.as_deref() == Some(SUBSTRATE)
-            && e.origin.as_deref() == Some("adopted")
+            && match e.origin.as_deref() {
+                Some("adopted") => e.substrate.as_deref() == Some(SUBSTRATE),
+                None => true,
+                Some(_) => false,
+            }
             && e.spawned_by_session
                 .as_deref()
                 .unwrap_or_default()
@@ -391,18 +398,25 @@ fn prepare_row(
         Some(r) => ("spawn", crate::native_adopt::launcher_lineage(r)),
         None => ("adopted", Lineage::unproven(LINEAGE_REASON)),
     };
+    let node = record.and_then(|r| r.launch.node.clone()).or(node);
     RegistryEntry {
         name: record
             .and_then(|r| r.launch.name.clone())
             .or_else(|| row.name.as_deref().map(listing_name_slug))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| crate::claude_adopt::synthesized_entry_name(session, &row.short_id)),
+            // A listing that shows only the short id names nothing.
+            .filter(|s| !s.is_empty() && *s != row.short_id)
+            .unwrap_or_else(|| {
+                let node_name = node
+                    .as_deref()
+                    .and_then(|n| crate::naming::node_worker_name(n, Path::new(&cwd)));
+                crate::claude_adopt::synthesized_entry_name(session, &row.short_id, node_name)
+            }),
         origin: Some(origin.into()),
         status: AgentStatus::Live,
         short_id: row.short_id.clone(),
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
-        node: record.and_then(|r| r.launch.node.clone()).or(node),
+        node,
         created_at: crate::daemon::now_rfc3339_like(),
         // The listing pid can be a pre-warmed spare in claude's bg daemon,
         // not this session; the row stays pidless and routes by short id.
@@ -538,6 +552,42 @@ mod tests {
                 assert_eq!(e.node.as_deref(), Some("x-aaaa"), "{}", e.name);
             }
             assert!(registry.entries.iter().any(|e| e.name == "t-xaaaa-glm"));
+
+            // The mail-hold register can write the child's row before any
+            // beat mints it: no origin, no substrate, no parent. The claimed
+            // record still parents it, so the reaper's spawn pipeline sees it.
+            // A self-registered row no record names is the user's own and
+            // stays unproven.
+            let raced = "cccccccc-0000-0000-0000-000000000003";
+            let own = "dddddddd-0000-0000-0000-000000000004";
+            claim_record(home, raced);
+            crate::state::update_registry(&home.registry_json(), |r| {
+                for sid in [raced, own] {
+                    r.entries.push(RegistryEntry {
+                        name: sid[..8].to_string(),
+                        harness: Some("claude".into()),
+                        ..RegistryEntry::new(
+                            Some(sid.to_string()),
+                            Lineage::unproven("mail-hold register"),
+                        )
+                    });
+                }
+            })
+            .unwrap();
+            mint_missing_native_bg(home, &snapshot, &em);
+            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
+            let row = |sid: &str| {
+                registry
+                    .entries
+                    .iter()
+                    .find(|e| e.harness_session_id.as_deref() == Some(sid))
+                    .unwrap()
+            };
+            assert_eq!(row(raced).origin.as_deref(), Some("spawn"));
+            assert_eq!(row(raced).spawned_by_session.as_deref(), Some("d7031e2c"));
+            assert_eq!(row(raced).node.as_deref(), Some("x-aaaa"));
+            assert_eq!(row(own).origin, None);
+            assert_eq!(row(own).spawned_by_session, None);
         });
     }
 

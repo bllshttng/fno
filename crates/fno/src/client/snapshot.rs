@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|feed-detail|question-detail]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -92,6 +92,9 @@ pub enum ViewKind {
     NavigatorPr,
     /// The prefix+f navigator filtered by the model name `opus`.
     NavigatorModel,
+    /// The prefix+f navigator with the sideline's row menu (Ctrl-o) open on
+    /// the first agent row.
+    NavigatorMenu,
     /// The event provenance modal on the first feed row that is not a
     /// question, with a mouse selection dragged across its longest line.
     FeedDetail,
@@ -156,6 +159,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
         "navigator-model" => Some(ViewKind::NavigatorModel),
+        "navigator-menu" => Some(ViewKind::NavigatorMenu),
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
         _ => None,
@@ -234,7 +238,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-model, feed-detail or question-detail")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail or question-detail")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -803,6 +807,18 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             open_navigator(&mut view, pr.to_string())?;
         }
         Some(ViewKind::NavigatorModel) => open_navigator(&mut view, "opus".into())?,
+        Some(ViewKind::NavigatorMenu) => {
+            open_navigator(&mut view, String::new())?;
+            let at = view
+                .nav_filtered(view.nav.as_ref().ok_or("navigator did not open")?)
+                .iter()
+                .position(|r| matches!(r.menu, super::row_menu::NavMenu::Agent(_)))
+                .ok_or("no agent rows to open a navigator menu on")?;
+            if let Some(n) = view.nav.as_mut() {
+                n.cursor = at;
+            }
+            view.nav_open_menu();
+        }
         Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
         Some(ViewKind::Composer) => {
             super::agent_launcher::open(&mut view);
@@ -993,6 +1009,7 @@ mod tests {
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),
             ("navigator-model", ViewKind::NavigatorModel),
+            ("navigator-menu", ViewKind::NavigatorMenu),
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
         ] {
@@ -1009,7 +1026,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-model, feed-detail or question-detail"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail or question-detail"
             ),
             "{e}"
         );

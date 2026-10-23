@@ -385,9 +385,20 @@ impl Core {
     }
 
     /// Phase one, on the loop: refuse an empty argv and reserve the id.
-    fn spawn_job(&mut self, order: SpawnOrder) -> Result<SpawnJob, String> {
+    fn spawn_job(&mut self, mut order: SpawnOrder) -> Result<SpawnJob, String> {
         if order.argv.is_empty() {
             return Err("pane run needs a command (empty argv)".into());
+        }
+        // Every spawn road lands here, so a claude pane gets the plugin's
+        // shipped theme for the mux theme (`theme::claude_theme`) whether it
+        // is a fresh run, a resume, a restore or a recruit. The OSC 11 answer
+        // resolves `auto` to the theme's ground and the custom theme sets
+        // the user message band that `band_remap` gives readable text.
+        // `--settings` is per-session; settings.json is never touched.
+        if argv_runs_claude(&order.argv) {
+            if let Some(name) = crate::theme::claude_theme(&osc_reply::theme_at(&order.cwd)) {
+                with_claude_theme(&mut order.argv, name);
+            }
         }
         Ok(SpawnJob {
             id: self.reserve_pane_id()?,
