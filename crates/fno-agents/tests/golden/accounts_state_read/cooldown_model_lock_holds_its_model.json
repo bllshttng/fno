@@ -1,0 +1,1 @@
+{"op": "is_in_cooldown", "state": {"provider_health": {"m": {"last_error_at": 1789399940.0, "model_locks": {"opus": 1789400300.0, "sonnet": 1789400300.0}}}}, "id": "m", "model": "sonnet", "expect": true}

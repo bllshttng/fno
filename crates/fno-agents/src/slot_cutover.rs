@@ -61,7 +61,7 @@ pub fn decide(
     // the coarse low/exhausted label is all there is (today's behavior).
     let worst = usage
         .and_then(|rows| rows.get(from))
-        .and_then(crate::fallback_chain::Snapshot::from_refresh_row);
+        .and_then(crate::accounts::state::parse_snapshot);
     let eligible = match crate::fallback_chain::worst_binding_used_pct(worst.as_ref(), now as f64) {
         Some(pct) => exhausted || pct >= threshold_pct,
         None => matches!(state, Some("low" | "exhausted")),
