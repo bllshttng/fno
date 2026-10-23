@@ -107,7 +107,7 @@ pub(crate) fn current() -> Option<Hold> {
 }
 
 /// prefix+U and the menu row: clear a hold the machine armed through the one
-/// clear verb, and say what happened. A person's stop is refused with the
+/// clear command, and say what happened. A person's stop is refused with the
 /// command, never cleared from a keypress.
 pub(super) async fn lift(view: &mut View) {
     view.aux = None;
