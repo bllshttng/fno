@@ -599,15 +599,11 @@ fn random_token(session: Option<&str>) -> Option<String> {
     id.ok()?.get(9..13).map(str::to_ascii_lowercase)
 }
 
-/// A worker's name from an `agents.naming.worker` template. Tokens: `{slug}`
-/// (the node slug's first words), `{node}` (the node id), `{skill}` (the
-/// seed's command, e.g. `target`) and `{random}` (four hex digits). `None`
-/// when a token has no fact, the template names an unknown token, or the
-/// result does not start with a letter.
-///
-/// The template has no model token: the lane picks the model after the name
-/// is set, so a model in the name can be false. The row's `node` and `model`
-/// fields carry those facts.
+/// A worker's name from an `agents.naming.worker` template: `{slug}` (the
+/// node slug's first words), `{node}`, `{skill}` (the seed's command) and
+/// `{random}`. No model token: the lane picks the model after the name is
+/// set. `None` for a token with no fact, an unknown token, or a result that
+/// does not start with a letter.
 pub fn render_worker_name(template: &str, facts: &WorkerFacts) -> Option<String> {
     let mut out = String::new();
     let mut rest = template;
@@ -649,10 +645,8 @@ fn seed_skill(seed: &str) -> Option<String> {
     crate::provider::parse_command_token(first).map(|(command, _)| command.to_string())
 }
 
-/// The worker name of the node `token` names, rendered from the
-/// `agents.naming.worker` template of the project at `cwd`, else None. A
-/// row's own cwd picks its project, so a node of another project than the
-/// daemon's reads its own graph and its own template.
+/// The `agents.naming.worker` name of the node `token` names. A row's own
+/// cwd picks its project, so its graph and its template.
 pub fn node_worker_name(token: &str, cwd: &std::path::Path, session: &str) -> Option<String> {
     let slug = node_slug(token, cwd);
     let facts = WorkerFacts {
@@ -713,9 +707,7 @@ fn run_worker_mint(args: &[String]) -> i32 {
             0
         }
         None => {
-            eprintln!(
-                "error: agents.naming.worker {template:?} has a token with no fact for this worker"
-            );
+            eprintln!("error: agents.naming.worker {template:?} has a token with no value");
             3
         }
     }
