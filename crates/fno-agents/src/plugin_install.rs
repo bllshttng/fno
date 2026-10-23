@@ -205,7 +205,7 @@ fn require_fno_source(source_root: &Path) -> Result<(), String> {
     let hint =
         match std::fs::read_to_string(crate::state_layout::place(&state_root(), "source-path")) {
             Ok(pin) if !pin.trim().is_empty() => format!(
-                "the fno checkout is {}: cd there and rerun, or pass --source",
+                "the pinned fno checkout is {0}: pass --source {0}",
                 pin.trim()
             ),
             _ => "cd into the fno checkout and rerun, or pass --source".to_string(),
@@ -2391,7 +2391,7 @@ pub(crate) fn loop_install_probe(
                 Ok(path) => path,
                 Err(reason) => return Some(Err(reason)),
             };
-            let root = match repo_root(&std::env::current_dir().unwrap_or_default()) {
+            let root = match repo_root(&default_source_dir()) {
                 Ok(root) => root,
                 Err(reason) => return Some(Err(reason)),
             };
