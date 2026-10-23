@@ -364,9 +364,10 @@ fn install_newest_published_arm(
     let got12: String = newest_rev.chars().take(12).collect();
     if !installed_rev.is_empty() {
         if installed_rev == newest_rev {
-            return wait(format!(
-                "the newest published build ({got12}) is already installed; waiting for CI to publish {want12}"
-            ));
+            println!(
+                "fno doctor update: the newest published build ({got12}) is already installed; waiting for CI to publish {want12}; NOT compiling"
+            );
+            return "newest-published-current".into();
         }
         // A downgrade refused beats a downgrade explained: only a build git
         // proves NOT older installs, and an unreadable ordering refuses to
@@ -426,6 +427,7 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
         outcome,
         "waiting-ci"
             | "installed-newest-published"
+            | "newest-published-current"
             | "skipped-no-origin"
             | "skipped-no-cargo"
             | "failed"
@@ -435,6 +437,17 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
             "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together (`--published` installs both from the newest published rev; `--no-rust` moves python alone, at your risk)"
         )
     })
+}
+
+/// A planned hold: the rust leg sits on the newest build CI published, so
+/// the hold is publish lag, not a defect. It prints as a note and exits 0
+/// when the daemon runs the bins on disk, so `fno update && fno restart`
+/// still restarts.
+pub(crate) fn hold_is_planned(rust_outcome: Option<&str>) -> bool {
+    matches!(
+        rust_outcome,
+        Some("installed-newest-published") | Some("newest-published-current")
+    )
 }
 
 /// The newest commit on `repo`'s first-parent line whose crates/ rev is
@@ -2394,9 +2407,14 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     // fails until CI publishes. The wheel and the plugin restage wait for
     // the update that installs both halves together.
     let held = python_hold_line(rust_outcome.as_deref());
+    let planned_hold = held.is_some() && hold_is_planned(rust_outcome.as_deref());
     if let Some(line) = &held {
-        eprintln!("fno doctor update: {line}");
-        failed.push("python held behind rust".into());
+        if planned_hold {
+            println!("fno doctor update: note: {line}");
+        } else {
+            eprintln!("fno doctor update: {line}");
+            failed.push("python held behind rust".into());
+        }
     }
 
     let cmd: Vec<String> = if held.is_some() {
@@ -2487,7 +2505,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let verdict = daemon_verdict();
 
     // The journal records the install; the daemon verdict only sets the exit.
-    let code = if failed.is_empty() {
+    let code = if failed.is_empty() && held.is_none() {
         let installed_fields: Vec<(&str, String)> = {
             let mut f: Vec<(&str, String)> = Vec::new();
             if let Some(r) = &rev {
@@ -2504,12 +2522,19 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         journal_call("installed", &installed_fields, front_door.as_deref());
         0
     } else {
-        let mut fields: Vec<(&str, String)> = vec![("rc", "1".to_string())];
+        // A planned hold with no failed step exits 0; the row still names
+        // the hold, so the journal never reads the wheel as installed.
+        let rc = if failed.is_empty() && planned_hold {
+            0
+        } else {
+            1
+        };
+        let mut fields: Vec<(&str, String)> = vec![("rc", rc.to_string())];
         if let Some(line) = &held {
             fields.push(("reason", line.clone()));
         }
         journal_call("failed", &fields, None);
-        1
+        rc
     };
     // An update finishes in 60 seconds (user order 2026-10-09). One that runs
     // longer still installs, but exits 1 and names its time, so a slow path
@@ -2520,13 +2545,18 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {
-        Ok(line) if failed.is_empty() => match &last_green {
-            Some(r) => println!(
-                "fno update: done; last green rev {}; {line}.",
-                &r[..r.len().min(12)]
-            ),
-            None => println!("fno update: done; {line}."),
-        },
+        Ok(line) if failed.is_empty() => {
+            match &last_green {
+                Some(r) => println!(
+                    "fno update: done; last green rev {}; {line}.",
+                    &r[..r.len().min(12)]
+                ),
+                None if planned_hold => {
+                    println!("fno update: done; rust on the newest published build, python held; {line}.")
+                }
+                None => println!("fno update: done; {line}."),
+            }
+        }
         Err(line) if failed.is_empty() => eprintln!("fno update: FAILED: installed, but {line}."),
         Ok(line) | Err(line) => {
             eprintln!("fno update: FAILED step(s): {}; {line}.", failed.join(", "))

@@ -459,6 +459,7 @@ fn python_holds_whenever_rust_trails_the_source() {
     for trails in [
         "waiting-ci",
         "installed-newest-published",
+        "newest-published-current",
         "skipped-no-origin",
         "skipped-no-cargo",
         "failed",
@@ -468,6 +469,13 @@ fn python_holds_whenever_rust_trails_the_source() {
             line.contains(trails) && line.starts_with("python held"),
             "{line}"
         );
+        // Only a hold on the newest published build is publish lag: it exits
+        // 0 so `fno update && fno restart` still restarts.
+        let planned = matches!(
+            trails,
+            "installed-newest-published" | "newest-published-current"
+        );
+        assert_eq!(hold_is_planned(Some(trails)), planned, "{trails}");
     }
     // Rust current, wheel-only machines, and --no-rust move Python freely.
     for moves in [
