@@ -65,9 +65,11 @@ pub(crate) fn adopted_claude_terminal(
 /// row whose registry status reads terminal and that no known roster
 /// snapshot lists live takes the normal pipeline - the open-PR hold and
 /// the grace window judge it - instead of keeping as a phantom forever.
-/// A roster-listed session keeps: the listing is the live fact and the
-/// registry status the stale one. A non-claude row answers true (no
-/// roster instrument governs it), which does not block the carve-out.
+/// A session the roster lists live keeps: the listing is the live fact and
+/// the registry status the stale one. A finished claude agent never leaves
+/// the listing, so a row listed `done`, `stopped` or `failed` is finished.
+/// A non-claude row answers true (no roster instrument governs it), which
+/// does not block the carve-out.
 pub(crate) fn adopted_row_is_finished(
     e: &state::RegistryEntry,
     agents_memo: &std::cell::RefCell<Option<ClaudeAgentsSnapshot>>,
@@ -87,9 +89,12 @@ pub(crate) fn adopted_row_is_finished(
     }
     let mut memo = agents_memo.borrow_mut();
     let snapshot = memo.get_or_insert_with(|| agents_read());
+    let carries_pids = snapshot.carries_pids();
     match crate::daemon::claude_row_id(e) {
         Some(rid) => match snapshot {
-            ClaudeAgentsSnapshot::Known { rows, .. } => !rows.iter().any(|r| r.short_id == rid),
+            ClaudeAgentsSnapshot::Known { rows, .. } => !rows
+                .iter()
+                .any(|r| r.short_id == rid && r.has_live_process(carries_pids)),
             ClaudeAgentsSnapshot::Unknown { .. } => true,
         },
         None => true,

@@ -13,6 +13,7 @@
 //! Python headline exactly (`invalid provider record 'x': auth_strategy_mismatch`)
 //! and a one-line reason in place of pydantic's multi-line report.
 
+use crate::claude_ask::py_repr as py_repr_str;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -297,14 +298,6 @@ fn py_repr(v: &toml::Value) -> String {
     match v {
         toml::Value::String(s) => py_repr_str(s),
         other => py_str(other),
-    }
-}
-
-fn py_repr_str(s: &str) -> String {
-    if s.contains('\'') && !s.contains('"') {
-        format!("\"{s}\"")
-    } else {
-        format!("'{}'", s.replace('\'', "\\'"))
     }
 }
 

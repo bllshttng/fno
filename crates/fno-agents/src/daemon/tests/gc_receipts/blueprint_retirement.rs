@@ -111,7 +111,7 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
 
 /// AC4-EDGE: a `bp-` row whose planning set is EMPTY retires through
 /// the session release - the basis uses the session arm, never the planning
-/// wording. The `released` spelling is reserved for planning_released.
+/// wording. The `released` spelling is reserved for hold_released.
 #[test]
 fn a_bp_row_with_an_empty_planning_set_retires_on_the_session_basis() {
     use crate::daemon::CascadeOutcome;

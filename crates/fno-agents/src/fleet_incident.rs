@@ -903,6 +903,33 @@ fn write_transition_locked(
     {
         return Err("a stop is already armed".into());
     }
+    // A reserve replaces only the machine arm's hold and an older reserve,
+    // and the daemon lifts only its own reserve.
+    if let Some(origin @ (crate::reserve::RESERVE_ORIGIN | crate::reserve::RESERVE_AUTO_ORIGIN)) =
+        metadata.origin.as_deref()
+    {
+        let current = match read_at(path) {
+            Verdict::Stopped(record) => Some(record),
+            Verdict::Clear(_) => None,
+            Verdict::Unavailable(detail) => {
+                return Err(format!("existing breaker is unreadable: {detail}"))
+            }
+        };
+        let owned = current
+            .as_ref()
+            .is_some_and(|r| r.origin.as_deref() == Some(crate::reserve::RESERVE_AUTO_ORIGIN));
+        if state == "clear" && !owned {
+            return Err("the daemon's reserve no longer holds the breaker".into());
+        }
+        if let Some(record) = current.filter(|_| state == "stopped") {
+            if !crate::reserve::may_replace(origin, record.origin.as_deref()) {
+                return Err(format!(
+                    "a stop is already armed (generation {}, reason: {}); a reserve never replaces it",
+                    record.generation, record.reason
+                ));
+            }
+        }
+    }
     let generation = current_generation(path)? + 1;
     let record = IncidentRecord {
         version: STATE_VERSION,
@@ -1010,7 +1037,7 @@ fn print_receipt(record: &IncidentRecord) {
 
 fn print_usage() {
     println!(
-        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
+        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | reserve stream|edit [--for <dur>, default 2h] [--reason <text>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
     );
 }
 
@@ -1105,7 +1132,7 @@ fn check_json(verdict: &Verdict, scope: &str) -> serde_json::Value {
     })
 }
 
-/// Binary entry: `fleet-incident stop|clear|status|check`.
+/// Binary entry: `fleet-incident stop|clear|reserve|status|check`.
 pub fn run_fleet_incident(args: &[String]) -> i32 {
     let Some(action) = args.first() else {
         print_usage();
@@ -1120,7 +1147,23 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
         print_usage();
         return 0;
     }
-    match action.as_str() {
+    // `reserve <preset>` is a stop with the preset's holds, a default time
+    // box and the reserve origin, parsed by the same flag loop.
+    let reserve = match action.as_str() {
+        "reserve" => match rest.first().and_then(|p| crate::reserve::preset_holds(p)) {
+            Some(holds) => Some((rest[0].clone(), holds)),
+            None => {
+                eprintln!("fleet-incident: reserve needs a preset: stream (holds spawns and tests) or edit (holds tests)");
+                return 2;
+            }
+        },
+        _ => None,
+    };
+    let (action, rest) = match reserve {
+        Some(_) => ("stop", &rest[1..]),
+        None => (action.as_str(), rest),
+    };
+    match action {
         "stop" | "clear" => {
             let mut reason: Option<String> = None;
             let mut by: Option<String> = None;
@@ -1184,7 +1227,7 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                         raw_target = Some((kind.to_string(), value.clone()));
                         i += 2;
                     }
-                    "--ttl" => {
+                    "--ttl" | "--for" => {
                         match rest.get(i + 1) {
                             Some(value) => match parse_ttl(value) {
                                 Ok(parsed) => ttl_ms = Some(parsed),
@@ -1217,6 +1260,21 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
             if action == "clear" && ttl_ms.is_some() {
                 eprintln!("fleet-incident: --ttl applies to stop only");
                 return 2;
+            }
+            if let Some((preset, preset_holds)) = &reserve {
+                if holds.is_some() || raw_target.is_some() {
+                    eprintln!(
+                        "fleet-incident: a reserve sets its own holds on the machine-wide record"
+                    );
+                    return 2;
+                }
+                holds = Some(preset_holds.clone());
+                ttl_ms = ttl_ms.or(Some(crate::reserve::DEFAULT_FOR_MS));
+                reason = reason.or_else(|| {
+                    Some(format!(
+                        "the user reserved the machine for {preset}; `fno agents incident clear` ends it early"
+                    ))
+                });
             }
             let home = crate::paths::AgentsHome::from_env();
             let cwd = match std::env::current_dir() {
@@ -1293,6 +1351,9 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 RecordMetadata {
                     target,
                     expires_at,
+                    origin: reserve
+                        .as_ref()
+                        .map(|_| crate::reserve::RESERVE_ORIGIN.to_string()),
                     ..RecordMetadata::default()
                 },
             ) {

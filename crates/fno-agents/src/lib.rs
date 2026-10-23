@@ -452,6 +452,7 @@ pub mod release_notes;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
+pub mod reserve;
 pub(crate) mod resolve_tier;
 pub mod restart_run;
 pub mod resume_args;
@@ -1499,10 +1500,11 @@ mod tests {
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
-    // birth write, a node filled on a later beat, and the per-beat budget
-    // deferral.
+    // birth write, a node or parent filled on a later beat, and the
+    // per-beat budget deferral.
     "native_bg_mint_failed",
     "native_bg_node_backfilled",
+    "native_bg_parent_backfilled",
     "native_bg_mint_deferred",
     // The sandbox-denial ingester: codex transcript refusals -> one row per
     // (session, class, path) with a hit count, plus the pass summary row.

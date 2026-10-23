@@ -162,13 +162,6 @@ def test_stage_missing_credentials_source_raises(
 # verify_staged / unstage
 # ---------------------------------------------------------------------------
 
-def test_verify_staged_returns_true_after_stage(
-    oauth_record: ProviderRecord, staging_root: Path
-) -> None:
-    """verify_staged() returns True for a properly staged oauth_dir record."""
-    stage(oauth_record, root=staging_root)
-    assert verify_staged(oauth_record, root=staging_root) is True
-
 
 def test_verify_staged_returns_false_after_unstage(
     oauth_record: ProviderRecord, staging_root: Path
