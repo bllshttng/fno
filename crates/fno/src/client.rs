@@ -1814,9 +1814,9 @@ mod keys_settings;
 mod messages_detail;
 mod messages_reply;
 mod overlay_lines;
-pub(crate) use overlay_lines::{
-    humanize_age, nav_agent_tokens, nav_overlay_lines, peek_overlay_lines,
-};
+#[cfg(test)]
+pub(crate) use overlay_lines::nav_overlay_lines;
+pub(crate) use overlay_lines::{humanize_age, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
 mod org_detail;
