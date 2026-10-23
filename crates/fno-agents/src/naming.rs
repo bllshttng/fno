@@ -592,20 +592,11 @@ fn slug_head(slug: &str) -> Option<String> {
     (!head.is_empty()).then_some(head)
 }
 
-/// Four hex digits from an FNV-1a hash of the session, else of the clock and
-/// pid. Never the session's own head: that is its short id.
-fn random_token(session: Option<&str>) -> String {
-    let seed = session.map(str::to_string).unwrap_or_else(|| {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default();
-        format!("{nanos}-{}", std::process::id())
-    });
-    let hash = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    });
-    format!("{:04x}", hash & 0xffff)
+/// Four hex digits: the second group of the session's UUID, else of a fresh
+/// one. Never the first group: that is the short id the name replaces.
+fn random_token(session: Option<&str>) -> Option<String> {
+    let id = session.map_or_else(crate::identity::mint_fno_id, |s| Ok(s.to_string()));
+    id.ok()?.get(9..13).map(str::to_ascii_lowercase)
 }
 
 /// A worker's name from an `agents.naming.worker` template. Tokens: `{slug}`
@@ -627,7 +618,7 @@ pub fn render_worker_name(template: &str, facts: &WorkerFacts) -> Option<String>
             "slug" => slug_head(facts.slug?)?,
             "node" => slug_component(facts.node, usize::MAX),
             "skill" => slug_component(facts.skill, usize::MAX),
-            "random" => random_token(facts.session),
+            "random" => random_token(facts.session)?,
             _ => return None,
         };
         if value.is_empty() {
@@ -1036,22 +1027,13 @@ mod tests {
         );
         assert_eq!(slug("fix").as_deref(), Some("t-fix"));
         assert_eq!(slug("--"), None);
-        let sid = "cccccccc-0000-0000-0000-000000000003";
         let facts = WorkerFacts {
             node: Some("X-6C15"),
-            session: Some(sid),
+            session: Some("cccccccc-AB12-0000-0000-000000000003"),
             ..Default::default()
         };
-        let random = render_worker_name("w-{node}-{random}", &facts).unwrap();
-        assert_eq!(
-            random,
-            render_worker_name("w-{node}-{random}", &facts).unwrap()
-        );
-        assert!(
-            random.starts_with("w-x-6c15-") && random.len() == 13,
-            "{random}"
-        );
-        assert!(!random.contains("cccc"), "{random}");
+        let random = render_worker_name("w-{node}-{random}", &facts);
+        assert_eq!(random.as_deref(), Some("w-x-6c15-ab12"));
         assert_eq!(render_worker_name("{bogus}", &facts), None);
         assert_eq!(render_worker_name("t-{node", &facts), None);
         assert_eq!(
