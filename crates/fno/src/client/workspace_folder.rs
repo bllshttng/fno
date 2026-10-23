@@ -5,14 +5,15 @@
 
 use super::*;
 
-/// What the create overlay's folder field holds. `Viewed` is the default: the
-/// workspace being viewed now. `NoFolder` makes a workspace no row joins by
-/// cwd, only by an explicit move. `Live` indexes the live-row folder list.
+/// What the create overlay's folder field holds. `NoFolder` is the default:
+/// the folder is optional, and a workspace without one is joined by an explicit
+/// move only. `Viewed` copies the workspace being viewed now. `Live` indexes
+/// the live-row folder list.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FolderChoice {
     #[default]
-    Viewed,
     NoFolder,
+    Viewed,
     Live(usize),
 }
 
@@ -171,7 +172,7 @@ impl View {
         if self.folder_pick.picked {
             self.folder_pick.choice
         } else {
-            folder_for_name(folders, name).map_or(FolderChoice::Viewed, FolderChoice::Live)
+            folder_for_name(folders, name).map_or(FolderChoice::NoFolder, FolderChoice::Live)
         }
     }
 
@@ -193,23 +194,23 @@ impl View {
         })
     }
 
-    /// Up (`forward` false) or Down in the create overlay: step through the
-    /// viewed default, no folder, and each live-row folder, and stop following
+    /// Up (`forward` false) or Down in the create overlay: step through no
+    /// folder, the viewed workspace's folder, and each live-row folder, and stop following
     /// the name.
     pub(super) fn cycle_create_folder(&mut self, name: &str, forward: bool) {
         let folders = self.live_row_folders();
         let slots = folders.len() + 2;
         let slot = match self.create_choice(name, &folders) {
-            FolderChoice::Viewed => 0,
-            FolderChoice::NoFolder => 1,
+            FolderChoice::NoFolder => 0,
+            FolderChoice::Viewed => 1,
             FolderChoice::Live(i) => i + 2,
         };
         let next = (slot + if forward { 1 } else { slots - 1 }) % slots;
         self.folder_pick = FolderPick {
             picked: true,
             choice: match next {
-                0 => FolderChoice::Viewed,
-                1 => FolderChoice::NoFolder,
+                0 => FolderChoice::NoFolder,
+                1 => FolderChoice::Viewed,
                 i => FolderChoice::Live(i - 2),
             },
             path: None,
@@ -234,12 +235,12 @@ impl View {
     /// The create overlay's footer: the folder it will send.
     pub(super) fn create_hint(&self, name: &str) -> String {
         if let Some(path) = &self.folder_pick.path {
-            return format!("folder: {path}▏ tab completes, esc back");
+            return format!("folder (optional): {path}▏ tab completes, esc back");
         }
         let shown = match self.create_folder(name) {
             Ok(CreateOrigin::Folder(p)) => abbrev_home(&p),
-            Ok(CreateOrigin::NoFolder) => "none (rows join by a move only)".to_string(),
-            _ => {
+            Ok(CreateOrigin::NoFolder) => "none".to_string(),
+            Ok(CreateOrigin::Viewed) | Err(_) => {
                 let (ws, folder) = self.viewed_workspace();
                 let folder = if folder.is_empty() {
                     "no folder".to_string()
@@ -249,7 +250,7 @@ impl View {
                 format!("same as {ws} ({folder})")
             }
         };
-        format!("folder: {shown} ↑↓ tab to type")
+        format!("folder (optional): {shown} ↑↓ tab to type")
     }
 
     /// A workspace section's Add folder: the picker of live-row folders.
@@ -288,20 +289,20 @@ mod tests {
         );
         let folder = |p: &str| Ok(CreateOrigin::Folder(p.to_string()));
         assert_eq!(v.create_folder("fno-books"), folder("/code/fno-books"));
-        assert_eq!(v.create_folder("other"), Ok(CreateOrigin::Viewed));
-        // Down from the viewed default lands on no folder, then the first
-        // live folder, and the pick sticks even when the typed name differs.
-        v.cycle_create_folder("other", true);
-        assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::NoFolder));
+        assert_eq!(v.create_folder("other"), Ok(CreateOrigin::NoFolder));
         assert_eq!(CreateOrigin::NoFolder.wire(), Some(String::new()));
+        // Down from none lands on the viewed folder, then the first live
+        // folder, and the pick sticks even when the typed name differs.
+        v.cycle_create_folder("other", true);
+        assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::Viewed));
         v.cycle_create_folder("fnh", true);
         assert_eq!(v.create_folder("fnh"), folder("/code/fno-books"));
         v.cycle_create_folder("fnh", true);
         v.cycle_create_folder("fnh", true);
-        assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::Viewed));
+        assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::NoFolder));
         v.cycle_create_folder("fnh", false);
         assert_eq!(v.create_folder("fnh"), folder("/code/fnh"));
-        assert!(v.create_hint("fnh").starts_with("folder: "));
+        assert!(v.create_hint("fnh").starts_with("folder (optional): "));
     }
 
     #[test]
