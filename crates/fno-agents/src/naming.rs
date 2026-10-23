@@ -545,18 +545,40 @@ fn positionals(args: &[String]) -> Vec<String> {
     out
 }
 
-/// Slug words a target worker's default name keeps.
+/// Slug words the `{slug}` token keeps.
 const WORKER_SLUG_WORDS: usize = 3;
 /// A three-word head longer than this keeps two words, so a sideline row
 /// stays readable.
 const WORKER_SLUG_CAP: usize = 24;
+/// A rendered worker name is a CLI handle no longer than this.
+const WORKER_NAME_CAP: usize = 32;
 
-/// The default name of a target worker: `t-` and the first words of its
-/// node's slug (`visual-approval-gate-two-paint` -> `t-visual-approval-gate`).
-/// It carries no model token: the lane picks the model after the name is
-/// set, so a model in the name can be false. The row's `node` and `model`
-/// fields carry those facts.
-pub fn worker_name(slug: &str) -> Option<String> {
+/// `agents.naming.worker` when the config sets none.
+pub const DEFAULT_WORKER_TEMPLATE: &str = "t-{slug}";
+
+/// What a worker name template draws on. A token whose fact is absent
+/// leaves the whole template unrendered, so the caller falls to its next
+/// naming source and never prints a half-filled name.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WorkerFacts<'a> {
+    pub node: Option<&'a str>,
+    pub slug: Option<&'a str>,
+    pub skill: Option<&'a str>,
+    /// Seeds `{random}`, so a row renamed on a later beat keeps one name.
+    pub session: Option<&'a str>,
+}
+
+/// The `agents.naming.worker` template the project at `cwd` resolves.
+pub fn worker_template(cwd: &std::path::Path) -> String {
+    crate::agents_config::config_lookup(cwd, &["agents", "naming", "worker"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKER_TEMPLATE.to_string())
+}
+
+/// The first words of a node slug (`visual-approval-gate-two-paint` ->
+/// `visual-approval-gate`).
+fn slug_head(slug: &str) -> Option<String> {
     let clean = slug_component(Some(slug), usize::MAX);
     let words: Vec<&str> = clean.split('-').filter(|w| !w.is_empty()).collect();
     if words.is_empty() {
@@ -567,7 +589,57 @@ pub fn worker_name(slug: &str) -> Option<String> {
         head = words[..2].join("-");
     }
     let head = cut_slug(Some(head.as_str()), WORKER_SLUG_CAP);
-    (!head.is_empty()).then(|| format!("t-{head}"))
+    (!head.is_empty()).then_some(head)
+}
+
+/// Four hex digits from an FNV-1a hash of the session, else of the clock and
+/// pid. Never the session's own head: that is its short id.
+fn random_token(session: Option<&str>) -> String {
+    let seed = session.map(str::to_string).unwrap_or_else(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        format!("{nanos}-{}", std::process::id())
+    });
+    let hash = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{:04x}", hash & 0xffff)
+}
+
+/// A worker's name from an `agents.naming.worker` template. Tokens: `{slug}`
+/// (the node slug's first words), `{node}` (the node id), `{skill}` (the
+/// seed's command, e.g. `target`) and `{random}` (four hex digits). `None`
+/// when a token has no fact, the template names an unknown token, or the
+/// result does not start with a letter.
+///
+/// The template has no model token: the lane picks the model after the name
+/// is set, so a model in the name can be false. The row's `node` and `model`
+/// fields carry those facts.
+pub fn render_worker_name(template: &str, facts: &WorkerFacts) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let close = open + rest[open..].find('}')?;
+        let value = match &rest[open + 1..close] {
+            "slug" => slug_head(facts.slug?)?,
+            "node" => slug_component(facts.node, usize::MAX),
+            "skill" => slug_component(facts.skill, usize::MAX),
+            "random" => random_token(facts.session),
+            _ => return None,
+        };
+        if value.is_empty() {
+            return None;
+        }
+        out.push_str(&value);
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    let name = cut_slug(Some(out.as_str()), WORKER_NAME_CAP);
+    name.starts_with(|c: char| c.is_ascii_lowercase())
+        .then_some(name)
 }
 
 /// The node a `/target <node>` seed names, else None. Only a target seed
@@ -580,11 +652,32 @@ fn target_seed_node(seed: &str) -> Option<String> {
     }
 }
 
-/// The default worker name of the node `token` names, read from the graph
-/// the project at `cwd` resolves, else None. A row's own cwd picks its
-/// project, so a node of another project than the daemon's reads its own graph.
-pub fn node_worker_name(token: &str, cwd: &std::path::Path) -> Option<String> {
-    node_slug(token, cwd).as_deref().and_then(worker_name)
+/// The command a seed opens with (`/fno:target x-aaaa` -> `target`).
+fn seed_skill(seed: &str) -> Option<String> {
+    let first = seed.split_whitespace().next()?;
+    crate::provider::parse_command_token(first).map(|(command, _)| command.to_string())
+}
+
+/// The worker name of the node `token` names, rendered from the
+/// `agents.naming.worker` template of the project at `cwd`, else None. A
+/// row's own cwd picks its project, so a node of another project than the
+/// daemon's reads its own graph and its own template.
+pub fn node_worker_name(
+    token: &str,
+    cwd: &std::path::Path,
+    skill: Option<&str>,
+    session: Option<&str>,
+) -> Option<String> {
+    let slug = node_slug(token, cwd);
+    render_worker_name(
+        &worker_template(cwd),
+        &WorkerFacts {
+            node: Some(token),
+            slug: slug.as_deref(),
+            skill,
+            session,
+        },
+    )
 }
 
 /// The slug of the node `token` names (id first, then slug), else None.
@@ -608,25 +701,37 @@ fn node_slug(token: &str, cwd: &std::path::Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `name-mint --worker <node> [--seed TEXT] [--slug S]`: the default name of
-/// a target worker. An empty `--worker` reads the node from a `/target`
-/// seed. Prints the name; exit 3 when no node or slug resolves.
+/// `name-mint --worker <node> [--seed TEXT] [--slug S]`: a node worker's
+/// name, rendered from `agents.naming.worker`. An empty `--worker` reads the
+/// node from a `/target` seed, and the seed's command fills `{skill}`.
+/// Prints the name; exit 3 when a template token has no fact.
 fn run_worker_mint(args: &[String]) -> i32 {
     let nonblank = |v: &String| !v.trim().is_empty();
+    let seed = value_of(args, "--seed").filter(nonblank);
     let node = value_of(args, "--worker")
         .filter(nonblank)
-        .or_else(|| value_of(args, "--seed").and_then(|s| target_seed_node(&s)));
-    let slug = value_of(args, "--slug").filter(nonblank).or_else(|| {
-        node.as_deref()
-            .and_then(|n| node_slug(n, std::path::Path::new(".")))
-    });
-    match slug.as_deref().and_then(worker_name) {
+        .or_else(|| seed.as_deref().and_then(target_seed_node));
+    let cwd = std::path::Path::new(".");
+    let slug = value_of(args, "--slug")
+        .filter(nonblank)
+        .or_else(|| node.as_deref().and_then(|n| node_slug(n, cwd)));
+    let skill = seed.as_deref().and_then(seed_skill);
+    let template = worker_template(cwd);
+    let facts = WorkerFacts {
+        node: node.as_deref(),
+        slug: slug.as_deref(),
+        skill: skill.as_deref(),
+        session: None,
+    };
+    match render_worker_name(&template, &facts) {
         Some(name) => {
             println!("{name}");
             0
         }
         None => {
-            eprintln!("error: no node slug to name the worker from");
+            eprintln!(
+                "error: agents.naming.worker {template:?} has a token with no fact for this worker"
+            );
             3
         }
     }
@@ -878,34 +983,87 @@ mod tests {
             })],
         )
         .unwrap();
-        let named = node_worker_name("fb-bd7a", tmp.path());
-        let missing = node_worker_name("fb-0000", tmp.path());
+        let named = node_worker_name("fb-bd7a", tmp.path(), None, None);
+        let missing = node_worker_name("fb-0000", tmp.path(), None, None);
+        // A project's agents.naming.worker renders every token it names.
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(project.join(".fno")).unwrap();
+        std::fs::write(
+            project.join(".fno/config.toml"),
+            "[agents.naming]\nworker = \"{skill}-{node}-{slug}\"\n",
+        )
+        .unwrap();
+        let templated = node_worker_name("fb-bd7a", &project, Some("target"), None);
+        let no_skill = node_worker_name("fb-bd7a", &project, None, None);
         match saved {
             Some(v) => std::env::set_var("FNO_STATE_DIR", v),
             None => std::env::remove_var("FNO_STATE_DIR"),
         }
         assert_eq!(named.as_deref(), Some("t-books-index-sweep"));
         assert_eq!(missing, None);
+        assert_eq!(
+            templated.as_deref(),
+            Some("target-fb-bd7a-books-index-sweep")
+        );
+        assert_eq!(no_skill, None, "a token with no fact renders nothing");
     }
 
-    /// A target worker's default name: `t-` and the first slug words, two
-    /// when three run long, and no model token. Only a target seed binds.
+    /// The default template: `t-` and the first slug words, two when three
+    /// run long, and no model token. `{random}` is stable per session and is
+    /// never the session's own short id. Only a target seed binds a node.
     #[test]
-    fn worker_name_keeps_the_slug_head_and_no_model() {
+    fn worker_template_renders_its_tokens() {
+        let slug = |s: &str| {
+            render_worker_name(
+                DEFAULT_WORKER_TEMPLATE,
+                &WorkerFacts {
+                    slug: Some(s),
+                    ..Default::default()
+                },
+            )
+        };
         assert_eq!(
-            worker_name("visual-approval-gate-two-paint").as_deref(),
+            slug("visual-approval-gate-two-paint").as_deref(),
             Some("t-visual-approval-gate")
         );
         assert_eq!(
-            worker_name("spawned-workers-name-them-t-short").as_deref(),
+            slug("spawned-workers-name-them-t-short").as_deref(),
             Some("t-spawned-workers-name")
         );
         assert_eq!(
-            worker_name("observability-instrumentation-dashboards").as_deref(),
+            slug("observability-instrumentation-dashboards").as_deref(),
             Some("t-observability")
         );
-        assert_eq!(worker_name("fix").as_deref(), Some("t-fix"));
-        assert_eq!(worker_name("--"), None);
+        assert_eq!(slug("fix").as_deref(), Some("t-fix"));
+        assert_eq!(slug("--"), None);
+        let sid = "cccccccc-0000-0000-0000-000000000003";
+        let facts = WorkerFacts {
+            node: Some("X-6C15"),
+            session: Some(sid),
+            ..Default::default()
+        };
+        let random = render_worker_name("w-{node}-{random}", &facts).unwrap();
+        assert_eq!(
+            random,
+            render_worker_name("w-{node}-{random}", &facts).unwrap()
+        );
+        assert!(
+            random.starts_with("w-x-6c15-") && random.len() == 13,
+            "{random}"
+        );
+        assert!(!random.contains("cccc"), "{random}");
+        assert_eq!(render_worker_name("{bogus}", &facts), None);
+        assert_eq!(render_worker_name("t-{node", &facts), None);
+        assert_eq!(
+            render_worker_name("7-{node}", &facts),
+            None,
+            "a handle starts with a letter"
+        );
+        assert_eq!(
+            seed_skill("/fno:blueprint x-aaaa").as_deref(),
+            Some("blueprint")
+        );
+        assert_eq!(seed_skill("go"), None);
         assert_eq!(
             target_seed_node("/fno:target x-aaaa").as_deref(),
             Some("x-aaaa")

@@ -91,7 +91,8 @@ pub(crate) fn prepare_mint(
     let short = crate::client_commands::derived_short_id(session_id);
     let origin = if native { "spawn" } else { "operator" };
     // Name precedence: the record's name, then the row the worker lost, then
-    // the child's own name, then the draw (transcript title, else t-short).
+    // the child's own name, then the draw (agents.naming.worker for the
+    // record's node, else the transcript title, else t-short).
     let base_name = record
         .and_then(|r| r.launch.name.clone())
         .or_else(|| agent_self.map(str::to_string))
@@ -99,7 +100,12 @@ pub(crate) fn prepare_mint(
         .unwrap_or_else(|| {
             let node_name = record.and_then(|r| {
                 let node = r.launch.node.as_deref()?;
-                crate::naming::node_worker_name(node, std::path::Path::new(&r.launch.cwd))
+                crate::naming::node_worker_name(
+                    node,
+                    std::path::Path::new(&r.launch.cwd),
+                    None,
+                    Some(session_id),
+                )
             });
             crate::claude_adopt::synthesized_entry_name(session_id, &short, node_name)
         });
