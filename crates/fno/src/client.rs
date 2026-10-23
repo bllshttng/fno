@@ -1775,6 +1775,10 @@ pub(crate) enum AuxAction {
     /// The whole-machine resource meter: flip the status-row meter, persist
     /// `resource_meter.enabled`, start or stop the sampler.
     ToggleResourceMeter,
+    /// Flip `agents.reserve_auto` (the daemon's OBS / editor reserve).
+    ToggleReserveAuto,
+    /// Clear the machine-wide fleet hold the status row names (prefix+U).
+    LiftHold,
     ToggleConfirmLifecycle,
     /// Apply the named mux theme now: swap the in-memory theme, then
     /// persist via `fno config set mux.theme`. The picker lists the shipped
@@ -1815,7 +1819,7 @@ mod messages_detail;
 mod messages_reply;
 mod overlay_lines;
 pub(crate) use overlay_lines::{
-    humanize_age, nav_agent_tokens, nav_overlay_lines, peek_overlay_lines,
+    humanize_age, humanize_ago, nav_agent_tokens, nav_overlay_lines, peek_overlay_lines,
 };
 mod messages_view;
 mod org_board;
@@ -5005,7 +5009,7 @@ impl View {
                 overlay_origin,
                 overlay_dims,
                 &chrome,
-                &conn.render(),
+                &conn.render_with(&self.layout.agents),
                 &self.theme,
                 None,
             );
@@ -5239,7 +5243,7 @@ impl View {
             origin,
             dims,
             &chrome,
-            &conn.render(),
+            &conn.render_with(&self.layout.agents),
             None,
             OverlayAnchor::Center,
         )
@@ -7074,21 +7078,6 @@ fn nav_glyph(s: PaneState) -> char {
 /// transcript still follows within ~3s; a silent row stops refetching entirely.
 const PEEK_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Humanize an age in seconds to `Ns`/`Nm`/`Nh`/`Nd` for the peek
-/// header's `changed Ns ago` line (Discretion 3). A future stamp (clock skew)
-/// is clamped by the caller to 0 before this, so `0s` is the floor.
-pub(crate) fn humanize_ago(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Attach + main loop
 // ---------------------------------------------------------------------------
@@ -7470,6 +7459,9 @@ async fn attach_and_run(
         }
         // kick a wanted Connections read off the UI loop, at most one in
         // flight, tagged with the current gen so a stale result is dropped.
+        if view.connections.as_mut().is_some_and(|cv| cv.usage_due()) {
+            view.rearm_connections_read();
+        }
         if view.conn_want && !view.conn_inflight {
             view.conn_want = false;
             view.conn_inflight = true;
@@ -8857,13 +8849,7 @@ async fn dispatch_event(
             // Pure local state, like the sort cycle: no geometry, no wire.
             view.agent_group = view.agent_group.next();
             view_store::save_agent_group(view.agent_group);
-            let word = match view.agent_group {
-                AgentGroup::Workspace => "workspace",
-                AgentGroup::Team => "lead",
-                AgentGroup::Cwd => "cwd",
-                AgentGroup::Status => "status",
-            };
-            view.set_notice(format!("grouping by {word}"));
+            view.set_notice(format!("grouping by {}", view.agent_group.word()));
         }
         Event::ToggleCardHead => {
             // Pure local state: the head row is one display row, and the
@@ -8915,6 +8901,7 @@ async fn dispatch_event(
         Event::OpenSweepThreads => {
             execute_aux_action(view, AuxAction::OpenSweep, sock_w).await?;
         }
+        Event::LiftHold => hold::lift(view).await,
         Event::OpenSidelineMenu => {
             // The footer `menu` button's popup, on the keyboard.
             view.open_sideline_menu(Anchor::Center);
@@ -9302,6 +9289,7 @@ async fn execute_aux_action(
             view.aux = None;
             return Ok(DispatchFlow::Detach);
         }
+        AuxAction::LiftHold => hold::lift(view).await,
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
         AuxAction::Share(act) => share_flow::act(view, act).await,
         AuxAction::OpenBacklogView => {
@@ -9312,6 +9300,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleStatus
         | AuxAction::ToggleConfirmLifecycle
         | AuxAction::ToggleResourceMeter
+        | AuxAction::ToggleReserveAuto
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::ThemeImportOpen
@@ -10340,6 +10329,7 @@ mod agent_sort;
 
 #[path = "client/agent_group.rs"]
 mod agent_group;
+mod hold;
 
 #[path = "client/header_band.rs"]
 mod header_band;

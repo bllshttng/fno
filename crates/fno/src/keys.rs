@@ -492,7 +492,7 @@ pub enum Event {
     /// round trip through slim.
     ToggleAgentSort,
     /// Cycle the sideline agents view's group-by axis: workspace -> team ->
-    /// cwd -> status (prefix+G). Persisted like the density.
+    /// cwd -> status -> harness (prefix+W). Persisted like the density.
     CycleAgentGroup,
     /// Show or hide the card's `node · PR` header row (prefix+Y). The header
     /// shows at every width now; this is the operator's off switch.
@@ -541,6 +541,9 @@ pub enum Event {
     /// `sweep threads` row, on the keyboard. The modal still asks before
     /// anything is reaped.
     OpenSweepThreads,
+    /// Lift the machine-wide fleet hold the status row names (prefix+U),
+    /// when the machine armed it.
+    LiftHold,
     /// Share the focused pane and copy the join link (prefix+X); pressed
     /// again while sharing, it copies the link again. The experimental
     /// `pane share` toggle gates it client-side.
@@ -1399,7 +1402,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "cycle-agent-group",
             CycleAgentGroup,
             Global,
-            "group agents by workspace, lead, cwd, or status",
+            "group agents by workspace, lead, cwd, status, or harness",
         ),
         b(
             b'Y',
@@ -1422,6 +1425,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             OpenSweepThreads,
             Global,
             "sweep threads (close, reap)",
+        ),
+        b(
+            b'U',
+            "lift-hold",
+            LiftHold,
+            Global,
+            "lift the fleet hold (reserve, overload)",
         ),
         b(
             b'X',

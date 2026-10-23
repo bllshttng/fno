@@ -62,11 +62,16 @@ impl View {
                     self.sideline_layout == crate::sideline_color::SidelineLayout::Card,
                     "sideline card layout",
                 ));
+                rows.push(toggle(
+                    hold::reserve_auto_on(),
+                    "hold the fleet while OBS or an editor runs",
+                ));
                 actions.push(AuxAction::ToggleHoverFocus);
                 actions.push(AuxAction::ToggleStatus);
                 actions.push(AuxAction::ToggleResourceMeter);
                 actions.push(AuxAction::ToggleConfirmLifecycle);
                 actions.push(AuxAction::ToggleSidelineLayout);
+                actions.push(AuxAction::ToggleReserveAuto);
             }
             SettingsTab::Theme => {
                 if !matches!(&self.theme_import, theme_import_ui::ThemeImportUi::Idle) {
@@ -379,6 +384,7 @@ pub(super) async fn run_action(
             view.set_notice(format!("confirm before stop/remove: {enabled}"));
             view.reopen_settings_keeping_sel();
         }
+        AuxAction::ToggleReserveAuto => hold::toggle_reserve_auto(view),
         AuxAction::ToggleResourceMeter => {
             view.resource_meter_on = !view.resource_meter_on;
             view.resource_meter_gate

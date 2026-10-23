@@ -81,6 +81,21 @@ pub(crate) fn nav_agent_tokens(a: &AgentRow, squad: Option<&str>) -> Vec<String>
     t
 }
 
+/// Humanize an age in seconds to `Ns`/`Nm`/`Nh`/`Nd` for the peek
+/// header's `changed Ns ago` line (Discretion 3). A future stamp (clock skew)
+/// is clamped by the caller to 0 before this, so `0s` is the floor.
+pub(crate) fn humanize_ago(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
 /// The table's last-activity cell: the same buckets as [`humanize_ago`],
 /// right-justified to a fixed width of 4 so the column never reflows when a
 /// value rolls from `59m` to `1h`. An absent reading renders EMPTY, like the
