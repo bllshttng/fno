@@ -18,10 +18,15 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::digest_overlay::{config_roots, config_str, non_empty_env_os, read_nested_file};
 
-/// The flags this front door owns. `fno agents spawn --floor N` is peeled
-/// here, before any forwarding, so the Python Typer command never declares
-/// it and `lint_cli`'s Python-only count never sees it.
-pub const FRONT_DOOR_SPAWN_FLAGS: &[&str] = &["--floor"];
+/// The flags this front door owns. `fno agents spawn --floor N` and `--mux`
+/// are peeled here, before any forwarding, so the Python Typer command never
+/// declares them and `lint_cli`'s Python-only count never sees them.
+pub const FRONT_DOOR_SPAWN_FLAGS: &[&str] = &["--floor", "--mux"];
+
+/// The env `--mux` sets for the forwarded spawn. The headless claude lane
+/// (`fno_agents::claude_ask::SHOW_ROW_ENV`, same spelling) then keeps the
+/// run's registry row, so the one-shot shows in the mux while it runs.
+pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
 
 /// The default the receipt prints when the config carries no floor yet.
 /// Pinned equal to the gate's own default by the cap test below, so the
@@ -56,6 +61,8 @@ impl std::fmt::Display for FloorError {
 #[derive(Debug)]
 pub struct Peeled {
     pub floor: Option<u32>,
+    /// `--mux` appeared before the fence.
+    pub mux: bool,
     /// The argv with the flag and its value removed. A `--floor` after the
     /// `--` fence stays: past the fence the flags are the harness's.
     pub rest: Vec<String>,
@@ -72,6 +79,7 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
         return Err("expected an `agents spawn` argv".into());
     }
     let mut floor: Option<u32> = None;
+    let mut mux = false;
     let mut help = false;
     let mut rest: Vec<String> = args[..2].to_vec();
     let mut i = 2;
@@ -84,6 +92,11 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
         if tok == "-h" || tok == "--help" {
             help = true;
             rest.push(tok.to_string());
+            i += 1;
+            continue;
+        }
+        if tok == "--mux" {
+            mux = true;
             i += 1;
             continue;
         }
@@ -110,7 +123,12 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
         }
         i += if tok == "--floor" { 2 } else { 1 };
     }
-    Ok(Peeled { floor, rest, help })
+    Ok(Peeled {
+        floor,
+        mux,
+        rest,
+        help,
+    })
 }
 
 /// The receipt the setter prints: the old value, the new one, the file it
@@ -470,9 +488,16 @@ mod tests {
         let p = peel_of(&["agents", "spawn", "--floor", "8", "w1", "build", "it"]).unwrap();
         assert_eq!(p.rest, vec!["agents", "spawn", "w1", "build", "it"]);
         // Past the fence the flag is the harness's: untouched, no floor.
-        let p = peel_of(&["agents", "spawn", "--", "--floor", "3"]).unwrap();
+        let p = peel_of(&["agents", "spawn", "--", "--floor", "3", "--mux"]).unwrap();
         assert_eq!(p.floor, None);
-        assert_eq!(p.rest, vec!["agents", "spawn", "--", "--floor", "3"]);
+        assert!(!p.mux);
+        assert_eq!(
+            p.rest,
+            vec!["agents", "spawn", "--", "--floor", "3", "--mux"]
+        );
+        let p = peel_of(&["agents", "spawn", "--mux", "w1", "--once", "go"]).unwrap();
+        assert!(p.mux && p.floor.is_none());
+        assert_eq!(p.rest, vec!["agents", "spawn", "w1", "--once", "go"]);
         // Help is recognized with and without a floor, and stays in rest.
         let p = peel_of(&["agents", "spawn", "--help"]).unwrap();
         assert!(p.help && p.floor.is_none());
