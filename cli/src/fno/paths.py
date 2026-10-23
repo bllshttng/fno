@@ -1884,19 +1884,19 @@ def resolve_plugin_script(relpath: str) -> Path:
     project), e.g. ``hooks/helpers/init-target-state.sh`` or
     ``scripts/setup/setup-worktree.sh``.
 
-    Order: env hint (CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT / FNO_REPO_ROOT, authoritative) ->
-    package-relative -> persisted ~/.fno/install/plugin-root pointer -> repo."""
-    hinted: "Path | None" = None
-    for env_name in ("CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"):
+    Order: CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT (authoritative) -> FNO_REPO_ROOT
+    when it holds the script -> package-relative -> persisted
+    ~/.fno/install/plugin-root pointer -> FNO_REPO_ROOT -> repo."""
+    for env_name in ("CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT"):
         root = os.environ.get(env_name)
         if root:
-            candidate = Path(root).expanduser() / relpath
-            if candidate.exists():
-                return candidate
-            if hinted is None:
-                hinted = candidate
-    # A hint that names a root without this script (FNO_REPO_ROOT is the
-    # active project in a foreign repo) must not shadow the installed plugin.
+            return Path(root).expanduser() / relpath
+    # FNO_REPO_ROOT names the active project, which in a foreign repo ships no
+    # plugin scripts: it must not shadow the installed plugin.
+    repo_hint = os.environ.get("FNO_REPO_ROOT")
+    hinted = Path(repo_hint).expanduser() / relpath if repo_hint else None
+    if hinted is not None and hinted.exists():
+        return hinted
     pkg_root = Path(__file__).resolve().parents[3]
     if _is_plugin_root(pkg_root) and ((pkg_root / relpath).exists() or hinted is None):
         return pkg_root / relpath
