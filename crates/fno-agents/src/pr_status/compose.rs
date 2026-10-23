@@ -530,6 +530,12 @@ fn entry_name(c: &Value) -> String {
 }
 
 fn push_review_notes(unresolved: &Value, resolved_unchanged: &Value, out: &mut Vec<String>) {
+    if unresolved.is_null() {
+        out.push(
+            "note: optional review findings unreadable; ready does not wait on them. Required reviewers still gate through review coverage."
+                .to_string(),
+        );
+    }
     if let Some(n) = unresolved.as_i64() {
         if n > 0 {
             out.push(format!(
