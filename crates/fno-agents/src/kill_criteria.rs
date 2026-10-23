@@ -1,4 +1,4 @@
-//! `fno-agents kill-check` verb — Rust port of `scripts/lib/kill-criteria.sh`
+//! `fno-agents kill-check` command — Rust port of `scripts/lib/kill-criteria.sh`
 //! (packaging EPIC, eliminate-don't-vendor leg).
 //!
 //! Provable byte-parity with the bash `check_kill_criteria <plan_path>`:
@@ -57,9 +57,9 @@ fn parse_args(args: &[String]) -> KillCheckArgs {
     let mut state_file = std::env::var("STATE_FILE").ok().filter(|s| !s.is_empty());
     let mut git_bin = std::env::var("FNO_KILLCHECK_GIT_BIN").unwrap_or_else(|_| "git".to_string());
 
-    // Tolerate a leading `kill-check` verb token (loopcheck does the same with
+    // Tolerate a leading `kill-check` command token (loopcheck does the same with
     // `loop-check`). `bin/client.rs` already passes `&args[1..]`, but callers /
-    // tests that include the verb still parse correctly.
+    // tests that include the command still parse correctly.
     let args = if args.first().map(|s| s.as_str()) == Some("kill-check") {
         &args[1..]
     } else {

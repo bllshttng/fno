@@ -140,7 +140,7 @@ impl Core {
             _ => {
                 // `CurrentRoute` here defaults to the squad owning the spawn's
                 // CWD, not the active/gazed-at squad that `resolve_squad`
-                // (the tab and layout verbs) passes for the same token. Both
+                // (the tab and layout commands) passes for the same token. Both
                 // defaults are deliberate; the pair is not interchangeable.
                 let current = self.session.find_by_cwd(&squad_key);
                 let dest = self

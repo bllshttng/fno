@@ -8,10 +8,10 @@ the same commands `fno approvals ls` did. The lead board LEAF joins them too
 stays put here and folds into agents in a later unit, so `board_cmd` is
 registered under both `lead` and `inbox` rather than moved.
 
- (d-add90c60): the human-authority verbs join the human-facing group.
-`decisions` and the whole `law` app are the Rust front's nested verbs (no
+ (d-add90c60): the human-authority commands join the human-facing group.
+`decisions` and the whole `law` app are the Rust front's nested commands (no
 Python mount), and `fno inbox decide` answers natively through the decide
-door; the root `fno decide` / `fno law` spellings are VERB_MOVES shims.
+door; the root `fno decide` / `fno law` spellings are COMMAND_MOVES shims.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ inbox_app.add_typer(notify_app, name="notify")
 inbox_app.add_typer(outstanding_app, name="outstanding")
 inbox_app.add_typer(day_app, name="day")
 # `fno inbox law` is the Rust front's nested group; no Python mount.
-# The queue verb is `user`; the pre-rename spelling stays as a hidden
+# The queue command is `user`; the pre-rename spelling stays as a hidden
 # alias so existing scripts keep working.
 inbox_app.add_typer(operator_app, name="user")
 inbox_app.add_typer(operator_app, name="operator", hidden=True)

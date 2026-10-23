@@ -25,9 +25,12 @@ pub(crate) fn release_repo() -> String {
 /// move it in this window loses to the compile fallback anyway.
 const FETCH_SECS: &str = "45";
 
-/// The four binaries every tarball carries: the fno-agents triad and the
+/// The four binaries every tarball must carry: the fno-agents triad and the
 /// `fno` front door. The standalone `footnote` harness left the tarball when
-/// crates/footnote was retired; requiring it here refused every update.
+/// crates/footnote was retired; requiring it here refused every update. This
+/// is the required core, not the inventory: swap_into lands every binary the
+/// tarball carries, so a bin added to crates/fno-agents reaches machines
+/// without this list learning about it.
 pub(crate) const BINARIES: [&str; 4] = [
     "fno-agents",
     "fno-agents-daemon",
@@ -356,10 +359,15 @@ fn proves_rev(unpacked: &Path, crates_rev: &str) -> Result<(), String> {
     }
 }
 
-/// Move the four unpacked binaries into `bin_dir`. Every copy lands first as
-/// a temp file beside its target, and only then do the renames run, so a
-/// failed copy leaves the old set whole. A rename over a running binary is
-/// safe on unix: the live process keeps its old inode.
+/// Move every unpacked binary into `bin_dir`. The four core names must be
+/// present (a truncated or foreign tarball refuses here and swaps nothing);
+/// anything else the tarball carries is swapped too, so a bin added to
+/// crates/fno-agents reaches machines whose install predates it. On
+/// 2026-10-22 a four-name swap list dropped the new fno-gh-proxy and left
+/// the `gh` shim execing a binary no install ever landed. Every copy lands
+/// first as a temp file beside its target, and only then do the renames run,
+/// so a failed copy leaves the old set whole. A rename over a running binary
+/// is safe on unix: the live process keeps its old inode.
 pub(crate) fn swap_into(unpacked: &Path, bin_dir: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -371,9 +379,19 @@ pub(crate) fn swap_into(unpacked: &Path, bin_dir: &Path) -> Result<(), String> {
     if !missing.is_empty() {
         return Err(format!("the tarball lacks {}", missing.join(", ")));
     }
+    let mut names: Vec<String> = match std::fs::read_dir(unpacked) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect(),
+        Err(e) => return Err(format!("{}: {e}", unpacked.display())),
+    };
+    names.sort();
     std::fs::create_dir_all(bin_dir).map_err(|e| format!("{}: {e}", bin_dir.display()))?;
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for name in BINARIES {
+    for name in &names {
         let tmp = bin_dir.join(format!(".{name}.prebuilt-{}", std::process::id()));
         let copied = std::fs::copy(unpacked.join(name), &tmp)
             .and_then(|_| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)));
@@ -410,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn swap_moves_all_four_or_none() {
+    fn swap_moves_every_tarball_binary_or_none() {
         let src = tempfile::tempdir().unwrap();
         let dest = tempfile::tempdir().unwrap();
         for name in &BINARIES[..3] {
@@ -424,13 +442,25 @@ mod tests {
             b"old"
         );
 
+        // The core four swap; so does anything else the tarball carries (a
+        // bin added to crates/fno-agents after this machine's first install).
         std::fs::write(src.path().join(BINARIES[3]), b"new").unwrap();
+        std::fs::write(src.path().join("fno-gh-proxy"), b"proxy").unwrap();
+        std::fs::write(src.path().join("footnote"), b"stub").unwrap();
         swap_into(src.path(), dest.path()).unwrap();
         for name in BINARIES {
             assert_eq!(std::fs::read(dest.path().join(name)).unwrap(), b"new");
         }
+        assert_eq!(
+            std::fs::read(dest.path().join("fno-gh-proxy")).unwrap(),
+            b"proxy"
+        );
+        assert_eq!(
+            std::fs::read(dest.path().join("footnote")).unwrap(),
+            b"stub"
+        );
         let leftovers = std::fs::read_dir(dest.path()).unwrap().count();
-        assert_eq!(leftovers, BINARIES.len());
+        assert_eq!(leftovers, BINARIES.len() + 2);
     }
 
     #[test]

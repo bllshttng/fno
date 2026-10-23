@@ -80,7 +80,7 @@ pub fn send_at(
     scope: &str,
     text: &str,
 ) -> Result<Vec<String>, String> {
-    let rows = crate::client_verbs::load_registry_entries(registry)
+    let rows = crate::client_commands::load_registry_entries(registry)
         .map_err(|e| format!("lead mail: {e}"))?;
     let projects =
         crate::org_board::scope::project_map(&std::env::current_dir().unwrap_or_default()).ok();

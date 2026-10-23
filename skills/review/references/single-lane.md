@@ -2,9 +2,9 @@
 
 # The fno review lane
 
-The owned reviewer. One context walks every angle, then verifies, as ordinary tool calls in the current session. It never dispatches subagents, never fires a native review verb, a pane, or the mail bus, and it satisfies the same `code-review` gate entry the native verb satisfies.
+The owned reviewer. One context walks every angle, then verifies, as ordinary tool calls in the current session. It never dispatches subagents, never fires a native review command, a pane, or the mail bus, and it satisfies the same `code-review` gate entry the native command satisfies.
 
-Why inline, always: a fan-out needs a provider that permits it, and a native verb needs a transport that can fail in each measured way this lane replaces. A single context has neither dependency. Inline is the primary shape, not a fallback.
+Why inline, always: a fan-out needs a provider that permits it, and a native command needs a transport that can fail in each measured way this lane replaces. A single context has neither dependency. Inline is the primary shape, not a fallback.
 
 Inputs from the router: a level (`low` `medium` `high` `xhigh` `max`), optional flags (`--comment`, `--fix`), and an optional target (PR number, branch, or path).
 
@@ -72,7 +72,7 @@ For the one question this diff answers (take it from the plan's `surface:` block
 
 The other angles ask whether the diff is right. This one asks who else relies on what the diff changed and never saw it change. A staff engineer reads the consumers before the code.
 
-1. Name the surfaces. List each changed thing that a reader outside the changed files can depend on. Kinds: verb, flag, output line, file format, config key, event type, exit code, public type, default, capability claim. One line each, in the shape `<surface>: <old> -> <new>`. A diff that changes no such surface writes `surfaces: none` and the angle ends.
+1. Name the surfaces. List each changed thing that a reader outside the changed files can depend on. Kinds: command, flag, output line, file format, config key, event type, exit code, public type, default, capability claim. One line each, in the shape `<surface>: <old> -> <new>`. A diff that changes no such surface writes `surfaces: none` and the angle ends.
 2. Cross-repo contracts first. Another repo breaks silently, and no check in this repo fails. List the sibling repos: `fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .`. Exit 3 means no workspace lists this repo. Write `siblings: unconfigured` in the report, never `siblings: none`. Fetch each sibling, then grep its remote default branch: `git -C <path> grep -n -F -e <surface> <ref>`. Read `<ref>` from `git -C <path> symbolic-ref --short refs/remotes/origin/HEAD`. A local checkout can sit days behind. With no remote ref, grep `HEAD` and mark that sibling `local` in the report. Also search THIS repo for text that describes a sibling. Examples: a capability table, a vendored schema, a pinned version, a doc that names the sibling. Check each hit against the sibling's current `origin/main`. A claim the sibling no longer makes true is a candidate.
 3. Then the in-repo readers that no call graph shows. Look at docs, `--help` text, refusal and receipt strings, tests, config defaults and generated copies. Also look at the other language leg of a dual surface (`cli/src/fno` and `crates/` here). A reader that still teaches the old behavior is a candidate.
 4. Name the one fact the change is safe because of. Say how far you proved it. The levels: cited at a line, walked through the failure, or ran code that fails on a false fact. A fact you only stated is `unproven`.

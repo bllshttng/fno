@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.mail.cli.cmd_reply
 //!
-//! Characterization harness for the `mail reply` wrapped-verb port.
+//! Characterization harness for the `mail reply` wrapped-command port.
 //! The goldens were captured from the Python leg (cmd_reply) before its body
 //! was deleted, through tests/capture/mail_reply_capture.py; the frozen bytes
 //! are the contract now that the front routes every reply to this leaf. The
@@ -37,7 +37,7 @@ const DROP_PREFIXES: [&str; 6] = [
     "  obsidian enabled:",
     "  sentinel:",
     // The escalation stderr advisory names whether the OS notifier displayed,
-    // a property of the host, not of the verb. The receipt is the contract.
+    // a property of the host, not of the command. The receipt is the contract.
     "escalated to human (",
 ];
 
@@ -596,4 +596,49 @@ fn mail_reply_matches_captured_goldens() {
         assert_golden("mail_reply", case.label, &leg.golden(&root), None);
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+fn dir_named(root: &Path, name: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.file_name().is_some_and(|n| n == name) {
+            return Some(path);
+        }
+        if let Some(found) = dir_named(&path, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[test]
+fn reply_to_a_system_arm_sender_writes_its_durable_floor() {
+    let root = temp_root("system-arm");
+    seed_bus(
+        &root,
+        &[bus_row(
+            "msg-caparm",
+            "fno/quiet-recovery",
+            "claude-capture1",
+            "send",
+            Some("name"),
+            None,
+        )],
+    );
+    let leg = run_case(&root, false, false, None, &["--to", "msg-caparm", "ack"]);
+    let output = format!("{}{}", leg.stdout, leg.stderr);
+    assert!(
+        !output.contains("path separators"),
+        "the slash in the arm name must not reach the traversal guard: {output}"
+    );
+    let floor = dir_named(&root, "fno.quiet-recovery").expect("the arm's floor directory exists");
+    let threads = std::fs::read_dir(floor.join("inbox"))
+        .expect("floor inbox readable")
+        .flatten()
+        .count();
+    assert_eq!(threads, 1, "the reply landed as one thread: {output}");
+    let _ = std::fs::remove_dir_all(&root);
 }

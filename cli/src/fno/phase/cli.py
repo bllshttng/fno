@@ -1,7 +1,7 @@
-"""fno do phase CLI - thin wrapper over the `fno-agents kill-check` Rust verb.
+"""fno do phase CLI - thin wrapper over the `fno-agents kill-check` Rust command.
 
 Formerly sourced scripts/lib/kill-criteria.sh; the predicate evaluator is now
-folded into the bundled fno-agents binary (US1), so the verb runs
+folded into the bundled fno-agents binary (US1), so the command runs
 on a bare `pip install fno` (the binary ships in the wheel) with no repo-root
 script dependency. The Python wrapper still resolves the default plan_path from
 .fno/target-state.md and forwards it to the binary, preserving the prior

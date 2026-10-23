@@ -279,10 +279,10 @@ def _stamp_spawned_session_row(
     if not harness or not session_id:
         if worker_name:
             from fno.paths import agents_registry_path
-            from fno.rust_binary import verb_call
+            from fno.rust_binary import command_call
             try:
                 grant = _resolve_spawn_merge_grant(message) if phase == "execute" else None
-                verb_call("pending-session-row", {"action": "park", "name": worker_name,
+                command_call("pending-session-row", {"action": "park", "name": worker_name,
                          "phase": phase, "merge_grant": grant,
                          "registry": str(agents_registry_path())})
             except (Exception, SystemExit) as exc:  # noqa: BLE001 - never fail the spawn

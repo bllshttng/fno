@@ -4,7 +4,7 @@
 //! DonePRGreen means the PR merged; it does not mean the node closed (the
 //! specimen: a lead stopped the worker four minutes after its merge, and
 //! the node read in_review until a peer ran reconcile by hand). The
-//! merge verb closes its node in a child bound to the worker's lifetime, so
+//! merge command closes its node in a child bound to the worker's lifetime, so
 //! a killed, crashed, or 429-dead worker takes the closer with it. This arm
 //! is the session-free floor: it shells the same bare
 //! `fno backlog reconcile --json` the SessionStart hook runs, with no
@@ -44,7 +44,7 @@ fn short(text: &str) -> String {
 
 // `unreadable reconcile json` alone was a dead end: the row named the
 // symptom but threw away the one thing a reader needs to diagnose it - what
-// the verb actually printed. Carry a bounded snippet instead.
+// the command actually printed. Carry a bounded snippet instead.
 fn unreadable(stdout: &str) -> CloseOutcome {
     let sample = short(stdout.trim());
     let sample = if sample.is_empty() {
@@ -75,7 +75,7 @@ fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
 }
 
 /// Turn one reconcile run into a tick outcome. Pure, so tests drive it with
-/// strings. The verb pretty-prints its JSON across many lines, so the whole
+/// strings. The command pretty-prints its JSON across many lines, so the whole
 /// trimmed stdout parses as one object - never a search for a `{` line. A
 /// run that did not report a readable `closed` array is an error, never a
 /// zero: a fabricated zero reads as "in sync" (the stale-summary rule). A
@@ -201,7 +201,7 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
 }
 
 /// The production runner: the bare sweep, cwd-free (the graph is one store).
-/// The native door, not the wheel: the Python verb is deleted, and the arm's
+/// The native door, not the wheel: the Python command is deleted, and the arm's
 /// JSON contract lives in the Rust arm now.
 fn run_reconcile() -> Result<String, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
@@ -213,7 +213,7 @@ fn run_reconcile() -> Result<String, String> {
 }
 
 /// Classify a run from its bytes. Exit 0 is the payload. Exit 4 is the
-/// verb's documented partial status: its JSON is already complete on stdout
+/// command's documented partial status: its JSON is already complete on stdout
 /// and holds the failures, so it is kept instead of discarded for the
 /// stderr tail. Anything else keeps the stderr lines that diagnose it. The
 /// last line alone was a dead end: a Rust panic spends its first line on

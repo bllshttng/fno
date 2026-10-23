@@ -1,4 +1,4 @@
-"""A revival fork must prove it came up before the verb reports one.
+"""A revival fork must prove it came up before the command reports one.
 
 The reported failure: a ``spawn --resume`` fork of a claude thread worker
 returned a session id while the new session never wrote a transcript line and
@@ -63,7 +63,7 @@ def test_a_missing_binary_stands_the_gate_down(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Journey: the spawn verb refuses through the real wiring
+# Journey: the spawn command refuses through the real wiring
 # ---------------------------------------------------------------------------
 
 

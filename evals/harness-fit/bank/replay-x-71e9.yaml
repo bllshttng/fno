@@ -28,9 +28,9 @@ prompt: |
 
   THE LANE ALREADY EXISTS. packages/bundle/acp-app/package.json describes the acp profile as "automation-only JSON-RPC stdio and process lifecycle over dsh-base". Footnote already drives that transport twice: fno/agents/harnesses/_acp.py holds AcpStdioSession, the shared protocol loop, and grok.py (150 lines) and kimi.py (231 lines) subclass it. So this is a subclass plus a capability row, NOT a protocol implementation. Write no new JSON-RPC.
 
-  WHAT EACH SUBCLASS ACTUALLY CARRIES, so scope is honest: an argv builder, auth-error detection with a typed *AuthenticationRequired, a request-timeout override, and the session verbs the vendor supports. That last is the real variance. Grok defines session_new only. Kimi defines new, resume, close, delete and fork. The size of this task is decided by which verbs dsh implements.
+  WHAT EACH SUBCLASS ACTUALLY CARRIES, so scope is honest: an argv builder, auth-error detection with a typed *AuthenticationRequired, a request-timeout override, and the session commands the vendor supports. That last is the real variance. Grok defines session_new only. Kimi defines new, resume, close, delete and fork. The size of this task is decided by which commands dsh implements.
 
-  FIRST TASK, before any estimate. Read packages/acp in the checkout and report which ACP session verbs dsh's acp-app actually implements, and how a session id is minted: caller-assigned like grok, or vendor-minted like kimi. Report that as a finding on this node BEFORE writing code. Kimi's six verbs against grok's one is roughly an 80-line swing and it decides the capability row.
+  FIRST TASK, before any estimate. Read packages/acp in the checkout and report which ACP session commands dsh's acp-app actually implements, and how a session id is minted: caller-assigned like grok, or vendor-minted like kimi. Report that as a finding on this node BEFORE writing code. Kimi's six commands against grok's one is roughly an 80-line swing and it decides the capability row.
 
   THEN. Add the subclass beside grok.py and kimi.py, add the harness_capabilities.toml row, and note that the toml exists in three places (cli/src/fno/agents/, crates/fno/src/, crates/fno-agents/src/). Establish whether those are generated copies with a sync gate before hand-editing three files; if they are not, say so rather than editing all three.
 

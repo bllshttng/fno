@@ -273,20 +273,20 @@ pub fn enrich_spawn_payload(message: &str) -> String {
     format!("{message}\n\n{BREVITY_BLOCK}")
 }
 
-/// `is_verb_seed` (`config/_dispatch_verbs.py:58`): position 0 is
+/// `is_command_seed` (`config/_dispatch_commands.py:60`): position 0 is
 /// load-bearing - only a leading command token may be rewritten.
-pub fn is_verb_seed(seed: &str) -> bool {
+pub fn is_command_seed(seed: &str) -> bool {
     seed.split_whitespace()
         .next()
-        .is_some_and(|first| crate::provider::parse_verb_token(first).is_some())
+        .is_some_and(|first| crate::provider::parse_command_token(first).is_some())
 }
 
 /// `normalize_command`'s slash-surface leg (harness_map.py:537): the
 /// plugin-namespace prefix swap only, never re-tokenized. `codex-skill`
-/// (the `$fno:verb` swap) and the `refused` surface belong to the codex and
+/// (the `$fno:command` swap) and the `refused` surface belong to the codex and
 /// gemini arms; a codex-shaped seed reaching this arm keeps its spelling.
 /// An internal-slash first token (`/usr/bin/script`) is nobody's footnote
-/// verb and passes verbatim, like Python's guard.
+/// command and passes verbatim, like Python's guard.
 pub fn normalize_command(command: &str, harness: &str) -> String {
     let surface_ok = matches!(
         harness,
@@ -299,7 +299,7 @@ pub fn normalize_command(command: &str, harness: &str) -> String {
     let Some(first_word) = cmd.split_whitespace().next() else {
         return command.to_string();
     };
-    let Some((command_word, namespaced)) = crate::provider::parse_verb_token(first_word) else {
+    let Some((command_word, namespaced)) = crate::provider::parse_command_token(first_word) else {
         return command.to_string();
     };
     let tail = &cmd[first_word.len()..];

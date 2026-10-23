@@ -48,7 +48,7 @@ impl View {
 
     /// [`View::open_rename`] with the buffer pre-filled: an agent rename seeds
     /// the row's CURRENT label, so Enter with no edit lands on the rename
-    /// verb's same-label no-op rather than an empty refusal.
+    /// command's same-label no-op rather than an empty refusal.
     pub(super) fn open_rename_seeded(&mut self, target: RenameTarget, seed: String) {
         self.selector = None;
         self.answers = None;

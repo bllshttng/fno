@@ -1,7 +1,7 @@
 //! The `fno mux pane keeper list` parser tests, moved out of the parent
 //! under the file-budget gate's shrink-only rule for over-budget files.
 #[test]
-fn keeper_list_parses_as_a_hidden_pane_verb() {
+fn keeper_list_parses_as_a_hidden_pane_command() {
     let parsed = crate::mux_cli::parse_pane_args(
         &crate::cli_args::PaneOp::Keeper {
             op: crate::cli_args::KeeperOp::List(crate::cli_args::MuxTail { tail: Vec::new() }),

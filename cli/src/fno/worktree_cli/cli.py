@@ -8,7 +8,7 @@ archiving (remove directory, keep branch).
 
 `ensure` is the mechanical dispatch-time primitive (node): the
 deterministic-isolation behaviour PR #29 gave the bash spawn path, exposed as
-a CLI verb so the two Rust-intercepted code-dispatch callers (`dispatch-node.sh`
+a CLI command so the two Rust-intercepted code-dispatch callers (`dispatch-node.sh`
 and `/execute`'s foreign-wave prose) can shell it. It lives here, NOT under
 `fno agents` (Rust-intercepted runtime), so the default install can reach it.
 """
@@ -263,7 +263,7 @@ def _abs_git_path(repo: Path, which: str) -> Optional[Path]:
 def _base_ref(repo: Path) -> Optional[str]:
     """The ref a fresh dispatch branch is based on. Prefer origin/main so the
     worker never inherits the dispatcher's stale-ahead local HEAD (the
-    phantom-deletion bug this verb retires, Locked Decision 5). Falls back to
+    phantom-deletion bug this command retires, Locked Decision 5). Falls back to
     HEAD (None) only when no remote-tracking main exists (e.g. a local repo)."""
     for ref in ("origin/main", "origin/master"):
         if _git(repo, "rev-parse", "--verify", "--quiet", ref).returncode == 0:
@@ -564,7 +564,7 @@ def _worktree_ensure(
 
     # Portable git mechanism only. Linking footnote-ecosystem shared state
     # (.fno / internal / .claude) via scripts/setup/setup-worktree.sh is the
-    # CALLER's job, not this package verb's: a `pip install fno` ships no
+    # CALLER's job, not this package command's: a `pip install fno` ships no
     # repo-root scripts, so a shell-out here trips the shellout-drift gate
     # (and forcing it to fail-on-bare-install would break the "best-effort,
     # never fail the ensure" contract). The in-repo skill callers
@@ -695,7 +695,7 @@ def overlap_record_cmd(
     typed event to the machine-global journal under a 250 ms lock bound, and
     folds the recurrence window. Always exits 0: recording and fold status ride
     on the emitted JSON line; the carrier renders advisories and keeps exit-zero.
-    ``--stdin`` is the carrier's invocation contract; the verb reads stdin
+    ``--stdin`` is the carrier's invocation contract; the command reads stdin
     unconditionally (it is the only input mode).
     """
     from fno.worktree_cli.overlaps import overlap_record

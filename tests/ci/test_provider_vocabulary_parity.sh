@@ -18,7 +18,7 @@ write_match() {
     'provider: Some("anthropic".to_string()),' \
     '#[cfg(test)]' > "$tmp/claude.rs"
   # claude_adopt.rs keeps the manifest line reader only; the gate reads it
-  # for existence. The mint lives on client_verbs; the route-settings match
+  # for existence. The mint lives on client_commands; the route-settings match
   # lives in the adopt-identity module, so the fixtures mirror the split.
   printf '%s\n' 'pub fn manifest_field' > "$tmp/adopt.rs"
   printf '%s\n' 'provider_from_route_settings(Some(&model))' > "$tmp/adopt-identity.rs"

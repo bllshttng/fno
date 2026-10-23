@@ -1,8 +1,8 @@
-Usage: fno backlog batch <verb> [options]
+Usage: fno backlog batch <command> [options]
 
 Batch-lane state: coalesce same-domain nodes into one PR (opt-in).
 
-Verbs:
+Commands:
   open --domain <d> --branch <b> --worktree <w> [--max-nodes <n>]
   join --domain <d> --node <id> [--summary <s>]
   ship --domain <d> [--base <b>] [--title <t>]

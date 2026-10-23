@@ -616,9 +616,9 @@ async function runJson($: EngineInterface, argv: string[], cwd?: string): Promis
   }
 }
 
-// The same counts the fleet's own verbs print: live workers from the spawn gate,
+// The same counts the fleet's own commands print: live workers from the spawn gate,
 // questions waiting on the user from the outstanding inbox, and the user's open PRs.
-// Each verb takes several seconds, so one read every FLEET_MS serves every session.
+// Each command takes several seconds, so one read every FLEET_MS serves every session.
 export function fleetLine(gate: any, outstanding: any, prs: any): string {
   const parts: string[] = []
   if (typeof gate?.live_workers === 'number') parts.push(`${gate.live_workers} workers`)

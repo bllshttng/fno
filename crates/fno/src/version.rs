@@ -55,10 +55,10 @@ pub fn print_version(json_out: bool) {
         // WHICH install this door actually forwards to - the question the
         // cached-sentinel resolution made unanswerable (gap audit 9). A
         // set-but-unusable FNO_PY says so here, matching the refusal every
-        // forwarded verb would hit.
+        // forwarded command would hit.
         match crate::bootstrap::python_override_state() {
             crate::bootstrap::PythonOverride::Unusable(msg) => {
-                println!("python-cli: unusable ({msg}); forwarded verbs will refuse")
+                println!("python-cli: unusable ({msg}); forwarded commands will refuse")
             }
             crate::bootstrap::PythonOverride::Unset => {
                 match crate::bootstrap::resolved_python_script() {

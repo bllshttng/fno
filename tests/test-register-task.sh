@@ -403,7 +403,7 @@ EOF
         > "$sandbox/out.log" 2> "$sandbox/err.log"
 
     # Event MUST land in the worktree's store (events.db beside the journal),
-    # not the canonical repo's; read it back through the rows verb.
+    # not the canonical repo's; read it back through the rows command.
     ROWS_BIN="${FNO_BIN:-}"
     if [[ -z "$ROWS_BIN" ]]; then
         for _profile in debug release; do

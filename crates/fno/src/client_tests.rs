@@ -200,7 +200,7 @@ mod agent_hit_tests;
 #[path = "client/tests/paneless_row_tests.rs"]
 mod paneless_row_tests;
 
-fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> SquadMeta {
+pub(super) fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> SquadMeta {
     SquadMeta {
         id,
         name: name.into(),
@@ -360,7 +360,7 @@ fn tab_agent(tab: Option<TabId>, badge: Option<AgentBadge>, exited: bool) -> Age
     }
 }
 
-fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
+pub(super) fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
     Frame {
         rows,
         cols,
@@ -3728,7 +3728,7 @@ fn row_menu_rows() {
         actions.iter().any(|a| matches!(a, MenuAction::MoveDir(_))),
         "pane row offers the Move grid"
     );
-    // The paneless-only attach verbs must not appear on a pane-hosted row.
+    // The paneless-only attach commands must not appear on a pane-hosted row.
     assert!(!actions.contains(&MenuAction::OpenHere));
     assert!(!actions.contains(&MenuAction::NewTab));
 
@@ -3768,7 +3768,7 @@ fn row_menu_rows() {
     );
 
     // (x-e763) AC8: a live row's menu offers Remove as a real, enabled
-    // entry. Neither verb is gated behind the other any more.
+    // entry. Neither command is gated behind the other any more.
     let live = agent_row("w", 10, Some(AgentBadge::Working), false);
     let menu = super::build_row_menu(&live, Anchor::Center);
     let enabled =
@@ -3849,7 +3849,7 @@ fn row_menu_rows() {
             "{label} mirrors its menu-scope glyph"
         );
     }
-    // Tab menu: every tab verb mirrors its scoped glyph; the join grid
+    // Tab menu: every tab command mirrors its scoped glyph; the join grid
     // carries no hint slot at all, so nothing can hardcode a chord there
     // either.
     let tabs = squad_tabs(&view_with_agents(vec![]), 1);
@@ -4233,7 +4233,7 @@ async fn clear_dead_refolds_the_set_at_commit_not_at_open() {
 #[tokio::test]
 async fn clear_dead_routes_external_rows_by_attach_id() {
     // An external tombstone removes by its stable attach_id (x-7561), the
-    // same split the single-row `x` verb makes - clear-dead must not flatten
+    // same split the single-row `x` command makes - clear-dead must not flatten
     // every row to a by-name RemoveAgent.
     let mut ext = lifecycle_row("ext-dead", true, true);
     ext.attach_id = Some("deadbeef".into());
@@ -4603,7 +4603,7 @@ fn entry_hint(v: &View, label: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn row_menu_verbs_show_their_menu_keys() {
+async fn row_menu_commands_show_their_menu_keys() {
     // AC9-HP: Stop, Peek, Mail, Open Here and Diff each show the
     // menu-scope key that runs them - the glyph read live from
     // keys::menu_key_for, never a literal.
@@ -4616,7 +4616,7 @@ async fn row_menu_verbs_show_their_menu_keys() {
         ("Stop", "stop-row"),
         ("Diff", "diff-row"),
     ] {
-        let want = crate::keys::menu_key_for(id).expect("the verb is bound in menu scope");
+        let want = crate::keys::menu_key_for(id).expect("the command is bound in menu scope");
         assert_eq!(
             entry_hint(&v, label),
             Some(want),
@@ -4907,7 +4907,7 @@ fn menu_accel_rows() {
     // menu, no two offered actions resolve to the same byte, so the
     // offer-scoped dispatch can never be ambiguous. The exited-row menu
     // (Remove/Peek/Resume/Diff) and the live paneless menu are the two
-    // shapes that carry the new verbs.
+    // shapes that carry the new commands.
     let exited = build_row_menu(
         &{
             let mut r = paneless_bg_row("w1");
@@ -5883,7 +5883,7 @@ async fn tab_menu_reorder_names_the_clicked_tab_and_its_squad() {
 
 #[tokio::test]
 async fn tab_menu_join_and_split_target_the_viewed_tab() {
-    // Join is the drag's verb through the menu: the clicked tab joins the
+    // Join is the drag's command through the menu: the clicked tab joins the
     // viewed tab as a split of the focused pane. The clicked tab being the
     // focus's own tab is the join-into-self the wire refuses - named as a
     // notice instead of sent.
@@ -6481,7 +6481,7 @@ async fn sweep_open_queues_one_counts_probe_and_apply_queues_scope() {
         "the menu closes; the modal opens on landing"
     );
 
-    // A second tap while a verb runs says so instead of queueing: the
+    // A second tap while a command runs says so instead of queueing: the
     // pending counts probe stays exactly as the first tap left it.
     v.sweep_inflight = true;
     execute_aux_action(&mut v, AuxAction::OpenSweep, &mut buf)
@@ -7787,49 +7787,6 @@ fn client_compose_ignores_stale_frames_and_clips_overflow() {
 }
 
 #[test]
-fn client_compose_letterboxes_beyond_the_clamped_area() {
-    // AC1-UI: a 29x72 local content area showing a tab clamped to 20x50
-    // - content anchors top-left, everything beyond is dim '·' filler,
-    // and the cursor never enters the filler.
-    let mut view = View::new(
-        (30, 100),
-        "main".into(),
-        LayoutView {
-            squads: vec![meta(1, "footnote", 1, 0)],
-            active_squad: 1,
-            panes: vec![(
-                10,
-                Rect {
-                    x: 0,
-                    y: 0,
-                    rows: 20,
-                    cols: 50,
-                },
-            )],
-            focus: 10,
-            area: (20, 50),
-            agents: vec![],
-            focus_node: None,
-        },
-    );
-    view.frames.insert(10, text_frame(20, 50, 'a'));
-    let frame = view.compose();
-    let cols = frame.cols as usize;
-    // The frame's top-left corner, then the in-area content cell one cell in.
-    assert_eq!(frame.cells[cols + 28].c, '╭');
-    assert_eq!(frame.cells[2 * cols + 29].c, 'a');
-    // One column beyond the area: filler, dim.
-    let beyond_col = &frame.cells[cols + 28 + 50];
-    assert_eq!(beyond_col.c, '·', "beyond-area column must be filler");
-    assert!(beyond_col.flags & cell_flags::DIM != 0);
-    // One row beyond the area (content row 20): filler too.
-    let beyond_row = &frame.cells[(1 + 20) * cols + 28];
-    assert_eq!(beyond_row.c, '·', "beyond-area row must be filler");
-    // Cursor confined to content even against a lying frame cursor.
-    assert!(frame.cursor_row < 1 + 20 && frame.cursor_col < 28 + 50);
-}
-
-#[test]
 fn selector_fold_rows() {
     // Gemini medium: an arrow sequence split across reads must fold into
     // one nav key - never a bare-Esc close plus leaked tail bytes.
@@ -9016,7 +8973,7 @@ async fn selector_x_on_live_agent_arms_remove_confirm() {
 #[tokio::test]
 async fn selector_x_on_exited_agent_arms_remove_confirm() {
     // US2 / AC2-HP (client half): x on an exited row arms a RemoveAgent
-    // confirm - the row's own state (exited) selects the verb, no timer.
+    // confirm - the row's own state (exited) selects the command, no timer.
     let mut v = view_with_agents(vec![lifecycle_row("worker-b", true, false)]);
     v.set_squad_view(1, SectionView::Expanded);
     v.selector = Some(agent_row_at(&v, |a| a.name == "worker-b"));
@@ -12688,7 +12645,7 @@ async fn xf331_pointer_over_sideline_keeps_keys_on_the_pane() {
         handle_stdin(&mut v, &mut scanner, &mut carry, b, &mut buf)
             .await
             .unwrap();
-        assert!(v.confirm.is_none(), "no verb fired off a hover");
+        assert!(v.confirm.is_none(), "no command fired off a hover");
         let mut cur = std::io::Cursor::new(buf);
         match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
             ClientMsg::Input(bytes) => {
@@ -13829,7 +13786,7 @@ fn every_rim_drop_zone_actually_lights_something() {
     let mut view = two_pane_view();
     let panel_w = view.panel_w();
     let (term_rows, term_cols) = (view.term.0, view.term.1);
-    let (a_rows, a_cols) = view.layout.area;
+    let (a_rows, a_cols) = view.visible_area();
     let mid_col = panel_w + a_cols / 2;
     let mid_row = TAB_BAR_ROWS + a_rows / 2;
 
@@ -14391,7 +14348,7 @@ fn probe_bottom_rim_band() {
     let mut view = two_pane_view();
     view.begin_pane_drag(10, Instant::now());
     let rect = view.pane_rect(11).unwrap();
-    let r = TAB_BAR_ROWS + rect.y + rect.rows - 1;
+    let r = TAB_BAR_ROWS + view.visible_area().0 - 1;
     let c = view.panel_w() + rect.x + 5;
     let z = view.edge_zone_at(r, c).expect("rim zone");
     eprintln!("zone={:?}", z);

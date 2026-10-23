@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::client_verbs::RowLiveness;
+use crate::client_commands::RowLiveness;
 use crate::daemon::{is_codex_thread_entry, is_non_terminal};
 use crate::provider::ReachabilityProbeError;
 use crate::state::{self, RegistryEntry};

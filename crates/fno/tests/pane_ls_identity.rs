@@ -67,11 +67,11 @@ fn spawned_name_without_id_never_shares_the_sentinel() {
 
 #[test]
 fn worker_name_in_the_id_column_reads_unresolved_not_as_an_id() {
-    // Live specimen: `fno_id=t-b783-verb-prefix-agy` beside two session UUIDs
+    // Live specimen: `fno_id=t-b783-command-prefix-agy` beside two session UUIDs
     // in one listing. The column must not carry two kinds of identifier.
     let (state, cell) = pane_identity_cell(&pane(
-        Some("t-b783-verb-prefix-agy"),
-        Some("t-b783-verb-prefix-agy"),
+        Some("t-b783-command-prefix-agy"),
+        Some("t-b783-command-prefix-agy"),
     ));
     assert_eq!(state, "unresolved:name-as-id");
     assert!(cell.starts_with("unresolved:"), "{cell}");
@@ -121,7 +121,7 @@ fn the_listing_state_is_the_refusal_state() {
 
 #[test]
 fn pane_help_says_identity_not_idleness() {
-    // AC6: the help states what the column answers and names the verb that
+    // AC6: the help states what the column answers and names the command that
     // answers idleness, so `pane ls` stops being read as a reuse decision.
     let help = fno::cli_args::render_path_help(&["mux", "pane"]);
     assert!(help.contains("identity"), "{help}");

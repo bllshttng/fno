@@ -38,7 +38,7 @@ staged binaries and:
 
 - ships each as a wheel **script** (`*.data/scripts/<binary>`), which pip installs into
   the environment's `bin/` (`Scripts/` on Windows) — i.e. on PATH, so daemon-backed
-  verbs work with no second install (US6); and
+  commands work with no second install (US6); and
 - tags the wheel `py3-none-<platform>` rather than `cp3XX-cp3XX-<platform>`, because a
   standalone executable is interpreter-agnostic. One wheel serves every Python 3.x on
   the platform, so there is no per-version build explosion and no sdist fallback on
@@ -52,7 +52,7 @@ license-less wheel hard-fails rather than ship silently (US5). The events schema
 (`fno/events/schema.yaml`) ships as ordinary package data — it lives inside the
 `src/fno` package, so it needs no force-include. The CI runs a clean-machine smoke
 (`cli/tests/smoke/clean_machine_smoke.sh`) against the freshly built wheel — all three
-binaries on PATH, the internalized verbs run, the clone-only verbs degrade — failing the
+binaries on PATH, the internalized commands run, the clone-only commands degrade — failing the
 release on any miss.
 
 When no binary is staged (local dev, `pip install -e`, sdist) the hook no-ops the binary
@@ -64,17 +64,17 @@ a Rust toolchain to build.** On Linux the CI sets
 
 ## Rust runtime for `fno agents` (default)
 
-The Rust daemon is the **default** runtime for the daemon-native verbs and four of the five
-shared verbs (which closed the flag +
-stdout parity gap for `list`/`stop`/`rm`/`reconcile`). By default `fno agents <verb>` execs
-the installed `fno-agents` binary for every verb the Rust client implements at parity, and
-uses the mature Python dispatch for `ask` and the Python-only verbs. `FNO_AGENTS_RUNTIME`
+The Rust daemon is the **default** runtime for the daemon-native commands and four of the five
+shared commands (which closed the flag +
+stdout parity gap for `list`/`stop`/`rm`/`reconcile`). By default `fno agents <command>` execs
+the installed `fno-agents` binary for every command the Rust client implements at parity, and
+uses the mature Python dispatch for `ask` and the Python-only commands. `FNO_AGENTS_RUNTIME`
 selects the runtime explicitly:
 
 | `FNO_AGENTS_RUNTIME` | Behavior |
 |---|---|
-| unset / anything else | **`auto`** (default): exec the installed binary for the daemon-native + the four cut-over shared verbs; Python for `ask` and the Python-only verbs |
-| `rust` | force the binary for every verb, `ask` included (missing binary → exit 127) |
+| unset / anything else | **`auto`** (default): exec the installed binary for the daemon-native + the four cut-over shared commands; Python for `ask` and the Python-only commands |
+| `rust` | force the binary for every command, `ask` included (missing binary → exit 127) |
 | `python` | force the Python dispatch; never touch the binary |
 
 ```bash
@@ -82,14 +82,14 @@ fno agents spawn --name worker-A --harness codex             # Rust by default w
 fno agents session list --json                                 # Rust: render_json shape; table on a TTY
 fno agents session stop worker-A                               # Rust: prints "stopped: worker-A (<short_id>)"
 fno agents mail ask worker-A "hello" --harness codex        # Python (ask stays on Python — see below)
-FNO_AGENTS_RUNTIME=rust fno agents mail ask worker-A "..."  # force the binary for every verb, ask included
+FNO_AGENTS_RUNTIME=rust fno agents mail ask worker-A "..."  # force the binary for every command, ask included
 ```
 
-Why the default routes most verbs, and is install-aware:
+Why the default routes most commands, and is install-aware:
 
-- **Daemon-native + four shared verbs auto-route; `ask` stays on Python.** The Rust client
+- **Daemon-native + four shared commands auto-route; `ask` stays on Python.** The Rust client
   implements `spawn`, `ask`, `list`, `status`, `stop`, `rm`, `reconcile`, `drive`, and the
-  `*-channel` verbs. Four shared verbs reached flag + stdout parity:
+  `*-channel` commands. Four shared commands reached flag + stdout parity:
   `stop` prints `stopped: <name> (<short_id>)`, `rm` prints `removed: <name>`, and
   `list`/`reconcile` emit the `render_json` shape under `--json`/non-TTY (a functional
   table on a TTY) and accept `--cwd/--harness/--status`. **`ask` is NOT auto-routed**: the
@@ -100,7 +100,7 @@ Why the default routes most verbs, and is install-aware:
   create-on-first-contact `handle_ask` groundwork (auto-spawn via
   `ProviderWithPty::create_argv`, readiness-poll reply) is in place for
   `FNO_AGENTS_RUNTIME=rust` force-mode and a future reply-extraction follow-up, but `auto`
-  keeps `ask` on Python. Only `ask` and the Python-only verbs (`logs`, `ping`,
+  keeps `ask` on Python. Only `ask` and the Python-only commands (`logs`, `ping`,
   `drive-authority`, `attach`, `resume`, `trace`) stay on Python. (One decided behavior,
   not a gap: `list` reports the daemon's PTY-worker status and deliberately does not
   replicate Python's per-row `claude agents --json` `live_status` augmentation. Under the
@@ -117,8 +117,8 @@ Why the default routes most verbs, and is install-aware:
   exits 127 with an actionable message when no binary is found.
 
 `fno agents --help` always stays on the Python group help so the wrapper stays
-discoverable; because the shared verbs stay on Python, `fno agents <verb> --help` renders
-the Python help for them. (Per-verb help for the daemon-native verbs is pending Rust-client
+discoverable; because the shared commands stay on Python, `fno agents <command> --help` renders
+the Python help for them. (Per-command help for the daemon-native commands is pending Rust-client
 support.)
 
 ## Release channels (the runbook)

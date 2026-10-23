@@ -20,7 +20,7 @@
 #
 # FAIL CLOSED, AND ON A POSITIVE MARKER. Permission requires BOTH exit 0 and a
 # literal `reapable=yes` on stdout. An absence of "no" is not a yes: a stale
-# installed CLI that predates the verb exits 2 with no receipt at all, which is
+# installed CLI that predates the command exits 2 with no receipt at all, which is
 # indistinguishable from any other non-answer at this layer. Every unknown
 # degrades to "not reapable", which is exactly the historical behaviour.
 #
@@ -34,7 +34,7 @@
 #                               files salvaged by the CALLER first. Only the
 #                               merged sweep's gate call sets it.
 
-# Set by wt_reapable to the verb's receipt line (or a synthesised one).
+# Set by wt_reapable to the command's receipt line (or a synthesised one).
 WT_REAPABLE_LINE=""
 
 # One attempt's reading: 0 a real yes, 1 a real no, 2 no answer at all.
@@ -114,6 +114,6 @@ wt_reapable() {
         WT_REAPABLE_LINE="$out"
         return "$verdict"
     fi
-    WT_REAPABLE_LINE="reapable=no reason=probe-failed detail=verb-unavailable(rc=$rc)"
+    WT_REAPABLE_LINE="reapable=no reason=probe-failed detail=command-unavailable(rc=$rc)"
     return 1
 }

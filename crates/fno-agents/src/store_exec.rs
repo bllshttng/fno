@@ -135,7 +135,7 @@ pub(crate) fn keeper_processes_on(graph: &std::path::Path) -> Vec<(i32, i64)> {
 }
 
 /// The `keeper_scan` store op: every resident keeper holding this store's
-/// graph, with pid and RSS. The doctor's status verb reads it through the
+/// graph, with pid and RSS. The doctor's status command reads it through the
 /// same exec transport and decides legality from the backend it already has.
 pub(crate) fn handle_keeper_scan(
     state: &StoreState,

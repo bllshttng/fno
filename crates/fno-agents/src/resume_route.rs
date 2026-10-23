@@ -28,7 +28,7 @@ pub(crate) fn resume_route(
         Err(_) => {
             return ResumeRoute::Refused(format!(
                 "fno agents resume: harness {} resume not supported by this fno version.",
-                crate::client_verbs::py_repr_str(harness)
+                crate::client_commands::py_repr_str(harness)
             ));
         }
     };
@@ -134,8 +134,8 @@ pub(crate) fn print_resume_command(
     if form_session_id.is_empty() {
         eprintln!(
             "fno agents resume: agent {} has no recorded session_id for harness {}.",
-            crate::client_verbs::py_repr_str(name),
-            crate::client_verbs::py_repr_str(harness)
+            crate::client_commands::py_repr_str(name),
+            crate::client_commands::py_repr_str(harness)
         );
         return 13;
     }
@@ -187,7 +187,7 @@ pub(crate) fn print_resume_command(
         } else {
             eprintln!(
                 "fno agents resume: harness {} resume contract is invalid.",
-                crate::client_verbs::py_repr_str(harness)
+                crate::client_commands::py_repr_str(harness)
             );
         }
         return 13;
@@ -261,7 +261,7 @@ pub(crate) fn print_resume_command(
             Err(_) => {
                 eprintln!(
                     "fno agents resume: harness {} resume contract is invalid.",
-                    crate::client_verbs::py_repr_str(harness)
+                    crate::client_commands::py_repr_str(harness)
                 );
                 return 13;
             }

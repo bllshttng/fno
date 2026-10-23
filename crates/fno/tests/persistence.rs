@@ -13,7 +13,7 @@ use common::{
     FakeClient, Scratch, ServerProc,
 };
 use fno::proto::{
-    read_msg_sync, write_msg_sync, Cell, ClientMsg, ControlVerb, Frame, ProtoError, ServerMsg,
+    read_msg_sync, write_msg_sync, Cell, ClientMsg, ControlCommand, Frame, ProtoError, ServerMsg,
     BUILD_VERSION, PROTO_VERSION,
 };
 
@@ -114,7 +114,7 @@ fn pane_send(scratch: &Scratch, pane: u64, bytes: &[u8]) {
         &ClientMsg::Control {
             proto: PROTO_VERSION,
             build: BUILD_VERSION.to_string(),
-            verb: ControlVerb::PaneSend {
+            command: ControlCommand::PaneSend {
                 pane,
                 bytes: bytes.to_vec(),
                 guarded: false,

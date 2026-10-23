@@ -138,7 +138,7 @@ error() { echo "  ERROR: $*"; ((ERRORS++)) || true; }
 warn()  { echo "  WARN:  $*"; ((WARNINGS++)) || true; }
 ok()    { echo "  OK:    $*"; }
 
-# Echo a plan's readiness rung, or `!<reason>` when the verb could not answer.
+# Echo a plan's readiness rung, or `!<reason>` when the command could not answer.
 # Never classifies statuses itself; the single authority is `fno do plan rung`
 # (fno.graph.ladder).
 #
@@ -146,13 +146,13 @@ ok()    { echo "  OK:    $*"; }
 # caller reads this through `$(...)` - a global set inside that subshell dies
 # with it, and the caller silently prints an empty reason.
 #
-# Silence is reported, never swallowed. An installed `fno` predating the verb
+# Silence is reported, never swallowed. An installed `fno` predating the command
 # exits 2 with no `rung=` line, indistinguishable from any other non-answer at
 # this layer - and a check that quietly passes on a stale binary is exactly the
 # decorative guard this consolidation exists to remove.
 #
 # SOURCE FIRST, for the same reason `_semantic_validate` resolves that way: an
-# installed `fno` older than this checkout does not have verbs this source
+# installed `fno` older than this checkout does not have commands this source
 # defines. CI is exactly that case - it runs the repo's scripts against whatever
 # `fno` is on PATH - so an installed-only lookup degrades to a warning there and
 # the check never actually runs. Falls back to the installed binary so the
@@ -522,7 +522,7 @@ if [[ -f "$PLAN_DIR" ]]; then
         # vault, so a read failure must not quarantine the backlog), the node skips
         # the design rung and derives `ready`, and `/blueprint --finalize` exits 0
         # having validated nothing. The whole chain's only trace is a warning line
-        # that scrolls past. An unquoted `title: verb X: qualifier` is how it
+        # that scrolls past. An unquoted `title: command X: qualifier` is how it
         # happens in practice, since node titles here routinely carry a colon.
         _fm_python=""
         if [[ -n "${FNO_PYTHON:-}" && -x "${FNO_PYTHON}" ]]; then
@@ -539,7 +539,7 @@ except yaml.YAMLError as exc:
     sys.stdout.write(" ".join(str(exc).split())[:200])' 2>/dev/null)
             if [[ -n "$_fm_err" ]]; then
                 error "frontmatter is not valid YAML: $_fm_err"
-                error "  a title containing a colon must be quoted: title: \"verb X: qualifier\""
+                error "  a title containing a colon must be quoted: title: \"command X: qualifier\""
             else
                 ok "frontmatter parses as YAML"
             fi
@@ -1656,7 +1656,7 @@ check_surface_file() {
         return 0
     fi
 
-    # Shape check: the ONE YAML model is the Rust verb. The Python heredoc
+    # Shape check: the ONE YAML model is the Rust command. The Python heredoc
     # that used to live here parsed the surface: block while the
     # cross-language walk (the port made it necessary) parses the same block
     # in Rust, and principle 9 bars a dual implementation - so the shell only
@@ -2562,7 +2562,7 @@ if [[ -n "$target_file" ]]; then
     # uses instead of a second copy that has to be remembered.
     STATUS_FM="$(_plan_rung "$target_file")"
     if [[ "$STATUS_FM" == \!* ]]; then
-        # The verb could not answer. Saying "not yet shipped" here would be an
+        # The command could not answer. Saying "not yet shipped" here would be an
         # affirmative claim built on a non-answer; the same reason is already
         # warned about above, so keep this line honest and short.
         ok "Stamp fields not checked (rung unavailable)"

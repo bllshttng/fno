@@ -1,5 +1,5 @@
-//! The session phase a spawn seed names: the one verb table
-//! (`spawn_phase.toml`) read through the shared verb-token parser.
+//! The session phase a spawn seed names: the one command table
+//! (`spawn_phase.toml`) read through the shared command-token parser.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -9,7 +9,7 @@ struct Table {
     phases: HashMap<String, Vec<String>>,
 }
 
-fn verb_phases() -> &'static HashMap<String, String> {
+fn command_phases() -> &'static HashMap<String, String> {
     static PHASES: OnceLock<HashMap<String, String>> = OnceLock::new();
     PHASES.get_or_init(|| {
         let table: Table = toml::from_str(include_str!("spawn_phase.toml"))
@@ -17,16 +17,20 @@ fn verb_phases() -> &'static HashMap<String, String> {
         table
             .phases
             .into_iter()
-            .flat_map(|(phase, verbs)| verbs.into_iter().map(move |verb| (verb, phase.clone())))
+            .flat_map(|(phase, commands)| {
+                commands
+                    .into_iter()
+                    .map(move |command| (command, phase.clone()))
+            })
             .collect()
     })
 }
 
-/// The phase the seed's first token names. Prose, paths, unmapped verbs, and
+/// The phase the seed's first token names. Prose, paths, unmapped commands, and
 /// empty seeds name no phase.
 pub fn seed_phase(seed: &str) -> Option<&'static str> {
-    let (verb, _) = crate::provider::parse_verb_token(seed.split_whitespace().next()?)?;
-    verb_phases().get(verb).map(String::as_str)
+    let (command, _) = crate::provider::parse_command_token(seed.split_whitespace().next()?)?;
+    command_phases().get(command).map(String::as_str)
 }
 
 /// A spawn request's seed is its `message` parameter.
@@ -49,7 +53,7 @@ mod tests {
     }
 
     #[test]
-    fn prose_paths_and_unmapped_verbs_name_no_phase() {
+    fn prose_paths_and_unmapped_commands_name_no_phase() {
         assert_eq!(seed_phase("review the diff"), None);
         assert_eq!(seed_phase("/Users/x/review"), None);
         assert_eq!(seed_phase("/fno:triage deep"), None);

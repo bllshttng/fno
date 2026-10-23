@@ -15,10 +15,10 @@ pub(super) struct ParsedBlockPipe {
 }
 
 /// Parse the tokens after `mux block` into a [`ParsedBlockPipe`]. Pure, so the
-/// grammar is unit-testable without a socket. `pipe` is the only block verb.
+/// grammar is unit-testable without a socket. `pipe` is the only block command.
 pub(super) fn parse_block_args(args: &[OsString]) -> Result<ParsedBlockPipe, String> {
     // The typed tree already routed on the operation word; args is the
-    // verb-excluded tail.
+    // command-excluded tail.
     let a = BlockPipeArgs::try_parse_from(args)
         .map_err(|e| crate::cli_args::refusal_line("fno mux block pipe", &e))?;
     if a.session.is_some() {
@@ -62,7 +62,7 @@ pub(super) struct ParsedBlockAnnotate {
 /// non-agent pane has no provenance to resolve, so the caller must name it).
 pub(super) fn parse_block_annotate(args: &[OsString]) -> Result<ParsedBlockAnnotate, String> {
     // The typed tree already routed on the operation word; args is the
-    // verb-excluded tail.
+    // command-excluded tail.
     let a = BlockAnnotateArgs::try_parse_from(args)
         .map_err(|e| crate::cli_args::refusal_line("fno mux block annotate", &e))?;
     if a.session.is_some() {

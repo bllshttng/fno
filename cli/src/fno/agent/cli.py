@@ -5,7 +5,7 @@ still the one-line operating-stack summary, byte-identical to the former
 single command. The session-read leaves folded under it: ``status`` (the
 former top-level status root, one session read under two names),
 ``context``, ``cost``, and ``scoreboard``. The old top-level spellings stay
-one-release shims (``fno.verb_moves``).
+one-release shims (``fno.command_moves``).
 
     whoami            - operating-stack summary (project + fleet + walker + session)
     whoami status     - gate satisfaction + bounded events tail + inconsistencies
@@ -92,7 +92,7 @@ def _foreign_identity_line() -> Optional[str]:
     if not flags:
         return None
     names = flags[1::2]
-    # Defaulted: whoami is the confused-agent recovery verb and must never gain
+    # Defaulted: whoami is the confused-agent recovery command and must never gain
     # a failure mode, so an unmapped name renders rather than raising.
     families = sorted({AMBIENT_IDENTITY_FAMILY.get(name, "unknown") for name in names})
     remedy = " ".join(flags)
@@ -139,7 +139,7 @@ def _mail_unread_count(
     they exclude nothing.
 
     Each address is guarded independently so one unreadable lane never zeroes the
-    others; whoami is the confused-agent recovery verb and must never gain a
+    others; whoami is the confused-agent recovery command and must never gain a
     failure mode. stderr is swallowed for the scan: ``warn=False`` silences
     ``iter_messages`` but not ``read_cursor``'s corrupt-cursor warning."""
     try:
@@ -400,7 +400,7 @@ def whoami_command(
     # Context pressure from the same transcript the model line resolves. Probed
     # once here and reused in both render branches so the file is not tailed
     # twice. None (fresh session, no assistant usage row yet, unreadable store)
-    # omits the line entirely: whoami is the confused-agent recovery verb and
+    # omits the line entirely: whoami is the confused-agent recovery command and
     # must never gain a failure mode, and a fresh SessionStart stays byte-for-byte
     # unchanged (the inject block carries a real number exactly on a post-compaction
     # resume, where re-orientation matters).
@@ -673,7 +673,7 @@ def status_command(
 #
 # `status` is a merge, not a relocation: this is the same command object the
 # former top-level status root served, so `fno whoami status` and the old
-# spelling (one release, via fno.verb_moves) share one session read.
+# spelling (one release, via fno.command_moves) share one session read.
 whoami_app.command("status")(status_command)
 
 from fno.context_probe import context_command  # noqa: E402

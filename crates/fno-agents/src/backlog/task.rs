@@ -78,7 +78,7 @@ fn task_plan_or_exit(node_token: &str) -> (String, std::path::PathBuf) {
 }
 
 /// Plan task ids, or the named refusals (the wheel's _task_ids_or_exit): a
-/// broken strategy fence exits 1 like every other task-verb failure, and an
+/// broken strategy fence exits 1 like every other task-command failure, and an
 /// id-less strategy is the same "no grain here" as an unbound plan (exit 6).
 fn task_ids_or_exit(plan_path: &std::path::Path) -> Vec<String> {
     let strategy = match wave::parse_strategy(plan_path) {

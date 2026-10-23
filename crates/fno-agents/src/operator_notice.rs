@@ -300,7 +300,7 @@ pub(crate) fn stored_token(path: &Path, key: &str) -> Option<String> {
 // The notify_watch arm
 // ---------------------------------------------------------------------------
 
-/// Board queues the arm subscribes to: key -> (pointer verb, count label).
+/// Board queues the arm subscribes to: key -> (pointer command, count label).
 const BOARD_QUEUES: [(&str, &str, &str); 4] = [
     (
         "operator_question",
@@ -715,14 +715,14 @@ fn run_captured(bin: &str, args: &[&str], cwd: &Path, timeout: Duration) -> Opti
 }
 
 // ---------------------------------------------------------------------------
-// The verb
+// The command
 // ---------------------------------------------------------------------------
 
 /// `fno-agents notify-watch --json [--root PATH]...`: run one pass, print the
 /// receipt, exit 0 - an honest skip is the tick row's business, never an
-/// error. Not a routable `fno agents` verb (matched with `==` beside `board`),
-/// so the routable-verb parity guard sees no new advertised verb.
-pub fn run_notify_watch_verb(args: &[String]) -> i32 {
+/// error. Not a routable `fno agents` command (matched with `==` beside `board`),
+/// so the routable-command parity guard sees no new advertised command.
+pub fn run_notify_watch_command(args: &[String]) -> i32 {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {

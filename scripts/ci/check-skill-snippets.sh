@@ -28,7 +28,7 @@
 #   guarded-empty-array-arg         "${a[@]+"${a[@]}"}" on an empty array: bash
 #                                   expands to no arguments, zsh to one EMPTY
 #                                   argument (measured argc 2 vs 3).
-#   fno-mutation-swallowed          a mutating fno verb ending in `|| true`,
+#   fno-mutation-swallowed          a mutating fno command ending in `|| true`,
 #                                   which swallows a real rejection.
 #
 # Escape hatch: `# lint-ok: <class>` on the offending line or the line above.
@@ -173,12 +173,12 @@ FNR == 1 { inblk = 0; prev = "" }
     report("guarded-empty-array-arg", \
       "zsh passes one EMPTY arg here; branch instead: if [ -n \"$V\" ]; then cmd --flag \"$V\"; else cmd; fi")
 
-  # 5. a mutating fno verb whose failure is swallowed. A trailing comment must
+  # 5. a mutating fno command whose failure is swallowed. A trailing comment must
   # not defeat the anchor - `... || true   # best effort` is the same hazard.
   if (line ~ /\|\|[ \t]*true[ \t]*(#.*)?$/ &&
       line ~ /fno (backlog (idea|advance|reconcile|update|done|rank|capture add|session add|batch)|retro run|carveout (add|resolve)|plan reconcile-status|pr sync-canonical|skill-diff|worktree archive|state set|agents (stop|rm))/)
     report("fno-mutation-swallowed", \
-      "best-effort mutation must be visible: verb || { echo \"...failed\" >&2; FAILURES+=(\"<verb>\"); }")
+      "best-effort mutation must be visible: command || { echo \"...failed\" >&2; FAILURES+=(\"<command>\"); }")
 
   prev = line
 }

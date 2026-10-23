@@ -13,7 +13,7 @@ pre-commit hook, and CI all converge on the same surface.
 
 Module path is ``fno.bundle`` (not ``fno.skills``) so the
 ``skills`` namespace stays free for future content management (e.g.
-``fno skills list``). The verb operates on the bundle manifest, not on
+``fno skills list``). The command operates on the bundle manifest, not on
 the skills themselves.
 """
 from fno.bundle.cli import bundle_app

@@ -583,7 +583,7 @@ def test_config_command_normalized_per_harness():
     """x-f0e2: a slash-leading config template is normalized on the chosen
     harness, exactly like the builtin rung - config stops being literal."""
     cfg = {"command": "/target --no-merge {id}"}
-    # codex: leading /verb -> $fno:verb
+    # codex: leading /command -> $fno:command
     assert resolve_dispatch(harness="codex", node_id="x-1234", dispatch_cfg=cfg)[
         "command"
     ] == "$fno:target --no-merge x-1234"
@@ -644,8 +644,8 @@ def test_opencode_default_dispatch_renders_fno_slash():
     assert out["command_surface"] == "slash"
 
 
-def test_opencode_arbitrary_verb_renders_fno_prefix():
-    """AC4-EDGE: the single prefix-swap rule renders ANY verb (no allowlist in the
+def test_opencode_arbitrary_command_renders_fno_prefix():
+    """AC4-EDGE: the single prefix-swap rule renders ANY command (no allowlist in the
     render path) - `/blueprint quick <doc>` and an arbitrary `/zzz` both namespace."""
     out = resolve_dispatch(
         harness="opencode", node_id="x-9", dispatch_cfg={"command": "/blueprint quick {id}"}
@@ -784,9 +784,9 @@ def test_thread_seat_is_derived_from_the_spawn_claim():
         )
 
 
-def test_native_verbs_roster_is_filled_from_measured_sources():
-    """A slash harness with a TUI palette declares its native verbs; the
-    normalizer needs them so a native verb typed at a worker is not rewritten
+def test_native_commands_roster_is_filled_from_measured_sources():
+    """A slash harness with a TUI palette declares its native commands; the
+    normalizer needs them so a native command typed at a worker is not rewritten
     into a footnote skill that does not exist. gemini is refused (deprecated)
     and so declares none; pi's surface is extension-composed and declares the
     one built-in its docs name."""
@@ -807,11 +807,11 @@ def test_native_verbs_roster_is_filled_from_measured_sources():
     assert capabilities("gemini").get("native_verbs") is None
 
 
-def test_native_verb_stays_literal_on_the_slash_surface():
+def test_native_command_stays_literal_on_the_slash_surface():
     """The slash branch guards on the same roster the codex branch reads:
-    `/undo` on opencode is opencode's own palette verb, so it must reach the
-    palette verbatim, never a phantom `/fno:undo` plugin skill. Footnote verbs
-    still namespace, and an unknown verb keeps the AC4-EDGE behavior."""
+    `/undo` on opencode is opencode's own palette command, so it must reach the
+    palette verbatim, never a phantom `/fno:undo` plugin skill. Footnote commands
+    still namespace, and an unknown command keeps the AC4-EDGE behavior."""
     from fno.agents.harness_map import normalize_command
 
     assert normalize_command("/undo", "opencode") == "/undo"
@@ -863,12 +863,12 @@ def test_contract_rejects_an_empty_capability_table():
         parse_capability_contract("map_version = 1\n\n[harness]\n")
 
 
-# --- US3: configurable dispatch verb + brief ------------------------------
+# --- US3: configurable dispatch command + brief ------------------------------
 
 
-def test_node_verb_assembles_command():
-    """AC2-HP: a node verb resolves to `<verb> <id>` (not the /target default)."""
-    out = _resolve(node_id="x-1", verb="/think")
+def test_node_command_assembles_command():
+    """AC2-HP: a node command resolves to `<command> <id>` (not the /target default)."""
+    out = _resolve(node_id="x-1", command_name="/think")
     assert out["command"] == "/think x-1"
     assert out["env"] == {}
 
@@ -876,40 +876,40 @@ def test_node_verb_assembles_command():
 def test_node_brief_rides_env_never_command():
     """AC2-HP: the brief reaches the worker via TARGET_BRIEF env, and no brief
     text is shell-interpolated into the command line."""
-    out = _resolve(node_id="x-1", verb="/think", brief="brainstorm the retry design")
+    out = _resolve(node_id="x-1", command_name="/think", brief="brainstorm the retry design")
     assert out["command"] == "/think x-1"
     assert out["env"]["TARGET_BRIEF"] == "brainstorm the retry design"
     assert "brainstorm" not in out["command"]
 
 
-def test_out_of_allowlist_verb_rejected():
-    """AC3-EDGE: an injection-shaped verb is refused, naming the verb + allowlist."""
+def test_out_of_allowlist_command_rejected():
+    """AC3-EDGE: an injection-shaped command is refused, naming the command + allowlist."""
     with pytest.raises(DispatchResolveError) as exc:
-        _resolve(node_id="x-1", verb="rm -rf; /target")
+        _resolve(node_id="x-1", command_name="rm -rf; /target")
     msg = str(exc.value)
     assert "rm -rf" in msg
     assert "/target" in msg  # the allowlist is named
 
 
-def test_empty_verb_rejected():
-    """An explicit empty verb fails loud rather than silently defaulting."""
+def test_empty_command_rejected():
+    """An explicit empty command fails loud rather than silently defaulting."""
     with pytest.raises(DispatchResolveError):
-        _resolve(node_id="x-1", verb="   ")
+        _resolve(node_id="x-1", command_name="   ")
 
 
 def test_brief_over_8kb_rejected():
     """Verify 4: a brief larger than the 8 KB env budget is an explicit error,
     never silent truncation."""
     with pytest.raises(DispatchResolveError, match="8"):
-        _resolve(node_id="x-1", verb="/think", brief="x" * 8193)
+        _resolve(node_id="x-1", command_name="/think", brief="x" * 8193)
 
 
 def test_brief_at_8kb_ok():
-    out = _resolve(node_id="x-1", verb="/think", brief="x" * 8192)
+    out = _resolve(node_id="x-1", command_name="/think", brief="x" * 8192)
     assert out["env"]["TARGET_BRIEF"] == "x" * 8192
 
 
-def test_no_verb_leaves_default_command_with_env_refusal():
+def test_no_command_leaves_default_command_with_env_refusal():
     """Verify 3 (regression, x-9d11): no dispatch fields -> /target --no-merge
     <id>, and the env carries the refusal (TARGET_NO_MERGE), not briefs only."""
     out = _resolve(node_id="x-1")
@@ -918,20 +918,20 @@ def test_no_verb_leaves_default_command_with_env_refusal():
 
 
 def test_config_extends_allowlist():
-    """A per-project allowlist admits a domain workflow verb."""
-    cfg = {"allowed_verbs": ["/target", "/think", "/marketing"]}
-    out = _resolve(node_id="x-1", verb="/marketing", dispatch_cfg=cfg)
+    """A per-project allowlist admits a domain workflow command."""
+    cfg = {"allowed_commands": ["/target", "/think", "/marketing"]}
+    out = _resolve(node_id="x-1", command_name="/marketing", dispatch_cfg=cfg)
     assert out["command"] == "/marketing x-1"
 
 
-def test_node_verb_wins_over_config_command():
-    """Precedence: node verb > config.dispatch.command > builtin."""
+def test_node_command_wins_over_config_command():
+    """Precedence: node command > config.dispatch.command > builtin."""
     cfg = {"command": "/foo {id}"}
-    out = _resolve(node_id="x-1", verb="/think", dispatch_cfg=cfg)
+    out = _resolve(node_id="x-1", command_name="/think", dispatch_cfg=cfg)
     assert out["command"] == "/think x-1"
 
 
-def test_brief_without_verb_still_rides_env():
+def test_brief_without_command_still_rides_env():
     """A brief on a default (/target) dispatch still travels via env."""
     out = _resolve(node_id="x-1", brief="ship carefully")
     assert out["command"] == "/target --no-merge x-1"
@@ -1063,7 +1063,7 @@ def test_message_carries_no_merge_is_word_padded():
 
 
 def test_legacy_token_rewrite_is_position_scoped():
-    """Only the two legacy positions (directly after the verb, or trailing -
+    """Only the two legacy positions (directly after the command, or trailing -
     the old normalize.sh append) are migrated. A /target argument is free
     text: ``/target fix the no-merge carrier bug`` is a real feature
     description, and rewriting the word mid-string would mutate prompt text
@@ -1106,7 +1106,7 @@ def test_submit_refusal_names_the_table_and_the_key():
 
 
 def test_normalize_passes_absolute_path_through_on_every_surface():
-    """An absolute path is nobody's footnote verb: it passes through literally
+    """An absolute path is nobody's footnote command: it passes through literally
     on every surface, at every caller - the guard lives inside the normalizer,
     not at one call site."""
     from fno.agents.harness_map import normalize_command
@@ -1140,7 +1140,7 @@ def test_internal_slash_guard_lives_inside_normalize_command():
     from fno.agents import harness_map
 
     norm_src = inspect.getsource(harness_map.normalize_command)
-    assert "parse_verb_token(first_word)" in norm_src
+    assert "parse_command_token(first_word)" in norm_src
     resolve_src = inspect.getsource(harness_map.resolve_dispatch)
     assert "'/' not in first_word[1:]" not in resolve_src
 
@@ -1151,7 +1151,7 @@ def test_internal_slash_guard_lives_inside_normalize_command():
 )
 def test_normalize_command_rewrites_dollar_seed_for_slash_surfaces(harness, expected):
     """x-413d: the sigil says WHO WROTE the seed, never which harness runs
-    it. A codex-authored `$fno:verb` seed rendered for a slash surface
+    it. A codex-authored `$fno:command` seed rendered for a slash surface
     arrives in that harness's native spelling, namespace preserved (agy
     strips it, per its /fno: input rule)."""
     from fno.agents.harness_map import normalize_command
@@ -1163,7 +1163,7 @@ def test_normalize_command_rewrites_dollar_seed_for_slash_surfaces(harness, expe
     assert normalize_command("do a $fno:blueprint", "claude") == "do a $fno:blueprint"
 
 
-# The measured rows from the operator's one-call table (bare verbs an operator
+# The measured rows from the operator's one-call table (bare commands an operator
 # drives at a codex prompt line). The roster here is the minimal shipped
 # surface the rows exercise; the real-reader tests below pin the loader.
 _MEASURED_ROWS = [
@@ -1175,38 +1175,38 @@ _MEASURED_ROWS = [
     ("/model gpt-5.6-luna", "/model gpt-5.6-luna"),
     ("/status", "/status"),
     ("/compact", "/compact"),
-    # neither a footnote verb nor native: an unrecognized verb stays literal
+    # neither a footnote command nor native: an unrecognized command stays literal
     ("/frobnicate", "/frobnicate"),
 ]
 
 
 @pytest.mark.parametrize(("command", "expected"), _MEASURED_ROWS)
-def test_codex_normalizer_rewrites_only_footnote_verbs(command, expected, monkeypatch):
+def test_codex_normalizer_rewrites_only_footnote_commands(command, expected, monkeypatch):
     """A leading-slash token is rewritten only when it names a shipped footnote
-    verb that is not also a declared native verb: native and unknown verbs
+    command that is not also a declared native command: native and unknown commands
     pass through literally instead of being captured into a phantom skill."""
     from fno.agents import harness_map
 
     monkeypatch.setattr(
-        harness_map, "footnote_verbs", lambda: frozenset({"target", "review", "think"})
+        harness_map, "footnote_commands", lambda: frozenset({"target", "review", "think"})
     )
     assert harness_map.normalize_command(command, "codex") == expected
 
 
 def test_codex_review_collision_spells_both_ways(monkeypatch):
-    """`review` is BOTH a shipped footnote skill and a native codex verb. The
+    """`review` is BOTH a shipped footnote skill and a native codex command. The
     bare spelling stays native; the fno lane is reached namespaced."""
     from fno.agents import harness_map
 
     monkeypatch.setattr(
-        harness_map, "footnote_verbs", lambda: frozenset({"target", "review"})
+        harness_map, "footnote_commands", lambda: frozenset({"target", "review"})
     )
     assert harness_map.normalize_command("/review", "codex") == "/review"
     assert harness_map.normalize_command("/fno:review", "codex") == "$fno:review"
 
 
-def test_native_verbs_come_from_the_capability_table():
-    """The native-verb knowledge lives in ONE place: the codex row of the
+def test_native_commands_come_from_the_capability_table():
+    """The native-command knowledge lives in ONE place: the codex row of the
     capability table."""
     from fno.agents.harness_map import capabilities
 
@@ -1224,29 +1224,29 @@ def test_roster_is_read_from_the_shipped_plugin(monkeypatch):
 
     repo_root = Path(__file__).resolve().parents[4]
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root))
-    harness_map.footnote_verbs.cache_clear()
+    harness_map.footnote_commands.cache_clear()
     try:
-        roster = harness_map.footnote_verbs()
+        roster = harness_map.footnote_commands()
     finally:
-        harness_map.footnote_verbs.cache_clear()
+        harness_map.footnote_commands.cache_clear()
     assert {"target", "review", "think", "mail"} <= roster
 
 
 def test_new_skill_normalizes_without_a_normalizer_edit(monkeypatch):
-    """Adding a verb to the plugin surface must not require touching the
+    """Adding a command to the plugin surface must not require touching the
     normalizer: the roster is read, never retyped."""
     from fno.agents import harness_map
 
-    monkeypatch.setattr(harness_map, "footnote_verbs", lambda: frozenset({"brandnewverb"}))
-    assert harness_map.normalize_command("/brandnewverb run", "codex") == "$fno:brandnewverb run"
+    monkeypatch.setattr(harness_map, "footnote_commands", lambda: frozenset({"brandnewcommand"}))
+    assert harness_map.normalize_command("/brandnewcommand run", "codex") == "$fno:brandnewcommand run"
 
 
 def test_real_roster_rewrites_target_on_codex():
     """End to end over the real cached roster and the real capability row:
     the two footnote rows of the measured table rewrite, unchanged from the
     day the normalizer shipped."""
-    from fno.agents.harness_map import footnote_verbs, normalize_command
+    from fno.agents.harness_map import footnote_commands, normalize_command
 
-    assert "target" in footnote_verbs()
+    assert "target" in footnote_commands()
     assert normalize_command("/target x-1", "codex") == "$fno:target x-1"
     assert normalize_command("/fno:target x-1", "codex") == "$fno:target x-1"

@@ -1,7 +1,7 @@
 """The pr-watch merge arm refuses an off-list PR under the scoped merge freeze.
 
 The role writes one record (subject + allow-list) through the
-authorized-merge verb's freeze ops; the Rust gate is the authoritative
+authorized-merge command's freeze ops; the Rust gate is the authoritative
 reader, and the arm's executor asks it through one thin receipt call. The
 verdict mapping lives here; the record read is the Rust tests'.
 """
@@ -15,8 +15,8 @@ def _door(monkeypatch, receipt=None, error=None):
 
     seen = {}
 
-    def _call(verb, args, *, timeout=None):
-        seen["verb"] = verb
+    def _call(command, args, *, timeout=None):
+        seen["verb"] = command
         seen["args"] = args
         return (error, receipt)
 
@@ -95,8 +95,8 @@ def _run_queue(monkeypatch, entries, pr, receipt=None):
     _door(monkeypatch, receipt=receipt if receipt is not None else CLEAR)
 
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, timeout=None: {"exit": 0},
+        "fno.rust_binary.command_call",
+        lambda command, payload, timeout=None: {"exit": 0},
         raising=True,
     )
     counts = run_execute_queue(

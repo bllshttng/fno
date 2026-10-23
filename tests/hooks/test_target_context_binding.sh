@@ -115,7 +115,7 @@ if DEV_BIN_DIR="$(PYTHONPATH="$REPO_ROOT/cli/src" python3 -c "from fno.rust_bina
     PYTHONPATH="$REPO_ROOT/cli/src" python3 - "$BOUND" "$MINTED_BINDING" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 repo, out = Path(sys.argv[1]), Path(sys.argv[2])
 plan = (repo / "PLAN.md").read_text()
@@ -143,7 +143,7 @@ request = {
     "payload_bytes": 512,
     "stage": "prepared",
 }
-answer = verb_call("task-context-prepare", {"binding": request})
+answer = command_call("task-context-prepare", {"binding": request})
 assert answer.get("ok"), answer
 bound = dict(request)
 bound["binding_digest"] = answer["binding_digest"]
@@ -152,7 +152,7 @@ print("MINT_OK")
 PY
     MINT_RC=$?
     if [[ "$MINT_RC" != "0" ]]; then
-        fail "mint the hook-fixture binding through the real verb (rc=$MINT_RC)"
+        fail "mint the hook-fixture binding through the real command (rc=$MINT_RC)"
     fi
 
     OUT="$(run_hook "$BOUND")"

@@ -151,7 +151,7 @@ pub fn ensure_sccache_server() {
     ensure_sccache_server_unless(sccache_server_pid().is_some());
 }
 
-/// The rows-taking form: a caller holding a process table (the census verb,
+/// The rows-taking form: a caller holding a process table (the census command,
 /// the machine-watch tick) answers the probe without a second table walk.
 pub fn ensure_sccache_server_unless(live_server: bool) {
     if live_server || sccache_bin().is_none() || !sccache_opted_in() {
@@ -1022,7 +1022,7 @@ fn joined_or_none(set: &BTreeSet<String>) -> String {
 
 /// One row line, the single form every lane prints. `path=` stays last so a
 /// reader that splits on `path=` keeps working.
-fn row_line(verb: &str, lane: &str, row: &Row, holders: &HolderView) -> String {
+fn row_line(command: &str, lane: &str, row: &Row, holders: &HolderView) -> String {
     let owner = match &row.owner {
         Some(tree) => tree.display().to_string(),
         None => "none".to_string(),
@@ -1040,7 +1040,7 @@ fn row_line(verb: &str, lane: &str, row: &Row, holders: &HolderView) -> String {
         HolderView::Unread => ("unread".to_string(), "unread".to_string()),
     };
     format!(
-        "cargo-build-dir {verb} lane={lane} bytes={} quiet_h={:.1} owner={owner} node={nodes} session={sessions} path={}",
+        "cargo-build-dir {command} lane={lane} bytes={} quiet_h={:.1} owner={owner} node={nodes} session={sessions} path={}",
         row.bytes,
         row.quiet.as_secs_f64() / 3600.0,
         row.path.display()
@@ -1291,8 +1291,8 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
                     planned_bytes += row.bytes;
                     remaining -= row.bytes;
                     decisions[i] = Decision::Reap("cap");
-                    let verb = if apply { "reaped" } else { "would-reap" };
-                    let line = row_line(verb, "cap", row, &holders_view);
+                    let command = if apply { "reaped" } else { "would-reap" };
+                    let line = row_line(command, "cap", row, &holders_view);
                     println!("{line}");
                     rep.lines.push(line);
                     if apply {
@@ -1712,9 +1712,9 @@ fn idle_trees_with(
                 report.reclaimed += reclaimed.dirs.len();
                 report.reclaimed_bytes += bytes;
             }
-            let verb = if apply { "reclaimed" } else { "would-reclaim" };
+            let command = if apply { "reclaimed" } else { "would-reclaim" };
             let line = format!(
-                "idle-tree {verb} tree={} dirs={} bytes={} reason=-",
+                "idle-tree {command} tree={} dirs={} bytes={} reason=-",
                 tree.display(),
                 reclaimed.dirs.len(),
                 bytes

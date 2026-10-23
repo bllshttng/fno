@@ -729,7 +729,7 @@ fn index_receipts(registry_path: Option<&str>) -> HashMap<String, ReceiptAxes> {
 
 // ---------------------------------------------------------------------------
 // The ledger join (`fno.ledger_join`), ported. `pr-watch pr-sessions` is its
-// transport door; retro and carveout call the op through `verb_call`.
+// transport door; retro and carveout call the op through `command_call`.
 // ---------------------------------------------------------------------------
 
 /// Opening words of every reason that names an INFRA failure - something that

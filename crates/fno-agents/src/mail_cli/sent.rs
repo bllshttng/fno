@@ -1,4 +1,4 @@
-//! The `sent` front verb: the outbound half of `mail unread`.
+//! The `sent` front command: the outbound half of `mail unread`.
 //!
 //! Port of the Python `mail sent` front. Lists mail this session sent, with
 //! the claim state the recipient's cursor implies and the landed tri-state
@@ -89,7 +89,7 @@ pub fn run_sent(args: &[String]) -> i32 {
         // TTL of -1, not 0: the age test is strict `>` and bus timestamps are
         // whole seconds, so a message sent this second has age 0.0 and a TTL
         // of 0 would classify it CLAIMED - reporting a just-sent, unread
-        // message as picked up, the opposite of the truth this verb exists
+        // message as picked up, the opposite of the truth this command exists
         // to tell.
         let unclaimed_ids: HashSet<String> = sent_unclaimed(&all, &handle, -1, now, &bus)
             .iter()

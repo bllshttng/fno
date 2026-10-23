@@ -3,7 +3,7 @@
 //! graph/_reconcile.py. The store-side settlement lives in graph_store
 //! (`settle_blocked_by_edges`); this module owns the cause-surface proof a
 //! merged PR's changed-file set owes its predecessors, and the receipt
-//! rendering both verbs print.
+//! rendering both commands print.
 
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -20,7 +20,7 @@ pub(crate) fn normalize_surface(path: &str) -> String {
 
 /// Verify predecessor cause surfaces against one merged PR's file set.
 ///
-/// Full contract: docs/architecture/backlog-graph-verb-contracts.md
+/// Full contract: docs/architecture/backlog-graph-command-contracts.md
 pub(crate) fn verify_pending_supersessions(
     entries: &mut [Value],
     successor: &str,

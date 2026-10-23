@@ -1,11 +1,11 @@
-"""Tests for fno.agents.dispatch lifecycle verbs.
+"""Tests for fno.agents.dispatch lifecycle commands.
 
 Wave-1 coverage (US4-lifecycle):
 
 - ``reconcile_agents`` (AC3-*)
 
-``attach`` has no Python leg: the Rust client verb owns it, and its refusals
-are pinned in ``test_rust_verb_parity.py``.
+``attach`` has no Python leg: the Rust client command owns it, and its refusals
+are pinned in ``test_rust_command_parity.py``.
 
 Each test monkeypatches the corresponding helper in
 ``fno.agents.harnesses.{claude,codex}`` so we exercise the

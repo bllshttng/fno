@@ -157,7 +157,7 @@ transitive children of --parent. Resolve the parent id up-front so a
 missing node is a hard error (AC2-ERR) and a childless node prints a
 clear note while still returning null so the walker can fall back
 (AC2-EDGE). The actual descendant SET is computed inside the keeper's
-ready verb from the entries it receives so that under --claim it reflects the
+ready command from the entries it receives so that under --claim it reflects the
 locked graph state, not a pre-read snapshot (avoids a TOCTOU where a
 concurrent reparent could claim a node no longer in the subtree).
 
@@ -186,7 +186,7 @@ identity is shared (an opencode worker's daemon-anchored pid, a
 manifest-inherited session id) - refusing with the fix beats attributing
 a stranger's work. release_claim is non-strict, so honoring a takeover
 against a LIVE claim would delete a running worker's claim and let the
-next in_progress succeed on an empty key: the double-dispatch these verbs
+next in_progress succeed on an empty key: the double-dispatch these commands
 exist to close. A live claim is never takeable, whoever it names; this
 guard runs for every transition, so done/pending cannot settle a live
 worker's row either.
@@ -308,12 +308,12 @@ whatever this run dropped either way.
 
 TWO locked passes, and the split is the whole safety argument.
 `archive` writes the archive inside its mutator because archive-FIRST is
-safe for it: a crash leaves a duplicate. Inverting the verb inverts the
+safe for it: a crash leaves a duplicate. Inverting the command inverts the
 safe order, and the mutator cannot express it - `locked_mutate_graph`
 persists the returned entries only AFTER the mutator returns, so an
 archive shrink written inside the mutator lands BEFORE the working graph
 and a crash between them loses the node from both files. That is the one
-outcome neither verb may produce, and doing it there quietly guaranteed
+outcome neither command may produce, and doing it there quietly guaranteed
 the ordering the comment claimed to prevent.
 So: pass 1 adds the row to the working graph and persists it. Pass 2 takes
 the lock again, re-reads the archive fresh (never a list read before the

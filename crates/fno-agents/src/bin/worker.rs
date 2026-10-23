@@ -20,13 +20,13 @@
 //!   Callers build this argv; humans never type it.
 //! - `--law-exec`: the one-shot law-door lane (law_match.rs). Serves ONE
 //!   law request on stdin, prints the door's own answer, and exits with the
-//!   door's code. The front's `fno inbox law` verbs spawn it, because the
+//!   door's code. The front's `fno inbox law` commands spawn it, because the
 //!   mux never links the runtime (product boundary). Callers build this
 //!   argv; humans never type it.
 //! - `--paths-exec`: the one-shot paths lane (paths_cli.rs). Serves ONE
-//!   `config paths` verb argv (emit-shell and shell-stub so far; siblings
-//!   still answer in Python) and exits with the verb's code. The front's
-//!   `fno config paths <native-verb>` spawns it. Callers build this argv;
+//!   `config paths` command argv (emit-shell and shell-stub so far; siblings
+//!   still answer in Python) and exits with the command's code. The front's
+//!   `fno config paths <native-command>` spawns it. Callers build this argv;
 //!   humans never type it.
 //! - `--footnote-host <spec> <socket> <name>`: holds one fnh session open
 //!   over ACP stdio for a `-H footnote --substrate thread` row and serves it
@@ -125,8 +125,8 @@ fn main() {
              (claude stream-json adoption), --store-keeper (graph store), \
              --store-exec (one store request), --law-exec (one law request on \
              stdin), or --law-exec-arg <request> (one law request by argv, \
-             stdin inherited), --paths-exec <verb> [args...] (one paths \
-             verb, e.g. emit-shell), or --footnote-host <spec> <socket> <name> \
+             stdin inherited), --paths-exec <command> [args...] (one paths \
+             command, e.g. emit-shell), or --footnote-host <spec> <socket> <name> \
              (one footnote thread session)"
         );
         std::process::exit(2);
@@ -151,7 +151,7 @@ fn store_exec_lane(args: &[String]) -> Result<(), String> {
 }
 
 /// `--law-exec` entrypoint: one law-door request on stdin, the door's own
-/// stdout and exit code out. The front's `fno inbox law` verbs spawn this
+/// stdout and exit code out. The front's `fno inbox law` commands spawn this
 /// lane; the child reads stdin to EOF and answers, so write-then-read
 /// cannot deadlock.
 fn law_exec_lane() {

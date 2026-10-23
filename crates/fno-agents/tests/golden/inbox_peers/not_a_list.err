@@ -1,0 +1,2 @@
+inbox.settings: peer 'alpha' surfaces is not a list; dropping (got str)
+inbox.settings: surface_patterns['api'] is not a list; dropping (got str)

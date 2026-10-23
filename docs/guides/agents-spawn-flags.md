@@ -42,7 +42,7 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--resume/-r` seeds a NEW claude session from an existing transcript. The content carries over. The session id does NOT: the result is a new id, a new agent-view row, and a new fno binding. To revive a session under its OWN id use `fno agents session resume`. The value is a full uuid or the 8-hex short id. It implies thread. claude and thread only.
 
-`--session-phase` stamps the sessions row that a node-bearing spawn opens on the node. Empty infers from the message through the verb table (`crates/fno-agents/src/spawn_phase.toml`): the first token's verb names the phase in its bare, `/fno:` and `$fno:` spellings. A `--node` spawn the table cannot label is refused before any worker launches. Pass the phase explicitly. A dispatch verb from `dispatch.verb_registry` declares its phase in the descriptor (`session_phase`), and the resolver attaches it. A spawn with no `--node` writes no row.
+`--session-phase` stamps the sessions row that a node-bearing spawn opens on the node. Empty infers from the message through the command table (`crates/fno-agents/src/spawn_phase.toml`): the first token's command names the phase in its bare, `/fno:` and `$fno:` spellings. A `--node` spawn the table cannot label is refused before any worker launches. Pass the phase explicitly. A dispatch command from `dispatch.command_registry` declares its phase in the descriptor (`session_phase`), and the resolver attaches it. A spawn with no `--node` writes no row.
 
 ## Roles
 

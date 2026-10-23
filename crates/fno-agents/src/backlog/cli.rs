@@ -143,7 +143,7 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
-    // The ported tracker-owned verbs own graph state: under an external
+    // The ported tracker-owned commands own graph state: under an external
     // backend they refuse before any read or write. Help still answers.
     if matches!(
         resolved.legacy,
@@ -215,7 +215,7 @@ pub fn run(args: &[String]) -> i32 {
         // The vote is native: identity, style gate and the one same-voter
         // refusal over the single-row write seam. No Python twin remains.
         "encounter" => super::encounter_cli::run(resolved.tail),
-        // The create verbs are native end to end as of this wave: parse,
+        // The create commands are native end to end as of this wave: parse,
         // gates, locked write with the rollup inside it, receipts.
         "add" => super::create_cli::run(resolved.tail),
         "idea" => super::create_cli::run_idea(resolved.tail),
@@ -231,7 +231,7 @@ pub fn run(args: &[String]) -> i32 {
         // same change (d-e11b2b3e), so the door owns every shape, help
         // included.
         "decisions" => super::decisions_cli::run(resolved.tail),
-        // The decide record verb is native end to end: the same door
+        // The decide record command is native end to end: the same door
         // `fno inbox decide` uses, every lane, the Python twin deleted in
         // the same change.
         "decide" => crate::decide_door::run_decide_door(resolved.tail),
@@ -286,7 +286,7 @@ pub fn run(args: &[String]) -> i32 {
         // so a forward back would loop.
         "triage" => super::triage_cli::run(resolved.tail),
         // The projections: the shared kanban classifier, the post-publish
-        // view pass, and the read verbs over it.
+        // view pass, and the read commands over it.
         "render-views" => super::projections::run_render_views(resolved.tail),
         "view" => super::projections::run_view(resolved.tail),
         "board" => super::projections::run_board(resolved.tail),
@@ -302,12 +302,12 @@ pub fn run(args: &[String]) -> i32 {
         "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
         "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
         "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
-        // The publish verb is native end to end: the public projection
+        // The publish command is native end to end: the public projection
         // renders through `fno board-render`, and the three targets (static
-        // dir, uploader command, GitHub Pages) are the verb's own. The
+        // dir, uploader command, GitHub Pages) are the command's own. The
         // catalog row sits in the board group.
         "publish" => super::publish::run(resolved.tail),
-        // The owner-run import beside the publish verb it serves: approved
+        // The owner-run import beside the publish command it serves: approved
         // issues in, quarantined intake rows out, dry run by default.
         "import-requests" => super::requests::run(resolved.tail),
         // The wave-4 cutover arms: catalog commands whose Python bodies were
@@ -329,10 +329,10 @@ pub fn run(args: &[String]) -> i32 {
         "ready" => super::cutover::run_ready(resolved.tail),
         "remove" => super::cutover::run_remove(resolved.tail),
         "project-root" => super::cutover::run_project_root(resolved.tail),
-        // The finale arms (this PR): the remaining heavy verbs, served with
+        // The finale arms (this PR): the remaining heavy commands, served with
         // no compat forward. The catalog-vs-arms gate (check-backlog-native
         // check 2) derives the unclaimed set mechanically and fails the tree
-        // while any verb still rides the catch-all.
+        // while any command still rides the catch-all.
         "new" => super::finale::run_new(resolved.tail),
         // The epic status table: children, receipts, streaks, verify-merges,
         // and the scope-growth metric over the archive-joined read.

@@ -3,7 +3,7 @@
 The ancestor walk itself lives in Rust
 (`spawn_context::session_identity_from_table` / `session_identity_ambient`),
 served natively by `fno agents claim session-pid`. This module is the Python
-shim over that verb: one cached exec per ``from_pid`` per process, so many
+shim over that command: one cached exec per ``from_pid`` per process, so many
 call sites pay one exec, and the pid and the harness can never name different
 processes (AC6: both halves come from one JSON read).
 
@@ -20,7 +20,7 @@ pins a claim to machinery that never dies. A thread worker therefore degrades
 to no pid; the claim lives by its TTL (the same answer the walk gave a plain
 shell before).
 
-This is degrade-safe by construction: if the verb answers nothing (no harness
+This is degrade-safe by construction: if the command answers nothing (no harness
 ancestor, a refused spare, the binary unavailable), the caller records no
 ``--pid`` and the claim is LIVE via the TTL arm exactly as before. A
 mis-resolved/transient pid is a dead pid that fails ``is_live`` -> STALE on
@@ -96,7 +96,7 @@ def _session_identity(from_pid: Optional[int]) -> tuple[Optional[int], Optional[
         if from_pid is not None:
             cmd += ["--from-pid", str(from_pid)]
         try:
-            proc = subprocess.run(  # noqa: S603 - a fixed verb, never user input
+            proc = subprocess.run(  # noqa: S603 - a fixed command, never user input
                 cmd, capture_output=True, text=True, timeout=30, check=False
             )
             payload = json.loads(proc.stdout)
@@ -116,7 +116,7 @@ def _session_identity(from_pid: Optional[int]) -> tuple[Optional[int], Optional[
 def resolve_session_pid(from_pid: Optional[int] = None) -> Optional[int]:
     """Return the durable session pid, or None if uncapturable (degrade).
 
-    Resolution order (applied by the native verb this shim execs):
+    Resolution order (applied by the native command this shim execs):
       1. ``FNO_SESSION_PID`` env, if set to a live pid (launcher override).
       2. The nearest harness ancestor of FROM_PID (default: this process's
          parent - the caller passes its own pid chain up to the session) that
@@ -131,7 +131,7 @@ def resolve_session_pid(from_pid: Optional[int] = None) -> Optional[int]:
 def resolve_session_harness(from_pid: Optional[int] = None) -> Optional[str]:
     """The harness of this process's nearest harness ancestor, or None.
 
-    The companion of :func:`resolve_session_pid`: one cached verb read answers
+    The companion of :func:`resolve_session_pid`: one cached command read answers
     both halves, so the pid and the harness always name the same process (the
     refusing walk that answers the pid declines the whole identity; the
     harness walk behind a pooled spare still proves the harness is claude,
@@ -142,7 +142,7 @@ def resolve_session_harness(from_pid: Optional[int] = None) -> Optional[str]:
     stamped by a caller one fork SHALLOWER - the `fno do target init` CLI -
     whose own ppid read was still permitted; under the codex sandbox every
     deeper fork reads PermissionError on its parent's ppid, so the script and
-    the verb it spawns cannot walk at all (measured: only self's ppid is
+    the command it spawns cannot walk at all (measured: only self's ppid is
     readable). The pid must be alive, and the name must be a known harness, or
     the stamp is ignored and the walk decides - a stale or forged pair fails
     closed to the walk's own answer.

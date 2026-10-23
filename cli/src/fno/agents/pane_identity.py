@@ -1,8 +1,8 @@
 """`fno agents pane-identity`: cross-check mux panes against registry rows.
 
-A hidden verb: operator-facing reads go through `fno agents list`. This
+A hidden command: operator-facing reads go through `fno agents list`. This
 module exists because `agents/cli.py` sits over the line budget, so the
-verb moved here, named by the question it answers. The cross-check core is
+command moved here, named by the question it answers. The cross-check core is
 `fno.agents.reachability.pane_identity_crosscheck`.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ def cmd_pane_identity(
     referenced by a row (a miss is an fno worker no fno surface can address).
     The counts compared print on every run, so a zero-mismatch result is a
     reading and not a silence. A mismatch is a READING, never a repair: this
-    verb mutates nothing, and it never mints an identity from argv.
+    command mutates nothing, and it never mints an identity from argv.
 
     Exit codes: 0 clean, 1 mismatch found, 2 an instrument (mux listing or
     registry) could not be read.

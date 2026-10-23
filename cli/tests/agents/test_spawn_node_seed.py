@@ -1,8 +1,8 @@
 """CLI wiring for the node-seeded spawn: `fno agents spawn --node <id>` with no
-typed message reads the node's encoded verb and brief (x-e53e change 1).
+typed message reads the node's encoded command and brief (x-e53e change 1).
 
 The seed render and the brief chain are unit-covered upstream; this file pins
-the front door: a node-seeded pane carries verb + brief, the receipt names both
+the front door: a node-seeded pane carries command + brief, the receipt names both
 sources, an unencoded node refuses before any peer exists, and a typed message
 wins over the node.
 """
@@ -35,7 +35,7 @@ def _isolated(monkeypatch, tmp_path):
 _ENCODED = {
     "id": "x-1",
     "slug": "feat",
-    "dispatch_verb": "/target",
+    "dispatch_command": "/target",
     "difficulty": "low",
 }
 
@@ -89,9 +89,9 @@ def _invoke(runner, *args):
     return runner.invoke(agents_app, ["spawn", "--name", "w1", *args])
 
 
-def test_node_seeded_pane_carries_verb_and_brief(monkeypatch, runner, loop_admission_ready):
+def test_node_seeded_pane_carries_command_and_brief(monkeypatch, runner, loop_admission_ready):
     """AC1-HP: no typed message + encoded node -> the pane seed is the node's
-    rendered verb command, the brief rides TARGET_BRIEF, and the receipt names
+    rendered command line, the brief rides TARGET_BRIEF, and the receipt names
     both sources."""
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
     result = _invoke(runner, "--node", "x-1", "--here", "--as", "pane", "--split", "left")
@@ -106,13 +106,13 @@ def test_node_seeded_pane_carries_verb_and_brief(monkeypatch, runner, loop_admis
 
 
 def test_unencoded_node_refuses_before_any_peer(monkeypatch, runner):
-    """AC1-ERR: a node with no dispatch_verb and no typed message exits
+    """AC1-ERR: a node with no dispatch_command and no typed message exits
     non-zero naming the node and the encode remedy; no pane is created."""
     received = _stub_pane_path(monkeypatch, rec={"id": "x-2", "slug": "bare", "difficulty": "low"})
     result = _invoke(runner, "--node", "x-2", "--here", "--as", "pane", "--split", "left")
     assert result.exit_code != 0
     assert "x-2" in result.output
-    assert "fno backlog update x-2 dispatch_verb=" in result.output
+    assert "fno backlog update x-2 dispatch_command=" in result.output
     assert received == {}
 
 
@@ -155,14 +155,14 @@ def test_node_seeded_spawn_launches_in_the_ensured_worktree(monkeypatch, runner,
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED, cwd="/repo"))
     seen: dict = {}
 
-    def fake_verb_call(verb, payload, unavailable_cls, **kw):
-        seen["verb"] = verb
+    def fake_command_call(command, payload, unavailable_cls, **kw):
+        seen["verb"] = command
         seen["payload"] = dict(payload)
         return {"workdir": str(tmp_path / "wt")}
 
     import fno.rust_binary as rb
 
-    monkeypatch.setattr(rb, "verb_call", fake_verb_call)
+    monkeypatch.setattr(rb, "command_call", fake_command_call)
     result = _invoke(runner, "--node", "x-1", "--as", "pane", "--split", "left")
     assert result.exit_code == 0, result.output
     assert seen["verb"] == "launch-workdir"
@@ -176,7 +176,7 @@ def test_ensure_refusal_holds_the_node(monkeypatch, runner):
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED))
     import fno.rust_binary as rb
 
-    monkeypatch.setattr(rb, "verb_call", lambda *a, **k: {"hold": "refused"})
+    monkeypatch.setattr(rb, "command_call", lambda *a, **k: {"hold": "refused"})
     result = _invoke(runner, "--node", "x-1", "--as", "pane", "--split", "left")
     assert result.exit_code == 2
     assert "worktree ensure refused or misconfigured for x-1" in result.output
@@ -191,7 +191,7 @@ def test_ensure_refusal_holds_the_node(monkeypatch, runner):
 
 
 def _row(**fields):
-    row = {"id": "x-1", "slug": "seed", "dispatch_verb": "/blueprint", "difficulty": "medium"}
+    row = {"id": "x-1", "slug": "seed", "dispatch_command": "/blueprint", "difficulty": "medium"}
     row.update(fields)
     return row
 
@@ -200,18 +200,18 @@ def _stub_row(monkeypatch, row):
     monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", lambda path, tokens: {"entries": [row] if row else [], "missing": []})
 
 
-def _stub_verb(monkeypatch, answer=None, *, unavailable=None):
+def _stub_command(monkeypatch, answer=None, *, unavailable=None):
     import fno.rust_binary as rb
 
     seen: list = []
 
-    def _call(verb, payload, unavailable_cls, **kw):
+    def _call(command, payload, unavailable_cls, **kw):
         seen.append(payload.get("node_seed", payload))
         if unavailable is not None:
             raise unavailable_cls(str(unavailable))
         return answer
 
-    monkeypatch.setattr(rb, "verb_call", _call)
+    monkeypatch.setattr(rb, "command_call", _call)
     return seen
 
 
@@ -221,18 +221,18 @@ def _seed_args(*extra):
     return ["spawn", *extra]
 
 
-def test_seam_names_the_binary_when_the_verb_is_unavailable(monkeypatch, capsys):
-    """AC3-HP: VerbUnavailable exits 2 naming the transport, never a silent
+def test_seam_names_the_binary_when_the_command_is_unavailable(monkeypatch, capsys):
+    """AC3-HP: CommandUnavailable exits 2 naming the transport, never a silent
     fallback to the role profile."""
     _stub_row(monkeypatch, _row())
 
     class _Unavailable(Exception):
         pass
 
-    _stub_verb(monkeypatch, unavailable="fno-agents: no binary")
+    _stub_command(monkeypatch, unavailable="fno-agents: no binary")
     import fno.rust_binary as rb
 
-    monkeypatch.setattr(rb, "VerbUnavailable", _Unavailable)
+    monkeypatch.setattr(rb, "CommandUnavailable", _Unavailable)
     from fno.agents.rust_runtime import _node_seed_at_seam
 
     with pytest.raises(SystemExit) as exc:
@@ -241,13 +241,13 @@ def test_seam_names_the_binary_when_the_verb_is_unavailable(monkeypatch, capsys)
     assert "spawn-axes unavailable" in capsys.readouterr().err
 
 
-def test_seam_profile_returns_the_derived_verb(monkeypatch):
+def test_seam_profile_returns_the_derived_command(monkeypatch):
     _stub_row(monkeypatch, _row())
-    _stub_verb(monkeypatch, {"action": "profile", "verb": "blueprint"})
+    _stub_command(monkeypatch, {"action": "profile", "verb": "blueprint"})
     from fno.agents.rust_runtime import _node_seed_at_seam
 
-    args, node_verb = _node_seed_at_seam(_seed_args("--node", "x-1", "--substrate", "thread"))
-    assert node_verb == "blueprint"
+    args, node_command = _node_seed_at_seam(_seed_args("--node", "x-1", "--substrate", "thread"))
+    assert node_command == "blueprint"
     assert args[1] == "--node"
 
 
@@ -257,9 +257,9 @@ def test_seam_profile_returns_the_derived_verb(monkeypatch):
 @pytest.fixture
 def _target_row(tmp_path):
     """A node whose lifecycle answers /target: a readable plan (no status
-    scalar reads READY) beside a declared /target verb."""
+    scalar reads READY) beside a declared /target command."""
     (tmp_path / "p.md").write_text("---\n---\n", encoding="utf-8")
-    row = _row(dispatch_verb="/target", plan_path=str(tmp_path / "p.md"), cwd=str(tmp_path))
+    row = _row(dispatch_command="/target", plan_path=str(tmp_path / "p.md"), cwd=str(tmp_path))
     return row
 
 
@@ -271,23 +271,23 @@ def _rust_graph(tmp_path, monkeypatch):
     seed_graph(tmp_path / "graph.json", json.dumps({"entries": [{"id": "x-1"}]}))
 
 
-def _stub_verb_seq(monkeypatch, answers):
-    """Like _stub_verb but each call pops the next canned answer; later calls
+def _stub_command_seq(monkeypatch, answers):
+    """Like _stub_command but each call pops the next canned answer; later calls
     answer pass, which is what an agreeing /target derivation meets."""
     import fno.rust_binary as rb
 
     seen: list = []
 
-    def _call(verb, payload, unavailable_cls, **kw):
+    def _call(command, payload, unavailable_cls, **kw):
         seen.append(payload.get("node_seed", payload))
         return answers.pop(0) if answers else {"action": "pass"}
 
-    monkeypatch.setattr(rb, "verb_call", _call)
+    monkeypatch.setattr(rb, "command_call", _call)
     return seen
 
 
 def test_seam_derive_names_an_unresolvable_node_as_a_receipt(monkeypatch):
-    """x-8d88 Task 4: the seed names a node the verb's store read cannot
+    """x-8d88 Task 4: the seed names a node the command's store read cannot
     resolve, so the receipt-compose answer hands the reason to the mint
     through FNO_NODE_REASON and the spawn proceeds WITHOUT a node binding;
     the receipt is never a parser flag."""
@@ -298,11 +298,11 @@ def test_seam_derive_names_an_unresolvable_node_as_a_receipt(monkeypatch):
         "--node-reason",
         "x-gone names no readable backlog row (derived from the seed)",
     ]
-    _stub_verb_seq(monkeypatch, [{"action": "compose", "argv": receipt_argv}])
+    _stub_command_seq(monkeypatch, [{"action": "compose", "argv": receipt_argv}])
     from fno.agents.rust_runtime import _node_seed_at_seam
 
-    args, node_verb = _node_seed_at_seam(_seed_args("/fno:target x-gone"))
-    assert node_verb is None
+    args, node_command = _node_seed_at_seam(_seed_args("/fno:target x-gone"))
+    assert node_command is None
     assert "--node-reason" not in args
     assert "--node" not in args
     assert "x-gone" in os.environ.get("FNO_NODE_REASON", "")
@@ -365,12 +365,12 @@ def test_seam_real_binary_refuses_a_payload_named_unknown_node(monkeypatch, caps
 
 @requires_rust
 def test_seam_real_binary_payload_disagreement_names_the_payload(monkeypatch, tmp_path, capsys):
-    """AC4-ERR on the real transport: a payload-named node whose verb
+    """AC4-ERR on the real transport: a payload-named node whose command
     disagrees refuses naming the payload and the spawn to run instead."""
     (tmp_path / "p.md").write_text("---\n---\n", encoding="utf-8")
     _stub_row(
         monkeypatch,
-        _row(id="x-1be2", dispatch_verb="/blueprint", plan_path=str(tmp_path / "p.md"), cwd=str(tmp_path)),
+        _row(id="x-1be2", dispatch_command="/blueprint", plan_path=str(tmp_path / "p.md"), cwd=str(tmp_path)),
     )
     from fno.agents.rust_runtime import _node_seed_at_seam
 
@@ -384,13 +384,13 @@ def test_seam_real_binary_payload_disagreement_names_the_payload(monkeypatch, tm
 
 
 def test_refused_spawn_reaches_no_lane(monkeypatch, runner):
-    """A payload-verb refusal exits 2 at the front door, before any lane is
+    """A payload-command refusal exits 2 at the front door, before any lane is
     routed: nothing mints a registry row or takes the node claim."""
     from fno.agents import rust_runtime as rr
     from fno.cli import app
 
     _stub_row(monkeypatch, _row())
-    _stub_verb(monkeypatch, {"action": "refuse", "message": "--node x-1 derives /blueprint; the payload names /target."})
+    _stub_command(monkeypatch, {"action": "refuse", "message": "--node x-1 derives /blueprint; the payload names /target."})
     routed: list = []
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: routed.append(list(args)))

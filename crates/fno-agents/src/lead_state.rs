@@ -18,7 +18,7 @@
 //! shared root this reader exists to end.
 //!
 //! CLI surface (direct dispatch in `bin/client.rs`, not routable `fno agents`
-//! verbs, same reasoning as `kill-check`):
+//! commands, same reasoning as `kill-check`):
 //!   `fno-agents lead-state [--scope S | --session ID] [--root PATH]`
 //!     one JSON LeadState on stdout, exit 0; unknowns are encoded in the JSON.
 //!   `fno-agents lead-shape --scope S --shape pass|org [--session ID]`
@@ -858,7 +858,7 @@ pub(crate) fn arm_manifest(
 }
 
 /// Rewrite `shape` in place on one scope's existing manifest. A thin caller
-/// of [`set_manifest_fields`]; kept because the CLI verb and its tests key
+/// of [`set_manifest_fields`]; kept because the CLI command and its tests key
 /// on this name and its `Ok(new_value)` return.
 pub fn set_manifest_shape(
     root: &Path,
@@ -1014,8 +1014,8 @@ pub fn run_lead_term(args: &[String]) -> i32 {
     0
 }
 
-fn usage(verb: &str) -> String {
-    format!("fno-agents {verb}: [--scope S | --session ID] [--root PATH] [--registry PATH]")
+fn usage(command: &str) -> String {
+    format!("fno-agents {command}: [--scope S | --session ID] [--root PATH] [--registry PATH]")
 }
 
 /// One orphan team for the org sweep: a manifest that carries a team no
@@ -1336,8 +1336,8 @@ pub fn run_lead_state(args: &[String]) -> i32 {
 }
 
 /// `fno-agents lead-shape [--term SPEC]`: a `--term` flag is a term
-/// declaration wearing the same registered verb (the client-actions shrink
-/// law bars a second verb for this: an argument of an existing action,
+/// declaration wearing the same registered command (the client-actions shrink
+/// law bars a second command for this: an argument of an existing action,
 /// never a new action).
 pub fn run_lead_shape_or_term(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--term") {

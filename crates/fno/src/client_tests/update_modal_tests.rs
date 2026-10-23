@@ -155,18 +155,18 @@ async fn upgrade_tap_queues_once_and_verdict_rearms_probe() {
         DispatchFlow::Detach
     ));
     assert!(v.restart_pending, "the clean tap arms the restart unwind");
-    assert_eq!(v.update_verb_want, None, "the restart never queues");
+    assert_eq!(v.update_command_want, None, "the restart never queues");
     v.restart_pending = false;
     execute_aux_action(&mut v, AuxAction::UpgradeRelease(Channel::Uv), &mut buf)
         .await
         .unwrap();
-    assert_eq!(v.update_verb_want, Some(Channel::Uv));
-    v.update_verb_want = None;
-    v.update_verb_inflight = true;
+    assert_eq!(v.update_command_want, Some(Channel::Uv));
+    v.update_command_want = None;
+    v.update_command_inflight = true;
     execute_aux_action(&mut v, AuxAction::RestartAgents, &mut buf)
         .await
         .unwrap();
-    assert_eq!(v.update_verb_want, None);
+    assert_eq!(v.update_command_want, None);
     assert!(v
         .notice
         .as_ref()
@@ -174,7 +174,7 @@ async fn upgrade_tap_queues_once_and_verdict_rearms_probe() {
 
     v.update_probe_want = false;
     v.land_update_verdict("upgrade ok: Updated fno v0.3.1 -> v0.3.2".into());
-    assert!(!v.update_verb_inflight);
+    assert!(!v.update_command_inflight);
     assert!(v.update_probe_want);
     assert!(v
         .notice
@@ -878,7 +878,7 @@ fn update_modal_renders_version_pair_changelog_and_guidance() {
 }
 
 #[test]
-fn readiness_payload_from_the_native_verb_parses_for_the_tui() {
+fn readiness_payload_from_the_native_command_parses_for_the_tui() {
     let _lock = crate::model_catalog::state_env_lock();
     let tmp = std::env::temp_dir().join(format!("fno-du-parse-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);

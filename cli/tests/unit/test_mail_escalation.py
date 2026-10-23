@@ -50,7 +50,7 @@ def emitted_events(monkeypatch):
 
 def _unread_count(runner, name: str) -> int:
     # Store-layer count via the bus log's own read primitives: the unread read
-    # verb is the native binary's leaf, and the pytest smoke shard runs without
+    # command is the native binary's leaf, and the pytest smoke shard runs without
     # that binary by design. No acks happen in these tests, so deliverable
     # minus withdrawn is exactly what the reader would report.
     from fno.bus.log import is_deliverable, iter_messages, withdrawn_ids

@@ -4,7 +4,7 @@
 //! The goldens under tests/golden/post_merge/ were captured from the Python
 //! legs by fixtures/post_merge/capture_driver.py while those legs lived. This
 //! test rebuilds the identical fixture tree with `--build-only` (import-free,
-//! no oracle run), drives the pr-watch subverbs through the production argv
+//! no oracle run), drives the pr-watch subcommands through the production argv
 //! door, and compares masked streams against the frozen goldens. A golden can
 //! only be re-frozen by running the driver against the Python leg, never from
 //! this binary.

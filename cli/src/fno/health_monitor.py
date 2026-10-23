@@ -1,13 +1,13 @@
 """Backlog health monitoring: thresholds, notifications, and history.
 
-The triage health verb (``cli/src/fno/graph/triage.py::cmd_health``)
+The triage health command (``cli/src/fno/graph/triage.py::cmd_health``)
 emits a deterministic report of backlog state (idea pile depth, stale ready
 nodes, failure-prone nodes, collisions). This module turns that report into
 a pass/fail signal: it evaluates the report against configurable thresholds,
 dispatches breach notifications to configured surfaces, and appends a JSONL
 history entry for trend analysis.
 
-Design principle: deterministic until breach. The check verb runs no LLM
+Design principle: deterministic until breach. The check command runs no LLM
 calls, costs zero, and exits 0 silently when everything is within thresholds.
 Only when a threshold is crossed does it emit output. This is what makes the
 check loop-safe: you can run it every hour without spam.
@@ -684,7 +684,7 @@ def append_history(
 ) -> None:
     """Append a JSONL line summarising this check; prune entries older than retain_days.
 
-    Both healthy and breach states are logged - the trend verb consumes
+    Both healthy and breach states are logged - the trend command consumes
     the full series. Pruning runs on every append: read the file, drop
     entries older than ``retain_days``, write back. For 90-day retention
     at 1 check per hour that's ~2160 entries - small enough that

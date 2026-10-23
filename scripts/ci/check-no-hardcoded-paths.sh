@@ -169,8 +169,8 @@ add_violation "skills/ bare \$HOME/.fno violations:" "$SKILLS_SH_HITS"
 # ---------------------------------------------------------------------------
 # handoffs/ path joins: the canon handoff doc location is configured via
 # paths.handoffs_dir() and surfaced by `fno config paths handoff`. A skill or hook
-# that composes a `handoffs/` path by hand re-hardcodes the convention the verb
-# exists to retire. The verb (`fno config paths handoff`) and the
+# that composes a `handoffs/` path by hand re-hardcodes the convention the command
+# exists to retire. The command (`fno config paths handoff`) and the
 # worktree-local succession brief (`.fno/artifacts/handoff/`, singular) do not
 # match this plural-slash form, so there are no legitimate hits to exclude.
 # ---------------------------------------------------------------------------

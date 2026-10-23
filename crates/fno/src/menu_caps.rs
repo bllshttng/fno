@@ -1,18 +1,18 @@
 //! `fno doctor lint menu-caps`: the first three levels of every fno binary
-//! hold at most twelve verbs each, and a hidden verb counts. Hiding is not
+//! hold at most twelve commands each, and a hidden command counts. Hiding is not
 //! folding, so the guard never reads a visibility cell.
 //!
 //! It is a pure read over committed files, so it needs no Python and no
 //! running binary:
-//! - `scripts/ci/verb-collapse-map.tsv`: every leaf of a collapsed Python
-//!   group, hidden included (the verb ratchet refuses drift from the code);
-//! - `scripts/ci/verb-baseline.txt`: every other Python leaf (`inbox` and
+//! - `scripts/ci/command-collapse-map.tsv`: every leaf of a collapsed Python
+//!   group, hidden included (the command ratchet refuses drift from the code);
+//! - `scripts/ci/command-baseline.txt`: every other Python leaf (`inbox` and
 //!   `whoami` are in no collapsed group, so the map alone misses them);
 //! - `scripts/ci/native-command-tree.txt`: the typed clap tree;
-//! - `cli/src/fno/verb_moves.py`: a moved root spelling is a shim, so its
+//! - `cli/src/fno/command_moves.py`: a moved root spelling is a shim, so its
 //!   whole subtree is dropped;
 //! - `crates/fno-agents/src/bin/client.rs`: the fno-agents binary's own
-//!   top-level verbs, which count the same as fno's;
+//!   top-level commands, which count the same as fno's;
 //! - and, in-process, the `agents` table in `agents_menu`. Its group is
 //!   counted from the table, and the flat Python registrations it forwards
 //!   to are the `(python compat)` leg.
@@ -30,10 +30,10 @@ use regex::Regex;
 /// The one cap, at the root, the second level and the third.
 pub const MENU_CAP: usize = 12;
 
-const MAP_REL: &str = "scripts/ci/verb-collapse-map.tsv";
-const BASELINE_REL: &str = "scripts/ci/verb-baseline.txt";
+const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
+const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
-const MOVES_REL: &str = "cli/src/fno/verb_moves.py";
+const MOVES_REL: &str = "cli/src/fno/command_moves.py";
 const AGENTS_SOURCE_REL: &str = "crates/fno-agents/src/bin/client.rs";
 pub const DEBT_REL: &str = "scripts/ci/menu-caps-debt.tsv";
 const COMPAT: &str = "(python compat)";
@@ -43,7 +43,7 @@ pub struct Inputs {
     pub collapse_map: String,
     pub baseline: String,
     pub native_tree: String,
-    pub verb_moves: String,
+    pub command_moves: String,
     pub agents_source: String,
     pub debt: String,
 }
@@ -58,22 +58,24 @@ pub fn read_inputs(root: &Path) -> Result<Inputs, String> {
         collapse_map: read(MAP_REL)?,
         baseline: read(BASELINE_REL)?,
         native_tree: read(NATIVE_REL)?,
-        verb_moves: read(MOVES_REL)?,
+        command_moves: read(MOVES_REL)?,
         agents_source: read(AGENTS_SOURCE_REL)?,
         debt: read(DEBT_REL)?,
     })
 }
 
-/// The root names `VERB_MOVES` holds. Zero keys is an error: an empty set
+/// The root names `COMMAND_MOVES` holds. Zero keys is an error: an empty set
 /// would count every shim as a root.
-fn moved_roots(verb_moves: &str) -> Result<BTreeSet<String>, String> {
+fn moved_roots(command_moves: &str) -> Result<BTreeSet<String>, String> {
     let key = Regex::new(r#"(?m)^\s+"([a-z][a-z0-9-]*)": Move\("#).expect("static regex");
     let keys: BTreeSet<String> = key
-        .captures_iter(verb_moves)
+        .captures_iter(command_moves)
         .map(|c| c[1].to_string())
         .collect();
     if keys.is_empty() {
-        return Err(format!("menu-caps: {MOVES_REL} yielded no VERB_MOVES keys"));
+        return Err(format!(
+            "menu-caps: {MOVES_REL} yielded no COMMAND_MOVES keys"
+        ));
     }
     Ok(keys)
 }
@@ -131,7 +133,7 @@ fn menu_paths() -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The source lines with `//` comments removed: doc comments narrate verbs
+/// The source lines with `//` comments removed: doc comments narrate commands
 /// that no arm dispatches.
 fn strip_comments(text: &str) -> String {
     text.lines()
@@ -162,62 +164,62 @@ fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
     ))
 }
 
-/// The verb literals the match opening at the first line dispatches
+/// The command literals the match opening at the first line dispatches
 /// directly. Depth-scoped: a flag parser nested inside an arm spells words
-/// that are not verbs.
+/// that are not commands.
 fn arms_at_top_level(lines: &[&str], arm: &Regex) -> BTreeSet<String> {
-    let mut verbs = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     let mut depth: i64 = 0;
     for (i, line) in lines.iter().enumerate() {
         if depth == 0 {
-            verbs.extend(arm.captures_iter(line).map(|c| c[1].to_string()));
+            commands.extend(arm.captures_iter(line).map(|c| c[1].to_string()));
         }
         depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
         if i == 0 {
             depth = (depth - 1).max(0);
         }
     }
-    verbs
+    commands
 }
 
-/// The fno-agents binary's top-level verbs, read from its dispatcher.
-fn fno_agents_verbs(source: &str) -> Result<BTreeSet<String>, String> {
+/// The fno-agents binary's top-level commands, read from its dispatcher.
+fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, String> {
     let text = strip_comments(source);
     let arm = Regex::new(r#"(?:Some\(\s*)?"([a-z][a-z0-9-]*)"\s*(?:\)\s*)?(?:\||=>)"#)
         .expect("static regex");
     let literal = Regex::new(r#""([a-z][a-z0-9-]*)""#).expect("static regex");
-    let mut verbs = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     let run = braced_region(&text, "async fn run(args:")?;
-    let if_verb = Regex::new(r#"\bif verb == "([a-z][a-z0-9-]*)""#).expect("static regex");
-    verbs.extend(if_verb.captures_iter(run).map(|c| c[1].to_string()));
-    let matches = Regex::new(r"matches!\(\s*verb\s*,([^)]*)\)").expect("static regex");
+    let if_command = Regex::new(r#"\bif command == "([a-z][a-z0-9-]*)""#).expect("static regex");
+    commands.extend(if_command.captures_iter(run).map(|c| c[1].to_string()));
+    let matches = Regex::new(r"matches!\(\s*command\s*,([^)]*)\)").expect("static regex");
     for alternatives in matches.captures_iter(run) {
-        verbs.extend(
+        commands.extend(
             literal
                 .captures_iter(&alternatives[1])
                 .map(|c| c[1].to_string()),
         );
     }
-    let retired = braced_region(&text, "fn retired_verb_pointer(verb:")?;
-    verbs.extend(arm.captures_iter(retired).map(|c| c[1].to_string()));
-    let request = braced_region(&text, "let method = match verb")?;
+    let retired = braced_region(&text, "fn retired_command_pointer(command:")?;
+    commands.extend(arm.captures_iter(retired).map(|c| c[1].to_string()));
+    let request = braced_region(&text, "let method = match command")?;
     let lines: Vec<&str> = request.lines().collect();
-    verbs.extend(arms_at_top_level(&lines, &arm));
-    verbs.insert("help".into());
-    verbs.insert("version".into());
-    if !verbs.contains("claim") || !verbs.contains("detect") {
+    commands.extend(arms_at_top_level(&lines, &arm));
+    commands.insert("help".into());
+    commands.insert("version".into());
+    if !commands.contains("claim") || !commands.contains("detect") {
         return Err(format!(
             "menu-caps: the {AGENTS_SOURCE_REL} scan missed `claim` or `detect`; \
              a silent miss is the defect this scan exists to prevent"
         ));
     }
-    Ok(verbs)
+    Ok(commands)
 }
 
-/// How many distinct verbs each group at the first three levels holds,
+/// How many distinct commands each group at the first three levels holds,
 /// keyed by its printed path.
 pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
-    let moved = moved_roots(&inputs.verb_moves)?;
+    let moved = moved_roots(&inputs.command_moves)?;
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut add = |path: &[String], from: usize, label: &dyn Fn(&[String]) -> String| {
         for i in from..path.len().min(3) {
@@ -249,8 +251,8 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
     for path in native_paths(&inputs.native_tree) {
         add(&path, 0, &plain);
     }
-    for verb in fno_agents_verbs(&inputs.agents_source)? {
-        add(&[verb], 0, &|_: &[String]| "fno-agents".to_string());
+    for command in fno_agents_commands(&inputs.agents_source)? {
+        add(&[command], 0, &|_: &[String]| "fno-agents".to_string());
     }
     Ok(children.into_iter().map(|(k, v)| (k, v.len())).collect())
 }
@@ -290,16 +292,16 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
         }
         match rows.get(path) {
             None => failures.push(format!(
-                "`{path}` holds {count} verbs (cap {MENU_CAP}) and has no debt row. Fold its \
-                 verbs into nested groups; hiding a verb does not lower the count. Only a \
+                "`{path}` holds {count} commands (cap {MENU_CAP}) and has no debt row. Fold its \
+                 commands into nested groups; hiding a command does not lower the count. Only a \
                  group over the cap today may enter {DEBT_REL}, as `{path}\\t{count}\\t<note>`."
             )),
             Some(&ceiling) if count > ceiling => failures.push(format!(
-                "`{path}` holds {count} verbs, above its debt ceiling {ceiling} (cap \
-                 {MENU_CAP}). Nest the new verb under a group, or remove it."
+                "`{path}` holds {count} commands, above its debt ceiling {ceiling} (cap \
+                 {MENU_CAP}). Nest the new command under a group, or remove it."
             )),
             Some(&ceiling) if count < ceiling => failures.push(format!(
-                "`{path}` holds {count} verbs, below its debt ceiling {ceiling}. Lower its \
+                "`{path}` holds {count} commands, below its debt ceiling {ceiling}. Lower its \
                  row in {DEBT_REL} to {count} in this change, so the slack is not banked."
             )),
             Some(_) => {}
@@ -309,7 +311,7 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
         let count = counts.get(path).copied().unwrap_or(0);
         if count <= MENU_CAP {
             failures.push(format!(
-                "`{path}` holds {count} verbs, inside the cap of {MENU_CAP}. Delete its row \
+                "`{path}` holds {count} commands, inside the cap of {MENU_CAP}. Delete its row \
                  from {DEBT_REL}."
             ));
         }
@@ -334,12 +336,12 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
 
 const USAGE: &str = "usage: fno doctor lint menu-caps
 
-Counts every verb, hidden included, at the first three levels of fno and
+Counts every command, hidden included, at the first three levels of fno and
 fno-agents. Cap 12. Groups over the cap today are named in
 scripts/ci/menu-caps-debt.tsv, which may only shrink.
 Exit 0 ok, 1 a group over its cap or ceiling, 2 an input is missing.";
 
-/// The verb: exit 0 ok, 1 refused, 2 unreadable input.
+/// The command: exit 0 ok, 1 refused, 2 unreadable input.
 pub fn run(args: &[std::ffi::OsString]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{USAGE}");
@@ -389,7 +391,7 @@ mod tests {
 
     #[test]
     fn menu_caps_refuses_every_debt_drift_and_counts_hidden_leaves() {
-        // A group at the cap passes with no row; one more verb, hidden or
+        // A group at the cap passes with no row; one more command, hidden or
         // not, refuses by name with the count and the cap (AC2).
         assert!(check(&tree(&[("do", 12)]), "").is_ok());
         let over = check(&tree(&[("do", 13)]), "").unwrap_err();
@@ -424,10 +426,10 @@ mod tests {
             collapse_map: "current-leaf\ttier\nlead board\tT1\nwhoami x\tT1\n".into(),
             baseline: "# c\ninbox a !--hid\nfno-agents\n".into(),
             native_tree: native,
-            verb_moves: "VERB_MOVES = {\n    \"lead\": Move(\n".into(),
-            agents_source: "async fn run(args: X) { if verb == \"claim\" {} if matches!(verb, \"detect\" | \"top\") {} }\n\
-                 fn retired_verb_pointer(verb: &str) { match verb { \"gone\" => 1, _ => 0 } }\n\
-                 let method = match verb {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
+            command_moves: "COMMAND_MOVES = {\n    \"lead\": Move(\n".into(),
+            agents_source: "async fn run(args: X) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
+                 fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
+                 let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
                 .into(),
             debt: String::new(),
         };

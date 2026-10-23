@@ -8,7 +8,7 @@ use super::*;
 use crate::vt::frame_text;
 
 #[test]
-fn which_key_lists_the_dead_row_removal_verbs() {
+fn which_key_lists_the_dead_row_removal_commands() {
     // (x-f300) The gap this node closed was discoverability: if the modal
     // stops naming these, removal is invisible again.
     let modal = build_keys_modal();

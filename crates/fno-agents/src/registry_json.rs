@@ -1,9 +1,9 @@
 //! `fno-agents registry-json`: the daemon-free registry projection the hooks
 //! read, with the served liveness pair layered on top of the stored
-//! eight-key row. Split out of `client_verbs.rs` rather than grown there:
+//! eight-key row. Split out of `client_commands.rs` rather than grown there:
 //! that file is over the 5,000-line budget and shrink-only.
 
-use crate::client_verbs::{load_registry_entries, resume_session_id, to_python_json};
+use crate::client_commands::{load_registry_entries, resume_session_id, to_python_json};
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 

@@ -1,0 +1,16 @@
+{
+  "peers": {
+    "docs-lead": [
+      "docs"
+    ]
+  },
+  "projects": {
+    "docs-lead": "handbook"
+  },
+  "surface_patterns": {
+    "docs": [
+      "docs/**",
+      "*.md"
+    ]
+  }
+}

@@ -1324,7 +1324,7 @@ def test_interrupt_after_mutation_restores_exact_state_before_reraise(
 
 
 def test_door_forwards_extra_args_to_fno_agents(monkeypatch) -> None:
-    """The plugin-install door forwards unknown flags to the Rust verb
+    """The plugin-install door forwards unknown flags to the Rust command
     byte-exact: the opencode arm's --yes/--dry-run live in Rust, and the
     Typer door must accept them without declaring them."""
     from fno.plugin_install_cli import plugin_app

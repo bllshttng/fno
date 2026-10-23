@@ -74,7 +74,7 @@
 #      root to allow exactly it and nothing wider. Comparison only; no
 #      footnote state lands there.
 #      scripts/metrics/port-order.sh reads the same transcripts: a 30-day
-#      scan counts `fno <verb-group>` occurrences for the port-order
+#      scan counts `fno <command-group>` occurrences for the port-order
 #      table's use column. Read-only; footnote stores nothing there, and a
 #      missing root leaves use at zero rather than creating anything.
 #      the harness's data; footnote stores nothing there, and a missing root
@@ -110,6 +110,10 @@
 #      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
 #      under a temp root to prove two roots keep distinct credential
 #      identity. Read-only; footnote stores nothing under either.
+#      accounts/staging.rs and accounts/env.rs port staging.py, dispatch.py
+#      and the account_env.py overlay: they name a staged account's
+#      `<id>/.claude` dir and pin the shared ~/.claude slot for the active
+#      managed account. They build env values and write nothing there.
 #      managed.py resolves the same canonical path for the same reason, in
 #      reconcile-slot: an identity read must not follow an ambient
 #      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
@@ -132,7 +136,7 @@
 #      gc_inventory.rs and receipt.rs are the retirement census and the reap
 #      receipt: they resolve Claude Code's own ~/.claude/projects transcript
 #      tree to join a session's store existence and locator - read-only, the
-#      same category as claude_roster.rs/client_verbs.rs/daemon.rs, from
+#      same category as claude_roster.rs/client_commands.rs/daemon.rs, from
 #      which this code moved. roster_reap.rs is the roster-side twin of the
 #      same census: it stages reap receipts and measures resume evidence off
 #      that transcript tree, and its test stages one under a tmp HOME.
@@ -281,7 +285,6 @@ cli/src/fno/adapters/providers/dispatch.py
 cli/src/fno/adapters/providers/managed.py
 cli/src/fno/adapters/providers/staging.py
 cli/src/fno/adapters/providers/test_cli.py
-cli/src/fno/adapters/providers/test_dispatch.py
 cli/src/fno/adapters/providers/test_failover.py
 cli/src/fno/adapters/providers/test_loader.py
 cli/src/fno/adapters/providers/test_managed.py
@@ -312,6 +315,8 @@ crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/accounts/binding.rs
+crates/fno-agents/src/accounts/env.rs
+crates/fno-agents/src/accounts/staging.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs
@@ -368,7 +373,7 @@ crates/fno-agents/src/claude_roster.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
-crates/fno-agents/src/client_verbs.rs
+crates/fno-agents/src/client_commands.rs
 crates/fno-agents/src/daemon.rs
 crates/fno-agents/src/daemon_tests.rs
 crates/fno-agents/src/eval_part4.rs

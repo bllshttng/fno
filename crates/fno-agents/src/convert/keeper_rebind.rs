@@ -61,8 +61,8 @@ pub fn hand_off(
 }
 
 /// The production hand-off: `fno mux pane kill --hand-off-to`. It rides the
-/// kill verb because from the server's side it IS the same question - this
-/// pane stops being ours - and a second verb would duplicate the pane
+/// kill command because from the server's side it IS the same question - this
+/// pane stops being ours - and a second command would duplicate the pane
 /// resolution and refusal ladder.
 pub fn run_mux_hand_off(session: &str, pane_id: u64, target: &str) -> Result<(), String> {
     let pane_id = pane_id.to_string();

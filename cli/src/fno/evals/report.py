@@ -49,13 +49,13 @@ def evals_health_summary(
 def _native_summary(history_path: Path, stale_days: int) -> Optional[dict[str, Any]]:
     """The native summary payload (fno-agents evals-trend, stdin summary
     op); None when the door is unreachable or answers a non-dict."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        payload = verb_call("evals-trend", {
+        payload = command_call("evals-trend", {
             "op": "summary", "history": str(history_path), "stale_days": stale_days,
         })
-    except VerbUnavailable:
+    except CommandUnavailable:
         return None
     return payload if isinstance(payload, dict) else None
 

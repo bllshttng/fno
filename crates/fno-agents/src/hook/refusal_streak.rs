@@ -1,7 +1,7 @@
 //! `fno-agents hook posttooluse-bash` + the `refusal-streak` PreToolUse
 //! guard: one refusal-streak ledger per session.
 //!
-//! A lead that hit a refused verb retried it 35 times and mailed 53
+//! A lead that hit a refused command retried it 35 times and mailed 53
 //! near-identical status reports in one window (lead comparison 2026-10-03,
 //! internal/fno/evals/leads/20261003-lead-comparison.md). The general rule
 //! that evaluation asked for: count identical refusals per command shape,

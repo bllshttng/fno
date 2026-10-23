@@ -10,7 +10,7 @@
 //! directly (the backlog namespace is native-only), and the side-effect
 //! listing always reads the claim state through the Python CLI, because the
 //! claim JSON's byte shape is pinned by the frozen `.fx` files and the
-//! Python claim verb survives the init port.
+//! Python claim command survives the init port.
 
 #![allow(dead_code)]
 
@@ -31,7 +31,7 @@ fn cli_src() -> PathBuf {
     repo_root().join("cli/src")
 }
 
-/// Which implementation plays the verb under test.
+/// Which implementation plays the command under test.
 pub enum Leg {
     /// The live Python CLI through the front-door shim (differential stage).
     PythonCli,
@@ -64,7 +64,7 @@ pub const PINNED_SESSION_ID: &str = "00000000-0000-0000-0000-000000000000";
 /// The second session id the foreign-holder case's challenger rides.
 pub const OTHER_SESSION_ID: &str = "11111111-1111-1111-1111-111111111111";
 
-/// Which plugin root the case hands the verb.
+/// Which plugin root the case hands the command.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Plugin {
     /// A stub plugin whose helper prints the TARGET_*/FNO_TARGET_* env.
@@ -79,7 +79,7 @@ pub enum Plugin {
 /// What the case builds before the run.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Setup {
-    /// Plain run: fixture, then the verb.
+    /// Plain run: fixture, then the command.
     Normal,
     /// Start once under the pinned session (discarded), then capture the
     /// second run: the bind path answers already-claimed.
@@ -356,7 +356,7 @@ pub fn python_leg_available() -> bool {
 }
 
 pub fn spawn_cmd(cmd: &mut Command) -> std::process::Output {
-    cmd.output().expect("verb under test spawns")
+    cmd.output().expect("command under test spawns")
 }
 
 /// The seeded backlog node's id, minted by the native create.
@@ -390,7 +390,7 @@ pub fn seed_node(env: &[(String, String)], cwd: &Path, title: &str) -> String {
 /// dispatch prints, so the captured streams hold only scenario output.
 pub fn prewarm(leg: &Leg, env: &[(String, String)], cwd: &Path) {
     let argv: Vec<String> = vec!["do".into(), "target".into(), "init".into()];
-    let _ = run_verb(leg, &argv, cwd, env);
+    let _ = run_command(leg, &argv, cwd, env);
 }
 
 /// One-line-per-file inventory of every graph-shaped file under the case
@@ -491,10 +491,10 @@ fn graph_state_probe(root: &Path) -> String {
     }
 }
 
-/// Play the verb under test. The Python leg runs through the shim (so nested
+/// Play the command under test. The Python leg runs through the shim (so nested
 /// `fno` calls resolve to the same source); the native door execs the sibling
 /// binary directly.
-pub fn run_verb(
+pub fn run_command(
     leg: &Leg,
     argv: &[String],
     cwd: &Path,
@@ -941,7 +941,7 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
             env.extend(env_extra.iter().cloned());
             let argv: Vec<String> =
                 vec!["do".into(), "target".into(), "start".into(), node.clone()];
-            let _ = run_verb(leg, &argv, &cwd, &env);
+            let _ = run_command(leg, &argv, &cwd, &env);
         }
         Setup::ForeignHolder => {
             // Session A cold-starts the node (worktree, manifest, live claim),
@@ -951,7 +951,7 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
             env.extend(env_extra.iter().cloned());
             let argv: Vec<String> =
                 vec!["do".into(), "target".into(), "start".into(), node.clone()];
-            let _ = run_verb(leg, &argv, &cwd, &env);
+            let _ = run_command(leg, &argv, &cwd, &env);
             let sleeper_b = Sleeper::spawn();
             session_pid = sleeper_b.pid();
             _keep_b = Some(sleeper_b);
@@ -1002,7 +1002,7 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
             env.extend(env_extra.iter().cloned());
             let argv: Vec<String> =
                 vec!["do".into(), "target".into(), "start".into(), node.clone()];
-            let _ = run_verb(leg, &argv, &cwd, &env);
+            let _ = run_command(leg, &argv, &cwd, &env);
             // Start node B from inside node A's worktree.
             let mut wt = None;
             for base in [
@@ -1052,7 +1052,7 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
 
     let mut env = base_env(root, &bindir, &session_pid);
     env.extend(env_extra.iter().cloned());
-    let out = run_verb(leg, &argv, &cwd, &env);
+    let out = run_command(leg, &argv, &cwd, &env);
     let code = exit_code(&out);
     let stdout = normalize(&String::from_utf8_lossy(&out.stdout), root, &node_key);
     let stderr = normalize(&String::from_utf8_lossy(&out.stderr), root, &node_key);

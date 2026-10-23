@@ -13,7 +13,7 @@
 //! forward a browser byte upstream. The browser also never drives - it drops
 //! every inbound WS message and only picks which already-arriving frame to draw
 //! locally. The backlog board's writes are separate: guarded subprocess runs of
-//! the same `fno` verbs an agent runs (see `write_guard`), never socket input.
+//! the same `fno` commands an agent runs (see `write_guard`), never socket input.
 //!
 //! Data flow, one direction only:
 //!   vt::Pane --composite--> Frame --broadcast--> bridge --WS/JSON--> browser
@@ -246,24 +246,24 @@ pub(crate) fn web_state_path_for_session(session: &str) -> Option<PathBuf> {
 /// Read a session's web-bridge state file and build the pasteable
 /// per-pane URL. The bridge writes `web-<session>.json` at bind; a file whose
 /// port no longer answers is a corpse, not a bridge, so the TCP probe - not
-/// the file's existence - decides liveness. Exit codes follow the mux verbs'
+/// the file's existence - decides liveness. Exit codes follow the mux commands'
 /// (0 printed, 1 no usable bridge).
-pub(crate) fn print_pane_url(verb: &str, session: &str, pane: u64) -> i32 {
+pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
     let hint = format!(
         "no web bridge for session {session}; start one with: fno mux serve --web --session {session}"
     );
     let Some(path) = web_state_path_for_session(session) else {
-        eprintln!("{verb}: {hint}");
+        eprintln!("{command}: {hint}");
         return 1;
     };
     let Ok(raw) = std::fs::read_to_string(&path) else {
-        eprintln!("{verb}: {hint}");
+        eprintln!("{command}: {hint}");
         return 1;
     };
     let state: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => {
-            eprintln!("{verb}: {hint}");
+            eprintln!("{command}: {hint}");
             return 1;
         }
     };
@@ -274,7 +274,7 @@ pub(crate) fn print_pane_url(verb: &str, session: &str, pane: u64) -> i32 {
     let port = match state.get("port").and_then(|v| v.as_u64()) {
         Some(p) => p,
         None => {
-            eprintln!("{verb}: {hint}");
+            eprintln!("{command}: {hint}");
             return 1;
         }
     };
@@ -292,7 +292,7 @@ pub(crate) fn print_pane_url(verb: &str, session: &str, pane: u64) -> i32 {
     // Probe liveness for ANY spelling the operator may have bound (codex P2):
     // a corpse file must not read as a bridge. Same probe --status uses.
     if !tcp_answers(host, port as u16) {
-        eprintln!("{verb}: {hint}");
+        eprintln!("{command}: {hint}");
         return 1;
     }
     // Bracket a literal IPv6 host; a bare::1 in a URL truncates at the colon.
@@ -506,7 +506,7 @@ fn tcp_answers(host: &str, port: u16) -> bool {
 }
 
 /// True when a bridge was built from a different, known crates/ rev than the
-/// binary this verb runs from, i.e. it is serving pre-deploy code. "unknown"
+/// binary this command runs from, i.e. it is serving pre-deploy code. "unknown"
 /// revs (a hand-built or stripped binary) are never called stale - we cannot
 /// know, so we do not claim to.
 fn rev_is_stale(recorded: &str) -> bool {
@@ -1259,8 +1259,8 @@ enum Act {
         id: String,
     },
     /// One encounter: the demand signal, POSTed with the operator's own
-    /// evidence. The verb refuses a repeat voter, so the page forwards the
-    /// verb's own answer.
+    /// evidence. The command refuses a repeat voter, so the page forwards the
+    /// command's own answer.
     Encounter {
         id: String,
         evidence: String,
@@ -1282,12 +1282,12 @@ fn act_id(act: &Act) -> &str {
     }
 }
 
-/// What a planned act runs: a backlog verb's argv through
-/// [`crate::backlog_write::run_verb`], or a launch through
+/// What a planned act runs: a backlog command's argv through
+/// [`crate::backlog_write::run_command`], or a launch through
 /// [`crate::server::agent_launch::run_dispatch_one`].
 #[derive(Debug)]
 enum Planned {
-    Verb(Vec<String>),
+    Command(Vec<String>),
     Dispatch { plan: bool },
 }
 
@@ -1321,7 +1321,7 @@ fn plan_act(inputs: &backlog_model::Inputs, act: &Act) -> Result<Planned, (Statu
             };
             crate::backlog_write::rank_argv(id, place, None)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))
-                .map(Planned::Verb)
+                .map(Planned::Command)
         }
         Act::Blueprint { .. } | Act::Target { .. } => {
             if view.card.claimed || view.card.live {
@@ -1342,7 +1342,7 @@ fn plan_act(inputs: &backlog_model::Inputs, act: &Act) -> Result<Planned, (Statu
                     "encounter: evidence is required; name what the node cost".into(),
                 ));
             }
-            Ok(Planned::Verb(vec![
+            Ok(Planned::Command(vec![
                 "backlog".into(),
                 "encounter".into(),
                 id.to_string(),
@@ -1354,13 +1354,13 @@ fn plan_act(inputs: &backlog_model::Inputs, act: &Act) -> Result<Planned, (Statu
     }
 }
 
-/// The effect half of `POST /backlog/act`: a planned verb argv runs through
+/// The effect half of `POST /backlog/act`: a planned command argv runs through
 /// the shared shell-out; a launch runs the mux's own dispatch door and
 /// carries its notice back. The launch arm's ok fact is `true`: the door
 /// reports refusals through its notice text.
 async fn run_planned(_st: &AppState, id: &str, planned: Planned) -> (bool, String) {
     match planned {
-        Planned::Verb(argv) => crate::backlog_write::run_verb(&argv, None).await,
+        Planned::Command(argv) => crate::backlog_write::run_command(&argv, None).await,
         Planned::Dispatch { plan } => {
             let notice = crate::server::agent_launch::run_dispatch_one(Some(id), None, plan).await;
             (true, notice)
@@ -1368,7 +1368,7 @@ async fn run_planned(_st: &AppState, id: &str, planned: Planned) -> (bool, Strin
     }
 }
 
-/// The 200 body: the verb's exit fact and its own last line.
+/// The 200 body: the command's exit fact and its own last line.
 fn act_response(ok: bool, notice: &str) -> Response {
     json_response(&serde_json::json!({ "ok": ok, "notice": notice }))
 }
@@ -1971,7 +1971,7 @@ mod tests {
         let socket = dir.join("t.sock");
         // pid names THIS live test process, but the recorded start token is
         // wrong: the identity check must read stale, and this process must
-        // survive the verb.
+        // survive the command.
         let own_start =
             proto::pid_start_time(std::process::id()).expect("start time on test platform");
         let state = web_state_path(&socket).unwrap();

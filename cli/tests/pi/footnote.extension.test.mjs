@@ -312,7 +312,7 @@ test("per-turn state: turn start, tool call and settle each push through the ses
   }
 })
 
-test("the manifest read rides the verb, so a directory with no .fno still gates", async () => {
+test("the manifest read rides the command, so a directory with no .fno still gates", async () => {
   const world = makeWorld({
     reply: {
       decision: "block",
@@ -322,7 +322,7 @@ test("the manifest read rides the verb, so a directory with no .fno still gates"
   })
   try {
     // The fixture dir carries no .fno at all: the space-resolved path from
-    // the verb is the only manifest the extension knows.
+    // the command is the only manifest the extension knows.
     assert.equal(existsSync(join(world.dir, ".fno")), false)
     await world.settle()
     assert.equal(world.sent.length, 1, "the gate still ran")

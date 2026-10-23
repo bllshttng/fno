@@ -1,4 +1,4 @@
-"""Typer CliRunner tests for the US4-lifecycle CLI verbs.
+"""Typer CliRunner tests for the US4-lifecycle CLI commands.
 
 Covers ``fno agents reconcile`` and ``fno agents attach``. Dispatch is
 monkeypatched per-test so the CLI layer is exercised in isolation.
@@ -104,7 +104,7 @@ def test_cli_reconcile_surfaces_dispatch_error(
 
 def test_cli_attach_without_installed_binary_refuses(monkeypatch) -> None:
     """The Rust client owns attach; with no installed binary the Python
-    verb refuses legibly instead of running a leg that no longer exists."""
+    command refuses legibly instead of running a leg that no longer exists."""
     from fno import rust_binary
     from fno.agents import rust_runtime as rr
     from fno.cli import app

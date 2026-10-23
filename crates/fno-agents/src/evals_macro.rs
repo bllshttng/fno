@@ -5,7 +5,7 @@
 //! `fno doctor evals macro` shell resolves `paths.event_journals()` and
 //! forwards the flags HERE - and the native side owns the fold, so the
 //! file-budget Python-tree ratchet holds. Daemon-free read, not a routable
-//! `fno agents` verb.
+//! `fno agents` command.
 //!
 //! What the fold does: one row per `(type, label)` pass over the ordered
 //! journal rows. A pattern is a `(type, label)` pair where the label is the
@@ -218,8 +218,8 @@ fn strict_utc_ts(value: &Value) -> Option<DateTime<Utc>> {
 
 /// The loose `--since` stamp parser: ISO-8601 (naive reads as UTC) or a bare
 /// date, mirroring the Python `datetime.fromisoformat` acceptance. One
-/// implementation, shared with the trace verb's matcher.
-use crate::client_verbs::parse_iso8601 as parse_loose_ts;
+/// implementation, shared with the trace command's matcher.
+use crate::client_commands::parse_iso8601 as parse_loose_ts;
 
 /// `--since`: a `Nd`/`Nh`/`Nm`/`Ns` duration back from now, else a loose ISO
 /// stamp. A refusal names the offending value like the Python shell did.
@@ -701,7 +701,7 @@ fn min_ts() -> DateTime<Utc> {
     )
 }
 
-// -- The verb ----------------------------------------------------------------
+// -- The command ----------------------------------------------------------------
 
 /// One `--flag value` / `--flag=value` token pair, advancing the cursor. The
 /// caller's loop already stepped `i` past the flag, so the value sits AT `i`.
@@ -1173,11 +1173,11 @@ mod tests {
     }
 
     #[test]
-    fn verb_exit_codes_match_the_python_surface() {
+    fn command_exit_codes_match_the_python_surface() {
         let dir = tempfile::tempdir().unwrap();
         let stamp = |t: DateTime<Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let now = Utc::now();
-        // The verb always applies a cutoff (default 30d), so the topic cases
+        // The command always applies a cutoff (default 30d), so the topic cases
         // need fresh rows; the stale journal covers the empty-window case.
         let fresh = dir.path().join("fresh.jsonl");
         std::fs::write(

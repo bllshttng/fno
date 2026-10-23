@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/pr_watch/cli.py:heal
 //!
-//! Characterization for the pr-watch heal port: the Rust verb
+//! Characterization for the pr-watch heal port: the Rust command
 //! (`fno-agents pr-watch heal`) is pinned by the frozen goldens under
 //! tests/golden/pr-watch-heal/. The goldens freeze the live Python leaf's
 //! bytes; this change replaced that body with a forward, so capture mode
@@ -145,11 +145,11 @@ fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
     pins
 }
 
-/// Seed the held flight through the binary's own gate, so the heal verb's
-/// in-process acquire meets the same claim layout the CLI verb writes. The
+/// Seed the held flight through the binary's own gate, so the heal command's
+/// in-process acquire meets the same claim layout the CLI command writes. The
 /// seed carries the test process's pid: the gate stamps a pid-less acquire
 /// with the seeder's own pid, and a dead holder is reclaimed on the pid
-/// probe before the verb ever sees it held.
+/// probe before the command ever sees it held.
 fn seed_flight(dir: &Path) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .args([

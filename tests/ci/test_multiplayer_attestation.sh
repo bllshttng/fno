@@ -95,7 +95,7 @@ echo "$row" | grep -F '"attest_machine":"' >/dev/null \
 echo "PASS: the pushed row names its writing machine"
 
 # Machine B's gate read: B's journals are empty, so the row can only come
-# from the primary segment. This is the exact read (native rows verb,
+# from the primary segment. This is the exact read (native rows command,
 # review_attestation types) the Python merge gate consults through
 # journal_lines.
 # Diagnostics first: a silent empty segment must name its half.
@@ -105,7 +105,7 @@ echo "diag: B config: $(cat "$HOME_B/.fno/config.toml")"
 rows_b=$(FNO_ATTEST_DEBUG=1 env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
     --events "$journal_b" --type review_attestation 2>"$HOME_B/rows.err") \
     || fail "machine B rows read failed: $(cat "$HOME_B/rows.err")"
-# The rows verb prints a JSON array, so envelope quotes arrive escaped;
+# The rows command prints a JSON array, so envelope quotes arrive escaped;
 # strip the backslashes before matching the raw substring.
 echo "$rows_b" | tr -d '\\' | grep -F "\"head_sha\":\"$head_sha\"" >/dev/null \
     || fail "machine B's gate read stayed machine-local (rows.err: $(cat "$HOME_B/rows.err")); rows answered: $rows_b"

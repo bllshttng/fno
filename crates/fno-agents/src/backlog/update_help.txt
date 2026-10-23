@@ -13,7 +13,7 @@ Field operators (the argument carries the operator):
     records  additional_prs
              += adds one entry, -= removes it
     scalar   title, domain, size, model, type, batch, orphan_ok,
-             priority, project, cwd, difficulty, dispatch_verb,
+             priority, project, cwd, difficulty, dispatch_command,
              locked_by, plan_path, parent, caused_by, pr_number,
              pr_url, collisions_acknowledged, source_node_id
              (= only; 'null' clears)
@@ -26,7 +26,7 @@ Field operators (the argument carries the operator):
 
 Lifecycle (never mixed with field writes in one call):
   --status <word>        move to idea|design|ready|deferred; a refusal
-                         names the missing fact and the verb that supplies it
+                         names the missing fact and the command that supplies it
   --leave <state>        leave deferred or superseded
   --set <field>=<value>  set a stored field through the patch door (repeatable)
 

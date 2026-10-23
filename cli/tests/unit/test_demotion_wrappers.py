@@ -6,7 +6,7 @@ canonical scripts get located, missing-script paths fail loudly). The heavy
 behavior (AST/PageRank traversal, lifecycle git ops) lives in the canonical
 scripts under scripts/diagnostics/ and scripts/lib/, and (for codemap) in
 the engine shipped beside fno.codemap_cli; each is exercised by its own
-callers. The former `fno tokens` wrapper was deleted by the verb audit;
+callers. The former `fno tokens` wrapper was deleted by the command audit;
 `fno whoami context` / `fno whoami cost` cover the diagnosis.
 """
 from __future__ import annotations

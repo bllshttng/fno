@@ -1,11 +1,11 @@
 //! `fno-agents judge` -- the grading half of the advisory five-question
 //! blueprint judge. Daemon-free, like `graph-get`/`bash-census`: never a
-//! routable `fno agents <verb>` invocation, though listed in
-//! `ALL_CLIENT_ACTIONS` for the binary's own verb-surface probe.
+//! routable `fno agents <command>` invocation, though listed in
+//! `ALL_CLIENT_ACTIONS` for the binary's own command-surface probe.
 //!
 //! Ported off `cli/src/fno/observer/judge.py` per the flag-registry ratchet
 //! (operator ruling 2026-09-12): a new CLI flag is Rust work.
-//! This verb owns the lens prompts, the model spawn, and verdict parsing; it
+//! This command owns the lens prompts, the model spawn, and verdict parsing; it
 //! emits no events and mints no run_id. The Python wrapper
 //! (`cli/src/fno/observer/cli.py::judge_cmd`/`sweep`) still does the
 //! pre-existing plan-parsing gate (`has_section("Five questions")`) and event
@@ -1067,7 +1067,7 @@ pub fn run_judge(args: &[String]) -> i32 {
             "--force" | "-F" => {
                 // Accepted, ignored: the level=report gate is a Python-side
                 // config read (fno.loops.loop_level) and already ran before
-                // this verb was invoked.
+                // this command was invoked.
             }
             other => {
                 eprintln!("fno-agents judge: unknown flag {other}");

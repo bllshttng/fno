@@ -438,7 +438,7 @@ fn sent_recently(fingerprint: &str) -> bool {
 
 /// The question-page dedupe subject: every warning's cause flattened to
 /// one capped line. It carries the nodes, the reasons, and the remedy
-/// verbs (the reconcile refusal text), which is what question-intake
+/// commands (the reconcile refusal text), which is what question-intake
 /// stores as the question. It is the dedupe subject: an identical repeat
 /// pass produces the same subject, so the intake's subject+node dedup
 /// holds one open page per warning set; any change to the set or to a
@@ -1302,7 +1302,7 @@ fn execute_fold(
             FoldAction::Encounter { key, node, count } => {
                 let evidence = format!("notice_route fold: {count} more rows of the key in 24h");
                 // The daemon holds no session identity, so the encounter
-                // verb's identity gate would refuse (or misattribute the
+                // command's identity gate would refuse (or misattribute the
                 // vote to a launcher session): append as the system
                 // component through the locked write instead.
                 if record_system_encounter(&node, &evidence) {

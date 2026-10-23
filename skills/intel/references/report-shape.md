@@ -75,7 +75,7 @@ line: how many relay rows breached the 80-word rule, how many used
 ## Operator corrections
 Verbatim, deduped across sessions, ranked by repeat count:
 
-- "<correction>" (x<repeat count>, <session prefix>, signal=<category>, skill=<name> when the correction is about one fno verb) #agent-correction
+- "<correction>" (x<repeat count>, <session prefix>, signal=<category>, skill=<name> when the correction is about one fno command) #agent-correction
 
 After the list, one line per correction saying whether it wants to be an
 AGENTS.md line, a law, or a SKILL.md diff. This section is the only one

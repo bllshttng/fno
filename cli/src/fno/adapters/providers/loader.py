@@ -780,7 +780,7 @@ def effective_active(
 def load_scope_config(scope: "Literal['project', 'global']") -> ProvidersConfig:
     """The accounts config as stored in ONE scope's own file.
 
-    Read-modify-write verbs (add/register/use/pin) mutate one file's own
+    Read-modify-write commands (add/register/use/pin) mutate one file's own
     block; loading the merged view here copies other layers' records into
     the target file, where the frozen copies shadow later edits by id.
     Mirrors save_providers' target selection so the read and the write hit

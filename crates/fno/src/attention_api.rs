@@ -21,7 +21,7 @@ pub const DEFAULT_ATTENTION_PORT: u16 = 8724;
 /// multi-store read.
 const ITEMS_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The clear's budget, needs_overlay's WRITE_TIMEOUT for the same verb.
+/// The clear's budget, needs_overlay's WRITE_TIMEOUT for the same command.
 const CLEAR_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// One configured sink's answer credential. The token identifies the sink;
@@ -485,7 +485,7 @@ fn run_bounded(bin: PathBuf, args: &[&str], bound: Duration) -> Result<(bool, St
 }
 
 /// The real IO: the items fold shells `fno-agents needs --items --json`, the
-/// journal is `questions.jsonl`, the clear shells the same verb the mux
+/// journal is `questions.jsonl`, the clear shells the same command the mux
 /// overlay runs.
 #[derive(Default)]
 pub struct RealIo;

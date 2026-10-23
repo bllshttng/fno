@@ -516,7 +516,7 @@ fn child_note(child: &Value, events: &[Value], worker: &Option<String>) -> Strin
 }
 
 // ---------------------------------------------------------------------------
-// The verb
+// The command
 // ---------------------------------------------------------------------------
 
 /// One table over an epic's children (the wheel's cmd_epic_status).

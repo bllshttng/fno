@@ -11,7 +11,7 @@ HOOK="hooks/prompt-outstanding.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-# The overload skip must never fire in a suite: the stub verb must run on
+# The overload skip must never fire in a suite: the stub command must run on
 # every boundary. Pin past any runner load (hook-budget.sh's skip contract).
 export FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
 STUB="$TMP/bin"
@@ -53,10 +53,10 @@ check "the envelope reaches stdout, exactly" \
     "$out"
 
 out="$(run_with_stub 'exit 0' "$PAYLOAD")"
-check "a silent verb renders nothing" "" "$out"
+check "a silent command renders nothing" "" "$out"
 
 out="$(run_with_stub 'exit 3' "$PAYLOAD")"
-check "a failing verb renders nothing" "" "$out"
+check "a failing command renders nothing" "" "$out"
 
 rm "$STUB/fno-agents"
 # Pin the probe PATH: the caller's PATH may carry a real fno-agents, which

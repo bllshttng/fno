@@ -174,7 +174,7 @@ impl Core {
         // survives, ready to graft into the template tree.
         if matches!(outcome, Ok(tree::DetachOutcome::TabEmptied)) {
             self.session.remove_tab(sid, ti);
-            self.tab_areas.remove(&tid);
+            self.sizing.areas.remove(&tid);
             self.reanchor_views();
         }
     }

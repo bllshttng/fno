@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.mail.cli.cmd_send
 //!
-//! Characterization harness for the `mail send` wrapped-verb port.
+//! Characterization harness for the `mail send` wrapped-command port.
 //! The goldens were captured from the Python leg (cmd_send) before its body
 //! was deleted, through tests/capture/mail_send_capture.py; the frozen bytes
 //! are the contract now that the front routes every send to this leaf. The hermetic root cannot offer a live recipient, so
@@ -38,7 +38,7 @@ const DROP_PREFIXES: [&str; 6] = [
     "  obsidian enabled:",
     "  sentinel:",
     // The escalation stderr advisory names whether the OS notifier displayed,
-    // a property of the host, not of the verb. The receipt is the contract.
+    // a property of the host, not of the command. The receipt is the contract.
     "escalated to human (",
 ];
 

@@ -421,10 +421,10 @@ def refresh_watcher(
     binary path, a fresh captured PATH, and a new mtime (so doctor's
     ``healthy-pending`` grace applies until the next tick instead of a
     transient false ``dead`` - unless the recent ends are a broken streak,
-    which reads ``wedged``). Called by the refresh verb at the tail of
+    which reads ``wedged``). Called by the refresh command at the tail of
     ``fno doctor update`` so an update leaves an enabled watcher running the
     new binary and un-wedges a job a mid-tick reinstall may have broken, and
-    by the heal verb as the cure behind the SessionStart self-heal. Returns
+    by the heal command as the cure behind the SessionStart self-heal. Returns
     ``(message, exit_code)``.
     """
     plist_path = launch_agents_dir / _PLIST_FILENAME

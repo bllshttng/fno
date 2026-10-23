@@ -763,7 +763,7 @@ pub fn dispatch_agy_once_with_effort(
     }
 }
 
-/// Client interceptor for the `ask` (resume-by-name) verb on an agy target.
+/// Client interceptor for the `ask` (resume-by-name) command on an agy target.
 ///
 /// agy is STATELESS here (plain text, no session id), so a stateful `ask` resume
 /// is not supported. Returns `None` for non-agy targets (fall through), or a

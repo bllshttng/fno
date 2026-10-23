@@ -267,7 +267,7 @@ pub(crate) struct Settings {
 }
 
 impl Settings {
-    /// The two review leaves the review-hold verb reads from outside the
+    /// The two review leaves the review-hold command reads from outside the
     /// loopcheck module; the fields stay pub(super) like their siblings.
     pub(crate) fn hold_ttl_minutes_opt(&self) -> Option<f64> {
         self.hold_ttl_minutes

@@ -1,6 +1,6 @@
 #![allow(unused_variables)]
 
-/// Integration tests for loop_target.rs (TargetQueue, run_loop_verb) and
+/// Integration tests for loop_target.rs (TargetQueue, run_loop_command) and
 /// loop_dispatch.rs (ShelloutDispatcher, preflight, driver_default_max).
 ///
 /// Test naming mirrors the acceptance criteria in the task spec:
@@ -560,7 +560,7 @@ fn caller_root_journal() {
     let caller_root_str = caller_root.display().to_string();
     let pin_path_str = pin_path.display().to_string();
     let home_str = dir.path().join("home").display().to_string();
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1351,7 +1351,7 @@ fn write_stub_fno_board(dir: &Path, actionable: u64) {
     );
 }
 
-fn run_verb(args: &[&str], envs: &[(&str, &str)]) -> (String, String, Option<i32>) {
+fn run_command(args: &[&str], envs: &[(&str, &str)]) -> (String, String, Option<i32>) {
     let mut cmd = std::process::Command::new(BINARY);
     cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.args(args);
@@ -1385,7 +1385,7 @@ fn lead_walk_proceeds_past_driver_validation_into_preflight() {
     pin_clean_board(dir.path(), "epic-x");
     write_lead_manifest(dir.path(), "epic-x", "k-9331", 0, 4);
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1436,7 +1436,7 @@ fn lead_walk_terminates_budget_at_the_respawn_ceiling() {
     write_stub_fno_board(&bin_dir, 0);
     write_lead_manifest(dir.path(), "epic-x", "k-9331", 4, 4);
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1510,7 +1510,7 @@ fn lead_walk_dispatches_past_a_prior_lead_terminal_and_bills_one_respawn() {
     fs::create_dir_all(events.parent().unwrap()).unwrap();
     seed_termination_event(&events, "k-9331", "NoProgress");
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1596,7 +1596,7 @@ fn lead_wake_mode_dispatches_past_a_spent_ceiling_without_billing_it() {
     write_stub_fno_board(&bin_dir, 2);
     write_lead_manifest(dir.path(), "epic-x", "k-9331", 4, 4);
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1672,7 +1672,7 @@ fn lead_walk_without_wake_still_refuses_at_the_spent_ceiling() {
     write_stub_fno_board(&bin_dir, 2);
     write_lead_manifest(dir.path(), "epic-x", "k-9331", 4, 4);
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1727,7 +1727,7 @@ fn lead_wake_mode_over_an_empty_board_terminates_nowork() {
     pin_clean_board(dir.path(), "epic-x");
     write_lead_manifest(dir.path(), "epic-x", "k-9331", 4, 4);
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1798,7 +1798,7 @@ fn lead_wake_reason_without_wake_is_refused() {
     write_stub_binary(&bin_dir, "claude", "exit 0");
     write_lead_manifest(dir.path(), "epic-x", "k-9331", 0, 4);
 
-    let (stdout, stderr, code) = run_verb(
+    let (stdout, stderr, code) = run_command(
         &[
             "loop",
             "run",
@@ -1858,7 +1858,7 @@ fn lead_wake_reason_board_and_backstop_clauses_reach_the_prompt() {
         write_stub_fno_board(&bin_dir, 2);
         write_lead_manifest(dir.path(), "epic-x", "k-9331", 0, 4);
 
-        let (stdout, stderr, _code) = run_verb(
+        let (stdout, stderr, _code) = run_command(
             &[
                 "loop",
                 "run",

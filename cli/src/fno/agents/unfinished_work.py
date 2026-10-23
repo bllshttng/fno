@@ -1,6 +1,6 @@
 """The unfinished-work report: the operator question the fleet watchdog answers.
 
-Four dimensions, one clearing verb each; liveness from pid and transcript
+Four dimensions, one clearing command each; liveness from pid and transcript
 truth only; unreadable evidence keeps the dimension unknown, never clean.
 The full contract lives in
 docs/architecture/unfinished-work-and-row-registration.md.
@@ -238,20 +238,20 @@ def _node_idle_age(node: NodeObs, now_epoch: float) -> Optional[float]:
 
 
 def _checked(finding: Optional[Finding], warnings: list) -> Optional[Finding]:
-    """A finding without a clearing verb is not a report, it is noise: it is
+    """A finding without a clearing command is not a report, it is noise: it is
     dropped with a scan warning naming it, never emitted as a row."""
     if finding is None:
         return None
     if not (finding.subject and finding.basis and finding.clear_command):
         warnings.append(
-            f"finding without a clearing verb withheld: {finding_identity(finding)}"
+            f"finding without a clearing command withheld: {finding_identity(finding)}"
         )
         return None
     return finding
 
 
 def _dirty_clear_command(w: WorktreeObs) -> str:
-    """The verb that moves a dirty ownerless worktree out of its class. A
+    """The command that moves a dirty ownerless worktree out of its class. A
     resolved node resumes delivery; a node-less tree gets a live owner
     spawned into it, which is the adoption path this fleet actually has."""
     if w.node_id:
@@ -658,7 +658,7 @@ def dirty_path_count(worktree: Path, *, runner=None) -> Optional[int]:
 
 def report_roots() -> "list[Path]":
     """Every project scope the report covers. The scheduled tick and the
-    manual verb resolve their roots here so the two surfaces cannot
+    manual command resolve their roots here so the two surfaces cannot
     disagree on scope: the invoking repo (when it is a checkout) plus the
     distinct cwd of every tracked sidecar."""
     roots: list[Path] = []
@@ -814,7 +814,7 @@ def collect_observations(
         # rather than the listing's first row: a bare worktree-container
         # contributes no main row at all, so "first listed" would name a
         # linked tree and silently exclude it from the dirty dimension.
-        # Clearing verbs name the main tree, never whichever linked worktree
+        # Clearing commands name the main tree, never whichever linked worktree
         # happened to run the report.
         main_path = _main_worktree(listed, runner) if listed else str(root)
         fetched_ok[main_path] = fetch_origin_main(Path(root), runner=runner)
@@ -1090,7 +1090,7 @@ def build_report(
     now_s: Optional[float] = None,
     **kwargs,
 ) -> Snapshot:
-    """The one producer: collect then classify. Both the manual verb and the
+    """The one producer: collect then classify. Both the manual command and the
     scheduled tick call this, so their reports cannot diverge."""
     obs = collect_observations(roots, now_s=now_s, **kwargs)
     return classify(obs)
@@ -1104,7 +1104,7 @@ def publish_report(
     mail_to: str,
     log: Optional[Callable[[str], None]] = None,
 ) -> dict:
-    """The one publish sequence, shared by the manual verb and the tick:
+    """The one publish sequence, shared by the manual command and the tick:
     mail (change-gated, push not pull), sweep-file stamps (the positive
     complete marker only on a fully measured scan), the scan event plus
     fresh finding events, and the deduplicated durable question.

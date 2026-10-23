@@ -17,5 +17,5 @@ for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
         exit 0
     fi
 done
-echo "subagent-worktree-guard: no fno-agents could answer the hook verb; allowing" >&2
+echo "subagent-worktree-guard: no fno-agents could answer the hook command; allowing" >&2
 printf '%s\n' '{}'

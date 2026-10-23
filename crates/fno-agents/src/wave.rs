@@ -1,7 +1,7 @@
 //! Parallel execution-wave validation and worktree lifecycle.
 //!
 //! `fno-agents wave check|fork|join` is a transport-only door used by plan
-//! validation and `/execute waves`; it is not an advertised `fno` verb.
+//! validation and `/execute waves`; it is not an advertised `fno` command.
 
 use serde_yaml_ng::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

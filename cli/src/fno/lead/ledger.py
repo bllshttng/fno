@@ -1,7 +1,7 @@
 """``fno agents lead ledger`` - the term ledger page.
 
 Identity and the team adjudication stay in Python; the page assembly and
-the default out path are the native ``term-ledger`` verb (the lead-history
+the default out path are the native ``term-ledger`` command (the lead-history
 split), so the Python-tree ratchet holds. Contract: docs/architecture/lead.md.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ def build_ledger_data(rows=None, *, fold_fn=None) -> dict:
 def write_ledger(team: dict, path: Optional[Path] = None) -> Path:
     """Relay the team to the native renderer; returns the path written.
 
-    With no path, the verb resolves its own default out through the layout
+    With no path, the command resolves its own default out through the layout
     table and this reads the path it names from the ``rundown: `` line.
     """
     from fno.paths import graph_json
@@ -38,7 +38,7 @@ def write_ledger(team: dict, path: Optional[Path] = None) -> Path:
     if binary is None:
         raise RuntimeError(
             "the fno-agents binary was not found: the term ledger page is "
-            "rendered by the native lead-rundown verb"
+            "rendered by the native lead-rundown command"
         )
     argv = [
         str(binary),

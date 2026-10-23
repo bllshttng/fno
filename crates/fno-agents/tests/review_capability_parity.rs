@@ -299,7 +299,7 @@ fn cases() -> Vec<Case> {
         ),
         // invocation renders: bare, PR target, branch target, and the
         // validation refusals. No --root case: sizing would round-trip a
-        // binary the leg reaches through verb_call.
+        // binary the leg reaches through command_call.
         inv("invocation bare claude", &["--harness", "claude"]),
         inv(
             "invocation pr target",

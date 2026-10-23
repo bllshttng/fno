@@ -480,7 +480,7 @@ pub(crate) fn dispatch_with(
     // paint, and holding the name that long would queue every other
     // same-name operation behind it.
     drop(_lock);
-    let rendered = crate::provider::render_verb_seed(message, harness);
+    let rendered = crate::provider::render_command_seed(message, harness);
     if !rendered.trim().is_empty() {
         let ready_marker: &[u8] = if arm.ready_marker.is_empty() {
             DEFAULT_READY_MARKER.as_bytes()
@@ -501,8 +501,8 @@ pub(crate) fn dispatch_with(
         }
     }
 
-    crate::client_verbs::append_agents_event(
-        &crate::client_verbs::trace_events_path(home),
+    crate::client_commands::append_agents_event(
+        &crate::client_commands::trace_events_path(home),
         "agent_ask_done",
         &[
             ("stage", Value::String("dispatch".into())),
@@ -514,8 +514,8 @@ pub(crate) fn dispatch_with(
 
     // The receipt: the created-spawn shape the CLI prints, byte-parity JSON
     // (the claude arm's `json_string_ascii` mirrors the Python `json.dumps`
-    // values). A verb-rendered seed carries the effective message and the
-    // pending verb-fired word; the verb-marker chain stays Python until the
+    // values). A command-rendered seed carries the effective message and the
+    // pending command-fired word; the command-marker chain stays Python until the
     // dispatch_spawn port.
     let mut receipt = format!(
         "{{\"name\": {}, \"short_id\": {}, \"harness\": {}, \"status\": \"live\"",
@@ -525,7 +525,7 @@ pub(crate) fn dispatch_with(
     );
     if rendered != message {
         receipt.push_str(&format!(
-            ", \"effective_message\": {}, \"verb_fired\": \"pending\"",
+            ", \"effective_message\": {}, \"command_fired\": \"pending\"",
             crate::claude_ask::json_string_ascii(&rendered)
         ));
     }

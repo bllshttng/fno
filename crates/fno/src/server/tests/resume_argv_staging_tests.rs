@@ -82,7 +82,7 @@ fn resume_agent_runs_the_staged_resume_argv() {
 
 #[test]
 fn resume_agent_fails_open_when_resume_argv_unavailable() {
-    // AC3-FALLBACK: the verb failing is NOT silent. The gesture still
+    // AC3-FALLBACK: the command failing is NOT silent. The gesture still
     // resumes on the declared-form render (the fail-open fallback) and a
     // pane notice names the degradation. The ready-handler is driven
     // directly: the fire path itself needs a live runtime.

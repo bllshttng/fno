@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end check of the registry-miss heal (x-da8c): a stored-but-unregistered
-# session must be addressable by the Rust lifecycle verbs, which resolve through
+# session must be addressable by the Rust lifecycle commands, which resolve through
 # a `fno agents heal-token` shellout. The Rust unit tests cover the pure parts;
 # only this tree can exercise the shellout itself.
 set -uo pipefail
@@ -35,7 +35,7 @@ cd "$tmp" || { echo "FAIL: could not enter tmp"; exit 1; }
 
 # Shim `fno` to this worktree's source, so the shellout exercises the code under
 # test rather than whatever version happens to be installed. `mux` never
-# forwards: the Python front execs the `fno` on PATH for that verb, which is
+# forwards: the Python front execs the `fno` on PATH for that command, which is
 # this shim again, and the recursion runs until the runner kills it. attach
 # reaches the mux through `fno mux thread`, so the shim answers as a box with
 # no live mux server.
@@ -209,7 +209,7 @@ restore_fno
 # 8. The heal adopts into the registry the CALLER read, not whichever one the
 #    Python side would resolve on its own. Rust honors FNO_AGENTS_HOME and the
 #    Python path resolver does not, so without the forwarded --registry the row
-#    lands in the default file: the verb still works, so nothing warns, but the
+#    lands in the default file: the command still works, so nothing warns, but the
 #    roster never gains the row and every later call re-heals.
 reg_clear
 ALT_HOME="$tmp/alt-agents"

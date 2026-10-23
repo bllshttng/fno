@@ -1,6 +1,6 @@
 """`fno agents mcp` CLI: thin wrappers over the MCP sidecar client.
 
-Currently one verb, ``send``, used by the fno-agents daemon's push-channel
+Currently one command, ``send``, used by the fno-agents daemon's push-channel
 delivery leg to hand an envelope to a registered channel server. The envelope is
 read from stdin (never argv) so it can be arbitrarily large.
 """
@@ -16,7 +16,7 @@ mcp_app = typer.Typer(
     name="mcp",
     no_args_is_help=True,
     add_completion=False,
-    help="MCP sidecar client verbs.",
+    help="MCP sidecar client commands.",
 )
 
 

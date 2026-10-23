@@ -1,5 +1,5 @@
 //! The p0 repro: a note piped into a reader that closes early (`| head`)
-//! must still land, and the verb must still exit 0. The child's stdout is a
+//! must still land, and the command must still exit 0. The child's stdout is a
 //! pipe whose read end is closed before the child starts, so the receipt
 //! print hits EPIPE deterministically (Rust std ignores SIGPIPE, so the
 //! default `println!` path panics instead of dying quietly).
@@ -21,7 +21,7 @@ fn fixture_node(id: &str) -> serde_json::Value {
 }
 
 #[test]
-fn a_closed_stdout_pipe_neither_loses_the_note_nor_fails_the_verb() {
+fn a_closed_stdout_pipe_neither_loses_the_note_nor_fails_the_command() {
     let dir = tempfile::tempdir().unwrap();
     let graph = dir.path().join("graph.json");
     fno_agents::graph_store::seed_rows(&graph, &[fixture_node("t-pipe")]).unwrap();

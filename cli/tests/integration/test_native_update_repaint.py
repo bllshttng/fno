@@ -1,8 +1,8 @@
-"""The native update verb's plan-doc repaint, pinned at its real surface.
+"""The native update command's plan-doc repaint, pinned at its real surface.
 
 The goldens replay compares graph rows and never the linked plan doc, so the
-wave-6 retarget that deleted the python-verb repaint tests left the doc side
-of the mirror with no coverage. The python `fno backlog update` verb is
+wave-6 retarget that deleted the python-command repaint tests left the doc side
+of the mirror with no coverage. The python `fno backlog update` command is
 retired, so these tests drive the fno-agents binary directly over a seeded
 temp graph and assert the doc's frontmatter converges to the graph after the
 mutation (and the graph rows where the deleted tests did). Skips when the

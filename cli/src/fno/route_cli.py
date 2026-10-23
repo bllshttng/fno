@@ -1,6 +1,6 @@
 """``fno config route``: legible, on-the-fly provider route lanes.
 
-Six verbs over the existing per-spawn model-routing machinery
+Six commands over the existing per-spawn model-routing machinery
 (``fno.agents.model_routing``), which stays the single source of the z.ai
 env-var contract:
 
@@ -316,18 +316,18 @@ def inventory_cmd(
     One row per declared model with its resolved band and a reachability
     verdict: ``ok`` | ``not-installed`` (refused BY NAME, never dropped) |
     ``unbanded`` (a candidate at every band) | ``incomplete`` (no --model).
-    Then a ``slots`` section: each verb's lanes, live capacity, would_take.
+    Then a ``slots`` section: each command's lanes, live capacity, would_take.
     """
     from fno.agents.harnesses import READABLE_PROVIDERS
     from fno.route_resolve import (
         resolve_inventory,
         slot_states,
-        slot_verbs,
+        slot_commands,
     )
     from fno.route_slot_client import RouteSlotUnavailable, route_slot_call
 
     inv = resolve_inventory()
-    slots = [slot_states(verb) for verb in slot_verbs()]
+    slots = [slot_states(command) for command in slot_commands()]
     rows: list[dict[str, str]] = []
     refusals: list[str] = []
     if not inv.rows:
@@ -391,12 +391,12 @@ def _routing_policy_safe() -> dict:
 
     try:
         return route_slot_call({"mode": "policy"})
-    except RouteSlotUnavailable:  # noqa: BLE001 - an unreachable verb answers unknown
+    except RouteSlotUnavailable:  # noqa: BLE001 - an unreachable command answers unknown
         return {"enforce_inventory": False, "operator_access": "unknown"}
 
 
 def _echo_slots(slots: list[dict]) -> None:
-    """Print the per-verb slot readout under the row table."""
+    """Print the per-command slot readout under the row table."""
     typer.echo("slots: preview (simulated; no launch)")
     for slot in slots:
         if not slot.get("lanes"):
@@ -507,7 +507,7 @@ def env_cmd(
 #
 # The spawn path writes one content-addressed overlay per distinct route under
 # state_dir()/route-settings. The names are digests, so the only way to answer
-# "which file is my session on / is any of them stale" is this read verb.
+# "which file is my session on / is any of them stale" is this read command.
 
 settings_app = typer.Typer(
     name="settings",
@@ -567,7 +567,7 @@ def settings_ls_cmd(
         referenced_paths = {
             p for p in (getattr(e, "route_settings_path", None) for e in load_registry()) if p
         }
-    except Exception:  # noqa: BLE001 - unreadable registry degrades the column, never the verb
+    except Exception:  # noqa: BLE001 - unreadable registry degrades the column, never the command
         referenced_paths = None
 
     state_root = paths.state_dir()

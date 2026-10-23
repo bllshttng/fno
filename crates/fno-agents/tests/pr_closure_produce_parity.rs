@@ -1,4 +1,4 @@
-//! Golden parity for the raw `pr-closure-*` produce verbs.
+//! Golden parity for the raw `pr-closure-*` produce commands.
 //!
 //! parity-stage: characterization
 //! parity-oracle: tests/fixtures/pr_closure_produce/oracle.py (frozen copy
@@ -6,15 +6,15 @@
 //!
 //! Each case in the fixture `cases.json` builds the same hermetic graph,
 //! config, and git fixture the deleted oracle's builder made, runs the Rust
-//! verb, and compares the bytes against goldens frozen from that oracle
+//! command, and compares the bytes against goldens frozen from that oracle
 //! while the port was differential. Both sides are masked identically
 //! (case paths become `<CASE>`, error details become `<ERR>`) before the
 //! golden comparison, so the frozen goldens never embed a machine's
 //! tempdir. Freeze: `FNO_CAPTURE_GOLDEN=1 cargo -p fno-agents --test
-//! pr_closure_produce_parity test produce_verbs`.
+//! pr_closure_produce_parity test produce_commands`.
 //!
 //! `pr-closure-context` has no oracle leg: Python exposes it only as an
-//! in-process library call, never a wire verb, so its JSON envelope is a
+//! in-process library call, never a wire command, so its JSON envelope is a
 //! new Rust-binary surface. Its bytes and failure paths are pinned by the
 //! stub-gh characterization below; the Python library call it mirrors is
 //! `fetch_pr_closure_context` in the oracle file.
@@ -282,9 +282,12 @@ fn mask_golden(g: Golden, case_dir: &Path) -> Golden {
 // -------------------------------------------------------------------------
 
 fn invocation(case: &Value) -> (Vec<String>, Option<String>) {
-    let verb = case.get("verb").and_then(Value::as_str).expect("case verb");
+    let command = case
+        .get("verb")
+        .and_then(Value::as_str)
+        .expect("case command");
     let stdin = serde_json::to_string(case).unwrap();
-    match verb {
+    match command {
         // The trailer leg is argv-driven and must never block on stdin.
         "trailer" => {
             let mut argv = vec!["pr-closure-trailer".to_string()];
@@ -302,19 +305,19 @@ fn invocation(case: &Value) -> (Vec<String>, Option<String>) {
             }
             (argv, None)
         }
-        // Stdin verbs read the whole case object and pick only their keys,
+        // Stdin commands read the whole case object and pick only their keys,
         // exactly as the oracle legs do.
         "branch-ids" => (vec!["pr-closure-branch-ids".to_string()], Some(stdin)),
         "ensure" => (vec!["pr-closure-ensure".to_string()], Some(stdin)),
         // bind-created takes its payload as one JSON argv element, matching
         // its CLI door (a TTY passthrough stdin must never be read).
         "bind" => (vec!["pr-closure-bind-created".to_string(), stdin], None),
-        other => panic!("cases.json carries an unknown verb: {other}"),
+        other => panic!("cases.json carries an unknown command: {other}"),
     }
 }
 
 #[test]
-fn produce_verbs_match_the_python_oracle() {
+fn produce_commands_match_the_python_oracle() {
     let cases_text =
         std::fs::read_to_string(fixture_dir().join("cases.json")).expect("cases fixture");
     let cases: Vec<Value> = serde_json::from_str(&cases_text).expect("cases array");

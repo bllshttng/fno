@@ -25,7 +25,7 @@ inherited from) and, when armed:
     been away instead.
   - **consented dispatch** (``chain_blueprint=True``, e.g. decompose's
     ``needs_think``/wave0 fan-out; or a non-birth ``reason`` such as the
-    explicit conversational verb): spawns a
+    explicit conversational command): spawns a
     fire-and-forget ``/think`` background worker carrying the *resolved*
     transcript pointer (not a paraphrase) when away, or per
     ``think_spawn.attended`` when an operator is present; stamps the node
@@ -111,7 +111,7 @@ _SPAWN_ALREADY_EXISTS = "already exists"
 # fires on a high-volume lifecycle moment.
 REASON_BIRTH = "birth"
 REASON_WORK_START = "work-start"
-# C: the explicit conversational verb. NOT in _LIFECYCLE_REASONS: it is
+# C: the explicit conversational command. NOT in _LIFECYCLE_REASONS: it is
 # operator-invoked (one per explicit call, no firehose), so it does not need the
 # relevance filter and may degrade to the stored triple like birth does.
 REASON_CONVERSATIONAL = "conversational"
@@ -697,7 +697,7 @@ def _worker_agent_name(node_id: str, node_slug: Optional[str], reason: str = REA
     """Provenance-carrying bg worker name, scoped by trigger reason.
 
  shape: ``th-th-<node-id>[-<reason>]-<slug>`` - the spawn_think
-    source stamped only by this path, the think verb as a code. A LIFECYCLE
+    source stamped only by this path, the think command as a code. A LIFECYCLE
     trigger keeps its ``<reason>`` segment so a node born + later worked +
     retro'd dispatches a DISTINCT worker per moment - the dedup token
     is reason-scoped, and ``fno agents spawn`` rejects a duplicate NAME, so the
@@ -768,15 +768,15 @@ def _spawn_think_worker(
     if reason == REASON_CONVERSATIONAL:
         from fno.agents.harness_map import _load_dispatch_cfg
 
-        dispatch_cfg = _load_dispatch_cfg(settings_obj, verb="/think")
-        allowed = dispatch_cfg.get("allowed_verbs")
+        dispatch_cfg = _load_dispatch_cfg(settings_obj, command="/think")
+        allowed = dispatch_cfg.get("allowed_commands")
         if isinstance(allowed, list):
-            dispatch_cfg["allowed_verbs"] = [*allowed, "/think"]
+            dispatch_cfg["allowed_commands"] = [*allowed, "/think"]
     resolved = resolve_dispatch(
         harness=(provider or "").strip() or None,
         substrate=legacy_substrate,
         node_id=node_id,
-        verb="/think",
+        command_name="/think",
         trigger="autonomous",
         settings=settings_obj,
         dispatch_cfg=dispatch_cfg,
@@ -818,11 +818,11 @@ def _spawn_think_worker(
         stderr = (proc.stderr or "").strip()
         if proc.returncode == 2 and _SPAWN_ALREADY_EXISTS in stderr:
             raise SpawnAlreadyRunning(f"agent {agent_name} already exists")
-        from fno.rust_binary import VerbUnavailable, verb_call
+        from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": stderr or proc.stdout or ""})["detail"]
-        except VerbUnavailable as exc:
+            detail = command_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": stderr or proc.stdout or ""})["detail"]
+        except CommandUnavailable as exc:
             detail = f"{stderr or proc.stdout or ''} (gate detail unavailable: {exc})"
         raise SpawnError(f"fno agents spawn exited {proc.returncode}: {detail}")
     short_id = _parse_short_id(proc.stdout or "")
@@ -1051,7 +1051,7 @@ def on_node_born(
 
 
 # ---------------------------------------------------------------------------
-# dispatch_conversational() - the explicit conversational verb (v2 C)
+# dispatch_conversational() - the explicit conversational command (v2 C)
 # ---------------------------------------------------------------------------
 
 
@@ -1067,7 +1067,7 @@ def dispatch_conversational(
 ) -> ThinkSpawnResult:
     """C : explicit conversational /think dispatch for a named node.
 
-    The operator, mid-conversation about an fno-touched node, invokes one verb
+    The operator, mid-conversation about an fno-touched node, invokes one command
     and a bg /think picks it up with full LIVE context (US5/AC5-HP). Unlike the
     automatic A1/A2 triggers this:
 
@@ -1076,7 +1076,7 @@ def dispatch_conversational(
         reads THIS conversation, not whatever first filed the node;
       * actually SPAWNS a bg /think even in an attended session - the explicit
         invocation IS the opt-in, so we do not degrade to a stderr offer line;
-      * is not gated behind ``config.think_spawn.enabled`` - the verb is the
+      * is not gated behind ``config.think_spawn.enabled`` - the command is the
         per-invocation opt-in, so a default-OFF install still serves an explicit
         request.
 
@@ -1092,7 +1092,7 @@ def dispatch_conversational(
     environ = dict(os.environ if env is None else env)
     # Overlay the LIVE pointer so assemble_seed resolves THIS conversation's
     # transcript, never the node's birth origin (AC5-HP). An empty session_id
-    # falls through to maybe_spawn_think's no-origin skip (the CLI verb rejects
+    # falls through to maybe_spawn_think's no-origin skip (the CLI command rejects
     # that earlier with a clearer message).
     live_node = {
         **node,
@@ -1103,7 +1103,7 @@ def dispatch_conversational(
     environ[_ENV_OVERRIDE] = "1"
     environ[_ENV_ATTENDED] = "spawn"
     # The live session id discriminates the dedup token + worker name so a LATER
-    # conversation can re-dispatch the same node (the verb is repeatable, unlike
+    # conversation can re-dispatch the same node (the command is repeatable, unlike
     # the once-per-moment birth/lifecycle triggers) - codex P2.
     suffix = (session_id or "").strip()[:8] or None
     return maybe_spawn_think(
@@ -1203,7 +1203,7 @@ def maybe_spawn_think(
     #     disproportionate ceremony (the residual-edge bug that motivated this
     #     gate was a size-S bug that fanned out to a whole /think). CONSENTED
     #     fan-outs bypass this, because neither is an automatic trigger: the
-    #     explicit conversational verb (the operator invoking it IS the opt-in)
+    #     explicit conversational command (the operator invoking it IS the opt-in)
     #     and a forced decompose child (`chain_blueprint` - a `needs_think` group
     #     the operator flagged for a design pass, decompose.py's forced lane). A
     #     consented small-bug child must still be designed + linked, never left an

@@ -102,10 +102,10 @@ pub mod census;
 pub mod chats;
 pub mod check_supersession;
 pub mod claim_cli;
+pub mod claim_commands;
 pub mod claim_lanes_cli;
 pub mod claim_queue;
 pub mod claim_store;
-pub mod claim_verbs;
 pub mod claims;
 pub mod claims_root;
 pub mod claude_adopt;
@@ -126,8 +126,8 @@ pub mod claude_vault;
 pub mod claude_workspace_trust;
 pub mod cli_args;
 pub mod client;
+pub mod client_commands;
 pub mod client_render;
-pub mod client_verbs;
 pub mod codex_ask;
 pub mod codex_daemon_readiness;
 pub mod codex_daemon_upgrade;
@@ -226,11 +226,11 @@ pub mod grok_ask;
 pub mod grok_store;
 pub mod harness_beat;
 pub mod harness_capabilities;
+pub mod harness_commands;
 pub mod harness_daemon;
 pub mod harness_matrix;
 pub mod harness_reader;
 pub mod harness_roster;
-pub mod harness_verbs;
 pub mod heal;
 pub mod heal_pid;
 pub mod heal_sweep;
@@ -239,6 +239,7 @@ pub mod hold_label;
 pub mod honesty_sweep;
 pub mod hook;
 pub mod identity;
+pub mod inbox_peers;
 pub mod incident_claim;
 pub mod install_verify;
 pub mod intel;
@@ -324,6 +325,7 @@ pub mod manifest;
 pub mod manifest_lookup;
 pub mod memory_groups;
 pub mod merge_close;
+pub mod merge_command;
 pub mod merge_freeze;
 pub mod merge_gates;
 pub mod merge_grant;
@@ -331,7 +333,6 @@ pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
 pub mod merge_reap;
-pub mod merge_verb;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
 mod mint_guard_tests;
@@ -422,7 +423,7 @@ pub mod prove_it_verdicts;
 pub mod provenance;
 pub mod provider;
 pub mod provider_cap;
-pub mod provider_cap_verbs;
+pub mod provider_cap_commands;
 pub mod provider_key;
 pub mod provider_route;
 pub mod publish_review;
@@ -451,6 +452,7 @@ pub mod release_notes;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
+pub mod reserve;
 pub(crate) mod resolve_tier;
 pub mod restart_run;
 pub mod resume_args;
@@ -521,12 +523,12 @@ pub mod spawn_cwd;
 pub mod spawn_edge;
 pub mod spawn_gate;
 pub mod spawn_gate_admission;
+pub mod spawn_gate_command;
 pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
 pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
 pub(crate) mod spawn_gate_slots;
-pub mod spawn_gate_verb;
 pub mod spawn_guard;
 pub mod spawn_lineage;
 pub mod spawn_overlay;
@@ -1499,10 +1501,11 @@ mod tests {
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
-    // birth write, a node filled on a later beat, and the per-beat budget
-    // deferral.
+    // birth write, a node or parent filled on a later beat, and the
+    // per-beat budget deferral.
     "native_bg_mint_failed",
     "native_bg_node_backfilled",
+    "native_bg_parent_backfilled",
     "native_bg_mint_deferred",
     // The sandbox-denial ingester: codex transcript refusals -> one row per
     // (session, class, path) with a hit count, plus the pass summary row.
@@ -1549,7 +1552,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // latency from the call per harness, substrate and machine.
     "spawn_first_turn",
     // A reaped session came back (client-emitted): one event per revive
-    // naming the verb, the actor session, the prior name and the session id.
+    // naming the command, the actor session, the prior name and the session id.
     "agent_revived",
     // The keeper's render trigger failed a pass (waves 8-9 store cutover);
     // carries the version and a stderr tail, and the backoff retries it.
@@ -1613,7 +1616,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "agent_orphan_reaped",
     "agent_orphan_state_archived",
     // Orphaned-test-binary reap sweep (daemon-emitted): one event per pid
-    // the footprint verb killed on the daemon's behalf.
+    // the footprint command killed on the daemon's behalf.
     "orphan_test_binary_reaped",
     "orphan_owner_server_reaped",
     // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
@@ -1627,7 +1630,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // from a probe miss (no event, just skipped) and from `agent_late_bind`
     // (the write succeeded).
     "agent_late_bind_failed",
-    // Dead-row GC (daemon/reap-verb-emitted): a terminal, past-grace,
+    // Dead-row GC (daemon/reap-command-emitted): a terminal, past-grace,
     // clean agent-view row was removed from the registry by the GC sweep or
     // `fno agents reap`. Distinct from `agent_orphan_reaped` (which flips a
     // live-but-unowned PID to exited); this REMOVES the row entirely.
@@ -1647,7 +1650,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // `agent_row_reaped` (the GC door's own event); this fires for every
     // door, including ones nobody has enumerated yet.
     "registry_row_removed",
-    // One lossy save, grouped: the writer, pid, verb, and every
+    // One lossy save, grouped: the writer, pid, command, and every
     // lost id in one event, beside the per-row receipts above, so a save
     // that drops rows can never vanish without a door being named.
     "registry_rows_lost",
@@ -1685,12 +1688,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // run, so a quiet run cannot be mistaken for a sweep that never ran.
     "park_sweep",
     // A parked PR resumed polling (pr-park-emitted): retries reset, by hand
-    // (the lead row's verb) or by the sweep.
+    // (the lead row's command) or by the sweep.
     "pr_watch_unparked",
     // Dead-row GC also reconstructs the loop's canonical failure event when a
     // convention-named dispatch disappeared without a termination receipt.
     "node_failed",
-    // The merge reaper emits the same kind the cleanup verb does when
+    // The merge reaper emits the same kind the cleanup command does when
     // it takes a merged node's tree, so one removal, one event, wherever the
     // caller lives.
     "worktree_removed",
@@ -1918,7 +1921,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // verdict was stored/refreshed/cleared on a hook-less mux row, or a
     // provider's manifest failed to load.
     "screen_state_change",
-    // CI heal drive loop (pr-heal verb): one row per --all --apply
+    // CI heal drive loop (pr-heal command): one row per --all --apply
     // invocation carrying the per-tick counts, so the arm is visible in the
     // journal even on a quiet cycle. Emitted even when every PR is skipped,
     // for the same reason worktree_sweep is: a quiet repo must not read as a
