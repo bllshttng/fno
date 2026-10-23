@@ -1,0 +1,1 @@
+{"op": "normalize", "status": 429, "body": "{\"error\":\"rate limit\",\"resets_at\":1789408778}", "expect": {"error_class": "provider_4xx_quota", "raw_status": 429, "raw_exit_code": null, "body_excerpt": "{\"error\":\"rate limit\",\"resets_at\":1789408778}", "triggers_swap": true, "model": null, "resets_at": 1789408778.0, "reset_stamp_unparsed": null, "reset_is_derived": false}}
