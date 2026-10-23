@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn the_user_verbs_run_native_and_everything_else_forwards() {
+    fn the_user_commands_run_native_and_everything_else_forwards() {
         for group in ["user", "operator"] {
             assert_eq!(
                 classify_inbox_user(&mk(&["inbox", group, "status", "--json"])),
