@@ -1,11 +1,14 @@
 name: cli-ci
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Each main push gets its own group keyed by sha: a group keeps one
-# running and one pending run and drops the older pending one, so a shared
-# main group left the middle merge of a burst untested on main.
+# run. Main pushes share one group keyed by ref. The running main run always
+# finishes, and the newest push replaces the pending one, so a burst of merges
+# queues at most two runs and the tip is the commit that tests. A group keyed
+# by sha ran every merge in full: the runs piled up against the PR runs and
+# main never settled. Cancelling the running main run instead starves main:
+# merges land faster than the suite finishes, so no main run ever completes.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || (github.event_name == 'push' && github.sha) || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
