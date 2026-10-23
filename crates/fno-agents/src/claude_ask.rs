@@ -360,6 +360,16 @@ impl ClaudeHome {
         }
     }
 
+    /// A live claude process holds this session, so `claude --bg --resume`
+    /// on it would start a copy. Unlike [`Self::session_live`], an fno
+    /// command line that only names the id does not count.
+    pub fn session_held(&self, session_id: &str) -> bool {
+        match &self.live_sessions {
+            Some(sessions) => sessions.iter().any(|s| s == session_id),
+            None => crate::census::live_claude_holds_session(session_id),
+        }
+    }
+
     /// What `claude agents --json --all`, read under `config_dir`, says
     /// about one job. The listing is the only source of job state; the files
     /// under `jobs/` are Claude's own.
