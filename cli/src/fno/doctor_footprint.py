@@ -1072,6 +1072,11 @@ def _emit_result(
             f"against max_fleet_cpu_share {adm['ceiling'] * 100:.1f}% "
             f"-> {adm['verdict']}"
         )
+        load5, load15 = payload["load_5m"], payload["load_15m"]
+        load_text = "unavailable"
+        if load5 is not None and load15 is not None:
+            load_text = f"5m {load5:.1f}, 15m {load15:.1f} on {payload['load_cpu_count']} cpus"
+        typer.echo(f"load average: {load_text} (a separate axis - it did not decide the verdict)")
         typer.echo(
             f"sustained CPU: {reading.sustained_cpu_cores:.3f} cores "
             f"(threshold {threshold_cores:.3f} from {payload['cpu_capacity_cores']} cpus; "

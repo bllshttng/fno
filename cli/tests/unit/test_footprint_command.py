@@ -91,6 +91,7 @@ def _pin_load(
     status: str,
     load: float = 1.0,
     ceiling: float = 96.0,
+    load_5m: float | None = None,
     load_15m: float | None = None,
 ):
     """Pin the spawn-load snapshot so a verdict test is hermetic: the real
@@ -106,7 +107,7 @@ def _pin_load(
         load_ceiling=ceiling,
         load_cpu_count=int(ceiling // 8),
         spawn_load_status=status,
-        load_5m=None,
+        load_5m=load_5m,
         load_15m=load_15m,
     )
     monkeypatch.setattr(doctor_footprint, "_spawn_load_snapshot", lambda: snapshot)
@@ -881,6 +882,40 @@ def test_ac7_edge_short_lived_descendant_counts_in_fleet_cpu(
     assert result.exit_code == 0, result.output
     assert "fleet CPU: 1.200 cores" in result.stdout
     assert "verdict: admit on fleet_cpu_share (10.0% against 50.0%)" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("load_5m", "load_15m", "expected"),
+    [
+        (141.0, 500.0, "load average: 5m 141.0, 15m 500.0 on 12 cpus"),
+        (None, None, "load average: unavailable"),
+    ],
+)
+def test_load_average_prints_with_its_demotion_and_decides_nothing(
+    monkeypatch, no_worker_roots, load_5m, load_15m, expected
+) -> None:
+    """The number a king would fetch from uptime arrives inside the instrument
+    carrying its own ruling: a separate axis, never the verdict."""
+
+    _pin_load(monkeypatch, status="within", ceiling=96.0, load_5m=load_5m, load_15m=load_15m)
+    _pin_admission(monkeypatch)
+    _pin_capacity(monkeypatch, 12)
+    _fake_runner(
+        monkeypatch,
+        """\
+        PID PPID ELAPSED %CPU RSS COMMAND
+        100 1 01:00:00 20.0 1024 fno-agents-worker --run
+        """,
+        [{"name": "worker-a"}],
+        [],
+    )
+
+    result = runner.invoke(app, ["doctor", "footprint", "--cause-only"])
+
+    assert result.exit_code == 0, result.output
+    assert f"{expected} (a separate axis - it did not decide the verdict)" in result.stdout
+    assert "verdict: admit on fleet_cpu_share" in result.stdout
+    assert "load_15m" not in result.stdout
 
 
 def test_ac8_edge_descendants_do_not_consume_direct_process_threshold(
