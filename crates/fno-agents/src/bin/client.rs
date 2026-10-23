@@ -2302,7 +2302,10 @@ fn maybe_run_spawn(
     // The route arm: resolved before the gate, so a refusal takes no slot.
     let route = match fno_agents::spawn_route::route_seam(
         params.get("route").and_then(Value::as_str),
-        params.get("account").and_then(Value::as_str),
+        params
+            .get("account")
+            .or(params.get("dispatch_account"))
+            .and_then(Value::as_str),
         provider,
         public_substrate,
         &cwd,

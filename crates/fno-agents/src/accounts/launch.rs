@@ -223,7 +223,14 @@ pub fn seam(
 /// inherits. A claude launch scrubs the inherited auth vars first, and a
 /// moved HOME is sealed so this client's own state reads stay put. The
 /// carrier is claimed whatever the flags say, so it never reaches a child.
+/// A routed spawn is left whole to the route arm.
 pub fn seam_exit(params: &Value, provider: &str) -> Option<i32> {
+    // A route with either account flag composes in the Python CLI, which the
+    // route arm re-execs. Scrubbing here first would strip a vendor key the
+    // route reads from a scrubbed var (ANTHROPIC_AUTH_TOKEN as api_key_env).
+    if params.get("route").is_some() {
+        return None;
+    }
     let carrier = std::env::var(DISPATCH_ACCOUNT_ENV).ok();
     std::env::remove_var(DISPATCH_ACCOUNT_ENV);
     let text = |key: &str| params.get(key).and_then(Value::as_str);

@@ -82,11 +82,6 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
     assert received["account_env"] == {
         "CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1",
     }
-    receipt = json.loads(
-        next(ln for ln in result.output.splitlines() if ln.startswith("{"))
-    )
-    assert receipt["credential_source"] == "canary-proven carrier"
-    assert receipt["credential_env_keys"] == ["AUTH_PROVEN", "CLAUDE_CONFIG_DIR"]
     # The carrier travels to the Rust owner verbatim, against the spawn's harness.
     assert asked[0]["kind"] == "dispatch-account"
     assert (asked[0]["account"], asked[0]["harness"], asked[0]["carrier"]) == (

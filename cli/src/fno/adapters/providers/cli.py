@@ -1139,7 +1139,11 @@ def pick_account(
     from fno.adapters.providers.loader import load_quota_config
     from fno.adapters.providers.rotation import Combo, next_healthy_provider
     from fno.adapters.providers.runtime_state import headroom, refresh_usage
-    from fno.agents.spawn_overlay_client import AccountRefused, account_overlay
+    from fno.agents.spawn_overlay_client import (
+        AccountRefused,
+        SpawnOverlayUnavailable,
+        account_overlay,
+    )
 
     config = _load()
     quota = load_quota_config(repo_root=_get_repo_root())
@@ -1165,7 +1169,7 @@ def pick_account(
             continue
         try:
             overlay = account_overlay(pid)
-        except AccountRefused as exc:
+        except (AccountRefused, SpawnOverlayUnavailable) as exc:
             rows.append((pid, f"not launchable: {str(exc).splitlines()[0]}"))
             continue
         if overlay["lane"] == "managed-active":
