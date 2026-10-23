@@ -17,8 +17,9 @@
 //!
 //! Scrub runs before any row reaches disk: secret shapes are masked with the
 //! report scrub's regex, home paths collapse to `~`, email addresses become
-//! `[email]`, the row is rescanned, and a residual match drops it. A row that cites a tool call which read or
-//! printed a `.env*`, credentials, `.pem` or keychain path is dropped whole.
+//! `[email]`, the row is rescanned, and a residual match drops it. A row that
+//! cites a tool call which read or printed a `.env*`, credentials, `.pem` or
+//! keychain path is dropped whole.
 //! Whole sessions go to the eval candidates, so no eval session ever lends a
 //! row to train, holdout or unlabelled; the manifest's `leaks` re-reads the
 //! written files to prove it. Nothing leaves the machine.
