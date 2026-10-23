@@ -544,7 +544,9 @@ mod tests {
         assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
-        // A glm proposal names the temporary seat law it would contradict.
+        // A glm proposal names the temporary seat law it would contradict,
+        // until that law lapses; from the lapse date glm flash is the seat
+        // and contradicts nothing.
         let laws: Vec<&str> = p["laws"]
             .as_array()
             .unwrap()
@@ -552,7 +554,9 @@ mod tests {
             .filter(|l| l["contradicted"] == json!(true))
             .filter_map(|l| l["id"].as_str())
             .collect();
-        assert!(laws.contains(&"d-e38d92cc"), "{laws:?}");
+        let lapse = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        let lapsed = chrono::Utc::now().date_naive() >= lapse;
+        assert_eq!(laws.contains(&"d-e38d92cc"), !lapsed, "{laws:?}");
     }
 
     #[test]
