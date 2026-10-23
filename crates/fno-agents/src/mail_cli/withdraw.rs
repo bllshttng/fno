@@ -191,7 +191,7 @@ pub fn run(args: &[String]) -> i32 {
     // in flight may already hold the body, so the receipt names the boundary
     // the tombstone actually guarantees.
     let refund = if super::send::release_budget_by_id(&msg_id) > 0 {
-        " Its words no longer count against the pair budget."
+        " Its words no longer count against the control-lane budget."
     } else {
         ""
     };

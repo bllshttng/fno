@@ -724,7 +724,8 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             "--cwd" | "-c" => {
                 // Python's `workdir`: every repo-scoped read below (project
                 // resolution, the kind sender, config lookups) resolves
-                // against this directory, not the ambient one. run() chdir's to it before any consumer reads.
+                // against this directory, not the ambient one. run() chdir's
+                // to it before any consumer reads.
                 out.cwd = Some(PathBuf::from(take_arg(args, &mut index, "--cwd")?));
             }
             "--from-name" => out.from_name = Some(take_arg(args, &mut index, "--from-name")?),
