@@ -3,7 +3,7 @@
 //!
 //! Characterization for `fno agents roles context`, on the Rust door as
 //! `fno-agents spawn-overlay roles context`. The goldens under
-//! tests/golden/roles_context/ were captured from the Python verb and its
+//! tests/golden/roles_context/ were captured from the Python command and its
 //! `fno.roles.context` catalog on this same fixture before both were
 //! deleted (step 2 of the port protocol,
 //! docs/architecture/dual-implementation-inventory.md). Capture mode now
