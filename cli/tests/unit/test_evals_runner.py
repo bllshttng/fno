@@ -152,6 +152,13 @@ def test_default_spawn_trial_leaves_no_claude_project_dir(tmp_path: Path, monkey
     run_task(_task(prompt="x"), repeat=1, repo_root=root, history_path=tmp_path / "h.jsonl")
     assert seen and not seen[0].exists()
     assert keep.exists()
+    # An account lane's trial lands under that account's config dir.
+    acct = tmp_path / "acct" / "projects" / "-w-t"
+    acct.mkdir(parents=True)
+    overlay = _runner._account_env.AccountOverlay("a1", {"CLAUDE_CONFIG_DIR": str(tmp_path / "acct")}, "own-dir")
+    monkeypatch.setattr(_runner._account_env, "resolve_account_overlay", lambda account: overlay)
+    _runner._forget_trial_transcripts(Path("/w/t"), type("Lane", (), {"account": "a1"})())
+    assert not acct.exists() and keep.exists()
 
 
 # AC3-ERR: spawn failure is a graded fail, remaining repeats still run.

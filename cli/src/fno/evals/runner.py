@@ -220,13 +220,21 @@ def _make_disposable_worktree(repo_root: Path, ref: str, tag: str) -> Path:
     return path
 
 
-def _forget_trial_transcripts(workdir: Path) -> None:
+def _forget_trial_transcripts(workdir: Path, lane: Optional[Any]) -> None:
     # Every trial worktree is a fresh cwd, so claude keeps one projects dir per
     # trial, and they pile up in its own session list. The observe door has
-    # read the transcript by now; the history row is the record.
+    # read the transcript by now; the history row is the record. An account
+    # lane writes under that account's config dir, not the ambient one.
     from fno.agents.harnesses.claude import _claude_project_slug, _claude_projects_dir
 
-    shutil.rmtree(_claude_projects_dir(os.environ) / _claude_project_slug(workdir), ignore_errors=True)
+    roots = {_claude_projects_dir(os.environ)}
+    if account := getattr(lane, "account", None):
+        try:
+            roots.add(_claude_projects_dir(_account_env.resolve_account_overlay(account).env))
+        except Exception:  # noqa: BLE001 - an unresolvable account wrote nothing there
+            pass
+    for root in roots:
+        shutil.rmtree(root / _claude_project_slug(workdir), ignore_errors=True)
 
 
 def _remove_worktree(repo_root: Path, path: Path) -> None:
@@ -397,7 +405,7 @@ def run_task(
                     lane_evidence.update(account_dropped=True, lane_reason=spawn_res.lane_note)
                     lane_evidence["lane_status"] = "account-dropped" if lane_evidence.get("lane_status") == "ok" else lane_evidence.get("lane_status")
             if spawned and spawn is None and workdir is not None:
-                _forget_trial_transcripts(workdir)
+                _forget_trial_transcripts(workdir, lane)
 
             duration = round(time.monotonic() - started, 3)
             passed = outcome is not None and outcome.passed

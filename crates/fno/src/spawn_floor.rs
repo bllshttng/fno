@@ -73,7 +73,9 @@ pub struct Peeled {
 /// Take `--floor N` (or `--floor=N`) off an argv that starts `agents spawn`.
 /// Scans the tokens after `spawn` up to the first `--` fence. Refusals: a
 /// missing value, a value that is not a whole number of 1 or more, and the
-/// flag given twice.
+/// flag given twice. `--mux` refuses without a one-shot (`--once` or the
+/// headless lane): only a one-shot loses its row, so on any other spawn the
+/// flag would do nothing.
 pub fn peel(args: &[String]) -> Result<Peeled, String> {
     if args.len() < 2 || args[0] != "agents" || args[1] != "spawn" {
         return Err("expected an `agents spawn` argv".into());
@@ -104,7 +106,7 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
             Some(v) => (tok, Some(v.to_string())),
             None if tok == "--floor" => match args.get(i + 1) {
                 Some(v) => (tok, Some(v.clone())),
-                None => return Err("needs a whole number of 1 or more".into()),
+                None => return Err("--floor needs a whole number of 1 or more".into()),
             },
             None => {
                 rest.push(tok.to_string());
@@ -119,9 +121,14 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
         let parsed = raw.parse::<u32>().ok().filter(|v| *v >= 1);
         match parsed {
             Some(v) => floor = Some(v),
-            None => return Err(format!("{raw} is not a whole number of 1 or more")),
+            None => return Err(format!("--floor {raw} is not a whole number of 1 or more")),
         }
         i += if tok == "--floor" { 2 } else { 1 };
+    }
+    if mux && !help && !one_shot(&rest) {
+        return Err(
+            "--mux shows a headless one-shot while it runs; add --once (or --as headless)".into(),
+        );
     }
     Ok(Peeled {
         floor,
@@ -129,6 +136,22 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
         rest,
         help,
     })
+}
+
+/// True when the forwarded argv asks for a headless one-shot, before the fence.
+fn one_shot(rest: &[String]) -> bool {
+    let flags: Vec<&str> = rest
+        .iter()
+        .map(String::as_str)
+        .take_while(|t| *t != "--")
+        .collect();
+    flags.iter().any(|t| matches!(*t, "--once" | "-o"))
+        || flags
+            .windows(2)
+            .any(|w| matches!(w[0], "--as" | "--substrate") && w[1] == "headless")
+        || flags
+            .iter()
+            .any(|t| matches!(*t, "--as=headless" | "--substrate=headless"))
 }
 
 /// The receipt the setter prints: the old value, the new one, the file it
@@ -498,6 +521,10 @@ mod tests {
         let p = peel_of(&["agents", "spawn", "--mux", "w1", "--once", "go"]).unwrap();
         assert!(p.mux && p.floor.is_none());
         assert_eq!(p.rest, vec!["agents", "spawn", "w1", "--once", "go"]);
+        assert!(peel_of(&["agents", "spawn", "--mux", "--as", "headless", "w1"]).is_ok());
+        // Only a one-shot loses its row, so --mux elsewhere refuses.
+        let err = peel_of(&["agents", "spawn", "--mux", "w1", "go"]).expect_err("no one-shot");
+        assert!(err.contains("add --once"), "{err}");
         // Help is recognized with and without a floor, and stays in rest.
         let p = peel_of(&["agents", "spawn", "--help"]).unwrap();
         assert!(p.help && p.floor.is_none());

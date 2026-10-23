@@ -1099,7 +1099,7 @@ fn main() {
         let peeled = match fno::spawn_floor::peel(&names) {
             Ok(peeled) => peeled,
             Err(message) => {
-                eprintln!("fno agents spawn --floor: {message}");
+                eprintln!("fno agents spawn: {message}");
                 std::process::exit(2);
             }
         };
