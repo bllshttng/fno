@@ -752,8 +752,8 @@ portable alternatives. If the item exists but `dispatch_env()` still raises
 
 **config.toml validation failure on `fno config accounts add`**
 
-The `add` command validates the record via Pydantic before writing. Common
-causes:
+The `add` command validates the record before writing
+(`crates/fno-agents/src/accounts/records.rs`). Common causes:
 
 - `id` contains uppercase or spaces. Pattern: `[a-z][a-z0-9-]{0,63}`.
 - `auth: oauth_dir` without `--credentials-source`.

@@ -49,8 +49,12 @@ pub fn lock_path(path: &Path) -> PathBuf {
 
 /// `atomic_mutate_settings`: read `path` (or its settings.yaml sibling) under
 /// the exclusive lock, apply `edit`, then write a temp file and rename it over
-/// `path`. A missing file starts empty; an unparseable one refuses.
-pub fn mutate<T>(path: &Path, edit: impl FnOnce(&mut DocumentMut) -> T) -> Result<T, WriteError> {
+/// `path`. A missing file starts empty; an unparseable one refuses. An `Err`
+/// from `edit` writes nothing and comes back as the inner `Err`.
+pub fn mutate<T, E>(
+    path: &Path,
+    edit: impl FnOnce(&mut DocumentMut) -> Result<T, E>,
+) -> Result<Result<T, E>, WriteError> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
     let lock = OpenOptions::new()
@@ -63,7 +67,10 @@ pub fn mutate<T>(path: &Path, edit: impl FnOnce(&mut DocumentMut) -> T) -> Resul
         return Err(std::io::Error::last_os_error().into());
     }
     let mut doc = read_strict(path)?;
-    let out = edit(&mut doc);
+    let out = match edit(&mut doc) {
+        Ok(out) => out,
+        Err(e) => return Ok(Err(e)),
+    };
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -75,7 +82,7 @@ pub fn mutate<T>(path: &Path, edit: impl FnOnce(&mut DocumentMut) -> T) -> Resul
     tmp.write_all(doc.to_string().as_bytes())?;
     tmp.persist(path).map_err(|e| e.error)?;
     drop(lock);
-    Ok(out)
+    Ok(Ok(out))
 }
 
 /// `loader._read_parsed_strict`, kept as an editable document.
@@ -111,19 +118,12 @@ fn read_strict(path: &Path) -> Result<DocumentMut, WriteError> {
     rendered.parse::<DocumentMut>().map_err(|e| refuse(&e))
 }
 
-/// `save_providers` for the target file: `records` and `active` replace the
-/// stored ones; every other accounts subkey and every other top-level key
-/// rides. A legacy `[config]` wrapper is lifted and a `providers` block is
-/// migrated onto `accounts`.
-pub fn save_records(
-    path: &Path,
-    records: &[Record],
-    active: Option<&str>,
-) -> Result<(), WriteError> {
-    mutate(path, |doc| set_records(doc.as_table_mut(), records, active))
-}
-
-fn set_records(root: &mut Table, records: &[Record], active: Option<&str>) {
+/// `save_providers` inside [mutate]: `records` and `active` replace the stored
+/// ones; every other accounts subkey and every other top-level key rides. A
+/// legacy `[config]` wrapper is lifted and a `providers` block is migrated
+/// onto `accounts`.
+pub fn set_records(doc: &mut DocumentMut, records: &[Record], active: Option<&str>) {
+    let root = doc.as_table_mut();
     flatten_config(root);
     let accounts = match root.remove("accounts").map(Item::into_table) {
         Some(Ok(table)) => table,
@@ -224,7 +224,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
         std::fs::write(&path, "# keep me\n[review]\nmax_rounds = 2 # inline\n").unwrap();
-        save_records(&path, &[], Some("work")).unwrap();
+        let save = |path: &Path, active: Option<&str>| {
+            mutate(path, |doc| {
+                set_records(doc, &[], active);
+                Ok::<(), ()>(())
+            })
+        };
+        save(&path, Some("work")).unwrap().unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
             text.contains("# keep me") && text.contains("max_rounds = 2 # inline"),
@@ -234,11 +240,36 @@ mod tests {
         assert!(lock_path(&path).is_file());
 
         std::fs::write(&path, "[review\n").unwrap();
-        let err = save_records(&path, &[], None).unwrap_err().to_string();
+        let err = save(&path, None).unwrap_err().to_string();
         assert!(
             err.starts_with("Cannot save: config file failed to parse ("),
             "{err}"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[review\n");
+
+        // An edit that refuses writes nothing.
+        std::fs::write(&path, "x = 1\n").unwrap();
+        let refused = mutate(&path, |doc| {
+            doc.insert("y", toml_edit::value(2_i64));
+            Err::<(), _>("refused")
+        });
+        assert_eq!(refused.unwrap(), Err("refused"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x = 1\n");
+
+        // A write that cannot land leaves the file as it was (root ignores modes).
+        if unsafe { libc::geteuid() } != 0 {
+            use std::os::unix::fs::PermissionsExt;
+            let ro = tmp.path().join("ro");
+            std::fs::create_dir(&ro).unwrap();
+            std::fs::write(ro.join("config.toml"), "x = 1\n").unwrap();
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let failed = save(&ro.join("config.toml"), Some("work"));
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(matches!(failed, Err(WriteError::Io(_))), "{failed:?}");
+            assert_eq!(
+                std::fs::read_to_string(ro.join("config.toml")).unwrap(),
+                "x = 1\n"
+            );
+        }
     }
 }

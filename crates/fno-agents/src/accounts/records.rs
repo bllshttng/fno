@@ -1313,8 +1313,13 @@ pub fn load_scope(scope: Scope, cwd: &Path) -> Result<Accounts, LoadError> {
     let Some(target) = scope_path(scope, cwd) else {
         return Ok(Accounts::default());
     };
-    let data = read_layer(&target);
-    let Some(block) = extract_accounts_block(&data).filter(|b| !b.is_empty()) else {
+    scope_accounts(&read_layer(&target))
+}
+
+/// The scope read over one parsed file: [load_scope] without the read, so
+/// a writer can run it on the document it holds under the lock.
+pub fn scope_accounts(data: &toml::Table) -> Result<Accounts, LoadError> {
+    let Some(block) = extract_accounts_block(data).filter(|b| !b.is_empty()) else {
         return Ok(Accounts::default());
     };
     if let Some(toml::Value::String(active)) = block.get("active") {

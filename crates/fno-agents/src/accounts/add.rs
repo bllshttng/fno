@@ -179,39 +179,47 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("error: no HOME to resolve the global config.toml from");
         return 1;
     };
-    if records::reads_legacy_block(&records::read_layer(&target)) {
-        eprintln!(
-            "config.providers is the pre-rename name for config.accounts; the next account write migrates it"
-        );
-    }
-    let config = match records::load_scope(scope, &cwd) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("error loading existing config: {e}");
-            return 1;
+    let force = args.force;
+    let record_id = record.id.clone();
+    // The scope read, the duplicate check and the write share one lock hold,
+    // so a concurrent account write cannot land between them and be lost.
+    let outcome = writer::mutate(&target, |doc| -> Result<(), String> {
+        let data: toml::Table = doc
+            .to_string()
+            .parse()
+            .map_err(|e| format!("error loading existing config: {e}"))?;
+        if records::reads_legacy_block(&data) {
+            eprintln!(
+                "config.providers is the pre-rename name for config.accounts; the next account write migrates it"
+            );
+        }
+        let config = records::scope_accounts(&data)
+            .map_err(|e| format!("error loading existing config: {e}"))?;
+        if config.by_id(&record.id).is_some() && !force {
+            return Err(format!(
+                "error: account '{}' already exists. Use --force to overwrite.",
+                record.id
+            ));
+        }
+        let mut kept: Vec<_> = config
+            .records
+            .into_iter()
+            .filter(|r| r.id != record.id)
+            .collect();
+        kept.push(record);
+        writer::set_records(doc, &kept, config.active.as_deref());
+        Ok(())
+    });
+    let refusal = match outcome {
+        Ok(Ok(())) => None,
+        Ok(Err(msg)) => Some(msg),
+        Err(writer::WriteError::Unreadable(msg)) => Some(format!("error: {msg}")),
+        Err(writer::WriteError::Io(e)) => {
+            Some(format!("error: failed to write {}: {e}", target.display()))
         }
     };
-    if config.by_id(&record.id).is_some() && !args.force {
-        eprintln!(
-            "error: account '{}' already exists. Use --force to overwrite.",
-            record.id
-        );
-        return 1;
-    }
-    let record_id = record.id.clone();
-    let mut kept: Vec<_> = config
-        .records
-        .into_iter()
-        .filter(|r| r.id != record_id)
-        .collect();
-    kept.push(record);
-    if let Err(e) = writer::save_records(&target, &kept, config.active.as_deref()) {
-        match e {
-            writer::WriteError::Unreadable(msg) => eprintln!("error: {msg}"),
-            writer::WriteError::Io(e) => {
-                eprintln!("error: failed to write {}: {e}", target.display())
-            }
-        }
+    if let Some(msg) = refusal {
+        eprintln!("{msg}");
         return 1;
     }
     println!("Account '{record_id}' added (scope={scope_word}).");
