@@ -15,7 +15,7 @@
 use super::models::{self, canonical_digest, DefinitionSource, RoleLayer, RoleRef, RoutingHint};
 use super::registry::{self, Discovered};
 use super::resolver::{overlay_violation, Blocked};
-use crate::client_verbs::py_repr_str;
+use crate::client_commands::py_repr_str;
 use serde_json::{json, Value};
 use std::path::Path;
 
