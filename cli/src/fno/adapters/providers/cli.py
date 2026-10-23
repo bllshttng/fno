@@ -736,7 +736,11 @@ def show_forward(
     ),
 ) -> None:
     """Show all fields of a single account record."""
-    # Transport only: `fno-agents spawn-overlay accounts show` owns the command.
+    _forward_accounts("show", provider_id, *(["--print-binding"] if print_binding else []))
+
+
+def _forward_accounts(*args: str) -> None:
+    """Transport only: `fno-agents spawn-overlay accounts <args>` owns the command."""
     import subprocess
 
     from fno.rust_binary import resolve_binary
@@ -745,10 +749,7 @@ def show_forward(
     if binary is None:
         typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
         raise typer.Exit(127)
-    argv = [str(binary), "spawn-overlay", "accounts", "show", provider_id]
-    if print_binding:
-        argv.append("--print-binding")
-    raise typer.Exit(subprocess.run(argv).returncode)
+    raise typer.Exit(subprocess.run([str(binary), "spawn-overlay", "accounts", *args]).returncode)
 
 
 # ---------------------------------------------------------------------------
@@ -779,17 +780,8 @@ def add_forward(
     force: bool = typer.Option(False, "--force", "-F", help="Overwrite existing record"),
 ) -> None:
     """Add a new account record. Refuses to overwrite without --force."""
-    # Transport only: `fno-agents spawn-overlay accounts add` owns the command.
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    binary = resolve_binary()
-    if binary is None:
-        typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
-        raise typer.Exit(127)
     argv = [
-        str(binary), "spawn-overlay", "accounts", "add", provider_id,
+        "add", provider_id,
         "--harness", harness_name, "--auth", auth,
         "--priority", str(priority), "--scope", scope,
     ]
@@ -802,7 +794,7 @@ def add_forward(
             argv += [flag, value]
     if force:
         argv.append("--force")
-    raise typer.Exit(subprocess.run(argv).returncode)
+    _forward_accounts(*argv)
 
 
 # ---------------------------------------------------------------------------
@@ -1471,17 +1463,7 @@ def reconcile_slot_cmd(
     Keychain directly and tells footnote nothing, so the stamp is the state
     known to drift, and the live credential is the only thing that can correct it.
     """
-    # Transport only: `fno-agents spawn-overlay accounts reconcile-slot` owns the command.
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    binary = resolve_binary()
-    if binary is None:
-        typer.echo("error: the fno-agents binary was not found; set FNO_AGENTS_BIN", err=True)
-        raise typer.Exit(127)
-    argv = [str(binary), "spawn-overlay", "accounts", "reconcile-slot", harness_name]
-    raise typer.Exit(subprocess.run(argv).returncode)
+    _forward_accounts("reconcile-slot", harness_name)
 
 
 # ---------------------------------------------------------------------------
