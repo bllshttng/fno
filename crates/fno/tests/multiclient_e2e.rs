@@ -350,6 +350,9 @@ while :; do sleep 0.2; done\n",
     // the only event inside the measured window.
     a.pump(Duration::from_millis(2500));
     let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    // Client b compares against the same settled layout, so it must hold
+    // the split before the delivery, not catch up on it afterwards.
+    b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
     let baseline = [count("r"), count("n")];
 
     let mut paste = b"\x1b[200~".to_vec();
