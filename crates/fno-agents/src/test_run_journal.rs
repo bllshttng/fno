@@ -7,7 +7,7 @@
 //! spawns nothing and writes nothing. A journal write that fails never
 //! changes the run's exit code.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -42,13 +42,7 @@ pub(crate) fn command_key(argv: &[String], whole: bool) -> String {
             .iter()
             .position(|w| *w == "--manifest-path")
             .and_then(|i| words.get(i + 1))
-            .and_then(|p| p.rsplit('/').nth(1))
-            .or_else(|| {
-                words
-                    .iter()
-                    .position(|w| *w == "-p")
-                    .and_then(|i| words.get(i + 1).copied())
-            });
+            .and_then(|p| p.rsplit('/').nth(1));
         let selector = ["--lib", "--test", "--bin", "--doc"]
             .into_iter()
             .find(|s| words.contains(s));
@@ -69,46 +63,45 @@ pub(crate) fn command_key(argv: &[String], whole: bool) -> String {
     }
 }
 
-fn row(run: &Run<'_>, stage: &str) -> Map<String, Value> {
-    let command: String = run.argv.join(" ").chars().take(COMMAND_CAP).collect();
-    let mut data = Map::new();
-    data.insert("run_id".into(), json!(run.run_id));
-    data.insert("stage".into(), json!(stage));
-    data.insert("command".into(), json!(command));
-    data.insert(
-        "command_key".into(),
-        json!(command_key(run.argv, run.whole)),
-    );
-    data.insert("whole".into(), json!(run.whole));
-    for (field, var) in [("node_id", "FNO_NODE"), ("session_id", "FNO_SESSION_ID")] {
-        if let Some(v) = std::env::var(var).ok().filter(|v| !v.is_empty()) {
-            data.insert(field.into(), json!(v));
+fn append(run: &Run<'_>, stage: &str, extra: Value) {
+    let mut data = json!({
+        "run_id": run.run_id,
+        "stage": stage,
+        "command": run.argv.join(" ").chars().take(COMMAND_CAP).collect::<String>(),
+        "command_key": command_key(run.argv, run.whole),
+    });
+    let present = [
+        ("node_id", std::env::var("FNO_NODE").ok()),
+        ("session_id", std::env::var("FNO_SESSION_ID").ok()),
+        (
+            "worktree",
+            std::env::current_dir()
+                .ok()
+                .map(|c| c.display().to_string()),
+        ),
+    ];
+    for (field, value) in present {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            data[field] = json!(v);
         }
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        data.insert("worktree".into(), json!(cwd.display().to_string()));
+    if let (Some(fields), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
+        fields.extend(extra.clone());
     }
-    data
-}
-
-fn append(data: Map<String, Value>) {
-    let _ = EventEmitter::new(events_path(), "agents").emit("test_run", &Value::Object(data));
+    let _ = EventEmitter::new(events_path(), "agents").emit("test_run", &data);
 }
 
 pub(crate) fn record_started(run: &Run<'_>, pid: u32) {
-    let mut data = row(run, "started");
-    data.insert("pid".into(), json!(pid));
-    append(data);
+    append(run, "started", json!({ "pid": pid }));
 }
 
 pub(crate) fn record_finished(run: &Run<'_>, exit_code: i32, elapsed: Duration) {
-    let mut data = row(run, "finished");
-    data.insert("exit_code".into(), json!(exit_code));
-    data.insert(
-        "duration_ms".into(),
-        json!(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),
+    let ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    append(
+        run,
+        "finished",
+        json!({ "exit_code": exit_code, "duration_ms": ms }),
     );
-    append(data);
 }
 
 /// Linear-interpolated percentile of an ascending list.
@@ -233,7 +226,10 @@ mod tests {
             "cargo test fno-agents --lib"
         );
         assert_eq!(
-            command_key(&argv(&["cargo", "test", "-p", "fno"]), true),
+            command_key(
+                &argv(&["cargo", "test", "--manifest-path", "crates/fno/Cargo.toml"]),
+                true
+            ),
             "cargo test fno (whole)"
         );
     }

@@ -3155,8 +3155,6 @@ event_types:
         command_key:
           type: string
           description: "Normalized grouping key: tool, crate, selector, and (whole) when no target narrowed the run."
-        whole:
-          type: boolean
         pid:
           type: integer
           description: "The child's pid, on started rows."
