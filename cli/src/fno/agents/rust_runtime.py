@@ -1062,21 +1062,6 @@ def _is_promotion_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     return command == "spawn" and _has_flag(args, longs=("--promote",))
 
 
-def _is_dispatch_account_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying ``--dispatch-account`` (the cutover carrier).
-
-    The Rust spawn parser does not know the flag and exits ``unknown flag:
-    --dispatch-account``, killing the launch. Python owns it: it resolves the
-    destination record's env overlay and refuses a harness mismatch. Keeping the
-    decision HERE rather than at one caller is the point - a shell dispatcher
-    pinning its own runtime protects only itself, and the next caller to reach
-    for the flag would hit the binary.
-    """
-    if command != "spawn":
-        return False
-    return _has_flag(args, longs=("--dispatch-account",))
-
-
 def _is_resume_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--resume`` / ``-r``.
 
@@ -1135,14 +1120,12 @@ def _spawn_flag_value(args: Sequence[str], *names: str) -> Optional[str]:
 def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     """Inject a headroom-picked ``--account`` for a spawn that named none.
 
-    Runs at the SAME seam as the auth scrub below, for the same reason: a
-    bg/headless spawn auto-routes to the Rust client through an ``exec``, so
-    neither Python spawn seam is ever reached. A picker wired only there would
-    leave every such worker on the ambient - possibly exhausted - account while
-    ``pick_on_launch`` read enabled, which is the decorative-guard shape this
-    repo's corpus names. Injecting the flag here is the one edit BOTH runtimes
-    see, and the scrub below then applies the account's overlay exactly as it
-    does for an explicit ``--account``.
+    Runs at the seam because a bg/headless spawn auto-routes to the Rust
+    client through an ``exec``, so neither Python spawn seam is ever reached. A
+    picker wired only there would leave every such worker on the ambient -
+    possibly exhausted - account while ``pick_on_launch`` read enabled.
+    Injecting the flag here is the one edit BOTH runtimes see, and each then
+    resolves the account's overlay exactly as for an explicit ``--account``.
 
     Six spawns are left alone: one that already named an account (explicit
     intent always wins), one carrying ``--role`` or ``--route``/``--provider``
@@ -1170,7 +1153,7 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
         # the operator would be told to drop a flag they never typed. Nothing to
         # pick - the transcript already decided where it lives.
         return out
-    if _is_dispatch_account_bearing_spawn("spawn", out):
+    if _has_flag(out, longs=("--dispatch-account",)):
         # A cutover already SELECTED its account, and picking a second one here
         # merges two overlays: the destination's config_dir with the picked
         # account's api key, which is the mis-bill this function already refuses
@@ -1199,60 +1182,6 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     # stamps a config pick as "caller" - the misread this column ends.
     os.environ[LAUNCH_ACCOUNT_SOURCE_ENV] = "config"
     return [*out[:boundary], "--account", picked, *out[boundary:]]
-
-
-def _scrub_account_auth_at_seam(args: Sequence[str]) -> None:
-    """Drop inherited vendor auth/model vars from ``os.environ`` for an
-    ``--account`` spawn, at the seam, so the Rust client inherits the scrub too.
-
-    The three Python substrate seams already scrub ``SCRUB_AUTH_VARS`` before
-    layering the account overlay, but an ``--account`` spawn on ``--substrate
-    bg`` auto-routes to the Rust client, which has no ``ANTHROPIC_*`` handling
-    at all -- so the Python scrub never ran for it and the pinned account
-    inherited the parent's vendor endpoint and tier remaps. ``route_to_rust``
-    execs with ``os.environ``, so scrubbing here is the one edit both runtimes
-    see. The account overlay is still layered per-substrate afterwards, so an
-    account record that legitimately pins any of these still wins. A
-    route-bearing ``--account`` spawn skips this scrub entirely: routing is
-    Python-only and the create lane scrubs + applies route-wins itself, and a
-    vendor may name a scrubbed var (e.g. ``ANTHROPIC_AUTH_TOKEN``) as its
-    ``api_key_env``, so scrubbing first would strip the key before
-    ``resolve_explicit_route`` reads it.
-
-    Order is load-bearing: the overlay is resolved BEFORE the scrub. An api_key
-    record may reference the ambient environment (``ANTHROPIC_API_KEY =
-    "${ENV:ANTHROPIC_API_KEY}"``) and ``resolve_env_value`` reads
-    ``os.environ``, so scrubbing first would delete the source value and make a
-    previously valid ``--account`` spawn unresolvable. Resolve, then scrub, then
-    re-apply the resolved values.
-    """
-    os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
-    account = _spawn_flag_value(args, "--account")
-    if not account:
-        # Its provenance twin dies with it, or a stale "config" mislabels
-        # the next spawn the way a stale id would.
-        os.environ.pop(LAUNCH_ACCOUNT_SOURCE_ENV, None)
-        return
-    if _is_route_bearing_spawn("spawn", args):
-        return
-    from fno.agents import account_env as _account_env
-
-    try:
-        overlay = _account_env.resolve_account_overlay(account)
-    except Exception:
-        return
-    if overlay is None:
-        return
-    for var in _account_env.SCRUB_AUTH_VARS:
-        os.environ.pop(var, None)
-    os.environ.update(overlay.env)
-    #: the account ID has no argv carrier on the Rust route (the binary
-    # has no --account flag), so publish it on the env for the row mint to
-    # stamp as launch_account. Set at the same seam as the overlay for the
-    # same reason: this is the one edit both runtimes see. An id, never a
-    # credential - the registry row carries it verbatim. The PROVENANCE
-    # carrier is deliberately untouched: _pick_account_at_seam owns it.
-    os.environ["FNO_LAUNCH_ACCOUNT"] = account
 
 
 #: Commands whose Rust-client handling launches a harness child that would inherit
@@ -1569,7 +1498,6 @@ def make_agents_group_cls() -> type:
                     if command == "spawn":  # after the export: the probe needs its roots
                         _refuse_codex_spawn_with_unreachable_tools(args)
                     args = _pick_account_at_seam(args)
-                    _scrub_account_auth_at_seam(args)
                 elif command == "rm":
                     if not _gate_rm_at_seam(args):
                         raise SystemExit(RM_DECLINED_EXIT)
@@ -1578,10 +1506,9 @@ def make_agents_group_cls() -> type:
                 py_spawn = (
                     _is_role_bearing_spawn(command, args)
                     or _is_promotion_bearing_spawn(command, args)
-                    or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account") is not None)
+                    or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account", "--dispatch-account") is not None)
                     or _is_default_substrate_spawn(command, args)
                     or _is_retired_axis_spawn(command, args)
-                    or _is_dispatch_account_bearing_spawn(command, args)
                 )
                 if mode == "rust" and not py_spawn:
                     _pin = _worktree_policy_pin_at_seam(args)

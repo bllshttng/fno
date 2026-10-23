@@ -403,23 +403,24 @@ def _patch_account_env(monkeypatch, registered_ids=()) -> None:
     """Stub the providers registry: `registered_ids` are known to by_id, and
     resolve only those; a known-but-unresolvable id and a crashing registry
     are reachable through the ids below."""
-    import fno.agents.account_env as account_env
+    from fno.adapters.providers import loader
+    from fno.agents import spawn_overlay_client as overlay
 
     class _Cfg:
         by_id = {i: object() for i in registered_ids}
 
-    monkeypatch.setattr(account_env, "load_providers", lambda **_: _Cfg())
+    monkeypatch.setattr(loader, "load_providers", lambda **_: _Cfg())
 
     def _resolve(account_id, **_):
         if account_id == "acct-broken":
-            raise account_env.AccountResolutionError(
+            raise overlay.AccountRefused(
                 "account 'acct-broken' config_dir does not exist; register a live login there first"
             )
         if account_id not in _Cfg.by_id:
-            raise account_env.AccountResolutionError(f"account {account_id!r} is not registered")
-        return object()
+            raise overlay.AccountRefused(f"account {account_id!r} is not registered")
+        return {}
 
-    monkeypatch.setattr(account_env, "resolve_account_overlay", _resolve)
+    monkeypatch.setattr(overlay, "account_overlay", _resolve)
 
 
 def test_lane_account_rides_only_for_a_registered_account(monkeypatch) -> None:
@@ -462,12 +463,12 @@ def test_lane_account_fails_closed_on_every_other_refusal(monkeypatch) -> None:
     flag, refusal, _ = _runner._lane_account(broken)
     assert flag is None and "acct-broken" in refusal
 
-    import fno.agents.account_env as account_env
+    from fno.adapters.providers import loader
 
     def _boom(**_):
         raise ValueError("providers.toml is not valid TOML")
 
-    monkeypatch.setattr(account_env, "load_providers", _boom)
+    monkeypatch.setattr(loader, "load_providers", _boom)
     flag, refusal, _ = _runner._lane_account(broken)
     assert flag is None and "refused" in refusal
 

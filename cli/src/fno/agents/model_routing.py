@@ -596,8 +596,8 @@ def overlay_restores_model_env(*overlays: Optional[Mapping[str, str]]) -> bool:
 
     A caller composing account_env/route_env right after the incoherent
     scrub must not assume ANY overlay re-supplies a dropped model var: the
-    config-dir and managed-active account lanes (``resolve_account_overlay``
-    in ``account_env.py``) return an overlay of just ``CLAUDE_CONFIG_DIR`` -
+    config-dir and managed-active account lanes (``accounts::env::overlay``
+    in the Rust crate) return an overlay of just ``CLAUDE_CONFIG_DIR`` -
     no model var - so the dropped var stays dropped and the child genuinely
     falls back to its account's own default. Only a route, or an
     ``own-dir``/api-key account overlay that carries its own model pins,

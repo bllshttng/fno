@@ -35,18 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fno.agents.dispatch_errors import DispatchAskError, RouteRestoreRefused
 from fno.agents.rust_spawn import _codex_thread_spawn, _opencode_serve_spawn
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-)
-
-if TYPE_CHECKING:
-    from fno.agents.account_env import AccountOverlay
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from fno import paths
 from fno.agents import events
@@ -2133,10 +2122,10 @@ def _pick_account_overlay(
     *,
     role: Optional[str] = None,
     route_env: Optional[Mapping[str, str]] = None,
-) -> "Optional[AccountOverlay]":
+) -> Optional[Any]:
     """Consult the picker for a spawn that named no account, or None.
 
-    Returns the full :class:`AccountOverlay` (env AND account_id), because the
+    Returns the overlay's ``env`` AND ``account_id``, because the
     spawn seams stamp the picked id on the row's ``launch_account`` ;
     the env alone drops the one fact re-entry needs.
 
@@ -2148,9 +2137,11 @@ def _pick_account_overlay(
     if picked is None:
         return None
     try:
-        from fno.agents.account_env import resolve_account_overlay
+        from types import SimpleNamespace
 
-        return resolve_account_overlay(picked)
+        from fno.agents.spawn_overlay_client import account_overlay
+
+        return SimpleNamespace(**account_overlay(picked))
     except Exception as exc:  # noqa: BLE001 - picking is advisory; never block a spawn
         print(f"account: default (pick unavailable: {exc})", file=sys.stderr)
         return None
@@ -2236,20 +2227,11 @@ def _account_id_for_env(account_env: Optional[Mapping[str, str]]) -> Optional[st
     if not account_env:
         return None
     try:
-        from fno.adapters.providers.loader import load_providers
-        from fno.agents.account_env import resolve_account_overlay
+        from fno.agents.spawn_overlay_client import spawn_overlay_call
 
-        for record in load_providers().records:
-            if record.harness != "claude":
-                continue
-            try:
-                if dict(resolve_account_overlay(record.id).env) == dict(account_env):
-                    return record.id
-            except Exception:  # noqa: BLE001 - an unresolvable record is not a match
-                continue
-    except Exception:  # noqa: BLE001
+        return spawn_overlay_call({"kind": "account-for-env", "env": dict(account_env)})["account"]
+    except Exception:  # noqa: BLE001 - attribution is best-effort
         return None
-    return None
 
 
 def _revival_answer(name: str, harness: str, resume_session_id: str) -> Optional[dict]:

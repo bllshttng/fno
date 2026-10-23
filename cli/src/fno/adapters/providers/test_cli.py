@@ -1446,7 +1446,10 @@ class TestDoctor:
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("PWD", str(tmp_path))
         monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / ".fno"))
-        monkeypatch.setattr("fno.agents.account_env._login_present", lambda p: False)
+        monkeypatch.setattr(
+            "fno.agents.spawn_overlay_client.spawn_overlay_call",
+            lambda payload, **_: {"login_present": False},
+        )
         result = _invoke(["doctor"], cwd=tmp_path, home=tmp_path)
         assert result.exit_code != 0, result.output
         assert "no-login-in-config-dir" in result.output
@@ -1495,6 +1498,7 @@ def _pick_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cfg: dict) -> Pat
     return tmp_path
 
 
+@pytest.mark.dev_build
 class TestPick:
     def test_no_launchable_candidate_exits_4_with_the_setup_instruction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1677,6 +1681,7 @@ def _pick_verdict(cwd: Path, exclude: tuple[str, ...] = ()):
     return pick_account(exclude=exclude)
 
 
+@pytest.mark.dev_build
 class TestPickOptInAndOverlay:
     """The two halves a non-Python caller cannot get right on its own."""
 
@@ -1721,7 +1726,7 @@ class TestPickOptInAndOverlay:
         ANTHROPIC_BASE_URL outranks it, so the worker would bill through a
         different route while the receipt named the picked account.
         """
-        from fno.agents.account_env import SCRUB_AUTH_VARS
+        from fno.agents.spawn_overlay_client import compose_credentials
 
         _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
         result = _invoke(["pick", "--print-env"], cwd=tmp_path, home=tmp_path)
@@ -1730,7 +1735,7 @@ class TestPickOptInAndOverlay:
             line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
         )
         assert emitted["CLAUDE_CONFIG_DIR"] == str(tmp_path / "claude-alt")
-        for var in SCRUB_AUTH_VARS:
+        for var in compose_credentials(None, None, {})["scrub"]:
             assert var in emitted, f"{var} not carried for scrubbing"
             assert emitted[var] == "", f"{var} should be cleared, not set"
 

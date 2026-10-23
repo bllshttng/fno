@@ -1139,11 +1139,7 @@ def pick_account(
     from fno.adapters.providers.loader import load_quota_config
     from fno.adapters.providers.rotation import Combo, next_healthy_provider
     from fno.adapters.providers.runtime_state import headroom, refresh_usage
-    from fno.agents.account_env import (
-        AccountResolutionError,
-        login_probe_refusal,
-        resolve_account_overlay,
-    )
+    from fno.agents.spawn_overlay_client import AccountRefused, account_overlay
 
     config = _load()
     quota = load_quota_config(repo_root=_get_repo_root())
@@ -1168,11 +1164,11 @@ def pick_account(
             rows.append((pid, "excluded"))
             continue
         try:
-            overlay = resolve_account_overlay(pid)
-        except AccountResolutionError as exc:
+            overlay = account_overlay(pid)
+        except AccountRefused as exc:
             rows.append((pid, f"not launchable: {str(exc).splitlines()[0]}"))
             continue
-        if overlay.lane == "managed-active":
+        if overlay["lane"] == "managed-active":
             # A managed account reaches a worker only through the daemon-wide
             # ~/.claude slot, so two workers can never run on two such accounts
             # at once and "picking" it just names the default. Excluded on
@@ -1183,7 +1179,7 @@ def pick_account(
                 "not a picker candidate: managed, rides the shared ~/.claude slot",
             ))
             continue
-        if (refusal := login_probe_refusal(pid, overlay.env.get("CLAUDE_CONFIG_DIR"))) is not None:
+        if (refusal := overlay["login_probe"]) is not None:
             # The gate already refused this login; skip, pick the next live one.
             rows.append((pid, f"login probe refused: {refusal}"))
             continue
@@ -1309,14 +1305,15 @@ def pick_env_lines(account_id: str) -> list[str]:
     is not enough: an inherited ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or
     routed ANTHROPIC_BASE_URL outranks it, so the worker would authenticate or
     bill through a different route while the receipt named the picked account.
-    Every Python spawn substrate already scrubs SCRUB_AUTH_VARS before applying
-    an overlay; emitting that same list here is what lets a non-Python caller
+    Every spawn substrate scrubs the overlay answer's ``scrub`` list before
+    applying it; emitting that same list here is what lets a non-Python caller
     apply the whole overlay instead of half of it, from one source of truth.
     """
-    from fno.agents.account_env import SCRUB_AUTH_VARS, resolve_account_overlay
+    from fno.agents.spawn_overlay_client import account_overlay
 
-    overlay = resolve_account_overlay(account_id).env
-    lines = [f"{key}=" for key in SCRUB_AUTH_VARS if key not in overlay]
+    answer = account_overlay(account_id)
+    overlay = answer["env"]
+    lines = [f"{key}=" for key in answer["scrub"] if key not in overlay]
     lines.extend(f"{key}={value}" for key, value in overlay.items())
     return lines
 
@@ -1369,7 +1366,7 @@ def _doctor_findings() -> list[dict]:
             })
 
         if record.config_dir is not None:
-            from fno.agents.account_env import _login_present
+            from fno.agents.spawn_overlay_client import spawn_overlay_call
 
             if not record.config_dir.exists():
                 findings.append({
@@ -1377,7 +1374,7 @@ def _doctor_findings() -> list[dict]:
                     "problem": "missing-config-dir",
                     "detail": f"config_dir {record.config_dir} does not exist",
                 })
-            elif not _login_present(record.config_dir):
+            elif not spawn_overlay_call({"kind": "login-present", "dir": str(record.config_dir)})["login_present"]:
                 findings.append({
                     "record": record.id,
                     "problem": "no-login-in-config-dir",
