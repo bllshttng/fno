@@ -52,3 +52,14 @@ def test_retired_dispatch_key_unsets_from_disk(tmp_path):
     res = unset_config_value("dispatch.allowed_verbs", scope="project", repo_root=tmp_path)  # verb-wording: allow
     assert res.present is True
     assert _read(tmp_path) == {"dispatch": {"substrate": "thread"}}
+
+
+def test_load_drops_retired_dispatch_keys_once(tmp_path):
+    from fno.config.writer import drop_retired_dispatch_keys
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[dispatch]\nallowed_verbs = ["/target"]\nverb_registry = {}\nsubstrate = "thread"\n')  # verb-wording: allow
+    first = drop_retired_dispatch_keys([cfg])
+    assert len(first) == 2 and all(str(cfg) in line or cfg.name in line for line in first)
+    assert tomllib.loads(cfg.read_text()) == {"dispatch": {"substrate": "thread"}}
+    assert drop_retired_dispatch_keys([cfg]) == []

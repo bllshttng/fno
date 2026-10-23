@@ -914,6 +914,49 @@ def unset_config_value(
     )
 
 
+def drop_retired_dispatch_keys(paths: typing.Iterable[Path]) -> list[str]:
+    """Remove the retired dispatch keys from every config file that holds one.
+
+    Runs on the first settings load after an update. Returns one receipt line
+    per file and key. A file it cannot write is skipped: the unmodeled-key
+    warning still names the key.
+    """
+    receipts: list[str] = []
+    seen: set[str] = set()
+    global_path = os.path.realpath(_global_settings_path())
+    for path in paths:
+        real = os.path.realpath(path)
+        if real in seen or not os.path.isfile(real):
+            continue
+        seen.add(real)
+        try:
+            text = Path(real).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        held = sorted(k for k in RETIRED_DISPATCH_KEYS if k.split(".", 1)[1] in text)
+        if not held:
+            continue
+        removed: list[str] = []
+
+        def _mutate(existing: dict[str, Any]) -> dict[str, Any]:
+            for key in held:
+                existing, _was, present = _deep_unset(existing, key.split("."))
+                if present:
+                    removed.append(key)
+            return existing
+
+        try:
+            _locked_update(
+                Path(real), _mutate,
+                scope="global" if real == global_path else "project",
+                lock_timeout=2.0,
+            )
+        except (OSError, TimeoutError, ConfigSetError):
+            continue
+        receipts.extend(f"removed retired key {key} from {real}" for key in removed)
+    return receipts
+
+
 def read_scope_value(
     key: str,
     *,
