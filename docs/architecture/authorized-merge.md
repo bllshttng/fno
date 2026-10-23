@@ -116,7 +116,7 @@ Per outside, non-bot PR the steward takes one action per pass, tracked in stage 
 
 ## The merge freeze
 
-A merge freeze holds a release window. The team sets it, and only the user lifts it. The record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. The code is `merge_freeze.rs`.
+A merge freeze holds a release window. The team sets it, and only the user lifts it. The code is `merge_freeze.rs`. With `store.remote_url` set, the record lives in the primary's `merge_freeze` table, so a freeze set on one machine holds a merge made from any other. Without it, the record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. If the primary holds no record, a machine with a primary still reads its local file, so a freeze an older build wrote keeps holding. An unreachable primary holds the merge. The lift is a ruling, so it reaches another machine only through the shared backlog (`store.share_backlog`).
 
 The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` command:
 
@@ -136,7 +136,7 @@ fno inbox decide 'merge-freeze:<owner/repo>@<pin key>' 'lift' --authority operat
 
 The user records that row at a terminal, or types `/fno:law` in chat with the same subject. A team or agent row at the subject does not lift it. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
 
-The `freeze-clear` op only tidies the file. Its `evidence` must be the decision id of a live superuser ruling at the current lift subject. Free text refuses, and the refusal names both user doors.
+The `freeze-clear` op only tidies the record. It removes the primary row and the local file. Its `evidence` must be the decision id of a live superuser ruling at the current lift subject. Free text refuses, and the refusal names both user doors.
 
 A new pin re-arms the freeze. While the current pin is unlifted, a set refuses. After the user lifts it, a set with the same pin refuses, and a set with a new pin writes the record. The new pin has its own lift subject and no ruling there, so it holds again.
 
