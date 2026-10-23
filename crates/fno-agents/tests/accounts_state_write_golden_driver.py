@@ -94,15 +94,6 @@ CASES: dict[str, dict] = {
     "usage_replaces_and_drops_stale": {"op": "write-usage", "state": MIXED, "id": "a1", "snapshot": snap(91.0)},
     "usage_clamps_and_keeps_a_null_reset": {"op": "write-usage", "state": None, "id": "c3", "snapshot": snap(140.0, resets_at=None)},
     "usage_locked_is_not_persisted": {"op": "write-usage", "state": MIXED, "id": "a1", "snapshot": snap(10.0), "locked": True},
-    # advance-cursor
-    "cursor_fresh_starts_at_zero": {"op": "advance-cursor", "state": None, "combo": "fast", "sticky": 3, "hash": "h1", "count": 3},
-    "cursor_sticks_under_the_limit": {"op": "advance-cursor", "state": {"combo_cursors": {"fast": cursor(1, 2)}}, "combo": "fast", "sticky": 3, "hash": "h1", "count": 3},
-    "cursor_rolls_at_the_limit": {"op": "advance-cursor", "state": {"combo_cursors": {"fast": cursor(1, 3)}}, "combo": "fast", "sticky": 3, "hash": "h1", "count": 3},
-    "cursor_wraps_modulo": {"op": "advance-cursor", "state": {"combo_cursors": {"fast": cursor(2, 1)}}, "combo": "fast", "sticky": 1, "hash": "h1", "count": 3},
-    "cursor_hash_mismatch_resets": {"op": "advance-cursor", "state": {"combo_cursors": {"fast": cursor(2, 1, "old")}}, "combo": "fast", "sticky": 1, "hash": "h1", "count": 3},
-    "cursor_stale_resets": {"op": "advance-cursor", "state": MIXED, "combo": "stale", "sticky": 1, "hash": "h2", "count": 2},
-    "cursor_writes_schema_2": {"op": "advance-cursor", "state": {"schema_version": 1}, "combo": "fast", "sticky": 2, "hash": "h1", "count": 2},
-    "cursor_locked_computes_lock_free": {"op": "advance-cursor", "state": {"combo_cursors": {"fast": cursor(0, 2)}}, "combo": "fast", "sticky": 2, "hash": "h1", "count": 2, "locked": True},
     # stamp-window
     "stamp_first_open": {"op": "stamp-window", "state": None, "id": "zai", "opened_at": NOW - 100, "window_minutes": 300},
     "stamp_inside_the_window_is_a_no_op": {"op": "stamp-window", "state": {"windows_opened": {"zai": {"window": opened(NOW - 600, True)}}}, "id": "zai", "opened_at": NOW, "window_minutes": 300},
@@ -153,11 +144,6 @@ def run_case(rs, case: dict, path: Path):
             probed_at=s["probed_at"], source=s["source"], partial=s["partial"],
             confidence=s["confidence"],
         ), now=NOW)
-    if op == "advance-cursor":
-        return dataclasses.asdict(rs.advance_cursor(
-            case["combo"], sticky_limit=case["sticky"], providers_hash=case["hash"],
-            providers_count=case["count"], now=NOW,
-        ))
     if op == "stamp-window":
         return rs.stamp_window_open(case["id"], case["opened_at"], label=case.get("label", "window"))
     if op == "mark-warned":

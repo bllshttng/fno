@@ -70,20 +70,6 @@ fn run_op(case: &Value, path: &Path, timeout: Duration) -> Value {
             let snap = state::parse_snapshot(&case["snapshot"]).unwrap();
             json!(state::write_usage(path, id, snap, NOW, timeout).unwrap())
         }
-        "advance-cursor" => {
-            let combo = case["combo"].as_str().unwrap();
-            let c = state::advance_cursor(
-                path,
-                combo,
-                case["sticky"].as_i64().unwrap(),
-                case["hash"].as_str().unwrap(),
-                case["count"].as_i64().unwrap(),
-                NOW,
-                timeout,
-            )
-            .unwrap();
-            state::keyed(c.to_json(), "combo_name", combo)
-        }
         "stamp-window" => json!(state::stamp_window(
             path,
             id,
@@ -120,7 +106,7 @@ fn accounts_state_write_matches_the_python_leg() {
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect();
     cases.sort();
-    assert!(cases.len() >= 45, "golden cases missing: {}", cases.len());
+    assert!(cases.len() >= 37, "golden cases missing: {}", cases.len());
     let failures: Vec<String> = cases
         .iter()
         .filter_map(|golden| {

@@ -739,58 +739,6 @@ pub fn write_usage(
     Ok(written.is_some())
 }
 
-/// `_next_cursor`: a fresh cursor (none, edited combo, stale) starts at
-/// (0, 1); under the sticky limit it stays and counts; at the limit it moves
-/// to the next index with a count of 1.
-fn next_cursor(prev: Option<&Cursor>, sticky: i64, hash: &str, count: i64, now: f64) -> Cursor {
-    let start = |index| Cursor {
-        cursor_index: index,
-        consecutive_use_count: 1,
-        providers_hash: hash.to_string(),
-        last_rotated_at: now,
-    };
-    match prev
-        .filter(|p| p.providers_hash == hash && p.last_rotated_at >= now - COMBO_CURSOR_TTL_SECONDS)
-    {
-        None => start(0),
-        Some(p) if p.consecutive_use_count < sticky => Cursor {
-            consecutive_use_count: p.consecutive_use_count + 1,
-            ..start(p.cursor_index)
-        },
-        Some(p) => start((p.cursor_index + 1).rem_euclid(count)),
-    }
-}
-
-/// `advance_cursor`: always writes schema 2. On lock timeout it computes
-/// from a lock-free read, which may duplicate a rotation across racers.
-pub fn advance_cursor(
-    path: &Path,
-    combo: &str,
-    sticky: i64,
-    hash: &str,
-    count: i64,
-    now: f64,
-    timeout: Duration,
-) -> io::Result<Cursor> {
-    let written = locked(path, timeout, |raw| {
-        let mut state = rewritable(raw.as_ref(), now);
-        let next = next_cursor(state.combo_cursors.get(combo), sticky, hash, count, now);
-        state.combo_cursors.insert(combo.to_string(), next.clone());
-        state.schema_version = SCHEMA_VERSION;
-        write_atomic(path, &serialize(&state))?;
-        Ok(next)
-    })?;
-    Ok(written.unwrap_or_else(|| {
-        next_cursor(
-            read_cursor(path, combo, hash, now).as_ref(),
-            sticky,
-            hash,
-            count,
-            now,
-        )
-    }))
-}
-
 /// `stamp_window_open`: true when written. A stamp inside a recorded window
 /// still in force is a no-op, so a repeated dispatch never resets it.
 pub fn stamp_window(
@@ -948,7 +896,7 @@ fn wall_now() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
-const STATE_USAGE: &str = "usage: fno-agents spawn-overlay accounts state <update-health|write-usage|advance-cursor|stamp-window|mark-warned>  (a JSON payload on stdin)";
+const STATE_USAGE: &str = "usage: fno-agents spawn-overlay accounts state <update-health|write-usage|stamp-window|mark-warned>  (a JSON payload on stdin)";
 
 /// `accounts state <op>`: the door the Python writers call. The payload is
 /// one JSON object on stdin, the answer one JSON object on stdout.
@@ -981,7 +929,8 @@ pub fn run(args: &[String]) -> i32 {
     let path = crate::provider_cap::runtime_state_path(&cwd);
     // The env override names one explicit file, so nothing folds into it.
     if std::env::var_os("FNO_RUNTIME_STATE_PATH").is_none() {
-        let legacy = Path::new(".fno").join("provider-runtime-state.json");
+        // A legacy file has the machine file's name under the root's `.fno`.
+        let legacy = Path::new(".fno").join(path.file_name().unwrap_or_default());
         let repo_root = payload
             .get("repo_root")
             .and_then(Value::as_str)
@@ -1030,18 +979,6 @@ pub fn run(args: &[String]) -> i32 {
                 return 2;
             };
             write_usage(&path, id, snapshot, now, LOCK_TIMEOUT).map(|ok| json!({"persisted": ok}))
-        }
-        "advance-cursor" => {
-            let count = int("providers_count").unwrap_or(0);
-            if count < 1 {
-                eprintln!("advance_cursor: providers_count must be >= 1, got {count}");
-                return 2;
-            }
-            let combo = text("combo_name").unwrap_or_default();
-            let hash = text("providers_hash").unwrap_or_default();
-            let sticky = int("sticky_limit").unwrap_or(1);
-            advance_cursor(&path, combo, sticky, hash, count, now, LOCK_TIMEOUT)
-                .map(|c| keyed(c.to_json(), "combo_name", combo))
         }
         "stamp-window" => {
             let span = record_window_seconds(&cwd, id);
