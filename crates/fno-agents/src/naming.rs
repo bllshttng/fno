@@ -1014,22 +1014,11 @@ mod tests {
         };
         let random = render_worker_name("w-{node}-{random}", &facts);
         assert_eq!(random.as_deref(), Some("w-x-aaaa-ab12"));
-        assert_eq!(
-            render_worker_name("{skill}-{node}", &facts),
-            None,
-            "no skill fact"
-        );
-        assert_eq!(render_worker_name("{bogus}", &facts), None);
-        assert_eq!(render_worker_name("t-{node", &facts), None);
-        assert_eq!(
-            render_worker_name("7-{node}", &facts),
-            None,
-            "a handle starts with a letter"
-        );
-        assert_eq!(
-            seed_skill("/fno:blueprint x-aaaa").as_deref(),
-            Some("blueprint")
-        );
+        // No skill fact, an unknown token, an open brace, a leading digit.
+        for bad in ["{skill}-{node}", "{bogus}", "t-{node", "7-{node}"] {
+            assert_eq!(render_worker_name(bad, &facts), None, "{bad}");
+        }
+        assert_eq!(seed_skill("/fno:blueprint x").as_deref(), Some("blueprint"));
         assert_eq!(
             target_seed_node("/fno:target x-aaaa").as_deref(),
             Some("x-aaaa")
