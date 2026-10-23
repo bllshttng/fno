@@ -395,9 +395,7 @@ fn nav_on(v: &mut View, query: &str) {
 
 #[tokio::test]
 async fn ctrl_o_then_x_on_a_stopped_navigator_row_removes_it_like_the_sideline() {
-    // The navigator's menu is the sideline's: x on a stopped row runs the same
-    // confirm and sends the same RemoveAgent the sideline's Remove sends, and
-    // the navigator closes first, as the confirm always does.
+    // x on a stopped navigator row sends the same RemoveAgent as the sideline.
     let mut v = view_with_agents(vec![lifecycle_row("dead-nav", true, false)]);
     v.set_squad_view(1, SectionView::Expanded);
     nav_on(&mut v, "dead-nav");
