@@ -1,0 +1,42 @@
+{
+  "yaml": "review:\n  max_rounds: 4\naccounts:\n  active: old\n  records:\n    - id: old\n      name: old\n      harness: codex\n      auth: managed\n",
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "managed"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'alpha' added (scope=global).\n",
+    "stderr": "",
+    "global": {
+      "review": {
+        "max_rounds": 4
+      },
+      "accounts": {
+        "active": "old",
+        "records": [
+          {
+            "id": "old",
+            "name": "old",
+            "harness": "codex",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "old"
+          },
+          {
+            "id": "alpha",
+            "name": "alpha",
+            "harness": "claude",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "alpha"
+          }
+        ]
+      }
+    },
+    "project": null
+  }
+}

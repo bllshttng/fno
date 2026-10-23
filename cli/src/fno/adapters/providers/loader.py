@@ -6,7 +6,6 @@ precedence, mirroring cli/src/fno/cli.py::_load_v2_config_flag.
 """
 from __future__ import annotations
 
-import dataclasses
 import fcntl
 import logging
 import os
@@ -970,90 +969,3 @@ def atomic_mutate_settings(
                     tmp_path.unlink(missing_ok=True)
         finally:
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-
-
-class MissingActiveProvider(ProviderConfigError):
-    """Raised when settings.yaml's `active` field references a missing or
-    null provider record. Used by ``read_active_provider_atomic`` to give
-    callers a typed exception they can catch instead of a generic KeyError.
-    """
-
-
-@dataclasses.dataclass(frozen=True)
-class ActiveProviderSnapshot:
-    """Frozen snapshot of the active provider's record, taken under shared
-    lock so all fields belong to the same logical record at one instant.
-
-    Cites what-if finding #6: a swap-in-progress without lock can return
-    new ``id`` paired with old ``auth`` (auth-mismatch cascade). The
-    shared lock + frozen dataclass prevents this at the read side.
-    """
-
-    id: str
-    harness: str
-    auth: str
-    credential_ref: str | None
-    base_url: str | None
-    pricing: dict[str, Any] | None
-
-
-def read_active_provider_atomic(*, settings_path: Path) -> ActiveProviderSnapshot:
-    """Atomically read the active provider record under a shared lock.
-
-    LOCK_SH lets multiple concurrent readers proceed in parallel while
-    excluding writers. ``atomic_mutate_settings`` uses LOCK_EX which
-    blocks both other writers and readers. Together they prevent the
-    auth-mismatch cascade.
-
-    Args:
-        settings_path: absolute path to settings.yaml. Required (no
-            default) - same rationale as atomic_mutate_settings.
-
-    Returns:
-        Frozen ``ActiveProviderSnapshot`` with id, harness, auth, optional
-        credential_ref/base_url/pricing.
-
-    Raises:
-        MissingActiveProvider: if active is None or names a record that
-            doesn't exist in records.
-        ProviderConfigError: on unparseable settings.yaml.
-    """
-    settings_path = Path(settings_path)
-    lock_path = _settings_lock_path(settings_path)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(lock_path, "a") as lock_f:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_SH)
-        try:
-            settings = _read_parsed_strict(settings_path)
-        finally:
-            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-
-    block = _extract_accounts_block(settings)
-    if block is None:
-        raise MissingActiveProvider(
-            "config.accounts block is absent or invalid"
-        )
-    active_id = block.get("active")
-    if not active_id:
-        raise MissingActiveProvider(
-            "config.accounts.active is unset (None or empty)"
-        )
-    raw_records = block.get("records") or []
-    record = next((r for r in raw_records if isinstance(r, dict) and r.get("id") == active_id), None)
-    if record is None:
-        raise MissingActiveProvider(
-            f"active provider id '{active_id}' is not in records"
-        )
-
-    return ActiveProviderSnapshot(
-        id=str(active_id),
-        # Read both spellings: `harness` is canonical, `cli` is the pre-rename
-        # key that an unmigrated config.toml still carries. A plain get("cli")
-        # would silently yield "" for every migrated record.
-        harness=str(record.get("harness") or record.get("cli") or ""),
-        auth=str(record.get("auth", "")),
-        credential_ref=record.get("credential_ref") if isinstance(record.get("credential_ref"), str) else None,
-        base_url=record.get("base_url") if isinstance(record.get("base_url"), str) else None,
-        pricing=record.get("pricing") if isinstance(record.get("pricing"), dict) else None,
-    )

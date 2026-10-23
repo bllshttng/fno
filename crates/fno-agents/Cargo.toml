@@ -102,6 +102,8 @@ chrono-tz = "0.10"
 # moves, and a SIGWINCH-aware resize event.
 crossterm = { version = "0.29", features = ["event-stream"] }
 toml = "0.8"
+# Format-preserving edits of the accounts config: comments survive a write.
+toml_edit = "0.22"
 regex = "1"
 # The store's version-conflict digest (file_content_version) and the dedup
 # keys are SHA256 on both legs; blake3 cannot stand in for them.

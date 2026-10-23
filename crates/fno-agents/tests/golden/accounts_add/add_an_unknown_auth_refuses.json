@@ -1,0 +1,16 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "token"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: 1 validation error for ProviderRecord\nauth\n  Input should be 'oauth_dir', 'api_key' or 'managed'\n",
+    "global": null,
+    "project": null
+  }
+}

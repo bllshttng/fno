@@ -1,0 +1,42 @@
+{
+  "global": "[config.review]\nmax_rounds = 3\n\n[config.accounts]\nactive = \"old\"\n\n[[config.accounts.records]]\nid = \"old\"\nname = \"old\"\nharness = \"codex\"\nauth = \"managed\"\n",
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "managed"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'alpha' added (scope=global).\n",
+    "stderr": "",
+    "global": {
+      "review": {
+        "max_rounds": 3
+      },
+      "accounts": {
+        "active": "old",
+        "records": [
+          {
+            "id": "old",
+            "name": "old",
+            "harness": "codex",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "old"
+          },
+          {
+            "id": "alpha",
+            "name": "alpha",
+            "harness": "claude",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "alpha"
+          }
+        ]
+      }
+    },
+    "project": null
+  }
+}
