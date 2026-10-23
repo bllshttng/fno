@@ -69,7 +69,17 @@ pub fn run(args: &[String]) -> i32 {
 
     // Scope-own read: removal edits ONE file's records; the merged view would
     // freeze every other layer's records into the file being written.
-    let config = match records::load_scope(scope, &cwd) {
+    let target = records::scope_path(scope, &cwd);
+    let data = target
+        .as_deref()
+        .map(records::read_layer)
+        .unwrap_or_default();
+    if records::reads_legacy_block(&data) {
+        eprintln!(
+            "config.providers is the pre-rename name for config.accounts; the next account write migrates it"
+        );
+    }
+    let config = match records::scope_accounts(&data) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("error: {e}");
@@ -99,7 +109,7 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
 
-    let Some(target) = records::scope_path(scope, &cwd) else {
+    let Some(target) = target else {
         eprintln!("error: no HOME to resolve the global config.toml from");
         return 1;
     };
