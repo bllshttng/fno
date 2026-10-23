@@ -1,0 +1,1 @@
+{"op": "launch_env", "id": "makers", "config": "[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"ready\"\nname = \"ready\"\nharness = \"claude\"\nauth = \"managed\"\n", "expect": {"env": {}}}
