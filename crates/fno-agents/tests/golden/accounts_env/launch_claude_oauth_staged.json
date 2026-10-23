@@ -1,0 +1,1 @@
+{"op": "launch_env", "id": "o1", "config": "[[accounts.records]]\nid = \"o1\"\nname = \"o1\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n", "dirs": ["creds"], "links": {"state/providers/o1/.claude": "creds"}, "expect": {"env": {"CLAUDE_CONFIG_DIR": "<TMP>/state/providers/o1/.claude"}}}
