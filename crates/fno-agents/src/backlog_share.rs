@@ -899,7 +899,8 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// primary never received must not die one write later; a real peer delete
 /// reaches the local row through sync instead. When the refusal names no
 /// node (a global table, or the request itself failed), the take-back covers
-/// the whole batch and its INSERTs re-queue instead of dying with it.
+/// the whole batch and its INSERTs re-queue instead of dying with it, all
+/// but the refused one, which keeps its local row.
 /// Newer queued writes to the refused node ride outbox rows past the
 /// snapshot; the take-back already reverted their effects locally, so they
 /// drop with the batch. After the commit, the operator notice (stderr plus a
@@ -1013,17 +1014,19 @@ fn repair(
         ))
         .map_err(|e| e.to_string())?;
     // An unnamed refusal takes the whole batch back, so its INSERTs would
-    // die with it; they re-queue instead, since the primary either takes
-    // them (no row there) or refuses them again as a recorded clash.
+    // die with it; they re-queue instead. The insert the primary refused
+    // stays out: resent, it refuses again, and every later batch with it.
     let requeued: Vec<&Change> = changes
         .iter()
-        .filter(|c| {
+        .enumerate()
+        .filter(|&(i, c)| {
             if refused_ids.is_empty() {
-                c.op == Op::Insert
+                c.op == Op::Insert && Some(i) != refused
             } else {
                 !taken_back(c)
             }
         })
+        .map(|(_, c)| c)
         .collect();
     for change in &requeued {
         transaction
