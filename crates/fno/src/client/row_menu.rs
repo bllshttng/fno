@@ -1516,9 +1516,8 @@ pub(super) async fn row_menu_mouse(
     Ok(())
 }
 
-/// What a navigator row's menu acts on, pinned by identity (never a layout
-/// index), so the menu re-resolves against the live layout when it opens.
-/// A plain pane has no menu: nothing in the row menu applies to a bare shell.
+/// What a navigator row's menu acts on, pinned by identity and re-resolved
+/// when it opens. A plain pane has none: no menu entry applies to a bare shell.
 pub(super) enum NavMenu {
     Agent(AgentIdent),
     Tab(TabId),
@@ -1645,10 +1644,9 @@ impl View {
         }
     }
 
-    /// Open the menu of the navigator's highlighted row through the SAME
-    /// builders the sideline uses, resolved against the live layout. A row
-    /// with no menu (a plain pane) or a target that vanished says so and
-    /// opens nothing; the navigator stays up underneath either way.
+    /// Open the navigator's highlighted row menu through the sideline's own
+    /// builders. A row with no menu or a vanished target says so and opens
+    /// nothing; the navigator stays up.
     pub(super) fn nav_open_menu(&mut self) -> bool {
         let Some(row) = self
             .nav
