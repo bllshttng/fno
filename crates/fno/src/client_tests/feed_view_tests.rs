@@ -343,7 +343,11 @@ fn hit_rows() {
         ),
         "the ghost session's link takes the adopt door: {actions:?}"
     );
-    assert_eq!(actions.len(), 3, "node, session-id and pane are actions");
+    let acting = actions
+        .iter()
+        .filter(|a| !matches!(a, feed_detail::FeedAction::Field))
+        .count();
+    assert_eq!(acting, 3, "node, session-id and pane are actions");
 
     let item = feed_item(Some("x-nope"), None);
     let (_, actions, _) = feed_detail::build(&[], 0, &item);

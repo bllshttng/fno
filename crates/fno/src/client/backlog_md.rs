@@ -2,7 +2,7 @@
 //! dependency: one markdown doc in, styled `BLine`s out.
 
 use super::backlog_style::BLine;
-use super::node_detail::wrap_line;
+use super::node_detail::wrap_line_joined;
 
 pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
     let mut out: Vec<BLine> = Vec::new();
@@ -76,16 +76,17 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
             let mark: String = rest.chars().take(mark_len).collect();
             let body_text = inline(&rest[mark_len..]);
             let wrap_w = w.saturating_sub(indent + 2).max(8);
-            let mut wrapped: Vec<String> = Vec::new();
-            wrap_line(&body_text, wrap_w, &mut wrapped);
+            let wrapped = wrap_line_joined(&body_text, wrap_w);
             let marker = if bullet { "\u{2022}" } else { mark.trim_end() };
-            for (li, l) in wrapped.into_iter().enumerate() {
+            for (li, (l, join)) in wrapped.into_iter().enumerate() {
                 let padded = if li == 0 {
                     format!("{marker} {l}")
                 } else {
                     format!("{}{}", " ".repeat(indent + 2), l)
                 };
-                out.push(BLine::plain(format!("{}{}", " ".repeat(indent), padded)));
+                let mut item = BLine::plain(format!("{}{}", " ".repeat(indent), padded));
+                item.join = join;
+                out.push(item);
             }
             continue;
         }
@@ -113,10 +114,10 @@ fn flush(para: &mut Vec<&str>, out: &mut Vec<BLine>, w: usize) {
 
 /// Wrap one inline-stripped paragraph at `w` and push the plain lines.
 fn flush_body(owned: &str, out: &mut Vec<BLine>, w: usize) {
-    let mut wrapped: Vec<String> = Vec::new();
-    wrap_line(owned, w, &mut wrapped);
-    for l in wrapped {
-        out.push(BLine::plain(l));
+    for (l, join) in wrap_line_joined(owned, w) {
+        let mut line = BLine::plain(l);
+        line.join = join;
+        out.push(line);
     }
 }
 

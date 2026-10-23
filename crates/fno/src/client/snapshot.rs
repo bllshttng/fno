@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|connections]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -95,6 +95,12 @@ pub enum ViewKind {
     /// The prefix+f navigator with the sideline's row menu (Ctrl-o) open on
     /// the first agent row.
     NavigatorMenu,
+    /// The event provenance modal on the first feed row that is not a
+    /// question, with a mouse selection dragged across its longest line.
+    FeedDetail,
+    /// The question page on the first open question, with a mouse selection
+    /// dragged across its longest line.
+    QuestionDetail,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
     Connections,
@@ -118,6 +124,16 @@ fn open_navigator(view: &mut View, query: String) -> Result<(), String> {
     view.nav = Some(nav);
     view.nav_esc.clear();
     Ok(())
+}
+
+/// Select the longest line of the open modal's body, the way a drag does:
+/// compose once so the frame is recorded, then select. The caller's compose
+/// paints the selection.
+fn select_modal_line(view: &mut View) -> Result<(), String> {
+    let _ = view.compose();
+    crate::modal_select::select_longest_line()
+        .map(|_| ())
+        .ok_or_else(|| "the modal painted no body text to select".to_string())
 }
 
 fn parse_view(v: &str) -> Option<ViewKind> {
@@ -147,6 +163,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-pr" => Some(ViewKind::NavigatorPr),
         "navigator-model" => Some(ViewKind::NavigatorModel),
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
+        "feed-detail" => Some(ViewKind::FeedDetail),
+        "question-detail" => Some(ViewKind::QuestionDetail),
         "connections" => Some(ViewKind::Connections),
         _ => None,
     }
@@ -224,7 +242,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -631,7 +649,7 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 _ => {}
             }
         }
-        Some(ViewKind::Feed) => {
+        Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => {
             // The `e` key's state flip plus the fold the live panel's run
             // loop kicks, run inline: one Head page lands, newest first.
             view.feed = Some(super::feed_view::open_overlay(None, 0));
@@ -651,6 +669,30 @@ shoot a root seeded with questions, mail or backlog activity \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
                     .into());
             }
+            if let Some(ViewKind::FeedDetail) = kind {
+                // A question row opens the question page, so the provenance
+                // modal opens on the first row that is not one.
+                let item = view
+                    .feed
+                    .as_ref()
+                    .and_then(|f| f.win.items.iter().find(|i| i.kind != "question_asked"))
+                    .cloned()
+                    .ok_or("feed-detail: the feed holds only question rows to open")?;
+                view.feed_detail = Some(super::feed_detail::modal(&view, item));
+                select_modal_line(&mut view)?;
+            }
+        }
+        Some(ViewKind::QuestionDetail) => {
+            // The same gather the bell shots run, then the page the bell
+            // opens on a row.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            let id = super::bell::first_question_id(&view).ok_or(
+                "question-detail: no open question to show; shoot a root seeded with \
+questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
+            )?;
+            view.open_detail_on(&id);
+            select_modal_line(&mut view)?;
         }
         Some(ViewKind::RowMenu) => {
             let i = view
@@ -1011,6 +1053,8 @@ mod tests {
             ("navigator-pr", ViewKind::NavigatorPr),
             ("navigator-model", ViewKind::NavigatorModel),
             ("navigator-menu", ViewKind::NavigatorMenu),
+            ("feed-detail", ViewKind::FeedDetail),
+            ("question-detail", ViewKind::QuestionDetail),
             ("connections", ViewKind::Connections),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
@@ -1026,7 +1070,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
             ),
             "{e}"
         );

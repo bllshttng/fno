@@ -4,7 +4,7 @@
 //! attributes and palette-following slots (never hard colors, never
 //! INVERSE) and every backlog surface inherits it.
 
-use super::super::chrome;
+use super::super::chrome::{self, Join};
 use super::super::theme::{band_style, cell_style, Role, Theme};
 use crate::proto::{cell_flags, Cell};
 
@@ -38,6 +38,8 @@ pub(crate) struct BLine {
     /// The role for chars past the role walk (whole-line constructors).
     pub(crate) default_role: BRole,
     pub(crate) band: bool,
+    /// How this line follows the one above; a wrapped line joins back on copy.
+    pub(crate) join: Join,
 }
 
 /// Helper: append one segment's chars.
@@ -58,7 +60,7 @@ impl BLine {
         if chars.iter().map(|c| char_w(*c)).sum::<usize>() <= w {
             return vec![self];
         }
-        let piece = |from: usize, to: usize| BLine {
+        let piece = |from: usize, to: usize, join: Join| BLine {
             text: chars[from..to].iter().collect(),
             roles: self
                 .roles
@@ -67,15 +69,23 @@ impl BLine {
                 .to_vec(),
             default_role: self.default_role,
             band: self.band,
+            join,
         };
         let mut out = Vec::new();
+        let mut join = Join::Line;
         let (mut start, mut used, mut space) = (0usize, 0usize, None);
         let mut i = 0usize;
         while i < chars.len() {
             let cw = char_w(chars[i]);
             if used + cw > w && i > start {
-                let cut = space.filter(|&s| s > start).unwrap_or(i);
-                out.push(piece(start, cut));
+                let soft = space.filter(|&s| s > start);
+                let cut = soft.unwrap_or(i);
+                out.push(piece(start, cut, join));
+                join = if soft.is_some() {
+                    Join::Space
+                } else {
+                    Join::Seam
+                };
                 start = cut;
                 used = chars[start..i].iter().map(|c| char_w(*c)).sum();
                 space = None;
@@ -87,7 +97,7 @@ impl BLine {
             used += cw;
             i += 1;
         }
-        out.push(piece(start, chars.len()));
+        out.push(piece(start, chars.len(), join));
         out
     }
 
@@ -114,13 +124,16 @@ impl BLine {
             roles: self.roles.get(consumed..).unwrap_or(&[]).to_vec(),
             default_role: self.default_role,
             band,
+            join: Join::Line,
         };
-        for piece in remainder.wrap(tail_w) {
+        let first_join = pieces.get(1).map_or(Join::Space, |p| p.join);
+        for (k, piece) in remainder.wrap(tail_w).into_iter().enumerate() {
             let mut indented = BLine {
                 text: indent.to_string(),
                 roles: vec![BRole::Meta; indent.chars().count()],
                 default_role: piece.default_role,
                 band: piece.band,
+                join: if k == 0 { first_join } else { piece.join },
             };
             indented.push_line(piece);
             out.push(indented);
@@ -140,6 +153,7 @@ impl BLine {
             roles,
             default_role: BRole::Body,
             band: false,
+            join: Join::Line,
         }
     }
 
@@ -150,6 +164,7 @@ impl BLine {
             roles: Vec::new(),
             default_role: BRole::Body,
             band: false,
+            join: Join::Line,
         }
     }
 
@@ -160,6 +175,7 @@ impl BLine {
             roles: Vec::new(),
             default_role: BRole::Meta,
             band: false,
+            join: Join::Line,
         }
     }
 
@@ -170,6 +186,7 @@ impl BLine {
             roles: Vec::new(),
             default_role: BRole::Head,
             band: false,
+            join: Join::Line,
         }
     }
 
@@ -264,6 +281,7 @@ impl BLine {
             roles: self.roles.into_iter().take(keep).collect(),
             default_role: self.default_role,
             band: self.band,
+            join: self.join,
         }
     }
 }
@@ -405,6 +423,7 @@ pub(crate) fn to_body_line(line: &BLine) -> chrome::BodyLine {
     let mut body_line = chrome::BodyLine::plain(line.text.clone());
     body_line.segs = segs;
     body_line.pad_role = role_of(line.default_role);
+    body_line.join = line.join;
     body_line
 }
 

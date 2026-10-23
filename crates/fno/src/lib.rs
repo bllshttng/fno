@@ -58,6 +58,7 @@ pub mod lint_cli;
 pub mod live_store_fence;
 pub mod menu_caps;
 pub mod messages_model;
+pub mod modal_select;
 pub mod model_catalog;
 pub mod mouse;
 pub mod mux_cli;
