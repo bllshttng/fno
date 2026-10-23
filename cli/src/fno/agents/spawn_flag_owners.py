@@ -116,5 +116,6 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
 
 #: Growth ratchet, measured at the axis retirement: 33 live flags (the
 #: eleven translation axes left; --harness stays as the binary choice), plus
-#: the front door's own --floor, which the fno crate counts against this cap.
-SPAWN_FLAG_CAP = 34
+#: the front door's own --floor and --mux, which the fno crate counts against
+#: this cap. --mux raised it by one: rowless one-shots needed a watch opt-in.
+SPAWN_FLAG_CAP = 35

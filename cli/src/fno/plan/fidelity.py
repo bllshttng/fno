@@ -255,7 +255,10 @@ def _body_carveout_refusal(pr_body: str) -> Optional[str]:
 
     from fno import paths as _paths
 
-    script = _paths.resolve_plugin_script("scripts/ci/check-oos-tracked.sh")
+    rel = "scripts/ci/check-oos-tracked.sh"
+    script = _paths.resolve_plugin_script(rel)
+    if not script.is_file():
+        script = _paths.installed_plugin_script(rel) or script
     try:
         proc = subprocess.run(
             ["bash", str(script)],

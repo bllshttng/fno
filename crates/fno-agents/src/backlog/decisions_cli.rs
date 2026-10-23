@@ -1397,7 +1397,7 @@ fn write_report(report: &Value, output: &str, format: Option<&str>) -> Result<()
 }
 
 /// `json.dumps(..., sort_keys=True)` parity: recursively sorted object keys.
-fn sort_keys(value: &Value) -> Value {
+pub(crate) fn sort_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();

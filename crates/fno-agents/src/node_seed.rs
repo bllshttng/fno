@@ -304,7 +304,16 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
 
     // 1. Team and resume spawns pass unchanged: their flags already name
     //    the work profile, and the payload carries them as facts.
+    let argv: Vec<String> = payload["argv"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     if payload.get("role").and_then(Value::as_bool) == Some(true)
+        || crate::spawn_compose::argv_has_team(&argv)
         || payload.get("resume").and_then(Value::as_bool) == Some(true)
     {
         return json!({"action": "pass"});
@@ -524,7 +533,7 @@ pub fn spawn_payload_command_refusal(params: &Value, cwd: &Path) -> Option<Strin
 /// passes it without comparing the payload command. A promoted codex thread
 /// reaches the client carrying `role_level` / `role_scope`.
 fn spawn_skips_command_check(params: &Value) -> bool {
-    ["resume_id", "role_level", "role_scope"]
+    ["resume_id", "role_level", "role_scope", "promote"]
         .iter()
         .any(|key| params.get(*key).is_some())
 }
@@ -732,9 +741,9 @@ mod tests {
     #[test]
     fn team_and_resume_spawns_pass_unchanged() {
         let mut p = base().clone();
-        p["role"] = json!(true);
+        p["argv"] = json!(["spawn", "--promote", "x-1", "/fno:target x-1"]);
         assert_eq!(decide_map(p.clone())["action"], "pass");
-        p["role"] = json!(false);
+        p.as_object_mut().unwrap().remove("argv");
         p["resume"] = json!(true);
         assert_eq!(decide_map(p)["action"], "pass");
     }

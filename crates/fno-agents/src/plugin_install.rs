@@ -190,12 +190,39 @@ fn staged_marketplace_bytes(source_bytes: &str, marketplace: &str) -> Result<Str
     serde_json::to_string_pretty(&manifest).map_err(|e| format!("{marketplace}: {e}"))
 }
 
+/// Refuse a root whose `.claude-plugin/plugin.json` does not name the fno
+/// plugin. The stage replaces the live plugin tree, so a stray cwd (another
+/// repo, a sibling project) must never become the stage.
+fn require_fno_source(source_root: &Path) -> Result<(), String> {
+    let manifest = source_root.join(".claude-plugin").join("plugin.json");
+    let names_fno = std::fs::read_to_string(&manifest)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|v| v.get("name").and_then(Value::as_str) == Some("fno"));
+    if names_fno {
+        return Ok(());
+    }
+    let hint =
+        match std::fs::read_to_string(crate::state_layout::place(&state_root(), "source-path")) {
+            Ok(pin) if !pin.trim().is_empty() => format!(
+                "the fno checkout is {}: cd there and rerun, or pass --source",
+                pin.trim()
+            ),
+            _ => "cd into the fno checkout and rerun, or pass --source".to_string(),
+        };
+    Err(format!(
+        "{} is not the fno plugin source (no .claude-plugin/plugin.json naming \"fno\"); the stage is untouched; {hint}",
+        source_root.display()
+    ))
+}
+
 /// Rebuild `<stage_parent>/fno` from `source_root` (git-tracked +
 /// untracked-but-not-ignored files). Builds into a sibling temp dir and swaps
 /// by rename so live sessions execing hooks from the stage never see a
 /// half-built tree; running bash hooks keep their open inode and finish on
 /// old bytes. Returns the stage path and the file count copied.
 fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usize), String> {
+    require_fno_source(source_root)?;
     let listed = run_checked(
         &[
             "git".to_string(),
@@ -2737,6 +2764,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("hooks/live.sh"), "live\n").unwrap();
+        fs::write(dir.join(".claude-plugin/plugin.json"), r#"{"name":"fno"}"#).unwrap();
         fs::write(
             dir.join(MARKETPLACE_REL),
             r#"{"name":"footnote","plugins":[{"name":"fno","source":{"source":"github","repo":"bllshttng/fno","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
@@ -2889,6 +2917,28 @@ mod tests {
         fs::create_dir_all(&stage_parent).unwrap();
         let err = build_stage(&source, &stage_parent).unwrap_err();
         assert!(err.contains("no fno entry"), "err: {err}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A restage from a git repo that is not fno refuses and leaves the live
+    /// stage byte-for-byte untouched (fno-books once replaced the plugin).
+    #[test]
+    fn restage_from_non_fno_repo_refuses_and_keeps_stage() {
+        let base = std::env::temp_dir().join(format!("pi-notfno-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (_, stage) = fresh_stage(&base);
+        let stage_parent = stage.parent().unwrap().to_path_buf();
+        let before = fs::read(stage.join("hooks/live.sh")).unwrap();
+        let books = base.join("books");
+        fs::create_dir_all(&books).unwrap();
+        git_in(&books, &["init", "-b", "main", "-q"]);
+        fs::write(books.join("README.md"), "# Books\n").unwrap();
+        git_in(&books, &["add", "-A"]);
+        git_in(&books, &["commit", "-q", "-m", "c1"]);
+        let err = restage_stage(&books, &stage_parent).unwrap_err();
+        assert!(err.contains("not the fno plugin source"), "err: {err}");
+        assert_eq!(fs::read(stage.join("hooks/live.sh")).unwrap(), before);
+        assert!(!stage.join("README.md").exists());
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -3165,11 +3215,12 @@ mod tests {
         assert_eq!(second.check.status, "stale");
         assert!(second.blocker.is_none(), "{:?}", second.blocker);
         assert!(second.note.contains("retired cache"), "{}", second.note);
-        // The registry copy also lacks the manifest HEAD tracks.
+        // The registry copy also lacks the manifests HEAD tracks.
         assert_eq!(
             second.check.sample,
             vec![
                 ".claude-plugin/marketplace.json".to_string(),
+                ".claude-plugin/plugin.json".to_string(),
                 "hooks/live.sh".to_string()
             ]
         );

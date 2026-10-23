@@ -59,6 +59,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_WORKER_BIN` | py+rs | unclear: cli/src/fno/agents/dispatch.py:888 |
 | `FNO_AGENT_HARNESS` | py | unclear: cli/src/fno/harness_identity.py:77 |
 | `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
+| `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
 | `FNO_AGENT_ROW_PENDING` | py | unclear: cli/src/fno/agents/register_session.py:200 |
 | `FNO_AGENT_SELF` | py+rs | unclear: cli/src/fno/agent/cli.py:363 |
 | `FNO_AGENT_SESSION` | py | unclear: cli/src/fno/agents/context.py:237 |
@@ -240,6 +241,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SPAWN_GATE` | py+rs | unclear: cli/src/fno/agents/spawn_gate.py:1554 |
 | `FNO_SPAWN_ORIGIN` | py+rs | Explicit dispatch-origin JSON the spawn door validates onto the request; malformed refuses. |
 | `FNO_SPAWN_OWNER` | py+rs | Explicit dispatch-owner JSON the spawn door validates onto the request; must be exported together with FNO_SPAWN_ORIGIN. |
+| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agents spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. Never passed on to the child. |
 | `FNO_SPAWN_TAKE_OVER` | rs | Refusal marker only: nothing sets it, so a read means a forgery or a stale leak, and the compose door refuses the spawn. The take-over reason rides the compose answer, never the environment. |
 | `FNO_SPAWN_TRIGGER` | py+rs | unclear: cli/src/fno/agents/dispatch.py:860 |
 | `FNO_STATE_DIR` | py+rs | Pins fno's config state root: `state_dir` and `locks_dir` read it ahead of their config/`$HOME` defaults, and the Rust default graph path and the backlog porcelain reads serve from it ahead of config. `seal_state_root` sets it around a forwarded HOME so a spawned worker's graph, ledger, and locks stay on the parent's root. |

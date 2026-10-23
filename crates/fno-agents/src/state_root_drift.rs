@@ -151,7 +151,13 @@ pub struct DriftReport {
 /// unreadable doc or root makes the caller print a failed reading.
 pub fn drift_report(state_root: &Path) -> Result<DriftReport, String> {
     let doc = doc_path(state_root).ok_or_else(|| {
-        "inventory doc unreadable: no docs/state-root-inventory.md upward from the cwd or beside the state root".to_string()
+        format!(
+            "inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor {} is a file; run `fno doctor update` to restage the plugin",
+            state_root
+                .join("plugin-stage/fno")
+                .join("docs/state-root-inventory.md")
+                .display()
+        )
     })?;
     let text = std::fs::read_to_string(&doc).map_err(|e| format!("read {}: {e}", doc.display()))?;
     let patterns = top_level_patterns(&text);

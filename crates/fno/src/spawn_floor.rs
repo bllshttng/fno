@@ -18,10 +18,15 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::digest_overlay::{config_roots, config_str, non_empty_env_os, read_nested_file};
 
-/// The flags this front door owns. `fno agents spawn --floor N` is peeled
-/// here, before any forwarding, so the Python Typer command never declares
-/// it and `lint_cli`'s Python-only count never sees it.
-pub const FRONT_DOOR_SPAWN_FLAGS: &[&str] = &["--floor"];
+/// The flags this front door owns. `fno agents spawn --floor N` and `--mux`
+/// are peeled here, before any forwarding, so the Python Typer command never
+/// declares them and `lint_cli`'s Python-only count never sees them.
+pub const FRONT_DOOR_SPAWN_FLAGS: &[&str] = &["--floor", "--mux"];
+
+/// The env `--mux` sets for the forwarded spawn. The headless claude lane
+/// (`fno_agents::claude_ask::SHOW_ROW_ENV`, same spelling) then keeps the
+/// run's registry row, so the one-shot shows in the mux while it runs.
+pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
 
 /// The default the receipt prints when the config carries no floor yet.
 /// Pinned equal to the gate's own default by the cap test below, so the
@@ -56,6 +61,8 @@ impl std::fmt::Display for FloorError {
 #[derive(Debug)]
 pub struct Peeled {
     pub floor: Option<u32>,
+    /// `--mux` appeared before the fence.
+    pub mux: bool,
     /// The argv with the flag and its value removed. A `--floor` after the
     /// `--` fence stays: past the fence the flags are the harness's.
     pub rest: Vec<String>,
@@ -66,12 +73,15 @@ pub struct Peeled {
 /// Take `--floor N` (or `--floor=N`) off an argv that starts `agents spawn`.
 /// Scans the tokens after `spawn` up to the first `--` fence. Refusals: a
 /// missing value, a value that is not a whole number of 1 or more, and the
-/// flag given twice.
+/// flag given twice. `--mux` refuses without a one-shot (`--once` or the
+/// headless lane): only a one-shot loses its row, so on any other spawn the
+/// flag would do nothing.
 pub fn peel(args: &[String]) -> Result<Peeled, String> {
     if args.len() < 2 || args[0] != "agents" || args[1] != "spawn" {
         return Err("expected an `agents spawn` argv".into());
     }
     let mut floor: Option<u32> = None;
+    let mut mux = false;
     let mut help = false;
     let mut rest: Vec<String> = args[..2].to_vec();
     let mut i = 2;
@@ -87,11 +97,16 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
             i += 1;
             continue;
         }
+        if tok == "--mux" {
+            mux = true;
+            i += 1;
+            continue;
+        }
         let (flag, inline_value) = match tok.strip_prefix("--floor=") {
             Some(v) => (tok, Some(v.to_string())),
             None if tok == "--floor" => match args.get(i + 1) {
                 Some(v) => (tok, Some(v.clone())),
-                None => return Err("needs a whole number of 1 or more".into()),
+                None => return Err("--floor needs a whole number of 1 or more".into()),
             },
             None => {
                 rest.push(tok.to_string());
@@ -106,11 +121,37 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
         let parsed = raw.parse::<u32>().ok().filter(|v| *v >= 1);
         match parsed {
             Some(v) => floor = Some(v),
-            None => return Err(format!("{raw} is not a whole number of 1 or more")),
+            None => return Err(format!("--floor {raw} is not a whole number of 1 or more")),
         }
         i += if tok == "--floor" { 2 } else { 1 };
     }
-    Ok(Peeled { floor, rest, help })
+    if mux && !help && !one_shot(&rest) {
+        return Err(
+            "--mux shows a headless one-shot while it runs; add --once (or --as headless)".into(),
+        );
+    }
+    Ok(Peeled {
+        floor,
+        mux,
+        rest,
+        help,
+    })
+}
+
+/// True when the forwarded argv asks for a headless one-shot, before the fence.
+fn one_shot(rest: &[String]) -> bool {
+    let flags: Vec<&str> = rest
+        .iter()
+        .map(String::as_str)
+        .take_while(|t| *t != "--")
+        .collect();
+    flags.iter().any(|t| matches!(*t, "--once" | "-o"))
+        || flags
+            .windows(2)
+            .any(|w| matches!(w[0], "--as" | "--substrate") && w[1] == "headless")
+        || flags
+            .iter()
+            .any(|t| matches!(*t, "--as=headless" | "--substrate=headless"))
 }
 
 /// The receipt the setter prints: the old value, the new one, the file it
@@ -470,9 +511,20 @@ mod tests {
         let p = peel_of(&["agents", "spawn", "--floor", "8", "w1", "build", "it"]).unwrap();
         assert_eq!(p.rest, vec!["agents", "spawn", "w1", "build", "it"]);
         // Past the fence the flag is the harness's: untouched, no floor.
-        let p = peel_of(&["agents", "spawn", "--", "--floor", "3"]).unwrap();
+        let p = peel_of(&["agents", "spawn", "--", "--floor", "3", "--mux"]).unwrap();
         assert_eq!(p.floor, None);
-        assert_eq!(p.rest, vec!["agents", "spawn", "--", "--floor", "3"]);
+        assert!(!p.mux);
+        assert_eq!(
+            p.rest,
+            vec!["agents", "spawn", "--", "--floor", "3", "--mux"]
+        );
+        let p = peel_of(&["agents", "spawn", "--mux", "w1", "--once", "go"]).unwrap();
+        assert!(p.mux && p.floor.is_none());
+        assert_eq!(p.rest, vec!["agents", "spawn", "w1", "--once", "go"]);
+        assert!(peel_of(&["agents", "spawn", "--mux", "--as", "headless", "w1"]).is_ok());
+        // Only a one-shot loses its row, so --mux elsewhere refuses.
+        let err = peel_of(&["agents", "spawn", "--mux", "w1", "go"]).expect_err("no one-shot");
+        assert!(err.contains("add --once"), "{err}");
         // Help is recognized with and without a floor, and stays in rest.
         let p = peel_of(&["agents", "spawn", "--help"]).unwrap();
         assert!(p.help && p.floor.is_none());
