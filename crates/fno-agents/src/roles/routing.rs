@@ -126,7 +126,9 @@ pub(crate) fn manifest_routing(role_id: &str, records: &[Discovered]) -> Result<
                 .unwrap_or_else(|| fallback.to_string()),
         )
     };
-    let at = |record: &Discovered| Some((record.layer, record.source_id.as_str()));
+    fn at(record: &Discovered) -> Option<(RoleLayer, &str)> {
+        Some((record.layer, record.source_id.as_str()))
+    }
     if let Some(unchecked) = records
         .iter()
         .find(|r| r.role.is_none() && r.status != "valid")
