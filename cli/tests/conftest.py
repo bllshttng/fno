@@ -277,16 +277,16 @@ def _business_role_door_without_build(monkeypatch: pytest.MonkeyPatch) -> None:
         return
     from fno import rust_binary
 
-    real = rust_binary.verb_call
+    real = rust_binary.command_call
 
-    def answer(verb, payload, *args, **kwargs):
+    def answer(command, payload, *args, **kwargs):
         if payload.get("kind") != "business-role" or os.environ.get("FNO_ROLES_ROOT"):
-            return real(verb, payload, *args, **kwargs)
+            return real(command, payload, *args, **kwargs)
         role = payload["role"]
         return {"role": {"id": role, "function_id": "unavailable"}, "reason": "not_found",
                 "source_layer": None, "source_id": None, "reference": role, "detail": None}
 
-    monkeypatch.setattr(rust_binary, "verb_call", answer)
+    monkeypatch.setattr(rust_binary, "command_call", answer)
 
 
 @pytest.hookimpl(tryfirst=True)

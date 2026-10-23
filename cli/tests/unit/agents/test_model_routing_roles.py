@@ -73,15 +73,15 @@ def _resolved(*, provider: str | None = None, model: str | None = None) -> dict:
 def _answer_business_role(monkeypatch: pytest.MonkeyPatch, answer: dict) -> list[str]:
     """Answer the business-role door with ``answer``; return the roles asked."""
     asked: list[str] = []
-    real = rust_binary.verb_call
+    real = rust_binary.command_call
 
-    def door(verb, payload, *args, **kwargs):
+    def door(command, payload, *args, **kwargs):
         if payload.get("kind") != "business-role":
-            return real(verb, payload, *args, **kwargs)
+            return real(command, payload, *args, **kwargs)
         asked.append(payload["role"])
         return answer
 
-    monkeypatch.setattr(rust_binary, "verb_call", door)
+    monkeypatch.setattr(rust_binary, "command_call", door)
     return asked
 
 

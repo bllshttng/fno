@@ -1373,7 +1373,7 @@ def _resolve_business_role(role: str) -> Optional[dict]:
     from fno import rust_binary
     from fno.roles import RoleResolutionBlocked
 
-    answer = rust_binary.verb_call("spawn-overlay", {"kind": "business-role", "role": role})
+    answer = rust_binary.command_call("spawn-overlay", {"kind": "business-role", "role": role})
     if "reason" not in answer:
         return answer
     if answer["reason"] == "not_found":
