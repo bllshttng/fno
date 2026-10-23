@@ -3063,11 +3063,12 @@ mod tests {
         assert_eq!(second.check.status, "stale");
         assert!(second.blocker.is_none(), "{:?}", second.blocker);
         assert!(second.note.contains("retired cache"), "{}", second.note);
-        // The registry copy also lacks the manifest HEAD tracks.
+        // The registry copy also lacks the manifests HEAD tracks.
         assert_eq!(
             second.check.sample,
             vec![
                 ".claude-plugin/marketplace.json".to_string(),
+                ".claude-plugin/plugin.json".to_string(),
                 "hooks/live.sh".to_string()
             ]
         );
