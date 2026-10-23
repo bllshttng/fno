@@ -71,6 +71,54 @@ gates:
 
 event_types:
 
+  - name: native_bg_mint_failed
+    description: "The native-bg roster adopt's registry write failed; a `claude --bg` row did not mint this beat. The write closure re-decides absence, so the next beat retries; this names a failed birth, never a silent zero."
+    sources: [daemon]
+    data:
+      required: [error]
+      properties:
+        error: { type: string, description: "The registry write failure" }
+    consumers: [operator]
+
+  - name: native_bg_node_backfilled
+    description: "A native-bg registry row born before its transcript existed gained its node on a later beat. One row per fill."
+    sources: [daemon]
+    data:
+      required: [name, node]
+      properties:
+        name: { type: string, description: "The registry row's name" }
+        node: { type: string, description: "The node id read from the launch prompt" }
+    consumers: [operator]
+
+  - name: native_bg_parent_backfilled
+    description: "A claude registry row born with no parent gained its spawner from the launch record its child claimed: a native-bg adopted row, or a row the mail-hold register minted first with no origin. One row per fill."
+    sources: [daemon]
+    data:
+      required: [name, spawned_by_session]
+      properties:
+        name: { type: string, description: "The registry row's name" }
+        spawned_by_session: { type: string, description: "The launcher session the claimed record names" }
+    consumers: [operator]
+
+  - name: native_bg_renamed
+    description: "A claude registry row still named by its short id took a real name: the launch record's, the agents.naming.worker name of its node, or the claude agents listing's. The old name stays in aliases. One row per rename."
+    sources: [daemon]
+    data:
+      required: [name, from]
+      properties:
+        name: { type: string, description: "The row's new name" }
+        from: { type: string, description: "The short-id name it replaced" }
+    consumers: [operator]
+
+  - name: native_bg_mint_deferred
+    description: "The native-bg roster adopt hit its per-beat budget; the remaining candidates wait for later beats."
+    sources: [daemon]
+    data:
+      required: [budget]
+      properties:
+        budget: { type: integer, description: "The per-beat cap on mint and backfill candidates" }
+    consumers: [operator]
+
   - name: version_skew
     description: "A spawn gate refused because the registry writer floor is newer than this reader."
     sources: [rust]
@@ -3093,6 +3141,39 @@ event_types:
         pid:
           type: integer
 
+  - name: test_run
+    retention: durable
+    description: >
+      One local test run through `fno doctor test`. A started row lands at
+      spawn and a finished row at exit, joined by run_id. A started row with
+      no finished row names a killed runner. A refused run writes nothing.
+    sources: [daemon]
+    data:
+      required: [run_id, stage]
+      properties:
+        run_id:
+          type: string
+        stage:
+          type: string
+          enum: [started, finished]
+        command:
+          type: string
+        command_key:
+          type: string
+        pid:
+          type: integer
+        node_id:
+          type: string
+        session_id:
+          type: string
+        worktree:
+          type: string
+        exit_code:
+          type: integer
+        duration_ms:
+          type: integer
+    consumers: [fno-agents test-run stats]
+
   - name: orphan_test_binary_reaped
     description: "An orphaned cargo deps/ test binary (parentless or holding 20+ zombie children, CACHEDIR.TAG-confirmed) was SIGKILLed by the daemon's 300s reap sweep, past the config.test.orphan_min_elapsed_seconds age guard. The payload is the reap row: pid, command, zombie count, elapsed_seconds."
     sources: [daemon]
@@ -3205,6 +3286,36 @@ event_types:
         successor_name:
           type: string
         predecessor_name:
+          type: string
+        succession_id:
+          type: string
+  - name: team_succession_taken_over
+    description: "The take-over step's journal: a superior lead moved a contained sub-team from its live holder to a spawned colleague, with the reason and the predecessors' row fields at the moment of the move. The registry commit stays the authority; the mail never undoes it."
+    sources: [agents, daemon]
+    data:
+      required: [scope, by, reason, predecessors, successor]
+      properties:
+        scope:
+          type: string
+        by:
+          type: string
+        reason:
+          type: string
+        predecessors:
+          type: array
+        successor:
+          type: string
+        succession_id:
+          type: string
+  - name: team_succession_take_over_mail_failed
+    description: "The take-over step could not append the old lead's envelope: one stderr line carries the error and the transfer stands."
+    sources: [agents, daemon]
+    data:
+      required: [scope, to]
+      properties:
+        scope:
+          type: string
+        to:
           type: string
         succession_id:
           type: string
@@ -3976,7 +4087,7 @@ event_types:
       properties:
         arm:
           type: string
-          description: "Stable arm name: lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire."
+          description: "Stable arm name: lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire, pane_loop."
         scheduler:
           type: string
           description: "What schedules the arm: daemon, launchd:<label>, hook:<name>, or session (an in-process caller)."
@@ -3992,6 +4103,24 @@ event_types:
         interval_s:
           type: integer
           description: "The cadence this arm runs on, in seconds; the readout reads stale past twice this. 0 marks an event-driven arm (stop_hook): staleness does not apply."
+    consumers: [operator]
+
+  - name: pane_loop_tick
+    retention: telemetry
+    description: "One due pane-loop schedule processed: the daemon typed the armed prompt into the row's pane (delivered), or names the one-token reason it did not: a working or asking pane, a row with no pane, a schedule past expiry, a gone or terminal row, or a refused delivery. The arm's own pass receipt stays on control_plane_tick."
+    sources: [daemon, loop]
+    data:
+      required: [session, outcome, every_s]
+      properties:
+        session:
+          type: string
+          description: "The schedule's session id: the row's harness session id the mail pane lane addresses."
+        outcome:
+          type: string
+          description: "delivered, busy, no-pane, expired, row-gone, corrupt, unreadable, or the deliver refusal token such as no-confirm-source or io-error."
+        every_s:
+          type: integer
+          description: "The schedule's interval in seconds, so a reader judges tick cadence without opening the store."
     consumers: [operator]
 
   - name: machine_sample
@@ -4476,7 +4605,7 @@ event_types:
 
   - name: attention_answer
     retention: durable
-    description: "One durable answer row from an attention sink: the projection the daemon arm delivers (a question or pin the user answered away from a terminal, through the configured questions file, or later a sink adapter) recorded before the clear runs, so the answer survives a slow or refused clear. The row lands in questions.jsonl (the feed's question store), first answer wins, a later one records superseded and changes nothing. The `fno inbox outstanding clear` it precedes records the actual decision; this row is the provenance receipt naming the sink and the answer lane. Written by the attention daemon arm; never written by Python."
+    description: "One durable answer row from an attention sink: the projection the daemon arm delivers (a question or pin the user answered away from a terminal, through the configured questions file, or later a sink adapter) recorded before the clear runs, so the answer survives a slow or refused clear. The row commits to the store beside the questions journal (the feed's question store), first answer wins, a later one records superseded and changes nothing. The `fno inbox outstanding clear` it precedes records the actual decision; this row is the provenance receipt naming the sink and the answer lane. Written by the attention daemon arm; never written by Python."
     sources: [daemon, test]
     data:
       required: [item_id, sink, authority]
@@ -4987,6 +5116,21 @@ event_types:
         panes:
           type: integer
           description: "How many panes the server held at exit."
+    consumers: [operator]
+
+  - name: mux_session_healed
+    retention: durable
+    description: "A mux reader (ls, the picker, doctor, the workspace sweep) found a dead server's leftover session files and removed them: every connect was refused, no starter held the startup marker, and the pid sidecar named no live process. One row per healed session, so a SIGKILLed server's cleanup is visible without a user step."
+    sources: [daemon]
+    data:
+      required: [mux_session, path]
+      properties:
+        mux_session:
+          type: string
+          description: "The dead session's name."
+        path:
+          type: string
+          description: "The socket path that was removed with its sidecars."
     consumers: [operator]
 
   - name: portal_opened
@@ -5628,9 +5772,9 @@ event_types:
         territory:
           type: string
           description: "The territory key the verdict door attributed this dispatch to (a role scope, or loose:<project>); null when nothing could read the attribution."
-        kingless:
+        leadless:
           type: boolean
-          description: "False on a titled territory, true on a kingless one, null when the attribution was unreadable (territory_unknown or a read failure) - an absence is never read as a boolean. The record, not the veto: a kingless territory still drains."
+          description: "False on a territory a live lead holds, true on a leadless one, null when the attribution was unreadable (territory_unknown or a read failure) - an absence is never read as a boolean. The record, not the veto: a leadless territory still drains. Rows written before the 2026-10 rename key this value as kingless; readers accept that stored spelling as an alias."
     consumers: [operator]
 
   - name: advance_dispatched
@@ -8168,6 +8312,18 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: mail_hold_stamped
+    description: "A writer stamped a session's registry row bus-only (DND). The row names the writer, this process's argv and its parent's command line, so a stamp nobody armed traces to its caller."
+    sources: [daemon, rust]
+    data:
+      required: [session_id, writer]
+      properties:
+        session_id: { type: string }
+        writer: { type: string, enum: [conversation_arm, hold_verb, register_command] }
+        pid: { type: integer }
+        ppid: { type: integer }
+        argv: { type: array }
+        parent: { type: string }
   - name: session_registered
     description: "A session registered with the agents family."
     sources: [daemon, agents]
@@ -8459,6 +8615,16 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: spawn_defaults_applied
+    description: "Spawn compose: the defaults one spawn resolved, by axis and rung, with the config fingerprint."
+    sources: [agents]
+    data:
+      required: [name, fingerprint]
+  - name: legacy_journal_retired
+    description: "The migrate pass imported the retired root journal family and parked it; repeat marks a writer's reappearance."
+    sources: [daemon]
+    data:
+      required: [journal, bytes, ingested, parked_to]
   - name: spawn_first_turn
     description: "The first-turn watch saw a launched worker's first assistant line: latency_ms from the spawn call, row_ms to its registry row, with harness, substrate and machine."
     sources: [daemon]
@@ -8694,6 +8860,35 @@ event_types:
           type: string
         code:
           type: string
+  - name: autocorrect_review_run
+    description: "One autocorrect review run reached its exit: outcome, packet source, patch count and refusal reason. The receipt the scheduled job leaves in the event journal, so a refusal is visible beside every other run instead of only in a log file. One row per run, written by scripts/autocorrect-review.sh; a run that finds nothing writes a row with outcome ok and patch_count 0."
+    sources: [bash]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [ok, refused, failed]
+          description: "ok = patch list written; refused = validation refusal (missing key, missing rule text, malformed packet); failed = API failure."
+        exit_code:
+          type: integer
+          description: "The review script's exit status (0, 1 or 2)."
+        packet_source:
+          type: string
+          description: "The --packet-source label the caller passed (weekly-cron, manual, ...)."
+        input_count:
+          type: integer
+          description: "Correction events the packet carries; absent when the run refused before reading the packet."
+        patch_count:
+          type: integer
+          description: "Patches the review proposed; present when outcome is ok."
+        output_path:
+          type: string
+          description: "Proposed-patches file the run wrote; present when outcome is ok."
+        reason:
+          type: string
+          description: "Refusal or failure reason, one line; present when outcome is not ok."
+    consumers: [operator]
 # Size cap per Failure Modes (Boundaries): the system rejects events whose
 # data payload exceeds 64KB. Validators enforce this at validate() time.
 limits:

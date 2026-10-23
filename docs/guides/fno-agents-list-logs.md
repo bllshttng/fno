@@ -1,17 +1,17 @@
-# Listing and tailing agents — `fno agents list` / `fno agents logs`
+# Listing and tailing agents — `fno agents session list` / `fno agents session logs`
 
-Two read verbs in the `fno agents` subsystem. Use them when you want to:
+Two read commands in the `fno agents` subsystem. Use them when you want to:
 
 - see your whole fleet at once (what's running, what's orphaned, what claude is doing right now)
 - attach to an agent's output without dropping into a TUI
 - script a polling loop that watches for stuck or idle agents
 
-These verbs are pure reads — they never modify the registry. Status mutations belong to `fno agents ask` and the `stop` / `rm` / `reconcile` verbs.
+These commands are pure reads — they never modify the registry. Status mutations belong to `fno agents mail ask` and the `stop` / `rm` / `reconcile` commands.
 
-## `fno agents list` — the fleet roster
+## `fno agents session list` — the fleet roster
 
 ```bash
-fno agents list
+fno agents session list
 ```
 
 A typical human-table view:
@@ -38,17 +38,17 @@ Columns:
 | LAST MESSAGE | Flattened text of the worker's last transcript turn (`[tool_use: name]` markers inline), capped for display; `-` when the probe did not answer. |
 | STATUS | The served activity word: `writing`, `quiet`, `parked`, `refused`, `orphaned`, or `unknown`. |
 
-`--json` keeps every field the table drops, such as `cwd`, `pid`, `address` and `last_reconciled_at`. `fno agents list` needs the `fno-agents` binary. There is no Python list lane, so `FNO_AGENTS_RUNTIME=python` refuses the verb with exit 127.
+`--json` keeps every field the table drops, such as `cwd`, `pid`, `address` and `last_reconciled_at`. `fno agents session list` needs the `fno-agents` binary. There is no Python list lane, so `FNO_AGENTS_RUNTIME=python` refuses the command with exit 127.
 
 The emitter refuses self-contradictory stored fields. If a terminal `status` is behind a fresher transcript event, it becomes `unknown` with `basis: stale-verdict-fresher-event`. If `last_message_at` is newer than `last_event_at`, it becomes `null` with `last_message_at_basis: refused-newer-than-transcript`. When process-start evidence is unavailable, `liveness_origin` is `null` and `liveness_origin_basis` names which of five causes produced it: `pid-absent`, `created-at-absent`, `created-at-unreadable`, `pid-start-absent`, or `pid-start-unreadable`. Otherwise the origin is `resumed` or `survivor` and the basis is `null`, because the value is its own evidence.
 
 ### Filters
 
 ```bash
-fno agents list --harness claude               # claude agents only
-fno agents list --status orphaned              # only stale entries
-fno agents list --cwd ~/code/proj              # only agents created in this repo
-fno agents list --harness claude --status writing --cwd ~/code/proj
+fno agents session list --harness claude               # claude agents only
+fno agents session list --status orphaned              # only stale entries
+fno agents session list --cwd ~/code/proj              # only agents created in this repo
+fno agents session list --harness claude --status writing --cwd ~/code/proj
 ```
 
 `--cwd` resolves relative paths to absolute before comparing, so `./.` works.
@@ -56,7 +56,7 @@ fno agents list --harness claude --status writing --cwd ~/code/proj
 ### JSON output
 
 ```bash
-fno agents list --json
+fno agents session list --json
 ```
 
 Returns a canonical object suitable for scripts:
@@ -107,7 +107,7 @@ Returns a canonical object suitable for scripts:
 }
 ```
 
-The row's key set is pinned by [`schemas/agents-list-row.json`](../../schemas/agents-list-row.json), which both serializers are tested against; edit that file first when adding a key. Every entry carries the same keys regardless of harness, so a consumer never branches on harness to find a field. JSON is the default whenever stdout is a pipe, so `fno agents list | jq .` Just Works without an explicit `--json`.
+The row's key set is pinned by [`schemas/agents-list-row.json`](../../schemas/agents-list-row.json), which both serializers are tested against; edit that file first when adding a key. Every entry carries the same keys regardless of harness, so a consumer never branches on harness to find a field. JSON is the default whenever stdout is a pipe, so `fno agents session list | jq .` Just Works without an explicit `--json`.
 
 `harness` names the CLI, not the model vendor. `provider` beside it is the model vendor the row was spawned with, stamped at spawn and never inferred from `harness`. An old alias once duplicated the harness value here, so a z.ai-routed worker reported `provider: claude` and that falsely looked like an Anthropic fallback. The alias was removed for that lie, and the removal then hid the real vendor axis, which the split had just created. `provider` is back with its true meaning. `model` is projected with `model_basis` beside it, because an omitted field read as unset. The basis says whether the stored value is a request or a verified reading. `observed_model` stays the transcript truth, and every renderer puts it ahead of the stored value. `harness_session_id` is the worker's own session id in its harness's store.
 
@@ -125,10 +125,10 @@ The value is a discriminated object, and the five kinds never collapse into one 
 | `unreadable` | The file exists and could not be parsed. Carries `reason`; the row still renders. |
 
 ```bash
-fno agents list --json | jq -r '.agents[] | "\(.name)\t\(.harness)\t\(.observed_model.model // .observed_model.kind)"'
+fno agents session list --json | jq -r '.agents[] | "\(.name)\t\(.harness)\t\(.observed_model.model // .observed_model.kind)"'
 ```
 
-`address` is the one field in the row you can send mail to: the first eight of the session id, the same string `fno agents mail drain-self` computes for itself.
+`address` is the one field in the row you can send mail to: the first eight of the session id, the same string `fno agents mail admin drain-self` computes for itself.
 Every other identifier names something else.
 `name` is a spawn label, `short_id` is a transport key that is `null` for most rows, `session_id` is a resume target, and the discovered lane's `LABEL` is a friendly alias.
 A reader with no address column copies `name`, and a name-lane durable write queues under a key no drain reads; that is the largest still-growing category of stranded mail on the bus.
@@ -136,15 +136,15 @@ A reader with no address column copies `name`, and a name-lane durable write que
 It is deliberately not promoted to the full session id when two rows share a first eight: ambiguity detection lives in the send resolver, which fails closed and names the candidates, and a second implementation here would be a second answer to one question.
 
 ```bash
-fno agents list --json | jq -r '.agents[] | select(.address) | "\(.address)\t\(.name)"'
+fno agents session list --json | jq -r '.agents[] | select(.address) | "\(.address)\t\(.name)"'
 ```
 
-`session_id` is the unified, harness-resolving resume target: `short_id` for claude, `harness_session_id` for codex, gemini, and opencode. `short_id` is the transport key and stays claude-only for back-compat (the claude jobId, by construction the leading 8 hex of the session uuid), so for a codex agent you get `short_id: null` but `session_id: "<uuid>"`, and that UUID is exactly what `fno agents resume` (and `codex resume <uuid>`) consume. It is `null` when the id was never captured, and for a claude pane row, which has no transport key for it to resolve from.
+`session_id` is the unified, harness-resolving resume target: `short_id` for claude, `harness_session_id` for codex, gemini, and opencode. `short_id` is the transport key and stays claude-only for back-compat (the claude jobId, by construction the leading 8 hex of the session uuid), so for a codex agent you get `short_id: null` but `session_id: "<uuid>"`, and that UUID is exactly what `fno agents session resume` (and `codex resume <uuid>`) consume. It is `null` when the id was never captured, and for a claude pane row, which has no transport key for it to resolve from.
 
 `mux` is the hosting ref (`{session, pane_id}`) for a pane-hosted row, `null` otherwise. Such a row holds that ref INSTEAD of a transport key (one live ref per row: mux, worker, or bg), so its `short_id` is `null`. Do not use `session_id == null` to detect a pane row: a codex or opencode pane still resolves one from `harness_session_id`. Test `mux != null`, and address the worker through it:
 
 ```bash
-fno agents list --json | jq -r '.agents[] | select(.mux != null) | "\(.mux.session):\(.mux.pane_id)"'
+fno agents session list --json | jq -r '.agents[] | select(.mux != null) | "\(.mux.session):\(.mux.pane_id)"'
 ```
 
 ### Common recipes
@@ -153,16 +153,16 @@ fno agents list --json | jq -r '.agents[] | select(.mux != null) | "\(.mux.sessi
 # How many claude agents are live right now?
 # `status` carries the transcript verdict; `live_status` is always null on this
 # path (see below), so selecting on it would silently always return 0.
-fno agents list --harness claude --json | jq '[.agents[] | select(.status == "live")] | length'
+fno agents session list --harness claude --json | jq '[.agents[] | select(.status == "live")] | length'
 
 # Names of every orphaned entry (script can stop or rm them):
-fno agents list --status orphaned --json | jq -r '.agents[].name'
+fno agents session list --status orphaned --json | jq -r '.agents[].name'
 
 # Watch your fleet from a separate terminal:
-watch -n 2 fno agents list
+watch -n 2 fno agents session list
 
 # Detect a stuck agent (no message in >10 minutes):
-fno agents list --json | jq -r '
+fno agents session list --json | jq -r '
   .agents[]
   | select(.last_message_at != null)
   | select((now - (.last_message_at | fromdateiso8601)) > 600)
@@ -178,10 +178,10 @@ fno agents list --json | jq -r '
 - If the registry file is malformed or schema-mismatched, the served path currently returns an empty roster and exit 0 rather than an error, so an empty result is not proof of an empty fleet. Distinguish the two by reading the registry file directly. This is a known gap, filed for a fix that has to decide what a version-skewed daemon should do.
 - If the registry is genuinely empty, you get `{"agents": [], "count": 0, ...}` and exit 0. No special-casing needed in your script.
 
-## `fno agents whoami` — this worker's own name
+## `fno agents registry whoami` — this worker's own name
 
 ```bash
-fno agents whoami
+fno agents registry whoami
 ```
 
 Answers the one question `list` cannot: *what is MY registered name* — the handle peers use to address you via `fno agents mail send <name>`. A worker that lost track of its name after a compaction has a native answer instead of grepping `list` for its own session.
@@ -205,12 +205,12 @@ Like `list`, it is a pure read (it never mutates the registry, writes state, or 
 | 3 | Not a registered mesh agent — a human shell or top-level session with no injected identity. The JSON shape carries `registered: false`. |
 | 4 | Ambient harness markers disagree and no process-tree proof can choose one. |
 
-If the registry is unreadable but `FNO_AGENT_SELF` is set, the name still comes back (with a `WARN:` line) — the env answer never depends on the registry. This verb reports your *mesh* identity; the top-level `fno whoami` reports operating context (fleet, walker, session, harness) and, when you are a mesh worker, now echoes your name on one extra `agent:` line as a pointer here.
+If the registry is unreadable but `FNO_AGENT_SELF` is set, the name still comes back (with a `WARN:` line) — the env answer never depends on the registry. This command reports your *mesh* identity; the top-level `fno whoami` reports operating context (fleet, walker, session, harness) and, when you are a mesh worker, now echoes your name on one extra `agent:` line as a pointer here.
 
-## `fno agents logs <name>` — tail an agent's output
+## `fno agents session logs <name>` — tail an agent's output
 
 ```bash
-fno agents logs worker-frontend
+fno agents session logs worker-frontend
 ```
 
 Default behavior is to show the last 100 lines of the agent's log output. For claude agents, this delegates to `claude logs <short_id>` and passes the raw output through verbatim (so any formatting claude applies is preserved).
@@ -218,16 +218,16 @@ Default behavior is to show the last 100 lines of the agent's log output. For cl
 ### Flags
 
 ```bash
-fno agents logs worker-frontend --tail 500       # last 500 lines
-fno agents logs worker-frontend --tail 0         # nothing (zero requested)
-fno agents logs worker-frontend --follow         # stream as new lines arrive
-fno agents logs worker-frontend -f -n 50         # short-flag form
+fno agents session logs worker-frontend --tail 500       # last 500 lines
+fno agents session logs worker-frontend --tail 0         # nothing (zero requested)
+fno agents session logs worker-frontend --follow         # stream as new lines arrive
+fno agents session logs worker-frontend -f -n 50         # short-flag form
 ```
 
 `--tail` and `--follow` interact differently per provider:
 
 - **Codex/gemini agents:** `--follow` re-emits the last N lines (from `--tail`, default 100) before entering the 500ms poll loop. Pass `--tail 0 --follow` to start from the live tip.
-- **Claude agents:** `--tail` is ignored when `--follow` is set — we cannot retroactively buffer lines that the upstream `claude logs --follow` is already streaming live. If you need backfill on a claude agent, run `fno agents logs <name> --tail N` without `--follow`, then re-run with `--follow` once you've caught up.
+- **Claude agents:** `--tail` is ignored when `--follow` is set — we cannot retroactively buffer lines that the upstream `claude logs --follow` is already streaming live. If you need backfill on a claude agent, run `fno agents session logs <name> --tail N` without `--follow`, then re-run with `--follow` once you've caught up.
 
 ### `--follow` and Ctrl-C
 
@@ -240,7 +240,7 @@ For codex/gemini follow mode, the poll loop stats the log file every 500ms. If t
 | Code | Meaning |
 |---|---|
 | 0 | logs delivered (or `--tail 0` requested no output) |
-| 1 | registry could not be loaded, OR the entry exists but has no `claude_short_id` (data drift; suggests re-dispatching with `fno agents ask`) |
+| 1 | registry could not be loaded, OR the entry exists but has no `claude_short_id` (data drift; suggests re-dispatching with `fno agents mail ask`) |
 | 2 | usage error (e.g. `--tail -5`) |
 | 13 | agent not found by name, OR codex/gemini entry whose log file does not exist yet |
 | _other_ | claude's exit code propagates verbatim when its own invocation fails |
@@ -248,29 +248,29 @@ For codex/gemini follow mode, the poll loop stats the log file every 500ms. If t
 A negative `--tail` value is rejected at parse time:
 
 ```
-$ fno agents logs worker-X --tail -3
+$ fno agents session logs worker-X --tail -3
 --tail must be >= 0 (got -3)
 ```
 
 ### Today's limitations
 
-- `fno agents logs --json` for **Claude entries** is a future concern (we'd have to parse claude's log format). The verb emits a `WARN:` that JSON output for Claude logs is not implemented and continues with raw passthrough.
-- `fno agents logs` for **codex / gemini entries** returns exit 13 when the tee'd JSONL log file does not exist yet.
+- `fno agents session logs --json` for **Claude entries** is a future concern (we'd have to parse claude's log format). The command emits a `WARN:` that JSON output for Claude logs is not implemented and continues with raw passthrough.
+- `fno agents session logs` for **codex / gemini entries** returns exit 13 when the tee'd JSONL log file does not exist yet.
 
 ## Troubleshooting
 
-**`agent not found: <name>`** — the name isn't in your registry. Run `fno agents list` to see what's actually there. Names are case-sensitive.
+**`agent not found: <name>`** — the name isn't in your registry. Run `fno agents session list` to see what's actually there. Names are case-sensitive.
 
 **Looking for the LIVE column** — it was removed. `CHECKED` (probe age) and `PID` replaced it, and `STATUS` now carries the transcript verdict that LIVE used to approximate.
 
 **A row shows `harness: null` or `mux: null` for a worker you know is pane-hosted** — you are on a build that predates the row projection carrying those keys. Confirm against the registry file itself before concluding a worker is unbound; that mistake has produced a wrong diagnosis before.
 
-**`fno agents list` is slow** — a reconcile probe runs per row. If you're polling in a tight loop, that probe is the bottleneck, not the registry read.
+**`fno agents session list` is slow** — a reconcile probe runs per row. If you're polling in a tight loop, that probe is the bottleneck, not the registry read.
 
 **`--follow` printed everything at once then exited** — you're on an older fno build. The streaming path is in current builds; the buffered behavior was a bug in an early cut.
 
 ## Related
 
 - [fno-agents-ask-followup.md](fno-agents-ask-followup.md) — the follow-up flow for sending messages.
-- [../architecture/fno-agents-list-logs.md](../architecture/fno-agents-list-logs.md) — internal architecture for these verbs.
-- [../architecture/fno-agents-registry-and-dispatch.md](../architecture/fno-agents-registry-and-dispatch.md) — the registry storage substrate both verbs read.
+- [../architecture/fno-agents-list-logs.md](../architecture/fno-agents-list-logs.md) — internal architecture for these commands.
+- [../architecture/fno-agents-registry-and-dispatch.md](../architecture/fno-agents-registry-and-dispatch.md) — the registry storage substrate both commands read.

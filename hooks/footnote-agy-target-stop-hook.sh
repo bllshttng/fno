@@ -30,7 +30,7 @@
 # `.fno/target-state.md` is the active-session discriminator, checked BEFORE any
 # error path. With NO state file there is nothing to gate, so every failure emits
 # `{}` (allow) as before. With a state file present, a broken checker (missing jq,
-# missing binary, verb non-zero, non-JSON output) is NOT a safe fail-open allow --
+# missing binary, command non-zero, non-JSON output) is NOT a safe fail-open allow --
 # silently allowing there disables the ship gate. Instead each such path
 # bounded-CONTINUES up to MAX_UNAVAIL_RETRIES so a transient breakage (mid-rebuild
 # binary, flaky gh) can recover, then gives up LOUDLY (an event + `{}`) so a
@@ -106,7 +106,7 @@ resolve_agents_bin() { fno_agents_bin "$REPO_ROOT"; }
 # The seam sits ABOVE every `state path` read: a bare-PATH call there let an
 # ambient fno-agents answer for a tmp cwd, so a mocked fixture inherited an
 # arbitrary manifest/space answer and the delivery-retry tests went red or
-# green per machine. The fixture's FNO_AGENTS_BIN decides now. Every verb call
+# green per machine. The fixture's FNO_AGENTS_BIN decides now. Every command call
 # runs from ROOT: agy fires the global hooks.json from ~/.gemini/config, which
 # is not a git repo, so a cwd-keyed answer there is the wrong slice or a
 # rc=2 ("unable to read git worktree list").
@@ -114,7 +114,7 @@ BIN=$(resolve_agents_bin)
 state_path_answer() { (cd "$ROOT" && "${BIN:-fno-agents}" state path "$1") 2>/dev/null || true; }
 
 LIVE_STATE_FILE=$(state_path_answer target-state)
-# The verb answers THIS cwd's spaces-layout slice whether or not a manifest
+# The command answers THIS cwd's spaces-layout slice whether or not a manifest
 # lives there; when that answer is not on disk, the manifest init wrote at the
 # workspace root is the one to gate on. agy fires Stop from unrelated cwds, so
 # an empty answer alone never fired this fallback (review, T9).
@@ -331,7 +331,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     # reproduced on the one path that never got the fix.
     LEAD_STATE_FILE=""
     if [[ -n "$CONVERSATION_ID" ]] && command -v fno >/dev/null 2>&1; then
-        LEAD_STATE_FILE=$(cd "$ROOT" && fno agents lead manifest-path \
+        LEAD_STATE_FILE=$(cd "$ROOT" && fno agents org chart manifest-path \
             --harness-session-id "$CONVERSATION_ID" --harness agy \
             --state-root "$SPACE_DIR" 2>/dev/null || true)
     fi
@@ -470,7 +470,7 @@ fi
 
 # ── 7. Invoke loop-check (transcript scan only; agy stdin has no last message) ─
 DECISION_JSON=""
-verb_rc=0
+command_rc=0
 if [[ "$STATE_FILE" == "$DELIVERY_PENDING_STATE" ]]; then
     DECISION_JSON='{"decision":"allow","termination_reason":"DoneDelivery","message":"retrying generic delivery finalization"}'
 else
@@ -491,7 +491,7 @@ else
         --state "$STATE_FILE" \
         --transcript "$SYNTH" \
         --cwd "$TARGET_CWD" \
-        2>>"${SPACE_DIR}/agy-loop-check.stderr.log") || verb_rc=$?
+        2>>"${SPACE_DIR}/agy-loop-check.stderr.log") || command_rc=$?
 
     # Same invariant as the claude adapter: a non-zero exit means a BROKEN
     # checker only when the reply carries no verdict. A driver may return a
@@ -506,8 +506,8 @@ else
     if ! printf '%s' "$DECISION_JSON" | jq -e '.decision' >/dev/null 2>&1; then
         stderr_tail=$(tail -n 2 "${SPACE_DIR}/agy-loop-check.stderr.log" 2>/dev/null \
             | tr -d '\n' | sed 's/["\\]/\\&/g' || true)
-        emit_event "loop_check_gh_error" ",\"read\":\"verb\",\"stderr_tail\":\"${stderr_tail}\""
-        echo "agy stop-hook: WARNING: loop-check unavailable (rc=$verb_rc / no decision)" >&2
+        emit_event "loop_check_gh_error" ",\"read\":\"command\",\"stderr_tail\":\"${stderr_tail}\""
+        echo "agy stop-hook: WARNING: loop-check unavailable (rc=$command_rc / no decision)" >&2
         tail -n 5 "${SPACE_DIR}/agy-loop-check.stderr.log" >&2 2>/dev/null || true
         unavailable_continue_or_allow
     fi

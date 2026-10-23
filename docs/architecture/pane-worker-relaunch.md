@@ -30,11 +30,11 @@ Membership meant "a claude agent row was attached here", not "a worker pane live
 
 ## Startup restore holds by default; only policy respawns
 
-A worker pane's pty was a child of the previous mux server pid and died with it. After a restart such a member is always dead. No liveness probe runs, because probing an already-known answer is the receipt-can-lie shape. By default no process starts either: `[mux.restore] policy` is `hold` (named held panes, resume on focus), or `idle` (members stay idle rows). Only the explicit `resume` policy respawns at startup, and only the explicit `fno mux workspace restore` verb respawns on demand - both name every member they could not bring back.
+A worker pane's pty was a child of the previous mux server pid and died with it. After a restart such a member is always dead. No liveness probe runs, because probing an already-known answer is the receipt-can-lie shape. By default no process starts either: `[mux.restore] policy` is `hold` (named held panes, resume on focus), or `idle` (members stay idle rows). Only the explicit `resume` policy respawns at startup, and only the explicit `fno mux workspace restore` command respawns on demand - both name every member they could not bring back.
 
 The member stays as-is and the row renders idle in the agent panel. Restore also prints one notice naming how many idle worker rows it created. That makes "nothing resumed" distinguishable from "the counter never ran".
 
-Restore also prunes a worker member whose registry row is gone. A reaped name (`fno agents rm`, a GC pass) can never resume, so it is dead weight rather than a card. Each restart names the prune count in a notice. A name that still exists stays, exited or not. An UNREADABLE registry prunes nothing and says so. Mapping a failed read to an empty set deletes every worker member and persists the deletion. Ghosts are cheaper than that.
+Restore also prunes a worker member whose registry row is gone. A reaped name (`fno agents session rm`, a GC pass) can never resume, so it is dead weight rather than a card. Each restart names the prune count in a notice. A name that still exists stays, exited or not. An UNREADABLE registry prunes nothing and says so. Mapping a failed read to an empty set deletes every worker member and persists the deletion. Ghosts are cheaper than that.
 
 Claude attach members restore exactly as before: `claude attach` in the recorded cwd, because the daemon still owns those sessions.
 
@@ -52,11 +52,11 @@ Only a DEAD row offers Resume. A live row has a process writing its session stat
 
 ## Live paneless workers after restart
 
-A registry worker can remain live after the mux loses its pane mapping. The old mux owned that PTY, so the current server cannot safely re-parent the process or silently create a second harness writer. The sideline keeps the dead-only Resume guard, classifies the row as live-paneless, and tells the operator to run `fno agents peek <worker-name> --follow` for read-only transcript observation. A row with a live claude daemon `attach_id` still uses the existing placement picker first. Missing harness, missing session id, unsupported harness, and a registry backend that is no longer live remain separate refusal notices. Pre-v54 rows without the typed reason keep the generic compatibility notice.
+A registry worker can remain live after the mux loses its pane mapping. The old mux owned that PTY, so the current server cannot safely re-parent the process or silently create a second harness writer. The sideline keeps the dead-only Resume guard, classifies the row as live-paneless, and tells the operator to run `fno agents session peek <worker-name> --follow` for read-only transcript observation. A row with a live claude daemon `attach_id` still uses the existing placement picker first. Missing harness, missing session id, unsupported harness, and a registry backend that is no longer live remain separate refusal notices. Pre-v54 rows without the typed reason keep the generic compatibility notice.
 
 The resumed pane is placed in the workspace the one thread-workspace resolver answers: recorded membership, then the spawner's, then the project default. If neither rung answers, the workspace owning the cwd does. The two tokens the server builds are pinned against `harness_capabilities.toml` by a test that reads the toml. The Rust mirror cannot drift from the file that owns it. The pane is titled from the registry row and recorded as a worker member again, so it survives the NEXT restart too.
 
-The resume argv cannot go through the porcelain: `fno agents spawn --resume` is claude-bg-only, and the mux is a reader of the registry. So the server binds the row to its new pane itself, in `worker_pane` (name to pane, the worker twin of the claude attach map). While the pane lives, the panel presents the row pane-hosted. A second Resume then focuses it instead of opening a second session on the same rollout. When the pane dies, the binding is swept and the row returns to idle.
+The resume argv cannot go through the porcelain: the spawn fork door was claude-bg-only and is retired, and the mux is a reader of the registry. So the server binds the row to its new pane itself, in `worker_pane` (name to pane, the worker twin of the claude attach map). While the pane lives, the panel presents the row pane-hosted. A second Resume then focuses it instead of opening a second session on the same rollout. When the pane dies, the binding is swept and the row returns to idle.
 
 ## Files
 

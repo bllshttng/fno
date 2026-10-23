@@ -3,7 +3,7 @@ K1	cli/benchmarks/test_measure_fno.py	py	7
 K1	cli/src/fno/paths_testing.py	py	1
 K1	cli/src/fno/setup/test_recommended_rules.py	py	5
 K1	cli/src/fno/test_worktree_paths.py	py	11
-K1	cli/tests/agents/test_verb_answer_blueprint_floor.py	py	4
+K1	cli/tests/agents/test_command_answer_blueprint_floor.py	py	4
 K1	cli/tests/goldens/test_advance_golden.py	py	3
 K1	cli/tests/goldens/test_lifecycle_golden.py	py	18
 K1	cli/tests/goldens/test_reconcile_golden.py	py	3
@@ -25,7 +25,7 @@ K1	cli/tests/integration/test_migrate_paths.py	py	8
 K1	cli/tests/integration/test_native_update_repaint.py	py	7
 K1	cli/tests/integration/test_no_hardcoded_paths.py	py	1
 K1	cli/tests/integration/test_skill_discovery.py	py	13
-K1	cli/tests/integration/test_verb_projection.py	py	4
+K1	cli/tests/integration/test_command_projection.py	py	4
 K1	cli/tests/integration/test_worktree.py	py	1
 K1	cli/tests/integration/test_worktree_cargo_build_base.py	py	3
 K1	cli/tests/integration/test_worktree_ensure.py	py	23
@@ -50,9 +50,9 @@ K1	cli/tests/lint/test_shellout_drift.py	py	18
 K1	cli/tests/lint/test_smoke_wheel_env_scrub.py	py	9
 K1	cli/tests/lint/test_think_skill_size.py	py	2
 K1	cli/tests/lint/test_think_workflow_contract.py	py	2
-K1	cli/tests/lint/test_verb_callers.py	py	11
-K1	cli/tests/lint/test_verb_ratchet.py	py	14
-K1	cli/tests/lint/test_verb_ratchet_source_scan.py	py	6
+K1	cli/tests/lint/test_command_callers.py	py	11
+K1	cli/tests/lint/test_command_ratchet.py	py	14
+K1	cli/tests/lint/test_command_ratchet_source_scan.py	py	6
 K1	cli/tests/skill_diff/test_cli_tick.py	py	32
 K1	cli/tests/skill_diff/test_engine.py	py	17
 K1	cli/tests/skill_diff/test_guards.py	py	10
@@ -61,7 +61,6 @@ K1	cli/tests/test_config_autonomy.py	py	3
 K1	cli/tests/test_config_schema_drift.py	py	11
 K1	cli/tests/test_import_time_env_reads.py	py	3
 K1	cli/tests/test_lazy_imports.py	py	38
-K1	cli/tests/test_v2_paths.py	py	1
 K1	cli/tests/unit/test_agent_cli.py	py	17
 K1	cli/tests/unit/test_agent_integration.py	py	2
 K1	cli/tests/unit/test_autonomous_route.py	py	20
@@ -125,9 +124,9 @@ K1	cli/tests/unit/test_setup_id.py	py	2
 K1	cli/tests/unit/test_setup_integration.py	py	16
 K1	cli/tests/unit/test_setup_wizard.py	py	10
 K1	cli/tests/unit/test_skill_bundles.py	py	12
-K1	cli/tests/unit/test_verb_collapse_dispatch.py	py	4
-K1	cli/tests/unit/test_verb_collapse_map.py	py	11
-K1	cli/tests/unit/test_verb_moves.py	py	15
+K1	cli/tests/unit/test_command_collapse_dispatch.py	py	4
+K1	cli/tests/unit/test_command_collapse_map.py	py	11
+K1	cli/tests/unit/test_command_moves.py	py	15
 K1	cli/tests/unit/test_workflow_authority_contract.py	py	16
 K1	cli/tests/unit/test_worktree_node_branch.py	py	3
 K1	cli/tests/unit/test_worktree_occupancy.py	py	13
@@ -227,7 +226,7 @@ K2	cli/tests/agents/test_spawn_gate_agreement.py	py	5
 K2	cli/tests/agents/test_spawn_gate_refusal_events.py	py	6
 K2	cli/tests/agents/test_spawn_gate_wiring.py	py	8
 K2	cli/tests/agents/test_spawn_graph_launch_edge.py	py	7
-K2	cli/tests/agents/test_spawn_lost_verb.py	py	6
+K2	cli/tests/agents/test_spawn_lost_command.py	py	6
 K2	cli/tests/agents/test_spawn_model_substitution.py	py	3
 K2	cli/tests/agents/test_spawn_node_seed.py	py	29
 K2	cli/tests/agents/test_spawn_normalize.py	py	52
@@ -251,7 +250,7 @@ K2	cli/tests/agents/test_spawn_route_override.py	py	44
 K2	cli/tests/agents/test_spawn_seed_receipt.py	py	4
 K2	cli/tests/agents/test_spawn_seedless_refusal.py	py	6
 K2	cli/tests/agents/test_spawn_session_row.py	py	26
-K2	cli/tests/agents/test_spawn_unfireable_verb.py	py	12
+K2	cli/tests/agents/test_spawn_unfireable_command.py	py	12
 K2	cli/tests/agents/test_spawn_uuid_capture.py	py	7
 K2	cli/tests/agents/test_spawn_wait.py	py	5
 K2	cli/tests/agents/test_thread_keeper_journey.py	py	1
@@ -272,10 +271,10 @@ K2	cli/tests/unit/test_dispatch_mux_send.py	py	19
 K2	cli/tests/unit/test_dispatch_no_merge_env.py	py	17
 K2	cli/tests/unit/test_dispatch_settings_path.py	py	6
 K2	cli/tests/unit/test_dispatch_undeclared_repo.py	py	11
-K2	cli/tests/unit/test_dispatch_verb_projection.py	py	4
-K2	cli/tests/unit/test_dispatch_verb_registry.py	py	20
+K2	cli/tests/unit/test_dispatch_command_projection.py	py	4
+K2	cli/tests/unit/test_dispatch_command_registry.py	py	20
 K2	cli/tests/unit/test_footprint.py	py	31
-K2	cli/tests/unit/test_footprint_verb.py	py	99
+K2	cli/tests/unit/test_footprint_command.py	py	99
 K2	cli/tests/unit/test_inbox_store_threads.py	py	23
 K2	cli/tests/unit/test_lane_dispatch.py	py	20
 K2	cli/tests/unit/test_lane_experiment_contract.py	py	4
@@ -283,7 +282,6 @@ K2	cli/tests/unit/test_lane_rollup.py	py	3
 K2	cli/tests/unit/test_launch_pick.py	py	19
 K2	cli/tests/unit/test_mail_name_lane_reply.py	py	20
 K2	cli/tests/unit/test_managed_slot_blob.py	py	12
-K2	cli/tests/unit/test_mission_not_dispatchable.py	py	1
 K2	cli/tests/unit/test_mux_pane_guarded.py	py	16
 K2	cli/tests/unit/test_org_spelling_dispatch.py	py	2
 K2	cli/tests/unit/test_pane_prepare_bridge.py	py	8
@@ -324,7 +322,7 @@ K2	crates/fno-agents/src/spawn_gate_lanes.rs	rs	22
 K2	crates/fno-agents/src/spawn_gate_reservations.rs	rs	3
 K2	crates/fno-agents/src/spawn_gate_slot_tests.rs	rs	15
 K2	crates/fno-agents/src/spawn_gate_territory_tests.rs	rs	1
-K2	crates/fno-agents/src/spawn_gate_verb.rs	rs	21
+K2	crates/fno-agents/src/spawn_gate_command.rs	rs	21
 K2	crates/fno-agents/src/spawn_overlay.rs	rs	5
 K2	crates/fno-agents/src/spawn_payload.rs	rs	4
 K2	crates/fno-agents/src/spawn_phase.rs	rs	2
@@ -349,7 +347,6 @@ K3	cli/tests/agents/test_agents_top.py	py	31
 K3	cli/tests/agents/test_agy_conversation_mint.py	py	5
 K3	cli/tests/agents/test_argv_fence_gate.py	py	2
 K3	cli/tests/agents/test_attention_order.py	py	4
-K3	cli/tests/agents/test_cli.py	py	5
 K3	cli/tests/agents/test_cli_help.py	py	8
 K3	cli/tests/agents/test_cli_lifecycle.py	py	11
 K3	cli/tests/agents/test_cli_list_logs.py	py	11
@@ -365,7 +362,7 @@ K3	cli/tests/agents/test_follow_signal.py	py	9
 K3	cli/tests/agents/test_format.py	py	24
 K3	cli/tests/agents/test_gate_status.py	py	3
 K3	cli/tests/agents/test_handle_collisions.py	py	9
-K3	cli/tests/agents/test_heal_token_verb.py	py	7
+K3	cli/tests/agents/test_heal_token_command.py	py	7
 K3	cli/tests/agents/test_lead_board_default_state.py	py	5
 K3	cli/tests/agents/test_lead_drain_cache.py	py	8
 K3	cli/tests/agents/test_lead_expire.py	py	21
@@ -384,7 +381,7 @@ K3	cli/tests/agents/test_pi_resume_duplicates.py	py	8
 K3	cli/tests/agents/test_pi_rpc.py	py	15
 K3	cli/tests/agents/test_provenance_read_failure.py	py	7
 K3	cli/tests/agents/test_reconcile_batched.py	py	7
-K3	cli/tests/agents/test_refusal_remedy_verbs.py	py	2
+K3	cli/tests/agents/test_refusal_remedy_commands.py	py	2
 K3	cli/tests/agents/test_register_session.py	py	58
 K3	cli/tests/agents/test_registry.py	py	90
 K3	cli/tests/agents/test_resolve_agent.py	py	30
@@ -403,7 +400,7 @@ K3	cli/tests/agents/test_role_team.py	py	42
 K3	cli/tests/agents/test_route_survival.py	py	45
 K3	cli/tests/agents/test_row_contradiction.py	py	3
 K3	cli/tests/agents/test_rust_runtime.py	py	73
-K3	cli/tests/agents/test_rust_verb_parity.py	py	21
+K3	cli/tests/agents/test_rust_command_parity.py	py	21
 K3	cli/tests/agents/test_sandbox_probe.py	py	7
 K3	cli/tests/agents/test_seed_provenance_env.py	py	13
 K3	cli/tests/agents/test_self_stamp.py	py	21
@@ -423,7 +420,6 @@ K3	cli/tests/agents/test_watch.py	py	6
 K3	cli/tests/agents/test_whoami.py	py	24
 K3	cli/tests/agents/test_with_agent_lock_and_entry.py	py	7
 K3	cli/tests/graph/test_discovery_pass.py	py	10
-K3	cli/tests/integration/test_reconcile_session_satisfied.py	py	10
 K3	cli/tests/relay/test_registry.py	py	19
 K3	cli/tests/test_agents_watchdog.py	py	183
 K3	cli/tests/test_autonomy_registry_ci.py	py	2
@@ -605,7 +601,7 @@ K4	crates/fno-agents/src/footnote_harness/tests.rs	rs	4
 K4	crates/fno-agents/src/gc_claude_stop.rs	rs	11
 K4	crates/fno-agents/src/harness_capabilities.rs	rs	7
 K4	crates/fno-agents/src/harness_daemon.rs	rs	4
-K4	crates/fno-agents/src/harness_verbs.rs	rs	4
+K4	crates/fno-agents/src/harness_commands.rs	rs	4
 K4	crates/fno-agents/src/identity.rs	rs	3
 K4	crates/fno-agents/src/model_price.rs	rs	8
 K4	crates/fno-agents/src/opencode_archive_tests.rs	rs	16
@@ -653,7 +649,6 @@ K5	cli/tests/integration/test_backlog_ready_json_flag.py	py	1
 K5	cli/tests/integration/test_backlog_selection_completed_guard.py	py	1
 K5	cli/tests/integration/test_carveout.py	py	30
 K5	cli/tests/integration/test_claims_concurrency.py	py	7
-K5	cli/tests/integration/test_claims_cross_impl.py	py	18
 K5	cli/tests/integration/test_collision.py	py	58
 K5	cli/tests/integration/test_demand_importance.py	py	7
 K5	cli/tests/integration/test_done.py	py	15
@@ -662,14 +657,12 @@ K5	cli/tests/integration/test_graph_claim_filter.py	py	10
 K5	cli/tests/integration/test_graph_cli.py	py	94
 K5	cli/tests/integration/test_graph_concurrency.py	py	1
 K5	cli/tests/integration/test_graph_grouped_get.py	py	1
-K5	cli/tests/integration/test_graph_hygiene.py	py	5
 K5	cli/tests/integration/test_graph_status.py	py	42
 K5	cli/tests/integration/test_mail_hold_release.py	py	6
 K5	cli/tests/integration/test_maintain_cli.py	py	41
 K5	cli/tests/integration/test_maintain_encounter.py	py	5
 K5	cli/tests/integration/test_rank_operator_only.py	py	6
 K5	cli/tests/integration/test_rollup_intake.py	py	9
-K5	cli/tests/integration/test_target_claim_integration.py	py	2
 K5	cli/tests/integration/test_target_node_claim.py	py	8
 K5	cli/tests/integration/test_triage_apply_event.py	py	2
 K5	cli/tests/integration/test_triage_consistency.py	py	17
@@ -677,7 +670,6 @@ K5	cli/tests/integration/test_triage_context.py	py	19
 K5	cli/tests/integration/test_triage_done_not_merged.py	py	13
 K5	cli/tests/integration/test_triage_health_metrics.py	py	10
 K5	cli/tests/integration/test_triage_rank.py	py	6
-K5	cli/tests/integration/test_verify_child_promise.py	py	10
 K5	cli/tests/scoreboard/test_by_skill.py	py	22
 K5	cli/tests/scoreboard/test_calibration.py	py	9
 K5	cli/tests/scoreboard/test_efficiency.py	py	21
@@ -687,7 +679,6 @@ K5	cli/tests/scoreboard/test_scoreboard.py	py	34
 K5	cli/tests/test_done_cross_check.py	py	28
 K5	cli/tests/test_graph_concurrent_writers.py	py	2
 K5	cli/tests/test_no_hardcoded_node_id.py	py	3
-K5	cli/tests/test_no_stale_deleted_capture_refs.py	py	2
 K5	cli/tests/test_node_claim_release_authority.py	py	5
 K5	cli/tests/test_review_locking.py	py	8
 K5	cli/tests/unit/company/test_join.py	py	10
@@ -868,7 +859,7 @@ K5	crates/fno-agents/src/backlog/worked.rs	rs	1
 K5	crates/fno-agents/src/backlog_ready.rs	rs	37
 K5	crates/fno-agents/src/claim_queue.rs	rs	11
 K5	crates/fno-agents/src/claim_store.rs	rs	8
-K5	crates/fno-agents/src/claim_verbs.rs	rs	21
+K5	crates/fno-agents/src/claim_commands.rs	rs	21
 K5	crates/fno-agents/src/claims.rs	rs	71
 K5	crates/fno-agents/src/claims_gate_tests.rs	rs	15
 K5	crates/fno-agents/src/claims_long_holds.rs	rs	7
@@ -953,7 +944,6 @@ K6	cli/tests/integration/test_worktree_cleanup_merged.py	py	63
 K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
 K6	cli/tests/mcp/test_sidecar_lifecycle.py	py	15
-K6	cli/tests/relay/test_roundtrip.py	py	67
 K6	cli/tests/test_pr_read_budget.py	py	6
 K6	cli/tests/test_pr_watch_cli_adapters.py	py	36
 K6	cli/tests/test_pr_watch_decide.py	py	26
@@ -977,7 +967,6 @@ K6	cli/tests/unit/test_config_post_merge.py	py	18
 K6	cli/tests/unit/test_config_post_merge_activity.py	py	2
 K6	cli/tests/unit/test_config_review.py	py	70
 K6	cli/tests/unit/test_config_reviewers.py	py	28
-K6	cli/tests/unit/test_coverage_gate.py	py	4
 K6	cli/tests/unit/test_decisions_in_db.py	py	1
 K6	cli/tests/unit/test_difficulty_coverage_grid_input.py	py	9
 K6	cli/tests/unit/test_event_global_mirror.py	py	7
@@ -1003,7 +992,6 @@ K6	cli/tests/unit/test_mail_dedup_writeahead.py	py	8
 K6	cli/tests/unit/test_mail_drain_flush.py	py	5
 K6	cli/tests/unit/test_mail_drain_origin.py	py	6
 K6	cli/tests/unit/test_mail_drain_receipt.py	py	13
-K6	cli/tests/unit/test_mail_envelope_unknown.py	py	1
 K6	cli/tests/unit/test_mail_escalation.py	py	18
 K6	cli/tests/unit/test_mail_force.py	py	15
 K6	cli/tests/unit/test_mail_forged_envelope.py	py	5
@@ -1043,7 +1031,7 @@ K6	cli/tests/unit/test_pr_optional_reviewers.py	py	1
 K6	cli/tests/unit/test_pr_quota.py	py	46
 K6	cli/tests/unit/test_pr_rest.py	py	37
 K6	cli/tests/unit/test_pr_review_hold.py	py	47
-K6	cli/tests/unit/test_pr_review_hold_verb.py	py	15
+K6	cli/tests/unit/test_pr_review_hold_command.py	py	15
 K6	cli/tests/unit/test_pr_reviews.py	py	32
 K6	cli/tests/unit/test_pr_verify.py	py	29
 K6	cli/tests/unit/test_pr_watch_config_coupling.py	py	10
@@ -1093,7 +1081,7 @@ K6	crates/fno-agents/src/loopcheck/review_count.rs	rs	4
 K6	crates/fno-agents/src/loopcheck/review_state.rs	rs	7
 K6	crates/fno-agents/src/loopcheck/tests/local_attestation_tests.rs	rs	3
 K6	crates/fno-agents/src/loopcheck/tests/pr_read_tests.rs	rs	3
-K6	crates/fno-agents/src/loopcheck/tests/review_coverage_verb_tests.rs	rs	5
+K6	crates/fno-agents/src/loopcheck/tests/review_coverage_command_tests.rs	rs	5
 K6	crates/fno-agents/src/loopcheck/tests/review_findings_tests.rs	rs	3
 K6	crates/fno-agents/src/loopcheck/tests/self_review_floor_tests.rs	rs	19
 K6	crates/fno-agents/src/machine_mail.rs	rs	6
@@ -1154,7 +1142,7 @@ K6	crates/fno-agents/tests/pr_push.rs	rs	7
 K6	crates/fno-agents/tests/pr_rebase_note.rs	rs	2
 K6	crates/fno-agents/tests/pr_watch_status_parity.rs	rs	1
 K6	crates/fno-agents/tests/review_coverage_paths.rs	rs	6
-K6	crates/fno-agents/tests/review_coverage_verb.rs	rs	15
+K6	crates/fno-agents/tests/review_coverage_command.rs	rs	15
 K6	crates/fno-agents/tests/task_context_journey.rs	rs	1
 K6	crates/fno/src/event_store_recovery.rs	rs	1
 K7	cli/src/fno/plan/test_boundary.py	py	21
@@ -1401,9 +1389,9 @@ K8	crates/fno/src/mux_cli/pane_args.rs	rs	1
 K8	crates/fno/src/mux_cli/tab_prune.rs	rs	12
 K8	crates/fno/src/mux_cli/tests/control_roundtrip_tests.rs	rs	1
 K8	crates/fno/src/mux_cli/tests/paneless_hint_tests.rs	rs	3
-K8	crates/fno/src/mux_cli/tests/reseat_verb_tests.rs	rs	5
+K8	crates/fno/src/mux_cli/tests/reseat_command_tests.rs	rs	5
 K8	crates/fno/src/mux_cli/tests/server_axis_flag_tests.rs	rs	5
-K8	crates/fno/src/mux_cli/thread_verb.rs	rs	3
+K8	crates/fno/src/mux_cli/thread_command.rs	rs	3
 K8	crates/fno/src/mux_cli/web_ctl.rs	rs	4
 K8	crates/fno/src/mux_rows.rs	rs	2
 K8	crates/fno/src/needs_overlay.rs	rs	9
@@ -1659,12 +1647,10 @@ K10	cli/tests/integration/test_effect_idempotency.py	py	4
 K10	cli/tests/integration/test_first_run_documentation.py	py	5
 K10	cli/tests/integration/test_health_monitor.py	py	37
 K10	cli/tests/integration/test_list_misscoped.py	py	3
-K10	cli/tests/integration/test_migrate_source_field.py	py	7
 K10	cli/tests/integration/test_operator_single_doc.py	py	7
 K10	cli/tests/integration/test_origin_promotion.py	py	4
 K10	cli/tests/integration/test_parent_filter.py	py	5
 K10	cli/tests/integration/test_routing_inventory_policy.py	py	5
-K10	cli/tests/integration/test_selection_score.py	py	7
 K10	cli/tests/integration/test_state_cli.py	py	10
 K10	cli/tests/integration/test_test_run_lifecycle.py	py	3
 K10	cli/tests/test_autonomy_status.py	py	13
@@ -1718,7 +1704,7 @@ K10	cli/tests/unit/test_cli_wrappers_phase.py	py	10
 K10	cli/tests/unit/test_cli_wrappers_pr.py	py	7
 K10	cli/tests/unit/test_completed_at_status_agreement.py	py	5
 K10	cli/tests/unit/test_context_audit.py	py	20
-K10	cli/tests/unit/test_context_nudge_prescribed_verbs.py	py	2
+K10	cli/tests/unit/test_context_nudge_prescribed_commands.py	py	2
 K10	cli/tests/unit/test_context_probe.py	py	5
 K10	cli/tests/unit/test_db_schema_grounding.py	py	19
 K10	cli/tests/unit/test_decisive_fields.py	py	3
@@ -1744,7 +1730,7 @@ K10	cli/tests/unit/test_fleet_state.py	py	17
 K10	cli/tests/unit/test_fno_test_cmd.py	py	22
 K10	cli/tests/unit/test_friction_lane.py	py	2
 K10	cli/tests/unit/test_frontmatter_reader.py	py	6
-K10	cli/tests/unit/test_gate_escape_verb.py	py	5
+K10	cli/tests/unit/test_gate_escape_command.py	py	5
 K10	cli/tests/unit/test_gh_proxy.py	py	32
 K10	cli/tests/unit/test_hatch_build.py	py	23
 K10	cli/tests/unit/test_heal_phase.py	py	8
@@ -1853,8 +1839,8 @@ K10	crates/fno-agents/src/census.rs	rs	8
 K10	crates/fno-agents/src/cli_args.rs	rs	13
 K10	crates/fno-agents/src/client.rs	rs	9
 K10	crates/fno-agents/src/client_tests.rs	rs	36
-K10	crates/fno-agents/src/client_verbs.rs	rs	15
-K10	crates/fno-agents/src/client_verbs_tests.rs	rs	1
+K10	crates/fno-agents/src/client_commands.rs	rs	15
+K10	crates/fno-agents/src/client_commands_tests.rs	rs	1
 K10	crates/fno-agents/src/compaction.rs	rs	5
 K10	crates/fno-agents/src/completion_output.rs	rs	2
 K10	crates/fno-agents/src/context_run.rs	rs	11

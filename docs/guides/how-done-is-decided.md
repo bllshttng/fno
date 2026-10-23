@@ -14,7 +14,7 @@ Three external facts decide done:
 3. Every required reviewer has approved it.
 
 The agent cannot vouch for any of these.
-It reads them from GitHub through one decision verb.
+It reads them from GitHub through one decision command.
 
 ## Watch a run that is still going
 
@@ -69,7 +69,7 @@ It is waiting because the world has not caught up.
 
 The agent's own text is not evidence.
 "Almost done" in the transcript does not move the gate.
-The decision verb reads GitHub, not the transcript.
+The decision command reads GitHub, not the transcript.
 Trust `fno do pr status` for CI, not the agent's self-report.
 
 ## Stop it yourself
@@ -85,8 +85,8 @@ This is the supported off switch. The author and reason are echoed in the run's 
 Do not edit `.fno/target-state.md`.
 It is an immutable manifest.
 
-## The decision verb
+## The decision command
 
-The verb behind all of this is `fno-agents loop-check`.
+The command behind all of this is `fno-agents loop-check`.
 It runs inside the session at the stop hook and reads only external truth.
 The full mechanism (the manifest, the shim, the done reads, the budget cap) is in [the control plane loop](../architecture/control-plane-loop.md).

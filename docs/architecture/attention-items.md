@@ -107,9 +107,9 @@ The close runs two ways: the daemon sweep every hour, and the bell's Questions-t
 
 ## Question pages
 
-One page per question. The page name is `<ask date>-<question id>-<slug>-<node>.md`, for example `20260922-q-aaaaaaaa-wont-do-deferral-kind-x-bbbb.md`. When the frontmatter `question_id` is the id inside the file name, the file is a page. A sync client's `q-1 (conflicted copy)` is ignored. Closed pages move to `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when the name is taken).
+One page per question. The page name is `<ask date>-<question id>-<slug>-<node>.md`, for example `20260922-q-aaaaaaaa-wont-do-deferral-kind-x-bbbb.md`. When the frontmatter `question_id` is the id inside the file name, the file is a page. A sync client's `q-1 (conflicted copy)` is ignored. Closed pages move to `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when the name is taken). A lost close renames onto the one lost copy the id already has instead of minting a new `-N`. The arm drains duplicate lost copies at up to 200 a beat and keeps the newest.
 
-Frontmatter carries `question_id`, `kind`, `status`, `title`, `ask`, `recommend`, `aliases`, `asked_at`, `created`, `updated`, and `project`. It also carries the routing facts `harness_session_id`, `session_name`, `harness`, `model`, `node`, `blocks`, `epic`, `role`, and `lead`. Each option also renders a letter column (`a`, `b`, `c`, ...), and `answer` holds the typed cell. A close adds `answered_at` and `recorded_by`. An unmeasured asker fact reads `unknown` and an absent routing fact reads `none`, never a blank key. The renderer escapes `<` and `>` in every text field it writes, and the answer reader unescapes them. An unescaped `<stage>` reads as an open HTML tag and eats every checkbox on the page.
+Frontmatter carries `question_id`, `kind`, `status`, `title`, `ask`, `recommend`, `aliases`, `asked_at`, `created`, `updated`, and `project`. It also carries the routing facts `harness_session_id`, `session_name`, `harness`, `model`, `node`, `blocks`, `epic`, `role`, and `lead`. The delivery stamp `arm` (16 hex over the machine id and the agents home) rides beside them. Each option also renders a letter column (`a`, `b`, `c`, ...), and `answer` holds the typed cell. A close adds `answered_at` and `recorded_by`. An unmeasured asker fact reads `unknown` and an absent routing fact reads `none`, never a blank key. The renderer escapes `<` and `>` in every text field it writes, and the answer reader unescapes them. An unescaped `<stage>` reads as an open HTML tag and eats every checkbox on the page.
 
 ## Answering
 
@@ -121,7 +121,7 @@ The body holds the title and the question body. `## Options` carries one `- [ ] 
 
 ## The arm
 
-The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/attention/questions.json`. The projection cache at `~/.fno/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
+The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/state/attention/questions.json`. The projection cache at `~/.fno/state/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
 
 ## Config keys
 
@@ -139,6 +139,7 @@ What a file answer can do: close the question, reach the asker, unblock the node
 - Any local process can tick a box. The answer carries no identity the machine can check. The `attention_answer` row names the lane, and section-style limits hold.
 - A page with conflict markers is skipped every beat and named in the tick detail. An answer typed inside it never records until someone resolves the markers.
 - Another writer changes a page between the arm's read and its close write. That page is skipped (`skip_reason: file_changed`) and the next beat closes it. Other pages still process.
+- A store loses a question's rows. A page then has no open row and no close row, so no beat can name its close. When every source reads clean, the arm closes such a page as `closed` and moves it to `done/`. The receipt reads `lost, no question row in the stores`. The close answers nothing, runs no `clear` and sends no mail. A page whose ask row is still there waits as before. An empty store also reads clean. So while any question store holds no row at all, no page closes as lost. The global events store holds rows but never a question, so it does not block the close. A lost page in `done/` carries `recorded_by: attention_lost`. It never blocks a redelivery. When the question reads open again, its page comes back. On 2026-10-18 this state held 110 pages open in the Base while the index listed 10. The close is owner-scoped. A page carries an `arm` stamp from delivery. The arm lost-closes only pages carrying its own stamp. A page stamped by another arm stays open. The tick detail names it once per beat (`foreign page ...`). Two machines on one synced vault each ran an arm. On 2026-10-22 that flap minted 2354 numbered copies in an hour. When `done/` holds a lost copy for the id, a page with no stamp stays open.
 
 ## The answer endpoint
 
@@ -166,10 +167,10 @@ A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `ev
 
 ## Delivery
 
-The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row, whatever its sink, drives one reply ladder from the persisted state at `~/.fno/attention/replies.json`. First the clear: while the item is still open, the arm runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes a note. Then the rungs, in order:
+The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row, whatever its sink, drives one reply ladder from the persisted state at `~/.fno/state/attention/replies.json`. First the clear: while the item is still open, the arm runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes a note. Then the rungs, in order:
 
 1. `mail` - the clear's mail leg. The posture line decides: `delivered (hosted)` is the end, `rung: mail, outcome: landed`.
-2. `resume` - a durable park under an idle asker. When the asker has a session id, the arm runs `fno agents resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id in the asker's transcript, after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`).
+2. `resume` - a durable park under an idle asker. When the asker has a session id, the arm runs `fno agents session resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id in the asker's transcript, after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`).
 3. `role` - an exit-17 resume, a nonzero exit, a missing transcript, or five unconfirmed minutes. The arm mails the answer, wrapped, to the live role whose territory names the asker's node (`rung: role, outcome: sent`). With no role, the row reads `rung: none, outcome: failed` and the evidence names why.
 
 Each item's ladder ends with one `attention_delivery` row in `questions.jsonl`. The panel shows the rung on the answered row for 15 minutes.

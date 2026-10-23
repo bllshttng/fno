@@ -4,7 +4,7 @@ cli/src/fno.
 
 Operator ruling 2026-09-12 (node): all new code is Rust and the flag
 registry is structural there (clap, one declaration per flag). A new Python
-flag means a new verb, and a new verb belongs in crates. The gate measures
+flag means a new command, and a new command belongs in crates. The gate measures
 the change against its own base - the merge base of PR_BASE_REF on a PR, the
 previous tip (FLAG_BASE_SHA = github.event.before) on a push - over only the
 files the change touched, and refuses any growth. There is no stored count:
@@ -156,7 +156,7 @@ def run(
             if deltas[path] > 0:
                 print(f"  {path} +{deltas[path]}", file=sys.stderr)
         print(
-            "A new flag is a new verb and a new verb belongs in crates "
+            "A new flag is a new command and a new command belongs in crates "
             "(clap; operator ruling 2026-09-12, node). Shrink the "
             "Python flag surface, never grow it.",
             file=sys.stderr,

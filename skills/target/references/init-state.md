@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Initialize State (Steps 1-3f)
 
 **Load when:** starting a fresh target run (Step 1 onwards). All steps run sequentially before pipeline execution.
@@ -58,7 +58,7 @@ The size profile sets the base values for all toggles. Individual flags then ove
 
 ## Step 1c-blast: Blast-Radius Modulation (AUTO, opt-in)
 
-When `config.target.blast.enabled: true` and the input is a plan or node with a File Ownership Map, `fno do target init` reads blast radius before writing the immutable manifest. It checks the plan's touched paths and adjusts the size from Step 1c. This runs inside the verb with no LLM call. Tell the agent that `target_size` can differ from the user's size or the default. The verb prints an announce line to stderr.
+When `config.target.blast.enabled: true` and the input is a plan or node with a File Ownership Map, `fno do target init` reads blast radius before writing the immutable manifest. It checks the plan's touched paths and adjusts the size from Step 1c. This runs inside the command with no LLM call. Tell the agent that `target_size` can differ from the user's size or the default. The command prints an announce line to stderr.
 
 - **high blast** (touched surface matches the blast map: the loc-ratchet control-plane globs plus a general auth/migrations/sql/infra/billing list, extended by `config.target.blast.high_blast_globs`) → ceremony is **floored at `M`**, non-overridable downward even over an explicit `S`. Announce: `blast: high (<matched-path>) -> floor M ...`.
 - **low blast** (known paths, no matches) **and no pinned size** → **downgraded to `S`** (do + PR, fast path).
@@ -132,7 +132,7 @@ fi
 - For plan input: set immediately from the input argument
 - For idea input: set after `/blueprint` creates the plan directory
 
-The stop hook uses `plan_path` to archive the scratchpad (if any) to `scratchpad-archive/` inside the plan folder, and to drive `stamp-plan.py` on ship. Session-state files (HANDOFF.md, SUMMARY.md, STATE.md, target-state.md) are transient and are NOT archived - the plan frontmatter stamp, COMPLETION.md, ledger.json, and git history are the durable record.
+`fno-agents finalize` uses `plan_path` to stamp the plan frontmatter on ship. Session-state files (HANDOFF.md, SUMMARY.md, STATE.md, target-state.md) are transient and are NOT archived. The durable record is the plan frontmatter stamp, ledger.json, git history, and any beastmode COMPLETION.md ledger.
 
 ## Step 3a: Cross-Project Is Retired (migration shim)
 
@@ -218,7 +218,7 @@ See [domain-profiles.md](domain-profiles.md) for full schema and examples.
 
 ## Step 3d2: Discovery Gate (idea input only)
 
-When `input_type == idea`, run the discovery protocol before plan to surface unknowns before planning. This is the most important touch point - it prevents target from silently assuming its way through ambiguity. `/think` is NOT a step here (operator ruling): it is a research verb outside the delivery path, never an automatic prerequisite. When no prior `/think` doc exists, the discovery protocol (and `/blueprint` after it) self-grounds via `fno do think inspect`.
+When `input_type == idea`, run the discovery protocol before plan to surface unknowns before planning. This is the most important touch point - it prevents target from silently assuming its way through ambiguity. `/think` is NOT a step here (operator ruling): it is a research command outside the delivery path, never an automatic prerequisite. When no prior `/think` doc exists, the discovery protocol (and `/blueprint` after it) self-grounds via `fno do think inspect`.
 
 ```
 DISCOVERY GATE -> plan -> execute -> review -> ship

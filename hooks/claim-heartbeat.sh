@@ -225,8 +225,8 @@ else:
   elif [[ "$_GH_ATTRIBUTION" == compound || "$_GH_ATTRIBUTION" == invalid ]]; then
     echo "claim-heartbeat: gh pr create not attributable ($_GH_ATTRIBUTION command); binding skipped" >&2
   fi
-  if [[ "$_BARE_GH_CREATE" -eq 1 ]] && ! command -v fno >/dev/null 2>&1; then
-    echo "claim-heartbeat: gh pr create observed but fno is unavailable; binding skipped" >&2
+  if [[ "$_BARE_GH_CREATE" -eq 1 ]] && [[ -z "$AGENTS_BIN" ]]; then
+    echo "claim-heartbeat: gh pr create observed but fno-agents is unavailable; binding skipped" >&2
   elif [[ "$_BARE_GH_CREATE" -eq 1 ]]; then
     _CREATED_PR_FAILED="$(printf '%s' "$STDIN" | jq -r '
       if (.tool_response | type) == "object" and (
@@ -254,7 +254,7 @@ else:
       while [[ "$_BIND_ATTEMPT" -lt 2 && "$_BIND_RC" -ne 0 ]]; do
         _BIND_ATTEMPT=$((_BIND_ATTEMPT + 1))
         _BIND_OUTPUT="$(with_timeout "$_BIND_TIMEOUT" \
-          fno "${_bind_args[@]}" 2>&1)"
+          "$AGENTS_BIN" "${_bind_args[@]}" 2>&1)"
         _BIND_RC=$?
       done
       if [[ "$_BIND_RC" -ne 0 ]]; then
@@ -374,8 +374,8 @@ if [[ "$_HANDOVER_NODE" =~ ^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$ \
 fi
 
 # The manifest lives in the repo space's worktree slice; resolve it through the
-# owning verb so this hook never spells the path. Degraded fallback for an fno
-# predating the verb: the legacy checkout-relative path (same contract as
+# owning command so this hook never spells the path. Degraded fallback for an fno
+# predating the command: the legacy checkout-relative path (same contract as
 # target-stop-hook.sh).
 MANIFEST="$("$AGENTS_BIN" state path target-state 2>/dev/null || true)"
 [[ -z "$MANIFEST" ]] && MANIFEST="$CWD/.fno/target-state.md"
@@ -518,7 +518,7 @@ if [[ -z "$_STATUS_ONCE" || "$_STATUS_SHAPE_OK" != 1 ]]; then
 fi
 if [[ "$HOLDER_STATE" == "corrupted" ]]; then
   # Corrupted is UNKNOWN ownership, not positively-free: the file exists, a
-  # holder may still be working the node, and every recovery verb refuses on
+  # holder may still be working the node, and every recovery command refuses on
   # it. Telling this session to "take a claim" dead-ends; say what is true.
   echo "claim-heartbeat: node:$NODE_ID claim file corrupted; ownership unverifiable, renewal impossible this window" >&2
   write_stamp corrupted

@@ -2,7 +2,7 @@
 
 ## Is this page for you?
 
-You run or debug the stop-hook decision verb (`fno-agents loop-check`): why a session refused to stop, or stopped too early. This document covers the verb that runs INSIDE a session. Misreading it sends you patching session state files that nothing reads. The hook reads the world and holds no state.
+You run or debug the stop-hook decision command (`fno-agents loop-check`): why a session refused to stop, or stopped too early. This document covers the command that runs INSIDE a session. Misreading it sends you patching session state files that nothing reads. The hook reads the world and holds no state.
 
 Not for: the driver loop that dispatches sessions from outside. See [unified-loop.md](unified-loop.md) (step 5). The target driver is live today. The megawalk and megatron arms were removed.
 
@@ -18,12 +18,12 @@ The arms: [background-processes.md](background-processes.md#arms) holds every ar
 
 The row shape is owned by `crates/fno-agents/src/tick_ledger.rs`. Python arms emit through `cli/src/fno/control_plane.py`. `cli/src/fno/events/schema.yaml` pins both validators on the shape.
 
-The readout: `fno agents status` prints one row per arm. The reader folds each journal's committed store rows plus its live bytes, through `event_store::journal_text`. Writers commit to the store only, so a fold over the raw file stops at the store cutover. Every row carries producer evidence, the honest runtime claim about its receipt. When the journals hold no tick row for the arm, the evidence is `unobserved`. When a tick row exists, the evidence is `observed`. An unobserved row reads `UNOBSERVED`, never red. An empty journal cannot say whether a producer exists or died before its first tick. Only an observed receipt is a measurement. When an observed row's newest tick is older than twice the row's own `interval_s`, the row reads red `STALE`. A fresh observed row whose skip reason is a failure token (`timeout`, `error`, `budget_spent`, `select-unmeasured`, `wake_failed`, `sweep_failed`, `notify_failed`) reads `FAIL`. A pass that stopped before it covered every unit it enumerated reads `FAIL`, and its detail names how many of N it reached (`evaluated=0/5`). A scheduler does not stop one arm at a time. When every observed interval-bearing arm misses a run, and no arm ticks within twice the shortest interval, the readout reads them all red. The job stopped, not the arm. The Rust owner selects the attention rows into the status payload's `arms_attention` list. Attention means unobserved, stale, or failing. `fno doctor` prints each selected row's rendered `line` and never re-derives the verdict in Python. A payload without `arms_attention` (older binary) reads unknown, never green. A row without a `line` falls back to the skip-reason sentence. `stop_hook` is event-driven (`interval_s: 0`) and reads `UNOBSERVED` from quiet like every arm. An unreadable readout reports unknown, never green.
+The readout: `fno agents session status` prints one row per arm. The reader folds each journal's committed store rows plus its live bytes, through `event_store::journal_text`. Writers commit to the store only, so a fold over the raw file stops at the store cutover. Every row carries producer evidence, the honest runtime claim about its receipt. When the journals hold no tick row for the arm, the evidence is `unobserved`. When a tick row exists, the evidence is `observed`. An unobserved row reads `UNOBSERVED`, never red. An empty journal cannot say whether a producer exists or died before its first tick. Only an observed receipt is a measurement. When an observed row's newest tick is older than twice the row's own `interval_s`, the row reads red `STALE`. A fresh observed row whose skip reason is a failure token (`timeout`, `error`, `budget_spent`, `select-unmeasured`, `wake_failed`, `sweep_failed`, `notify_failed`) reads `FAIL`. A pass that stopped before it covered every unit it enumerated reads `FAIL`, and its detail names how many of N it reached (`evaluated=0/5`). A scheduler does not stop one arm at a time. When every observed interval-bearing arm misses a run, and no arm ticks within twice the shortest interval, the readout reads them all red. The job stopped, not the arm. The Rust owner selects the attention rows into the status payload's `arms_attention` list. Attention means unobserved, stale, or failing. `fno doctor` prints each selected row's rendered `line` and never re-derives the verdict in Python. A payload without `arms_attention` (older binary) reads unknown, never green. A row without a `line` falls back to the skip-reason sentence. `stop_hook` is event-driven (`interval_s: 0`) and reads `UNOBSERVED` from quiet like every arm. An unreadable readout reports unknown, never green.
 
 Every red row names its cause as the first rule that holds. If no rule fires, the row reads `unexplained`, so a reader can see the rules ran. When arms stay failing, or go stale from a dead scheduler, longer than `[notify] arm_failing_after_s` (default 1800), the `arm_watch` arm sends one operator notice. The notice is deduped on the set of arms and their anchors, and recovery is silent.
 
 - `daemon_young`: A daemon-scheduled arm reads `pending`, not red, while the daemon is up less than twice the interval. The first window has not elapsed.
-- `stale_daemon`: The daemon predates the installed build. Run `fno agents restart`.
+- `stale_daemon`: The daemon predates the installed build. Run `fno agents session restart`.
 - `daemon_down`: The daemon is not running.
 - `tick_timeout`: The newest pr-watch tick end named this arm's phase (or, for `pr_watch_merge`, the `merge` phase) in its cut list. A killed, errored, or legacy tick end carries no cut list. That case falls back to blaming `pr_watch_merge`'s own row.
 - `tick_overdue`: No completed pr-watch tick stamp inside 2x interval. When the tick's attempt/end records show a tick started and did not complete, the cause names the phase. Run `fno do pr watch status`.
@@ -32,12 +32,12 @@ Every red row names its cause as the first rule that holds. If no rule fires, th
 
 ### Cause, repair, and owner
 
-A red row says more than how long it has been down. `crates/fno-agents/src/arm_repair.rs` holds the one cause table. Its `annotate` step runs after `explain` in all three readers: `fno agents status`, the `arm_watch` notice, and the lead check-in. It sets `cause`, `repair` and `heal` on the row, and the row's `line` ends with `repair: <verb> heal=auto|operator`. The notice and the check-in print that `line` as it is, so the three readers print the same text.
+A red row says more than how long it has been down. `crates/fno-agents/src/arm_repair.rs` holds the one cause table. Its `annotate` step runs after `explain` in all three readers: `fno agents session status`, the `arm_watch` notice, and the lead check-in. It sets `cause`, `repair` and `heal` on the row, and the row's `line` ends with `repair: <command> heal=auto|operator`. The notice and the check-in print that `line` as it is, so the three readers print the same text.
 
 | cause | repair | heal |
 |---|---|---|
 | `tick_overdue`, `launchd_foreign_plist`, `scheduler_down` on launchd | `fno do pr watch refresh` | auto |
-| `scheduler_down` on the daemon, `stale_daemon`, `daemon_down` | `fno agents restart` | operator |
+| `scheduler_down` on the daemon, `stale_daemon`, `daemon_down` | `fno agents session restart` | operator |
 | `tick_timeout`, `timeout` | `fno do pr watch status` | operator |
 | `dead_holder` | `fno agents claim release <key> --holder <holder>` | auto |
 | `stale_build` | `fno doctor update` | auto |
@@ -53,7 +53,7 @@ The new classes:
 - `dead_holder`: A `merge_close` row reads `skip=held`, its holder pid is gone, and the hold is past 300 s. That row reads `FAIL`.
 - `stale_build`: The install pin (`~/.fno/source-pin.json`) names a linked worktree or a divergent source. A missing or unreadable pin is not evidence.
 - `parent_gone`: A failing row whose detail names `parent-gone`.
-- `unclassified`: A red row that matches no class. It keeps its skip token and names no verb.
+- `unclassified`: A red row that matches no class. It keeps its skip token and names no command.
 
 ### The heal lane
 
@@ -64,22 +64,22 @@ Every `arm_watch` tick runs the `heal=auto` repairs before it pages, and then pa
 - **Stale build.** A row can read `stale_build`. Then the tick starts `fno doctor update` in the background from the canonical checkout. It does this at most once in 6 hours. The source-pin gate in `fno doctor update` still refuses a source that is not eligible. The next tick reads the pin again to see the result.
 - **Unmeasured selection.** A `select-unmeasured` row means the bounded backlog read did not answer or the store refused it. The bound comes from `[auto_continue] select_timeout_s` and defaults to 120 seconds. The tick starts one detached `fno backlog advance` retry per failed attempt. It starts at most one retry per 300-second `arm_watch` tick. The single-flight guard prevents overlap. A new failure timestamp permits the next retry.
 
-`recovery.self_heal.enabled` (default `true`) is the switch. When it is `false`, no repair runs, the tick detail reads `heal=off`, and the rows still print their repair verbs for the operator.
+`recovery.self_heal.enabled` (default `true`) is the switch. When it is `false`, no repair runs, the tick detail reads `heal=off`, and the rows still print their repair commands for the operator.
 
 ### Stuck work
 
-`arm_watch` also pages on work that is stuck outside the arms table. One module, `crates/fno-agents/src/stuck_work.rs`, answers "what work is stuck" for three readers. `fno agents status` carries the `stuck_work` payload and the `stuck work:` block. The arm tick folds the findings into the notice token and body under the `control plane: needs attention` title. The lead check-in reads them as its `control_plane` reading.
+`arm_watch` also pages on work that is stuck outside the arms table. One module, `crates/fno-agents/src/stuck_work.rs`, answers "what work is stuck" for three readers. `fno agents session status` carries the `stuck_work` payload and the `stuck work:` block. The arm tick folds the findings into the notice token and body under the `control plane: needs attention` title. The lead check-in reads them as its `control_plane` reading.
 
 Two findings:
 
-- **Hung verb.** A process whose argv0 basename is `fno`, `fno-py` or `fno-agents` is a verb. So is a python interpreter driving a `/fno-py` script. When its age passes three times its declared `--timeout` (else 1800 s), the verb is hung. The raw forms are `30`, `30s`, `30m`, `30h`. One const excludes the long-lived shapes. They are `fno --server`, a bare `fno` with no verb, and an argv carrying `daemon`, `attach`, `mux`, or the pair `loop run`. `fno-agents-daemon` and `fno-agents-worker` never match the basename rule.
+- **Hung command.** A process whose argv0 basename is `fno`, `fno-py` or `fno-agents` is a command. So is a python interpreter driving a `/fno-py` script. When its age passes three times its declared `--timeout` (else 1800 s), the command is hung. The raw forms are `30`, `30s`, `30m`, `30h`. One const excludes the long-lived shapes. They are `fno --server`, a bare `fno` with no command, and an argv carrying `daemon`, `attach`, `mux`, or the pair `loop run`. `fno-agents-daemon` and `fno-agents-worker` never match the basename rule.
 - **Dead holder.** A `flight:` claim held more than 300 s whose holder pid probe reads `absent` on this host. Only `flight:` holds count: they are pid-scoped by design, while session claims outlive their ambient pid on purpose.
 
-A third finding rides the same tick from its own module, `crates/fno-agents/src/role_alarm.rs`: the **empty role**. A titled scope that holds ready work and no live holder is a silent stall. The org reports the condition, and nothing asked the org. The producer shells the Python org verb (`fno agents org --nodes`, the one decider for which scopes are held) and reads its payload. When three facts hold together, it raises. The role reads `manifest-only`. The per-scope stuck verdict in its fold names unclaimed ready work. The scope has read empty for 1800 s. An unreadable org read is an error and never a clear board. A scope that stops reading empty drops its clock, so recovery is the designed quiet and a second episode pages again.
+A third finding rides the same tick from its own module, `crates/fno-agents/src/role_alarm.rs`: the **empty role**. A titled scope that holds ready work and no live holder is a silent stall. The org reports the condition, and nothing asked the org. The producer shells the Python org command (`fno agents org --nodes`, the one decider for which scopes are held) and reads its payload. When three facts hold together, it raises. The role reads `manifest-only`. The per-scope stuck verdict in its fold names unclaimed ready work. The scope has read empty for 1800 s. An unreadable org read is an error and never a clear board. A scope that stops reading empty drops its clock, so recovery is the designed quiet and a second episode pages again.
 
-The 1800 s grace counts from the first tick that saw the scope empty. The number is not invented. It is the floor `stuck_work` already applies to a hung verb. It is the `[notify] arm_failing_after_s` default the confirmed send pages at. It is two lead_wake beats and six arm_watch beats. One control plane, one meaning of "long enough". A role mid-handoff is briefly empty by design, so the grace is the anti-flap rule. The first-seen stamp lives in the notify signal store, so a daemon restart delays the page by one grace and never suppresses it.
+The 1800 s grace counts from the first tick that saw the scope empty. The number is not invented. It is the floor `stuck_work` already applies to a hung command. It is the `[notify] arm_failing_after_s` default the confirmed send pages at. It is two lead_wake beats and six arm_watch beats. One control plane, one meaning of "long enough". A role mid-handoff is briefly empty by design, so the grace is the anti-flap rule. The first-seen stamp lives in the notify signal store, so a daemon restart delays the page by one grace and never suppresses it.
 
-A dead-holder line ends with its repair: `; repair: fno agents claim release <key> --holder <holder> heal=auto`. For a claim outside `$HOME`, the verb starts with `FNO_CLAIMS_ROOT=<root>`. A new shell then resolves the same claims dir.
+A dead-holder line ends with its repair: `; repair: fno agents claim release <key> --holder <holder> heal=auto`. For a claim outside `$HOME`, the command starts with `FNO_CLAIMS_ROOT=<root>`. A new shell then resolves the same claims dir.
 
 The read fails loud. A `ps` that cannot run, or an unreadable claims dir, is an error and never an empty list. A blind read cannot page as "nothing is stuck". The daemon drain is the other half of the same clock. Its `backlog advance` child runs under a wall clock equal to the lease its own flight lock carries (`flight_gate::FLIGHT_TTL_MS`). A child killed at the bound journals an `active_backlog_skip` with reason `advance-timeout`.
 
@@ -93,7 +93,7 @@ Three layers of bash control-plane machinery were removed:
 | `fno gate` CLI surface | ~1460 | `cli/src/fno/gates/` package + both `gate_reality_map.yaml` copies; `fno gate ...` now exits unknown-command |
 | Phase verifiers | ~900 | `skills/target/scripts/verifiers/verify-{phase}.sh` + orchestrator (11 files) |
 
-Total deleted: ~9935 LOC. Replaced by: `fno-agents loop-check` Rust verb (~1830 LOC including unit tests) + 118-line bash shim.
+Total deleted: ~9935 LOC. Replaced by: `fno-agents loop-check` Rust command (~1830 LOC including unit tests) + 118-line bash shim.
 
 ## The shim (`hooks/target-stop-hook.sh`)
 
@@ -106,11 +106,11 @@ A 118-line read-only shim. The ONLY decision it makes is binary resolution order
 
 **Binary missing:** emits `loop_check_binary_missing` event to both event logs and allows exit. The session must be re-spawned once the binary is available.
 
-**Foreign session guard:** reads `claude_transcript_id` from the manifest; if the live session's transcript ID does not match, the shim exits clean without calling the verb (another session owns that manifest).
+**Foreign session guard:** reads `claude_transcript_id` from the manifest; if the live session's transcript ID does not match, the shim exits clean without calling the command (another session owns that manifest).
 
-The shim sources NO `scripts/lib/*.sh` files. Its only writes: the `loop_check_binary_missing` event append (when binary is absent) and `loop-check.stderr.log` append (verb stderr).
+The shim sources NO `scripts/lib/*.sh` files. Its only writes: the `loop_check_binary_missing` event append (when binary is absent) and `loop-check.stderr.log` append (command stderr).
 
-## The verb (`fno-agents loop-check`)
+## The command (`fno-agents loop-check`)
 
 CLI contract:
 
@@ -306,13 +306,13 @@ All events land in BOTH `<cwd>/.fno/events.jsonl` AND `~/.fno/events.jsonl` with
 
 | Event type | Emitted by | When |
 |---|---|---|
-| `loop_check` | verb | every stop-hook fire |
-| `termination` | verb | when a TerminationReason fires |
-| `loop_check_gh_error` | verb | gh CLI fails during a `done()` read |
-| `loop_advisory_mode` | verb | session is in advisory mode |
+| `loop_check` | command | every stop-hook fire |
+| `termination` | command | when a TerminationReason fires |
+| `loop_check_gh_error` | command | gh CLI fails during a `done()` read |
+| `loop_advisory_mode` | command | session is in advisory mode |
 | `loop_check_binary_missing` | shim | `fno-agents` binary not found |
-| `loop_check_legacy_manifest` | verb | manifest has `status:` key (pre-wedge) |
-| `loop_check_question_gate` | verb | the question gate blocks a stop; its held list lets the next fire end the loop with `HeldOnQuestion` |
+| `loop_check_legacy_manifest` | command | manifest has `status:` key (pre-wedge) |
+| `loop_check_question_gate` | command | the question gate blocks a stop; its held list lets the next fire end the loop with `HeldOnQuestion` |
 
 ## Back-compat
 
@@ -337,7 +337,7 @@ What landed here is the part that is already Rust.
 
 ## The finalize writer (step 6)
 
-`loop-check` remains a decision verb for legacy paths. The generic-delivery branch performs one durability write before returning the `DoneDelivery` decision: it appends the strict session-bound selected verdict that finalize must consume. `fno-agents finalize` is the separate writer the shim runs after any terminal-allow decision (a non-null `termination_reason`):
+`loop-check` remains a decision command for legacy paths. The generic-delivery branch performs one durability write before returning the `DoneDelivery` decision: it appends the strict session-bound selected verdict that finalize must consume. `fno-agents finalize` is the separate writer the shim runs after any terminal-allow decision (a non-null `termination_reason`):
 
 ```
 decision = fno-agents loop-check ...        # pure read-only, unchanged
@@ -348,7 +348,7 @@ if decision.allow AND decision.is_terminal:
 It splits into two trigger classes:
 
 - **Always** (any terminal reason): one ledger session-record, via `session-cost.py` + `register-task.py`, carrying `graph_node_id` + `provider_id` + scalar `session_id` + `cost_usd` + a new `termination_reason` field. Every provider session that touched a node leaves exactly one row, so a node's true cost and full session list roll up by grouping ledger entries on `graph_node_id`.
-- **Legacy ship** (`DonePRGreen` / `DoneAdvisory`): plan stamp + graduate (`stamp-plan.py`) and a git-derived handoff artifact.
+- **Legacy ship** (`DonePRGreen` / `DoneAdvisory`): plan stamp + graduate (`plan_doc::stamp`, `finalize.rs` `stamp_and_graduate`) and a git-derived handoff artifact.
 - **Generic delivery** (`DoneDelivery`): consume the already selected verdict, stamp or safely graduate the plan with its deterministic `fno-delivery://` receipt, write a generic handoff without PR or research assumptions, then durably append the authoritative termination event.
 
 It is idempotent: a `session_finalized` event keyed by `session_id` short-circuits re-fires, and a sub-step failure emits `session_finalize_failed` naming the step while running the remaining steps. Legacy terminal failures remain non-blocking. A `DoneDelivery` failure returns nonzero so the Claude and agy stop-hook adapters keep the session alive and retry the required receipt, stamp, handoff, and terminal-event writes. The authoritative `DoneDelivery` termination is absent until those writes succeed, so the active dispatcher cannot close the node mid-retry. Nothing it writes is read by a future `loop-check` decision as a gate: the budget axis filters ledger cost by `session_id`, so a terminal write can only push the same terminating session toward termination, never away. A delegating self-handoff session writes its own ledger record (`termination_reason: delegated`, ledger-only) inside `handoff.sh` before manifest archival, because the shim's finalize cannot read the archived manifest. New event kinds: `session_finalized`, `session_finalize_failed`.

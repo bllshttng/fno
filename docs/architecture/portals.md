@@ -12,15 +12,15 @@ Only an explicit gesture creates or closes a portal. A default never creates one
 
 | Door | Gesture |
 |---|---|
-| Any verb, explicit flag | `fno mux thread <key> --portal new` opens the next free index. `--portal N` opens N if N is not open, and tunes if it is. A `--split DIR` halves the caller's own pane; `--from portal N\|worker\|current` names another cell (split right from portal 0 gives the next index, and a 2x2 comes from splitting down from each of those). A spawn carries the same flags and opens the portal right after its receipt names the new index. Human or agent, the rule is the same: the flag is the ask. |
-| Any verb, no flag | Tune. The reach focuses the row's open portal. With none open, the door's own portal 0 serves it. A bare `fno agents spawn` is a paneless thread and opens nothing. |
+| Any command, explicit flag | `fno mux thread <key> --portal new` opens the next free index. `--portal N` opens N if N is not open, and tunes if it is. A `--split DIR` halves the caller's own pane; `--from portal N\|worker\|current` names another cell (split right from portal 0 gives the next index, and a 2x2 comes from splitting down from each of those). A spawn carries the same flags and opens the portal right after its receipt names the new index. Human or agent, the rule is the same: the flag is the ask. |
+| Any command, no flag | Tune. The reach focuses the row's open portal. With none open, the door's own portal 0 serves it. A bare `fno agents spawn` is a paneless thread and opens nothing. |
 | Sideline | Enter on a paneless live row reaches it. `P` opens the portal picker. The `+` row opens the next free index (shift+HJKL as a split beside the focused pane). |
 | Composer | The new-agent popup carries the placement in its launch request. The portal opens server-side on the launch receipt, through the requesting client's own reach. |
 | A side effect | Never creates. Retask, `fno mux command` and every other machine call tune an existing portal or open a transient view that is not a portal at all. |
 
 Closing is the operator's gesture only: the row menu's `Close portal` entry (`c`), prefix+x on the focused seat, or `fno mux pane kill <seat>`. A spawn, a reach, a restart, a finished worker or a dead viewer never closes one. Closing a portal never stops the row it showed.
 
-`<key>` is the agent name, or the full `session` id `fno agents whoami` prints. The match is exact, no prefix and no substring. Those tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`. Zero matches, or several rows answering the same key, refuse and spawn no worker.
+`<key>` is the agent name, or the full `session` id `fno agents registry whoami` prints. The match is exact, no prefix and no substring. Those tiers belong to `fno mux view`, `fno mux where` and `fno mux pane focus`. Zero matches, or several rows answering the same key, refuse and spawn no worker.
 
 ## The transient view
 
@@ -78,4 +78,4 @@ Every pane drains and renders its PTY, so portals cost redraw work. That plus th
 
 ## A conversion leaves no portal
 
-Converting a pane session to a thread (`fno agents resume <name> --substrate thread`) is a substrate change, not a view change. Afterward the mux server hosts nothing for that session. The conversion opens no portal and leaves none behind. To look at the converted thread, tune one with `fno mux thread <name>`. A portal never changes the substrate. The reseat verb moves the worker into the named portal's screen while the server keeps hosting the process.
+Converting a pane session to a thread (`fno agents session resume <name> --substrate thread`) is a substrate change, not a view change. Afterward the mux server hosts nothing for that session. The conversion opens no portal and leaves none behind. To look at the converted thread, tune one with `fno mux thread <name>`. A portal never changes the substrate. The reseat command moves the worker into the named portal's screen while the server keeps hosting the process.

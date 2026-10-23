@@ -23,7 +23,7 @@ field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
 # run <input> [extra argv...] -> echoes normalize.sh stdout.
 # PATH-pinned to a capabilities fixture that delegates everything else to the
 # HOST fno (resolved before the pin, x-3873): the surface read is a Rust-leaf
-# ask (`fno agents capabilities`), and a stale installed binary would refuse
+# ask (`fno agents admit capabilities`), and a stale installed binary would refuse
 # it and error every classify regardless of the script under test.
 _HOST_FNO="$(command -v fno || true)"
 _run_stub="$(mktemp -d)"
@@ -32,6 +32,15 @@ _run_stub="$(mktemp -d)"
 # with the stub dir first on PATH, `command -v fno` would find the stub).
 cat > "$_run_stub/fno" <<EOF
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat commands they forward to.
+case "\$1 \$2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
+  "agents admit")
+    case "\$3" in
+      guard) set -- agents spawn-guard "\${@:4}" ;;
+      capabilities) set -- agents capabilities "\${@:4}" ;;
+    esac ;;
+esac
 if [[ "\$1 \$2" == "agents capabilities" ]]; then
   case "\${3:-}" in
     claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
@@ -58,6 +67,15 @@ _de43_stub="$(mktemp -d)"
 # fail-closed posture property still holds suite-wide.
 cat > "$_de43_stub/fno" <<'EOF'
 #!/usr/bin/env bash
+# The nested agents spellings answer like the flat commands they forward to.
+case "$1 $2" in
+  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
+  "agents admit")
+    case "$3" in
+      guard) set -- agents spawn-guard "${@:4}" ;;
+      capabilities) set -- agents capabilities "${@:4}" ;;
+    esac ;;
+esac
 if [[ "$1 $2" == "agents capabilities" ]]; then
   case "${3:-}" in
     claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
@@ -70,7 +88,7 @@ EOF
 chmod +x "$_de43_stub/fno"
 run_nofno() { PATH="$_de43_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
 
-# x-8151: family membership is an ASK now (fno agents target-family), fail-closed
+# x-8151: family membership is an ASK now (fno agents internal target-family), fail-closed
 # when the ask fails - the exit-1 stub above would refuse every run_nofno
 # classify. FAMILY_RESOLVER is the documented test injection (normalize.sh
 # consults it before fno), so the "no host fno" property holds: the stub
@@ -295,7 +313,7 @@ out="$(run 'ab-99999999' -P codex)"
 check_eq   '-P codex -> provider=codex'        "$(field "$out" provider)" 'codex'
 check_eq   '-P codex leaves project empty'     "$(field "$out" project)"  ''
 
-# --- x-de43: per-harness native invocation (opencode /fno:verb, gemini refused)
+# --- x-de43: per-harness native invocation (opencode /fno:command, gemini refused)
 # run_nofno (defined at top) forces the STATIC fallback table so the rendered
 # surface is asserted against the in-tree mirror, not the installed fno (which
 # may lag until redeployed). This is the mirror the parity python test guards.
@@ -310,12 +328,12 @@ check_contains     'opencode build /fno:target'  "$(field "$out" message)" '/fno
 check_contains     'opencode build --no-merge'   "$(field "$out" message)" '--no-merge'
 check_not_contains 'opencode build no prose'     "$(field "$out" message)" 'Implement'
 
-# AC4-EDGE: passthrough renders ANY verb via the single prefix-swap (no allowlist)
+# AC4-EDGE: passthrough renders ANY command via the single prefix-swap (no allowlist)
 out="$(run_nofno '/blueprint quick doc.md' --provider opencode)"
 check_eq   'opencode passthrough status'  "$(field "$out" status)"  'ok'
 check_eq   'opencode passthrough /fno:'   "$(field "$out" message)" '/fno:blueprint quick doc.md'
 out="$(run_nofno '/zzz args' --provider opencode)"
-check_eq   'opencode arbitrary verb'      "$(field "$out" message)" '/fno:zzz args'
+check_eq   'opencode arbitrary command'      "$(field "$out" message)" '/fno:zzz args'
 # idempotent: an already-namespaced command (copied from the palette) is not double-prefixed
 out="$(run_nofno '/fno:blueprint quick doc.md' --provider opencode)"
 check_eq   'opencode passthrough idempotent' "$(field "$out" message)" '/fno:blueprint quick doc.md'
@@ -361,7 +379,7 @@ out="$(run 'ab-99999999 --model opus')"
 check_eq   'inline --model in task text is error' "$(field "$out" status)" 'error'
 # the refusal must be actionable from a slash command (x-ab78 WAVE 3): it names
 # the dashless trailing form, not only "pass it as a real flag" (impossible via
-# /command where everything after the verb is one string).
+# /command where everything after the command is one string).
 check_contains 'flag-in-payload refusal names dashless form' "$(field "$out" error)" 'model opus'
 # mid-task `model` stays task text (right-anchored run)
 out="$(run 'model the user data carefully')"
@@ -440,7 +458,7 @@ out="$(run 'ab-99999999' --provider claude)"
 check_eq 'claude no-yolo -> permission_mode stays empty'   "$(field "$out" permission_mode)" ''
 
 # --- -Y is a --yolo alias (flag, trailing-run, and guard semantics) -----------
-# The fno CLI spawn/ask verbs already take -Y for --yolo; the skill layer must
+# The fno CLI spawn/ask commands already take -Y for --yolo; the skill layer must
 # match or the flag silently degrades (a real spawn launched permission-manual
 # because -Y was coerced to -y upstream). Trailing -Y matches the RAW token:
 # lowercased it would collide with -y (--yes), which must keep refusing loud.
@@ -562,7 +580,7 @@ check_eq   'tier1 exact node_query'  "$(field "$out" node_query)" ''
 check_eq   'tier1 exact spawn_next'  "$(field "$out" spawn_next)" '0'
 
 # ===========================================================================
-# Payload modes: seed (free text, verbatim) + handoff verb (x-cbb0)
+# Payload modes: seed (free text, verbatim) + handoff command (x-cbb0)
 # ===========================================================================
 # spawn means start a session with what you pass, nothing more (x-cbb0). Free
 # text is a verbatim SEED, no longer implicitly /target-wrapped; the surviving
@@ -579,8 +597,8 @@ check_not_contains 'seed no no-merge'      "$(field "$out" message)"      'no-me
 
 # --- the deliberate semantics flip: "fix the X" seeds, does NOT build ---------
 out="$(run 'fix the login bug')"
-check_eq 'seed fix-verb mode'     "$(field "$out" payload_mode)" 'seed'
-check_eq 'seed fix-verb verbatim' "$(field "$out" message)"      'fix the login bug'
+check_eq 'seed fix-command mode'     "$(field "$out" payload_mode)" 'seed'
+check_eq 'seed fix-command verbatim' "$(field "$out" message)"      'fix the login bug'
 
 # --- a seed keeps trailing posture parsing (launch axes are orthogonal) -------
 out="$(run 'talk through the retry design codex')"

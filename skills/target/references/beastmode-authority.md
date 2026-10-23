@@ -11,7 +11,7 @@ So under authority, a judgment call is *decided and recorded* instead of stoppin
 It grants no new powers: merge stays on the auto-merge axis, and destructive or credential-blocked work still stops.
 
 **Why this is not called `yolo`.** `--yolo` is already taken, codebase-wide: it sits in the CLI's GLOBAL short-flag register (`-Y --yolo`) whose whole contract is that a global short "means the same thing on every command and never carries a per-command meaning".
-Its one meaning is the provider dangerous-mode bypass (`fno agents spawn --yolo` -> codex `--dangerously-bypass-approvals-and-sandbox`, claude `bypassPermissions`).
+Its one meaning is the provider dangerous-mode bypass: each lane's own never-prompt posture (codex `--dangerously-bypass-approvals-and-sandbox`, claude `bypassPermissions`); the spawn axis that chose it is retired.
 A judgment grant is a different axis entirely, so it gets a different word and deliberately carries **no short flag** at all.
 This matters most when spawning: in `/agent spawn /target <node> beastmode yolo`, `beastmode` binds to the target session's judgment and `yolo` to the spawn's permissions, with no token doing double duty.
 A beastmode session still asks the harness for permission exactly as before, and a yolo-spawned worker still stops on an architecture fork unless it also holds an authority grant.
@@ -73,7 +73,9 @@ Not `.fno/SUMMARY.md`: `.fno/` is gitignored and session-state files are explici
 The durable record is the plan artifact, the frontmatter stamp, `ledger.json`, and git history; the audit trail for decisions made on your behalf belongs with them.
 **Before a plan exists** (a beastmode run is node-bound, but `/think` still decides in its early steps while the plan is written in its last), stage entries in the session scratchpad (`scratchpad_path`) as `autonomous-decisions.md`.
 **Flush them to the plan's `COMPLETION.md` the moment `plan_path` is filled - not at ship.**
-Deferring the flush is what makes the window dangerous: the scratchpad is worktree-local and gitignored, and the stop hook only archives it once a plan path exists, so entries left staged through a long do phase die with the worktree if the session never reaches its gate.
+
+A late flush makes the window dangerous. The scratchpad is worktree-local and gitignored, and nothing archives it. Entries staged through a long do phase die with the worktree, unless the session reaches its gate.
+
 Flushing at plan-creation shrinks the exposure to the minutes between the first decision and the plan.
 If the run ends with no plan at all, carry the ledger into the PR body under `## Autonomous Decisions`, and if there is no PR either, put it in your closing summary - a decision nobody can read afterward may as well not have been recorded.
 

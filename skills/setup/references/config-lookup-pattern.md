@@ -7,10 +7,10 @@ Every skill that needs a configurable value must use this pattern.
 ```markdown
 ## Step 0: Read Configuration
 
-Resolve the plan save path with the verb, never a hand-assembled tier walk:
+Resolve the plan save path with the command, never a hand-assembled tier walk:
 `fno do plan path --slug "<slug>"` (run from the node's project root).
 
-The verb walks the one plans_path chain: `.claude/settings.local.json`
+The command walks the one plans_path chain: `.claude/settings.local.json`
 `plansDirectory` → `.claude/settings.json` → `plans_dir` in `.fno/config.toml`
 → `~/.fno/config.toml`. If unconfigured or `fno` is unavailable, ask the user
 or suggest `/fno:setup`.

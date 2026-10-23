@@ -50,8 +50,8 @@ graph TD
     CHECK --> ASK{"high severity?"}
     ASK -->|no| ADOPT["auto-intake"]
     ASK -->|yes| OPTIONS["AskUserQuestion:\nproceed / modify /\nsupersede / cancel"]
-    OPTIONS --> ACK["fno backlog update\n--acknowledge-collisions"]
-    OPTIONS --> SUP["fno backlog supersede\n<new> --replaces <old>\n--cause ... --surface ..."]
+    OPTIONS --> ACK["fno backlog update\ncollisions_acknowledged=<ids>"]
+    OPTIONS --> SUP["fno backlog supersede\n<new> --replaces <old>\n--cause ... --surface ...\n--reason ... --covers ..."]
     OPTIONS --> ADOPT
 ```
 
@@ -191,7 +191,7 @@ supplanted. `cmd_supersede` refuses to mutate already-shipped or
 already-superseded nodes so the operation is never a destructive write
 against ship history; the user opens a follow-up node instead.
 
-## Triage health verb
+## Triage health command
 
 `fno backlog triage health` returns a structured JSON report:
 
@@ -208,7 +208,7 @@ against ship history; the user opens a follow-up node instead.
 ```
 
 The shape is consumable by downstream tooling: `/loop`, scheduled agents,
-dashboards. Future health-style verbs (`fno backlog audit`,
+dashboards. Future health-style commands (`fno backlog audit`,
 `fno backlog cost-report`) follow the same pattern.
 
 ## Performance notes
@@ -227,7 +227,7 @@ stderr warning so a misconfigured environment is visible.
   candidate against the existing plan) - opt-in via a future flag.
 - **Cross-project collisions** - today's primitive is project-scoped
   because the graph is project-scoped.
-- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/pages/graph.md` requires extending the renderer.
+- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/cache/pages/graph.md` requires extending the renderer.
 - **Time-bounded collision tolerance** - "plans more than 60 days old
   don't count" risks papering over real conflicts; skipped.
 

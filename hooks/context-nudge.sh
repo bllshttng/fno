@@ -22,7 +22,7 @@
 #
 # A TEAMED lead additionally gets the ORPHAN check (b): did it spawn workers
 # that are still live with no resolution recorded? A lead that spawns workers
-# cannot be a pure pass: stepping_down now leaves them nobody to mail at review.
+# cannot be a pure pass: stepping down now leaves them nobody to mail at review.
 # Check (b) is team-only; only check (a) generalizes.
 #
 # Both BLOCK (the only Stop output documented to reach the model on Claude and
@@ -205,8 +205,8 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 # ── 4. Registry read (BEST-EFFORT): team + live children. ────────────────────
-# `fno agents registry-json` is a daemon-free file read (load_registry), NOT
-# `fno agents list` (which is Rust-routed and lazy-starts the daemon for
+# `fno agents internal registry-json` is a daemon-free file read (load_registry), NOT
+# `fno agents session list` (which is Rust-routed and lazy-starts the daemon for
 # live-status enrichment - a Stop hook must never stall on a daemon start).
 # Emits structured role_level/role_scope/spawned_by_session per row.
 #
@@ -225,7 +225,7 @@ UNLINKED_ORPHAN_COUNT=0
 UNLINKED_UNKNOWN=""
 UNLINKED_UNKNOWN_COUNT=0
 if [[ "$NUDGE_BUDGET" -gt 0 ]] && command -v fno >/dev/null 2>&1; then
-    AGENTS_JSON=$(with_timeout "$NUDGE_BUDGET" fno agents registry-json 2>/dev/null || true)
+    AGENTS_JSON=$(with_timeout "$NUDGE_BUDGET" fno agents internal registry-json 2>/dev/null || true)
     if printf '%s' "$AGENTS_JSON" | jq -e '.agents' >/dev/null 2>&1; then
         # This session's row (by session_id). No row -> non-teamed (not an exit).
         MY_ROW=$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$SESSION_ID" \
@@ -239,7 +239,7 @@ if [[ "$NUDGE_BUDGET" -gt 0 ]] && command -v fno >/dev/null 2>&1; then
         # on every non-lead Stop (the common case) is wasted work on a hot path.
         # The stored `status` word lies (a dead row can read `live`
         # indefinitely), so this reads the SERVED `liveness` field instead -
-        # `fno agents registry-json` derives it from the freshness rule
+        # `fno agents internal registry-json` derives it from the freshness rule
         # (served_liveness.rs) and withholds a stale word as null. A row whose
         # liveness is null (never measured, or stale past the window) is
         # unresolved, not alive: it is reported separately and never silently
@@ -417,7 +417,7 @@ compact_instruction() {
     if [[ "$out" == injectable:* ]]; then
         printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session HAS an injection path (measured just now: ${out}), so fire it at your own prompt line: fno agents mail send '/compact <brief-path>' --to-self --raw   (the leading slash is load-bearing, and the brief path matters: a bare /compact at exhausted context has no headroom left to summarize). A path is not a landing - if the receipt comes back unconfirmed, read your own prompt before assuming either way, and never re-send."
     elif [[ "$out" == not-injectable:* ]]; then
-        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session has NO injection path: 'fno agents mail send /compact --to-self --raw --check' answered ${out}. That means no registry row, a non-keystroke lane, a guarded mux pane (which refuses a mid-turn recipient, and you are mid-turn), or no control socket to write into. It is NOT a claim that you are dead. You cannot fire the verb yourself, so ${_ask}. On whether /fno-me would help: it adds the registry row this check needs FIRST, and nothing else - it creates no daemon roster entry and no control socket - so it flips this answer only for a session that already had those and merely lacked a row. Read the reason above rather than guessing which case you are."
+        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session has NO injection path: 'fno agents mail send /compact --to-self --raw --check' answered ${out}. That means no registry row, a non-keystroke lane, a guarded mux pane (which refuses a mid-turn recipient, and you are mid-turn), or no control socket to write into. It is NOT a claim that you are dead. You cannot fire the command yourself, so ${_ask}. On whether /fno-me would help: it adds the registry row this check needs FIRST, and nothing else - it creates no daemon roster entry and no control socket - so it flips this answer only for a session that already had those and merely lacked a row. Read the reason above rather than guessing which case you are."
     else
         printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and whether you can inject it at your own prompt line could not be measured here (no fno on PATH, or the check timed out), so this nudge will not claim you have a path. Either ${_ask}, or check for yourself with 'fno agents mail send /compact --to-self --raw --check' and fire it if that says injectable."
     fi
@@ -569,7 +569,7 @@ fi
 # ── 7. Check (b): orphaned live children (TEAM-ONLY; latches INDEPENDENTLY). ─
 if [[ "$IS_LEAD" -eq 1 && ( "$ORPHAN_COUNT" -gt 0 || "$ORPHAN_UNKNOWN_COUNT" -gt 0 || "$UNLINKED_ORPHAN_COUNT" -gt 0 || "$UNLINKED_UNKNOWN_COUNT" -gt 0 ) && ! -f "$ORPHAN_LATCH" ]]; then
     # Resolution 1: the team holder DECLARED this lead an org. Choosing
-    # org had no machine-visible act before `fno agents org shape` existed,
+    # org had no machine-visible act before `fno agents org chart shape` existed,
     # so this hook offered three options and could detect two - and the
     # cheapest way to silence it (the carveout, option 3) downgrades a live
     # teammate to advisory self-review. The shape field is the structured
@@ -616,7 +616,7 @@ if [[ "$IS_LEAD" -eq 1 && ( "$ORPHAN_COUNT" -gt 0 || "$ORPHAN_UNKNOWN_COUNT" -gt
         touch "$ORPHAN_LATCH" 2>/dev/null || true
         emit_event "lead_orphan_block" \
             "{\"role_level\":${TEAM_LEVEL},\"role_scope\":\"${TEAM_SCOPE}\",\"workers\":\"${ORPHANS}\",\"count\":${ORPHAN_COUNT},\"unknown_workers\":\"${ORPHAN_UNKNOWN}\",\"unknown_count\":${ORPHAN_UNKNOWN_COUNT},\"unlinked_workers\":\"${UNLINKED_ORPHANS}\",\"unlinked_count\":${UNLINKED_ORPHAN_COUNT},\"unlinked_unknown_workers\":\"${UNLINKED_UNKNOWN}\",\"unlinked_unknown_count\":${UNLINKED_UNKNOWN_COUNT},\"session_id\":\"${SESSION_ID}\"}"
-        ORPHAN_REASON="You hold the team over ${TEAM_SCOPE}. The served liveness word from 'fno agents registry-json' says ${ORPHAN_COUNT} worker(s) you spawned are still alive (${ORPHANS:-none}). Linked count: ${ORPHAN_COUNT}. ${ORPHAN_UNKNOWN_COUNT} spawned worker row(s) have unresolved liveness (${ORPHAN_UNKNOWN:-none}); a broken reader never clears this guard, so they count on their own and stay out of the linked obligation above. ${UNLINKED_ORPHAN_COUNT} active worker row(s) have no spawned_by link (${UNLINKED_ORPHANS:-none}); ownership unknown, so they cannot be excluded from this team's obligations. ${UNLINKED_UNKNOWN_COUNT} unlinked worker row(s) also have unresolved liveness (${UNLINKED_UNKNOWN:-none}); same reason, they count on their own. A lead that spawns workers cannot be a pure pass: stepping_down now leaves them with nobody to mail when they reach review. Pick one and act, then this stops: (1) stay as team through the wave with 'fno agents org shape team'; (2) hand the team to a successor by spawning it over your own scope, which vacates yours in the same atomic write - 'fno agents spawn -k \"${TEAM_SCOPE}\" \"<seed prompt>\"'; (3) record that these workers are review-orphaned with 'fno backlog carveout add -k deferred --scope ${TEAM_SCOPE} \"...\"' and they fall back to advisory self-review. Check 'fno agents registry-json' for spawned_by_session null to close the ownership gap."
+        ORPHAN_REASON="You hold the team over ${TEAM_SCOPE}. The served liveness word from 'fno agents internal registry-json' says ${ORPHAN_COUNT} worker(s) you spawned are still alive (${ORPHANS:-none}). Linked count: ${ORPHAN_COUNT}. ${ORPHAN_UNKNOWN_COUNT} spawned worker row(s) have unresolved liveness (${ORPHAN_UNKNOWN:-none}); a broken reader never clears this guard, so they count on their own and stay out of the linked obligation above. ${UNLINKED_ORPHAN_COUNT} active worker row(s) have no spawned_by link (${UNLINKED_ORPHANS:-none}); ownership unknown, so they cannot be excluded from this team's obligations. ${UNLINKED_UNKNOWN_COUNT} unlinked worker row(s) also have unresolved liveness (${UNLINKED_UNKNOWN:-none}); same reason, they count on their own. A lead that spawns workers cannot be a pure pass: stepping down now leaves them with nobody to mail when they reach review. Pick one and act, then this stops: (1) stay as team through the wave with 'fno agents org chart shape team'; (2) hand the team to a successor by spawning it over your own scope, which vacates yours in the same atomic write - 'fno agents spawn -k \"${TEAM_SCOPE}\" \"<seed prompt>\"'; (3) record that these workers are review-orphaned with 'fno backlog carveout add -k deferred --scope ${TEAM_SCOPE} \"...\"' and they fall back to advisory self-review. Check 'fno agents internal registry-json' for spawned_by_session null to close the ownership gap."
         if [[ -n "$REASON" ]]; then
             REASON="${REASON}  ||  ${ORPHAN_REASON}"
         else

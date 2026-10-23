@@ -2,7 +2,7 @@
 # dispatch-node.sh - Dispatch ready backlog node(s) as fresh detached `/target`
 # workers, fire-and-forget, with a per-node outcome line. The launch is ONE
 # command per node: `fno agents spawn --node <id> --substrate thread`.
-# The spawn door renders the seed from the node's declared verb and brief chain,
+# The spawn door renders the seed from the node's declared command and brief chain,
 # picks the lane from the grid while the model axis is free, ensures the launch
 # worktree, and takes the family-2 guard against double-dispatch. This script
 # passes the node and only what the human typed - nothing else.
@@ -20,9 +20,9 @@
 # same way it does for every advance worker. There is no per-run flag. The
 # per-run override is a typed message on the spawn itself:
 #   fno agents spawn --node <id> '/fno:target --no-merge <id>'
-# A typed /target or /blueprint must agree with the verb the node derives
+# A typed /target or /blueprint must agree with the command the node derives
 #; on disagreement the spawn refuses before any lane is spent, so
-# drop the verb from the payload and let --node supply it.
+# drop the command from the payload and let --node supply it.
 #
 # --route provider/model: per-dispatch explicit model route, forwarded
 #   to every worker spawn only when typed. Fails CLOSED in the spawn.
@@ -31,7 +31,7 @@
 #   door's worktree-ensure default.
 #
 # Per-node outcome lines (stdout; one per node; NEVER silent):
-#   launched         <node> name=<agent> session=<sid> hint="fno agents logs <agent>"
+#   launched         <node> name=<agent> session=<sid> hint="fno agents session logs <agent>"
 #   already-running  <node> reason="live target worker holds node:<id> (<holder>)"
 #   skipped-contested <node> reason="suspect claim (respawned worker); advancing"
 #   parked           <node> reason="blocked|deferred|<status> (not up-next)"
@@ -47,7 +47,7 @@
 #   summary: launched=<n> parked=<n> already=<n> skipped=<n> done=<n> failed=<n> capped=<n>[ nothing-up-next]
 #
 # Invariants (Failure Modes section of the plan):
-#   - The launch is the door (fno agents spawn), the one launch verb. The
+#   - The launch is the door (fno agents spawn), the one launch command. The
 #     substrate is the detached thread lane. NEVER
 #     `--bare`/`-p` (those force the API-credit pool and strip skills/hooks).
 #   - A failed dispatch is surfaced and leaves the node `ready`/re-dispatchable;
@@ -206,9 +206,9 @@ for id in "${NODES[@]}"; do
   # branch. A real ready dispatch passes --node to `fno agents spawn`, whose one
   # birth choke point reruns this family-2 decision with side effects and takes
   # dispatch:<id>; no reservation is taken on this shell rung.
-  # Fail CLOSED: a stale `fno` without the verb (or any non-clean/unparseable
+  # Fail CLOSED: a stale `fno` without the command (or any non-clean/unparseable
   # verdict) leaves the node `ready` and launches nothing.
-  # spawn-guard is a Python-only verb (no Rust client impl). Pin the call to the
+  # spawn-guard is a Python-only command (no Rust client impl). Pin the call to the
   # Python runtime so an operator with FNO_AGENTS_RUNTIME=rust exported does not
   # route it to the Rust binary (which lacks it -> 127 -> the guard fails closed
   # and bg-dispatch breaks). The inline override is scoped to this command; the
@@ -219,7 +219,7 @@ for id in "${NODES[@]}"; do
   guard_cwd_args=()
   [[ -n "$node_guard_cwd" ]] && guard_cwd_args=("--cwd" "$node_guard_cwd")
   if [[ "$DRY_RUN" -eq 1 || "$status" == "claimed" ]]; then
-    guard_out="$(FNO_AGENTS_RUNTIME=python fno agents spawn-guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+    guard_out="$(FNO_AGENTS_RUNTIME=python fno agents admit guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   else
     guard_out='{"verdict":"dispatchable"}'; guard_rc=0
   fi
@@ -322,7 +322,7 @@ for id in "${NODES[@]}"; do
       # refuses before substrate fan-out.
       : ;;
     *)
-      # verdict=error, OR empty/unparseable (a stale fno WITHOUT the verb prints
+      # verdict=error, OR empty/unparseable (a stale fno WITHOUT the command prints
       # Typer "No such command" + exits non-zero; or a probe crash): fail CLOSED.
       detail="$(printf '%s' "$guard_json" | jq -r '.detail // empty' 2>/dev/null)"
       echo "failed $id reason=\"${detail:-spawn-guard unavailable (rc=$guard_rc); not dispatching to avoid a double-launch}\""
@@ -330,36 +330,36 @@ for id in "${NODES[@]}"; do
       continue ;;
   esac
 
-  # Provenance-carrying name: [<source>-]<verb-code>-<node>-<slug>,
+  # Provenance-carrying name: [<source>-]<command-code>-<node>-<slug>,
   # minted through the canonical owner, which sanitizes the slug AND
-  # budgets the assembled name against the runtime's 64-char limit. No --verb:
-  # the seed (and so the verb) is rendered by the spawn door from the node.
+  # budgets the assembled name against the runtime's 64-char limit. No --command:
+  # the seed (and so the command) is rendered by the spawn door from the node.
   # FNO_AGENTS_RUNTIME=python pins the Python dispatch: an ambient `=rust` routes
-  # EVERY `fno agents` verb to the binary, which has no `name` port. Exit 3 (not
+  # EVERY `fno agents` command to the binary, which has no `name` port. Exit 3 (not
   # 2) is the naming refusal - Click spends 2 on usage errors including "no such
-  # command", so an `fno` too old to know this verb would otherwise read as
+  # command", so an `fno` too old to know this command would otherwise read as
   # "unrepresentable" and refuse the whole fleet.
   # Streams are merged so a refusal's cause survives; the name is read as the
   # LAST line of the capture and that line alone must match the runtime
   # contract (a live config notice on stderr reproduced a false refusal on
   # 2026-09-03 when the WHOLE capture was matched).
   node_slug="$(printf '%s' "$node_json" | jq -r '.slug // .title // empty' 2>/dev/null)"
-  # --verb t: the bridge refuses a verb-less mint (it usage-refused every
+  # --command t: the bridge refuses a command-less mint (it usage-refused every
   # dispatch here until 2026-09-14, so every name came from the fallback
   # assembly below). FNO_AGENTS_NAME_MODEL: the route's model when pinned, so
   # the name carries the model tag that makes a misroute visible at a glance
   #; an env var, not a flag - the flag registry refuses Python flag
   # growth.
-  name_args=("$id" --verb t --slug "$node_slug")
+  name_args=("$id" --command t --slug "$node_slug")
   name_env=(FNO_AGENTS_RUNTIME=python)
   [[ -n "$ROUTE" ]] && name_env+=(FNO_AGENTS_NAME_MODEL="${ROUTE##*/}")
-  name_out="$(env "${name_env[@]}" fno agents name "${name_args[@]}" 2>&1)"
+  name_out="$(env "${name_env[@]}" fno agents registry name "${name_args[@]}" 2>&1)"
   name_rc=$?
   name_last="${name_out##*$'\n'}"
   agent_name=""
   [[ "$name_rc" -eq 0 && "$name_last" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && agent_name="$name_last"
   if [[ "$name_rc" -eq 3 ]]; then
-    # Exit 3 covers every refusal cause (unknown source/verb, over-budget
+    # Exit 3 covers every refusal cause (unknown source/command, over-budget
     # identity, invalid characters), so relay the real message. Newlines and
     # double quotes are squeezed out first: this line has a documented grammar
     # other tools parse, and the message embeds a repr of the node id.
@@ -368,7 +368,7 @@ for id in "${NODES[@]}"; do
     n_failed=$((n_failed + 1))
     continue
   elif [[ "$name_rc" -ne 0 || -z "$agent_name" ]]; then
-    # Degraded: fno unreachable or too old for this verb. Keep a fallback
+    # Degraded: fno unreachable or too old for this command. Keep a fallback
     # assembly, and say so - an invisible degrade means the whole fleet can be
     # named by the fallback with nothing in the receipt to show it. The
     # fallback mirrors the canonical shape (t-<hex>[-<slug>]) minus the model;
@@ -423,11 +423,11 @@ for id in "${NODES[@]}"; do
   # yet caught above); report already-running. A dead row is removed so `ask`
   # creates fresh rather than resuming it.
   # Capture the probe exit code AND require a parseable {agents:[...]}: a
-  # crashed/garbled `fno agents list` (daemon down, stale install printing a
+  # crashed/garbled `fno agents session list` (daemon down, stale install printing a
   # Typer error) must fail CLOSED (refuse), never collapse to an empty
   # existing_status and fall through to a double-launch in the boot window
   # (parity with spawn.sh Guard 3, cv-dddd8ae5; sigma silent-failure-hunter).
-  agents_json="$(fno agents list 2>/dev/null)"; list_rc=$?
+  agents_json="$(fno agents session list 2>/dev/null)"; list_rc=$?
   if [[ "$list_rc" -ne 0 ]] || ! printf '%s' "$agents_json" | jq -e 'has("agents")' >/dev/null 2>&1; then
     echo "failed $id reason=\"agents-list probe failed (rc=$list_rc); not dispatching to avoid a double-launch\""
     n_failed=$((n_failed + 1))
@@ -440,7 +440,7 @@ for id in "${NODES[@]}"; do
     n_already=$((n_already + 1))
     continue
   elif [[ -n "$existing_status" ]]; then
-    fno agents rm "$agent_name" >/dev/null 2>&1 || true
+    fno agents session rm "$agent_name" >/dev/null 2>&1 || true
   fi
 
   # ---- Dispatch, fire-and-forget ----
@@ -539,7 +539,7 @@ for id in "${NODES[@]}"; do
     | jq -r '.session_id | select(. != null and . != "")' 2>/dev/null)"
   [[ -z "$sid" ]] && sid="thread"
   # Launched. The worker now owns node:<id>, which guards later dispatches.
-  echo "launched $id name=$agent_name session=$sid hint=\"fno agents logs $agent_name\""
+  echo "launched $id name=$agent_name session=$sid hint=\"fno agents session logs $agent_name\""
   n_launched=$((n_launched + 1))
 done
 

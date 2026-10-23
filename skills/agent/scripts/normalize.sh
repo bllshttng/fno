@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# normalize.sh - deterministic input normalization for /fno:agent (spawn verb).
+# normalize.sh - deterministic input normalization for /fno:agent (spawn command).
 #
 # Remote and runner-less surfaces can curl quotes or lack a local command runner,
 # so a typed `fno agents spawn ...` may split on bad quotes or never execute.
@@ -27,7 +27,7 @@
 #   name=<agent name>
 #   provider=<claude|codex|gemini>
 #   model=<exact model name>   (empty unless `model <name>` / --model given)
-#   message=<final message to pass verbatim to the spawn/host verb>
+#   message=<final message to pass verbatim to the spawn/host command>
 #
 # Locked decisions honored:
 #   4. provider = explicit -> config.accounts (resolve_dispatch_target) -> claude
@@ -43,7 +43,6 @@ set -uo pipefail
 export LC_ALL=C
 
 # Mirrors the Rust KNOWN_PROVIDERS source of truth (crates/fno-agents provider.rs):
-# the set `fno agents spawn --harness` accepts. Widen both together. (hermes /
 # openclaw are megawalk drivers, a different axis, not spawn providers.)
 VALID_PROVIDERS="claude codex gemini agy opencode"
 
@@ -51,10 +50,8 @@ INPUT=""
 NAME=""
 NAME_SET=0         # 1 = -n/--name was passed (even if empty -> empty-name error)
 PROVIDER=""
-MODEL=""           # exact model name forwarded to `fno agents spawn --model`
                    # (each provider's own --model). Dashless: `model <name>`.
                    # No short flag: `-m` is taken by --allow-merge.
-EFFORT=""          # reasoning effort forwarded to `fno agents spawn --effort`.
                    # Dashless: `effort <value>`; the CLI validates per provider.
 EFFORT_SET=0       # 1 = explicit --effort was passed, including an empty value.
 # tri-state: "" = unset (resolve from config.auto_merge.grant after
@@ -66,12 +63,16 @@ MODE="exec"        # exec | interactive  (-i routes codex/gemini -> host)
 SUBSTRATE=""       # ""|pane|thread|headless. The retired `bg` spelling
                    # refuses. Empty = the default `pane` (owned-PTY).
 YOLO=0             # 1 = full-auto (codex/gemini bypass); sandboxed default
-HANDOFF_MODE=0     # 1 = `handoff` verb: payload is a doc path -> continuation seed
+HANDOFF_MODE=0     # 1 = `handoff` command: payload is a doc path -> continuation seed
 PROJECT=""         # cross-project target: a registry project name/short_name to
                    # resolve into a launch cwd (work.workspaces.*.projects)
 PROJECT_SET=0      # 1 = -C/--project was passed (empty value -> loud error, never
                    # a silent caller-cwd launch when a cross-project hop was asked)
 FORCE=0            # 1 = -f/--force: let --project win over a node's own cwd
+MODEL=""           # exact model name; the spawn door refuses it (axis retired),
+                   # normalize still reports what the caller asked for
+EFFORT=""          # reasoning-effort pin; the spawn door refuses it (axis retired),
+                   # normalize still reports what the caller asked for
 PERMISSION_MODE="" # forwarded to spawn.sh --permission-mode (provider-native, CLI fails closed)
 ROLE=""            # per-spawn model-routing role; forwarded to spawn.sh --role
 TIMEOUT=""         # per-spawn timeout seconds; forwarded to spawn.sh --timeout
@@ -316,7 +317,7 @@ fi
 # /target-family command that runs. A free-text SEED is sent VERBATIM as
 # the session's opening turn, so a flag-shaped token in it ("what does grep -i
 # do") is conversational content, not a mangled dispatch flag - exempt, exactly as
-# the retired `ask` verb and `handoff` are. The node-id check mirrors the tier-1
+# the retired `ask` command and `handoff` are. The node-id check mirrors the tier-1
 # detection below (inline here because node detection runs after this); a tier-2
 # candidate is scanned on the SKILL's re-normalize pass, once it matches tier 1.
 # `--no-merge` is NOT in the vocabulary: it is part of the /target-family command
@@ -364,8 +365,8 @@ set +f
 # describe-it fuzzy tier (tier 4) is whatever is left - free prose - and lives
 # entirely in the SKILL body behind a confirm.
 # Family membership is answered by the owner's one
-# shell-readable surface, `fno agents target-family` - a pure, side-effect-free
-# verb (no daemon, no config read) whose answer comes from the canonical
+# shell-readable surface, `fno agents internal target-family` - a pure, side-effect-free
+# command (no daemon, no config read) whose answer comes from the canonical
 # merge_posture table. This file carries NO hand-copied spelling list: the
 # old regex mirror and its Python parity test are gone (writing the parity
 # guard is itself the trigger to port). FAMILY_RESOLVER is test-injectable
@@ -383,12 +384,12 @@ _normalize_is_family() {
   if [[ -n "${FAMILY_RESOLVER:-}" ]]; then
     _answer="$("$FAMILY_RESOLVER" "$1" 2>/dev/null </dev/null)" || _answer=""
   else
-    _answer="$(fno agents target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
+    _answer="$(fno agents internal target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
   fi
   case "$_answer" in
     family) return 0 ;;
     other)  return 1 ;;
-    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agents target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
+    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agents internal target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
   esac
 }
 
@@ -427,7 +428,7 @@ elif printf '%s' "$first_tok" | grep -qE '^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$'; t
   [[ "$msg" == "$first_tok" ]] && NODE_BARE=1
 elif _normalize_is_family "$msg"; then
   # Unanchored extraction, so a hex-shaped prose word can match inside the
-  # message. A verb + id message - exactly two tokens and the second IS the
+  # message. A command + id message - exactly two tokens and the second IS the
   # extracted id, so a path like plans/20260711-dark-mode-x-aaaa.md does not
   # read as deliberate - is as deliberate as a bare id: spawning a worker
   # onto an id that does not exist just burns it.
@@ -592,10 +593,10 @@ fi
 
 # ---- 3. agent-name derivation ------------------------------------------------
 # Explicit --name wins (sanitized). Otherwise the name is provenance-carrying so
-# the thread title reads at a glance: <verb>-<full-node-id>-<slug> for a node
-# (e.g. spawn-ab-11111111-cargo-bootstrapper), <verb>-<slug> for a free-form
+# the thread title reads at a glance: <command>-<full-node-id>-<slug> for a node
+# (e.g. spawn-ab-11111111-cargo-bootstrapper), <command>-<slug> for a free-form
 # feature, falling back to a deterministic CRC short-id when the slug is empty.
-# The leading <verb> is the launching verb (spawn | handoff), never a fixed
+# The leading <command> is the launching command (spawn | handoff), never a fixed
 # string, so a self-spawned worker is distinguishable from a handoff thread.
 sanitize_name() {
   # lowercase, keep alnum + dash, collapse repeats, trim dashes, cap length.
@@ -606,13 +607,13 @@ sanitize_name() {
     | cut -c1-32
 }
 
-# Verb that launched this thread; used as the agent-name prefix.
-verb="spawn"
-[[ "$HANDOFF_MODE" -eq 1 ]] && verb="handoff"
+# Command that launched this thread; used as the agent-name prefix.
+command="spawn"
+[[ "$HANDOFF_MODE" -eq 1 ]] && command="handoff"
 
 # Resolve a node's title-derived slug for the readable name tail. Best-effort: an
 # unknown node / read failure yields an empty slug and the name degrades to
-# <verb>-<full-node-id>. Overridable via NODE_SLUG_RESOLVER for hermetic tests,
+# <command>-<full-node-id>. Overridable via NODE_SLUG_RESOLVER for hermetic tests,
 # mirroring DISPATCH_PROVIDER_RESOLVER below.
 resolve_node_slug() {
   local _id="$1" _raw
@@ -636,16 +637,16 @@ elif [[ -n "$NODE" ]]; then
   # name against the runtime's 64-char limit and spends that budget on the slug,
   # which a local `cut -c1-64` cannot do.
   # FNO_AGENTS_RUNTIME=python pins the Python dispatch: an ambient `=rust` routes
-  # EVERY `fno agents` verb to the binary, which has no `name` port. Exit 3 (not
+  # EVERY `fno agents` command to the binary, which has no `name` port. Exit 3 (not
   # 2) is the naming refusal - Click spends 2 on usage errors including "no such
-  # command", so an `fno` too old to know this verb would otherwise read as
+  # command", so an `fno` too old to know this command would otherwise read as
   # "unrepresentable" and refuse every node.
   # Streams are merged so a refusal's cause survives; the exit code says which
   # stream it came from. Merging means a stray warning on stderr can ride along,
   # so a name is adopted only when the WHOLE capture matches the runtime contract
   # - `grep -q` would not do: it matches per line, so a warning followed by a
   # valid name would pass the guard and then be adopted in full.
-  _name_out="$(FNO_AGENTS_RUNTIME=python fno agents name "$verb" "$NODE" --slug "$_node_slug" 2>&1)"
+  _name_out="$(FNO_AGENTS_RUNTIME=python fno agents registry name "$command" "$NODE" --slug "$_node_slug" 2>&1)"
   _name_rc=$?
   agent_name=""
   [[ "$_name_rc" -eq 0 && "$_name_out" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && agent_name="$_name_out"
@@ -658,13 +659,13 @@ elif [[ -n "$NODE" ]]; then
     _name_msg="$(printf '%s' "${_name_out:-node $NODE cannot be represented as an agent name}" | tr '\n' ' ')"
     emit_error "$_name_msg"
   elif [[ "$_name_rc" -ne 0 || -z "$agent_name" ]]; then
-    # Degraded: fno unreachable or too old for this verb (the same condition that
+    # Degraded: fno unreachable or too old for this command (the same condition that
     # empties the slug via resolve_node_slug, so this normally yields
-    # <verb>-<node>).
+    # <command>-<node>).
     if [[ -n "$_node_slug" ]]; then
-      agent_name="${verb}-${NODE##*-}-${_node_slug}"
+      agent_name="${command}-${NODE##*-}-${_node_slug}"
     else
-      agent_name="${verb}-${NODE##*-}"
+      agent_name="${command}-${NODE##*-}"
     fi
     # Nothing downstream enforces 64 for a node spawn: it passes --node, which
     # forces the Python path (_NAME_MAX_LEN = 128), so the daemon's 64-char
@@ -684,10 +685,10 @@ else
   fi
   slug="$(sanitize_name "$_name_src" | cut -c1-20 | sed -E 's/-+$//')"
   if [[ -n "$slug" ]]; then
-    agent_name="${verb}-$slug"
+    agent_name="${command}-$slug"
   else
     crc="$(printf '%s' "$msg" | cksum | awk '{printf "%08x", $1}')"
-    agent_name="${verb}-$crc"
+    agent_name="${command}-$crc"
   fi
 fi
 
@@ -792,11 +793,11 @@ fi
 # `spawn` means start a session with what you pass, nothing more. Four
 # modes, no shape inference:
 #   passthrough: payload is an explicit slash command (leading `/`). Rendered
-#                per-harness: claude/agy verbatim, opencode `/fno:verb`, codex
-#                `$fno:verb`; a deprecated (refused) provider has no dispatch
+#                per-harness: claude/agy verbatim, opencode `/fno:command`, codex
+#                `$fno:command`; a deprecated (refused) provider has no dispatch
 #                lane, so a passthrough to it is REFUSED naming agy. (AC4-ERR)
 #   build:       a resolved backlog node id. The ONE surviving implicit `/target`,
-#                config-driven not shape-inferred: dispatch_verb resolution
+#                config-driven not shape-inferred: dispatch_command resolution
 #                (node > config > builtin `/target`) - normalize uses the builtin
 #                rung, wrapping `/target <id>` PROVIDER-AWARE (opencode
 #                `/fno:target`, codex `$fno:target`) + no-merge.
@@ -822,16 +823,16 @@ else
 fi
 
 # Command surface (slash|codex-skill|refused) from the packaged harness
-# capability table via `fno agents capabilities`, the single source
+# capability table via `fno agents admit capabilities`, the single source
 # both spawn surfaces route through - so /agent spawn never re-encodes the
 # per-harness spelling and can't drift from the `/target` dispatch surface.
 # NO static fallback copy: a spawn cannot run when fno is unreachable, so a
 # mirror here would only hide drift from the packaged table.
 resolve_command_surface() {
-  fno agents capabilities "$1" --json 2>/dev/null | jq -r '.command_surface // empty'
+  fno agents admit capabilities "$1" --json 2>/dev/null | jq -r '.command_surface // empty'
 }
 
-# The plugin-namespace prefix a slash-surface provider prepends to `/verb`
+# The plugin-namespace prefix a slash-surface provider prepends to `/command`
 # (mirrors harness_map's slash_prefix): opencode -> `fno:` (`/fno:target`);
 # pi -> `skill:` (`/skill:target`); claude/agy inject natively, so it is
 # empty. Keep in sync with harness_map.
@@ -846,8 +847,8 @@ slash_prefix() {
 case "$payload_mode" in
   passthrough)
     # A leading-`/` footnote command. claude/agy run it verbatim; opencode
-    # namespaces it (`/verb` -> `/fno:verb`, plugin palette); codex swaps
-    # `/verb` -> `$fno:verb` (plugin skill); a refused (deprecated) provider has
+    # namespaces it (`/command` -> `/fno:command`, plugin palette); codex swaps
+    # `/command` -> `$fno:command` (plugin skill); a refused (deprecated) provider has
     # no dispatch lane, so refuse loudly naming its successor (agy).
     surface="$(resolve_command_surface "$provider")"
     case "$surface" in

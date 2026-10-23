@@ -21,10 +21,10 @@ Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a
 > ones (Why, circuit breaker, nudge) are unaffected.
 
 > **Worker names.** Daemon-dispatched workers are named
-> `ab-<verb>-<node>-<slug>`. The `ab` source says the active-backlog drain
+> `ab-<command>-<node>-<slug>`. The `ab` source says the active-backlog drain
 > launched them. The full vocabulary lives in
 > [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md).
-> `fno agents autonomy provenance` prints the ratcheted inventory.
+> `fno agents admit autonomy provenance` prints the ratcheted inventory.
 
 ## Why
 
@@ -119,7 +119,7 @@ The daemon inherits the trigger layer the retired megawalk walker used to own. T
 
 An exhausted mission tick keeps the stable `skip_reason=no_work` token. It adds `stranded=N` to its detail. The value comes from `fno backlog undispatched --json`. That command counts finalized ready leaf plans with no execution claim outside the exhausted mission. A failed or malformed observer read reports `stranded=unknown`. It never fabricates zero. The mission remains pinned, so visibility improves without releasing the drain to the general queue.
 
-To change only the node's board rank, an operator runs `fno backlog rank <id> --top`. The verb refuses a session carrying a harness stamp and names `fno backlog encounter` as the agent's vote. When the node is outside every resolved active mission scope, the receipt says `no live dispatcher will take it`. If scope cannot be read, the receipt says `dispatcher scope unavailable`. A node inside a mission keeps the normal rank receipt. Ranking never broadens mission membership.
+To change only the node's board rank, an operator runs `fno backlog rank <id> --top`. The command refuses a session carrying a harness stamp and names `fno backlog encounter` as the agent's vote. When the node is outside every resolved active mission scope, the receipt says `no live dispatcher will take it`. If scope cannot be read, the receipt says `dispatcher scope unavailable`. A node inside a mission keeps the normal rank receipt. Ranking never broadens mission membership.
 
 ## Events
 

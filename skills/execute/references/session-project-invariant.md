@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Session-Project Invariant (G2)
 
 **A `/execute` session operates only in its own project.** When a wave (or a flat
@@ -69,11 +69,11 @@ case "$STATUS" in
     # SPAWN into the foreign project via the CLI --cwd flag (-C/--project is a normalize.sh input that resolves to --cwd, not a CLI flag; -P is --provider). Subscription lane (never -p/--bare).
     # x-aaaa: the worker name is minted through the bridge - ex-t-<node> (the
     # foreign-wave source), never a bare target- shape.
-    WORKER_NAME="$(FNO_AGENTS_RUNTIME=python fno agents name --source ex --verb t "$WAVE_NODE" 2>/dev/null)"
+    WORKER_NAME="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source ex --command t "$WAVE_NODE" 2>/dev/null)"
     if [[ -z "$WORKER_NAME" ]]; then
       echo "do: REFUSE foreign wave for '$WAVE_NODE' - the canonical name mint refused " >&2
     else
-      fno agents spawn --harness claude --cwd "$ROOT" --name "$WORKER_NAME" "/target $WAVE_NODE"
+      fno agents spawn --cwd "$ROOT" --name "$WORKER_NAME" "/target $WAVE_NODE"
       echo "do: spawned $WORKER_NAME --cwd $ROOT"   # receipt (AC3-UI)
     fi
     # mark the wave DELEGATED in STATE.md; continue the session's own waves

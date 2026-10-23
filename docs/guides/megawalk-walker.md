@@ -1,6 +1,6 @@
 # Walking the backlog (the megawalk successor)
 
-The megawalk walker is retired: the `/megawalk` skill, `fno megawalk` CLI verbs, and the `--driver megawalk` loop arm are all deleted. This page is what to run instead. The runtime design of the retired walker lives on as a historical record in [unified-loop.md](../architecture/unified-loop.md).
+The megawalk walker is retired: the `/megawalk` skill, `fno megawalk` CLI commands, and the `--driver megawalk` loop arm are all deleted. This page is what to run instead. The runtime design of the retired walker lives on as a historical record in [unified-loop.md](../architecture/unified-loop.md).
 
 ## The supported routes
 

@@ -136,7 +136,7 @@ EVENTS_FILE="$FNO_DIR/events.jsonl"
 # cwd-relative defaults above parked every self-handoff from a space-keyed
 # worktree ("manifest .fno/target-state.md not found", exit 10). An explicit
 # FNO_DIR is the test override and keeps the cwd-relative layout verbatim; an
-# fno-agents that cannot answer (missing binary, pre-verb install) falls back
+# fno-agents that cannot answer (missing binary, pre-command install) falls back
 # to the same layout rather than parking blind.
 if [ -z "$_FNO_DIR_EXPLICIT" ]; then
   _AGENTS_BIN="$(_handoff_agents_bin)"
@@ -368,8 +368,8 @@ set -o pipefail
 if [ "$_RUNG_EC" -ne 0 ]; then
   _RUNG="$(printf '%s' "$_RUNG_OUT" | sed -n 's/^rung=//p' | head -1)"
   if [ -z "$_RUNG" ]; then
-    # No `rung=` line at all: the verb did not answer. An installed fno older
-    # than this verb exits 2 the same way a usage error does, so name the
+    # No `rung=` line at all: the command did not answer. An installed fno older
+    # than this command exits 2 the same way a usage error does, so name the
     # likely cause - a bare "rung 'unknown'" would send the operator hunting
     # through the plan for a problem that is in their PATH.
     echo "parked $NODE_ID reason=\"'fno do plan rung' did not answer; installed fno may predate it - run 'fno doctor update' or 'fno doctor --fix'\""
@@ -442,7 +442,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents name --source sh --verb t \
+_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --command t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then
@@ -473,7 +473,7 @@ _SPAWN_EFFORT_ARGS=()
 _ASK_RC=0
 _ASK_OUT=""
 _ASK_ERR_FILE="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/handoff-spawn-$$.err")"
-_ASK_OUT="$(fno agents spawn --substrate pane \
+_ASK_OUT="$(fno agents spawn \
   --harness "$DEST_HARNESS" --model "$DEST_MODEL" \
   ${_SPAWN_ACCOUNT_ARGS[@]+"${_SPAWN_ACCOUNT_ARGS[@]}"} \
   ${_SPAWN_EFFORT_ARGS[@]+"${_SPAWN_EFFORT_ARGS[@]}"} \
@@ -520,7 +520,7 @@ _CAPABILITY_ELAPSED=0
 _CAPABILITY_TIMEOUT="${HANDOFF_CAPABILITY_TIMEOUT:-$VERIFY_TIMEOUT}"
 _CAPABILITY_INTERVAL="${HANDOFF_CAPABILITY_INTERVAL:-1}"
 while [ -z "$_CAPABILITY_FAILURE" ] && [ "$_CAPABILITY_ELAPSED" -lt "$_CAPABILITY_TIMEOUT" ]; do
-  _TRUTH_OUT="$(fno agents truth "$_TRUTH_HANDLE" --json 2>/dev/null || true)"
+  _TRUTH_OUT="$(fno agents fleet truth "$_TRUTH_HANDLE" --json 2>/dev/null || true)"
   _TRUTH_MESSAGE="$(printf '%s' "$_TRUTH_OUT" | jq -r '.last_message // empty' 2>/dev/null || true)"
   _TRUTH_MODEL_KIND="$(printf '%s' "$_TRUTH_OUT" | jq -r '.observed_model.kind // empty' 2>/dev/null || true)"
   _TRUTH_MODEL="$(printf '%s' "$_TRUTH_OUT" | jq -r '.observed_model.model // empty' 2>/dev/null || true)"
@@ -540,8 +540,8 @@ if [ -z "$_CAPABILITY_FAILURE" ] \
 fi
 
 if [ -n "$_CAPABILITY_FAILURE" ]; then
-  fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
   _emit_event "handoff_failed" \
     "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"capability_probe\",\"detail\":\"$(printf '%s' "$_CAPABILITY_FAILURE" | tr '\n' ' ' | cut -c1-300)\"}"
   echo "parked $NODE_ID reason=\"capability_probe: $_CAPABILITY_FAILURE\""
@@ -628,7 +628,7 @@ if ${_TC_EMBED:+FNO_TASK_CONTEXT_FILE="$_TASK_CONTEXT_FILE"} fno do resume recei
       --worktree "$PWD" \
       --branch "${_RECEIPT_BRANCH:-}" \
       --head "${_RECEIPT_HEAD:-}" \
-      --next-verb "/fno:target" \
+      --next-command "/fno:target" \
       --next-target "$NODE_ID" \
       >/dev/null 2>"$_TMP_RECEIPT_ERR"; then
   :
@@ -802,14 +802,14 @@ fi
 SPAWN_FLAGS="$(printf '%s' "$SPAWN_FLAGS" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
 
 case "$DEST_HARNESS" in
-  codex) _TARGET_VERB='$fno:target' ;;
-  opencode) _TARGET_VERB='/fno:target' ;;
-  *) _TARGET_VERB='/fno:target' ;;
+  codex) _TARGET_COMMAND='$fno:target' ;;
+  opencode) _TARGET_COMMAND='/fno:target' ;;
+  *) _TARGET_COMMAND='/fno:target' ;;
 esac
 if [ -n "$SPAWN_FLAGS" ]; then
-  CHILD_CMD="$_TARGET_VERB $SPAWN_FLAGS $NODE_ID"
+  CHILD_CMD="$_TARGET_COMMAND $SPAWN_FLAGS $NODE_ID"
 else
-  CHILD_CMD="$_TARGET_VERB $NODE_ID"
+  CHILD_CMD="$_TARGET_COMMAND $NODE_ID"
 fi
 
 _ASK_RC=0
@@ -823,8 +823,8 @@ _ASK_ERR="$(cat "$_ASK_ERR_FILE" 2>/dev/null)"; rm -f "$_ASK_ERR_FILE"
 # Only a nonzero raw-submit rc is a delivery failure. Task execution is proven
 # separately after this step; a send receipt is never treated as consumption.
 if [ "$_ASK_RC" -ne 0 ] || printf '%s\n' "$_ASK_OUT" | grep -q '"status":[[:space:]]*"refused"'; then
-  fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
   # Target-seed failure: unwind in order
   #   (a) re-acquire node:<id> FIRST; capture the rc
   _REACQ_RC=0
@@ -895,8 +895,8 @@ while [ "$_VERIFY_ELAPSED" -lt "$VERIFY_TIMEOUT" ]; do
 done
 
 if [ "$_CHILD_TARGET_READY" -eq 0 ]; then
-  fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
 
   # No shell-side node release here, and not as a formality: the child never
   # proved custody, so a release naming the child's holder is a guess about
@@ -959,7 +959,7 @@ _emit_event "session_satisfied" \
 # 8c. Delegating session's ledger session-record (step 6, / AC7-EDGE).
 # The manifest was archived in Step 4, so the stop-hook shim's finalize cannot
 # read it (and in fact the shim exits early on the now-missing manifest). Write
-# the paper-trail row HERE via the `finalize` verb against the ARCHIVED manifest,
+# the paper-trail row HERE via the `finalize` command against the ARCHIVED manifest,
 # with termination_reason=delegated. `delegated` is a non-ship reason, so finalize
 # writes ONLY the ledger row (stamp/graduate/handoff stay the SUCCESSOR's job)
 # and emits session_finalized for observability. Best-effort: failure never

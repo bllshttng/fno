@@ -12,7 +12,7 @@
 # A content hash over every file under both watched roots catches an added, a
 # removed and a changed file alike.
 #
-# Verbs:
+# Commands:
 #   plant      write the two .canary files, then snapshot a
 #              hash of every file under $HOME/.fno and <checkout>/.fno.
 #   verify     recompute and refuse on any added, removed or changed file,

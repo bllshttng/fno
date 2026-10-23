@@ -40,10 +40,10 @@ if [[ -z "$_git_toplevel" ]] \
   exit 0
 fi
 
-# Project state files resolve through the owning verb (the repo's space under
+# Project state files resolve through the owning command (the repo's space under
 # ~/.fno/spaces/, keyed on the canonical root). FNO_AGENTS_BIN wins when set:
 # a parity or supervisor env pins the exact binary, and PATH may not carry
-# `fno-agents` at all. Degraded fallback for an fno predating the verb: the
+# `fno-agents` at all. Degraded fallback for an fno predating the command: the
 # legacy checkout path, spelled with its real filename.
 _space_state_path() {
   local p
@@ -88,7 +88,7 @@ rm -f "$STATE_DIR/.target-starting" "$REPO_ROOT/.fno/.target-starting" 2>/dev/nu
 # ONLY rc 9 refuses; any other non-zero is a BROKEN gate, not a failed one, and
 # must not brick the mandatory bootstrap (same fail-open idiom as the in_review
 # dispatch guard below). 9 is deliberately NOT 2: a stale installed `fno`
-# without this verb is a Click usage error, which exits 2 with "No such
+# without this command is a Click usage error, which exits 2 with "No such
 # command", so treating 2 as a refusal would hard-refuse every direct bootstrap
 # the moment the CLI fell behind source.
 if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
@@ -114,9 +114,9 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # Containment gate, same seam and same rc idiom. A node carrying
     # `contained_in` ships inside another node's PR, and this script acquires
     # the claim and writes the manifest - so bootstrapping one here opens the
-    # second PR for one plan that the invariant exists to prevent. Its own verb
+    # second PR for one plan that the invariant exists to prevent. Its own command
     # and its own rc, so a broken gate cannot suppress the other one; the node
-    # is read from TARGET_INPUT/TARGET_PLAN_PATH by the verb, so the shell
+    # is read from TARGET_INPUT/TARGET_PLAN_PATH by the command, so the shell
     # passes nothing and cannot pass the wrong node.
     fno do target check-contained && _CT_RC=0 || _CT_RC=$?
     if [[ "$_CT_RC" -eq 9 ]]; then
@@ -615,7 +615,7 @@ _worktree_has_fresh_activity() {
   done < <(git -C "$root" diff --name-only HEAD 2>/dev/null || true)
   # scratchpad tree - a live /target session writes here continuously. It
   # lives in the worktree slice of the repo's space; fall back to the legacy
-  # checkout path for an fno predating the verb.
+  # checkout path for an fno predating the command.
   local spad
   spad="$(cd "$root" 2>/dev/null && fno-agents state path scratchpad 2>/dev/null || true)"
   [[ -z "$spad" ]] && spad="$root/.fno/scratchpad"
@@ -937,7 +937,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # is already caught by the claim acquire below; this closes the dead-prior-
   # session, PR-still-open gap the free claim does not. This block only
   # resolves the node; the binding verdict below is native. Graph reads run
-  # through the shipped verbs; no resolver here opens the store file.
+  # through the shipped commands; no resolver here opens the store file.
   _GUARD_NODE=""
   _GUARD_MATCHES=""   # space-joined distinct id-shaped tokens that ARE graph nodes
   _GUARD_AMBIGUOUS=0
@@ -949,7 +949,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # input => zero iterations, unlike an empty "${arr[@]}"); set -f keeps the
   # split from also glob-expanding a token like "5*" against the cwd.
   #
-  # Presence comes from the verb, not from grepping the id out of graph.json: a
+  # Presence comes from the command, not from grepping the id out of graph.json: a
   # quoted id also appears inside OTHER nodes (a blocked_by member, a nested
   # `"id":` in an embedded decomposition list), so the grep counted
   # merely-referenced ids as present, and two such hits set _GUARD_AMBIGUOUS and
@@ -1042,10 +1042,10 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # Resolve the harness identity this process can PROVE it owns, not the raw
   # precedence detect_provider() applies. An ambient CODEX_THREAD_ID inherited
   # into a claude session would otherwise launder into harness=codex and a
-  # stranger's session id on the manifest and the node claim. The verb (Python)
+  # stranger's session id on the manifest and the node claim. The command (Python)
   # does process-tree proof plus a registry-collision check; this hook has no
   # Python, so it shells out once and parses KEY=value lines. A stale fno without
-  # the verb prints nothing and the run fails OPEN to detect_provider (today's
+  # the command prints nothing and the run fails OPEN to detect_provider (today's
   # precedence) rather than bricking init - the same degrade every other
   # fno do target check-* gate here already uses.
   _OWNED_OUT=""
@@ -1053,7 +1053,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     _OWNED_OUT="$(fno do target resolve-owned-identity 2>/dev/null || true)"
   fi
   if [[ -n "$_OWNED_OUT" ]]; then
-    # Parse the verb's KEY=value lines in one read (zero subprocesses), not four
+    # Parse the command's KEY=value lines in one read (zero subprocesses), not four
     # printf|sed|head pipelines.
     _OWNED_HARNESS=""; _OWNED_SID=""; _OWNED_DISP=""; _OWNED_COLLISION=""
     while IFS='=' read -r _k _v; do
@@ -1067,7 +1067,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     # Ambiguous/unprovable -> empty harness -> default claude, NEVER precedence.
     PROVIDER="${_OWNED_HARNESS:-claude}"
   else
-    # Fail-open (stale fno, no verb). A real harness sets its OWN session marker,
+    # Fail-open (stale fno, no command). A real harness sets its OWN session marker,
     # overwriting any inherited value, so a SINGLE-family marker is this
     # process's own and stamps; only a MULTI-family disagreement degrades (one
     # marker is foreign and precedence must not launder it).
@@ -1089,8 +1089,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
     unset _failopen_families
   fi
 
-  # --harness ships in the same release as the owned-identity verb, so pass it
-  # only when the verb actually answered (_OWNED_OUT non-empty): a stale/mock fno
+  # --harness ships in the same release as the owned-identity command, so pass it
+  # only when the command actually answered (_OWNED_OUT non-empty): a stale/mock fno
   # that fail-opened lacks it and would reject the flag (and the claim falls to
   # ambient). Pin the OWNED harness or "unknown" - never ambient precedence.
   # ${...:-unknown} is always nonempty, so no bare --harness.
@@ -1131,7 +1131,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # unifies the per-provider session/thread id from whichever harness env is set;
   # harness = PROVIDER. Model is best-effort (empty when the harness hides it);
   # effort has no self-env today. Reused by the manifest write and the US6 stamp.
-  # The proven harness session id. When the owned-identity verb ran, trust its
+  # The proven harness session id. When the owned-identity command ran, trust its
   # answer (empty when it could not prove one - the manifest records null, honest
   # where a stranger's id is the bug). The fail-open path stamps a SINGLE-family
   # marker (a real harness sets its own, so it is own); a MULTI-family
@@ -1163,7 +1163,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
   else
     local_session_id="$(fno-agents state mint-id 2>/dev/null || true)"
     if [[ -z "$local_session_id" ]]; then
-      echo "init-target-state: fno-agents state mint-id answered nothing, so no run id was minted. The installed fno-agents is missing or predates this verb. Run: fno doctor update" >&2
+      echo "init-target-state: fno-agents state mint-id answered nothing, so no run id was minted. The installed fno-agents is missing or predates this command. Run: fno doctor update" >&2
       exit 1
     fi
   fi
@@ -1178,7 +1178,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     # Refuse the final claim rather than writing a timestamp/PID surrogate.
     claim_owner_id=""
   fi
-  # AC3 observability: when the owned-identity verb refused a candidate id a
+  # AC3 observability: when the owned-identity command refused a candidate id a
   # live registry row already owns, say so. The refusal itself already happened
   # (that id is absent from _HARNESS_SESSION); this line is the durable trace.
   if [[ -n "$_OWNED_COLLISION" ]]; then
@@ -1655,7 +1655,7 @@ PYEOF
           && _PC_RC=0 || _PC_RC=$?
         # A BROKEN gate on this path degrades silently unless it is said out
         # loud, exactly like the pre-claim gate a hundred lines above: only 9
-        # refuses, but a crash or a stale fno without the verb must not look
+        # refuses, but a crash or a stale fno without the command must not look
         # identical to "checked, and it is fine" - and here it happens while the
         # claim is already held.
         if [[ "$_PC_RC" -ne 0 && "$_PC_RC" -ne 9 ]]; then
@@ -1737,7 +1737,7 @@ PYEOF
             # Look for a delegated event for this node whose child_session is a
             # prefix of our session id (minimum 6 hex chars).
             #
-            # Verified relationship (2026-06-05): the claude create path (now spawn --provider claude; pre-Group-1: ask)
+            # Verified relationship (2026-06-05): the claude create path (the native spawn lane; pre-Group-1: ask)
             # prints a short-id via the "backgrounded · [0-9a-f]{8} ·" banner
             # (crates/fno-agents/src/claude_ask.rs:287). That 8-hex token is the
             # FIRST 8 HEX CHARS of the child's CLAUDE_CODE_SESSION_ID (= the full
@@ -1834,8 +1834,8 @@ PYEOF
     echo "graph_node_id: $_NODE_ID" >> "$STATE_FILE"
 
     # Premise and plan freshness against current main, from the native
-    # freshness verb. One advisory read: verdict lines print, nothing
-    # blocks, and an older fno-agents without the verb stays silent. The
+    # freshness command. One advisory read: verdict lines print, nothing
+    # blocks, and an older fno-agents without the command stays silent. The
     # notes `predates` line survives, printed from the plan leg's notes
     # field when the notes are newer than the plan.
     if [[ "$_NODE_OWNED" -eq 1 ]]; then
@@ -1871,7 +1871,7 @@ PYEOF
     # to `fno backlog join` here, at init: this session is the holder (one
     # worker) and join spawns the remainder into this worktree. The key is
     # opt-in - absent or `manual` waits for a person or a lead
-    # session to run the verb and does nothing here, so plans written before
+    # session to run the command and does nothing here, so plans written before
     # the key keep their behavior. Both facts come from the canonical probes
     # in the native join probes: bash re-implementing the auto-continue
     # precedence chain (autonomy master, env, config, default) is how the

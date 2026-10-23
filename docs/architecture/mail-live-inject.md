@@ -20,7 +20,7 @@ Every live transport carries the same `<fno_mail>`-wrapped turn:
 
 - **claude**: dual-lane by recipient spawn-style, resolved in one place by `roundtrip.resolve_live_lane` (worker beats control; the two `host_mode`s are mutually exclusive for one uuid):
   - an **owned-PTY worker** (`host_mode == "interactive"`, a footnote-spawned daemon worker) has no `control.sock` handle, so it is driven over its `worker.sock` via `roundtrip.submit_via_worker` (`worker.submit` RPC). Without this lane, mail to an owned-PTY worker silently fell to the durable queue a finished `/think` never drains. The worker inject is framed in bracketed paste (`ESC[200~ ... ESC[201~`, `worker.rs::submit_keys`) so claude's TUI buffers it atomically instead of dropping chars under render load. If the resolved `worker.sock` is gone (a stale live-looking interactive row can coexist with a valid adopted row for one uuid), delivery falls through to the control lane below rather than demoting to durable, mirroring the relay's claim-based dispatch (`daemon.py:351-365`).
-  - an **adopted `claude --bg`** session (`host_mode == "attached"`) takes the proven `control.sock` `op:'reply'` inject through the `fno-agents mail-inject` verb (see below). The stream-json switchboard and MCP-channel fast lanes still apply first for peers that are live stream threads or MCP-routed; the `control.sock` inject is the successor to the dead per-worker messaging socket.
+  - an **adopted `claude --bg`** session (`host_mode == "attached"`) takes the proven `control.sock` `op:'reply'` inject through the `fno-agents mail-inject` command (see below). The stream-json switchboard and MCP-channel fast lanes still apply first for peers that are live stream threads or MCP-routed; the `control.sock` inject is the successor to the dead per-worker messaging socket.
   - Both lanes carry the SAME `<fno_mail>` envelope (`_deliver_live` wraps the turn before lane selection), so an owned-PTY worker's turn is the same agent-vs-human-discriminated turn an adopted session gets.
 - **codex / gemini**: the daemon `agent.deliver` RPC, now carrying the `<fno_mail>` envelope (see [fno-agents-deliver-gate.md](fno-agents-deliver-gate.md)).
 - **A mux-hosted pane** of any harness takes `fno mux pane send` (`dispatch._mux_pane_send`), which writes the text and then the harness's `submit_keys` from `harness_capabilities.toml`. A harness declaring `submit_keys = ["unsupported"]` is refused BEFORE the transport is tried, and the send falls to the durable queue. That refusal is a capability declaration, not a transport failure, and it now says so. The old wording named `mux-send-failed` and the layer that did not run. It read as a broken pane. It cost two agents and an operator a night on a codex worker whose pane was fine. codex declares `["enter"]` with no delay. That value was measured against 0.148.0 by reading the pane, not an exit code. claude needs 800ms after the text. gemini, agy and opencode stay unsupported because nothing has been measured for them.
@@ -55,7 +55,7 @@ Mux peek always names `mux-peek` as sender. It declares no operator origin. Its 
 
 ## Where the envelope lands: per-harness transcript map
 
-A live `hosted` delivery puts the `<fno_mail>` turn into the recipient's session transcript by construction: the claude path injects it over `control.sock` and the `mail-inject` verb only reports `delivered` once that transcript grew; the codex/gemini path types it into the PTY worker, which the session records. So `grep <fno_mail>` reconstructs delivered a2a history, but you have to know where each harness keeps its transcript:
+A live `hosted` delivery puts the `<fno_mail>` turn into the recipient's session transcript by construction: the claude path injects it over `control.sock` and the `mail-inject` command only reports `delivered` once that transcript grew; the codex/gemini path types it into the PTY worker, which the session records. So `grep <fno_mail>` reconstructs delivered a2a history, but you have to know where each harness keeps its transcript:
 
 | Harness | Provider-native transcript | Notes |
 |---------|----------------------------|-------|
@@ -63,13 +63,13 @@ A live `hosted` delivery puts the `<fno_mail>` turn into the recipient's session
 | codex | `~/.codex/sessions/` rollout JSONL, indexed by `~/.codex/session_index.jsonl` | The index maps session uuids to rollout files. |
 | gemini | `~/.gemini/tmp/<cwd-basename>/chats/` | Per-cwd chats dir; gemini pins a session to its cwd. |
 
-Provider-agnostic fallback: footnote tees each spawned agent's I/O to a per-agent `output.jsonl` (the registry entry's `log_path`, surfaced by `fno agents logs <name>`). Because footnote owns that file's format and it captures both injected input and the model's output, it is the most uniform `grep <fno_mail>` target across all three harnesses. A durable (offline) message has no transcript yet; its `<fno_mail>` body lives in the bus log until drained.
+Provider-agnostic fallback: footnote tees each spawned agent's I/O to a per-agent `output.jsonl` (the registry entry's `log_path`, surfaced by `fno agents session logs <name>`). Because footnote owns that file's format and it captures both injected input and the model's output, it is the most uniform `grep <fno_mail>` target across all three harnesses. A durable (offline) message has no transcript yet; its `<fno_mail>` body lives in the bus log until drained.
 
-## The `mail-inject` verb
+## The `mail-inject` command
 
 `fno-agents mail-inject --session <uuid|short>` (`crates/fno-agents/src/mail_inject.rs`) is the one-shot claude live primitive `_deliver_live` shells out to. It reads the turn text from STDIN (sidestepping the argv size limit), resolves the recipient on the daemon roster, attaches to its `control.sock`, bracketed-pastes the text verbatim as raw keystrokes plus a wire-level CR, and confirms delivery by CONTENT (the injected turn's marker appearing in the recipient transcript after the inject, not mere transcript growth, because the growth proxy false-confirmed on a busy recipient whose transcript was already moving). It prints `{"delivered": bool, "reason": str}` and exits 0 when delivered. Every not-delivered reason (`not-injectable`, `no-transcript`, `attach-failed`, `not-confirmed`, ...) is a clean signal for Python to write the durable fallback.
 
-An unwrapped one-line payload rides verbatim. A payload that starts with `/fno:` or with `$fno:` names an fno verb. The verb rewrites that marker to the form of the receiving harness before delivery. A verb typed in one harness's dialect lands in the recipient's native one.
+An unwrapped one-line payload rides verbatim. A payload that starts with `/fno:` or with `$fno:` names an fno command. The command rewrites that marker to the form of the receiving harness before delivery. A command typed in one harness's dialect lands in the recipient's native one.
 
 ### `not-injectable` is not a liveness verdict
 
@@ -82,7 +82,7 @@ Once a session read it as "the session is busy with my turn, so mail-inject cann
 A source comment warning about the misnomer was already in place for the second one, which is why the name changed instead of the comment growing.
 The binary now also prints a one-line explanation on stderr whenever it returns this reason, so a human reading the terminal gets the sentence and not just the token.
 
-For reachability ask `fno agents truth` or the `reachability` field on `fno agents list` (`cli/src/fno/agents/reachability.py`), never this string.
+For reachability ask `fno agents fleet truth` or the `reachability` field on `fno agents session list` (`cli/src/fno/agents/reachability.py`), never this string.
 
 ### `--probe`: does a path exist, without injecting
 
@@ -102,7 +102,7 @@ What a yes does NOT promise: that the turn lands.
 No probe can see whether the recipient's prompt line is idle, so a paste can still refuse a mid-turn pane or a busy socket.
 A path existing is the whole claim.
 
-It is binary-direct (a Python subprocess), NOT a routable `fno agents` verb: it is dispatched via `matches!` in `bin/client.rs` like `version`/`--emit-schema`, so it stays out of the verb-parity lists (`RUST_CLIENT_VERBS` / `CLIENT_VERB_USAGE`).
+It is binary-direct (a Python subprocess), NOT a routable `fno agents` command: it is dispatched via `matches!` in `bin/client.rs` like `version`/`--emit-schema`, so it stays out of the command-parity lists (`RUST_CLIENT_COMMANDS` / `CLIENT_COMMAND_USAGE`).
 
 ### `--harness codex`: the codex live rung
 
@@ -112,10 +112,10 @@ It is binary-direct (a Python subprocess), NOT a routable `fno agents` verb: it 
 
 ### Confirm-by-growth is best-effort
 
-The verb confirms that the recipient transcript grew after the inject, i.e. the injected USER turn was recorded. For the target case (a session idle or blocked at a prompt) the turn records promptly, so growth fires within a poll interval. Two bounded edges remain:
+The command confirms that the recipient transcript grew after the inject, i.e. the injected USER turn was recorded. For the target case (a session idle or blocked at a prompt) the turn records promptly, so growth fires within a poll interval. Two bounded edges remain:
 
 - A BUSY recipient queues the injected turn past the poll budget.
-  The verb writes the durable fallback while the queued inject still lands later.
+  The command writes the durable fallback while the queued inject still lands later.
   That bounded DOUBLE delivery is now deduped at the drain (W2).
 - Live-first writes durable only after a failed live attempt.
   A kill during the live window used to lose the message.

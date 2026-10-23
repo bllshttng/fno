@@ -22,7 +22,7 @@
 # committing pins a commit your findings are not about and buys nothing.
 #
 # WHAT THIS EVENT PROVES: that a commit was pinned. NOT that a review
-# happened. The review verb emits nothing itself, and this script records the
+# happened. The review command emits nothing itself, and this script records the
 # reviewer name and verdict it is PASSED. Nothing here can tell a real review
 # from a caller that typed the arguments.
 #
@@ -46,6 +46,10 @@
 #   [--findings-file <path>]  a JSON findings payload; classified by `fno do
 #               review classify` and carried on the event as the finding record.
 #               A malformed or unreadable file is a refusal, never an empty record.
+#   [--refuse <reason>]  journal a terminal refused review_invocation row for an
+#               attempt that produced no verdict without failing a measurement
+#               (the fresh runner's silent reviewer). Emits NO attestation and
+#               exits 1: the exit is the refusal, the row is the record.
 set -euo pipefail
 
 usage() {
@@ -64,10 +68,22 @@ usage() {
 # gate. Any typo'd or stray flag did the same. There is no reviewer name in any
 # registry that begins with `-`, so refusing the whole shape costs nothing and
 # closes the class rather than the one spelling.
+# reviewer starts empty so the lstrip loop below is a no-op in refusal mode:
+# under set -u the loop runs before the refusal exit and $reviewer is
+# otherwise never assigned there.
+refuse_reason=""
+reviewer=""
 case "${1:-}" in
   -h | --help)
     usage
     exit 0
+    ;;
+  --refuse)
+    refuse_reason="${2:-}"
+    if [[ -z "$refuse_reason" ]]; then
+      echo "emit-attestation: --refuse needs a reason; no event emitted" >&2
+      exit 2
+    fi
     ;;
   -*)
     echo "emit-attestation: '$1' is a flag, not a reviewer name; no event emitted" >&2
@@ -103,26 +119,31 @@ done
   exit 2
 }
 
-reviewer="${positional[0]:?reviewer name required: a built-in (sigma|code-review|declare) or a config.review.reviewer_registry name}"
-verdict="${positional[1]:-pass}"
-reviewer_context="${positional[2]:-unknown}"
-execution_context="${positional[3]:-inline}"
-output_contract="${positional[4]:-json_block}"
-case "$reviewer_context" in
-  fresh|shared|unknown) ;;
-  *)
-    echo "emit-attestation: reviewer_context must be fresh, shared, or unknown (got '$reviewer_context')" >&2
-    exit 2
-    ;;
-esac
-case "$execution_context" in
-  inline|fork) ;;
-  *) echo "emit-attestation: execution_context must be inline or fork (got '$execution_context')" >&2; exit 2 ;;
-esac
-case "$output_contract" in
-  report_findings|json_block|prose_unparseable) ;;
-  *) echo "emit-attestation: output_contract must be report_findings, json_block or prose_unparseable (got '$output_contract')" >&2; exit 2 ;;
-esac
+# The refusal mode names no reviewer and takes no verdict: it rides the shared
+# resolution below (head, branch, invocation id, command) and journals one refused
+# row. Everything reviewer-shaped here is skipped when refusing.
+if [[ -z "$refuse_reason" ]]; then
+  reviewer="${positional[0]:?reviewer name required: a built-in (sigma|code-review|declare) or a config.review.reviewer_registry name}"
+  verdict="${positional[1]:-pass}"
+  reviewer_context="${positional[2]:-unknown}"
+  execution_context="${positional[3]:-inline}"
+  output_contract="${positional[4]:-json_block}"
+  case "$reviewer_context" in
+    fresh|shared|unknown) ;;
+    *)
+      echo "emit-attestation: reviewer_context must be fresh, shared, or unknown (got '$reviewer_context')" >&2
+      exit 2
+      ;;
+  esac
+  case "$execution_context" in
+    inline|fork) ;;
+    *) echo "emit-attestation: execution_context must be inline or fork (got '$execution_context')" >&2; exit 2 ;;
+  esac
+  case "$output_contract" in
+    report_findings|json_block|prose_unparseable) ;;
+    *) echo "emit-attestation: output_contract must be report_findings, json_block or prose_unparseable (got '$output_contract')" >&2; exit 2 ;;
+  esac
+fi
 while [[ "$reviewer" == /* ]]; do reviewer="${reviewer#/}"; done # strip ALL leading slashes (parity with both parsers' lstrip / trim_start_matches)
 
 head_sha="$(git rev-parse HEAD 2>/dev/null)" || {
@@ -223,19 +244,46 @@ fi
 invocation_id="$(printf '%s' "$hold_json" \
   | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
 if [[ -z "$invocation_id" && -n "$harness_session_id" && "$harness_session_id" != "null" ]]; then
-  invocation_id="$(jq -r '.invocation_id // empty' \
-    "${FNO_HOME:-$HOME/.fno}/review-invocations/${harness_session_id}.json" \
+  invocation_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${harness_session_id}.json" 2>/dev/null || true)"
+  [[ -n "$invocation_sidecar" ]] || invocation_sidecar="${FNO_HOME:-$HOME/.fno}/review-invocations/${harness_session_id}.json" # state-root: legacy fallback
+  invocation_id="$(jq -r '.invocation_id // empty' "$invocation_sidecar" \
     2>/dev/null || true)"
 fi
 if [[ -z "$invocation_id" ]]; then
   invocation_id="UNJOINED"
 fi
-review_verb="$(printf '%s' "$hold_json" | jq -r '.metadata.verb // "/code-review"' 2>/dev/null || echo /code-review)"
+review_command="$(printf '%s' "$hold_json" | jq -r '.metadata.verb // "/code-review"' 2>/dev/null || echo /code-review)"  # verb-wording: allow (hold metadata key)
 # jq reads EMPTY stdin as zero inputs: no output, exit 0, so the || default
-# above never fires and an empty hold reads as an empty verb. The explicit
+# above never fires and an empty hold reads as an empty command. The explicit
 # defaults below are what cover that (same for the metadata fields that
 # follow, whose fallbacks ride the same empty-input shape).
-[[ -n "$review_verb" ]] || review_verb="/code-review"
+[[ -n "$review_command" ]] || review_command="/code-review"
+
+# The refusal mode terminal: same row shape as the unresolvable-base refusal
+# below, emitted here because the hoisted block above already resolved the
+# invocation id, the command, the head and the branch, and the refusal names no
+# diff measurement. It closes the invocation's sent row, so an attempt that
+# produced no verdict reads as attempted-and-refused, never as
+# never-attempted. The exit stays 1: a refusal is a refusal even when it
+# journaled, and the caller reports the row note, never a pass.
+if [[ -n "$refuse_reason" ]]; then
+  refusal_row_note="the refused review_invocation row could NOT be journaled (the event writer failed); the attempt is unrecorded"
+  if "${FNO:-fno}" doctor event emit -t review_invocation -s daemon \
+    -d "$(jq -cn \
+      --arg invocation_id "$invocation_id" \
+      --arg stage refused \
+      --arg cmd "$review_command" \
+      --arg reason "$refuse_reason" \
+      --arg head_sha "$head_sha" \
+      --arg branch "$branch" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,head_sha:$head_sha,branch:$branch}')" \
+    >/dev/null 2>&1; then
+    refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id} (reason ${refuse_reason})"
+  fi
+  echo "emit-attestation: refusal journaled: $refuse_reason; no attestation emitted (${refusal_row_note})" >&2
+  exit 1
+fi
 
 # The diff under review, recorded with the event: its merge-base, its head, and
 # the added+deleted line count across it. Without these a clean review and a
@@ -261,11 +309,12 @@ if [[ -z "$reviewed_base_sha" ]]; then
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
-      --arg verb "$review_verb" \
+      --arg cmd "$review_command" \
       --arg reason unresolvable_base \
       --arg head_sha "$head_sha" \
       --arg branch "$branch" \
-      '{invocation_id:$invocation_id,stage:$stage,verb:$verb,reason:$reason,head_sha:$head_sha,branch:$branch}')" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,head_sha:$head_sha,branch:$branch}')" \
     >/dev/null 2>&1; then
     refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id}"
   fi
@@ -293,14 +342,15 @@ if (( reviewed_file_count == 0 )); then
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
-      --arg verb "$review_verb" \
+      --arg cmd "$review_command" \
       --arg reason empty_diff \
       --arg head_sha "$head_sha" \
       --arg branch "$branch" \
       --arg reviewed_base_sha "$reviewed_base_sha" \
       --arg reviewed_head_sha "$reviewed_head_sha" \
       --argjson reviewed_file_count "$reviewed_file_count" \
-      '{invocation_id:$invocation_id,stage:$stage,verb:$verb,reason:$reason,head_sha:$head_sha,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_file_count:$reviewed_file_count}')" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+         reason:$reason,head_sha:$head_sha,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_file_count:$reviewed_file_count}')" \
     >/dev/null 2>&1; then
     refusal_row_note="a refused review_invocation row was emitted for invocation ${invocation_id}"
   fi
@@ -319,7 +369,7 @@ if (( reviewed_file_count == 0 )); then
     echo "from the PR's worktree." >&2
   fi
   echo "If you are reviewing a worktree from the canonical checkout, hand the review its" >&2
-  echo "target explicitly: run from the worktree path, or pass the PR number to the review verb." >&2
+  echo "target explicitly: run from the worktree path, or pass the PR number to the review command." >&2
   exit 1
 fi
 
@@ -333,7 +383,7 @@ review_args_raw="$(printf '%s' "$hold_json" | jq -r '.metadata.args_raw // empty
 review_level="$(printf '%s' "$hold_json" | jq -r '.metadata.level // "unset"' 2>/dev/null || echo unset)"
 review_level_source="$(printf '%s' "$hold_json" | jq -r '.metadata.level_source // "fallback"' 2>/dev/null || echo fallback)"
 review_flags="$(printf '%s' "$hold_json" | jq -c '.metadata.flags // []' 2>/dev/null || echo '[]')"
-[[ -n "$review_verb" ]] || review_verb="/code-review"
+[[ -n "$review_command" ]] || review_command="/code-review"
 [[ -n "$review_level" ]] || review_level="unset"
 [[ -n "$review_level_source" ]] || review_level_source="fallback"
 [[ -n "$review_flags" ]] || review_flags='[]'
@@ -348,17 +398,33 @@ fi
 review_round=""
 if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
   review_round="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
-  [[ "$review_round" =~ ^[0-9]+$ ]] || review_round=""
+else
+  # An ordinary pass spends the next round; record it so the posted summary
+  # names a round instead of "unscoped".
+  review_round="$("${FNO:-fno}" do pr review-hold round --fresh --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
+fi
+[[ "$review_round" =~ ^[0-9]+$ ]] || review_round=""
+# A bare or diff-sized run leaves the hold without a level; resolve the one the
+# lane sized from the diff so the attestation never says "unset".
+if [[ "$review_level" == "unset" ]]; then
+  sized_level="$("${FNO:-fno}" do review resolve-level 2>/dev/null | jq -r '.level // empty' 2>/dev/null || true)"
+  [[ -n "$sized_level" ]] && review_level="$sized_level"
 fi
 review_model_family=""
 if [[ -n "$session_id" ]]; then
+  attest_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session_id}.json" 2>/dev/null || true)"
+  [[ -n "$attest_sidecar" ]] || attest_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session_id}.json" # state-root: legacy fallback
   review_model_family="$(jq -r '.model_family // .model // empty' \
-    "${FNO_HOME:-$HOME/.fno}/attest/${session_id}.json" 2>/dev/null || true)"
+    "$attest_sidecar" 2>/dev/null || true)"
 fi
 if [[ "$review_model_family" == "unobserved" ]]; then
   review_model_family=""
 fi
-count_dir="${FNO_HOME:-$HOME/.fno}/review-invocations/${invocation_id}.subagents"
+# Both reads answer from the state layout table via the `dir` door; on a
+# door refusal (no binary, or an fno-agents predating the door) the legacy
+# spelling answers, the path every pre-door binary wrote and read.
+count_dir="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${invocation_id}.subagents" 2>/dev/null || true)"
+[[ -n "$count_dir" ]] || count_dir="${FNO_HOME:-$HOME/.fno}/review-invocations/${invocation_id}.subagents" # state-root: legacy fallback
 subagent_count=0
 if [[ -d "$count_dir" ]]; then
   for marker in "$count_dir"/*; do
@@ -370,7 +436,7 @@ fi
 review_event_data="$(jq -cn \
   --arg invocation_id "$invocation_id" \
   --arg stage started \
-  --arg verb "$review_verb" \
+  --arg cmd "$review_command" \
   --arg args_raw "$review_args_raw" \
   --arg level "$review_level" \
   --arg level_source "$review_level_source" \
@@ -384,7 +450,8 @@ review_event_data="$(jq -cn \
   --arg execution_context "$execution_context" \
   --arg output_contract "$output_contract" \
   --argjson subagent_count "$subagent_count" \
-  '{invocation_id:$invocation_id,stage:$stage,verb:$verb,args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch,execution_context:$execution_context,output_contract:$output_contract,subagent_count:$subagent_count} | if $model_family == "" then . else .model_family=$model_family end' \
+  '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+     args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch,execution_context:$execution_context,output_contract:$output_contract,subagent_count:$subagent_count} | if $model_family == "" then . else .model_family=$model_family end' \
   2>/dev/null || true)"
 # The started row emits ONLY past every refusal point (the findings-file
 # checks below are the last of them): a refused run writes zero events, and
@@ -519,5 +586,17 @@ for _b in "${branch:-}" "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 done
 
 # The one receipt: the verdict shown is the measured one on the classified
-# path, the typed one when no findings file was given.
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context lines=$reviewed_line_count files=$reviewed_file_count" >&2
+# path, the typed one when no findings file was given. The review level is
+# composed from fields the row already carries, so the receipt names the
+# round's independence in one word without a new payload field: peer for a
+# cross-model peer verdict, fresh for a fresh-context reviewer round, self
+# for everything else (the inline lane and declare self-cert both included).
+# The variable is review_level_word, NOT review_level: that name carries the
+# invocation's effort level (:333) and feeds the event payload above.
+review_level_word="self"
+if [[ "$reviewer" == "peer" ]]; then
+  review_level_word="peer"
+elif [[ "$reviewer_context" == "fresh" ]]; then
+  review_level_word="fresh"
+fi
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count" >&2

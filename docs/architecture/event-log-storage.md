@@ -39,12 +39,13 @@ collision. A failed commit never falls back to a file write.
 
 A pruned row is gone, but its count stays. Each delete batch adds its rows to the `event_rollup` table in the same transaction. The key is the UTC day, the kind, and a subject. The subject is the arm of a tick, `guard:decision` of a guard row, the state of an inside-leg row, and empty for the rest. `occurrences` sums each row's `occurrence_count`, so a coalesced poll counts every poll it stood for. The rollup never expires. It grows by one row per kind and subject per day.
 
-`fno doctor event signals [--events <journal>] [--window-hours 24] [--pruned-days 30] [--check]` reads those shapes. Its `pruned` list totals the rollup per kind and subject over `--pruned-days`. It is read-only and flags four shapes:
+`fno doctor event signals [--events <journal>] [--window-hours 24] [--pruned-days 30] [--check]` reads those shapes. Its `pruned` list totals the rollup per kind and subject over `--pruned-days`. It is read-only and flags five shapes:
 
 - `burst`: one type wrote 1,000 rows in one minute.
 - `spike`: one type is at 5 times its prior daily average.
 - `arm_errors`: an arm's tick detail reported a failure 10 times.
 - `daemon_restarts`: the daemon started more than 12 times.
+- `legacy_journal`: a receipt row in the window carries `repeat`, the mark of a writer recreating the retired root journal family after its import-and-park pass.
 
 If any signal fires, `--check` exits 3.
 
@@ -68,7 +69,7 @@ Projections can join these owners by stable id. They must not copy them into the
 
 ## Import and export
 
-The importer walks every retained journal generation oldest-first, then the live file, then the ephemeral sibling. Each pass runs in one transaction and keys on row hash, so replays are free and a crash mid-import loses nothing. `fno doctor event export` writes the JSONL snapshot atomically from committed rows. An export is a snapshot for downgrades and audits, never re-ingested as new identity.
+The importer walks every retained journal generation oldest-first, then the live file, then the ephemeral sibling. Each pass runs in one transaction and keys on row hash, so replays are free and a crash mid-import loses nothing. `fno doctor event export` writes the JSONL snapshot atomically from committed rows. An export is a snapshot for downgrades and audits, never re-ingested as new identity. The root journal family is retired. The daemon's migrate pass imports any `events.jsonl*` file that reappears at the state root and parks it under the migration backups. A routed read serves committed rows only.
 
 ## Diagnose a malformed store on a copy
 
@@ -82,13 +83,13 @@ Readers refuse corruption. They never repair, replace, or silently rebuild a liv
 
 Writers and importers run no integrity sweep on open: a scan walks every page of a healthy store, and the write-open door sits on the per-fire hook append path, so the sweep cost scaled with store size on every Bash turn. Page damage instead surfaces as a SQLite statement error when a statement touches the damaged page. A write door that hits such an error refuses the write and appends a pin to the existing questions journal beside the store family; every door that hits the damage pins the same deduplicated question. Damage on pages a door never reads does not block that door. Deliberate sweeps still belong on a copy: `PRAGMA quick_check` and `PRAGMA integrity_check` remain the recovery-time instruments, and the copy procedure below is unchanged. Both native crates bundle SQLite 3.53.2 through rusqlite 0.40.2. SQLite documents the [WAL-reset race and its fix](https://sqlite.org/wal.html#walreset) in 3.51.3 and later. A vulnerable engine and WAL mode establish exposure. They do not prove the historical race occurred.
 
-Use the native copy verb on a quiescent offline database with its matching `-wal` sibling. The output directory must not exist. Both paths must stay outside the operator state root.
+Use the native copy command on a quiescent offline database with its matching `-wal` sibling. The output directory must not exist. Both paths must stay outside the operator state root.
 
 ```bash
 fno doctor event recover --copy-store --source /tmp/evidence/events.db --output /tmp/recovered-events
 ```
 
-The verb captures DB and WAL into scratch and refuses changed sources or linked files. SQL reconstruction preserves every readable table, explicit index, schema version, event identity, sequence, metadata row, and observation state. It resets only the derived `ingest_cursor`. Each preserved table receives a row count and matching source/candidate digest. Publication requires both `quick_check` and `integrity_check` to return `ok`. The new `events.db` and `recovery.json` are copy artifacts only. An unreadable authoritative table fails the verb. No JSONL rebuild or live installation occurs.
+The command captures DB and WAL into scratch and refuses changed sources or linked files. SQL reconstruction preserves every readable table, explicit index, schema version, event identity, sequence, metadata row, and observation state. It resets only the derived `ingest_cursor`. Each preserved table receives a row count and matching source/candidate digest. Publication requires both `quick_check` and `integrity_check` to return `ok`. The new `events.db` and `recovery.json` are copy artifacts only. An unreadable authoritative table fails the command. No JSONL rebuild or live installation occurs.
 
 ## Grammar
 

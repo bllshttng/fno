@@ -33,6 +33,7 @@ The overlay owns every keystroke, so bare arrows are free there.
 - `Left` or `Esc`: back to the pane you came from.
 - `Up`/`Down` or `Ctrl-p`/`Ctrl-n`: move the cursor.
 - `Tab`/`Shift-Tab`: cycle the state chip.
+- `Ctrl-o`: open the row menu on the selected row. An agent row gets the sideline's menu and keys (`x` remove, `p` peek, `m` mail, `s` stop). Tab and workspace rows get their own menus. A plain pane row has none. `Esc` returns to the list. Running an action closes the navigator. Bare letters stay filter text, so the menu is one keypress away.
 - Typing: filter by what the row IS. A hit invisible in the label shows the matched token as a suffix.
 
 ## Rebinding the prefix form
@@ -46,4 +47,4 @@ selector = ";"
 
 The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
 
-You can also rebind from the mux. The menu's `keybindings` row and `settings > keybindings` open the SAME table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button: it opens the key config in your `$EDITOR` (vi when none is set). After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.
+You can also rebind from the mux. The menu's `keybindings` row opens the table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button. It opens the key config in your `$EDITOR`. If no editor is set, it opens vi. After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.

@@ -50,8 +50,8 @@ Load `iteration-loop.md` and run this atomic loop:
 4. make one focused fix at the root cause
 5. `git commit` before verify
 6. re-run detection to compute `delta`
-7. if a guard command is set, run it
-8. keep, revert, or rework
+7. if a guard command is set, run it. For a `bug` item, the guard is required, and it must reproduce the bug: run it once before step 4, at the base commit. It must exit non-zero at the base and zero at the fix commit
+8. keep, revert, or rework. A `bug` fix with no red-to-green guard pair is never kept
 9. log to `fix-results.tsv`, with the cause and the state verdict from step 3
 10. emit ONE `builder_step` crumb (below)
 
@@ -99,6 +99,7 @@ Write:
 - blocked items
 - every reverted fix and why it reverted (regression / non-positive delta), so an auto-reverted attempt is reported, not silently dropped
 - for each kept fix, its `cause:` line and its state verdict (`legitimate` or `illegitimate`)
+- for each kept `bug` fix, the receipt line `guard: <command> base=<sha> exit=<n> head=<sha> exit=0`, with a non-zero base exit
 - suggestion to run a code review skill if available (e.g., `/review`), or run the project's test/lint/build commands to verify fixes
 
 ### Category Strategies
@@ -131,4 +132,4 @@ Discard and re-queue any fix that uses:
 fix_score = reduction * 0.60 + guard_health * 0.25 + quality * 0.15
 ```
 
-The score ranks candidate keeps when several fixes touch the same area; the decision rules above (delta and guard) stay the keep/revert authority. The per-class delta is trusted where the category has a mechanical counter (build, type, lint, test); for `bug` classes the delta is evidence, and the guard plus reproduction decide.
+The score ranks candidate keeps when several fixes touch the same area; the decision rules above (delta and guard) stay the keep/revert authority. The per-class delta is trusted where the category has a mechanical counter (build, type, lint, test); for `bug` classes the delta is evidence, and the red-to-green guard pair decides.

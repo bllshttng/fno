@@ -54,7 +54,7 @@ if [[ -n "${FNO_CLOSURE_ID_FAMILIES:-}" ]]; then
   fi
 fi
 
-# Candidate ids come from the fno-agents binary's pr-closure-branch-ids verb:
+# Candidate ids come from the fno-agents binary's pr-closure-branch-ids command:
 # the same delimiter-bounded scanner the merge-time bind runs, so this gate can
 # no longer disagree with the producer about what the ref names. The bash
 # re-glue loop this replaced kept its own split table (a single `IFS='/-'` once
@@ -197,7 +197,7 @@ if [[ $claimed -eq 0 ]]; then
     echo "  The gate wanted: ${candidates[*]}"
     echo "  Remedy: fno do pr closure-trailer <node-id> --extra <id> [--extra <id> ...]"
     echo "  prints ONE Fixes line naming every id. Replace EVERY closure line in"
-    echo "  the PR body with that one line. The verb checks the ids against the"
+    echo "  the PR body with that one line. The command checks the ids against the"
     echo "  graph and PRINTS the line; it does not edit the PR. Do NOT paste a"
     echo "  candidate from this message:"
     echo "  a branch segment can match the id grammar without being a real node,"

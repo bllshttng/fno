@@ -10,7 +10,7 @@ This file explains the machinery behind `SKILL.md`'s "Completion: what you do" p
 
 `hooks/target-stop-hook.sh` is a 118-line read-only shim. It resolves the `fno-agents` binary in order: `$FNO_AGENTS_BIN`, repo `target/release`, repo `target/debug`, then PATH. When the binary is missing the shim emits a `loop_check_binary_missing` event to both `.fno/events.jsonl` and `~/.fno/events.jsonl` and allows exit (session must be re-spawned once the binary is available). The shim sources no `scripts/lib/*.sh` files and makes no decisions itself.
 
-## The loop-check verb
+## The loop-check command
 
 The shim delegates all stop/allow logic to `fno-agents loop-check`. Output is one JSON object: `{decision, termination_reason, message, fires, fingerprint}`. Exit 0 for allow and for a healthy block; exit 2 also carries a full decision payload when the lead's board is unreadable (degraded block); exit 2 with no `decision` field means CLI misuse only. The shim keys on the `decision` field, never the exit code.
 
@@ -45,13 +45,13 @@ Events land in both `.fno/events.jsonl` and `~/.fno/events.jsonl` with envelope 
 
 ## The Golden Rule
 
-The loop continues until `<promise>MISSION COMPLETE: ...</promise>` AND the world agrees (PR green + reviewed), or a backstop, budget cap, or cancel sentinel terminates it. Emit `<promise>` only when the pipeline is genuinely done. The loop-check verb decides; you cannot self-authorize completion by writing to any file.
+The loop continues until `<promise>MISSION COMPLETE: ...</promise>` AND the world agrees (PR green + reviewed), or a backstop, budget cap, or cancel sentinel terminates it. Emit `<promise>` only when the pipeline is genuinely done. The loop-check command decides; you cannot self-authorize completion by writing to any file.
 
 To cancel: `touch .fno/.target-cancelled` (or invoke `/target cancel`). The shim detects the sentinel and terminates with `Interrupted`.
 
 ## bg terminal state, promise timing, and the review gate
 
-- **Merge authority is CONFIG-driven, not attendance-driven.** Read the manifest's resolved `auto_merge_approved` (`sed -n 's/^auto_merge_approved:[[:space:]]*//p' .fno/target-state.md`), NOT `fno config get auto_merge`. Init folds `auto_merge.enabled` together with this run's modifiers, and a per-run `no-merge` - which `/target bg` injects by default - sets the resolved field false even when the config is enabled, so the raw config would tell you to merge against an explicit per-run prohibition. `fno do pr merge` reads the same field and refuses too (it used to gate on `enabled` alone, which made the sanctioned verb a weaker gate than the raw `gh pr merge` the git-protection hook guards); treat that as a backstop and decide from the manifest.
+- **Merge authority is CONFIG-driven, not attendance-driven.** Read the manifest's resolved `auto_merge_approved` (`sed -n 's/^auto_merge_approved:[[:space:]]*//p' .fno/target-state.md`), NOT `fno config get auto_merge`. Init folds `auto_merge.enabled` together with this run's modifiers, and a per-run `no-merge` - which `/target bg` injects by default - sets the resolved field false even when the config is enabled, so the raw config would tell you to merge against an explicit per-run prohibition. `fno do pr merge` reads the same field and refuses too (it used to gate on `enabled` alone, which made the sanctioned command a weaker gate than the raw `gh pr merge` the git-protection hook guards); treat that as a backstop and decide from the manifest.
   - **When approved, MERGE BEFORE PROMISING.** `fno do pr merge <n>`, then `fno backlog reconcile` to close the node (a merge from inside a worktree skips the local post-merge step), and only then `<promise>`. This is the one exception to promise-early: a promise emitted first terminates the loop as `DonePRGreen` the moment CI is green, the session is never re-invoked, and the merge silently never happens. Config set once IS the standing authorization; re-asking each time re-imposes the step it was configured to delete.
   - **When not approved** (the default), the terminal state is a **green, reviewed, mergeable PR** and the merge goes to a human; promise once the PR is green and reviewed. **Any merge path counts as done:** a PR merged out-of-band (web/mobile UI, or `gh pr merge`) satisfies `done()` as `DonePRGreen` on the next stop-hook fire - the loop stops re-poking a finished session.
   - There is no attendance check anywhere in the merge path. The two-factor guard in `hooks/git-protection.py` (`_check_pr_merge_allowed`) gates on `auto_merge_approved` plus external-review evidence, both config- and session-driven. This bullet previously claimed the guard "refuses an unattended actor", which sent every bg session hunting for a human approver that nothing required.
@@ -65,4 +65,4 @@ To cancel: `touch .fno/.target-cancelled` (or invoke `/target cancel`). The shim
 
 ## What changed
 
-The pre-wedge control plane had three layers removed in Tasks 1.1-3.2: (1) the 1101-line bash stop hook with thrash/budget/phase-stall/help-escalation/orphan detectors and three-factor gate provenance machinery (~7575 LOC of `scripts/lib/` helpers deleted); (2) the `fno gate` CLI surface and `gates/` package (~1460 LOC + both `gate_reality_map.yaml` copies deleted); (3) the phase verifier scripts in `skills/target/scripts/verifiers/` (~900 LOC deleted). The replacement is `fno-agents loop-check` (a single Rust verb) + the 118-line shim.
+The pre-wedge control plane had three layers removed in Tasks 1.1-3.2: (1) the 1101-line bash stop hook with thrash/budget/phase-stall/help-escalation/orphan detectors and three-factor gate provenance machinery (~7575 LOC of `scripts/lib/` helpers deleted); (2) the `fno gate` CLI surface and `gates/` package (~1460 LOC + both `gate_reality_map.yaml` copies deleted); (3) the phase verifier scripts in `skills/target/scripts/verifiers/` (~900 LOC deleted). The replacement is `fno-agents loop-check` (a single Rust command) + the 118-line shim.

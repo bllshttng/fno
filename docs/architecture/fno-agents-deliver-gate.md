@@ -2,7 +2,7 @@
 
 > **Status note.** The Python claude follow-up legs named below (`_build_envelope`, `send_to_session`, `ask_followup_via_mcp`) were ported to the Rust runtime and deleted (the ask-adapter port, 2026-09-02). The container-escaping contract they pinned now lives in `crates/fno-agents/src/claude_ask.rs` and is byte-locked by `claude_ask_parity.rs` goldens. The `agent.deliver` RPC and gate material is unchanged.
 
-This document covers the internals of live PTY delivery for codex and gemini hosted peers: the `agent.deliver` daemon RPC, the `inject_into_pty` primitive, the provenance container format, and the per-provider injection gate that guards them. For the user-facing send verb, see [docs/guides/fno-agents-send.md](../guides/fno-agents-send.md).
+This document covers the internals of live PTY delivery for codex and gemini hosted peers: the `agent.deliver` daemon RPC, the `inject_into_pty` primitive, the provenance container format, and the per-provider injection gate that guards them. For the user-facing send command, see [docs/guides/fno-agents-send.md](../guides/fno-agents-send.md).
 
 ## agent.deliver RPC
 
@@ -107,7 +107,7 @@ pub enum InjectionGate {
 }
 ```
 
-`status` is one of `"passed"` or `"failed"`. `method` is `"manual"` for attestations written via `fno agents gate --record`; future automated probes would write a different method string.
+`status` is one of `"passed"` or `"failed"`. `method` is `"manual"` for attestations the retired gate command wrote; future automated probes would write a different method string.
 
 **Conservative posture.** The gate resolver maps every ambiguous condition to `Unverified`:
 
@@ -173,7 +173,7 @@ This differs from the `queued_command` shape a submitted, turn-processed message
 
 Two consequences landed from this measurement:
 
-- `crates/fno/src/server.rs`'s `rerun_allowed` doc comment no longer blames a corrupted composer for staying conservative on the `rerun` verb. That verb writes raw bytes via `pty.write_input`. This is a different write with no such measurement behind it. The guard's rationale is now scoped to that write specifically.
+- `crates/fno/src/server.rs`'s `rerun_allowed` doc comment no longer blames a corrupted composer for staying conservative on the `rerun` command. That command writes raw bytes via `pty.write_input`. This is a different write with no such measurement behind it. The guard's rationale is now scoped to that write specifically.
 - `cli/src/fno/agents/dispatch.py`'s `_mux_pane_send` dropped the equivalent busy-veto for mail delivery. That veto (`guarded=True`) rode `rerun_allowed` itself. It is replaced with a content confirm: poll the recipient's own transcript for the injected marker after the paste. This mirrors `crates/fno-agents/src/mail_inject.rs`'s `confirm_content_after`/`escaped_marker` pair. Both claude keystroke lanes, control.sock and mux pane, now confirm delivery the same way.
 
 ## Mail is typed as one line, never a paste (C17)
@@ -193,4 +193,4 @@ Two consequences:
 
 ## What Group 3 changes
 
-Group 3 of the cross-agent bus epic swaps the inbox store backing from the current per-recipient markdown thread files to a single global JSONL bus log (`~/.fno/bus/messages.jsonl`). The `write_new_thread` call in `dispatch_send` (step 4c, the durable envelope write) becomes a write to that log. The `send` verb's call sites, CLI flags, stdout contract, and delivery tier logic do not change - only the storage layer underneath the store API rotates.
+Group 3 of the cross-agent bus epic swaps the inbox store backing from the current per-recipient markdown thread files to a single global JSONL bus log (`~/.fno/bus/messages.jsonl`). The `write_new_thread` call in `dispatch_send` (step 4c, the durable envelope write) becomes a write to that log. The `send` command's call sites, CLI flags, stdout contract, and delivery tier logic do not change - only the storage layer underneath the store API rotates.

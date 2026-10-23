@@ -7,7 +7,7 @@
 # risk here: nine-plus spawners span cli/src (Python) and skills/*/scripts +
 # hooks (shell). A Python-only lint would miss every shell caller. This gate
 # enumerates both and fails CI the moment a new site appears, until someone
-# records it in the baseline naming which `fno agents autonomy status` spawner it
+# records it in the baseline naming which `fno agents admit autonomy status` spawner it
 # belongs to, or an explicit reason it is not autonomous.
 #
 # Run: bash scripts/ci/check-autonomy-registry.sh
@@ -108,7 +108,7 @@ REMOVED="$(comm -13 "$FOUND" "$BASE" || true)"
 if [[ -z "$ADDED" && -z "$REMOVED" ]]; then
   echo "check-autonomy-registry: ok ($(wc -l < "$BASE" | tr -d ' ') site(s) match the baseline)"
   # The dispatch-provenance audit: positive completeness marker for the
-  # source/verb vocabulary - every registered path must carry a code, and the
+  # source/command vocabulary - every registered path must carry a code, and the
   # marker line (not an empty grep) is the evidence. The vocabulary lives in
   # the fno-agents binary, so the audit runs it directly (no typer import); a
   # lane with no binary names the SKIP instead of failing, and provisioning
@@ -128,7 +128,7 @@ if [[ -n "$ADDED" ]]; then
   echo "check-autonomy-registry: NEW spawn-shaped call site(s) not in the baseline:" >&2
   printf '  %s\n' $ADDED >&2
   echo "  Add each to scripts/ci/autonomy-registry-baseline.txt naming the" >&2
-  echo "  fno agents autonomy status spawner it belongs to, add a status row via" >&2
+  echo "  fno agents admit autonomy status spawner it belongs to, add a status row via" >&2
   echo "  cli/src/fno/autonomy_cli.py if it is a genuinely new spawner, or" >&2
   echo "  record why it is not autonomous (an explicit operator command)." >&2
 fi

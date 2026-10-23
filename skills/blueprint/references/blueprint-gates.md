@@ -314,10 +314,10 @@ Then, only when non-empty, transcribe onto the node (idempotent; last writer
 wins, so a re-run with a changed pin overwrites cleanly):
 
 ```bash
-[[ -n "$MODEL_PIN" ]] && fno backlog update "$NODE_ID" --model "$MODEL_PIN"
+[[ -n "$MODEL_PIN" ]] && fno backlog update "$NODE_ID" "model=$MODEL_PIN"
 ```
 
-The `fno backlog update --model` verb validates the value as a single
+The `fno backlog update model=<id>` form validates the value as a single
 non-whitespace token; a malformed pin exits non-zero and leaves the node
 unchanged (surface the error, do not fabricate a pin). When `/blueprint`
 decomposes a scope:epic into child nodes, apply the same transcription to each
@@ -340,10 +340,10 @@ Precedence is `model:` (exact) over the provider default. An exact pin on the sa
 ```bash
 # Plan frontmatter `difficulty:` (scope to the frontmatter block).
 DIFFICULTY="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^difficulty:/{sub(/^difficulty:[[:space:]]*/,""); sub(/[[:space:]]*#.*$/,""); print; exit}' "$PLAN_INDEX")"
-[[ -n "$DIFFICULTY" ]] && fno backlog update "$NODE_ID" --difficulty "$DIFFICULTY"
+[[ -n "$DIFFICULTY" ]] && fno backlog update "$NODE_ID" "difficulty=$DIFFICULTY"
 ```
 
-`fno backlog update --difficulty` validates the band (`high|medium|low`). An invalid value exits non-zero and leaves the node unchanged (surface it, do not fabricate a band). The retired `--model-tier` spelling exits 2 with a message naming `--difficulty`.
+`fno backlog update difficulty=<band>` validates the band (`high|medium|low`). An invalid value exits non-zero and leaves the node unchanged (surface it, do not fabricate a band). The retired model-tier spelling exits 2 with a message naming `difficulty=<band>`.
 
 ## Blueprint Provenance Stamp
 
@@ -537,7 +537,7 @@ Two declarations are honored, either or both:
 | Key | Read by | Question |
 |-----|---------|----------|
 | `done_probes` | `fno-agents loop-check` | may this SESSION stop? |
-| `close_probes` | the three close verbs (`backlog done`, `done`, `reconcile`) | may this NODE close? |
+| `close_probes` | the three close commands (`backlog done`, `done`, `reconcile`) | may this NODE close? |
 
 Session termination and node closure are different questions with different
 right answers: wave 1 ships, its session is finished and should stop, but the
@@ -546,17 +546,17 @@ Putting wave 2's outcome assertion under `done_probes` would wedge wave 1's
 session; putting it under `close_probes` lets the session end while the node
 stays open until the promise lands.
 
-The close verbs shell out to `fno-agents probe-run --key close_probes`, the
+The close commands shell out to `fno-agents probe-run --key close_probes`, the
 same runner `loop-check` uses for `done_probes` - one runner, two gates.
 
 ```yaml
 close_probes:
-  - "test $(wc -l < scripts/ci/verb-baseline.txt) -lt 364"   # the cull ran
+  - "test $(wc -l < scripts/ci/command-baseline.txt) -lt 364"   # the cull ran
 ```
 
 **Assert an observable outcome, not a checkbox.**
 A probe asserts something a reader can check in the world: a count dropped, a
-file gained a section, a leaf verb disappeared.
+file gained a section, a leaf command disappeared.
 Checkboxes are ticked by the party that wants to close, the weakest evidence
 class.
 
@@ -573,7 +573,7 @@ close_probes:
   - "fno-agents probe-run main-ci --workflow cli-ci --node <id>"
 ```
 
-It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close verbs keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
+It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close commands keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
 
 ## Join posture (step 3, every plan carrying an `## Execution Strategy`)
 
@@ -593,7 +593,7 @@ The gate runs after the Execution Strategy is enriched and before `validate-plan
 WIDTH=$(fno backlog join width "$PLAN_PATH" 2>/dev/null); WIDTH_RC=$?
 ```
 
-**Use the native verb.** The old `python -m fno.backlog.join_trigger` module is gone. Every call to it fails with `ModuleNotFoundError`, so `WIDTH_RC` reads 1 on every plan. The gate then takes the unmeasured row every time and records `manual` without printing the width it exists to print.
+**Use the native command.** The old `python -m fno.backlog.join_trigger` module is gone. Every call to it fails with `ModuleNotFoundError`, so `WIDTH_RC` reads 1 on every plan. The gate then takes the unmeasured row every time and records `manual` without printing the width it exists to print.
 
 That is the same canonical probe `init-target-state.sh` shells out to. When the plan cannot be measured, it exits 1 and prints nothing. Otherwise it prints the measured int and exits 0. Branch on the exit code, never on the empty string:
 
@@ -626,7 +626,7 @@ adopting.
 If any entry in `collisions` has `severity: "high"`, take the first branch that fits and adopt or stop by it:
 
 - **Beastmode.** `fno do target status` shows `authority: full` on the `attended` line (a live `/target beastmode` session). Take the `recommended_action` for each entry, append one `## Autonomous Decisions` entry naming the collision and the action, and continue without prompting.
-- **Nobody can answer.** This session has no AskUserQuestion tool: a codex thread, a subagent, a headless or spawned run. Never ask in chat and wait, because nobody reads that chat and the plan never adopts. Take option 1. After intake, run `fno backlog update <new-id> --acknowledge-collisions <ids>` with every high entry's `with_node_id`. Then run one `fno backlog note <new-id> "collision disposition: proceeded unattended; <id>: <n> shared files, recommended <action>; ..."`, so whoever reads the node can still absorb or supersede.
+- **Nobody can answer.** This session has no AskUserQuestion tool: a codex thread, a subagent, a headless or spawned run. Never ask in chat and wait, because nobody reads that chat and the plan never adopts. Take option 1. After intake, run `fno backlog update <new-id> collisions_acknowledged=<ids>` with every high entry's `with_node_id`. Then run one `fno backlog note <new-id> "collision disposition: proceeded unattended, <action>"` per high entry. Whoever reads the node can still absorb or supersede it.
 - **A person can answer.** Present the entries via AskUserQuestion before adopting, as the block below shows, and apply the choice:
 
 > Your plan touches files also touched by these in-flight plans:
@@ -642,37 +642,26 @@ If any entry in `collisions` has `severity: "high"`, take the first branch that 
 
 Apply the user's choice:
 
-- **Option 1 (proceed):** continue to step 3b. Once the new node ID is
-  known, run `fno backlog update <new-id> --acknowledge-collisions
-  ab-XYZ,ab-ABC,...` so the new node carries an audit trail of the
-  collisions deliberately ignored.
-- **Option 2 (modify):** print the existing plan path and exit cleanly.
-  The user edits the older plan; the new file is left on disk for
-  reference but not adopted.
-- **Option 3 (supersede):** continue to step 3b. After adoption, run `fno backlog supersede <new-id> --replaces ab-XYZ --cause "..." --surface <path>`. Use the colliding plan's rationale or ask the user for a reason.
+- **Option 1 (proceed):** continue to step 3b. Once the new node ID is known, run `fno backlog update <new-id> 'collisions_acknowledged=ab-XYZ,ab-ABC,...'` so the new node carries an audit trail of the collisions deliberately ignored.
+- **Option 2 (modify):** print the existing plan path and exit cleanly. The user edits the older plan. The new file is left on disk for reference but not adopted.
+- **Option 3 (supersede):** continue to step 3b. After adoption, run `fno backlog supersede <new-id> --replaces ab-XYZ --cause "..." --surface <path> --reason "..." --covers "..."`. Use the colliding plan's rationale or ask the user for a reason.
 - **Option 4 (cancel):** delete the plan file and exit cleanly.
 
 Medium and low-severity collisions are reported as single-line warnings on
 stderr (`Warning: M shared files with ab-XYZ`) and never block auto-intake.
 
-The `no-collision-check` positional modifier (and `--no-collision-check`
-flag) skip this step entirely. Use case: "I know this collides; I'm doing
-it on purpose." When this modifier is used, after auto-intake run
-`fno backlog update <new-id> --acknowledge-collisions __skipped_check__`
-so the audit trail distinguishes "I checked and accepted" from "I never
-checked at all."
+The `no-collision-check` positional modifier (and `--no-collision-check` flag) skips this step entirely. Use case: "I know this collides; I'm doing it on purpose." When this modifier is used, run `fno backlog update <new-id> collisions_acknowledged=__skipped_check__` after auto-intake. The audit trail then distinguishes "I checked and accepted" from "I never checked at all."
 
 ## Cross-project peer heads-up (step 3a-bis; Files-to-Modify intersection)
 
-After the plan file is written and any collision check has resolved, but
-BEFORE auto-intake, scan the plan's Files-to-Modify table for paths that
-match a peer-owned surface. Mechanical resolution, not LLM judgment. Skip the
-whole step silently when no `peers` block exists (opt-in by design).
+After the plan file is written and any collision check has resolved, but BEFORE auto-intake, scan the plan's Files-to-Modify table for paths that match a peer-owned surface. Mechanical resolution, not LLM judgment. Skip the whole step silently when no `peers` block exists (opt-in by design).
 
 ```python
-from fno.inbox.settings import read_peer_surfaces, read_surface_patterns
-peers = read_peer_surfaces()           # {peer: [surface_name, ...]}
-patterns = read_surface_patterns()     # {surface_name: [glob, ...]}
+import json, subprocess
+maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
+                                 capture_output=True, text=True, check=True).stdout)
+peers = maps["peers"]                  # {peer: [surface_name, ...]}
+patterns = maps["surface_patterns"]    # {surface_name: [glob, ...]}
 ```
 
 For each peer, union the glob patterns of every surface that peer owns,
@@ -736,7 +725,7 @@ blasting.
 Every plan answers five questions before designing, into a `## Five questions` section (schema: `quick-template.md`). Each answer is a named thing or the word `none`. The word `none` is a claim, judged like any other.
 
 1. **Persona**: who hits this, what do they do today instead, and what does it cost them per week? Name the person: user, titled lead, worker session, or plugin user. Tie the cost to a source the plan cites.
-2. **Surface fit**: which existing verb, skill or config does this extend? Name it, or name the one you searched for and why it does not cover this.
+2. **Surface fit**: which existing command, skill or config does this extend? Name it, or name the one you searched for and why it does not cover this.
 3. **Uncovered case**: which realistic input or state breaks the design as written? Two sessions at once, a moved index or branch, an empty or stale input the plan already relies on.
 4. **Deletable**: what can you delete and still ship the stated goal?
 5. **Duplication**: which existing module already implements this, or can be extended so the feature falls out? Name a module and a relationship. Advice to consider consolidation is not an answer.

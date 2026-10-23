@@ -2,7 +2,7 @@
 # fno hook: SessionStart - outstanding session start
 # SessionStart hook: what is waiting on a human - the session's own open
 # questions plus one count line, read from the daemon's projection cache
-# (~/.fno/attention/items.json, rewritten every beat) instead of the 3s
+# (~/.fno/state/attention/items.json, rewritten every beat) instead of the 3s
 # `fno inbox outstanding` fold that exits 124 under a session-start budget.
 # A cache that is missing or stale falls back to the full fold, which is
 # also what a harness without the attention arm reads.
@@ -21,7 +21,12 @@ have_jq=1
 command -v jq >/dev/null 2>&1 || have_jq=0
 
 CACHE_MAX_AGE_SECS=120
-cache="${FNO_HOME:-$HOME/.fno}/attention/items.json"
+# The daemon writes the cache under state/attention/; a pre-fold cache at
+# the legacy spelling answers until the daemon-start pass folds it.
+cache="${FNO_HOME:-$HOME/.fno}/state/attention/items.json"
+if [[ ! -s "$cache" ]]; then
+    cache="${FNO_HOME:-$HOME/.fno}/attention/items.json"
+fi
 
 if [[ $have_jq -eq 1 && -s "$cache" ]]; then
     now=$(date +%s)
@@ -66,7 +71,7 @@ if [[ "${FNO_SESSION_ROLE:-}" == "worker" ]]; then
 fi
 
 # Fallback: the full fold. A non-zero exit is NOT silence: collapsing a failed
-# read into an empty string is the absence-as-success trap this verb exists to
+# read into an empty string is the absence-as-success trap this command exists to
 # close. But exit 2 is Typer's "no such command", which a DEPLOYED fno older
 # than this feature returns on EVERY session until someone runs
 # `fno doctor update`. Nagging forever is noise, so the loud path is reserved

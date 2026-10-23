@@ -1,6 +1,6 @@
 # fno agents — lifecycle (stop / rm / reconcile / attach)
 
-The lifecycle write verbs round out the `fno agents` surface alongside create (`ask`), follow-up (`ask` again), and read (`list`, `logs`): `stop`, `rm`, `reconcile`, and `attach`.
+The lifecycle write commands round out the `fno agents` surface alongside create (`ask`), follow-up (`ask` again), and read (`list`, `logs`): `stop`, `rm`, `reconcile`, and `attach`.
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). Sibling: [fno-agents-codex-provider.md](fno-agents-codex-provider.md). User guide: [../guides/fno-agents-stop-rm-reconcile.md](../guides/fno-agents-stop-rm-reconcile.md).
 
@@ -8,25 +8,25 @@ Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.m
 
 ```bash
 # Stop a running claude background session (keeps the conversation resumable):
-fno agents stop worker-claude
+fno agents session stop worker-claude
 
 # Remove an agent from the registry (and from claude's supervisor):
-fno agents rm worker-claude
-fno agents rm worker-claude --force        # override claude's refusal (e.g. uncommitted worktree)
+fno agents session rm worker-claude
+fno agents session rm worker-claude --force        # override claude's refusal (e.g. uncommitted worktree)
 
 # Sweep the registry, flip statuses against provider reality:
-fno agents reconcile
-fno agents reconcile --json | jq .         # machine-readable
+fno agents registry reconcile
+fno agents registry reconcile --json | jq .         # machine-readable
 
 # Drop into a claude agent's interactive TUI:
-fno agents attach worker-claude
+fno agents session attach worker-claude
 ```
 
 Provider matrix:
 
-| Verb | claude | codex | gemini |
+| Command | claude | codex | gemini |
 |------|--------|-------|--------|
-| stop | `claude stop <id>` shellout (30s timeout) <!-- retired-ok: a reference table of what each harness teardown invokes, not steps to run. --> | no-op + info on stderr (synchronous between asks) | no-op + info on stderr |
+| stop | the fno-agents client's `agent.stop` daemon RPC; `stop_claude` proves the worker set from claude's own roster and ends survivors itself | no-op + info on stderr (synchronous between asks) | no-op + info on stderr |
 | rm | `claude rm <id>` then registry-row removal (atomicity invariant); `--force` overrides <!-- retired-ok: a reference table of what each harness teardown invokes, not steps to run. --> | registry-only; on-disk session files stay (operator cleans manually) | registry-only |
 | reconcile | `claude logs <id> --tail 1` exit-code (10s timeout) | presence in `~/.codex/session_index.jsonl` | tri-state reachability probe (see [fno-agents-gemini-commands.md](fno-agents-gemini-commands.md)) |
 | attach | `claude attach <id>` with inherited stdio | exit 13 (interactive attach not supported) | exit 13 (interactive attach not supported) |
@@ -35,14 +35,14 @@ Provider matrix:
 
 ```
 cli.py
-   ├─ cmd_stop(name)         → dispatch.stop_agent(name)
+   ├─ cmd_stop(name)         → Rust runtime only (no Python stop; refuses by name
+   │                           without the fno-agents binary)
    ├─ cmd_rm(name, --force)  → Rust runtime only (no Python rm; refuses by name
    │                           without the fno-agents binary)
    ├─ cmd_reconcile(--json)  → dispatch.reconcile_agents()
    └─ cmd_attach(name)       → dispatch.attach_agent(name)
 
 dispatch.py
-   ├─ stop_agent     ─ per-agent flock → claude_stop → events.agent_stopped
    └─ reconcile_agents ─ no flock; per-entry update_registry; one-shot capability checks (claude-on-PATH, codex-session-index)
 
 harnesses/claude.py
@@ -59,27 +59,27 @@ The rm live-row gate, harness cascade, and `agent_removed` event live in the Rus
 
 ## Design rules
 
-1. **rm scope on codex is registry-only.** Codex's per-cwd session files stay on disk after `fno agents rm`. The operator cleans them manually if desired.
+1. **rm scope on codex is registry-only.** Codex's per-cwd session files stay on disk after `fno agents session rm`. The operator cleans them manually if desired.
 2. **reconcile is mark-only.** Detect orphans and stamp `status=orphaned`. Never delete. The operator decides removal via explicit `rm`.
 3. **reconcile is bidirectional.** `live → orphaned` AND `orphaned → live`. Handles transient supervisor failures gracefully.
 4. **stop for codex / gemini is a trivial no-op + informational message.** Codex / gemini asks are synchronous; the kill switch is SIGINT to the fno ask process. `stop` between asks is a no-op.
 5. **claude rm refusal propagates by default.** A non-forceful claude refusal leaves the registry unchanged with claude's stderr verbatim. `--force` overrides: it removes the registry row even on claude failure, with a stderr WARN about the orphan supervisor session.
-6. **stop / rm serialize on the per-agent flock.** The same flock as `ask`, so the three verbs cannot race against each other for a given name.
+6. **stop / rm serialize on the per-agent flock.** The same flock as `ask`, so the three commands cannot race against each other for a given name.
 7. **reconcile does NOT take the per-agent flock.** Read-mostly + per-entry atomic update via `update_registry`'s existing flock. Concurrent reconcile + ask is safe; stale orphan flags self-correct on the next sweep.
 8. **attach does NOT take the per-agent flock.** Attach is interactive and may hold the terminal indefinitely; a flock would block all other ops on the same agent. claude's own supervisor handles concurrent attach safety natively; codex / gemini exit 13 before any state mutation.
 9. **claude shellout timeouts: 30s for stop / rm, 10s for `claude logs --tail 1` during reconcile.** The operator can retry.
-10. **Revival of an exited claude row is probe-first.** An exited claude bg row stays revivable. `resume <name>` is the smart human verb. It probes reality first (`locate_session` plus a 250ms socket connect), never the registry `status` field. On a live supervisor it wakes the session headlessly and verifies the state reached Working. It no longer attaches directly. On a dead one it runs `claude respawn <short_id>` in the recorded cwd and confirms `jobs/<short>/state.json` advanced before reporting success. When that state file is gone, the verb relaunches with `claude --bg --resume <session_id>` in the resolved cwd, which continues the SAME session id (measured on 2.1.272); a copy notice from an already-running session is refused, the copy stopped (see [fleet-watchdog.md](fleet-watchdog.md#resume-what-re-entry-can-actually-restore)). `attach <name>` stays strict live-only. The colliding row must be exited, with a uuid matching its own. Then `spawn <name> --resume <uuid> --substrate bg` seeds a NEW session from the transcript. The content carries over. The session id does not: that door passes no resume target, so claude mints a fresh id. The row keeps the source uuid as lineage. Every other same-name case (live row, uuid mismatch, no `--resume`) stays fail-closed. Probe-first is load-bearing. Two writers in one transcript is the failure this check exists to prevent. Liveness is always checked before the resume lane fires. A resume cannot assume the same uuid continues. Claude has carried a transcript across under a new id. Rule 12 governs that case.
+10. **Revival of an exited claude row is probe-first.** An exited claude bg row stays revivable. `resume <name>` is the smart human command. It probes reality first (`locate_session` plus a 250ms socket connect), never the registry `status` field. On a live supervisor it wakes the session headlessly and verifies the state reached Working. It no longer attaches directly. On a dead one it runs `claude respawn <short_id>` in the recorded cwd and confirms `jobs/<short>/state.json` advanced before reporting success. When that state file is gone, the command relaunches with `claude --bg --resume <session_id>` in the resolved cwd, which continues the SAME session id (measured on 2.1.272); a copy notice from an already-running session is refused, the copy stopped (see [fleet-watchdog.md](fleet-watchdog.md#resume-what-re-entry-can-actually-restore)). `attach <name>` stays strict live-only. The colliding row must be exited, with a uuid matching its own. Then `spawn <name> --resume <uuid> --substrate bg` seeds a NEW session from the transcript. The content carries over. The session id does not: that door passes no resume target, so claude mints a fresh id. The row keeps the source uuid as lineage. Every other same-name case (live row, uuid mismatch, no `--resume`) stays fail-closed. Probe-first is load-bearing. Two writers in one transcript is the failure this check exists to prevent. Liveness is always checked before the resume lane fires. A resume cannot assume the same uuid continues. Claude has carried a transcript across under a new id. Rule 12 governs that case.
 11. **A claude re-entry carries its recorded binding, or refuses.** Every door resolves one canonical plan before launch. The doors are the CLI attach and resume arms, the mux gestures, restore, and recovery. The plan reads the row's launch account and validated route settings. It applies both to the provider invocation together. A missing account, an unresolvable account, or a gutted route file refuses with the field named. A dead-row re-entry whose session answers the bg resume with a copy refuses too, and the refusal names the copy and `attach`. No door rebuilds its own launch shape. Secrets stay inside the 0600 route file. The plan and every printed command carry paths and ids only.
 12. **A fork is additive: both ids stay valid on one row, forever.** A claude SessionStart never replaces a recorded id. An empty primary fills. A second different id fills the one optional `related_session_id` slot. A third distinct id refuses the write and names the two recorded ids. Arrival order decides which id is primary. The set of two is the durable fact. Both ids address the row. Either one can re-enter it. There is no lineage graph and no successor protocol.
-13. **`recover <agent> [--session <id>]` restores a recorded session with explicit selection.** With one recorded id that id is used. With two the verb refuses until `--session` names one of them. Recovery chooses a valid id, never a winner. When a recorded mux destination exists, the selected session relaunches there. Otherwise it relaunches in this terminal under the row's account and route. `--print-command` prints the inspection form and touches nothing. The single-writer claim keys on the selected id. The primary and the fork can never run as two live writers.
+13. **`recover <agent> [--session <id>]` restores a recorded session with explicit selection.** With one recorded id that id is used. With two the command refuses until `--session` names one of them. Recovery chooses a valid id, never a winner. When a recorded mux destination exists, the selected session relaunches there. Otherwise it relaunches in this terminal under the row's account and route. `--print-command` prints the inspection form and touches nothing. The single-writer claim keys on the selected id. The primary and the fork can never run as two live writers.
 
-## Writing a reaper against these verbs
+## Writing a reaper against these commands
 
 A reaper must confirm a removal with a positive marker: re-read the registry and check the row is gone. Never trust the exit code alone, and never treat a quiet run as proof. Both have lied on this surface, in opposite directions. One code path once reported success while the row stayed in the registry. Another once hung well past its own subprocess budget with the row already removed. An exit code cannot tell those two failures apart from a clean removal. Only the re-read can.
 
 Any hand-run roster enumeration must pass `--all`. `claude agents --json` alone omits stopped and completed sessions. A sweep run without it can read a small slice of the real roster and still report a clean fleet. Every reader inside fno already passes `--all`. The risk is a human typing the bare command.
 
-`claude rm` (and `claude stop`) take a SHORT ID, never an agent name. `fno agents rm` takes the agent NAME and resolves it internally. Passing the agent name straight to `claude rm` fails. A hand-driven teardown that mixes the two up can leave the fno registry holding a row `fno agents rm` still calls live.
+`claude rm` (and `claude stop`) take a SHORT ID, never an agent name. `fno agents session rm` takes the agent NAME and resolves it internally. Passing the agent name straight to `claude rm` fails. A hand-driven teardown that mixes the two up can leave the fno registry holding a row `fno agents session rm` still calls live.
 
 ## Failure modes addressed
 
@@ -93,42 +93,42 @@ Three classes of silent failure are pinned by tests:
 
 ## Test surface
 
-Lifecycle coverage lives in `cli/tests/agents/`: `test_dispatch_lifecycle.py` (stop / rm / reconcile / attach across happy-path, error, and edge cases, with event-stream assertions), `test_cli_lifecycle.py` (Typer CliRunner tests for the four verbs, `--force`, `--json`, exit-code propagation), `test_cli_yolo_e2e.py` (`--yolo` passthrough end-to-end), `test_codex_flock_parallel.py` (parallel codex asks serialize via the per-agent flock), and `test_codex_fatal_error_dispatch.py` (`CodexInvocationError` / `NoSessionIdError` → `DispatchAskError` with the right exit code; events.jsonl + registry-empty atomicity).
+Lifecycle coverage lives in `cli/tests/agents/`: `test_dispatch_lifecycle.py` (stop / rm / reconcile / attach across happy-path, error, and edge cases, with event-stream assertions), `test_cli_lifecycle.py` (Typer CliRunner tests for the four commands, `--force`, `--json`, exit-code propagation), `test_cli_yolo_e2e.py` (`--yolo` passthrough end-to-end), `test_codex_flock_parallel.py` (parallel codex asks serialize via the per-agent flock), and `test_codex_fatal_error_dispatch.py` (`CodexInvocationError` / `NoSessionIdError` → `DispatchAskError` with the right exit code; events.jsonl + registry-empty atomicity).
 
-## Not covered by these verbs
+## Not covered by these commands
 
 - **Attach for codex / gemini.** Both providers are non-interactive; the natural surface is "tail logs while messaging" — closer to `tmux attach` than `claude attach`.
-- **Auto-delete in reconcile.** reconcile is mark-only; removal stays manual via `fno agents rm`.
-- **`fno agents ask --stream`.** Per-event progress to stderr is a separate capability.
+- **Auto-delete in reconcile.** reconcile is mark-only; removal stays manual via `fno agents session rm`.
+- **`fno agents mail ask --stream`.** Per-event progress to stderr is a separate capability.
 
 ## Operator workflow examples
 
 **Daily cleanup loop (LLM orchestrator):**
 
 ```bash
-fno agents reconcile --json | jq '.orphaned[] | "\(.name) \(.provider)"'
-fno agents rm <name>   # for any the operator decides to clean
+fno agents registry reconcile --json | jq '.orphaned[] | "\(.name) \(.provider)"'
+fno agents session rm <name>   # for any the operator decides to clean
 ```
 
 **Recovering an orphaned claude session:**
 
 ```bash
-fno agents reconcile        # a claude supervisor restart can flip orphaned → live
-fno agents attach worker    # drop into the TUI to check state
+fno agents registry reconcile        # a claude supervisor restart can flip orphaned → live
+fno agents session attach worker    # drop into the TUI to check state
 ```
 
 **Force-removing an agent with uncommitted worktree changes (the operator knows the state):**
 
 ```bash
-fno agents rm worker-claude --force
+fno agents session rm worker-claude --force
 # stderr: WARN: claude rm failed but --force given; removing registry only.
-# Supervisor session 7c5dcf5d is orphaned; `fno agents adopt 7c5dcf5d`
+# Supervisor session 7c5dcf5d is orphaned; `fno agents registry adopt 7c5dcf5d`
 # brings it back under management.
 ```
 
-## Phase 6 Wave 5 — Rust daemon lifecycle verbs
+## Phase 6 Wave 5 — Rust daemon lifecycle commands
 
-The sections above describe the original Python (US4) lifecycle for one-shot agents. Phase 6 Wave 5 implements the same verbs in the Rust supervisor daemon (`crates/fno-agents/src/daemon.rs`), where agents are persistent PTY-backed sessions owned by per-agent worker processes (Outcome B). The verbs are JSON-RPC handlers on `supervisor.sock`; the `fno-agents` client maps the daemon's structured `ErrorCode` to process exit codes (`bin/client.rs::exit_code_for`). The driver-awareness is new: a verb's behavior depends on whether an operator is currently driving the agent (an interactive/step/paranoid `drive` session, tracked in the daemon's in-memory `DriveTable`).
+The sections above describe the original Python (US4) lifecycle for one-shot agents. Phase 6 Wave 5 implements the same commands in the Rust supervisor daemon (`crates/fno-agents/src/daemon.rs`), where agents are persistent PTY-backed sessions owned by per-agent worker processes (Outcome B). The commands are JSON-RPC handlers on `supervisor.sock`; the `fno-agents` client maps the daemon's structured `ErrorCode` to process exit codes (`bin/client.rs::exit_code_for`). The driver-awareness is new: a command's behavior depends on whether an operator is currently driving the agent (an interactive/step/paranoid `drive` session, tracked in the daemon's in-memory `DriveTable`).
 
 ### Exit-code conventions (client-side)
 

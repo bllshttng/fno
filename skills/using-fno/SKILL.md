@@ -3,16 +3,16 @@ name: using-fno
 description: Explain when to use Footnote workflow skills versus atomic fno CLI commands.
 ---
 
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # You are in a footnote-enabled project
 
-This workspace has the `footnote` plugin installed. Two surfaces compose: skills call CLI verbs internally. Knowing both keeps you from hand-editing state files the CLI manages.
+This workspace has the `footnote` plugin installed. Two surfaces compose: skills call CLI commands internally. Knowing both keeps you from hand-editing state files the CLI manages.
 
 **Worktree-first default:** whenever possible, enter a dedicated feature worktree before editing, generating, or committing; keep the canonical checkout unclogged; prune after the PR lands. Exception: a project whose resolved `worktree.policy` is `never` works in place on the canonical checkout by design.
 
 ## Missing `fno` CLI
 
-Nothing installs `fno` unasked: the session-start hook only prints the install plan. If `fno` is absent, tell the user it installs uv from astral.sh (edits the shell profile) then `fno` from PyPI, and ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`. Output ending `installer exit 0` means done. A non-zero exit line means failed. With `uv` present the run touches only the fno tool. While `fno` is absent its verbs fail: say what is blocked and stop cleanly.
+Nothing installs `fno` unasked: the session-start hook only prints the install plan. If `fno` is absent, tell the user it installs uv from astral.sh (edits the shell profile) then `fno` from PyPI, and ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`. Output ending `installer exit 0` means done. A non-zero exit line means failed. With `uv` present the run touches only the fno tool. While `fno` is absent its commands fail: say what is blocked and stop cleanly.
 
 ## Relay compression contract
 
@@ -26,9 +26,9 @@ Stop, resume, or scope change? Start the body with `control:`: own 60-word lane,
 
 ## 1. Workflow commands (orchestration, reasoning-required)
 
-Invoke plugin-qualified per harness: `/fno:<verb>` on claude/opencode, `$fno:<verb>` on codex (reserves `/` for harness commands). Front door:
+Invoke plugin-qualified per harness: `/fno:<command>` on claude/opencode, `$fno:<command>` on codex (reserves `/` for harness commands). Front door:
 
-| Verb | Purpose |
+| Command | Purpose |
 |------|---------|
 | `target` | End-to-end pipeline: think -> plan -> execute -> review -> ship. |
 | `think` | Research cited findings to one file. Briefs: what-if, panel, class. Prefix `bg`/`subagent` to run off-thread. |
@@ -38,13 +38,13 @@ Invoke plugin-qualified per harness: `/fno:<verb>` on claude/opencode, `$fno:<ve
 
 Everything else stays invocable by full name: `blueprint`, `execute` (`execute waves` for orchestration), `ship` (`ship pr` = `pr`, `ship doc`), `setup`, `triage`, `agent`, `mail`, `law`, `ship-docs`, `audit`, `speculate`. The session skill list enumerates them; this set is the entry point, not an access boundary.
 
-## 2. CLI primitives (`fno <verb>`, mechanical, fast)
+## 2. CLI primitives (`fno <command>`, mechanical, fast)
 
 Atomic, lock-protected, schema-validated. Use for exact state transitions, not orchestration.
 
-Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `pane` is mux-hosted at a fixed place. `thread` is the persistent lane and hosts no pane until one is created; view: a `portal`, 0-indexed, several at once (`--portal N`). `headless` is the only non-interactive substrate, and it is one-shot. `bg` is a deprecated one-release alias naming that same interactive `thread`. New commands and capability keys use `thread`. `fno mux where` reporting `hosts no live pane` is an absence of a PANE, never of life. Observe with `fno agents peek`, drive with `fno agents attach`, or mail.
+Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `pane` is mux-hosted at a fixed place. `thread` is the persistent lane and hosts no pane until one is created; view: a `portal`, 0-indexed, several at once (`--portal N`). `headless` is the only non-interactive substrate, and it is one-shot. `bg` is a deprecated one-release alias naming that same interactive `thread`. New commands and capability keys use `thread`. `fno mux where` reporting `hosts no live pane` is an absence of a PANE, never of life. Observe with `fno agents session peek`, drive with `fno agents session attach`, or mail.
 
-| Verb family | What it owns |
+| Command family | What it owns |
 |-------------|--------------|
 | `fno doctor event emit\|audit` | events.jsonl writes + audit. |
 | `fno doctor intel` | The provenance fold: who typed, per session. `/fno:intel` is the report skill. |
@@ -74,21 +74,21 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 
 **Sending with a reply address.** `send <name>` self-stamps your handle; `--to-project` stamps the project (add `--from-self` to hold for the answer). Only `fno whoami`'s `mail:` line is a valid `--from-name`.
 
-**Observing = `fno agents peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents logs <name>` is registry-scoped.
+**Observing = `fno agents session peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents session logs <name>` is registry-scoped.
 
-**You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-verb seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
+**You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-command seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
 
 A harness can also launch its own way. The [native launch table](../../docs/HARNESSES.md) holds each harness's own line.
 
 **Citizens vs limbs.** `fno agents spawn` makes an addressable, durable roster citizen. A native subagent is a one-shot, observable-only limb. Spawn work that must outlive you, hold a claim, or receive mail. Use a limb for a result consumed next turn. [Details](docs/architecture/coordination.md).
 
-**Mail is user-shaped.** A worker whose own invocation is refused has one fallback: `fno agents mail send <worker> --raw '/<verb>'`. A mail probe proves user-triggered behavior, never autonomy. The valid test is a transcript scan with no user-shaped prompt before the call: `scripts/diagnostics/autonomy-probe-audit.py`. No live lead means [advisory self-review](docs/architecture/review-lanes.md).
+**Mail is user-shaped.** A worker whose own invocation is refused has one fallback: `fno agents mail send <worker> --raw '/<command>'`. A mail probe proves user-triggered behavior, never autonomy. The valid test is a transcript scan with no user-shaped prompt before the call: `scripts/diagnostics/autonomy-probe-audit.py`. No live lead means [advisory self-review](docs/architecture/review-lanes.md).
 
 **Fix what you find. Carve out only what is too big.** A problem you spot mid-task gets FIXED in this PR as its own commit, unrelated or not. SIZE is the only justification for filing instead: `fno backlog carveout add --kind deferred|oos-bug "<what + why>"`. Harvested at merge, cleared only by `fno backlog retro sweep-carveouts --apply`. Prefer a node. Applies in every pipeline.
 
 **Vote on each node that cost you time.** `fno backlog encounter <id> --evidence "what it cost"` records an encounter with a node hit mid-task. Evidence required; capped at one vote per node per session. Read with `fno backlog demand`; never vote to seed a number.
 
-**Discovery:** `fno help` for the catalog, `fno help <verb>` for call shapes.
+**Discovery:** `fno help` for the catalog, `fno help <command>` for call shapes.
 
 ## Known Limitations and Deferred Work
 
@@ -103,7 +103,7 @@ A harness can also launch its own way. The [native launch table](../../docs/HARN
 | "Review my changes" | `/fno:review` |
 | "Which task next?" | `fno backlog next` / `ready` |
 | "Lead a territory" | `/fno:lead <scope>` |
-| "Rename (Codex has no /rename)" | `fno agents rename <you> --name <new>` |
+| "Rename (Codex has no /rename)" | `fno agents registry rename <you> --name <new>` |
 | "Open a PR" | `/fno:ship pr create` |
 | "Wait for external review" | `/fno:ship pr check` |
 | "Is this PR ready to merge?" | `fno do pr status <n>` |

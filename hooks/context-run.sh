@@ -14,6 +14,8 @@ set -u
 # Survive a caller env with no usable PATH (see worktree-write-protect.sh).
 PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
+# Producers are hooks: their fno calls never join the session.
+export FNO_HOOK_CONTEXT=1
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HOOK_DIR/.." && pwd)"
 source "$HOOK_DIR/lib/agents-bin.sh"
@@ -35,7 +37,7 @@ run_sync() {
     rc=$?
     if [ "$rc" -ne 0 ]; then
         # The runner exits 0 on its own error paths; a nonzero here is an old
-        # binary that does not know the verb. Name the remedy, keep the hook clean.
+        # binary that does not know the command. Name the remedy, keep the hook clean.
         echo "fno: context-run exited $rc (stale fno-agents binary?); run fno doctor --fix" >&2
     fi
 }
@@ -44,7 +46,7 @@ run_sync() {
 # one file per group. FNO_CONTEXT_CACHE_DIR relocates it; the detached pass
 # below writes CACHE plus a CACHE.ts epoch sibling next to it. shasum is not
 # on every Linux (no perl); sha256sum covers that side.
-CACHE_DIR="${FNO_CONTEXT_CACHE_DIR:-${HOME:-/tmp}/.fno/context-cache}"
+CACHE_DIR="${FNO_CONTEXT_CACHE_DIR:-${HOME:-/tmp}/.fno/cache/context}"
 mkdir -p "$CACHE_DIR" 2>/dev/null
 KEY="$(pwd -P | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-16)"
 CACHE="$CACHE_DIR/$KEY-$GROUP.json"

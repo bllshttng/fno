@@ -1,10 +1,10 @@
-# `fno agents`: every verb, per harness
+# `fno agents`: every command, per harness
 
 `fno agents` supports eight harness CLIs: `claude`, `codex`, `gemini`, `agy` (Antigravity), `opencode`, `pi`, `cursor-agent`, and `grok`. Each harness has different substrates, session IDs, and re-entry paths. This page explains the contract. The canonical table lives at `crates/fno-agents/src/harness_capabilities.toml`. Every build regenerates two byte copies from it: the Python tree's, which the package loads as a resource, and the mux crate's, which `include_str!`s it. The crates publish to crates.io independently, so neither copy is a dependency edge. When a generated copy diverges, `scripts/ci/check-harness-capabilities-fresh.sh` fails CI. The complete supported-harness roster is wider than this matrix. `KNOWN_HARNESSES` in `crates/fno-agents/src/provider.rs` is the one roster, and `cli/src/fno/harness_names.py` proxies it to Python. It also carries `hermes` and `openclaw`, identity-only hosts with no dispatch row (`docs/SETUP-HERMES.md`, `docs/SETUP-OPENCLAW.md`). The roster-parity CI gate (`scripts/ci/check-harness-roster-parity.py`) holds each evidence surface as a subset of that roster.
 
 Before calling a newly declared lane supported, run `fno doctor harness <name> --live`. The probe reads eight behaviors on the real lane: SPAWN, IDENTITY, CLAIM, MAIL BOTH WAYS, VIEW, SURVIVE, ROW MATCHES, and MANIFEST PINNED. The capability table is input only to ROW MATCHES. It is evidence for no other line. Without `--live`, the probe prints all eight markers and its no-spawn argv.
 
-Two runtimes serve the surface. The **Rust client** (`fno-agents`, the shipped default) intercepts most verbs; **Python** owns a handful (`whoami`, `top`, `peek`, `watch`, plus internal helpers) and is the fallback when no binary is installed (`FNO_AGENTS_RUNTIME=python`). Routing is automatic - you type `fno agents <verb>` either way. Notably, **pane spawns are Python-owned by design**: the mux-hosted back half lives in the Python `cmd_spawn` path, and the router keeps every pane spawn there even when Rust mode is requested - so the default substrate works identically under both runtimes.
+Two runtimes serve the surface. The **Rust client** (`fno-agents`, the shipped default) intercepts most commands; **Python** owns a handful (`whoami`, `top`, `peek`, `watch`, plus internal helpers) and is the fallback when no binary is installed (`FNO_AGENTS_RUNTIME=python`). Routing is automatic - you type `fno agents <command>` either way. Notably, **pane spawns are Python-owned by design**: the mux-hosted back half lives in the Python `cmd_spawn` path, and the router keeps every pane spawn there even when Rust mode is requested - so the default substrate works identically under both runtimes.
 
 Messaging note: `send` / `inbox` / `ack` are not direct lifecycle actions. They live under the `fno agents mail` subgroup.
 
@@ -16,10 +16,10 @@ What each harness fundamentally is, from fno's point of view:
 |---|---|---|---|---|---|---|---|---|---|
 | Substrates | pane, **thread**, headless | pane, **thread**, headless | pane, headless | pane, headless | pane, **thread**, headless | pane, **thread** | pane, **thread** | pane, **thread** | pane only |
 | Persistent-thread lane (`--substrate thread`) | yes (`claude --bg`) | yes, daemon-hosted: fno's `fno-agents-daemon` is a WebSocket client of codex's own shared `codex app-server daemon`, which owns the thread. `interactive_attach`'s `pre_exec` starts the daemon (`codex app-server daemon start`, a documented no-op when one is already running) before attaching, and `turn/start` carries the sandbox policy rather than an `--add-dir` argv (`docs/architecture/codex-thread-driver.md`). | no | no | yes, serve-hosted: one shared `opencode serve` per agents home. The spawn mints the session over HTTP and a detached `opencode run --attach` writer drives the initial turn (the section below has the lane's anatomy). The footnote plugin's stop bridge re-drives the same session in place - the shipped loop extension - and the spawn journey is the positive evidence (measured 2026-09-03). Mail injection over the API is the filed follow-up, and `ask` refuses with the pane-send pointer until it lands. | yes, keeper-hosted: fno mints the session id and holds the pty master in a keeper, the lane the restart journey proved survives a double SIGKILL (`test_thread_keeper_journey.py`, journey wk-x61bc). pi's rpc transport (`pi --mode rpc`: strict JSONL, typed events, native `steer` injection) is the same substrate the keeper TUI serves. | yes. fno's keeper hosts the TUI's pty on the generic lane-B entry: `create-chat` mints the chat id before launch, the keeper survives supervisor death, and the journey backs it (`test_cursor_agent_keeper_journey.py`). No daemon and no bidirectional transport exists; the pane remains the attended substrate. | yes, keeper-hosted on the same lane-B entry: fno mints the caller-assigned `--session-id` uuid before launch and the live measurement backs it - create, SIGKILL, then `--resume <id>` on a fresh process recalled the seed's codeword. grok's own daemon/WebSocket/ACP transports live in the Python driver, not in this lane. | no (refused naming the harness; pane is its only substrate) |
-| Headless one-shot (`--substrate headless` / `--headless` / `-p` / `--once`) | yes (`claude -p`) | yes (`codex exec`) | yes (one-shot) | yes (`agy -p`) | yes (`opencode run`) | yes (`pi --print --mode json`). The `state_root_grant` stance reads `unsandboxed`, measured by running the lane on 2026-10-16. | no. The output-only `--print` stream has no input half; refused by name. | refused: `grok -p` runs one prompt (exercised once), but no fno one-shot lane is built and the `state_root_grant` headless stance reads `unmeasured`. | no |
+| Headless one-shot (`--as headless` / `--headless` / `-p` / `--once`) | yes (`claude -p`) | yes (`codex exec`) | yes (one-shot) | yes (`agy -p`) | yes (`opencode run`) | yes (`pi --print --mode json`). The `state_root_grant` stance reads `unsandboxed`, measured by running the lane on 2026-10-16. | no. The output-only `--print` stream has no input half; refused by name. | refused: `grok -p` runs one prompt (exercised once), but no fno one-shot lane is built and the `state_root_grant` headless stance reads `unmeasured`. | no |
 | Session id recorded | `short_id` (jobId) + `harness_session_id` (full transcript UUID) | `harness_session_id` (full thread ID) | `harness_session_id` | **none captured yet** (a `conversation_id` is parseable in `-p --output-format json`, but no spawn lane records it) | `harness_session_id` (the `ses_` id, captured at spawn) | `harness_session_id`, CALLER-ASSIGNED: fno mints it at spawn and pi adopts it. Never let pi mint one - its default is a UUIDv7 whose head-8 is the same clock bucket that collides two codex short ids. | `harness_session_id` (the full chat UUID), CALLEE-MINTED-READ-BACK: `create-chat` returns it before launch and fno records it on the row; the id is not clock-derived but a head-8 of it is still only 32 random bits, so every fno surface keys on the full UUID. | `harness_session_id`, CALLER-ASSIGNED like pi: grok's `--session-id` adopts a uuid fno mints ("must be a valid UUID and must not already exist"), and the session directory is per-cwd, so the identity is the PAIR. | none. The registry row's NAME is the handle; mail by pane-send addresses it. |
-| Re-enter a **live** session | `attach` / `resume` | `resume` | `resume` | `resume` (`agy --conversation <id>`; no spawn lane records the id yet, so `fno agents resume` on an agy row stops at the missing-session-id refusal) | `resume` | `attach` execs pi's own TUI on the same session id, in the row's cwd. It JOINS the live rpc session rather than starting a rival one, measured. | `cursor-agent --resume <full chat UUID>` joins the exact remote chat. A bare `--resume` opens an interactive picker nothing can answer, so the id is always an explicit token and a truncated one is refused by name. | `grok --resume <uuid>` in the row's cwd; a UUID-shaped value always means id (the help's own rule). Attach stays unsupported: a second grok process on the session id is a rival TUI, not a join. | no resume form is invented. `fno mux` still lists the pane. |
-| Revive a **dead** session | `fno agents resume <name>` (respawns the job, same id) or `spawn --resume <uuid>` (forks a new id) or `recover` | no | no | no | no | yes: a fresh process on the same `(cwd, session_id)` pair recalls prior context and prints no creation warning | yes: a fresh process with the same explicit chat id recalls prior context from the remote store; the journey proves the recall across a stop | yes: a fresh `--resume <id>` process recalled the prior turn's codeword across a SIGKILL (measured 2026-09-02) | no |
+| Re-enter a **live** session | `attach` / `resume` | `resume` | `resume` | `resume` (`agy --conversation <id>`; no spawn lane records the id yet, so `fno agents session resume` on an agy row stops at the missing-session-id refusal) | `resume` | `attach` execs pi's own TUI on the same session id, in the row's cwd. It JOINS the live rpc session rather than starting a rival one, measured. | `cursor-agent --resume <full chat UUID>` joins the exact remote chat. A bare `--resume` opens an interactive picker nothing can answer, so the id is always an explicit token and a truncated one is refused by name. | `grok --resume <uuid>` in the row's cwd; a UUID-shaped value always means id (the help's own rule). Attach stays unsupported: a second grok process on the session id is a rival TUI, not a join. | no resume form is invented. `fno mux` still lists the pane. |
+| Revive a **dead** session | `fno agents session resume <name>` (respawns the job, same id) or `recover` (the spawn fork door is retired) | no | no | no | no | yes: a fresh process on the same `(cwd, session_id)` pair recalls prior context and prints no creation warning | yes: a fresh process with the same explicit chat id recalls prior context from the remote store; the journey proves the recall across a stop | yes: a fresh `--resume <id>` process recalled the prior turn's codeword across a SIGKILL (measured 2026-09-02) | no |
 | Read-only observation (`peek`, `logs`) | yes | yes | yes | yes | yes | yes | yes | yes | yes (pane read) |
 | Loop participation (`loop_participation`) | `native`. `hooks.json` declares a `Stop` group that runs `target-stop-hook.sh`. | `native`. `codex-hooks.json` declares the same `Stop` adapter. | `none`. Nothing wires a gemini stop boundary. The only gemini hook fno installs is SessionStart. A looping dispatch is refused. | `native`. `footnote-agy-target-stop-hook.sh` translates agy's wire format over the same `loop-check`, registered as a `Stop` handler by `fno config setup`. | `extension`. opencode has no shell hook and no exit veto. The loop closes through the JS plugin fno installs, which subscribes to `session.idle` and shells the same `loop-check`. | `extension`. pi ships no shell hook surface at all; its extension points are in-process TypeScript extensions. The `footnote.ts` extension fno installs subscribes to `pi.on("agent_settled")` - which fires when no retry, compaction or follow-up is left - and shells the same `loop-check`, re-driving the session on a non-terminal decision. The gate binds the manifest's own session: the extension passes `--harness pi --harness-session <id>`, so a foreign session gets a typed refusal, never a wrong continuation. | `extension`, with no artifact yet. `~/.cursor/hooks.json` declares a `stop` command, but no positive firing marker was captured on the headless lane and the hook file sits unattributed in a mixed GUI-and-CLI state root, so the declaration is not the capability. A looping dispatch is refused. | `extension`, with no artifact yet. The Stop contract is real and the trusted link installs (`fno config plugin install grok` links the stage, and the status reads `reachable`), but the 2026-09-26 linked-stage run recorded grok auto-disabling the discovered plugin, with no stop event and no loop-check decision, so a looping dispatch stays refused until plugin hooks are proven on the wire. | `none`. No capability row, no stop boundary. A looping dispatch is refused. |
 
@@ -27,28 +27,28 @@ The pane substrate (the default) is the great equalizer: all eight declared harn
 
 ## The undeclared lane
 
-`fno agents spawn -H <name> --substrate pane "<seed>" -- <init flags>` hosts any CLI binary on PATH under a name no capability row carries. The name must match `^[a-z][a-z0-9._-]{0,31}$` and must resolve on PATH, and each failed check refuses by naming it. fno is the viewport for the result. The harness gets a mux pane, a registry row, mail by pane-send, and the Drive viewport the moment `.fno/config.toml` declares `[harness.<name>.attach]`. That config block is the only further step. No code change, no roster edit.
+`fno agents spawn -H <name> --as pane "<seed>" -- <init flags>` hosts any CLI binary on PATH under a name no capability row carries. The name must match `^[a-z][a-z0-9._-]{0,31}$` and must resolve on PATH, and each failed check refuses by naming it. fno is the viewport for the result. The harness gets a mux pane, a registry row, mail by pane-send, and the Drive viewport the moment `.fno/config.toml` declares `[harness.<name>.attach]`. That config block is the only further step. No code change, no roster edit.
 
-The lane withholds what needs the vendor's own protocol: a thread lane, steering, and `fno agents ask`. Capability lookups answer "undeclared" by name through `capabilities_or_undeclared`. The strict reader `capabilities()` still raises, so an unmeasured harness never inherits claude's defaults. The one default that is not a measurement is `submit_keys=enter`. A harness that submits on something else produces a visibly unsubmitted pane, which mux reports. It never produces a wrong answer attributed to the worker.
+The lane withholds what needs the vendor's own protocol: a thread lane, steering, and `fno agents mail ask`. Capability lookups answer "undeclared" by name through `capabilities_or_undeclared`. The strict reader `capabilities()` still raises, so an unmeasured harness never inherits claude's defaults. The one default that is not a measurement is `submit_keys=enter`. A harness that submits on something else produces a visibly unsubmitted pane, which mux reports. It never produces a wrong answer attributed to the worker.
 
-A claude re-entry door resolves the row's recorded account and route before launch, on every verb above (`attach`, `resume`, `spawn --resume`, `recover`). A row whose binding evidence is missing or stale refuses with the field named. A claude row can hold two valid session ids after a fork. `recover` is the verb that restores one. With two ids recorded it requires `--session <id>` to name the chosen one. `--print-command` prints the inspection form without launching.
+A claude re-entry door resolves the row's recorded account and route before launch, on every command above (`attach`, `resume`, `recover`). A row whose binding evidence is missing or stale refuses with the field named. A claude row can hold two valid session ids after a fork. `recover` is the command that restores one. With two ids recorded it requires `--session <id>` to name the chosen one. `--print-command` prints the inspection form without launching.
 
 Codex pane spawn waits for rollout binding for 60 seconds. A bound receipt includes `status: live`, `session_id`, and the derived eight-character `short_id`. If binding expires, fno reaps the pane and exits nonzero. It does not return an unaddressable `status: spawning` receipt.
 
 agy pane spawns trust the exact cwd before launch. The shared gate clears remaining trust prompts. It submits seeds after the composer paints.
 
-Known limitation: the agy seed receipt is unverified. Until action confirmation lands, `seed: submitted`, `readiness: live`, and `pane_observation: painted` do not prove that the worker consumed its seed. After spawning, run `fno agents peek <name>` and require a first worker action. If the exact pane stays idle, read its composer before you type anything. When the composer is EMPTY, recover once with `fno mux pane send <pane> --text '<prompt>' --raw --submit`, then peek again. When the composer already holds the seed, do NOT retype it, because a second `--text` write concatenates onto the buffer that is already there. The obvious remedy for that case does not work. Measured 2026-08-24 on a live agy pane, neither `--text '' --raw --submit` nor a bare carriage return submitted staged text. The cause is `submit_pane`, which sends one carriage return for every provider. Report a stranded composer rather than retyping into it. Do not re-seed a pane that is already working because that can queue a duplicate target.
+Known limitation: the agy seed receipt is unverified. Until action confirmation lands, `seed: submitted`, `readiness: live`, and `pane_observation: painted` do not prove that the worker consumed its seed. After spawning, run `fno agents session peek <name>` and require a first worker action. If the exact pane stays idle, read its composer before you type anything. When the composer is EMPTY, recover once with `fno mux pane send <pane> --text '<prompt>' --raw --submit`, then peek again. When the composer already holds the seed, do NOT retype it, because a second `--text` write concatenates onto the buffer that is already there. The obvious remedy for that case does not work. Measured 2026-08-24 on a live agy pane, neither `--text '' --raw --submit` nor a bare carriage return submitted staged text. The cause is `submit_pane`, which sends one carriage return for every provider. Report a stranded composer rather than retyping into it. Do not re-seed a pane that is already working because that can queue a duplicate target.
 
 ## The opencode thread serve lane
 
-`spawn --harness opencode --substrate thread` is the unattended opencode worker lane, and it is HTTP-driven rather than PTY-hosted. The retired `bg` spelling refuses with a redirect to `thread`. The lane drives its initial turn today. The capability row reads `features.spawn = native`, measured 2026-09-03: the journey is the positive evidence that a selected thread can be driven. The spawn mints the session over HTTP, and the detached writer below drives the first turn. An explicit interactive spawn still reaches this lane. `ask`/mail-inject steering over the API remains the filed follow-up at the tail of this section. The plugin's stop bridge is what re-drives the session in place today.
+`fno agents spawn` in an opencode workspace (the serve lane) is the unattended opencode worker lane, and it is HTTP-driven rather than PTY-hosted. The retired `bg` spelling refuses with a redirect to `thread`. The lane drives its initial turn today. The capability row reads `features.spawn = native`, measured 2026-09-03: the journey is the positive evidence that a selected thread can be driven. The spawn mints the session over HTTP, and the detached writer below drives the first turn. An explicit interactive spawn still reaches this lane. `ask`/mail-inject steering over the API remains the filed follow-up at the tail of this section. The plugin's stop bridge is what re-drives the session in place today.
 
 - fno-agents manages one shared `opencode serve` per agents home (state file `opencode-serve.json`, health-gated reuse). The serve starts with a generated `OPENCODE_CONFIG`. That config grants `permission."*" = "allow"`, the unattended posture other worker lanes get from their own bypass flag. An unanswered permission `ask` on a headless server is a hang, not a refusal.
 - The spawn mints a session with `POST /session?directory=<cwd>`, so one serve hosts workers across worktrees.
 - The computed writable-dirs set rides `PATCH /session/:id`. The Python seam publishes it as `FNO_WORKER_ADD_DIRS` for every non-pane spawn. The set lands as per-session `external_directory` allow rules. This is the codex `--add-dir` pattern through opencode's native cell. It closes the claim-writes double-writer hazard.
 - A detached `opencode run --attach <serve> --session <id>` writer drives the initial turn. Command-template expansion is native. The attach writer prints nothing on stdout. Structured capture is the serve's message readback over HTTP (role, model, parts). No pane scraping, no pipe scraping. The registry row's log path collects the writer's diagnostics.
 - Registry identity: `harness_session_id` = the `ses_` id. Reachability is the existing store-membership probe (serve sessions share the global opencode store).
-- Steering over the API is a filed follow-up: mail inject, ask, peek, resume. Until it lands, the `ask` verb still refuses with the pane-send pointer.
+- Steering over the API is a filed follow-up: mail inject, ask, peek, resume. Until it lands, the `ask` command still refuses with the pane-send pointer.
 
 ## The pi dual-lane onboarding
 
@@ -60,9 +60,9 @@ Appends are safe. Creates are not, and they fail silently. Four simultaneous cre
 
 The reader half is separate. A resume whose id resolves to more than one session refuses. It names every session with its timestamp and picks none. Never rank duplicates by content. An empty assistant `content` array marks a turn that was attempted and FAILED.
 
-What ships today is the PANE lane plus the rpc transport as a driver library. `fno agents spawn -H pi` opens a pi TUI in a mux pane with an fno-minted session id, and `fno agents attach` joins that same session. The rpc driver has no spawn arm yet. So mail to a pi worker rides the pane's keystroke path, at a measured 0 ms enter delay. It does not ride the `steer` command the driver implements. Describe the lane that ships, not the one the library will serve.
+What ships today is the PANE lane plus the rpc transport as a driver library. `fno agents spawn -H pi` opens a pi TUI in a mux pane with an fno-minted session id, and `fno agents session attach` joins that same session. The rpc driver has no spawn arm yet. So mail to a pi worker rides the pane's keystroke path, at a measured 0 ms enter delay. It does not ride the `steer` command the driver implements. Describe the lane that ships, not the one the library will serve.
 
-Footnote verbs reach pi as skill commands: the verb seed renders `/fno:target` as `/skill:target`, the form pi registers from the installed skills directory. 
+Footnote commands reach pi as skill commands: the command seed renders `/fno:target` as `/skill:target`, the form pi registers from the installed skills directory. 
 
 Two traps carry the rest. `rpc` exits on stdin EOF mid-turn with status 0. `--provider` without `--model` falls through to a Bedrock model. Full contract and the credential rules: [docs/HARNESSES.md](HARNESSES.md).
 
@@ -70,7 +70,7 @@ Two traps carry the rest. `rpc` exits on stdin EOF mid-turn with status 0. `--pr
 
 The support probe is the onboarding gate for this table. Run `fno doctor harness <name> --live` before treating a row as supported. It must produce a positive marker for every non-skipped line. A missing credential is a named `skip`, not a pass or fail. Run `scripts/ci/check-harness-capabilities-fresh.sh` alongside the honesty sweep to catch a hand edit of a generated copy. The canonical table lives in `crates/fno-agents`, and every build regenerates the Python-tree and mux-crate copies from it.
 
-Run `fno agents capabilities <h> --json` to read one harness's capability contract. The JSON includes versioned data for permissions, sessions, readiness, input, stop, and removal. Missing or malformed fields stop contract loading. A harness never inherits Claude defaults.
+Run `fno agents admit capabilities <h> --json` to read one harness's capability contract. The JSON includes versioned data for permissions, sessions, readiness, input, stop, and removal. Missing or malformed fields stop contract loading. A harness never inherits Claude defaults.
 
 | Harness | Permission response | Positive ready rule | Paste submission | Interactive resume | `stop` | `rm` harness cleanup |
 |---|---|---|---|---|---|---|
@@ -112,32 +112,32 @@ The dispatch seam refuses a `/target` at a `none` harness, and at an `extension`
 
 The field replaced `stop_hook`, which read `native` on every row and had no consumer. One value across six rows is not a measurement. Each value above was read off the artifact and the wiring that reaches it, and two rows changed.
 
-## Verbs: creating and reviving workers
+## Commands: creating and reviving workers
 
-| Verb | claude | codex | gemini | agy | opencode | What it does |
+| Command | claude | codex | gemini | agy | opencode | What it does |
 |------|:---:|:---:|:---:|:---:|:---:|---|
 | `spawn "<prompt>"` | yes | yes | yes | yes | yes | Create + register a worker. Default substrate `pane` (mux-hosted PTY). |
-| `spawn --substrate thread` | yes | yes | no | no | yes | The persistent detached lanes: claude (`claude --bg`), codex (daemon-hosted over the shared `codex app-server daemon`), and opencode (serve-hosted over one shared `opencode serve`). gemini and agy have no thread lane and are refused toward `headless`. `bg` is a deprecated alias for one release. |
-| `spawn --substrate headless` / `--headless` / `-p` / `--once` | yes | yes | yes | yes | yes | One-shot: create + exchange + teardown. stdout is the harness reply. `-p` mirrors the harnesses' own one-shot short; `-H` is NOT a headless spelling, it selects the harness. OpenCode uses `opencode run`. |
-| `spawn --harness <h>` / `-H <h>` | selector | selector | selector | selector | selector | Canonical CLI-binary selector (`claude\|codex\|gemini\|opencode\|agy`); the `--harness` vocabulary the rest of fno uses. A model VENDOR (`zai`, ...) is never a harness value; that is `--provider`/`-P`, a separate axis. Reassigned from headless: `-H` now takes a harness value, not a one-shot toggle. |
-| `spawn --resume <uuid>` | yes (thread only) | no | no | no | no | **Fork a transcript into a fresh session**: mints a new detached thread seeded from the persisted transcript and re-registers the row under a NEW session id (the fork is by construction: no resume target is passed, so claude mints a fresh id; the row keeps the source UUID as lineage). To restore the SAME id, `fno agents resume <name>` respawns the job when `jobs/<short>/state.json` survives, and bg-resumes under the same id when it does not. Requires `--substrate thread` and harness claude. **Runtime caveat:** the `--resume` flag is wired only on the Python `cmd_spawn` path, so on an installed binary (default `auto`/`rust` runtime) the spawn auto-routes to the Rust client, which does not parse it; run it under `FNO_AGENTS_RUNTIME=python` until the flag joins the Python-only auto-route set. |
-| `spawn --model <m>` | pane+thread+headless | pane+headless | pane+headless | pane+headless | pane | Exact passthrough to the harness CLI. Every harness honors it on pane; the one-shot lanes forward it too (`codex exec --model`, `gemini --model`, `agy`, `claude -p --model`). |
+| the thread lane (native) | yes | yes | no | no | yes | The persistent detached lanes: claude (`claude --bg`), codex (daemon-hosted over the shared `codex app-server daemon`), and opencode (serve-hosted over one shared `opencode serve`). gemini and agy have no thread lane. The `bg` spelling and the `--as` flag are retired. |
+| the one-shot lane (`--once` / `--headless` / `-p`) | yes | yes | yes | yes | yes | One-shot: create + exchange + teardown. stdout is the harness reply. `-p` mirrors the harnesses' own one-shot short. OpenCode uses `opencode run`. |
+| the harness axis | RETIRED | RETIRED | RETIRED | RETIRED | RETIRED | The spawn harness axis is retired: the session's own harness seats the worker and every lane is templated (docs/HARNESSES.md). A model VENDOR rides the route. |
+| the spawn fork door (`--resume <uuid>`) | RETIRED | RETIRED | RETIRED | RETIRED | RETIRED | The spawn `--resume` fork is retired with the spawn axes. To restore the SAME id, `fno agents session resume <name>` respawns the job when `jobs/<short>/state.json` survives, and bg-resumes under the same id when it does not. |
+| the spawn model axis | shorthand | shorthand | shorthand | shorthand | shorthand | Spawn passes the model to the harness. `--model` or `-m` before the `--` fence moves behind it, where the harness reads it. A routing pick with no route rides there too (docs/HARNESSES.md). |
 | internal recovery spawn | pane | pane | pane | pane | pane | Provider-outage handoff uses the canonical pane spawn with explicit harness, model, account record, and separately recorded model-vendor identity. The recorded provider is not treated as a harness or as a Claude `--provider` route. Successor placement uses the bounded-placement lane: the placement lease, a stable tab id with room, and a four-pane-per-tab cap, verified from the server's tab listing; canaries and successors never create a fifth pane. |
-| `spawn --permission-mode <m>` | pane+thread+headless | pane | pane | pane | pane | Mapped approval mode (`claude -p`/`--bg` take it directly). Non-claude thread/headless lanes hardcode their own bypass form, so the flag is refused there (fail-closed, never silently dropped). Mutually exclusive with `--yolo`. |
+| the spawn permission axis | RETIRED | RETIRED | RETIRED | RETIRED | RETIRED | The spawn permission axis is retired: each lane default owns its posture (the Rust keeper_posture owner; the pane lane's bounded codex default survives as the one literal). |
 | `spawn "<prompt>" -- <flags...>` | pane only (all five) | | | | | Provider-CLI passthrough: every token after `--` is spliced into the harness's own pane argv, so a flag fno never declared needs no code change. Refused on bg/headless (those builders carry none of the pane's guards). The tokens ride the composed argv through the same refusals that govern fno's own flags: `-p`/`--print` (claude, agy), `--settings`/`--session-id` (happy lane), codex's bare `exec` and opencode's bare `run` (headless subcommands); a token duplicating a flag fno already emitted (`--model`, `--permission-mode`, `--name`, or an alias of a permission flag fno emitted, e.g. gemini `--yolo` vs `--approval-mode`) is a named refusal, not a silent last-wins. The parser stays strict: a typo'd fno flag before `--` still fails locally instead of being forwarded. |
 
-Retired creation verbs (each prints a pointer and exits non-zero, never a silent success): `host` and `promote` are gone - agent panes live in the mux now; use `fno agents spawn --name <n> --substrate pane`.
+Retired creation commands (each prints a pointer and exits non-zero, never a silent success): `host` and `promote` are gone - agent panes live in the mux now; use `fno agents spawn --name <n> --substrate pane`.
 
-## Verbs: talking to and observing workers
+## Commands: talking to and observing workers
 
-| Verb | claude | codex | gemini | agy | opencode | What it does |
+| Command | claude | codex | gemini | agy | opencode | What it does |
 |------|:---:|:---:|:---:|:---:|:---:|---|
 | `ask <name> <msg>` | id-bearing rows | id-bearing rows | id-bearing rows | no | no | Continue a registered session. A mux follow-up requires a pinned submit contract. Claude has one. Codex does not. Unsupported panes receive no bytes. |
 | `fno agents mail send <name> "<text>"` | yes | daemon or durable | yes | mux pane | mux pane | Send asynchronously. Confirmed live delivery skips the bus. Unsupported or unconfirmed panes use the durable queue. |
 | `watch <name>` | yes | no | no | no | no | Observe a held stream-json thread's turns in real time. claude-only transport. |
 | `peek <name>` | yes | yes | mux scrollback or status | mux scrollback or status | mux scrollback or status | Read-only. Pane rows use mux scrollback. Paneless rows use transcript or normalized status events. |
 | `attach <name>` | yes | no | no | no | no | Re-exec your terminal into the running session's own TUI (`claude attach <short_id>`). Requires the session to be **live**. |
-| `resume <name> [--print-command] [--message/-m]` | yes (live only) | yes | yes | no | yes | Re-exec the harness's resume CLI in the agent's recorded cwd. A **live** claude row no longer exec's `claude attach <short_id>` directly; it wakes the session headlessly (pty-backed, route-settings-restored) and verifies it moved, since `claude attach` run non-interactively just prints "Attaching..." and exits. `--print-command` prints the route the row is actually on: `claude attach <short_id>` live, `claude respawn <short_id>` dead. A **dead/exited** claude row runs `claude respawn <short_id>` (same session id) and confirms the job state advanced; when `jobs/<short>/state.json` is gone it relaunches with `claude --bg --resume <session_id>` (same session id, measured on 2.1.272) and refuses a copy notice, stopping the copy. Not the same door as `spawn --resume`. `--message`/`-m` is the text delivered on wake. A claude row that `claude agents` lists as `blocked`, `done`, `stopped` or `failed` takes `-m` directly: a session whose process has exited is revived in place first, and exit 0 means the transcript shows the message. |
+| `resume <name> [--print-command] [--message/-m]` | yes (live only) | yes | yes | no | yes | Re-exec the harness's resume CLI in the agent's recorded cwd. A **live** claude row no longer exec's `claude attach <short_id>` directly; it wakes the session headlessly (pty-backed, route-settings-restored) and verifies it moved, since `claude attach` run non-interactively just prints "Attaching..." and exits. `--print-command` prints the route the row is actually on: `claude attach <short_id>` live, `claude respawn <short_id>` dead. A **dead/exited** claude row runs `claude respawn <short_id>` (same session id) and confirms the job state advanced; when `jobs/<short>/state.json` is gone it relaunches with `claude --bg --resume <session_id>` (same session id, measured on 2.1.272) and refuses a copy notice, stopping the copy. `--message`/`-m` is the text delivered on wake. A claude row that `claude agents` lists as `blocked`, `done`, `stopped` or `failed` takes `-m` directly: a session whose process has exited is revived in place first, and exit 0 means the transcript shows the message. |
 | `logs <name>` | yes | yes | yes | yes | yes | Tail or follow the agent's log output (reads `log_path`). |
 
 Codex app-server mail is split by capability. Ordinary wrapped text uses the
@@ -150,19 +150,19 @@ read back. Provider goal and Footnote `Stop` receipts are separate: the
 verified provider goal is primary continuation evidence, while Stop remains an
 independent loop-hook proof.
 
-The three re-entry verbs are easy to conflate; the axes that separate them:
+The three re-entry commands are easy to conflate; the axes that separate them:
 
 | | Session must be live? | Where you end up | ID it keys on |
 |---|---|---|---|
 | `attach` / `resume` (claude) | yes | your terminal, inside the session's TUI | `claude_short_id` (8-hex jobId) |
 | `resume` (codex/gemini) | recorded session | your terminal, harness resume CLI | harness session ID |
-| `spawn --resume <uuid>` | **no - it revives the dead** | a new detached bg worker + registry row under a NEW session id (this door forks by construction: no resume target is passed, so the transcript content carries over, the id does not) | `claude_session_uuid` (the SOURCE transcript UUID, kept as lineage) |
+| the spawn fork door | RETIRED - the spawn axes are retired; `resume` and `recover` are the living doors | a new detached bg worker + registry row under a NEW session id (this door forks by construction: no resume target is passed, so the transcript content carries over, the id does not) | `claude_session_uuid` (the SOURCE transcript UUID, kept as lineage) |
 
-## Verbs: registry and admin
+## Commands: registry and admin
 
-Most verbs operate on the registry or daemon. When the capability contract declares a harness store, `stop` and `rm` use it.
+Most commands operate on the registry or daemon. When the capability contract declares a harness store, `stop` and `rm` use it.
 
-| Verb | What it does |
+| Command | What it does |
 |------|---|
 | `list` | List registered agents with filters (includes discovered live claude sessions). |
 | `status` | Daemon liveness + per-agent state (`status-v1.json`; warns on binary drift). |
@@ -176,29 +176,29 @@ Most verbs operate on the registry or daemon. When the capability contract decla
 | `restart` | Restart a stale daemon to pick up a new build; PTY workers survive. |
 | `ping` | **Placeholder stub** - prints `(not yet implemented)` and exits 0 without probing anything. Do not script against it; use `status` for a real daemon probe. |
 
-## Verbs: waiting and catch-up (harness-agnostic)
+## Commands: waiting and catch-up (harness-agnostic)
 
-| Verb | What it does |
+| Command | What it does |
 |------|---|
 | `wait --agent <name> --state idle\|blocked\|done [--timeout-ms N]` | Block until the agent's registry row reaches the state. The scripting primitive. |
 | `subscribe [--agent <name>] [--kinds state,exit]` | Stream registry state transitions + pane exits as they happen. |
 | `digest --session <s> [--since <ts>]` | "While you were gone": fold events + ledger since a timestamp into a catch-up summary. |
 | `needs [--since-epoch N]` | The needs-me queue: fold events + ledger across all projects into what wants operator attention. |
 
-## Verbs: MCP channel sidecar (claude only)
+## Commands: MCP channel sidecar (claude only)
 
-There are no CLI verbs here any more.
-`register-channel`, `unregister-channel`, and `push-channel` were removed: nothing shelled them, and `fno agents <verb>` now refuses each by name with a pointer (see `cli/src/fno/tombstones.py`).
+There are no CLI commands here any more.
+`register-channel`, `unregister-channel`, and `push-channel` were removed: nothing shelled them, and `fno agents <command>` now refuses each by name with a pointer (see `cli/src/fno/tombstones.py`).
 
 The `channel.*` daemon RPCs they fronted are live and untouched.
 The path in use is `fno.mcp.sidecar`, which speaks its own socket protocol (`register_channel` / `unregister_channel` ops) rather than going through the CLI.
 The channel reaches only sessions launched with the channel wired; it is a claude-only transport this release.
 
-## Verbs: loop and harness plumbing
+## Commands: loop and harness plumbing
 
 You rarely type these by hand - hooks and drivers do - but they live under `fno agents`:
 
-| Verb | Caller | What it does |
+| Command | Caller | What it does |
 |------|---|---|
 | `loop` | operator / dispatcher | Unified cross-session driver loop (`--driver target`; the megawalk arm was removed). |
 | `loop-check` | stop hook | The in-session stop/allow decision from external truth (PR, CI, review bots, budget). |
@@ -212,29 +212,29 @@ You rarely type these by hand - hooks and drivers do - but they live under `fno 
 | `nudge-peek` | Rust `loop-check` | Internal: loop-boundary inbox nudge read. |
 | `gate` | (retired) | Prints a retirement pointer - the injection gate died with daemon PTY hosting at G4. |
 
-## Retired and relocated verbs
+## Retired and relocated commands
 
-| Old verb | Where it went |
+| Old command | Where it went |
 |---|---|
 | `grid` | The mux. Open `fno mux`; script panes with `fno mux pane ls\|read\|run\|send\|wait\|kill`. |
 | `drive` | `fno mux pane send <pane> --raw ...`, or type into the pane in `fno mux`. `--raw` sends keystrokes verbatim; without it the payload is wrapped in an `<fno_mail>` envelope. `--text` fills the composer without submitting - see [Submitting a pane send](#submitting-a-pane-send). |
-| `host` | `fno agents spawn --name <n> --substrate pane`. |
+| `host` | `fno agents spawn --name <n> --as pane`. |
 | `promote` | Same - the mux hosts agent panes now. |
 | `send` / `inbox` / `ack` | The `fno agents mail` namespace (`fno agents mail send`, `fno agents mail inbox`, ...). |
 
-Retired verbs print these pointers and exit non-zero, so scripts fail loud rather than silently succeeding.
+Retired commands print these pointers and exit non-zero, so scripts fail loud rather than silently succeeding.
 
 ## Submitting a pane send
 
 `fno mux pane send <pane> --raw --text <s>` writes bytes into the composer. It does not submit. This default remains the staging contract for `fno mux block pipe`. Drop `--raw` only when the payload IS a peer message: the envelope is the default and keystrokes are the opt-out.
 
-When delivery is intended, add `--submit`. The verb settles, sends a separate carriage return, and requires changed output. Unconfirmed text exits 22.
+When delivery is intended, add `--submit`. The command settles, sends a separate carriage return, and requires changed output. Unconfirmed text exits 22.
 
 The internal delivery path uses this primitive. Agy seeds are submitted after trust and composer readiness. A carriage return inside pasted text is not Enter.
 
 ## Pointing the operator at a pane
 
-Every other `mux pane` verb lets an agent act ON a pane.
+Every other `mux pane` command lets an agent act ON a pane.
 `fno mux pane focus <pane>` is the one that moves the OPERATOR to one, so "it is in pane 31" becomes something their screen acts on.
 
 ```
@@ -261,15 +261,15 @@ Three refusals stay distinct, because "your pane is gone", "nobody is watching",
 There is deliberately no URL scheme for this.
 `link.rs` `OPENABLE_SCHEMES` guards untrusted pane-sourced bytes.
 Widening it to carry a deep link is a separate risk decision with its own blast radius.
-The verb reaches the same destination with none of that exposure.
+The command reaches the same destination with none of that exposure.
 
 ## Why the asymmetries exist
 
-- **claude** is the only harness with a supervisor-managed detached thread (`claude --bg`), which is what makes the thread substrate, `attach`, `watch`, and dead-session revival (`spawn --resume` off the persisted transcript UUID) possible. When the supervisor dies, the short jobId dies with it - only the full session UUID survives on disk, which is why revival and attach key on different IDs.
+- **claude** is the only harness with a supervisor-managed detached thread (`claude --bg`), which is what makes the thread substrate, `attach`, `watch`, and dead-session revival (`fno agents resume` off the persisted state) possible. When the supervisor dies, the short jobId dies with it - only the full session UUID survives on disk, which is why revival and attach key on different IDs.
 - **codex / gemini** run as mux-hosted PTY panes or through their own one-shot/resume CLIs. Codex also has a daemon-hosted thread lane: fno's `fno-agents-daemon` drives Codex's shared app-server over newline-delimited JSON. Its provider controller owns `thread/goal/get`, `thread/goal/set`, and `thread/compact/start`; raw mail does not emulate those actions. Gemini has no equivalent provider-action receipt, so its looping lane remains refused.
 - A **codex** pane's full thread ID is the row's `harness_session_id`. It drives discovery handles, requested-name resolution, and session-keyed node claims. The row also carries its own minted `fno_id`, and both ids resolve.
 - Codex recovery uses that full thread ID as its only join.
-- `fno agents watchdog --only recoverable --since 24h --cwd PATH` subtracts registered Codex rows from recent exact-cwd rollouts, reports both discovered and usable counts, and refuses a short ID or a rollout without readable transcript work.
+- `fno agents fleet watchdog --only recoverable --since 24h --cwd PATH` subtracts registered Codex rows from recent exact-cwd rollouts, reports both discovered and usable counts, and refuses a short ID or a rollout without readable transcript work.
 - `--apply` restores only usable candidates as `origin=adopted` rows with full-UUID follow-up paths. It never spawns or resumes the thread. Usable candidates converge: the adopted row registers and the next scan subtracts it. An unusable rollout is refused and stays reported until it ages out of the `--since` window. The event lane names each refusal once per verdict change, not once per tick.
 - A live recovery proof uses one disposable orphan and requires positive markers from the apply receipt, resumed reply, and exact full-ID row; row presence or an empty recovery queue is not proof:
 
@@ -286,26 +286,26 @@ test "$reply" = "$marker"
 uv run --project cli fno-py agents list --json | jq -e --arg sid "$sid" '.agents | any(.harness == "codex" and .harness_session_id == $sid and .last_message_at != null)'
 ```
 - **agy** emits plain text with no parseable session ID, so it is **stateless**: the live pane works while attached, but there is nothing to re-enter after it settles. `ask`-by-name is refused; use a fresh `--once`.
-- **opencode** is pane-hostable with a readiness detector and badge manifest. Its `ses_` session id is captured at spawn through a best-effort store lookup. An ambiguous or missed capture leaves the row live-only. The row is probed for store membership and resumable via `opencode --session <id>`. The fno install registers the footnote verbs as `fno:<verb>.md` command files in opencode's global config dir. The names appear in the command palette AND headlessly. Dispatch renders the native `/fno:verb`, not a prose brief. The headless spawn routes it through `opencode run --command fno:verb <args>`. A bare `run <message>` treats a leading slash as prose (verified against opencode v1.14.50). The routing makes a rendered slash command actually invoke the command.
+- **opencode** is pane-hostable with a readiness detector and badge manifest. Its `ses_` session id is captured at spawn through a best-effort store lookup. An ambiguous or missed capture leaves the row live-only. The row is probed for store membership and resumable via `opencode --session <id>`. The fno install registers the footnote commands as `fno:<command>.md` command files in opencode's global config dir. The names appear in the command palette AND headlessly. Dispatch renders the native `/fno:command`, not a prose brief. The headless spawn routes it through `opencode run --command fno:command <args>`. A bare `run <message>` treats a leading slash as prose (verified against opencode v1.14.50). The routing makes a rendered slash command actually invoke the command.
 
 ## Dispatch command surface
 
-This table shows how autonomous dispatch renders a footnote `/verb` for each harness. The canonical table lives at `crates/fno-agents/src/harness_capabilities.toml`. `fno.agents.harness_map` loads the generated cli copy. `skills/agent/scripts/normalize.sh` mirrors the command-surface subset as a tested fallback. The `fno agents retask` transaction runs inside fno-agents behind the `fno agents retask` leaf, which renders the target command through this same table.
+This table shows how autonomous dispatch renders a footnote `/command` for each harness. The canonical table lives at `crates/fno-agents/src/harness_capabilities.toml`. `fno.agents.harness_map` loads the generated cli copy. `skills/agent/scripts/normalize.sh` mirrors the command-surface subset as a tested fallback. The `fno agents registry retask` transaction runs inside fno-agents behind the `fno agents registry retask` leaf, which renders the target command through this same table.
 
 | Harness | Rendered invocation | Notes |
 |---|---|---|
-| claude, agy | `/verb ...` | Native slash command (verbatim). |
-| opencode | `/fno:verb ...` | Global command-file namespace: the install writes `fno:<verb>.md` files into `~/.config/opencode/command/`, and headless dispatch routes them through `opencode run --command fno:<verb>`. |
-| codex | `$fno:verb ...` | `codex exec` expands the plugin skill. |
+| claude, agy | `/command ...` | Native slash command (verbatim). |
+| opencode | `/fno:command ...` | Global command-file namespace: the install writes `fno:<command>.md` files into `~/.config/opencode/command/`, and headless dispatch routes them through `opencode run --command fno:<command>`. |
+| codex | `$fno:command ...` | `codex exec` expands the plugin skill. |
 | gemini | **refused** | Deprecated; the dispatch lane is a loud error naming its successor (agy). No prose build brief is generated. |
 
-Single-quote a `$fno:verb` payload on a command line. Inside double quotes the shell expands `$fno` to nothing before fno runs. bash leaves `:target`. zsh also drops the first letter and leaves `arget`. The worker reads either one as prose. `fno agents spawn` refuses both shapes and names the fix.
+Single-quote a `$fno:command` payload on a command line. Inside double quotes the shell expands `$fno` to nothing before fno runs. bash leaves `:target`. zsh also drops the first letter and leaves `arget`. The worker reads either one as prose. `fno agents spawn` refuses both shapes and names the fix.
 
-Without the footnote plugin enabled in its codex home, a codex session cannot expand an intact `$fno:verb`. A verb-shaped codex seed on a machine where the plugin is `missing` or `wrong-channel` is refused at spawn instead of delivered as prose. A receipt for a verb-shaped seed carries `"verb_fired": "pending"`. For `/fno:target <node>` it also carries a `"verb_marker"` command whose passing verdict is the claim naming the spawned session as holder. Prose seeds carry no field.
+Without the footnote plugin enabled in its codex home, a codex session cannot expand an intact `$fno:command`. A command-shaped codex seed on a machine where the plugin is `missing` or `wrong-channel` is refused at spawn instead of delivered as prose. A receipt for a command-shaped seed carries `"command_fired": "pending"`. For `/fno:target <node>` it also carries a `"command_marker"` command whose passing verdict is the claim naming the spawned session as holder. Prose seeds carry no field.
 
 Retask is a read-and-verified transaction over a live mux pane. It clears before switching. It waits for a changed harness session id. It renames the fno registry label. It verifies model and effort before submitting the no-merge target. Claude uses the declarative `direct` strategy. Codex uses `menu_walk` with live cursor reads. Gemini, agy, and opencode expose an unsupported strategy and retask refuses with `unsupported_switch_strategy` (spawn a fresh worker instead); only an axis mismatch returns `spawn_required`.
 
-Only two spawn payloads render through this table: an **explicit `/verb` passthrough**, and a **resolved node-id build** (a node id -> `/target <id>`, the one surviving implicit `/target`, config-driven not shape-inferred). Any other free text is NOT wrapped - `spawn "<free text>"` sends it **verbatim as the session seed**, no `/target`, no per-harness render. To build free text, write `spawn /target <text>` or pass a node id. (The retired `ask`/`discuss` verbs are subsumed: a one-shot Q&A is the `headless` substrate; a conversational session is the default seed.)
+Only two spawn payloads render through this table: an **explicit `/command` passthrough**, and a **resolved node-id build** (a node id -> `/target <id>`, the one surviving implicit `/target`, config-driven not shape-inferred). Any other free text is NOT wrapped - `spawn "<free text>"` sends it **verbatim as the session seed**, no `/target`, no per-harness render. To build free text, write `spawn /target <text>` or pass a node id. (The retired `ask`/`discuss` commands are subsumed: a one-shot Q&A is the `headless` substrate; a conversational session is the default seed.)
 
 ## See also
 

@@ -12,7 +12,7 @@ metadata:
 
 # Ship
 
-**One verb for delivering anything.** `/ship <type>` drives a deliverable to its finish line, dispatching on the *deliverable type* the way `/target` dispatches on task type. `pr` only names the code branch. `/ship` names the whole family.
+**One command for delivering anything.** `/ship <type>` drives a deliverable to its finish line, dispatching on the *deliverable type* the way `/target` dispatches on task type. `pr` only names the code branch. `/ship` names the whole family.
 
 | Type | Finish line (the mechanical "green") | What runs |
 |------|--------------------------------------|-----------|
@@ -23,9 +23,9 @@ metadata:
 
 A thing is a ship type ONLY if it has a definable **green** - a finish line readable mechanically. `pr` and `doc` both do. An ongoing *area* (`budget`, `community`) has no crisp green: it never "finishes", so it is not a deliverable. Admitting areas would make `/ship` mean "do stuff", which is exactly what `/target` already is. Route areas through `/target`. Types with a plausible-but-unwired green (`gtm` / launch) are post-MVP and rejected until each has a defined green.
 
-## Vocabulary: "ship" the verb vs the ship phase/gate
+## Vocabulary: "ship" the command vs the ship phase/gate
 
-`/ship` (this verb) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, from the `DonePRGreen`/`DoneAdvisory` termination reasons, from `fno do pr merge`, and from `/ship-docs` (which generates documentation and is NOT a ship type). The single canonical disambiguation lives in `AGENTS.md` -> "Ship vocabulary"; read it if the overlap is confusing.
+`/ship` (this command) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, from the `DonePRGreen`/`DoneAdvisory` termination reasons, from `fno do pr merge`, and from `/ship-docs` (which generates documentation and is NOT a ship type). The single canonical disambiguation lives in `AGENTS.md` -> "Ship vocabulary"; read it if the overlap is confusing.
 
 One owner decides every merge. `fno do pr merge` asks it, and so do `fno do pr verify --kind merged` and the `fno-agents finalize` queue arm. It answers merge or arm for one exact head, and it never emits an unpinned request. See [authorized-merge](../../docs/architecture/authorized-merge.md).
 
@@ -76,4 +76,4 @@ This is a **router**, not a monolith. Parse the first argument token:
 
 ## Multi-CLI
 
-Claude-Code primary. `ship pr` needs `fno`, `gh`, `git`, and the `create` worker from the configured role routing (the `pr` router owns that contract). `ship doc` needs `fno` (the `research` + `evals grade` verbs). If a dependency is missing, the type fails loud and reports it - it never fakes a PR, a brief, or a grade.
+Claude-Code primary. `ship pr` needs `fno`, `gh`, `git`, and the `create` worker from the configured role routing (the `pr` router owns that contract). `ship doc` needs `fno` (the `research` + `evals grade` commands). If a dependency is missing, the type fails loud and reports it - it never fakes a PR, a brief, or a grade.

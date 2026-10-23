@@ -1,6 +1,6 @@
 # Review lanes
 
-How a diff gets reviewed: workers use the fno-owned review lane inline in the session that built the diff. Harness-native review verbs remain low-level operator interfaces, not a worker fallback. This doc is the operational counterpart to [coordination](coordination.md), which covers who owns work. For the cross-model peer lane see [cross-model-review](cross-model-review.md), a different surface.
+How a diff gets reviewed: workers use the fno-owned review lane inline in the session that built the diff. Harness-native review commands remain low-level operator interfaces, not a worker fallback. This doc is the operational counterpart to [coordination](coordination.md), which covers who owns work. For the cross-model peer lane see [cross-model-review](cross-model-review.md), a different surface.
 
 ## The lane menu (after the panel retirement)
 
@@ -12,14 +12,14 @@ How a diff gets reviewed: workers use the fno-owned review lane inline in the se
 | `/fno:review peer` | cross-model second opinion | verdict-gated attestation with `--attest`, or a posted review with `--post` | needs a second provider |
 | `/fno:review research` | advisory research-verify panel over a doc deliverable | advisory only | needs the Task tool |
 | `/fno:review declare` | self-cert attestation, the bottom of the trust spectrum | clears an empty `reviewers` gate only | every harness |
-| native verbs (`/code-review`, `/review`) | low-level operator interface; not worker self-review | full via `hooks/code-review-attest.sh` | per harness |
+| native commands (`/code-review`, `/review`) | low-level operator interface; not worker self-review | full via `hooks/code-review-attest.sh` | per harness |
 | `sigma` | RETIRED | - | refuses everywhere, names the lane |
 
 The retirement measurement sits here so nobody rebuilds the panel from first principles. PR 1170 walked six rounds and produced 84 findings, of which 8 were real. Six readers of one diff yield six sets of objections, not six times the defects. One inline adversarial reviewer caught all 8 real defects in three rounds. The six specialist hunters remain individually invocable as agents. Only the six-at-once panel is gone.
 
 Before the lane existed, this doc carried a load-bearing correction. The widespread belief that `/code-review` cannot be self-invoked by the session that wrote the diff was too strong even then. The owned lane makes it moot now: the session reviews its own diff inline and dispatches zero review subagents. It emits the same head-pinned attestation a native pass produces.
 
-One of these lanes is obligatory on a code payload. The stop gate (`crates/fno-agents/src/loopcheck.rs`) and `fno do pr merge` enforce that obligation, not just this prose. A code PR that reaches the gate with no head-pinned `review_attestation` is held. The held reason names this harness's verb. This doc is the lane menu, and the gate is the authority. Opt out with `config.review.self_review_required = false` only while the global claim-backed opt-out lease is live.
+One of these lanes is obligatory on a code payload. The stop gate (`crates/fno-agents/src/loopcheck.rs`) and `fno do pr merge` enforce that obligation, not just this prose. A code PR that reaches the gate with no head-pinned `review_attestation` is held. The held reason names this harness's command. This doc is the lane menu, and the gate is the authority. Opt out with `config.review.self_review_required = false` only while the global claim-backed opt-out lease is live.
 
 ## Merge-gating opt-out leases
 
@@ -29,7 +29,7 @@ Readers enforce the lease at read time. A missing, expired, stale, suspect, corr
 
 While any opt-out claim is live, unattended auto-merge is disarmed. The deliberate path remains available to the session holding the lease through `fno do pr merge`; ambient `DonePRGreen` finalization does not arm GitHub's native auto-merge. Release the setting or wait for the lease to lapse before allowing unattended merge.
 
-Who the floor applies to: a harness with a native review verb floors. A run that cannot be attributed also floors. That covers absent markers, ambiguous markers, no target manifest, and an unrecognized spelling. Ambiguity about who authored the change is not permission to skip its review. The fno-owned review lane runs as ordinary tool calls wherever the plugin runs, so no KNOWN harness is verbless any more and every attributed run floors. The Python merge gate attributes the run from the target manifest's `harness:` field first. When no manifest carries a harness, a single-family ambient resolve is the fallback. The stop gate attributes from its ambient markers, and `--author-harness none` is the explicit hermetic opt-out. A verbless manifest alone never releases the floor. Release needs a clean ambient read that agrees on the same verbless family. An absent, ambiguous, or contradicting ambient read is not agreement and floors. One divergence stays, on purpose. A stale verbful manifest floors a merge by a verbless session whose own stop gate does not floor. That direction demands a review and never drops one, and the manifest names the run the PR belongs to. The manifest is an init-time snapshot that outlives its session, and nothing ties it to the PR being merged. A dead run's verbless stamp must not disengage the floor for an unrelated PR merged from that checkout. Before this rule the Python half read only ambient markers. Two families meant "no floor", so a claude session started from a codex shell merged code PRs with zero review. That is the default state of any session under a multi-CLI shell.
+Who the floor applies to: a harness with a native review command floors. A run that cannot be attributed also floors. That covers absent markers, ambiguous markers, no target manifest, and an unrecognized spelling. Ambiguity about who authored the change is not permission to skip its review. The fno-owned review lane runs as ordinary tool calls wherever the plugin runs, so no KNOWN harness is commandless any more and every attributed run floors. The Python merge gate attributes the run from the target manifest's `harness:` field first. When no manifest carries a harness, a single-family ambient resolve is the fallback. The stop gate attributes from its ambient markers, and `--author-harness none` is the explicit hermetic opt-out. A commandless manifest alone never releases the floor. Release needs a clean ambient read that agrees on the same commandless family. An absent, ambiguous, or contradicting ambient read is not agreement and floors. One divergence stays, on purpose. A stale commandful manifest floors a merge by a commandless session whose own stop gate does not floor. That direction demands a review and never drops one, and the manifest names the run the PR belongs to. The manifest is an init-time snapshot that outlives its session, and nothing ties it to the PR being merged. A dead run's commandless stamp must not disengage the floor for an unrelated PR merged from that checkout. Before this rule the Python half read only ambient markers. Two families meant "no floor", so a claude session started from a codex shell merged code PRs with zero review. That is the default state of any session under a multi-CLI shell.
 
 ## Lane 0: the provider budget decides the route before any lane runs
 
@@ -45,9 +45,9 @@ Why it is not a mailed cap. It was tried, and it caught nothing. On 2026-08-22 f
 
 ## Legacy native Skill-tool invocation
 
-This section records the older harness-native path. Workers use `/fno:review` or `$fno:review` inline. If that lane refuses, report the literal refusal and stop. Do not try a native verb or another session.
+This section records the older harness-native path. Workers use `/fno:review` or `$fno:review` inline. If that lane refuses, report the literal refusal and stop. Do not try a native command or another session.
 
-An in-session agent can launch the native review verb through the Skill
+An in-session agent can launch the native review command through the Skill
 tool with **bare args**, not by typing the slash command:
 
 ```
@@ -81,13 +81,13 @@ Anchor the probe at the repository root, because a relative pathspec silently ma
 
 The probe answers in the positive direction only. A fresh write proves a live writer. A stale read proves nothing, because a fork thinking between edits and a fork wedged look identical from outside. So a wedge call needs more than a quiet probe, and more than a timer.
 
-A forked review does not appear in `fno agents top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent verb sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
+A forked review does not appear in `fno agents fleet top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent command sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
 
 This section is prose and stays prose. A gate needs a mechanical signal, and the whole defect is that no signal arrives.
 
 ## Raw-inject transport
 
-`fno agents mail send --raw` is a low-level operator transport for explicitly authorized raw verbs. It is not a worker self-review fallback.
+`fno agents mail send --raw` is a low-level operator transport for explicitly authorized raw commands. It is not a worker self-review fallback.
 
 It routes by the recipient's live lane. It either fires the requested operation or names why that lane cannot fire it.
 
@@ -95,7 +95,7 @@ On a prompt-line lane it injects the payload UNWRAPPED. No `<fno_mail>` envelope
 
 That sidesteps any model-invocation refusal. The prompt-line injection IS the user-invocation path.
 
-Worker self-review runs through the inline fno review skill. Do not mail a lead to fire a review command or inject a review verb into another session.
+Worker self-review runs through the inline fno review skill. Do not mail a lead to fire a review command or inject a review command into another session.
 
 `<level>` is sized from the diff by `diff_review_level`, one round-trip to the fno-agents `review-level` door that owns the tier table. Never `ultra`: billed separately, and the builder rejects it. No surface needs to spell the invocation. `fno do target review-invocation` prints it rendered and sized for this session, and the coverage refusals (stop gate, merge guard, the `fno/review-coverage` status) embed that render.
 
@@ -133,11 +133,11 @@ See [mail-live-inject](mail-live-inject.md) for what it resolves and why the Sto
 
 `fno agents mail send --raw` routes to the right transport per recipient, and that transport is not always the same binary.
 
-A mux-hosted session injects via `fno mux pane send --raw`, regardless of harness. A mux-hosted Codex session is therefore a real prompt-line lane. It can fire `/compact`, `/review`, or any other TUI verb the Codex parser accepts. `--raw` is required here: a bare send now wraps the payload in an `<fno_mail>` envelope, and an enveloped slash verb is text rather than a command.
+A mux-hosted session injects via `fno mux pane send --raw`, regardless of harness. A mux-hosted Codex session is therefore a real prompt-line lane. It can fire `/compact`, `/review`, or any other TUI command the Codex parser accepts. `--raw` is required here: a bare send now wraps the payload in an `<fno_mail>` envelope, and an enveloped slash command is text rather than a command.
 
 A Claude daemon session injects via the `fno-agents mail-inject` Rust binary (`cli/src/fno/agents/dispatch.py`).
 
-A Codex app-server thread has no prompt line. The Python front door routes the exact verbs `/review` and `/code-review` to the structured `review/start` RPC. It refuses every other raw payload, naming the app-server constraint and the wrapped-send or mux alternatives.
+A Codex app-server thread has no prompt line. The Python front door routes the exact commands `/review` and `/code-review` to the structured `review/start` RPC. It refuses every other raw payload, naming the app-server constraint and the wrapped-send or mux alternatives.
 
 Other non-keystroke daemon lanes keep the generic refusal. A slash submitted through their model-turn RPC arrives as text and does not fire.
 
@@ -158,20 +158,20 @@ An over-cap unwrapped body is refused before it is delivered; the STDIN form is 
 
 It delivers over the daemon `control.sock` to a live `claude --bg` session, so the target must be an adopted live session: it never lazy-starts one.
 
-The binary's `mail-inject --harness codex` mode submits text through `turn/start`. It is the wrapped-mail transport, not a raw verb transport, because the Codex app-server has no slash parser.
+The binary's `mail-inject --harness codex` mode submits text through `turn/start`. It is the wrapped-mail transport, not a raw command transport, because the Codex app-server has no slash parser.
 
 The structured Codex expert door is `fno-agents review-start --session <thread-id> --target <uncommittedChanges|baseBranch:branch|commit:sha|custom:instructions> --delivery inline`.
 
-That direct verb takes an already-structured target rather than a raw payload. The exact-verb allowlist stays Python-only at the raw-payload door, so no second raw-payload door opens in Rust.
+That direct command takes an already-structured target rather than a raw payload. The exact-command allowlist stays Python-only at the raw-payload door, so no second raw-payload door opens in Rust.
 
 When the target repository has no `refs/remotes/origin/HEAD`, a bare `/review` or `/code-review` on a Codex app-server thread refuses and requires `--base`. The router derives `baseBranch` only from that authority. The `--uncommitted` flag remains the explicit working-tree target.
 
-**Discoverability note.** `mail-inject` is a `fno-agents` *binary* verb, not a `fno agents mail` or `fno agents` (Python CLI) verb.
-It is matched with `matches!` in `crates/fno-agents/src/bin/client.rs`, deliberately, so the routable-verb parity guard does not see it; that keeps it out of `--help` and `CLIENT_VERB_USAGE`.
+**Discoverability note.** `mail-inject` is a `fno-agents` *binary* command, not a `fno agents mail` or `fno agents` (Python CLI) command.
+It is matched with `matches!` in `crates/fno-agents/src/bin/client.rs`, deliberately, so the routable-command parity guard does not see it; that keeps it out of `--help` and `CLIENT_COMMAND_USAGE`.
 So `fno agents mail --help`, `fno agents --help`, and a grep of the Python tree all report nothing, and a "does this exist?" probe against any of them answers false.
 
-When its explicit structured or STDIN contract is the point, use the hidden binary verb. Otherwise reach for `fno agents mail send --raw` for recipient-aware routing.
-Do not conclude the lane is absent from an empty `--help` or an empty Python-tree search; the binary verb is there.
+When its explicit structured or STDIN contract is the point, use the hidden binary command. Otherwise reach for `fno agents mail send --raw` for recipient-aware routing.
+Do not conclude the lane is absent from an empty `--help` or an empty Python-tree search; the binary command is there.
 
 ## The target ship loop and findings
 
@@ -179,15 +179,15 @@ The target ship step runs the review round before the PR opens. The default roun
 
 ## Worker self-review
 
-Workers run the fno review skill inline in the session and worktree that built the diff: `$fno:review <level>` on Codex and `/fno:review <level>` on Claude. If that invocation refuses, report the literal refusal and stop. Do not mail a lead to fire a review verb or spawn a reviewer.
+Workers run the fno review skill inline in the session and worktree that built the diff: `$fno:review <level>` on Codex and `/fno:review <level>` on Claude. If that invocation refuses, report the literal refusal and stop. Do not mail a lead to fire a review command or spawn a reviewer.
 
-## Why (wrapped) mail cannot carry a verb
+## Why (wrapped) mail cannot carry a command
 
-A wrapped `fno agents mail send` cannot carry a verb. It writes an `<fno_mail ...>` envelope at character 0 of the input. The slash command therefore never sits at the start and never parses. Mail carries instructions, while `--raw` is a low-level command transport. Worker self-review uses the inline fno review skill and does not fall back to either mail form.
+A wrapped `fno agents mail send` cannot carry a command. It writes an `<fno_mail ...>` envelope at character 0 of the input. The slash command therefore never sits at the start and never parses. Mail carries instructions, while `--raw` is a low-level command transport. Worker self-review uses the inline fno review skill and does not fall back to either mail form.
 
 ## Do not assert a cause for a refusal
 
-Invocation refusals have been observed, but no cause is confirmed. Do not invent a mechanism or ask workers to check speculative flags. If inline fno review refuses, report the exact refusal and stop. Do not retry through raw mail, a native verb, or another session. See [lead/references/review.md](../../skills/lead/references/review.md) for the worker contract.
+Invocation refusals have been observed, but no cause is confirmed. Do not invent a mechanism or ask workers to check speculative flags. If inline fno review refuses, report the exact refusal and stop. Do not retry through raw mail, a native command, or another session. See [lead/references/review.md](../../skills/lead/references/review.md) for the worker contract.
 
 ## Counting invocations
 
@@ -291,7 +291,7 @@ Idempotent by a positive marker: an invocation with any attestation carrying its
 **Two identity implementations now exist, and that is deliberate, not drift.** `pr_code_diff_identity` decides whether a local verdict counts toward the event row. `coverage-carry.sh`'s patch-id decides whether the CI status carries. They can disagree, and both disagreements fail closed:
 
 - Local carries but CI does not: the status stays red until a session re-greens it. That is today's behavior, unchanged.
-- CI carries but local does not: `fno do pr merge` still enforces `covered_conjuncts` (`cli/src/fno/pr/_coverage_gate.py`) on its own. A CI-only carry is refused at merge time.
+- CI carries but local does not: `fno do pr merge` still enforces `covered_conjuncts` (the native gate) on its own. A CI-only carry is refused at merge time.
 
 The two gates are an AND, never an OR. Neither implementation can launder the other's refusal into a merge.
 
@@ -446,7 +446,7 @@ A match is strong evidence of self-attestation. A mismatch is weak evidence of a
 
 ## Reviewer context
 
-Each local `review_attestation` can carry `reviewer_context`. When the harness records a forked code-review context, the value is `fresh`. A positive same-context review tool result records `shared`. If no positive context marker exists, including Codex native review, the value is `unknown`. This field measures execution-context evidence, not who invoked the verb. It does not affect coverage or merge policy.
+Each local `review_attestation` can carry `reviewer_context`. When the harness records a forked code-review context, the value is `fresh`. A positive same-context review tool result records `shared`. If no positive context marker exists, including Codex native review, the value is `unknown`. This field measures execution-context evidence, not who invoked the command. It does not affect coverage or merge policy.
 
 The origin is recorded, not gating.
 
@@ -472,6 +472,18 @@ What survives from the retired lane is mechanics, not advice. An attestation fro
 A `--fix` that touches only documentation now carries rather than invalidates. The freshness rule is therefore not the reason this constraint stands. The tree-corruption specimens are.
 
 NO `--fix` remains the review contract. The author applies findings and re-attests. The reviewer's prior attestation is then stale by design.
+
+## The fresh reviewer round
+
+`/fno:review --fresh` runs the default lane once in a fresh context. One reviewer subagent. Width 1. The brief is the diff and the plan's acceptance criteria, never the builder's reasoning. The lane itself is unchanged (skills/review/references/single-lane.md). The runner contract is skills/review/references/fresh.md. The building session keeps ownership of the attestation, the fixes, and `--verify-fixes`. The reviewer emits nothing.
+
+The emit receipt names the round's independence in one word, composed from fields the row already carries. `peer` marks a cross-model peer verdict (`reviewer=peer`). `fresh` marks a round whose row carries `reviewer_context=fresh`. `self` covers everything else, the inline lane and `declare` self-cert included. No new payload field exists behind the word.
+
+Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` gates the dispatch. A refusal ends the fresh attempt rather than widening. Silence is not clean. No return, an error, or a findings-free response with no report is journaled as `review_invocation` `stage=refused` `reason=fresh_reviewer_silent`. It attests nothing and reads as not reviewed. A fresh promise never silently degrades into a self review. On a harness with no subagent dispatch the fresh attempt is not run. The inline lane is an explicit fallback whose level records `self`.
+
+The fresh row's provenance feeds the posture `independent` component, which rewards only a positive `reviewer_context=fresh` marker at the reviewed head. Coverage counting is unchanged: every `reviewed` verdict counts regardless of origin. Two readings are pinned. A fresh round runs FIRST-ROUND SCOPE. The reviewer never reads prior rounds' findings and never narrows to the incremental delta. The fresh marker therefore never rides a round that reviewed only part of the diff. And `execution_context=fork` names not-the-builder's-context. It never means an Agent-tool fork, which inherits the builder's whole conversation. The fresh dispatch is a subagent that starts empty.
+
+The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Its designed readers are setup, for the install offer, and the lane, for the fresh-vs-self pick. None ships here. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
 
 ## The pass condition and the four verdict states
 
@@ -510,7 +522,7 @@ Three PRs on 2026-08-22 read green, settled, mergeable and `ready: true` with an
 
 The window is the default ordering, not a race. A push starts a review. CI runs against that same head in parallel. CI is bounded, roughly nineteen minutes in this repo. A review is not. Green arrives FIRST, reliably. Any merge taken at the moment a PR turns green lands inside the window.
 
-Config makes this worse rather than better. With no `required_bots`, no `reviewers` and `self_review_required` false, `_review_lane_configured` short-circuits coverage to COVERED. So `ready: true` is correct against the configured policy and wrong against the world. The hold is therefore config-independent. A running review blocks whether or not the project requires any review.
+Config makes this worse rather than better. With no `required_bots`, no `reviewers` and `self_review_required` false, the lane predicate short-circuits coverage to COVERED. So `ready: true` is correct against the configured policy and wrong against the world. The hold is therefore config-independent. A running review blocks whether or not the project requires any review.
 
 ### Two layers
 
@@ -542,7 +554,7 @@ A `PostToolUse` release was wired here and removed. For an INLINE skill the Skil
 
 So a review that finds findings holds the lane until a clean re-review attests. That is the intended behavior: the findings are unfixed. To merge before then, release by hand.
 
-The release never names a holder, and `--holder` is optional on the verb for that reason. The hold is a lane lock, not an ownership assertion. Each release site derives its own holder string, and `release_claim` no-ops SILENTLY on a mismatch. A holder-matched release wedged the lane for the full TTL under a receipt that said "released".
+The release never names a holder, and `--holder` is optional on the command for that reason. The hold is a lane lock, not an ownership assertion. Each release site derives its own holder string, and `release_claim` no-ops SILENTLY on a mismatch. A holder-matched release wedged the lane for the full TTL under a receipt that said "released".
 
 ### Who reads it
 
@@ -584,15 +596,15 @@ The producer is now reachable from every path that can reach the gate.
 | `fno do pr status <n>` | yes | reads through the same recompute-then-read helper |
 | `fno do pr coverage-check <n>` without `--recompute` (and the git-protection hook through it) | no by default; `--recompute` yes | the hook path must not recompute: a PreToolUse hook has a 60s budget and the Rust producer takes minutes. `--recompute` shells the producer, same as `fno do pr merge`. One-directional: on a missing or stale row this denies where `fno do pr merge` may yet allow |
 | `finalize`'s auto-merge arm | not added, by decision | reached only from a terminal-allow, which implies `run_done` already ran this fire, and a failed arm leaves a green reviewed PR for a human |
-| a human running the verb by hand | yes | `fno-agents review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
+| a human running the command by hand | yes | `fno-agents review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
 
-The table is asserted, not trusted. `crates/fno-agents/tests/review_coverage_paths.rs` runs the Rust-drivable rows. It holds the safe-direction row to its reason. When a new call site reads `review_coverage` without joining the table, it fails. The verb's payload is pinned equal to `run_done`'s by `review_coverage_verb.rs`, on the whole data object.
+The table is asserted, not trusted. `crates/fno-agents/tests/review_coverage_paths.rs` runs the Rust-drivable rows. It holds the safe-direction row to its reason. When a new call site reads `review_coverage` without joining the table, it fails. The command's payload is pinned equal to `run_done`'s by `review_coverage_command.rs`, on the whole data object.
 
-The verb cannot assert coverage without performing the reads. There is no `--force`, no `--assume-covered`, and no skip key. A caller wanting a green gate must cause a review to exist. Its manifest-less defaults are strict: external review reads stay on, because `no_external` can only relax them. An unresolvable author session omits `self_attested_count` from the payload rather than reporting an unmeasured 0.
+The command cannot assert coverage without performing the reads. There is no `--force`, no `--assume-covered`, and no skip key. A caller wanting a green gate must cause a review to exist. Its manifest-less defaults are strict: external review reads stay on, because `no_external` can only relax them. An unresolvable author session omits `self_attested_count` from the payload rather than reporting an unmeasured 0.
 
 That pre-empts the aggregate-that-overstates-its-inputs shape at the field that becomes a bypass on the day anything enforces it.
 
-A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `hooks/git-protection.py` shells the hidden `fno do pr coverage-check` verb. That verb evaluates the guard's coverage check in `cli/src/fno/pr/_coverage_gate.py` without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character in `cli/tests/unit/test_pr_coverage_check.py`.
+A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `hooks/git-protection.py` shells the hidden `fno do pr coverage-check` command. That command evaluates the guard's coverage check (the native `review-coverage check` operand) without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character by the coverage_gate parity goldens.
 
 ### The GitHub status is a projection, not a latch
 
@@ -608,7 +620,7 @@ Every local review verdict lands in one place: `fno event emit -t review_attesta
 
 GitHub refuses an approving review from the PR author. With one account authoring and reviewing, `reviewDecision` reads empty. No number of review objects changes that.
 
-The mirror is fail-closed inside the producer (`crates/fno-agents/src/publish_review.rs`), which the emit chokepoint and the hidden verb drive through one JSON contract. An unconfigured lane or token skips. A bot that is the PR author refuses. A stale head pin refuses. An unmappable verdict refuses. The result carries the `reviewDecision` GitHub reports back, never the POST receipt. One stderr receipt line prints on every branch: `bot-review: posted ...`, `bot-review: skipped (...)`, `bot-review: refused (...)`. The backfill door is the hidden verb `fno do pr publish-review --pr-number N`. Its verdict defaults to the newest head-pinned attestation for HEAD.
+The mirror is fail-closed inside the producer (`crates/fno-agents/src/publish_review.rs`), which the emit chokepoint and the hidden command drive through one JSON contract. An unconfigured lane or token skips. A bot that is the PR author refuses. A stale head pin refuses. An unmappable verdict refuses. The result carries the `reviewDecision` GitHub reports back, never the POST receipt. One stderr receipt line prints on every branch: `bot-review: posted ...`, `bot-review: skipped (...)`, `bot-review: refused (...)`. The backfill door is the hidden command `fno do pr publish-review --pr-number N`. Its verdict defaults to the newest head-pinned attestation for HEAD.
 
 One ordering fact: the first review of a branch runs BEFORE its PR exists, so the emit-time mirror skips with no open PR. The `/fno:ship pr create` flow closes that gap. Its step 2d runs `fno do pr publish-review --pr-number <n>` the moment the PR opens, and it mirrors only a verdict the local gate already accepted. This doc once claimed branch protection makes the miss visible, and that claim is false. `config.review.bot_identity` is this project's own unconfigured default, with posture `self_review` and no bot identity or token set. The mirror above skips on every PR here, and nothing enforces its absence. A 2026-10-16 measurement of PRs 3490 through 3509 found 10 of 20 carried zero GitHub reviews, including merged PRs 3497, 3499, and 3500.
 

@@ -1,6 +1,6 @@
 # The resource meter and the lane advisor
 
-The operator ask behind this feature was a live monitor. It must say how the machine is doing and make a best guess on how many more lanes the fleet can take. Three surfaces answer it. `fno doctor lanes` is the on-demand verb: one number and its reasoning. The status row carries the same reading as a live one-line meter, once you switch the meter on. The org panel puts both in front of a person, behind `prefix` then `C` in the mux.
+The operator ask behind this feature was a live monitor. It must say how the machine is doing and make a best guess on how many more lanes the fleet can take. Three surfaces answer it. `fno doctor lanes` is the on-demand command: one number and its reasoning. The status row carries the same reading as a live one-line meter, once you switch the meter on. The org panel puts both in front of a person, behind `prefix` then `C` in the mux.
 
 ## Is this page for you?
 
@@ -34,7 +34,7 @@ Swap is the pressure signal, but only for a machine that has a swap file. On the
 
 Press `prefix` then `C` in the mux. The panel shows the fleet's CPU share against the cap, whole-machine CPU, and free memory. Below those it shows the census, the lane advisor's own answer, and the age of the reading. Every number comes from one `fno doctor lanes --json` call. The panel adds no capacity model of its own, because two estimators that disagree is a worse problem than an invisible one.
 
-The cap is the thing the panel exists to make visible. It is the fleet's share of CPU capacity (`agents.max_fleet_cpu_share`), checked on every spawn. Before this panel, only an agent running a hidden verb saw it.
+The cap is the thing the panel exists to make visible. It is the fleet's share of CPU capacity (`agents.max_fleet_cpu_share`), checked on every spawn. Before this panel, only an agent running a hidden command saw it.
 
 Three render rules keep the panel honest, and each closes a way a monitor can lie.
 
@@ -56,7 +56,7 @@ An unread half says `unknown` and names its reason. A half past its TTL keeps it
 
 ## Two measured budgets, and why neither was chosen by reasoning
 
-The panel's fold budget is 10 seconds and its cache TTL is 15. Both are pinned to one measurement: `fno doctor lanes --json` took 8.07 seconds on a machine at 1-minute load 107. The verb's own `macmon` sample is bounded at 5.0 seconds, so a read over five seconds is its designed worst case rather than a fault.
+The panel's fold budget is 10 seconds and its cache TTL is 15. Both are pinned to one measurement: `fno doctor lanes --json` took 8.07 seconds on a machine at 1-minute load 107. The command's own `macmon` sample is bounded at 5.0 seconds, so a read over five seconds is its designed worst case rather than a fault.
 
 When the machine is busy, a shorter budget guarantees a degrade. That is the only time a person opens the panel. When the TTL is under the read's own cost, every open refetches and every reading is stale on arrival. That is a busy loop wearing a cache's clothes.
 
@@ -72,8 +72,8 @@ A running test is a process whose OWN program is a test runner, matched on `argv
 
 ## The roster count is read in process
 
-`fno doctor footprint` sets its leak threshold from the count of live registry rows. That count used to arrive over a `fno agents list --status live --json` subprocess under a 5.0 second budget. The read measured 8.5 seconds at rest and 21.7 seconds under load. When the reading mattered, the roster was already dark. The report printed `roster unavailable`, and then `unexplained processes: unknown`.
+`fno doctor footprint` sets its leak threshold from the count of live registry rows. That count used to arrive over a `fno agents session list --status live --json` subprocess under a 5.0 second budget. The read measured 8.5 seconds at rest and 21.7 seconds under load. When the reading mattered, the roster was already dark. The report printed `roster unavailable`, and then `unexplained processes: unknown`.
 
 It now reads `load_registry` in process, in well under a second. There is no budget left to miss and no cache to age. An incomplete or unreadable registry still degrades the threshold away. Its reason names the registry, not a timeout that no longer happens.
 
-The count itself changed, and the change is deliberate. `fno agents list --status live` matches the status string `live` exactly, after its own dedup and liveness filtering. The in-process read uses `LIVE_STATUSES`, the six-status set the spawn gate itself calls live. On one machine at 2026-09-04 the first returned 1 row and the second returned 49. The registry held 47 rows at `live` and 2 at `idle`. So the leak threshold now counts what the gate counts. Read a new leak verdict as a new denominator, not as a fleet that changed overnight.
+The count itself changed, and the change is deliberate. `fno agents session list --status live` matches the status string `live` exactly, after its own dedup and liveness filtering. The in-process read uses `LIVE_STATUSES`, the six-status set the spawn gate itself calls live. On one machine at 2026-09-04 the first returned 1 row and the second returned 49. The registry held 47 rows at `live` and 2 at `idle`. So the leak threshold now counts what the gate counts. Read a new leak verdict as a new denominator, not as a fleet that changed overnight.

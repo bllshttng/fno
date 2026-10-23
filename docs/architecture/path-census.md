@@ -8,17 +8,17 @@ Rows marked `OPEN` below are intentionally not deleted when the repository still
 
 ## Census 1: post-merge ritual
 
-The dispatch lives in one leaf module: `crates/fno-agents/src/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` verb directly (no bg thread, no `/fno:ship pr merged` LLM wrapper), and the warm route injects that SAME verb. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
+The dispatch lives in one leaf module: `crates/fno-agents/src/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` command directly (no bg thread, no `/fno:ship pr merged` LLM wrapper), and the warm route injects that SAME command. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
 | 1 | Detector: `fno backlog reconcile` backstop | was `graph/cli.py` dispatch leg (deleted); reconcile now closes nodes + stamps plans + advances only | RETIRED dispatch leg | #587 |
 | 2 | Detector: pr-watch LaunchAgent daemon, 600s poll (SOLE detector) | `cli/src/fno/pr_watch/_dispatch.py` `_default_dispatch_ritual` -> `pr-watch post-merge-dispatch` (`crates/fno-agents/src/post_merge/route.rs`), `_install.py` | KEEP, sole detector | — |
-| 3 | Warm inject into live origin session (the verb, not an LLM prompt) | `crates/fno-agents/src/post_merge/route.rs` `inject_claude`/`inject_codex` (the warm prompt is `fno do pr ritual <pr> --autonomous`) | KEEP, canonical delivery | — |
-| 4 | Direct-finalize rung | `crates/fno-agents/src/post_merge/route.rs` `finalize_origin_impl` (cold prelude, falls through to the verb) | KEEP | — |
-| 5 | Cold `claude --bg` Sonnet session | was `_reconcile._spawn_post_merge_worker` (deleted) | DELETED; cold path runs the verb directly | #587 |
+| 3 | Warm inject into live origin session (the command, not an LLM prompt) | `crates/fno-agents/src/post_merge/route.rs` `inject_claude`/`inject_codex` (the warm prompt is `fno do pr ritual <pr> --autonomous`) | KEEP, canonical delivery | — |
+| 4 | Direct-finalize rung | `crates/fno-agents/src/post_merge/route.rs` `finalize_origin_impl` (cold prelude, falls through to the command) | KEEP | — |
+| 5 | Cold `claude --bg` Sonnet session | was `_reconcile._spawn_post_merge_worker` (deleted) | DELETED; cold path runs the command directly | #587 |
 | 6 | Cold headless `claude --print` `fire_skill` merged branch | `cli/src/fno/pr_watch/_dispatch.py` `fire_skill` (check-only) | RETIRED merged branch; the review `check` fire is retained | #587 |
-| 7 | LLM wrapper around the ritual | the `fno do pr ritual` verb owns the mechanical core; pr-watch runs it directly with no whole-ritual model layer | RETIRED wrapper paths | #587 |
+| 7 | LLM wrapper around the ritual | the `fno do pr ritual` command owns the mechanical core; pr-watch runs it directly with no whole-ritual model layer | RETIRED wrapper paths | #587 |
 
 The merge-SHA marker, `post-merge-ritual:<sha>` TTL claim, and `reconcile:pr-<n>`
 ritual claim remain in place through a seven-day observation window; only after
@@ -31,8 +31,8 @@ stays as the single idempotency floor).
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
 | 1 | `fno backlog groom` pipeline | `crates/fno-agents/src/backlog/groom.rs` (`groom_pass`) | KEEP, canonical | — |
-| 2 | `scripts/nightly-groom.sh` | whole file, execs the verb | DELETE | #573 |
-| 3 | `fno backlog triage health` | `graph/cli.py` | KEEP, separate metrics verb | — |
+| 2 | `scripts/nightly-groom.sh` | whole file, execs the command | DELETE | #573 |
+| 3 | `fno backlog triage health` | `graph/cli.py` | KEEP, separate metrics command | — |
 
 ## Census 3: post-merge addendum
 
@@ -64,7 +64,7 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno agents truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
+| 1 | `fno agents fleet truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
 | 2 | `truth_status` + manifest liveness | `agents/truth_status.py:182`, `target/orient.py:181` | KEEP, work ownership truth | — |
 | 3 | `discover_live_sessions` liveness verdict | `agents/discover.py:1585` | RETIRE verdict; keep enumeration | OPEN |
 | 4 | `peek` | `agents/peek.py:617` | KEEP | — |
@@ -108,7 +108,7 @@ The census said to call `fno backlog get --strict`, but the two resolvers are no
 Swapping trades one tested capability for another and drops the `RESOLVE_FUZZY` title-match path.
 What was actually the landmine -- the hand-rolled `json.load` -- is gone.
 
-Row 6c stays open on purpose: two heredocs resolve a node by `plan_path`, no verb does that, and minting one to serve two shell callers is more surface than the duplication costs.
+Row 6c stays open on purpose: two heredocs resolve a node by `plan_path`, no command does that, and minting one to serve two shell callers is more surface than the duplication costs.
 Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift landmine; they are ordinary duplication for a later sweep.
 
 ## Census 8: worktree creation
