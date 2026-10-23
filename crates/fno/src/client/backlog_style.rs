@@ -4,7 +4,7 @@
 //! attributes and palette-following slots (never hard colors, never
 //! INVERSE) and every backlog surface inherits it.
 
-use super::super::chrome;
+use super::super::chrome::{self, Join};
 use super::super::theme::{band_style, cell_style, Role, Theme};
 use crate::proto::{cell_flags, Cell};
 
@@ -39,7 +39,7 @@ pub(crate) struct BLine {
     pub(crate) default_role: BRole,
     pub(crate) band: bool,
     /// How this line follows the one above; a wrapped line joins back on copy.
-    pub(crate) join: crate::chrome::Join,
+    pub(crate) join: Join,
 }
 
 /// Helper: append one segment's chars.
@@ -60,7 +60,7 @@ impl BLine {
         if chars.iter().map(|c| char_w(*c)).sum::<usize>() <= w {
             return vec![self];
         }
-        let piece = |from: usize, to: usize| BLine {
+        let piece = |from: usize, to: usize, join: Join| BLine {
             text: chars[from..to].iter().collect(),
             roles: self
                 .roles
@@ -69,10 +69,10 @@ impl BLine {
                 .to_vec(),
             default_role: self.default_role,
             band: self.band,
-            join: crate::chrome::Join::Line,
+            join,
         };
-        let mut out: Vec<BLine> = Vec::new();
-        let mut joins: Vec<crate::chrome::Join> = Vec::new();
+        let mut out = Vec::new();
+        let mut join = Join::Line;
         let (mut start, mut used, mut space) = (0usize, 0usize, None);
         let mut i = 0usize;
         while i < chars.len() {
@@ -80,12 +80,12 @@ impl BLine {
             if used + cw > w && i > start {
                 let soft = space.filter(|&s| s > start);
                 let cut = soft.unwrap_or(i);
-                out.push(piece(start, cut));
-                joins.push(if soft.is_some() {
-                    crate::chrome::Join::Space
+                out.push(piece(start, cut, join));
+                join = if soft.is_some() {
+                    Join::Space
                 } else {
-                    crate::chrome::Join::Seam
-                });
+                    Join::Seam
+                };
                 start = cut;
                 used = chars[start..i].iter().map(|c| char_w(*c)).sum();
                 space = None;
@@ -97,10 +97,7 @@ impl BLine {
             used += cw;
             i += 1;
         }
-        out.push(piece(start, chars.len()));
-        for (tail, join) in out.iter_mut().skip(1).zip(joins) {
-            tail.join = join;
-        }
+        out.push(piece(start, chars.len(), join));
         out
     }
 
@@ -127,9 +124,9 @@ impl BLine {
             roles: self.roles.get(consumed..).unwrap_or(&[]).to_vec(),
             default_role: self.default_role,
             band,
-            join: crate::chrome::Join::Line,
+            join: Join::Line,
         };
-        let first_join = pieces.get(1).map_or(crate::chrome::Join::Space, |p| p.join);
+        let first_join = pieces.get(1).map_or(Join::Space, |p| p.join);
         for (k, piece) in remainder.wrap(tail_w).into_iter().enumerate() {
             let mut indented = BLine {
                 text: indent.to_string(),
@@ -156,7 +153,7 @@ impl BLine {
             roles,
             default_role: BRole::Body,
             band: false,
-            join: crate::chrome::Join::Line,
+            join: Join::Line,
         }
     }
 
@@ -167,7 +164,7 @@ impl BLine {
             roles: Vec::new(),
             default_role: BRole::Body,
             band: false,
-            join: crate::chrome::Join::Line,
+            join: Join::Line,
         }
     }
 
@@ -178,7 +175,7 @@ impl BLine {
             roles: Vec::new(),
             default_role: BRole::Meta,
             band: false,
-            join: crate::chrome::Join::Line,
+            join: Join::Line,
         }
     }
 
@@ -189,7 +186,7 @@ impl BLine {
             roles: Vec::new(),
             default_role: BRole::Head,
             band: false,
-            join: crate::chrome::Join::Line,
+            join: Join::Line,
         }
     }
 

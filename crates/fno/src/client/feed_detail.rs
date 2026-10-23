@@ -225,14 +225,19 @@ impl Parts {
         let Some(v) = value.filter(|v| !v.is_empty()) else {
             return;
         };
+        self.entry(label, v.clone(), FeedAction::Field, v);
+    }
+
+    /// One selectable target: its row, its action and its copyable value.
+    fn entry(&mut self, glyph: &str, label: String, action: FeedAction, value: String) {
         self.rows.push(PopupRow::Entry {
-            glyph: label.to_string(),
-            label: v.clone(),
+            glyph: glyph.to_string(),
+            label,
             hint: String::new(),
             enabled: true,
         });
-        self.actions.push(FeedAction::Field);
-        self.values.push(v);
+        self.actions.push(action);
+        self.values.push(value);
     }
 }
 
@@ -262,14 +267,12 @@ pub(crate) fn build(
 
     // node: a jump, not a label.
     if let Some(node) = item.node.as_deref() {
-        p.rows.push(PopupRow::Entry {
-            glyph: "node".to_string(),
-            label: node.to_string(),
-            hint: String::new(),
-            enabled: true,
-        });
-        p.actions.push(FeedAction::Node(node.to_string()));
-        p.values.push(node.to_string());
+        p.entry(
+            "node",
+            node.to_string(),
+            FeedAction::Node(node.to_string()),
+            node.to_string(),
+        );
     }
 
     // session-id: the shared open-session action (backlog_model::open_session),
@@ -299,14 +302,7 @@ pub(crate) fn build(
                     Some(n) => format!("{n} ({sid})"),
                     None => sid.to_string(),
                 };
-                p.rows.push(PopupRow::Entry {
-                    glyph: "session-id".to_string(),
-                    label,
-                    hint: String::new(),
-                    enabled: true,
-                });
-                p.actions.push(action);
-                p.values.push(value);
+                p.entry("session-id", label, action, value);
             }
             LinkRow::Inert(why) => p.field("session-id", Some(format!("{sid} · {why}"))),
         }
@@ -320,15 +316,12 @@ pub(crate) fn build(
             } else {
                 seat(a)
             };
-            p.rows.push(PopupRow::Entry {
-                glyph: "pane".to_string(),
-                label: seat_v.clone(),
-                hint: String::new(),
-                enabled: true,
-            });
-            p.actions
-                .push(FeedAction::Session(session_hit(a, active_squad)));
-            p.values.push(seat_v);
+            p.entry(
+                "pane",
+                seat_v.clone(),
+                FeedAction::Session(session_hit(a, active_squad)),
+                seat_v,
+            );
         }
         Destination::SessionOnly => p.field("pane", Some("not in the live roster".to_string())),
         Destination::Recovery(_) | Destination::None => {}
@@ -336,14 +329,12 @@ pub(crate) fn build(
 
     // The ship row's PR: open it.
     if let Some(url) = item.url.as_deref() {
-        p.rows.push(PopupRow::Entry {
-            glyph: "pr".to_string(),
-            label: url.to_string(),
-            hint: String::new(),
-            enabled: true,
-        });
-        p.actions.push(FeedAction::Pr(url.to_string()));
-        p.values.push(url.to_string());
+        p.entry(
+            "pr",
+            url.to_string(),
+            FeedAction::Pr(url.to_string()),
+            url.to_string(),
+        );
     }
 
     // parent: the exact row's named edge when one resolves, else the birth
@@ -376,14 +367,7 @@ pub(crate) fn build(
         .map(|sid| open_row(crate::backlog_model::open_session(agents, sid), sid));
     match (parent, parent_row) {
         (Some(text), Some(LinkRow::Action(action, value))) => {
-            p.rows.push(PopupRow::Entry {
-                glyph: "parent".to_string(),
-                label: text,
-                hint: String::new(),
-                enabled: true,
-            });
-            p.actions.push(action);
-            p.values.push(value);
+            p.entry("parent", text, action, value);
         }
         (Some(text), Some(LinkRow::Inert(why))) => {
             p.field("parent", Some(format!("{text} · {why}")))
@@ -406,15 +390,12 @@ pub(crate) fn build(
     });
     match (lead.or_else(|| item.role.clone()), exact_row(&dest)) {
         (Some(text), Some(a)) => {
-            p.rows.push(PopupRow::Entry {
-                glyph: "lead".to_string(),
-                label: text.clone(),
-                hint: String::new(),
-                enabled: true,
-            });
-            p.actions
-                .push(FeedAction::Session(session_hit(a, active_squad)));
-            p.values.push(text);
+            p.entry(
+                "lead",
+                text.clone(),
+                FeedAction::Session(session_hit(a, active_squad)),
+                text,
+            );
         }
         (Some(text), None) => p.field("lead", Some(text)),
         (None, _) => {}
@@ -451,14 +432,7 @@ pub(crate) fn build(
         });
     match (owner_text, owner_action) {
         (Some(text), Some(action)) => {
-            p.rows.push(PopupRow::Entry {
-                glyph: "owner".to_string(),
-                label: text.clone(),
-                hint: String::new(),
-                enabled: true,
-            });
-            p.actions.push(action);
-            p.values.push(text);
+            p.entry("owner", text.clone(), action, text);
         }
         (Some(text), None) => p.field("owner", Some(text)),
         (None, _) => {}
@@ -489,15 +463,12 @@ pub(crate) fn build(
                 Some(t) => format!("{} · {t}", a.name),
                 None => a.name.clone(),
             };
-            p.rows.push(PopupRow::Entry {
-                glyph: "now-led-by".to_string(),
-                label: label.clone(),
-                hint: String::new(),
-                enabled: true,
-            });
-            p.actions
-                .push(FeedAction::Session(session_hit(a, active_squad)));
-            p.values.push(label);
+            p.entry(
+                "now-led-by",
+                label.clone(),
+                FeedAction::Session(session_hit(a, active_squad)),
+                label,
+            );
         }
     }
     p.field("actor", item.actor.clone());
@@ -520,17 +491,15 @@ pub(crate) fn build(
             }
             None => ((*detail).to_string(), None),
         };
-        p.rows.push(PopupRow::Entry {
-            glyph: "resume".to_string(),
-            label: label.clone(),
-            hint: String::new(),
-            enabled: true,
-        });
-        p.actions.push(FeedAction::Resume {
-            line: label.clone(),
-            name,
-        });
-        p.values.push(label);
+        p.entry(
+            "resume",
+            label.clone(),
+            FeedAction::Resume {
+                line: label.clone(),
+                name,
+            },
+            label,
+        );
     }
 
     // The footer names every gesture the modal answers, including the
@@ -628,37 +597,25 @@ pub(crate) fn plan_node(item: &FeedItem) -> Option<&str> {
         .filter(|node| !node.is_empty())
 }
 
-/// `y` on the modal: the selected value, whole, to the clipboard - local
-/// tool first, OSC 52 to the outer terminal as fallback. The display clips
-/// a long value; the copy never does.
 /// Deliver one value to the clipboard and say what happened: local tool
 /// first, OSC 52 to the outer terminal as fallback. The display clips a
 /// long value; the copy never does. Shared by the feed modal and the
 /// backlog detail's y/Y.
 pub(crate) fn copy_value(view: &mut View, value: String) {
-    let outcome = crate::clipboard::deliver(&value, raw_out);
-    let note = match outcome {
-        crate::clipboard::CopyOutcome::Local(_) => format!("copied {value}"),
-        crate::clipboard::CopyOutcome::Osc52 { truncated: false } => {
-            format!("copied {value}")
-        }
-        crate::clipboard::CopyOutcome::Osc52 { truncated: true } => {
-            "copied (truncated)".to_string()
-        }
-        crate::clipboard::CopyOutcome::Failed => "copy failed".to_string(),
-    };
-    view.set_notice(note);
+    copy_noting(view, &value, &value);
 }
 
 /// The text a mouse drag selected, to the clipboard the same way `y` does.
 /// The notice counts chars: the text can span lines and would not fit one.
 pub(crate) fn copy_selection(view: &mut View, text: String) {
-    let chars = text.chars().count();
-    let note = match crate::clipboard::deliver(&text, raw_out) {
+    copy_noting(view, &text, &format!("{} chars", text.chars().count()));
+}
+
+/// Deliver `text` and say so in the notice, naming it as `what`.
+fn copy_noting(view: &mut View, text: &str, what: &str) {
+    let note = match crate::clipboard::deliver(text, raw_out) {
         crate::clipboard::CopyOutcome::Local(_)
-        | crate::clipboard::CopyOutcome::Osc52 { truncated: false } => {
-            format!("copied {chars} chars")
-        }
+        | crate::clipboard::CopyOutcome::Osc52 { truncated: false } => format!("copied {what}"),
         crate::clipboard::CopyOutcome::Osc52 { truncated: true } => {
             "copied (truncated)".to_string()
         }

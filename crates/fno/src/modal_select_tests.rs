@@ -101,6 +101,9 @@ fn a_press_is_a_click_until_it_moves_and_a_double_click_takes_the_word() {
     // row takes the whole URL, across the wrap.
     let second = press(at.0, at.1, t + Duration::from_millis(100));
     assert_eq!(second, Press::Word(URL.to_string()));
+    // A drag after it reshapes the selection, so the release copies again.
+    assert!(drag(at.0, at.1 + 2));
+    assert!(matches!(release(), Release::Copy(t) if !t.is_empty()));
 }
 
 #[test]

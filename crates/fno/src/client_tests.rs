@@ -6553,8 +6553,7 @@ fn left_click(row: u16, col: u16) -> crate::mouse::MouseReport {
     mrep(MouseKind::Press(MouseButton::Left), row, col)
 }
 
-/// The update modal's footer words are a target, not a label: a left
-/// click on them closes the popup.
+/// A left click on the update modal's footer words closes the popup.
 #[tokio::test]
 async fn update_modal_footer_esc_close_click_closes() {
     let mut v = view_with_agents(vec![]);
