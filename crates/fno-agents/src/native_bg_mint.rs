@@ -63,8 +63,7 @@ pub(crate) fn mint_missing_native_bg(
     // for rows born before their transcript existed. The write closure
     // re-decides both under the lock.
     let mut prepared = Vec::new();
-    // Forks of a session a row holds: (child, parent, child pid). They take
-    // the parent's row under the lock instead of minting a second one.
+    // (child, parent, child pid): a fork takes its parent's row, never a new one.
     let mut forks: Vec<(String, String, u32)> = Vec::new();
     let mut deferred = false;
     // State alone lies: a died session keeps its last `working`/`blocked`

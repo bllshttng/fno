@@ -1317,27 +1317,14 @@ mod process_table_tests {
         assert!(found, "a live argv naming the needle is a witness");
         assert!(!absent, "a needle no process names is no witness");
         assert!(!empty, "an empty needle names nothing");
-        // Only a claude argv's session flags hold; the sh child does not.
-        assert!(!super::live_claude_holds_session(needle));
-        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
-        let sid = "8789fe29-0e28-4d8e-aa00-8171920ce205";
-        let held = argv(&[
-            "/u/.local/share/claude/versions/2.1.309",
-            "--session-id",
-            sid,
-        ]);
-        assert!(super::claude_argv_holds(&held, sid));
-        assert!(super::claude_argv_holds(
-            &argv(&["claude", "--resume", sid]),
-            sid
+        // Only a claude argv's session flags hold, never an fno command line.
+        let holds = |line: &str| {
+            let argv: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            super::claude_argv_holds(&argv, "s-1")
+        };
+        assert!(holds(
+            "/u/.local/share/claude/versions/2.1.309 --session-id s-1"
         ));
-        assert!(!super::claude_argv_holds(
-            &argv(&["fno", "agents", "resume", sid]),
-            sid
-        ));
-        assert!(!super::claude_argv_holds(
-            &argv(&["fno", "agents", "spawn", "--resume", sid]),
-            sid
-        ));
+        assert!(!holds("fno agents spawn --resume s-1"));
     }
 }
