@@ -514,7 +514,7 @@ fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
             "--json" | "-J" => {}
             "--root" | "--source" => i += 1,
             a if a.starts_with("--root=") || a.starts_with("--source=") => {}
-            "ls" => {
+            "ls" | "show" => {
                 let json = root_json.then(|| OsString::from("--json"));
                 return Some(json.into_iter().chain(tail.iter().cloned()).collect());
             }
@@ -1099,15 +1099,17 @@ fn main() {
         let peeled = match fno::spawn_floor::peel(&names) {
             Ok(peeled) => peeled,
             Err(message) => {
-                eprintln!("fno agents spawn --floor: {message}");
+                eprintln!("fno agents spawn: {message}");
                 std::process::exit(2);
             }
         };
         if peeled.help {
             eprintln!(
                 "fno agents spawn --floor N: set [agents.capacity] floor in the user config, \
-                 then spawn if a name or payload follows. The front door reads this flag, \
-                 so the list below does not show it."
+                 then spawn if a name or payload follows.\n\
+                 fno agents spawn --mux: show a headless one-shot (--once) in the mux while \
+                 it runs; without it the run keeps no registry row.\n\
+                 The front door reads these flags, so the list below does not show them."
             );
         }
         // Help forwards with no write, even when a floor came with it.
@@ -1126,6 +1128,10 @@ fn main() {
                     std::process::exit(err.code);
                 }
             }
+        }
+        if peeled.mux {
+            // The forwarded spawn inherits it; the headless lane reads it.
+            std::env::set_var(fno::spawn_floor::SHOW_ROW_ENV, "1");
         }
         args = peeled.rest.iter().map(OsString::from).collect();
         if let Err(failure) = fno::process_admission::admit_agent_spawn() {
@@ -1824,8 +1830,8 @@ mod tests {
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
         );
-        // `roles ls` is the Rust door's in every spelling, group options
-        // carried; an op still on Python forwards.
+        // `roles ls` and `roles show` are the Rust door's in every
+        // spelling, group options carried; an op still on Python forwards.
         assert_eq!(
             decide_role(&os(&["agents", "roles", "--root", "r", "ls", "-J"]), false),
             Role::AgentsRoles(os(&["--root", "r", "ls", "-J"]))
@@ -1835,7 +1841,11 @@ mod tests {
             Role::AgentsRoles(os(&["--json", "--source=plan=p", "ls"]))
         );
         assert_eq!(
-            decide_role(&os(&["agents", "roles", "show", "x"]), false),
+            decide_role(&os(&["agents", "roles", "-J", "show", "x"]), false),
+            Role::AgentsRoles(os(&["-J", "show", "x"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "roles", "resolve", "x"]), false),
             Role::Forward
         );
     }

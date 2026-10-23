@@ -284,7 +284,7 @@ impl SessionRow {
 /// Enumerate `*.sock` stems in the mux dir, sorted. `Err` is an unreadable dir
 /// the caller must distinguish from "no sessions" (a permissions/IO error must
 /// never read as empty); `NotFound` returns an empty list (no session ever
-/// started here, AC6-FR). A graph keeper's `<graph>.store.sock` sibling is never a session: probing it with a mux frame reads as unreachable and poisons the fold (the e2e sandboxes put the graph inside the mux dir). Shared by `ls`/picker and `doctor` so both see the same session set.
+/// started here, AC6-FR). A graph keeper's `<graph>.store.sock` sibling is never a session: probing it with a mux frame reads as unreachable and poisons the fold (the e2e sandboxes put the graph inside the mux dir). Shared by `ls`/picker, `doctor` and the sweep so all see the same session set, and each heals a dead server's leftover files ([`dead_session::heal_if_dead`]).
 fn session_names() -> Result<Vec<String>, String> {
     let dir = proto::mux_dir();
     let entries = match std::fs::read_dir(&dir) {
@@ -298,9 +298,8 @@ fn session_names() -> Result<Vec<String>, String> {
             let p = e.path();
             let is_session = p.extension().and_then(|x| x.to_str()) == Some("sock")
                 && !p.to_string_lossy().ends_with(".store.sock");
-            is_session
-                .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .flatten()
+            let name = p.file_stem()?.to_string_lossy().into_owned();
+            (is_session && !dead_session::heal_if_dead(&name, &p)).then_some(name)
         })
         .collect();
     names.sort();
@@ -368,8 +367,8 @@ fn session_row_json(row: &SessionRow) -> serde_json::Value {
     }
 }
 
-/// `fno mux ls`: one row per `*.sock` in the mux dir. Read-only - a stale
-/// socket is REPORTED, never unlinked (kill-server owns removal). Exits 0
+/// `fno mux ls`: one row per `*.sock` in the mux dir. A proven-dead session
+/// is healed away first; a stale row left is one that proof refused. Exits 0
 /// even when every row is stale or unqueryable; only "no sessions" is
 /// distinguishable by text, not exit code, so scripts can `grep`.
 pub fn ls(json: bool) -> i32 {
@@ -3726,6 +3725,7 @@ pub mod web_ctl;
 // (v71) The prune aftermath (reload live servers + the receipt), same rule.
 mod prune_sync;
 // (v71) The live-tab fold, same rule; its tests moved with it.
+mod dead_session;
 mod tab_prune;
 use tab_prune::{live_tabs, prune_live_tabs_measuring_named, TabPruneOutcome};
 // (v72) The `fno mux thread reseat` command, same child-module pattern.
@@ -4240,7 +4240,7 @@ pub(crate) fn send_control(
                 return Err(ControlError::Fatal(format!(
                     "no response from the server; it may predate v4 control commands \
                      (this client speaks proto {PROTO_VERSION}). Restart the server \
-                     (fno mux kill-server) and retry."
+                     (fno mux kill-server {session}) and retry."
                 )))
             }
             Err(crate::proto::ProtoError::Io(e)) if crate::proto::is_retryable(&e) => {

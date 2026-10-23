@@ -360,6 +360,15 @@ impl ClaudeHome {
         }
     }
 
+    /// A live claude process holds this session, so `claude --bg --resume`
+    /// would copy it. An fno command line naming the id does not count.
+    pub fn session_held(&self, session_id: &str) -> bool {
+        match &self.live_sessions {
+            Some(sessions) => sessions.iter().any(|s| s == session_id),
+            None => crate::census::live_claude_holds_session(session_id),
+        }
+    }
+
     /// What `claude agents --json --all`, read under `config_dir`, says
     /// about one job. The listing is the only source of job state; the files
     /// under `jobs/` are Claude's own.
@@ -2674,13 +2683,19 @@ fn push_output_format(argv: &mut Vec<String>, output_format: Option<&str>) {
     }
 }
 
+/// Set to `1` by the front door's `fno agents spawn --mux`: the headless run
+/// keeps a registry row, so it shows in the mux while it runs.
+pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
+
 /// Dispatch a `claude -p` truly-headless one-shot (`headless` substrate).
 ///
 /// Unlike [`dispatch_claude_spawn`] (the detached `--bg` thread, which returns a
 /// short-id receipt), this runs `claude -p` SYNCHRONOUSLY to completion, prints
 /// the model's reply to stdout, and exits - no registry row, no short-id, no
-/// driveable pane. `claude` never *defaults* to `-p`; this is the one lane that
-/// shells it (Locked Decision 4). `ask` and the relay claude hop keep `--bg`.
+/// driveable pane. The child's SessionStart report would mint a row from its
+/// `FNO_AGENT_SELF`, so the child carries [`crate::session_report::NO_ROW_ENV`]
+/// unless [`SHOW_ROW_ENV`] opts in. `claude` never *defaults* to `-p`; this is
+/// the one lane that shells it (Locked Decision 4). `ask` and the relay claude hop keep `--bg`.
 ///
 /// A headless run cannot answer permission prompts, so it always passes
 /// `--dangerously-skip-permissions` (mirrors the agy/codex once lanes); `yolo`
@@ -2762,6 +2777,12 @@ pub fn dispatch_claude_headless(
     crate::model_env_scrub::scrub_onto(&mut cmd, &[]);
     crate::claims::stamp_command_env(&mut cmd, Some(name), "claude", None);
     cmd.env("FNO_AGENT_FROM", from_name);
+    // No row unless the caller opted in to watch: the opt-in is this spawn's
+    // alone, so the child never passes it on to a spawn of its own.
+    if std::env::var(SHOW_ROW_ENV).ok().as_deref() != Some("1") {
+        cmd.env(crate::session_report::NO_ROW_ENV, name);
+    }
+    cmd.env_remove(SHOW_ROW_ENV);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(if use_stdin {

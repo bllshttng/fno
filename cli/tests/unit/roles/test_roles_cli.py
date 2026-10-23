@@ -86,56 +86,6 @@ def _assert_pretty_sorted_json(output: str) -> Any:
     return parsed
 
 
-def test_ac_r7_ui_show_is_stable_and_keeps_invalid_sources_visible(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    roles_root = tmp_path / "roles"
-    _write_source(
-        roles_root,
-        layer=RoleLayer.BUILT_IN,
-        name="owner",
-        role_id="owner",
-        function_id="marketing",
-    )
-    invalid = roles_root / RoleLayer.PROJECT.value / "broken.json"
-    invalid.parent.mkdir(parents=True)
-    invalid.write_text(
-        json.dumps(
-            {
-                "layer": "project",
-                "source_id": "project/broken.json",
-                "snapshot_revision": "snapshot-1",
-                "role": {"id": "broken", "function_id": "support"},
-                "manifest": {"mission": "missing required manifest fields"},
-                "status": "valid",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(roles_root))
-    monkeypatch.setenv("FNO_SKIP_MIGRATION", "1")
-    before_roles = _snapshot_tree(roles_root)
-
-    shown =_invoke("agents", "roles", "show", "broken", "-J")
-    assert shown.exit_code == 0
-    definitions = _assert_pretty_sorted_json(shown.output)
-    assert len(definitions) == 1
-    assert definitions[0]["layer"] == "project"
-    assert definitions[0]["source"] == "project/broken.json"
-    assert definitions[0]["status"] == "invalid"
-    assert definitions[0]["disposition"] == "unchecked"
-    assert definitions[0]["error"]
-    assert definitions[0]["raw_definition"]["role"]["id"] == "broken"
-    shown_text = _invoke("agents", "roles", "show", "broken")
-    shown_text_again = _invoke("agents", "roles", "show", "broken")
-    assert shown_text.exit_code == shown_text_again.exit_code == 0
-    assert shown_text.output == shown_text_again.output
-    assert "status=invalid disposition=unchecked" in shown_text.output
-    assert "error:" in shown_text.output
-    assert _snapshot_tree(roles_root) == before_roles
-
-
 def test_ac_r7_ui_resolve_is_typed_inert_and_has_stable_exit_codes(
     tmp_path: Path,
     monkeypatch,
@@ -292,8 +242,3 @@ def test_resolve_fails_closed_when_an_unchecked_source_has_no_role_identity(
     assert blocked["source_layer"] == "project"
     assert blocked["source_id"] == expected_source
     assert blocked["detail"]
-
-    shown =_invoke("agents", "roles", *source_args, "show", "owner", "-J")
-    assert shown.exit_code == 0
-    shown_rows = _assert_pretty_sorted_json(shown.output)
-    assert any(row["source"] == expected_source for row in shown_rows)

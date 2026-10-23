@@ -383,3 +383,37 @@ fn nav_overlay_lines_show_the_matched_identity_token() {
         "a label match appends no reason token"
     );
 }
+
+/// Open the navigator filtered to `query`, the way prefix+f plus typing does.
+fn nav_on(v: &mut View, query: &str) {
+    v.nav = Some(NavView {
+        query: query.into(),
+        state_filter: None,
+        cursor: 0,
+    });
+}
+
+#[tokio::test]
+async fn ctrl_o_then_x_on_a_stopped_navigator_row_removes_it_like_the_sideline() {
+    // x on a stopped navigator row sends the same RemoveAgent as the sideline.
+    let mut v = view_with_agents(vec![lifecycle_row("dead-nav", true, false)]);
+    v.set_squad_view(1, SectionView::Expanded);
+    nav_on(&mut v, "dead-nav");
+    let mut buf: Vec<u8> = Vec::new();
+    nav_keys(&mut v, b"\x0f", &mut buf).await.unwrap();
+    assert!(v.row_menu.is_some(), "ctrl-o opens the row menu");
+    row_menu_keys(&mut v, b"x", &mut buf).await.unwrap();
+    confirm_keys(&mut v, b"\r", &mut buf).await.unwrap();
+    let from_nav = decode_cmds(buf);
+    assert!(v.nav.is_none());
+
+    let mut s = view_with_agents(vec![lifecycle_row("dead-nav", true, false)]);
+    s.set_squad_view(1, SectionView::Expanded);
+    let idx = agent_row_at(&s, |a| a.name == "dead-nav");
+    assert!(s.open_row_menu(idx, Anchor::Center));
+    let mut buf: Vec<u8> = Vec::new();
+    row_menu_keys(&mut s, b"x", &mut buf).await.unwrap();
+    confirm_keys(&mut s, b"\r", &mut buf).await.unwrap();
+    assert_eq!(from_nav, decode_cmds(buf));
+    assert_eq!(from_nav.len(), 1, "one RemoveAgent, nothing else");
+}

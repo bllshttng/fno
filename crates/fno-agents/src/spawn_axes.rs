@@ -610,11 +610,22 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     0
 }
 
+/// The role flags the client parses into spawn params.
+pub const ROLE_FLAGS: &[&str] = &[
+    "--role-level",
+    "--role-scope",
+    "--promote",
+    "--hand-off",
+    "--succeed",
+    "--take-over",
+];
+
 /// One role flag the client parses into spawn params: typed here
 /// so a promoted codex thread row is promoted AT MINT - the seed turn
 /// enqueues inside the lane and must never submit to an unpromoted row.
-/// The level bound is the type the registry row stores (a u32 0..=2);
-/// territory and succession policy live at the Python seam.
+/// The level bound is the type the registry row stores (a u32 0..=2).
+/// `--promote` repeats into the team's scopes, and the promote door
+/// (`spawn_promote`) owns territory and succession policy.
 pub fn insert_role_flag(
     flag: &str,
     args: &mut impl Iterator<Item = String>,
@@ -633,6 +644,25 @@ pub fn insert_role_flag(
         "--role-scope" => {
             let scope = args.next().ok_or("--role-scope needs a value")?;
             params.insert("role_scope".into(), Value::from(scope));
+        }
+        "--promote" => {
+            let scope = args.next().ok_or("--promote needs a value")?;
+            let scopes = params
+                .entry("promote")
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(scopes) = scopes {
+                scopes.push(Value::from(scope));
+            }
+        }
+        "--hand-off" | "--succeed" => {
+            if flag == "--succeed" {
+                eprintln!("--succeed is now --hand-off; the old spelling answers for one release.");
+            }
+            params.insert("hand_off".into(), Value::Bool(true));
+        }
+        "--take-over" => {
+            let reason = args.next().ok_or("--take-over needs a value")?;
+            params.insert("take_over".into(), Value::from(reason));
         }
         other => return Err(format!("unknown role flag: {other}")),
     }

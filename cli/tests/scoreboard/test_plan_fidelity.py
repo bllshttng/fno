@@ -310,9 +310,27 @@ def test_compute_plan_fidelity_refuses_when_the_body_parser_is_absent(monkeypatc
         body_reader=lambda pr, root: _SPECIMEN_BODY,
     )
     monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: tmp_path / "absent" / rel)
+    monkeypatch.setattr(paths, "installed_plugin_script", lambda rel: None)
     decision = fid.compute_plan_fidelity(plan_path=str(plan))
     assert decision["refused"] is True
     assert "carve-out check unreadable" in decision["reason"], decision["reason"]
+
+
+def test_compute_plan_fidelity_finds_the_installed_parser_when_the_project_hint_has_none(
+    monkeypatch, tmp_path
+):
+    """A foreign repo's FNO_REPO_ROOT names the project, which ships no
+    scripts/ci: the gate must read the installed plugin's copy, not exit 127."""
+    import fno.paths as paths
+
+    fid, plan = _forbidden_setup(
+        monkeypatch, tmp_path, carveouts_line="carveouts: forbidden\n",
+        body_reader=lambda pr, root: _SPECIMEN_BODY,
+    )
+    monkeypatch.setattr(paths, "resolve_plugin_script", lambda rel: tmp_path / "foreign" / rel)
+    monkeypatch.setattr(paths, "installed_plugin_script", lambda rel: _REPO / rel)
+    decision = fid.compute_plan_fidelity(plan_path=str(plan))
+    assert "declares 5 exclusion item(s)" in decision["reason"], decision["reason"]
 
 
 def test_compute_plan_fidelity_treats_a_typoed_carveouts_value_as_forbidden(monkeypatch, tmp_path):

@@ -1246,7 +1246,7 @@ pub(crate) fn mint_synthesized_entry(
         // Synthesized from an identity that arrived without a row; the lane
         // it ran on is unobserved, so the substrate stays unknown.
         substrate: None,
-        name: crate::claude_adopt::synthesized_entry_name(&session, &short),
+        name: crate::claude_adopt::synthesized_entry_name(&session, &short, None),
         // Birth marker: synthesized from a session identity that arrived
         // without a row, so nothing here observed how that session started.
         // "adopted" says that; it is not a claim that no human is sitting in

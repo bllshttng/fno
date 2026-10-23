@@ -48,6 +48,12 @@ const MAX_PAYLOAD_BYTES: u64 = 64 * 1024;
 /// (`session_report` vs `session-report`), and every SessionStart report fell
 /// to the unknown-command arm, so no adopt row was ever minted.
 pub const SESSION_REPORT_COMMAND: &str = "session-report";
+/// Set by a headless one-shot launcher to the child's own `FNO_AGENT_SELF`:
+/// the session reports (so it joins) but mints no row. A `claude -p` run has
+/// no thread to resume, so a row for it is a sidebar entry nothing can open.
+/// Keyed on the name, like `FNO_AGENT_ROW_PENDING`, so a grandchild that
+/// inherits it under a new name still mints.
+pub const NO_ROW_ENV: &str = "FNO_AGENT_NO_ROW";
 
 fn session_report_request(params: Value) -> Request {
     Request::new(1, format!("agent.{SESSION_REPORT_COMMAND}"), params)
@@ -236,6 +242,13 @@ pub(crate) fn handle_session_report(
         let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id);
     }
 
+    // A headless one-shot touches no row: not a mint, and not a stamp on an
+    // older row that shares its name (a verifier name repeats per session),
+    // which would read that row live again.
+    if p.get("no_row").and_then(Value::as_bool) == Some(true) {
+        return Response::ok(req.id, json!({"stored": false, "dropped": "no_row"}));
+    }
+
     // The mint prediction runs BEFORE the locked write: building the row does
     // transcript IO (title, model), which must not hold the registry lock.
     // The write closure re-decides absence under the lock.
@@ -250,6 +263,12 @@ pub(crate) fn handle_session_report(
         source.as_deref(),
         report_cwd.as_deref(),
     );
+
+    // A claude session no row holds may fork one a row holds. The argv read
+    // runs here, outside the lock, and only for a mint.
+    let fork_parent = (harness == "claude" && pending_mint.is_some())
+        .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
+        .flatten();
 
     // A claude session reporting against an id a row ALREADY holds
     // (`pending_mint` is `None` exactly in that case, per
@@ -283,6 +302,28 @@ pub(crate) fn handle_session_report(
     let mut manifest_arm: Option<(String, String, Option<String>)> = None;
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
+            if let Some(i) = fork_parent.as_ref().and_then(|(parent, pid)| {
+                crate::native_adopt::bind_fork_child(
+                    &mut r.entries,
+                    parent,
+                    &session_id,
+                    Some(*pid),
+                )
+            }) {
+                let entry = &mut r.entries[i];
+                entry.last_report_at = Some(now_stamp.clone());
+                if let Some(tp) = &transcript_path {
+                    entry.transcript_path = Some(tp.clone());
+                }
+                if let Some(src) = &source {
+                    entry.start_source = Some(src.clone());
+                }
+                row_name = Some(entry.name.clone());
+                outcome = Outcome::Stored {
+                    related_filled: false,
+                };
+                return;
+            }
             match &pending_mint {
                 // A retirement that landed after the pre-read still wins.
                 Some(mint)
@@ -1058,6 +1099,11 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if let Some(payload) = read_stdin_payload() {
         params["payload"] = payload;
     }
+    let agent_self = params.get("agent_self").and_then(Value::as_str);
+    let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
+    if no_row {
+        params["no_row"] = Value::Bool(true);
+    }
     let (record, child_name) = claim_launch(&params, home);
     record_origin(&params);
     if let Some(record) = &record {
@@ -1457,6 +1503,32 @@ mod tests {
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
         assert!(response_json(&resp)["result"]["minted"].is_null());
         assert!(read_rows(&home).is_empty());
+    }
+
+    /// A headless one-shot child reports with `no_row`: it joins, but no row
+    /// mints, and an older row under the same name (a verifier name repeats
+    /// per session) is left as it was, so it never reads live again.
+    #[test]
+    fn a_no_row_child_joins_but_mints_no_row() {
+        let (_d, home) = temp_home("no_row");
+        let sid = "0197ffff-1234-7abc-9def-0123456789ab";
+        seed_registry(
+            &home,
+            json!({"name": "verifier-advise-1", "cwd": "/repo",
+            "status": "exited", "created_at": "2026-10-22T00:00:00Z", "harness": "claude"}),
+        );
+        let params = report_params(
+            "claude",
+            sid,
+            json!({"agent_self": "verifier-advise-1", "no_row": true}),
+        );
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["dropped"], "no_row");
+        assert!(crate::join_marker::is_joined(home.root(), "claude", sid));
+        let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1, "no row minted");
+        assert_eq!(rows[0].harness_session_id, None);
+        assert_eq!(rows[0].last_report_at, None);
     }
 
     /// A joined session no row holds mints an operator row - the user's own

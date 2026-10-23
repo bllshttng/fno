@@ -2533,6 +2533,7 @@ pub fn run_test_run(args: &[String]) -> i32 {
         Some("build-admit") => return run_build_admit(&args[1..]),
         Some("run-admit") => return run_run_admit(&args[1..]),
         Some("builds") => return crate::cargo_builds::run(&args[1..]),
+        Some("stats") => return crate::test_run_journal::run_stats(&args[1..]),
         _ => {}
     }
     install_signal_handlers();
@@ -2662,7 +2663,20 @@ pub fn run_test_run(args: &[String]) -> i32 {
         ],
     );
 
+    let journal_run = crate::test_run_journal::Run {
+        run_id: &run_id,
+        argv: &opts.argv,
+        whole,
+    };
+    crate::test_run_journal::record_started(&journal_run, child.id());
     let wait_result = wait_bounded(&mut child, run_deadline);
+    let journal_exit = match &wait_result {
+        Ok(code) => *code,
+        Err(Unfinished::TimedOut) => 124,
+        Err(Unfinished::Signalled(sig)) => 128 + sig,
+        Err(Unfinished::WaitFailed(_)) => 2,
+    };
+    crate::test_run_journal::record_finished(&journal_run, journal_exit, admitted.elapsed());
 
     // A leader that exits by itself can leak group members behind it: the
     // group survives the leader's reap. Name them BEFORE the kill, so a

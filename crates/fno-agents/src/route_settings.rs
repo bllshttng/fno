@@ -83,7 +83,23 @@ fn payload_bytes(env: &Map<String, Value>, sandbox: Option<&Value>) -> Vec<u8> {
     if let Some(sb) = sandbox {
         root.insert("sandbox".to_string(), sb.clone());
     }
+    if let Some(theme) = claude_theme_env() {
+        root.insert("theme".to_string(), Value::String(theme));
+    }
     serde_json::to_vec(&Value::Object(root)).expect("payload serializes")
+}
+
+/// The Claude Code theme the mux pinned for this pane (`FNO_CLAUDE_THEME`,
+/// set from `theme::claude_theme`). A `claude --bg` session is forked by the
+/// claude daemon and the attached view renders with the theme the session
+/// launched with, so its settings file must carry it. `claude attach` itself
+/// ignores `--settings`.
+pub(crate) fn claude_theme_env() -> Option<String> {
+    let v = std::env::var("FNO_CLAUDE_THEME").ok()?;
+    let ok = !v.is_empty()
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_'));
+    ok.then_some(v)
 }
 
 fn digest_of(payload: &[u8]) -> String {

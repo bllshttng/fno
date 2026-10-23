@@ -424,6 +424,10 @@ headless_yolo = false
 # Use full-yolo (drop sandbox) for headless gemini workers.
 headless_yolo = false
 
+[agents.naming]
+# Name template for a worker on a node: fno agents spawn, a bare claude --bg with no name, and a row still named by its short id. Tokens: {slug} (first words of the node slug), {node} (node id), {skill} (the seed's command, e.g. target), {random} (four hex digits). A token with no value for the worker falls back to the next name source.
+worker = "t-{slug}"
+
 [process_admission]
 # Maximum fno-attributed OS processes admitted by the native pre-spawn gate; counts processes, not agents or panes (default 400).
 max_processes = 400

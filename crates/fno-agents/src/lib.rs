@@ -534,6 +534,7 @@ pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
+pub mod spawn_promote;
 pub mod spawn_route;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
@@ -582,6 +583,7 @@ pub mod territory;
 pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
+mod test_run_journal;
 pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
@@ -1500,11 +1502,12 @@ mod tests {
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
-    // birth write, a node or parent filled on a later beat, and the
-    // per-beat budget deferral.
+    // birth write, a node or parent filled on a later beat, a short-id row
+    // renamed, and the per-beat budget deferral.
     "native_bg_mint_failed",
     "native_bg_node_backfilled",
     "native_bg_parent_backfilled",
+    "native_bg_renamed",
     "native_bg_mint_deferred",
     // The sandbox-denial ingester: codex transcript refusals -> one row per
     // (session, class, path) with a hit count, plus the pass summary row.
@@ -1618,6 +1621,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // the footprint command killed on the daemon's behalf.
     "orphan_test_binary_reaped",
     "orphan_owner_server_reaped",
+    // One local test run through `fno doctor test`: a started and a finished
+    // row joined by run_id (test_run_journal.rs).
+    "test_run",
     // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
     // spawn-time bind window expired got its `harness_session_id` resolved on
     // a later reconcile tick, from the pane-tree rollout probe. Makes "the row

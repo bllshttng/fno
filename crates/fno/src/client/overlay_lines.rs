@@ -235,3 +235,41 @@ pub(crate) fn peek_overlay_lines(
     }
     lines
 }
+
+impl View {
+    /// The navigator's framed block, from the live layout. One layout feeds
+    /// the painter and the row menu's anchor, so the two cannot disagree.
+    pub(super) fn nav_layout(
+        &self,
+        overlay_origin: (usize, usize),
+        overlay_dims: (usize, usize),
+    ) -> Option<OverlayLayout> {
+        let nav = self.nav.as_ref()?;
+        let lines = nav_overlay_lines(&self.nav_filtered(nav), nav);
+        let chrome = chrome::Chrome::new("navigator", Anchor::Center)
+            .footer("type to filter · ctrl-o actions · esc close");
+        Some(layout_lines_overlay(
+            overlay_origin,
+            overlay_dims,
+            &chrome,
+            &lines,
+            // +1 for the query line.
+            Some(nav.cursor + 1),
+            OverlayAnchor::Center,
+        ))
+    }
+
+    /// Paint the navigator, if open.
+    pub(super) fn draw_nav(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        overlay_origin: (usize, usize),
+        overlay_dims: (usize, usize),
+    ) {
+        if let Some(layout) = self.nav_layout(overlay_origin, overlay_dims) {
+            draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
+        }
+    }
+}
