@@ -1140,6 +1140,81 @@ fn default_source_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_default()
 }
 
+/// The release channel the harness's footnote plugin comes from, or None for
+/// a local (dev) install or no install. A dev install must refuse to replace
+/// a release one: `claude plugin marketplace add <stage>` silently repoints
+/// an existing GitHub `footnote` marketplace at the stage, exit 0.
+fn release_channel(harness: &str, claude_dir: &Path, codex_dir: &Path) -> Option<String> {
+    let read = |path: PathBuf| -> Option<Value> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    };
+    let (place, git_ref) = match harness {
+        "claude" => {
+            let known = read(claude_dir.join("plugins").join("known_marketplaces.json"))?;
+            let source = known.get("footnote")?.get("source")?;
+            let place = match source.get("source").and_then(Value::as_str)? {
+                "github" => format!("github:{}", source.get("repo")?.as_str()?),
+                "git" | "url" => source.get("url")?.as_str()?.to_string(),
+                _ => return None,
+            };
+            (
+                place,
+                source
+                    .get("ref")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+        }
+        "codex" => {
+            let marker = read(codex_dir.join("footnote").join("plugin-channel.json"))?;
+            if marker.get("channel").and_then(Value::as_str) != Some("release") {
+                return None;
+            }
+            let place = marker
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("github")
+                .to_string();
+            (
+                place,
+                marker
+                    .get("ref")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+        }
+        _ => return None,
+    };
+    let channel = match git_ref.as_deref() {
+        None => "main",
+        Some(r) if r.contains("nightly") => "nightly",
+        Some(r) => r,
+    };
+    let git_ref = git_ref.as_deref().unwrap_or("main");
+    Some(format!("{channel} ({place}#{git_ref})"))
+}
+
+fn release_channel_here(harness: &str) -> Option<String> {
+    let home = dirs_home();
+    let env_dir = |key: &str, fallback: &str| match std::env::var_os(key) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => home.join(fallback),
+    };
+    release_channel(
+        harness,
+        &env_dir("CLAUDE_CONFIG_DIR", ".claude"),
+        &env_dir("CODEX_HOME", ".codex"),
+    )
+}
+
+fn release_refusal(harness: &str, channel: &str) -> String {
+    format!(
+        "plugin install {harness}: refused. Your footnote plugin comes from the {channel} channel. \
+         This command installs your local checkout for development, and it would move you off that channel. \
+         To switch to your local checkout, run: fno config plugin install {harness} --dev"
+    )
+}
+
 fn check_exit_code(status: &str) -> i32 {
     // Matches fno doctor plugin-file: fresh/absent 0, stale 3, unknown 4.
     match status {
@@ -1194,6 +1269,11 @@ struct PluginInstallArgs {
     extension_src: Option<String>,
     yes: bool,
     dry_run: bool,
+    /// Consent to replace a release-channel plugin with the local checkout.
+    dev: bool,
+    /// The harness word after a flag mode (`--stage-only codex`), so the
+    /// codex door gets the same release-channel refusal.
+    stage_for: Option<String>,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1220,6 +1300,8 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         extension_src: None,
         yes: false,
         dry_run: false,
+        dev: false,
+        stage_for: None,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1262,6 +1344,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dry_run = true;
                 i += 1;
             }
+            "--dev" => {
+                parsed.dev = true;
+                i += 1;
+            }
             "--json" | "-J" => {
                 parsed.json = true;
                 i += 1;
@@ -1299,8 +1385,12 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             other => {
-                if parsed.mode.is_none() && !other.starts_with('-') {
-                    parsed.mode = Some(other.to_string());
+                if !other.starts_with('-') {
+                    if parsed.mode.is_none() {
+                        parsed.mode = Some(other.to_string());
+                    } else if parsed.stage_for.is_none() {
+                        parsed.stage_for = Some(other.to_string());
+                    }
                 }
                 i += 1;
             }
@@ -1328,6 +1418,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         extension_src,
         yes,
         dry_run,
+        dev,
+        stage_for,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1383,9 +1475,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         // Deploy-only rebuild of an existing stage; fno doctor update calls
         // this after a successful install.
         Some("--restage") => {
-            let source_dir = source
-                .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
             let stage_parent = state_root().join("plugin-stage");
             match restage_stage(&source_dir, &stage_parent) {
                 Ok(RestageOutcome::Absent) => {
@@ -1412,10 +1502,14 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         // Stage-only mode: build the filtered stage, print its path, exit. The
         // Python codex arm uses it to hand converge a source_root.
         Some("--stage-only") => {
-            let cwd = source
-                .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            match repo_root(&cwd).and_then(|root| {
+            if let Some(harness) = stage_for.as_deref() {
+                if let Some(channel) = release_channel_here(harness).filter(|_| !dev) {
+                    eprintln!("{}", release_refusal(harness, &channel));
+                    return 3;
+                }
+            }
+            let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
+            match repo_root(&source_dir).and_then(|root| {
                 let parent = state_root().join("plugin-stage");
                 build_stage(&root, &parent).map(|(p, _)| p)
             }) {
@@ -1458,7 +1552,12 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 );
                 return 2;
             }
-            let outcome = install_harness(harness, force);
+            if let Some(channel) = release_channel_here(harness).filter(|_| !dev) {
+                eprintln!("{}", release_refusal(harness, &channel));
+                return 3;
+            }
+            let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
+            let outcome = install_harness(harness, force, &source_dir);
             match outcome {
                 Ok(detail) => {
                     println!("plugin install {harness}: {detail}");
@@ -1485,8 +1584,9 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok> [--force]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok> [--force] [--dev] [--source <dir>]"
             );
+            eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
             eprintln!("         (no --stage checks every plugin root; exit is the worst status across roots)");
             eprintln!("       fno-agents plugin-install --restage [--source <dir>]");
@@ -1996,9 +2096,8 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
 /// must agree on it.
 const STAGE_DIR: &str = "fno";
 
-fn install_harness(harness: &str, force: bool) -> Result<String, String> {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let root = repo_root(&cwd)?;
+fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<String, String> {
+    let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
     let (stage, _) = build_stage(&root, &parent)?;
     let detail = match harness {
@@ -2014,7 +2113,7 @@ fn install_harness(harness: &str, force: bool) -> Result<String, String> {
         }
     };
     prime_plugin_root_pointer(&stage);
-    Ok(detail)
+    Ok(format!("{detail}; local checkout {}", root.display()))
 }
 
 /// Persist the installed stage to `<state-root>/install/plugin-root`, the
@@ -2832,6 +2931,68 @@ mod tests {
             .map(|s| (*s).to_string())
             .collect();
         assert_eq!(run_plugin_install(&args), 2);
+
+        let args: Vec<String> = ["--stage-only", "codex", "--dev"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let parsed = parse_plugin_install_args(&args);
+        assert_eq!(parsed.mode.as_deref(), Some("--stage-only"));
+        assert_eq!(parsed.stage_for.as_deref(), Some("codex"));
+        assert!(parsed.dev);
+    }
+
+    /// A GitHub-sourced claude marketplace or a codex release marker is a
+    /// release channel the dev install must not replace; a directory source,
+    /// a dev marker, or no record at all is not.
+    #[test]
+    fn release_channel_names_github_and_codex_release_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude");
+        let codex = tmp.path().join("codex");
+        fs::create_dir_all(claude.join("plugins")).unwrap();
+        fs::create_dir_all(codex.join("footnote")).unwrap();
+        assert_eq!(release_channel("claude", &claude, &codex), None);
+        assert_eq!(release_channel("codex", &claude, &codex), None);
+
+        let known = claude.join("plugins/known_marketplaces.json");
+        let claude_with = |source: Value| {
+            fs::write(&known, json!({"footnote": {"source": source}}).to_string()).unwrap();
+            release_channel("claude", &claude, &codex)
+        };
+        assert_eq!(
+            claude_with(json!({"source": "github", "repo": "bllshttng/fno", "ref": "stable"}))
+                .as_deref(),
+            Some("stable (github:bllshttng/fno#stable)")
+        );
+        assert_eq!(
+            claude_with(
+                json!({"source": "github", "repo": "bllshttng/fno", "ref": "plugin-nightly"})
+            )
+            .as_deref(),
+            Some("nightly (github:bllshttng/fno#plugin-nightly)")
+        );
+        assert_eq!(
+            claude_with(json!({"source": "github", "repo": "bllshttng/fno"})).as_deref(),
+            Some("main (github:bllshttng/fno#main)")
+        );
+        assert_eq!(
+            claude_with(json!({"source": "directory", "path": "/stage"})),
+            None
+        );
+
+        let marker = codex.join("footnote/plugin-channel.json");
+        let codex_with = |channel: &str| {
+            let v = json!({"channel": channel, "source": "bllshttng/fno", "ref": "stable"});
+            fs::write(&marker, v.to_string()).unwrap();
+            release_channel("codex", &claude, &codex)
+        };
+        assert_eq!(
+            codex_with("release").as_deref(),
+            Some("stable (bllshttng/fno#stable)")
+        );
+        assert_eq!(codex_with("dev"), None);
+        assert_eq!(release_channel("agy", &claude, &codex), None);
     }
 
     /// A throwaway HOME for the root-enumeration fixtures. The marketplace

@@ -5,16 +5,13 @@ The plugin installs from the filtered stage of your checkout: git-tracked files 
 
 ## Plugin Install
 
-`fno config plugin install codex` converges Codex onto your checkout in one step.
-The installed identity is the dev one, because the source is a local stage.
-Run it from the durable canonical checkout for everyday use.
-For local plugin work, run it from your feature worktree instead.
+`fno config plugin install codex` is the dev channel. It converges Codex onto your local checkout in one step. The checkout is the one `fno doctor update` pinned, else the current folder. `--source <dir>` names another one, for example a feature worktree for local plugin work.
 
 ```bash
 fno config plugin install codex
 ```
 
-A git-marketplace release install for Codex is not available yet.
+The release channel is `codex plugin marketplace add bllshttng/fno@stable` (see [install](../install.md)). When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout.
 
 Codex caches plugins by version, so local edits at the same manifest version require an explicit refresh.
 `--force` removes and re-adds the copy through Codex, which deterministically rebuilds its cache.
