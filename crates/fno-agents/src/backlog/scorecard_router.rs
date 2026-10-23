@@ -552,7 +552,11 @@ mod tests {
             .filter(|l| l["contradicted"] == json!(true))
             .filter_map(|l| l["id"].as_str())
             .collect();
-        assert!(laws.contains(&"d-e38d92cc"), "{laws:?}");
+        // The temporary law lapses on 2026-10-23, when target work returns to
+        // glm-flash, so a flash proposal contradicts it only before then.
+        let before_lapse = chrono::Utc::now().date_naive()
+            < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        assert_eq!(laws.contains(&"d-e38d92cc"), before_lapse, "{laws:?}");
     }
 
     #[test]
