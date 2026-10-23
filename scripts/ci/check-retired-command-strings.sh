@@ -198,6 +198,26 @@ for cmd in "${CMDS[@]}"; do
 done
 PATTERN="(${PATTERN})"
 
+# Fixed-string prefilter. One ERE alternation of every registry entry, each with
+# a {0,2} sub-command group, ran 31+ minutes at 4.6 to 6 cores over the tree.
+# `git grep -F` narrows to lines naming a registry literal first, and the full
+# PATTERN then runs only on those lines, so the verdict is unchanged: every
+# PATTERN match contains its entry's literal. An entry that is itself a regex
+# (`backlog update[^`]* --title`) contributes the literal prefix before its
+# first metacharacter, minus the char a trailing quantifier would bind to.
+declare -a PREFILTER=()
+META='[][\.*+?()^$|{}]'
+for cmd in "${CMDS[@]}"; do
+    literal="${cmd%%$META*}"
+    if [ "$literal" != "$cmd" ]; then
+        meta="${cmd:${#literal}:1}"
+        case "$meta" in '*'|'?'|'+'|'{') literal="${literal%?}" ;; esac
+    fi
+    [ -n "$literal" ] ||
+        fail "$REGISTRY entry '${cmd}' has no literal prefix; the fixed-string prefilter cannot cover it"
+    PREFILTER+=(-e "$literal")
+done
+
 # --- 2. Tool control -------------------------------------------------------
 CANARY="run ${CMDS[0]} <short_id> to clean up"
 printf '%s\n' "$CANARY" | grep -qE "$PATTERN" ||
@@ -334,7 +354,7 @@ for surface in "${SURFACES[@]}"; do
     # git grep over the directory, then filter by extension here: the
     # extension test stays in this script rather than in a pathspec, where a
     # glob that matches nothing is indistinguishable from a clean surface.
-    hits="$(git grep -nE "$PATTERN" -- "$dir" | grep -E "^[^:]+\.${ext}:" || true)"
+    hits="$(git grep -nF "${PREFILTER[@]}" -- "$dir" | grep -E "^[^:]+\.${ext}:" | grep -E "$PATTERN" || true)"
     RAW="${RAW}${hits}${hits:+$'\n'}"
 done
 

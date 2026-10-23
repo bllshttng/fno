@@ -555,8 +555,8 @@ mod tests {
         assert!(line.contains("'[\"zai-flash"), "{line}");
         assert!(line.contains("on_exhausted degrade"), "{line}");
         assert!(p["climb_cmd"].as_str().unwrap().contains("--climb"));
-        // Until the temporary seat law lapses, a glm proposal names it. After
-        // that date glm is the standing seat and contradicts nothing.
+        // On the pinned day the temporary seat law is live, so a glm proposal
+        // names it. The assertion reads the same pinned day, never the clock.
         let laws: Vec<&str> = p["laws"]
             .as_array()
             .unwrap()
@@ -564,11 +564,7 @@ mod tests {
             .filter(|l| l["contradicted"] == json!(true))
             .filter_map(|l| l["id"].as_str())
             .collect();
-        // The proposal ran at the injected date, so the assertion reads the
-        // same date, never the wall clock.
-        let lapse = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
-        let seat_law_live = before_lapse() < lapse;
-        assert_eq!(laws.contains(&"d-e38d92cc"), seat_law_live, "{laws:?}");
+        assert!(laws.contains(&"d-e38d92cc"), "{laws:?}");
     }
 
     #[test]
