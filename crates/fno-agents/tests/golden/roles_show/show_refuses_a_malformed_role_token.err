@@ -1,0 +1,4 @@
+Usage: fno agents roles show [OPTIONS] ROLE
+Try 'fno agents roles show --help' for help.
+
+Error: Invalid value for role: role must be ROLE or FUNCTION/ROLE
