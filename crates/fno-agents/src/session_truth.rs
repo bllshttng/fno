@@ -1023,14 +1023,10 @@ fn claude_holder_proven(session_id: &str) -> bool {
 /// 120 chars classify, and with no HTTP status the only swap-triggering
 /// class reachable is the quota one. The error-class strings stay verbatim.
 fn provider_refusal_of(last_text: &str) -> Option<String> {
-    const QUOTA_MARKERS: [&str; 3] = ["rate limit", "quota exceeded", "usage limit"];
+    use crate::accounts::error_class::{matches_quota_body, ErrorClass};
     let collapsed: String = last_text.split_whitespace().collect::<Vec<_>>().join(" ");
     let lead: String = collapsed.chars().take(120).collect();
-    let lead_lower = lead.to_lowercase();
-    QUOTA_MARKERS
-        .iter()
-        .find(|marker| lead_lower.contains(*marker))
-        .map(|_| "provider_4xx_quota".to_string())
+    matches_quota_body(&lead).then(|| ErrorClass::Provider4xxQuota.as_str().to_string())
 }
 
 // ---------------------------------------------------------------------------

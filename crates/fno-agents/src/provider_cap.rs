@@ -184,14 +184,10 @@ fn account_of(row: &Value) -> String {
 // Capped-tail reading
 // ---------------------------------------------------------------------------
 
-/// The quota signals, the same ones error_taxonomy.py classifies as
-/// PROVIDER_4XX_QUOTA: the 429 status plus the body markers, case-insensitive.
+/// The quota signals the error taxonomy classes as a quota refusal: the 429
+/// status plus its body markers.
 fn is_quota_text(text: &str) -> bool {
-    let t = text.to_lowercase();
-    t.contains("429")
-        || t.contains("rate limit")
-        || t.contains("quota exceeded")
-        || t.contains("usage limit")
+    text.contains("429") || crate::accounts::error_class::matches_quota_body(text)
 }
 
 /// One transcript tail reading: the newest assistant timestamp, the quota
@@ -385,74 +381,40 @@ fn ts_epoch(ts: &str) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
-/// The far horizon a parsed reset may reach before it reads as a misread
-/// (mirrors error_taxonomy._MAX_RESET_HORIZON_S).
-const RESET_HORIZON_S: i64 = 14 * 24 * 3600;
-
-/// The reset epoch a capped 429 excerpt names, from its first
-/// `YYYY-MM-DD[T ]HH:MM(:SS)?` stamp. A stamp carrying its own offset
-/// (`Z` / `+HH:MM`) parses as-is; a naive stamp resolves only in the named
-/// zone, so a lane with no configured zone reads None (refuse to guess). An
-/// epoch farther than [`RESET_HORIZON_S`] past `now` is a misread, not a
-/// deadline, and reads None too.
+/// The reset epoch a capped 429 excerpt names. The error taxonomy's parse
+/// reads it first: an offset stamp, a reset-keyed epoch, or a naive stamp in
+/// the lane's zone. When the excerpt holds none of those, the codex
+/// usage-limit shape ("try again at Sep 19th, 2026 9:34 AM.") is read, a
+/// naive vendor stamp too. A naive stamp with no configured zone, and any
+/// epoch past the taxonomy's horizon, read None (refuse to guess).
 pub fn reset_epoch_from_excerpt(text: &str, tz: Option<&str>, now: i64) -> Option<i64> {
-    static STAMP_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static OFFSET_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    use crate::accounts::error_class::{self, MAX_RESET_HORIZON_S};
+    match error_class::parse_reset_stamp(text, tz, now as f64) {
+        (Some(epoch), _) => return Some(epoch as i64),
+        (None, Some(_)) => return None,
+        (None, None) => {}
+    }
     static CODEX_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let stamp_re = STAMP_RE
-        .get_or_init(|| regex::Regex::new(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?").unwrap());
-    let offset_re = OFFSET_RE.get_or_init(|| regex::Regex::new(r"^[+-]\d{2}:\d{2}").unwrap());
-    // The codex usage-limit message names its reset as a naive vendor stamp:
-    // "try again at Sep 19th, 2026 9:34 AM."
-    let codex_re = CODEX_RE.get_or_init(|| {
-        regex::Regex::new(
-            r"([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th), (\d{4}) (\d{1,2}):(\d{2}) ([AP]M)",
-        )
-        .unwrap()
-    });
-    let epoch = if let Some(m) = stamp_re.find(text) {
-        let mut stamp = m.as_str().replacen(' ', "T", 1);
-        if stamp.len() == 16 {
-            stamp.push_str(":00");
-        }
-        let rest = &text[m.end()..];
-        if rest.starts_with('Z') {
-            chrono::DateTime::parse_from_rfc3339(&format!("{stamp}Z"))
-                .ok()?
-                .timestamp()
-        } else if let Some(off) = offset_re.find(rest) {
-            chrono::DateTime::parse_from_rfc3339(&format!("{stamp}{}", off.as_str()))
-                .ok()?
-                .timestamp()
-        } else {
-            // A naive stamp means what the record's reset_timezone says; with
-            // none (or an unparseable zone name) it is refused, never guessed.
-            naive_epoch_in_zone(&stamp, "%Y-%m-%dT%H:%M:%S", tz)?
-        }
-    } else if let Some(c) = codex_re.captures(text) {
-        let stamp = format!(
-            "{} {:02}, {} {:02}:{:02} {}",
-            &c[1],
-            c[2].parse::<u32>().ok()?,
-            &c[3],
-            c[4].parse::<u32>().ok()?,
-            c[5].parse::<u32>().ok()?,
-            &c[6]
-        );
-        // The codex stamp carries no offset either: same refusal to guess.
-        naive_epoch_in_zone(&stamp, "%b %d, %Y %I:%M %p", tz)?
-    } else {
-        return None;
-    };
-    (epoch <= now + RESET_HORIZON_S).then_some(epoch)
-}
-
-/// Parse `stamp` with `fmt` and resolve it as a naive local time in `tz`.
-fn naive_epoch_in_zone(stamp: &str, fmt: &str, tz: Option<&str>) -> Option<i64> {
-    use chrono::TimeZone as _;
-    let zone = tz?.parse::<chrono_tz::Tz>().ok()?;
-    let naive = chrono::NaiveDateTime::parse_from_str(stamp, fmt).ok()?;
-    Some(zone.from_local_datetime(&naive).single()?.timestamp())
+    let c = CODEX_RE
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th), (\d{4}) (\d{1,2}):(\d{2}) ([AP]M)",
+            )
+            .unwrap()
+        })
+        .captures(text)?;
+    let stamp = format!(
+        "{} {:02}, {} {:02}:{:02} {}",
+        &c[1],
+        c[2].parse::<u32>().ok()?,
+        &c[3],
+        c[4].parse::<u32>().ok()?,
+        c[5].parse::<u32>().ok()?,
+        &c[6]
+    );
+    let naive = chrono::NaiveDateTime::parse_from_str(&stamp, "%b %d, %Y %I:%M %p").ok()?;
+    let epoch = error_class::naive_epoch_in_zone(naive, tz?)?;
+    (epoch <= now as f64 + MAX_RESET_HORIZON_S).then_some(epoch as i64)
 }
 
 /// Pure core of the runtime-state resolution so tests never race process env.
