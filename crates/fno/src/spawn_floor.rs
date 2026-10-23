@@ -7,6 +7,9 @@
 //! forwarding, so the Python CLI never sees it and the spawn flag ratchet
 //! (`cli/src/fno/agents/spawn_flag_owners.py`) never counts it - the cap test
 //! below pays the front door's slot against that file's cap instead.
+//!
+//! The same locked, atomic `[agents]` writer backs the mux settings toggle
+//! for `agents.reserve_auto` ([`set_agents_bool`]).
 
 use std::fs;
 use std::io::Write;
@@ -157,34 +160,120 @@ impl std::fmt::Display for FloorReceipt {
 /// then); otherwise the target is the user global config and the shadows are
 /// the project ladder the gate walks first.
 pub fn set_floor(floor: u32, cwd: &Path) -> Result<FloorReceipt, FloorError> {
+    let (target, shadows) = write_target(cwd)?;
+    set_floor_at(floor, &target, &shadows, cwd)
+}
+
+/// The config.toml an `[agents]` setter writes, and the files that shadow
+/// it: `$FNO_CONFIG` alone when set (fno-agents reads only that file then),
+/// else the user global config behind the project ladder.
+fn write_target(cwd: &Path) -> Result<(PathBuf, Vec<PathBuf>), FloorError> {
     let pinned = non_empty_env_os("FNO_CONFIG")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);
-    let (target, shadows) = match pinned {
-        Some(path) => (path, Vec::new()),
-        None => {
-            let target = gate_global_config().ok_or_else(|| {
-                FloorError::refuse(1, "no user config.toml to write (set FNO_CONFIG or HOME)")
-            })?;
-            // The gate reads the project ladder before the global file, so a
-            // floor set there wins and writing the global would be a no-op
-            // the receipt lies about. Anchored on cwd, like the fno-agents
-            // reader.
-            let mut shadows: Vec<PathBuf> = Vec::new();
-            let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
-                if !out.contains(&p) {
-                    out.push(p);
-                }
-            };
-            for root in config_roots(cwd) {
-                push(root.join(".fno/config.toml"), &mut shadows);
-            }
-            push(cwd.join(".fno/config.toml"), &mut shadows);
-            shadows.retain(|p| p != &target);
-            (target, shadows)
+    if let Some(path) = pinned {
+        return Ok((path, Vec::new()));
+    }
+    let target = gate_global_config().ok_or_else(|| {
+        FloorError::refuse(1, "no user config.toml to write (set FNO_CONFIG or HOME)")
+    })?;
+    // fno-agents reads the project ladder before the global file, so a value
+    // set there wins and writing the global would be a no-op the receipt
+    // lies about. Anchored on cwd, like the fno-agents reader.
+    let mut shadows: Vec<PathBuf> = Vec::new();
+    let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
+        if !out.contains(&p) {
+            out.push(p);
         }
     };
-    set_floor_at(floor, &target, &shadows, cwd)
+    for root in config_roots(cwd) {
+        push(root.join(".fno/config.toml"), &mut shadows);
+    }
+    push(cwd.join(".fno/config.toml"), &mut shadows);
+    shadows.retain(|p| p != &target);
+    Ok((target, shadows))
+}
+
+/// Write `[agents] <key> = value` to the config fno-agents reads for `cwd`
+/// (the mux's settings toggle for `agents.reserve_auto`), refusing when a
+/// project config already sets the key. Returns the file written.
+pub fn set_agents_bool(key: &str, on: bool, cwd: &Path) -> Result<PathBuf, FloorError> {
+    let (target, shadows) = write_target(cwd)?;
+    if let Some(shadow) = shadows
+        .iter()
+        .find(|s| config_str_at(s, "agents", key).is_some())
+    {
+        return Err(FloorError::refuse(
+            2,
+            format!(
+                "{} sets agents.{key}, and fno-agents reads it first. Change it there.",
+                shadow.display()
+            ),
+        ));
+    }
+    let (target, _lock, mut doc) = open_doc(&target)?;
+    let agents = ensure_table(
+        doc.as_table_mut().entry("agents").or_insert(Item::None),
+        "[agents]",
+        &target,
+    )?;
+    agents[key] = value(on);
+    commit_doc(&target, &doc)?;
+    Ok(target)
+}
+
+/// One `[section] key` from one config file, unparsed.
+fn config_str_at(path: &Path, section: &str, key: &str) -> Option<toml::Value> {
+    let parsed: toml::Value = fs::read_to_string(path).ok()?.parse().ok()?;
+    parsed.get(section)?.get(key).cloned()
+}
+
+/// Resolve a symlinked target, create its directory, take the config lock,
+/// and parse it (a missing file is an empty config). The lock rides the
+/// returned tuple, so it holds until the caller's write lands.
+fn open_doc(target: &Path) -> Result<(PathBuf, ConfigLock, DocumentMut), FloorError> {
+    let mut target = target.to_path_buf();
+    if target.is_symlink() {
+        target = fs::canonicalize(&target).map_err(|e| {
+            FloorError::refuse(1, format!("{} cannot be resolved: {e}", target.display()))
+        })?;
+    }
+    let parent = target.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(parent).map_err(|e| {
+        FloorError::refuse(1, format!("{} cannot be created: {e}", parent.display()))
+    })?;
+    let lock = ConfigLock::acquire(&target)?;
+    let text = match fs::read_to_string(&target) {
+        Ok(text) => text,
+        // A missing target is an empty config. Any other read failure is a
+        // refusal, because writing would replace a config we never saw.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(FloorError::refuse(
+                1,
+                format!("{} cannot be read: {e}", target.display()),
+            ))
+        }
+    };
+    let doc: DocumentMut = text.parse().map_err(|e| {
+        FloorError::refuse(
+            2,
+            format!(
+                "{} is not valid TOML ({e}); nothing written.",
+                target.display()
+            ),
+        )
+    })?;
+    Ok((target, lock, doc))
+}
+
+/// Write `doc` over `target`. A missing target gets 0600; an existing one
+/// keeps its mode.
+fn commit_doc(target: &Path, doc: &DocumentMut) -> Result<(), FloorError> {
+    let mode = fs::metadata(target)
+        .map(|m| m.permissions())
+        .unwrap_or_else(|_| fs::Permissions::from_mode(0o600));
+    write_atomic(target, &doc.to_string(), mode)
 }
 
 /// Set the floor in `target`, refusing when any `shadows` path already sets
@@ -214,38 +303,7 @@ pub fn set_floor_at(
             }
         }
     }
-    let mut target = target.to_path_buf();
-    if target.is_symlink() {
-        target = fs::canonicalize(&target).map_err(|e| {
-            FloorError::refuse(1, format!("{} cannot be resolved: {e}", target.display()))
-        })?;
-    }
-    let parent = target.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| {
-        FloorError::refuse(1, format!("{} cannot be created: {e}", parent.display()))
-    })?;
-    let _lock = ConfigLock::acquire(&target)?;
-    let text = match fs::read_to_string(&target) {
-        Ok(text) => text,
-        // A missing target is an empty config. Any other read failure is a
-        // refusal, because writing would replace a config we never saw.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(FloorError::refuse(
-                1,
-                format!("{} cannot be read: {e}", target.display()),
-            ))
-        }
-    };
-    let mut doc: DocumentMut = text.parse().map_err(|e| {
-        FloorError::refuse(
-            2,
-            format!(
-                "{} is not valid TOML ({e}); nothing written.",
-                target.display()
-            ),
-        )
-    })?;
+    let (target, _lock, mut doc) = open_doc(target)?;
     let old = read_floor_int(&doc);
     if old == Some(i64::from(floor)) {
         return Ok(FloorReceipt {
@@ -267,11 +325,7 @@ pub fn set_floor_at(
         &target,
     )?;
     capacity["floor"] = value(i64::from(floor));
-    // A missing target gets 0600; an existing one keeps its mode.
-    let mode = fs::metadata(&target)
-        .map(|m| m.permissions())
-        .unwrap_or_else(|_| fs::Permissions::from_mode(0o600));
-    write_atomic(&target, &doc.to_string(), mode)?;
+    commit_doc(&target, &doc)?;
     // Readback through the plain reader, not the editor: the write is only
     // done when what landed on disk parses back to the value.
     let written = fs::read_to_string(&target).map_err(|e| {
