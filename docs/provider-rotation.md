@@ -901,7 +901,7 @@ The sidecar feeds:
 |---|---|---|
 | `.fno/turn-attribution.jsonl` | dispatch layer | session boundary (gitignored, re-created per session) |
 | `.fno/failover-state.json` | failover controller | phase boundary (detected via phase_id mismatch) |
-| `~/.fno/.settings.lock` | atomic_mutate_settings + read_active_provider_atomic | n/a (lock file, content irrelevant) |
+| `~/.fno/config.toml.lock` | atomic_mutate_settings, save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
 
 ---
 

@@ -1,0 +1,16 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "nope",
+    "-a",
+    "managed"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: 1 validation error for ProviderRecord\nharness\n  Input should be 'claude', 'codex', 'opencode', 'agy', 'trae', 'openclaw', 'hermes' or 'gemini'\n",
+    "global": null,
+    "project": null
+  }
+}

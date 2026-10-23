@@ -1,0 +1,18 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "opencode",
+    "-a",
+    "api_key",
+    "--route",
+    "zai"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: 1 validation error for ProviderRecord\nroute\n  Value error, route must use provider/model spelling with a non-empty model\n",
+    "global": null,
+    "project": null
+  }
+}

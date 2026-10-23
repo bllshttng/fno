@@ -1,0 +1,38 @@
+{
+  "args": [
+    "gamma",
+    "-H",
+    "opencode",
+    "-a",
+    "api_key",
+    "--route",
+    "zai/glm-5",
+    "--name",
+    "Gamma Lane",
+    "-p",
+    "7",
+    "--account-id",
+    "acct-9"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'gamma' added (scope=global).\n",
+    "stderr": "",
+    "global": {
+      "accounts": {
+        "records": [
+          {
+            "id": "gamma",
+            "name": "Gamma Lane",
+            "harness": "opencode",
+            "auth": "api_key",
+            "priority": 7,
+            "route": "zai/glm-5",
+            "account_id": "acct-9"
+          }
+        ]
+      }
+    },
+    "project": null
+  }
+}

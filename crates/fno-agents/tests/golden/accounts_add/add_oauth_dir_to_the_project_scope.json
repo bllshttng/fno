@@ -1,0 +1,34 @@
+{
+  "args": [
+    "beta",
+    "--harness",
+    "claude",
+    "--auth",
+    "oauth_dir",
+    "--credentials-source",
+    "{TMP}/creds",
+    "-s",
+    "project"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'beta' added (scope=project).\n",
+    "stderr": "",
+    "global": null,
+    "project": {
+      "accounts": {
+        "records": [
+          {
+            "id": "beta",
+            "name": "beta",
+            "harness": "claude",
+            "auth": "oauth_dir",
+            "priority": 100,
+            "credentials_source": "<TMP>/creds",
+            "account_id": "beta"
+          }
+        ]
+      }
+    }
+  }
+}

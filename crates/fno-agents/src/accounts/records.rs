@@ -499,7 +499,14 @@ fn parse_record(t: &toml::Table) -> Result<Record, RecordError> {
     let harness = match t.get(harness_key) {
         None => return Err(field_err("harness", "Field required")),
         Some(toml::Value::String(s)) if HARNESS_LITERAL.contains(&s.as_str()) => s.clone(),
-        Some(_) => return Err(field_err("harness", "Input should be a known harness")),
+        Some(_) => {
+            let (head, last) = HARNESS_LITERAL.split_at(HARNESS_LITERAL.len() - 1);
+            let quoted: Vec<String> = head.iter().map(|h| format!("'{h}'")).collect();
+            return Err(field_err(
+                "harness",
+                &format!("Input should be {} or '{}'", quoted.join(", "), last[0]),
+            ));
+        }
     };
     let auth = match t.get("auth") {
         None => return Err(field_err("auth", "Field required")),
@@ -659,6 +666,19 @@ fn parse_record(t: &toml::Table) -> Result<Record, RecordError> {
     Ok(record)
 }
 
+/// `ProviderRecord(**fields)` as the add verb builds it. The refusal is
+/// `str(ValidationError)` without pydantic's ` [type=...]` suffix and its
+/// docs-URL line, which carry the pydantic version.
+pub(crate) fn build_record(t: &toml::Table) -> Result<Record, String> {
+    parse_record(t).map_err(|e| {
+        let body = match e.detail.split_once(": ") {
+            Some((loc, msg)) if !e.auth_mismatch => format!("{loc}\n  {msg}"),
+            _ => format!("  Value error, {}", e.detail),
+        };
+        format!("1 validation error for ProviderRecord\n{body}")
+    })
+}
+
 /// The relative path as pathlib renders it, without the home expansion
 /// (only an expanded `~` path can be absolute, so a refused one never
 /// started with `~/`).
@@ -783,7 +803,7 @@ fn pwd(cwd: &Path) -> PathBuf {
 }
 
 /// `loader._read_candidates`: config.toml then its settings.yaml sibling.
-fn read_candidates(path: &Path) -> Vec<PathBuf> {
+pub(crate) fn read_candidates(path: &Path) -> Vec<PathBuf> {
     match path.file_name().and_then(|n| n.to_str()) {
         Some("config.toml") => vec![path.to_path_buf(), path.with_file_name("settings.yaml")],
         Some("settings.yaml") => vec![path.with_file_name("config.toml"), path.to_path_buf()],
@@ -818,7 +838,7 @@ pub(crate) fn read_layer(path: &Path) -> toml::Table {
 /// A YAML value as `yaml.safe_load` hands it to the loader. A null maps to
 /// `None`, so a null key reads as absent, which is what every reader here
 /// does with Python's `None`.
-fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> Option<toml::Value> {
+pub(crate) fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> Option<toml::Value> {
     use serde_yaml_ng::Value as Y;
     Some(match value {
         Y::Null => return None,
@@ -844,6 +864,19 @@ fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> Option<toml::Value> {
         }
         Y::Tagged(tagged) => return yaml_value_to_toml(&tagged.value),
     })
+}
+
+/// True when [extract_accounts_block] answers from the pre-rename
+/// `providers` key, which is when the Python loader logs its rename notice.
+pub(crate) fn reads_legacy_block(data: &toml::Table) -> bool {
+    let wrapper = data.get("config").and_then(toml::Value::as_table);
+    let is_block = |key: &str| {
+        data.get(key).is_some_and(toml::Value::is_table)
+            || wrapper
+                .and_then(|w| w.get(key))
+                .is_some_and(toml::Value::is_table)
+    };
+    !is_block("accounts") && is_block("providers")
 }
 
 /// `loader._extract_accounts_block`: `accounts` then the pre-rename
@@ -1264,16 +1297,21 @@ pub enum Scope {
     Global,
 }
 
+/// The one file a scope reads and writes: `$PWD/.fno/config.toml` for the
+/// project, the global config.toml otherwise. `None` when no home resolves.
+pub fn scope_path(scope: Scope, cwd: &Path) -> Option<PathBuf> {
+    match scope {
+        Scope::Project => Some(pwd(cwd).join(".fno/config.toml")),
+        Scope::Global => crate::agents_config::global_config_path(),
+    }
+}
+
 /// `loader.load_scope_config`: the accounts block as stored in ONE scope's
 /// own file. A string `active` is kept unvalidated, because a project may
 /// point at a global record.
 pub fn load_scope(scope: Scope, cwd: &Path) -> Result<Accounts, LoadError> {
-    let target = match scope {
-        Scope::Project => pwd(cwd).join(".fno/config.toml"),
-        Scope::Global => match crate::agents_config::global_config_path() {
-            Some(p) => p,
-            None => return Ok(Accounts::default()),
-        },
+    let Some(target) = scope_path(scope, cwd) else {
+        return Ok(Accounts::default());
     };
     let data = read_layer(&target);
     let Some(block) = extract_accounts_block(&data).filter(|b| !b.is_empty()) else {
