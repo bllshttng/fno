@@ -19,6 +19,7 @@ use crate::accounts::state::{
     PROVIDER_HEALTH_TTL_SECONDS,
 };
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::io::{self, Read};
 
 fn f64_of(v: Option<&Value>) -> Option<f64> {
@@ -231,26 +232,6 @@ pub(crate) fn worst_binding_used_pct(usage: Option<&Snapshot>, now: f64) -> Opti
         .fold(f64::NAN, f64::max);
     (!worst.is_nan()).then_some(worst)
 }
-/// The usage table as `{account: {probed_at, partial, windows}}`, projected
-/// from the one runtime-state parse.
-pub(crate) fn parse_usage(raw: &Value) -> Map<String, Value> {
-    crate::accounts::state::parse_usage(raw)
-        .into_iter()
-        .map(|(pid, s)| (pid, s.to_json()))
-        .collect()
-}
-
-/// The provider_health table as `{account: {rate_limited_until, last_error_at}}`,
-/// shared with the spawn gate's quota-lock read and projected from the one
-/// runtime-state parse.
-pub(crate) fn parse_provider_health(raw: &Value) -> Map<String, Value> {
-    crate::accounts::state::parse_health(raw)
-        .into_iter()
-        .filter(|(_, h)| h.rate_limited_until.is_some() || h.last_error_at.is_some())
-        .map(|(pid, h)| (pid, h.to_json()))
-        .collect()
-}
-
 /// Canonicalize one RAW config link: config `harness` becomes the axis
 /// `provider` and is name-checked, mirroring spawn_overlay's table
 /// canonicalization. Err carries the operator-facing reason.
@@ -312,30 +293,14 @@ pub(crate) fn type_name(v: &Value) -> &'static str {
     }
 }
 
-/// A `Health` from a parsed provider-health map value, shared with the
-/// capacity read (one construction, no second impl).
-pub(crate) fn health_from_map(v: Option<&Value>) -> Option<Health> {
-    let obj = v?.as_object()?;
-    Some(Health {
-        rate_limited_until: f64_of(obj.get("rate_limited_until")),
-        last_error_at: f64_of(obj.get("last_error_at")),
-        ..Health::default()
-    })
-}
-
-/// A `Snapshot` from a parsed usage-map value, shared with the capacity read.
-pub(crate) fn snapshot_from_map(v: Option<&Value>) -> Option<Snapshot> {
-    crate::accounts::state::parse_snapshot(v?)
-}
-
 /// The worst headroom verdict across the link's accounts. Callers that must
 /// treat UNKNOWN differently from exhausted (the provider-cap destination
 /// filter, trap 3) read this instead of the collapsed bool.
 fn worst_link_verdict(
     link: &Value,
     accounts: Option<&Value>,
-    health: &Map<String, Value>,
-    usage: &Map<String, Value>,
+    health: &BTreeMap<String, Health>,
+    usage: &BTreeMap<String, Snapshot>,
     now: f64,
 ) -> Verdict {
     let get = |k: &str| {
@@ -367,9 +332,7 @@ fn worst_link_verdict(
     }
     let mut worst = Verdict::Ok;
     for pid in &ids {
-        let h = health_from_map(health.get(pid));
-        let u = snapshot_from_map(usage.get(pid));
-        match headroom(h.as_ref(), u.as_ref(), now).verdict {
+        match headroom(health.get(pid), usage.get(pid), now).verdict {
             Verdict::Exhausted => return Verdict::Exhausted,
             Verdict::Unknown => worst = Verdict::Unknown,
             _ => {}
@@ -420,8 +383,8 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
                 .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         })
         .unwrap_or_else(|| json!({}));
-    let health = parse_provider_health(&state);
-    let usage = parse_usage(&state);
+    let health = crate::accounts::state::parse_health(&state);
+    let usage = crate::accounts::state::parse_usage(&state);
     let mut eligible = Vec::new();
     for (i, raw) in links.iter().enumerate() {
         let link = match canonicalize_link(raw) {

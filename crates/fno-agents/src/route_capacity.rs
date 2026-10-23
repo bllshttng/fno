@@ -11,9 +11,8 @@
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-use crate::fallback_chain::{
-    headroom, health_from_map, parse_provider_health, parse_usage, snapshot_from_map, Verdict,
-};
+use crate::accounts::state::{parse_health, parse_usage};
+use crate::fallback_chain::{headroom, Verdict};
 
 /// The harnesses the Python default named, plus every inventory row's harness.
 pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
@@ -168,7 +167,7 @@ pub(crate) fn capacity(
         }
     }
     let raw = runtime_state_payload(cwd);
-    let health = parse_provider_health(&raw);
+    let health = parse_health(&raw);
     let usage = parse_usage(&raw);
     let roots = providers_root(cwd);
     let mut out = Map::new();
@@ -210,11 +209,7 @@ pub(crate) fn capacity(
                         )
                     }
                     None => {
-                        let hv = headroom(
-                            health_from_map(health.get(account)).as_ref(),
-                            snapshot_from_map(usage.get(account)).as_ref(),
-                            now,
-                        );
+                        let hv = headroom(health.get(account), usage.get(account), now);
                         (
                             word(hv.verdict).to_string(),
                             hv.source.to_string(),
