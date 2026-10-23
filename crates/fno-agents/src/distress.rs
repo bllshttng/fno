@@ -830,6 +830,18 @@ mod tests {
         let reason_only =
             extract_help_distress(r#"<help reason="x">"#).expect("reason-only parses");
         assert_eq!(reason_only.reason, "x");
+        // Typographic and single quotes delimit values like ASCII double quotes.
+        for tag in [
+            "<help class=\u{201c}wait\u{201d} reason=\u{201c}quota\u{201d} evidence=\u{201c}rate limit\u{201d}>",
+            "<help class=\u{201c}wait\u{201c} reason=\u{201c}quota\u{201c} evidence=\u{201c}rate limit\u{201c}>",
+            "<help class='wait' reason='quota' evidence='rate limit'>",
+            "<help class=\u{2018}wait\u{2019} reason=\u{2018}quota\u{2019} evidence=\u{2018}rate limit\u{2019}>",
+        ] {
+            let d = extract_help_distress(tag).expect("quoted tag parses");
+            assert_eq!(d.class, HelpClass::Wait, "{tag}");
+            assert_eq!(d.reason, "quota", "{tag}");
+            assert_eq!(d.evidence.as_deref(), Some("rate limit"), "{tag}");
+        }
         // A longer tag name sharing the prefix must NOT match.
         assert_eq!(extract_help_distress("use <helper> here"), None);
         // Absence stays absence.

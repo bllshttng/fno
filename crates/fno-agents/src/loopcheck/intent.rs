@@ -103,11 +103,32 @@ pub(crate) fn declared_recovery_hold(text: &str) -> Option<String> {
     }
 }
 
+/// Reads `attr="value"`. A model that writes the tag with typographic quotes
+/// (`attr=\u{201c}value\u{201d}`) or single quotes still parses: the opening
+/// quote picks a family, and any quote of that family closes the value.
 pub(crate) fn parse_xml_attr(tag_text: &str, attr: &str) -> Option<String> {
-    let pattern = format!(r#"{attr}=""#);
-    let start = tag_text.find(&pattern)? + pattern.len();
-    let end = tag_text[start..].find('"')?;
-    Some(tag_text[start..start + end].to_string())
+    const DOUBLE: &[char] = &['"', '\u{201c}', '\u{201d}'];
+    const SINGLE: &[char] = &['\'', '\u{2018}', '\u{2019}'];
+    let pattern = format!("{attr}=");
+    let mut from = 0usize;
+    while let Some(rel) = tag_text[from..].find(&pattern) {
+        let value_at = from + rel + pattern.len();
+        let Some(open) = tag_text[value_at..].chars().next() else {
+            return None;
+        };
+        let family = if DOUBLE.contains(&open) {
+            DOUBLE
+        } else if SINGLE.contains(&open) {
+            SINGLE
+        } else {
+            from = value_at;
+            continue;
+        };
+        let start = value_at + open.len_utf8();
+        let end = tag_text[start..].find(family)?;
+        return Some(tag_text[start..start + end].to_string());
+    }
+    None
 }
 
 /// Extract `last_assistant_message` from the Stop-hook stdin JSON
