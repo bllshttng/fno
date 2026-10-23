@@ -2,9 +2,10 @@
 //! account record and write it into one scope's own config file, refusing an
 //! existing id without `--force`.
 
-use crate::accounts::records::{self, Scope};
+use crate::accounts::records::{self, Record, Scope};
 use crate::accounts::show::pwd;
 use crate::accounts::writer;
+use std::path::Path;
 
 const HELP: &str = "Usage: fno config accounts add [OPTIONS] PROVIDER_ID
 
@@ -179,27 +180,65 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("error: no HOME to resolve the global config.toml from");
         return 1;
     };
-    let force = args.force;
     let record_id = record.id.clone();
-    // The scope read, the duplicate check and the write share one lock hold,
-    // so a concurrent account write cannot land between them and be lost.
-    let outcome = writer::mutate(&target, |doc| -> Result<(), String> {
+    let saved = upsert_record(&target, record, !args.force, &mut |m: &str| {
+        eprintln!("{m}")
+    });
+    let refusal = match saved {
+        Ok(()) => None,
+        Err(UpsertError::Load(msg)) => Some(format!("error loading existing config: {msg}")),
+        Err(UpsertError::Exists) => Some(format!(
+            "error: account '{record_id}' already exists. Use --force to overwrite."
+        )),
+        Err(UpsertError::Unreadable(msg)) => Some(format!("error: {msg}")),
+        Err(UpsertError::Io(e)) => {
+            Some(format!("error: failed to write {}: {e}", target.display()))
+        }
+    };
+    if let Some(msg) = refusal {
+        eprintln!("{msg}");
+        return 1;
+    }
+    println!("Account '{record_id}' added (scope={scope_word}).");
+    0
+}
+
+/// Why one record could not be written into a scope's own file.
+pub(crate) enum UpsertError {
+    /// The file read, but it or its accounts block did not parse.
+    Load(String),
+    /// The file exists and cannot be read as config.
+    Unreadable(String),
+    /// The id is already there and the caller refuses to replace it.
+    Exists,
+    /// The lock, temp file or rename failed.
+    Io(std::io::Error),
+}
+
+/// Write `record` into the scope file `target`, replacing a record with the
+/// same id unless `refuse_existing`. The read, the check and the write share
+/// one lock hold, so a concurrent account write cannot land between them and
+/// be lost. `notice` gets the legacy-block line the Python loader logs.
+pub(crate) fn upsert_record(
+    target: &Path,
+    record: Record,
+    refuse_existing: bool,
+    notice: &mut dyn FnMut(&str),
+) -> Result<(), UpsertError> {
+    let outcome = writer::mutate(target, |doc| -> Result<(), UpsertError> {
         let data: toml::Table = doc
             .to_string()
             .parse()
-            .map_err(|e| format!("error loading existing config: {e}"))?;
+            .map_err(|e: toml::de::Error| UpsertError::Load(e.to_string()))?;
         if records::reads_legacy_block(&data) {
-            eprintln!(
-                "config.providers is the pre-rename name for config.accounts; the next account write migrates it"
+            notice(
+                "config.providers is the pre-rename name for config.accounts; the next account write migrates it",
             );
         }
-        let config = records::scope_accounts(&data)
-            .map_err(|e| format!("error loading existing config: {e}"))?;
-        if config.by_id(&record.id).is_some() && !force {
-            return Err(format!(
-                "error: account '{}' already exists. Use --force to overwrite.",
-                record.id
-            ));
+        let config =
+            records::scope_accounts(&data).map_err(|e| UpsertError::Load(e.to_string()))?;
+        if refuse_existing && config.by_id(&record.id).is_some() {
+            return Err(UpsertError::Exists);
         }
         let mut kept: Vec<_> = config
             .records
@@ -210,18 +249,9 @@ pub fn run(args: &[String]) -> i32 {
         writer::set_records(doc, &kept, config.active.as_deref());
         Ok(())
     });
-    let refusal = match outcome {
-        Ok(Ok(())) => None,
-        Ok(Err(msg)) => Some(msg),
-        Err(writer::WriteError::Unreadable(msg)) => Some(format!("error: {msg}")),
-        Err(writer::WriteError::Io(e)) => {
-            Some(format!("error: failed to write {}: {e}", target.display()))
-        }
-    };
-    if let Some(msg) = refusal {
-        eprintln!("{msg}");
-        return 1;
+    match outcome {
+        Ok(inner) => inner,
+        Err(writer::WriteError::Unreadable(msg)) => Err(UpsertError::Unreadable(msg)),
+        Err(writer::WriteError::Io(e)) => Err(UpsertError::Io(e)),
     }
-    println!("Account '{record_id}' added (scope={scope_word}).");
-    0
 }

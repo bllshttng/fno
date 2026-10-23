@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time as time_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, NamedTuple, Optional, cast
 
 import typer
 
@@ -801,62 +801,6 @@ def add_forward(
 # register (managed credential store, US1)
 # ---------------------------------------------------------------------------
 
-def _register_config_dir_account(
-    provider_id: str,
-    harness_name: str,
-    priority: int,
-    name: Optional[str],
-    config_dir: str,
-    scope: str,
-) -> None:
-    """Register a per-account CLAUDE_CONFIG_DIR account.
-
-    The dir IS the account (a full second login); no shared-slot snapshot. The
-    resolver keys `spawn --account` off config_dir, so auth is a formality -
-    managed (which rejects credentials_source/env) keeps the record minimal.
-    """
-    if harness_name != "claude":
-        typer.echo("error: --config-dir accounts are claude-only", err=True)
-        raise typer.Exit(1)
-    cfg = Path(config_dir).expanduser()
-    if not cfg.is_absolute():
-        typer.echo(f"error: --config-dir must be absolute (got {config_dir!r})", err=True)
-        raise typer.Exit(1)
-    if not cfg.exists():
-        typer.echo(f"error: config dir {cfg} does not exist; sign in there first "
-                   f"(CLAUDE_CONFIG_DIR={cfg} claude /login)", err=True)
-        raise typer.Exit(1)
-    try:
-        record = ProviderRecord(
-            id=provider_id, name=name or provider_id, harness="claude",
-            auth="managed", priority=priority, config_dir=cfg,
-        )
-    except Exception as exc:  # noqa: BLE001 - surface pydantic validation receipts
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1)
-
-    try:
-        # Scope-own read: the save below must not freeze other layers'
-        # records into the target file.
-        config = load_scope_config(scope)  # type: ignore[arg-type]
-    except ProviderConfigError as exc:
-        typer.echo(f"error loading existing config: {exc}", err=True)
-        raise typer.Exit(1)
-    from fno.adapters.providers.model import ProvidersConfig
-
-    new_records = [r for r in config.records if r.id != record.id]
-    new_records.append(record)
-    try:
-        save_providers(ProvidersConfig(records=new_records, active=config.active), scope=scope)  # type: ignore[arg-type]
-    except OSError as exc:
-        typer.echo(f"error: failed to write config: {exc}", err=True)
-        raise typer.Exit(1)
-    typer.echo(
-        f"Registered config-dir account '{record.id}' (CLAUDE_CONFIG_DIR={cfg}, "
-        f"scope={scope}). `fno agents spawn --account {record.id}` now bills it."
-    )
-
-
 @cli.command("register")
 def register_provider(
     provider_id: str = typer.Argument(..., help="Unique account id (lowercase alphanumeric + hyphens)"),
@@ -887,127 +831,11 @@ def register_provider(
     With --config-dir <path>: register an account that lives in its OWN config
     dir (a full second login). No shared-slot snapshot - the dir IS the account.
     """
-    if config_dir is not None:
-        _register_config_dir_account(provider_id, harness_name, priority, name, config_dir, scope)
-        return
-    try:
-        record = ProviderRecord(
-            id=provider_id,
-            name=name or provider_id,
-            harness=harness_name,  # type: ignore[arg-type]
-            auth="managed",
-            priority=priority,
-        )
-    except Exception as exc:  # noqa: BLE001 - surface pydantic validation receipts
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1)
-
-    # One locked capture serves the proof, the snapshot, and the binding.
-    # Proving one read and snapshotting another is how account A's identity ends
-    # up bound to account B's credential - via an ambient CLAUDE_CONFIG_DIR on
-    # the second read, or a concurrent switch between them.
-    # No pre-lock load: `_persist` re-reads the authoritative config under the
-    # slot lock, and a second read here would only be a staler copy of it.
-
-    from fno.adapters.providers.model import ProvidersConfig
-
-    def _persist() -> None:
-        # Re-read under the lock. The load above happened before it, so two
-        # concurrent registrations would otherwise each merge into the same
-        # stale record set and the later save would silently drop the earlier
-        # account. Scope-own read: the save must not freeze other layers'
-        # records into the target file.
-        current = load_scope_config(cast('Literal["project", "global"]', scope))
-        new_records = [r for r in current.records if r.id != record.id]
-        new_records.append(record)
-        save_providers(
-            ProvidersConfig(records=new_records, active=current.active),  # type: ignore[arg-type]
-            scope=cast('Literal["project", "global"]', scope),
-        )
-
-    try:
-        adir, _proven, identity_failure = managed.register_slot_snapshot(
-            record, persist=_persist
-        )
-    except managed.ManagedStoreError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1)
-    except OSError as exc:
-        typer.echo(f"error: failed to write config: {exc}", err=True)
-        raise typer.Exit(1)
-    except ProviderConfigError as exc:
-        typer.echo(f"error loading existing config: {exc}", err=True)
-        raise typer.Exit(1)
-    if identity_failure and identity_failure.startswith("duplicate-credential:"):
-        holder_id = identity_failure.split(":", 1)[1]
-        typer.echo(
-            f"error: the current {record.harness} login is already registered as "
-            f"'{holder_id}'; registering it again as '{record.id}' would store one "
-            f"credential under two ids.\n"
-            f"  sign into the {record.id} account first (no /logout first):  "
-            f"{record.harness} /login\n"
-            f"  or give it its own dir:  fno config accounts register {record.id} "
-            f"--config-dir ~/.claude-{record.id}",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if identity_failure and identity_failure.startswith("duplicate-principal:"):
-        holder_id = identity_failure.split(":", 1)[1]
-        typer.echo(
-            f"error: that account is already registered as '{holder_id}'.\n"
-            f"  a rotated token hides this from the credential check, but the "
-            f"proven identity is the same, so two ids would share one quota pool "
-            f"and reconciliation could never tell them apart.\n"
-            f"  sign into the {record.id} account first (no /logout first):  "
-            f"{record.harness} /login",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if identity_failure == "ambiguous-slot":
-        typer.echo(
-            f"error: the {record.harness} slot currently holds credentials for two "
-            f"different accounts, so registering '{record.id}' could bind the wrong "
-            f"one.\n  " + managed.slot_switch_remedy(record.id)
-            + ", then re-run this command",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if identity_failure and identity_failure.startswith("slot-pinned:"):
-        who = identity_failure.split(":", 1)[1]
-        typer.echo(
-            f"error: {who} was pinning the {record.harness} slot when it was "
-            f"tainted and can still overwrite it, so registering '{record.id}' now "
-            f"could stamp a credential that is about to change.\n"
-            f"  stop it and re-run this command",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if identity_failure == "slot-changed":
-        typer.echo(
-            f"error: the {record.harness} slot changed while '{record.id}' was being "
-            f"registered (an out-of-band /login), so nothing was written.\n"
-            f"  re-run this command once the slot settles",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if adir is None:
-        # The capture reports "wrote nothing" structurally, so a failure value
-        # added later cannot fall through as a registration that never happened.
-        typer.echo(
-            f"error: registering '{record.id}' failed ({identity_failure}); "
-            "nothing was written",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    typer.echo(f"Registered managed account '{record.id}' (snapshot at {adir}, scope={scope}).")
-    if identity_failure == "slot-moved-after-write":
-        typer.echo(
-            f"warning: the {record.harness} slot changed while registering, so its "
-            f"active stamp is marked tainted rather than trusted; run "
-            f"`fno config accounts reconcile-slot {record.harness}` once it settles",
-            err=True,
-        )
+    argv = ["register", provider_id, "--harness", harness_name, "--priority", str(priority), "--scope", scope]
+    for flag, value in (("--name", name), ("--config-dir", config_dir)):
+        if value is not None:
+            argv += [flag, value]
+    _forward_accounts(*argv)
 
 
 # ---------------------------------------------------------------------------

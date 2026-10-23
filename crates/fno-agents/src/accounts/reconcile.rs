@@ -9,10 +9,8 @@ use crate::accounts::show::pwd;
 use crate::accounts::store::{self, Host, StoreError};
 use crate::claude_vault::Principal;
 use serde_json::json;
-use std::fs::{File, OpenOptions};
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// `managed.ReconcileResult`: `outcome` is the typed reason; anything other
 /// than `matched` wrote nothing.
@@ -53,28 +51,6 @@ pub fn slot_switch_remedy(account: &str) -> String {
     )
 }
 
-/// The switch mutex `managed.switch` holds: an exclusive flock on
-/// `<store>/.switch.lock`, polled until `timeout`.
-fn lock_switch(root: &Path, timeout: Duration) -> Option<File> {
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(store::switch_lock_path(root))
-        .ok()?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        // SAFETY: flock on a descriptor this function owns; dropping the
-        // returned file releases it.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Some(file);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 /// `managed.reconcile_slot`. The slot is read inside the switch mutex, so a
 /// concurrent switch can never make the observation stale before the write.
 pub fn reconcile_slot(
@@ -105,7 +81,7 @@ pub fn reconcile_slot(
             ),
         );
     }
-    let Some(_lock) = lock_switch(root, lock_timeout) else {
+    let Some(_lock) = store::lock_switch(root, lock_timeout) else {
         return Outcome::refused(
             "lock-timeout",
             "another slot transition is in progress; try again",
@@ -293,7 +269,7 @@ fn who(p: &Principal) -> String {
     }
 }
 
-fn principal_json(p: &Principal) -> serde_json::Value {
+pub(crate) fn principal_json(p: &Principal) -> serde_json::Value {
     let mut out = json!({
         "account_uuid": p.account_uuid,
         "organization_uuid": p.organization_uuid,

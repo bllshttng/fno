@@ -10,7 +10,7 @@
 //! `tests/accounts_*_parity.rs`.
 //!
 //! `fno-agents spawn-overlay accounts <command>` is where the
-//! `fno config accounts` commands land: [show], [add] and [reconcile] so far. They nest
+//! `fno config accounts` commands land: [show], [add], [reconcile] and [register] so far. They nest
 //! under `spawn-overlay` so they add no fno-agents root action.
 pub mod add;
 pub mod binding;
@@ -18,19 +18,21 @@ pub mod env;
 pub mod error_class;
 pub mod reconcile;
 pub mod records;
+pub mod register;
 pub mod show;
 pub mod slot;
 pub mod staging;
 pub mod store;
 pub mod writer;
 
-const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]";
+const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]\n       fno-agents spawn-overlay accounts register <id> [-H <harness>] [--config-dir <path>] [OPTIONS]";
 
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("show") => show::run(&args[1..]),
         Some("add") => add::run(&args[1..]),
         Some("reconcile-slot") => reconcile::run(&args[1..]),
+        Some("register") => register::run(&args[1..]),
         Some("-h" | "--help") => {
             println!("{USAGE}");
             0

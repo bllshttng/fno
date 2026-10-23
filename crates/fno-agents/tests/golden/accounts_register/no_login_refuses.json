@@ -1,0 +1,1 @@
+{"args": ["makers"], "now": 1800000000.0, "expect": {"code": 1, "stdout": "", "stderr": "error: no current claude login to snapshot for 'makers' (sign in first, then register)\n", "global": null, "project": null, "store": {}}}

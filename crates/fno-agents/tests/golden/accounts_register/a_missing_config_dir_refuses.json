@@ -1,0 +1,1 @@
+{"args": ["alt", "--config-dir", "{TMP}/nowhere"], "now": 1800000000.0, "expect": {"code": 1, "stdout": "", "stderr": "error: config dir <TMP>/nowhere does not exist; sign in there first (CLAUDE_CONFIG_DIR=<TMP>/nowhere claude /login)\n", "global": null, "project": null, "store": {}}}
