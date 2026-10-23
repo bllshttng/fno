@@ -1,0 +1,8 @@
+{
+  "role": {
+    "function_id": "communications",
+    "id": "publisher"
+  },
+  "routing_projection": null,
+  "source_digest": "5b2a9a8d9b98e71ee4ac1c1070e13827eb781d75817250ee94fca526d3d0fdf0"
+}

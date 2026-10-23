@@ -321,11 +321,31 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
 /// list reading argv only, so a click path pays no per-thread census. This
 /// process is skipped: its own argv carries the needle when the caller was
 /// handed it on the command line.
-#[cfg(target_os = "macos")]
 pub fn live_argv_contains(needle: &str) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
+    !needle.is_empty() && any_live_argv(|argv| argv.iter().any(|a| a.contains(needle)))
+}
+
+/// True when a live claude process holds `session_id`: its argv names the
+/// session as the value of `--resume`, `-r` or `--session-id`. Narrower than
+/// [`live_argv_contains`], which also matches an fno command that only
+/// mentions the id (`fno agents resume <id>`) and holds nothing.
+pub fn live_claude_holds_session(session_id: &str) -> bool {
+    !session_id.is_empty() && any_live_argv(|argv| claude_argv_holds(argv, session_id))
+}
+
+fn claude_argv_holds(argv: &[String], session_id: &str) -> bool {
+    let is_claude = argv
+        .first()
+        .is_some_and(|program| program.contains("claude"));
+    is_claude
+        && argv.windows(2).any(|pair| {
+            matches!(pair[0].as_str(), "--resume" | "-r" | "--session-id") && pair[1] == session_id
+        })
+}
+
+/// One pass over the pid list reading argv only, this process skipped.
+#[cfg(target_os = "macos")]
+fn any_live_argv(matches: impl Fn(&[String]) -> bool) -> bool {
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if count <= 0 {
         return false;
@@ -344,17 +364,17 @@ pub fn live_argv_contains(needle: &str) -> bool {
     pids[..filled as usize]
         .iter()
         .filter(|pid| **pid > 0 && **pid != me)
-        .any(|&pid| argv_of(pid).is_some_and(|argv| argv.iter().any(|a| a.contains(needle))))
+        .any(|&pid| argv_of(pid).is_some_and(|argv| matches(&argv)))
 }
 
+/// The `ps` leg splits each command on whitespace, as `process_argv` does.
 #[cfg(not(target_os = "macos"))]
-pub fn live_argv_contains(needle: &str) -> bool {
+fn any_live_argv(matches: impl Fn(&[String]) -> bool) -> bool {
     let me = std::process::id();
-    !needle.is_empty()
-        && process_table_ps()
-            .0
-            .iter()
-            .any(|r| r.pid != me && r.command.contains(needle))
+    process_table_ps().0.iter().any(|r| {
+        let argv: Vec<String> = r.command.split_whitespace().map(str::to_string).collect();
+        r.pid != me && matches(&argv)
+    })
 }
 
 /// The live argv of one pid, for the caller outside the census that needs
@@ -1297,5 +1317,14 @@ mod process_table_tests {
         assert!(found, "a live argv naming the needle is a witness");
         assert!(!absent, "a needle no process names is no witness");
         assert!(!empty, "an empty needle names nothing");
+        // Only a claude argv's session flags hold, never an fno command line.
+        let holds = |line: &str| {
+            let argv: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            super::claude_argv_holds(&argv, "s-1")
+        };
+        assert!(holds(
+            "/u/.local/share/claude/versions/2.1.309 --session-id s-1"
+        ));
+        assert!(!holds("fno agents spawn --resume s-1"));
     }
 }

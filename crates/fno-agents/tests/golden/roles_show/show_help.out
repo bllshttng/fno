@@ -1,0 +1,10 @@
+Usage: fno agents roles show [OPTIONS] ROLE
+
+  Show ordered raw definitions, validity, and shadowing.
+
+Arguments:
+  ROLE  ROLE or FUNCTION/ROLE.  [required]
+
+Options:
+  -J, --json  Emit stable structured JSON.
+  --help      Show this message and exit.

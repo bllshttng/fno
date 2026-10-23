@@ -278,6 +278,8 @@ pub enum AgentGroup {
     Cwd,
     /// Fixed bands: Needs input / Working / Completed, counts in the header.
     Status,
+    /// One section per harness (claude, codex, ...), its spend in the header.
+    Harness,
 }
 
 impl AgentGroup {
@@ -287,7 +289,19 @@ impl AgentGroup {
             Self::Workspace => Self::Team,
             Self::Team => Self::Cwd,
             Self::Cwd => Self::Status,
-            Self::Status => Self::Workspace,
+            Self::Status => Self::Harness,
+            Self::Harness => Self::Workspace,
+        }
+    }
+
+    /// The word the group notice and the keys help name this axis by.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Team => "lead",
+            Self::Cwd => "cwd",
+            Self::Status => "status",
+            Self::Harness => "harness",
         }
     }
 }

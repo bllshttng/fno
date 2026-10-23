@@ -84,3 +84,50 @@ fn account_from_argv_reads_the_fno_account_token() {
     assert_eq!(from(&["claude"]), None);
     assert_eq!(from(&["env", "FNO_ACCOUNT=", "claude"]), None);
 }
+
+#[test]
+fn claude_theme_rides_right_after_the_command_and_skips_attach() {
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let themed = |a: &[&str]| {
+        let mut argv = v(a);
+        with_claude_theme(&mut argv, "custom:fno:footnote-paper");
+        argv
+    };
+    let flag = ["--settings", "{\"theme\":\"custom:fno:footnote-paper\"}"];
+    // After the command token, so a `--` seed stays the prompt positional.
+    assert_eq!(
+        themed(&["env", "A=b", "claude", "--", "seed"]),
+        v(&["env", "A=b", "claude", flag[0], flag[1], "--", "seed"])
+    );
+    assert_eq!(
+        themed(&[
+            "taskpolicy",
+            "-c",
+            "utility",
+            "--",
+            "claude",
+            "--resume",
+            "x"
+        ]),
+        v(&[
+            "taskpolicy",
+            "-c",
+            "utility",
+            "--",
+            "claude",
+            flag[0],
+            flag[1],
+            "--resume",
+            "x"
+        ])
+    );
+    // attach ignores the flag; a named settings file and non-claude stay untouched.
+    for same in [
+        &["claude", "attach", "deadbee1"][..],
+        &["claude", "--settings", "/s.json"][..],
+        &["claude", "--settings=/s.json"][..],
+        &["codex", "resume"][..],
+    ] {
+        assert_eq!(themed(same), v(same));
+    }
+}

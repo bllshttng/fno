@@ -101,7 +101,7 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
         # --route/--account/--promote were absent, so their VALUES read as positionals:
         # a nameless `spawn --route zai,glm-5.2` registered an agent named "zai,glm-5.2".
         # Kept in lockstep with cmd_spawn (test_spawn_value_flags_cover_every_value_option).
-        "--route", "--account", "--promote", "--promote", "-k", "--dispatch-account",
+        "--route", "--account", "--promote", "--dispatch-account",
         "--take-over",
         # --at's value (current|<pane>) must not read as a positional.
         "--at",
@@ -395,9 +395,9 @@ def _head_flag_value(head: Sequence[str], flags: Tuple[str, ...]) -> Optional[st
 def _mint_node_name(
     node: Optional[str], seed: Optional[str], slug_flag: Optional[str], existing: Set[str]
 ) -> Optional[str]:
-    """The ``t-<short slug>`` default of a node-driven or ``/target`` spawn.
+    """The ``agents.naming.worker`` name of a node-driven or ``/target`` spawn.
 
-    The binary owns the form (naming.rs ``worker_name``). A name a live worker
+    The binary renders it (naming.rs ``render_worker_name``). A name a live worker
     holds gets a ``-2``..``-5`` suffix, so a re-spawn on one node is never a
     refusal. Any failure returns ``None`` and the adjective-noun mint runs: a
     spawn must never die on a naming lookup.

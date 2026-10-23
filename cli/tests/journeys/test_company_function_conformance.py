@@ -30,7 +30,6 @@ from fno.delivery import DeliveryEvidenceFact, evaluate_delivery
 from fno.plugins.activate import activate
 from fno.plugins.registry import PackRegistryStore
 from fno.plugins.verify import load_manifest, verify_pack
-from fno.roles.context import build_artifact_catalog
 from fno.roles.models import (
     ApprovalFloor,
     CapabilityFact,
@@ -185,6 +184,7 @@ def role_root(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.dev_build
 def test_pack_verification_runs_but_the_journey_carries_conformance() -> None:
     report = verify_pack(PACK, installed={})
     assert report.ok, [condition.name for condition in report.conditions if not condition.ok]
@@ -223,9 +223,7 @@ def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> 
             role=declared.role,
             definitions=definitions,
             capability_facts=facts,
-            context_catalog=build_artifact_catalog(
-                {}, snapshot_revision=revision, clock=NOW
-            ),
+            context_catalog=(),
             work_order=work_order,
             clock=NOW,
             snapshot_revision=revision,

@@ -38,8 +38,16 @@ fn parse_args_reads_every_flag() {
     assert_eq!(f.source, Some(PathBuf::from("/tmp/src")));
     assert!(f.dry_run && f.force && f.rust && !f.no_rust && !f.check);
 
-    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check"])).expect("parses");
-    assert!(f.dry_run && f.force && f.no_rust && f.check);
+    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--published"])).expect("parses");
+    assert!(f.dry_run && f.force && f.no_rust && f.check && f.published);
+    assert_eq!(f.published_rev, None);
+
+    // A rev after --published pins that build; a flag after it does not.
+    let f = parse_args(&os(&["--published", "a3670af2", "-N"])).expect("parses");
+    assert_eq!(f.published_rev.as_deref(), Some("a3670af2"));
+    assert!(f.published && f.dry_run);
+    let f = parse_args(&os(&["--published", "-N"])).expect("parses");
+    assert!(f.published && f.dry_run && f.published_rev.is_none());
 
     assert!(parse_args(&os(&["--bogus"])).is_err());
     assert!(parse_args(&os(&["--source"])).is_err());
@@ -451,6 +459,7 @@ fn python_holds_whenever_rust_trails_the_source() {
     for trails in [
         "waiting-ci",
         "installed-newest-published",
+        "newest-published-current",
         "skipped-no-origin",
         "skipped-no-cargo",
         "failed",
@@ -460,6 +469,13 @@ fn python_holds_whenever_rust_trails_the_source() {
             line.contains(trails) && line.starts_with("python held"),
             "{line}"
         );
+        // Only a hold on the newest published build is publish lag: it exits
+        // 0 so `fno update && fno restart` still restarts.
+        let planned = matches!(
+            trails,
+            "installed-newest-published" | "newest-published-current"
+        );
+        assert_eq!(hold_is_planned(Some(trails)), planned, "{trails}");
     }
     // Rust current, wheel-only machines, and --no-rust move Python freely.
     for moves in [
@@ -472,4 +488,31 @@ fn python_holds_whenever_rust_trails_the_source() {
         assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
     }
     assert_eq!(python_hold_line(None), None);
+}
+
+#[test]
+fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    git_ok(
+        tmp.path(),
+        &["init", "-q", "-b", "main", &repo.to_string_lossy()],
+    );
+    std::fs::create_dir_all(repo.join("crates")).unwrap();
+    let mut revs = Vec::new();
+    // Crates change, python-only, crates change, python-only.
+    for (n, file) in ["crates/a", "cli", "crates/a", "cli"].iter().enumerate() {
+        std::fs::write(repo.join(file), n.to_string()).unwrap();
+        git_ok(&repo, &["add", "-A"]);
+        git_ok(&repo, &["commit", "-q", "-m", &format!("c{n}")]);
+        revs.push(git_ok(&repo, &["rev-parse", "HEAD"]));
+    }
+    // CI published only the older crates rev: the python-only rev after it
+    // shares those bins and is the newest that does.
+    assert_eq!(last_green_rev(&repo, &revs[0]).unwrap(), revs[1]);
+    // The tip's own crates rev published: the tip is the last green.
+    assert_eq!(last_green_rev(&repo, &revs[2]).unwrap(), revs[3]);
+    // A published rev off this line is named, never guessed.
+    let err = last_green_rev(&repo, "0123456789abcdef").unwrap_err();
+    assert!(err.contains("0123456789ab"), "{err}");
 }

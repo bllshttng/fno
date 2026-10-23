@@ -103,10 +103,8 @@ agents review-coverage	T1	agents review-coverage	34
 agents attest	T1	agents attest	0
 agents sandbox-probe	T1	agents sandbox-probe	0
 agents rm	KEEP	agents rm	56	deliberate readability slack for a high-traffic distinct operation
-agents roles context	T1	agents roles context	2
 agents roles ls	T1	agents roles ls	1
-agents roles resolve	T1	agents roles resolve	2
-agents roles show	T1	agents roles show	2
+agents roles	T1	agents roles	43
 agents session-start-bytes	T1	agents session-start-bytes	0
 agents spawn	KEEP	agents spawn	256	deliberate readability slack for a high-traffic distinct operation
 agents spawn-guard	T1	agents spawn-guard	5
@@ -438,10 +436,7 @@ resume receipt write	T1	resume receipt write	2
 retro drain-postmortems	T1	retro drain-postmortems	2
 retro run	T1	retro run	23
 retro sweep-carveouts	T1	retro sweep-carveouts	3
-roles context	T1	roles context	2
 roles ls	T1	roles ls	1
-roles resolve	T1	roles resolve	2
-roles show	T1	roles show	2
 route env	T1	route env	4
 route init	T1	route init	0
 route inventory	T1	route inventory	0

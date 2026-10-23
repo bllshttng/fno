@@ -1,0 +1,11 @@
+{
+  "role": {
+    "function_id": "communications",
+    "id": "publisher"
+  },
+  "routing_projection": {
+    "model": "tightened-model",
+    "provider": "zai"
+  },
+  "source_digest": "08bffee59c40a8411103ece29bf7d0c414e2a8dcba271ed62a4cf12ee655536c"
+}

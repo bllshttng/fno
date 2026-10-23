@@ -1,0 +1,11 @@
+{
+  "detail": "ambiguous built-in definitions for communications/publisher: built-in/publisher-a.json, built-in/publisher-b.json",
+  "reason": "invalid_overlay",
+  "reference": "publisher",
+  "role": {
+    "function_id": "communications",
+    "id": "publisher"
+  },
+  "source_id": "built-in/publisher-a.json",
+  "source_layer": "built-in"
+}

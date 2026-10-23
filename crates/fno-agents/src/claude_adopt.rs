@@ -101,14 +101,14 @@ pub fn transcript_title(session_id: &str) -> Option<String> {
     transcript_title_in(&crate::claude_drive::claude_projects_dir(), session_id)
 }
 
-/// The synthesized registry row's display name: the thread title when the
-/// transcript carries one (capped, so a long title still fits the sideline
-/// cell), else the linked node id, else the derivable `t-<short>` form
-/// (`t-` is the bridge's manual form: no provenance). A bare short id reads
-/// as a phantom row, never as work.
-pub fn synthesized_entry_name(session: &str, short: &str) -> String {
-    transcript_title(session)
-        .map(|t| t.chars().take(48).collect::<String>())
+/// The synthesized registry row's display name: the linked node's
+/// `agents.naming.worker` name, else the thread title when the transcript
+/// carries one (capped, so a long title still fits the sideline cell), else
+/// the derivable `t-<short>` form (`t-` is the bridge's manual form: no
+/// provenance). A bare short id reads as a phantom row, never as work.
+pub fn synthesized_entry_name(session: &str, short: &str, node_name: Option<String>) -> String {
+    node_name
+        .or_else(|| transcript_title(session).map(|t| t.chars().take(48).collect::<String>()))
         .unwrap_or_else(|| format!("t-{short}"))
 }
 
@@ -420,23 +420,28 @@ mod tests {
     }
 
     #[test]
-    fn synthesized_entry_name_prefers_title_then_node_then_short_form() {
+    fn synthesized_entry_name_prefers_node_then_title_then_short_form() {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let uuid = "a1b2c3d4-1111-2222-3333-444455556666";
-        // The transcript title wins, capped at 48 chars.
         let long = "x".repeat(80);
         seed_transcript(
             "entry-name",
             uuid,
             &[format!(r#"{{"type":"summary","summary":"{long}"}}"#)],
         );
-        let named = synthesized_entry_name(uuid, "a1b2c3d4");
+        // The node's agents.naming.worker name beats the title.
+        assert_eq!(
+            synthesized_entry_name(uuid, "a1b2c3d4", Some("t-books-index".into())),
+            "t-books-index"
+        );
+        // No node: the transcript title, capped at 48 chars.
+        let named = synthesized_entry_name(uuid, "a1b2c3d4", None);
         assert_eq!(named.chars().count(), 48, "the title is capped");
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        // No title: the derivable t- form (the bridge's manual form).
-        assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4"), "t-a1b2c3d4");
+        // Neither: the derivable t- form (the bridge's manual form).
+        assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4", None), "t-a1b2c3d4");
     }
 
     /// Write a minimal transcript for `uuid` under a fresh temp projects dir

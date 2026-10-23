@@ -1,0 +1,11 @@
+{
+  "detail": "<ERROR>",
+  "reason": "invalid_manifest",
+  "reference": "publisher",
+  "role": {
+    "function_id": "communications",
+    "id": "publisher"
+  },
+  "source_id": "project/broken.json",
+  "source_layer": "project"
+}

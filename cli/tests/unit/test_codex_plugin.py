@@ -914,6 +914,17 @@ def test_freshness_prioritizes_persisted_rollback_failure(tmp_path: Path) -> Non
     assert report["status"] == "error"
     assert report["issue"] == "rollback-failure"
     assert report["detail"] == "rollback add failed"
+    # The dev install refuses a release channel, so release repairs through setup.
+    assert report["remedy"] == "fno config setup run --only harness-wiring"
+
+    receipt.write_text(
+        json.dumps({"channel": "dev", "detail": "rollback add failed"}), encoding="utf-8"
+    )
+    report = inspect_freshness(
+        runner=lambda *_args, **_kwargs: pytest.fail("state collection must not run"),
+        codex_home=home,
+    )
+    assert report["remedy"] == "fno config plugin install codex --force"
 
 
 def test_payload_digest_is_stable_and_ignores_non_plugin_files(tmp_path: Path) -> None:

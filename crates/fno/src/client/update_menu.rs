@@ -288,24 +288,42 @@ pub(crate) fn build_sideline_menu(
         }
         _ => {}
     }
+    // A hold the machine armed is liftable from here; the row exists only
+    // while one stands, so the menu never offers a no-op.
+    let prefix_hint = |id: &str| {
+        crate::keys::key_for(id)
+            .map(|k| format!("prefix {k}"))
+            .unwrap_or_default()
+    };
+    if let Some(held) = hold::current().filter(hold::Hold::liftable) {
+        rows.push(PopupRow::Entry {
+            glyph: "⏸".into(),
+            label: format!("lift hold on {}", held.holds.join(",")),
+            hint: prefix_hint("lift-hold"),
+            enabled: true,
+        });
+        actions.push(AuxAction::LiftHold);
+    }
     rows.push(entry("♺", "sweep threads"));
     rows.push(entry("＋", "new agent"));
     // The open row's hint names the prefix chord that opens the board from
     // anywhere the menu is not.
-    let open_hint = crate::keys::key_for("open-backlog-board")
-        .map(|k| format!("prefix {k}"))
-        .unwrap_or_default();
     rows.push(PopupRow::Entry {
         glyph: "▦".into(),
         label: "backlog".into(),
-        hint: open_hint,
+        hint: prefix_hint("open-backlog-board"),
         enabled: true,
     });
     let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
     rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
     rows.push(entry("⚙", "settings"));
-    rows.push(entry("⇄", "connections"));
+    rows.push(PopupRow::Entry {
+        glyph: "⇄".into(),
+        label: "connections (accounts, usage)".into(),
+        hint: prefix_hint("connections"),
+        enabled: true,
+    });
     rows.push(entry("⏏", "detach"));
     actions.push(AuxAction::OpenSweep);
     actions.push(AuxAction::OpenAgentLauncher);
