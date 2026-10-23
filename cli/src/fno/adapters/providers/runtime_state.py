@@ -700,8 +700,8 @@ def update_provider_health(
     """Atomically increment backoff state for ``provider_id``.
 
     Returns the freshly written ``ProviderHealth``. On lock contention past
-    five seconds the write is skipped and the last-known-good entry (or a zero
-    state) comes back.
+    five seconds, or when the writer cannot run, the write is skipped and the
+    last-known-good entry (or a zero state) comes back.
 
     When ``model`` is provided the cooldown lands in ``model_locks[model]`` and
     ``rate_limited_until`` is untouched; ``backoff_level`` still ramps per
@@ -710,14 +710,23 @@ def update_provider_health(
     real window. It also stamps the window it closed when the record has a
     ``window_minutes``.
     """
-    return ProviderHealth(**_state_write("update-health", {
-        "provider_id": provider_id,
-        "backoff": rule.backoff,
-        "cooldown_ms": rule.cooldown_ms,
-        "model": model,
-        "now": now,
-        "resets_at": resets_at,
-    }))
+    from fno.rust_binary import CommandUnavailable
+
+    try:
+        return ProviderHealth(**_state_write("update-health", {
+            "provider_id": provider_id,
+            "backoff": rule.backoff,
+            "cooldown_ms": rule.cooldown_ms,
+            "model": model,
+            "now": now,
+            "resets_at": resets_at,
+        }))
+    except CommandUnavailable as exc:
+        # The recovery sweep calls this with no guard of its own, so a writer
+        # that cannot run degrades like lock contention instead of raising.
+        logger.warning("runtime_state: health write skipped for %r: %s", provider_id, exc)
+        raw = _read_disk_payload(_resolve_state_path()) or {}
+        return _parse_state_payload(raw).get(provider_id, ProviderHealth(provider_id=provider_id))
 
 
 def is_in_cooldown(
