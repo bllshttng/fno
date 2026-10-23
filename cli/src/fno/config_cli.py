@@ -71,7 +71,7 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     # action per harness (claude|codex|opencode|agy).
     "plugin": (
         "fno.plugin_install_cli:plugin_app",
-        "Install the footnote plugin into a harness from the filtered stage.",
+        "Install your local checkout of footnote into a harness, for development.",
     ),
 }
 

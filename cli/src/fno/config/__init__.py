@@ -1999,6 +1999,7 @@ from fno.config.routing_blocks import RoutingBlock as RoutingBlock  # noqa: E402
 # over the file budget and shrink-only); re-exported for every reader.
 from fno.config.spawn_blocks import (  # noqa: E402
     HarnessOverlayBlock as HarnessOverlayBlock,
+    NamingBlock as NamingBlock,
     SpawnDefaultsBlock as SpawnDefaultsBlock,
     SpawnProfileBlock as SpawnProfileBlock,
 )
@@ -2199,6 +2200,7 @@ class AgentsBlock(SweepKeys):
     claude: AgentBeatBlock = Field(default_factory=AgentBeatBlock)
     codex: CodexAgentBlock = Field(default_factory=CodexAgentBlock)
     gemini: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
+    naming: NamingBlock = Field(default_factory=NamingBlock)
     # Spawn-gate scalars degrade to safe defaults: max_live caps the roster
     # union as the BACKSTOP behind the RAM floor (min_free_gb) and the CPU
     # axis (LD1); provider_limits caps lanes and fan-out; admission

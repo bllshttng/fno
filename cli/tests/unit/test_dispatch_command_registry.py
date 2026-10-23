@@ -135,15 +135,15 @@ def test_command_in_neither_surface_names_both():
     assert "/other" in msg
 
 
-def test_pre_rename_config_and_node_keys_still_read():
+def test_pre_rename_node_key_still_reads_but_config_keys_do_not():
     from fno.config import DispatchBlock
     from fno.graph.types import Node
 
     block = DispatchBlock.model_validate(
-        {"allowed_verbs": ["/target"], "verb_registry": {"/x": {"invocation": "/x"}}}  # verb-wording: allow
+        {"allowed_verbs": ["/x"], "verb_registry": {"/x": {"invocation": "/x"}}}  # verb-wording: allow
     )
-    assert block.allowed_commands == ["/target"]
-    assert set(block.command_registry) == {"/x"}
+    assert block.allowed_commands == ["/target", "/think", "/blueprint"]
+    assert block.command_registry == {}
     node = Node.model_validate({"id": "x-1", "dispatch_verb": "/think"})  # verb-wording: allow
     assert node.dispatch_command == "/think"
     assert "dispatch_verb" not in node.model_dump()  # verb-wording: allow

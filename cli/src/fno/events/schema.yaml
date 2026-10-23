@@ -100,6 +100,16 @@ event_types:
         spawned_by_session: { type: string, description: "The launcher session the claimed record names" }
     consumers: [operator]
 
+  - name: native_bg_renamed
+    description: "A claude registry row still named by its short id took a real name: the launch record's, the agents.naming.worker name of its node, or the claude agents listing's. The old name stays in aliases. One row per rename."
+    sources: [daemon]
+    data:
+      required: [name, from]
+      properties:
+        name: { type: string, description: "The row's new name" }
+        from: { type: string, description: "The short-id name it replaced" }
+    consumers: [operator]
+
   - name: native_bg_mint_deferred
     description: "The native-bg roster adopt hit its per-beat budget; the remaining candidates wait for later beats."
     sources: [daemon]
@@ -5106,6 +5116,21 @@ event_types:
         panes:
           type: integer
           description: "How many panes the server held at exit."
+    consumers: [operator]
+
+  - name: mux_session_healed
+    retention: durable
+    description: "A mux reader (ls, the picker, doctor, the workspace sweep) found a dead server's leftover session files and removed them: every connect was refused, no starter held the startup marker, and the pid sidecar named no live process. One row per healed session, so a SIGKILLed server's cleanup is visible without a user step."
+    sources: [daemon]
+    data:
+      required: [mux_session, path]
+      properties:
+        mux_session:
+          type: string
+          description: "The dead session's name."
+        path:
+          type: string
+          description: "The socket path that was removed with its sidecars."
     consumers: [operator]
 
   - name: portal_opened

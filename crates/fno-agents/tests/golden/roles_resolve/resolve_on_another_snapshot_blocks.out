@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "mixed_revision",
+  "reference": "snapshot-1",
+  "role": {
+    "function_id": "marketing",
+    "id": "owner"
+  },
+  "source_id": "built-in/owner.json",
+  "source_layer": "built-in"
+}

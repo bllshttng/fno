@@ -65,7 +65,8 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// completion. A run on an OLDER commit never sets the verdict, however
 /// fresh the workflow: a release run that failed or was cancelled days ago
 /// on an old sha must not read main red while the head is clean. Such
-/// failures ride the token's `stale` list instead and the check-in names
+/// failures ride the token's `stale` list instead (a cancelled older run is
+/// a superseded one and rides nowhere) and the check-in names
 /// each on its own line with its age. Per workflow with head rows the
 /// newest COMPLETED run decides - red on fail or cancel, naming the
 /// workflow and the sha it ran on; a workflow whose newest head run is
@@ -128,13 +129,22 @@ fn main_ci_token_from_pages<'a>(
             *newest_completed = Some(run);
         }
     }
+    // A cancelled run on an older commit is not a failure: main's
+    // concurrency group cancels the pending run a newer push replaces. Those
+    // rows never join the older fold, so the newest run that reached a
+    // verdict decides each workflow's stale entry.
     let mut older: Vec<(&'a str, &'a Value, Option<&'a Value>)> = Vec::new();
-    fold_page(&mut older, on_main.iter().filter(|run| !at_head(run)));
+    fold_page(
+        &mut older,
+        on_main
+            .iter()
+            .filter(|run| !at_head(run) && crate::pr_push::rest_bucket(run) != "cancel"),
+    );
     let window_start = now - chrono::Duration::days(STALE_REPORT_WINDOW_DAYS);
     let stale: Vec<Value> = older
         .iter()
         .filter_map(|(_, _, completed)| *completed)
-        .filter(|run| matches!(crate::pr_push::rest_bucket(run), "fail" | "cancel"))
+        .filter(|run| crate::pr_push::rest_bucket(run) == "fail")
         .filter(|run| {
             run.get("created_at")
                 .and_then(Value::as_str)
@@ -511,6 +521,50 @@ mod tests {
         assert_eq!(
             token_at("fresh", &[], &on_main),
             serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "fresh"})
+        );
+    }
+
+    /// Main's concurrency group cancels the pending run a newer push
+    /// replaces. That cancel on an older commit is never a stale failure, and
+    /// it never hides an older failure of the same workflow either.
+    #[test]
+    fn a_superseded_cancel_on_an_older_commit_is_not_stale() {
+        let on_main = vec![
+            wf_run(
+                "cli-ci",
+                "a1",
+                "completed",
+                "failure",
+                "2026-09-29T08:00:00Z",
+            ),
+            wf_run(
+                "cli-ci",
+                "a2",
+                "completed",
+                "cancelled",
+                "2026-09-29T09:00:00Z",
+            ),
+            wf_run(
+                "guards",
+                "a2",
+                "completed",
+                "cancelled",
+                "2026-09-29T09:00:00Z",
+            ),
+            wf_run(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-09-29T10:00:00Z",
+            ),
+        ];
+        let stale = vec![serde_json::json!({
+            "workflow": "cli-ci", "sha": "a1", "created_at": "2026-09-29T08:00:00Z",
+        })];
+        assert_eq!(
+            token_at("head", &[], &on_main),
+            serde_json::json!({"verdict": "green", "stale": stale})
         );
     }
 

@@ -267,6 +267,28 @@ def _dev_build_absent() -> bool:
     return _dev_build_absent_cache
 
 
+@pytest.fixture(autouse=True)
+def _business_role_door_without_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Model routing asks fno-agents for the business role behind every named
+    spawn role. A shard with no dev build has no door to ask. With no
+    FNO_ROLES_ROOT the checkout carries no role root, so the door's answer
+    there is not_found; a test that sets a root needs the build."""
+    if not _dev_build_absent():
+        return
+    from fno import rust_binary
+
+    real = rust_binary.command_call
+
+    def answer(command, payload, *args, **kwargs):
+        if payload.get("kind") != "business-role" or os.environ.get("FNO_ROLES_ROOT"):
+            return real(command, payload, *args, **kwargs)
+        role = payload["role"]
+        return {"role": {"id": role, "function_id": "unavailable"}, "reason": "not_found",
+                "source_layer": None, "source_id": None, "reference": role, "detail": None}
+
+    monkeypatch.setattr(rust_binary, "command_call", answer)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     """Show slow tests on smoke shards to measure the per-test ceiling."""

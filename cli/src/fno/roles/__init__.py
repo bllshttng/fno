@@ -11,7 +11,6 @@ from fno.roles.models import (
     ContextSelector,
     DefinitionStatus,
     DeliveryPolicy,
-    ManifestRoutingResolution,
     ResolvedRole,
     ResolvedSource,
     ReviewPolicy,
@@ -27,13 +26,10 @@ from fno.roles.models import (
 from fno.roles.registry import (
     DiscoveredRoleDefinition,
     DiscoveryInputError,
-    RegistryError,
-    RoleRegistry,
     default_role_root,
     discover_role_definitions,
-    ordered_definitions,
 )
-from fno.roles.resolver import resolve_manifest_routing, resolve_role
+from fno.roles.resolver import resolve_role
 
 __all__ = [
     "ApprovalFloor",
@@ -48,15 +44,12 @@ __all__ = [
     "DeliveryPolicy",
     "DiscoveredRoleDefinition",
     "DiscoveryInputError",
-    "RegistryError",
-    "ManifestRoutingResolution",
     "ResolvedRole",
     "ResolvedSource",
     "ReviewPolicy",
     "RoleDefinitionSource",
     "RoleLayer",
     "RoleManifest",
-    "RoleRegistry",
     "RoleResolution",
     "RoleResolutionBlocked",
     "RoleResolutionReason",
@@ -64,7 +57,5 @@ __all__ = [
     "Sensitivity",
     "default_role_root",
     "discover_role_definitions",
-    "ordered_definitions",
     "resolve_role",
-    "resolve_manifest_routing",
 ]

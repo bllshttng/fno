@@ -1,0 +1,4 @@
+Usage: fno agents roles resolve [OPTIONS] ROLE
+Try 'fno agents roles resolve --help' for help.
+
+Error: Missing option '--work-order'.

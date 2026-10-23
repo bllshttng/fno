@@ -1572,6 +1572,14 @@ pub(crate) fn relaunch_exited_claude_with(
             );
         }
     };
+    // A stale pid proves nothing: `--bg --resume` on a held session copies it.
+    if claude_home.session_held(&uuid) {
+        eprintln!(
+            "fno agents resume: a live claude process still holds {uuid}, so a relaunch \
+             would start a copy of it; attach it with `claude attach {short_id}` or stop it first"
+        );
+        return crate::reentry::REENTRY_REFUSED_EXIT;
+    }
     let spawn_name = relaunch_name(claude_home, row_name, short_id, &uuid);
     // A down-route launch refuses when another holder took the node or PR:
     // the same gate the dead arm runs before its relaunch.

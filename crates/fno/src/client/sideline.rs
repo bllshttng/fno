@@ -579,10 +579,20 @@ impl View {
                     rollup,
                     view,
                     ..
-                } => Some((
-                    header_band_text(&format!("{}{label}", view_caret(*view)), rollup, band_w),
-                    header_band_flags(false),
-                )),
+                } => {
+                    let caret_label = format!("{}{label}", view_caret(*view));
+                    // A harness band names what it spent in the gap.
+                    let text = match super::agent_group::band_spend(self, label) {
+                        Some(spend) => super::header_band::header_band_hinted(
+                            &caret_label,
+                            &spend,
+                            rollup,
+                            band_w,
+                        ),
+                        None => header_band_text(&caret_label, rollup, band_w),
+                    };
+                    Some((text, header_band_flags(false)))
+                }
                 // Card lines 2 and 3 indent under the name TEXT (the
                 // operator's 2026-10-04 mockup): the name cell's own
                 // `{mark} ` prefix plus the row's lineage depth, on top of

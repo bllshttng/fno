@@ -1,0 +1,11 @@
+{
+  "detail": "role layer exists but is not a directory",
+  "reason": "invalid_manifest",
+  "reference": "owner",
+  "role": {
+    "function_id": "marketing",
+    "id": "owner"
+  },
+  "source_id": "plan",
+  "source_layer": "plan"
+}
