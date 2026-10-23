@@ -1,0 +1,1 @@
+{"op": "launch_env", "id": "alt", "config": "[[accounts.records]]\nid = \"alt\"\nname = \"alt\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{TMP}/alt\"\n", "dirs": ["alt"], "expect": {"env": {"CLAUDE_CONFIG_DIR": "<TMP>/alt"}}}

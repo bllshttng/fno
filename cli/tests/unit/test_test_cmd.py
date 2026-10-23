@@ -453,12 +453,13 @@ def test_smoke_shard_partitions_steps_and_scopes_pytest_env(
 
     monkeypatch.setattr(tc.subprocess, "run", run)
 
-    assert tc._run_smoke(["--shard", "2/4"]) == 0
+    # Leg 4 holds after-b, so it keeps the build step that after-b needs.
+    assert tc._run_smoke(["--shard", "4/4"]) == 0
 
     assert [command for command, _shard in calls] == [
         "true", "true", "true", "true"
     ]
-    assert [shard for _command, shard in calls] == [None, "2/4", None, None]
+    assert [shard for _command, shard in calls] == [None, "4/4", None, None]
 
 
 @pytest.mark.parametrize("spec", ["5/4", "four/4"])

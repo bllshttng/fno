@@ -333,6 +333,58 @@ fn rev_on_origin_main_reads_merged_local_and_unanswered() {
 }
 
 #[test]
+fn published_is_older_answers_by_ancestry_and_refuses_the_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    let path = repo.to_string_lossy().into_owned();
+    git_ok(tmp.path(), &["init", "-q", "-b", "main", &path]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "old"]);
+    let older = git_ok(&repo, &["rev-parse", "HEAD"]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "new"]);
+    let newer = git_ok(&repo, &["rev-parse", "HEAD"]);
+    // Installing `older` over `newer` moves the bins backwards; installing
+    // `newer` over `older` moves them forward; a rev git cannot resolve (a
+    // foreign or garbage sha) refuses to answer, so the caller refuses to
+    // guess.
+    assert_eq!(published_is_older(&repo, &older, &newer), Some(true));
+    assert_eq!(published_is_older(&repo, &newer, &older), Some(false));
+    assert_eq!(published_is_older(&repo, "deadbeef", &newer), None);
+}
+
+#[test]
+fn crate_bin_names_reads_bin_entries_and_degrades_to_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let toml = tmp.path().join("Cargo.toml");
+    std::fs::write(
+        &toml,
+        "[package]\nname = \"fno-agents\"\n\n[[bin]]\nname = \"fno-agents\"\npath = \"src/bin/client.rs\"\n\n[[bin]]\nname = \"fno-gh-proxy\"\npath = \"src/bin/fno-gh-proxy.rs\"\n\n[profile.release]\n",
+    )
+    .unwrap();
+    let names = crate_bin_names(tmp.path()).expect("bin entries parse");
+    assert_eq!(names, vec!["fno-agents", "fno-gh-proxy"]);
+    let empty = tempfile::tempdir().unwrap();
+    std::fs::write(empty.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+    assert_eq!(crate_bin_names(empty.path()), None);
+    assert_eq!(crate_bin_names(&PathBuf::from("/nonexistent")), None);
+}
+
+#[test]
+fn missing_inventory_bins_names_absent_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let names = vec![
+        "fno-agents".to_string(),
+        "fno-gh-proxy".to_string(),
+        "fno-gh-coverage".to_string(),
+    ];
+    std::fs::write(tmp.path().join("fno-agents"), b"b").unwrap();
+    std::fs::write(tmp.path().join("fno-gh-proxy"), b"b").unwrap();
+    assert_eq!(
+        missing_inventory_bins(&names, tmp.path()),
+        vec!["fno-gh-coverage".to_string()]
+    );
+}
+
+#[test]
 fn the_check_readback_finds_an_update_row_in_the_store() {
     let _g = crate::model_catalog::state_env_lock();
     let tmp = std::env::temp_dir().join(format!("fno-du-store-{}", std::process::id()));

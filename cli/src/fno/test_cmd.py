@@ -1228,30 +1228,35 @@ def _parse_smoke_shard(spec: str) -> tuple[int, int]:
     return index, total
 
 
+def smoke_step_weights(root: Path) -> dict[str, float]:
+    """Measured seconds per step from scripts/ci/smoke-step-seconds.tsv."""
+    path = root / "scripts" / "ci" / "smoke-step-seconds.tsv"
+    if not path.is_file():
+        return {}
+    rows = [line.split("\t", 1) for line in path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")]
+    return {name: float(seconds) for seconds, name in rows}
+
+
 def _shard_selected_indices(
     steps: Sequence[tuple[str, str, str]], selected: Sequence[int],
-    index: int, total: int,
+    index: int, total: int, weights: dict[str, float] | None = None,
 ) -> list[int]:
-    """Partition selected registry steps while retaining shared prerequisites."""
+    """Put each selected step, heaviest first (unlisted: 2s), on the lightest leg."""
     names = [name for name, _cwd, _cmd in steps]
-    pytest_step = "Pytest (unit + integration)"
-    build_index = next(
-        (step_index for step_index, name in enumerate(names)
-         if name == _RUST_BUILD_STEP),
-        None,
-    )
-    selected_set = set(selected)
-    kept = {
-        step_index for step_index in selected
-        if names[step_index] == "Sync + build"
-        or names[step_index] == pytest_step
-        or step_index % total == index - 1
-    }
-    if build_index in selected_set and any(
-        step_index > build_index and step_index in selected_set
-        and step_index % total == index - 1
-        for step_index in selected
-    ):
+    shared = {"Sync + build", "Pytest (unit + integration)"}
+    weight = (weights or {}).get
+    loads = [0.0] * total
+    mine: set[int] = set()
+    for step_index in sorted((i for i in selected if names[i] not in shared),
+                             key=lambda i: (-weight(names[i], 2.0), i)):
+        leg = loads.index(min(loads))
+        loads[leg] += weight(names[step_index], 2.0)
+        if leg == index - 1:
+            mine.add(step_index)
+    kept = mine | {i for i in selected if names[i] in shared}
+    build_index = names.index(_RUST_BUILD_STEP) if _RUST_BUILD_STEP in names else None
+    if build_index in set(selected) and any(i > build_index for i in mine):
         kept.add(build_index)
     return sorted(kept)
 
@@ -2327,7 +2332,7 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
         shard_index, shard_total = _parse_smoke_shard(shard_spec)
         if shard_total > 1:
             selected = _shard_selected_indices(
-                steps, selected, shard_index, shard_total
+                steps, selected, shard_index, shard_total, smoke_step_weights(root)
             )
 
     if not selected:

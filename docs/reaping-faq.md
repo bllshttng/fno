@@ -102,7 +102,7 @@ These five move or remove state around sessions. None stops or removes a session
 3. keep mark: `kept {id} (keep mark: ...)`. Set by `fno agents registry reap --keep <row>`, lifted by `--unkeep`
 4. not spawn unless a proven corpse: `kept {id} (not a spawn row: {why})`
 5. graph unreadable: `kept {id} (graph unreadable: never a retirement on a failed read)`
-6. open do row on an all-done session: `kept {id} (open do row on done node: {node})`. The settle pass and a `--release` ruling work through this gate
+6. open do row on an all-done session: `kept {id} (open do row: {node})`. The settle pass and a `--release` ruling work through this gate
 7. policy `gc_decide`: a confirm hold answers as `kept {id} (sources disagree: {a} vs {b})` or `kept {id} (pr state contradicts: {node} {detail})`
 8. policy `gc_decide`: no provenance: `kept {id} (no provenance: ...)`
 9. policy `gc_decide`, open node: planning lane, then the open-PR and dead-worker keeps, then the four releases, then the open-work window
@@ -205,11 +205,11 @@ A kept open-PR row is a session that is not driving, and so is a kept dead-worke
 
 Events: `pr_nudge_sent`, `pr_nudge_escalated`, `pr_nudge_paused`. When a resume failed, `pr_nudge_sent` carries `reason`. When a mail pass fell back, it carries `resume_exit` and `resume_reason`. State is one file per session under `~/.fno/agents/pr-nudge/`. The ladder fires on the daemon arm only. `fno agents registry reap --dry-run` prints its plan as `would nudge {id} ({action})` and takes no effect.
 
-### open do row on done node
+### open do row
 
-The full line reads `kept {id} (open do row on done node: {node}: {detail})`. Every node the row names is done, but the graph still holds an open do row for the session. The retirement re-opens settled work, so the row stays (`gc_sweep.rs` `run_with_release`).
+The full line reads `kept {id} (open do row: {node}: {detail})`. Every node the row names is done, but the graph still holds an open do row for the session. The retirement re-opens settled work, so the row stays (`gc_sweep.rs` `run_with_release`).
 
-Two paths produce the line. The classify pass fires on the stale graph row (`gc_sweep.rs` `run_with_release`). The apply pass re-checks at stage and commit. Fresh work can arrive between decision and stop, and a stop then kills live work (`gc_sweep.rs` `commit_retirements`).
+Two paths produce the line. The classify pass fires on the stale graph row (`gc_sweep.rs` `run_with_release`). The apply pass re-checks at stage and commit. Fresh work can arrive between decision and stop, and a stop then kills live work (`gc_sweep.rs` `commit_retirements`). When the re-check finds the node not done, the detail reads `node status {status}: a session on unmerged work never retires`.
 
 The real run carries its own cure. The settle pass fills stale open do rows on done and merged nodes before the row pass reads the graph (`gc.rs` `gc_sweep`, `gc_sweep.rs` `settle_stale_do_rows`). A dry run prints the cure as `would settle {id} (stale open do row filled on done+merged node: {node})`.
 
@@ -258,7 +258,7 @@ A spawn row does not keep here forever. Its unresolved transcript ages on the re
 
 ### no provenance
 
-The line reads `kept {id} (no provenance: no source resolved a node (sessions, registry, name, transcript))`. No declared source resolved a node (`gc.rs` `gc_decide`). The sessions join answered nothing, the registry node field is empty, the name carries no node token, and the transcript mentions none.
+The line reads `kept {id} (no provenance: no source resolved a node (sessions, registry, name, transcript))`. No declared source resolved a node (`gc.rs` `gc_decide`). The sessions join answered nothing, the registry node field is empty, the name carries no node token, and the transcript mentions none. An escalated hold takes `fno agents registry reap --release <id>`: the ruling answers the node question, and the row retires on its quiet clock. When the released row did not retire, the command exits 2.
 
 The keep is no longer forever. When its inside-leg report reads done and fno never stopped the row, the row takes the quiet gate. Quiet past the grace retires it. A row still working, blocked, or stopped by fno keeps. Every kept row now carries a hold with an age, so `fno agents registry reap --release` and the escalation clock reach it.
 
@@ -357,8 +357,8 @@ Every top-level key of `fno agents registry reap --json`, one row each. The dry 
 | `retired` | `retired {id} ({basis})` and the count line | [In what order](#in-what-order) |
 | `pruned` | `pruned {id} (clean and merged: {path})` | [The row retired and its tree stayed](#the-row-retired-and-its-tree-stayed) |
 | `prune_failed` | `prune failed {id} ({reason})` | [The sweep tried and did not finish](#the-sweep-tried-and-did-not-finish) |
-| `settled_do_rows` | `settled {id} (stale open do row filled on done+merged node: {node})` | [open do row on done node](#open-do-row-on-done-node) |
-| `settle_refused` | `settle refused {node} ({reason})` | [open do row on done node](#open-do-row-on-done-node) |
+| `settled_do_rows` | `settled {id} (stale open do row filled on done+merged node: {node})` | [open do row](#open-do-row) |
+| `settle_refused` | `settle refused {node} ({reason})` | [open do row](#open-do-row) |
 | `kept_operator` | `kept {id} (operator row)` | [Rows no sweep can take](#rows-no-sweep-can-take) |
 | `kept_promoted` | `kept {id} (promoted)` | [Rows no sweep can take](#rows-no-sweep-can-take) |
 | `kept_not_spawn` | `kept {id} (not a spawn row: {why})` | [Rows no sweep can take](#rows-no-sweep-can-take) |
@@ -367,7 +367,7 @@ Every top-level key of `fno agents registry reap --json`, one row each. The dry 
 | `kept_pr_contradicts` | `kept {id} (pr state contradicts: {node} {detail})` | [pr state contradicts](#pr-state-contradicts) |
 | `kept_open_work` | `kept {id} (open work: {node} {status}; read via {reader})` | [open work](#open-work) |
 | `kept_open_work_stale` | `kept {id} (open work inside the retire window: {node} {status}; read via {reader}; quiet past the window retires)` | [open work](#open-work) |
-| `kept_open_do_row` | `kept {id} (open do row on done node: {node}: {detail})` | [open do row on done node](#open-do-row-on-done-node) |
+| `kept_open_do_row` | `kept {id} (open do row: {node}: {detail})` | [open do row](#open-do-row) |
 | `kept_open_pr` | `kept {id} (open pr: {node} {detail})` | [open pr](#open-pr) |
 | `kept_planning_unclosed` | `kept {id} (planning assignment not finished by this session: {node})` | [planning assignment not finished by this session](#planning-assignment-not-finished-by-this-session) |
 | `kept_active` | `kept {id} (active: transcript written {age}s ago)` | [active](#active) |
@@ -415,7 +415,7 @@ Every keep and hold reason from the sections above, one row each.
 | `kept {id} (open work: {node} {status}; read via {reader})` | Wait for the node to ship. Never close the node by hand. | Run `fno backlog get <node>` and read `status`. |
 | `kept {id} (open work inside the retire window: {node} {status}; read via {reader}; quiet past the window retires)` | Wait past the window, or act on the named node. | Run `fno backlog get <node>` and read `status`. |
 | `kept {id} (open pr: {node} {detail})` | Drive the PR to merge, or record a merge order. | Run `fno do pr status <N>`. |
-| `kept {id} (open do row on done node: {node}: {detail})` | Wait. A real run settles it. Never close the node. | Run `fno backlog get <node>` and read `status`. |
+| `kept {id} (open do row: {node}: {detail})` | Wait. A real run settles it. Never close the node. | Run `fno backlog get <node>` and read `status`. |
 | `kept {id} (planning assignment not finished by this session: {node})` | Wait up to 20 quiet minutes, or rule with `fno agents registry reap --release <row>` once escalated. | The line names the node and the hold age. |
 | `kept {id} (live descendant: {child})` | Wait for the live CHILD row to go, unless the parent's roster state reads `done`, `stopped` or `failed`. A handoff row (`sob-t-`, `ac-t-`) never holds its spawner. | The same report carries the child line. |
 | `kept {id} (active: transcript written {age}s ago)` | Wait past the grace window. Nothing retires the row early inside it. | Run the dry run again. Read the new age. |

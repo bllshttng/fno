@@ -1,6 +1,6 @@
 """Keep the smoke-shard per-test ceiling measured against its step cap.
 
-The 720s step cap is split across thirteen shards, and a passing test close to
+The 720s step cap bounds each of the four pytest shards, and a passing test close to
 the 120s timeout leaves too little margin to absorb two hangs. These guards
 keep the timeout and markers low enough while naming any future test that
 builds a fork-default pool in a threaded xdist worker.
