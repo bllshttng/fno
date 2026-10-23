@@ -1657,7 +1657,15 @@ impl View {
         else {
             return false;
         };
-        let anchor = Anchor::Center;
+        // Beside the highlighted line, so the menu never hides its own row.
+        let (origin, dims) = self.overlay_viewport();
+        let anchor = self.nav.as_ref().zip(self.nav_layout(origin, dims)).map_or(
+            Anchor::Center,
+            |(n, l)| Anchor::At {
+                row: (l.origin.0 + l.body_top + (n.cursor + 1).saturating_sub(l.window.0)) as u16,
+                col: (l.origin.1 + l.framed.width) as u16,
+            },
+        );
         let opened = match row.menu {
             NavMenu::Agent(id) => match self.layout.agents.iter().find(|a| id.matches(a)) {
                 Some(a) => {

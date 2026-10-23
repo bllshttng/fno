@@ -222,9 +222,30 @@ pub(crate) fn peek_overlay_lines(
 }
 
 impl View {
-    /// Paint the navigator: the filtered flat catalog + query/chip line. Rows
-    /// recompute per frame from the live layout (no cache), so a push
-    /// repopulates it. A no-op when the navigator is closed.
+    /// The navigator's framed block: the filtered flat catalog + query/chip
+    /// line, laid out from the live layout (no cache). One layout feeds the
+    /// painter and the row menu's anchor, so the two cannot disagree.
+    pub(super) fn nav_layout(
+        &self,
+        overlay_origin: (usize, usize),
+        overlay_dims: (usize, usize),
+    ) -> Option<OverlayLayout> {
+        let nav = self.nav.as_ref()?;
+        let lines = nav_overlay_lines(&self.nav_filtered(nav), nav);
+        let chrome = chrome::Chrome::new("navigator", Anchor::Center)
+            .footer("type to filter · ctrl-o actions · esc close");
+        Some(layout_lines_overlay(
+            overlay_origin,
+            overlay_dims,
+            &chrome,
+            &lines,
+            // Keep the cursor on screen past the fold; +1 for the query line.
+            Some(nav.cursor + 1),
+            OverlayAnchor::Center,
+        ))
+    }
+
+    /// Paint the navigator. A no-op when it is closed.
     pub(super) fn draw_nav(
         &self,
         cells: &mut [Cell],
@@ -233,24 +254,8 @@ impl View {
         overlay_origin: (usize, usize),
         overlay_dims: (usize, usize),
     ) {
-        let Some(nav) = &self.nav else {
-            return;
-        };
-        let filtered = self.nav_filtered(nav);
-        let lines = nav_overlay_lines(&filtered, nav);
-        let chrome = chrome::Chrome::new("navigator", Anchor::Center)
-            .footer("type to filter · ctrl-o actions · esc close");
-        draw_lines_overlay(
-            cells,
-            rows,
-            cols,
-            overlay_origin,
-            overlay_dims,
-            &chrome,
-            &lines,
-            &self.theme,
-            // Keep the cursor on screen past the fold; +1 for the query line.
-            Some(nav.cursor + 1),
-        );
+        if let Some(layout) = self.nav_layout(overlay_origin, overlay_dims) {
+            draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
+        }
     }
 }
