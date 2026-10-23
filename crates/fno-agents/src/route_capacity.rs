@@ -49,7 +49,7 @@ fn providers_root(cwd: &Path) -> PathBuf {
 /// first, then `[[accounts.records]]` bound to it, de-duplicated in that
 /// order. A row's `route` names a vendor, never an account id, and
 /// contributes nothing (the Python row.accounts() rule verbatim).
-fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String> {
+fn harness_accounts(harness: &str, inventory: &Value, records: &[toml::Value]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |a: &str| {
         let a = a.trim();
@@ -67,21 +67,17 @@ fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String>
             }
         }
     }
-    if let Some(records) = crate::agents_config::config_lookup(cwd, &["accounts", "records"])
-        .and_then(|v| v.as_array().cloned())
-    {
-        for rec in &records {
-            let bound = rec
-                .get("harness")
-                .or_else(|| rec.get("cli"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if bound != harness {
-                continue;
-            }
-            if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
-                push(id);
-            }
+    for rec in records {
+        let bound = rec
+            .get("harness")
+            .or_else(|| rec.get("cli"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if bound != harness {
+            continue;
+        }
+        if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
+            push(id);
         }
     }
     out
@@ -170,9 +166,10 @@ pub(crate) fn capacity(
     let health = parse_health(&raw);
     let usage = parse_usage(&raw);
     let roots = providers_root(cwd);
+    let records = crate::accounts::records::raw_records(None, cwd);
     let mut out = Map::new();
     for harness in &harnesses {
-        let accounts = harness_accounts(harness, inventory, cwd);
+        let accounts = harness_accounts(harness, inventory, &records);
         let evidence = identity_evidence(harness, &accounts, &roots);
         let mut detail: Map<String, Value> = Map::new();
         let mut sources: Map<String, Value> = Map::new();
@@ -429,9 +426,10 @@ mod tests {
             {"name": "opus-x", "harness": "claude", "model": "o", "route": "zai/glm-5.3"},
             {"name": "flash-x", "harness": "claude", "model": "f", "account": "paid-lane"},
         ]));
-        let accounts = harness_accounts("claude", &inventory, env.dir.path());
+        let records = crate::accounts::records::raw_records(None, env.dir.path());
+        let accounts = harness_accounts("claude", &inventory, &records);
         assert_eq!(accounts, vec!["paid-lane".to_string(), "rec-a".to_string()]);
-        let accounts = harness_accounts("codex", &inventory, env.dir.path());
+        let accounts = harness_accounts("codex", &inventory, &records);
         assert_eq!(accounts, vec!["rec-b".to_string()]);
     }
 }
