@@ -238,17 +238,15 @@ mod tests {
             .unwrap()
             .contains("rowan"));
 
-        team_names::history_append(&mac_store, bound("Tamsin", "x-8d35", "sess-mac")).unwrap();
-        let err =
-            team_names::carry_holder_name(&imac_store, "sess-imac", 2, "x-d811,x32c2", "Tamsin")
-                .unwrap_err();
+        team_names::history_append(&mac_store, bound("Tamsin", "x-bbbb", "sess-mac")).unwrap();
+        let err = team_names::carry_holder_name(&imac_store, "sess-imac", 2, "x-cccc", "Tamsin")
+            .unwrap_err();
         assert!(
-            err.contains("Tamsin is retired") && err.contains("x-8d35") && err.contains("sess-mac"),
+            err.contains("Tamsin is retired") && err.contains("x-bbbb") && err.contains("sess-mac"),
             "{err}"
         );
         assert_eq!(
-            team_names::carry_holder_name(&imac_store, "sess-imac", 2, "x-d811,x32c2", "Odile")
-                .unwrap(),
+            team_names::carry_holder_name(&imac_store, "sess-imac", 2, "x-cccc", "Odile").unwrap(),
             Some("Odile".to_string())
         );
         assert!(team_names::history_names(&mac_store)
