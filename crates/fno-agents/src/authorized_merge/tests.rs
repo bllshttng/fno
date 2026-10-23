@@ -1155,6 +1155,18 @@ fn an_unreadable_optional_review_count_never_holds_a_merge() {
         run(&fake, &request(Effect::Merge)),
         Outcome::Merged { .. }
     ));
+    // No count at all means the status read itself failed: that still holds.
+    let unread = Fake {
+        optional_unresolved: None,
+        ..clean()
+    };
+    let blockers = preview_blockers(&unread, &preview_request(7));
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.code == "optional_reviews_unknown"),
+        "{blockers:?}"
+    );
 }
 
 #[test]
