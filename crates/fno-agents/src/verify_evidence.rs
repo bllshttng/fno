@@ -274,24 +274,9 @@ fn cfg_table(content: &str) -> Option<toml::Table> {
     content.parse::<toml::Table>().ok()
 }
 
-/// The accounts block: canonical `accounts`, else the pre-rename `providers`.
-///
-/// The Rust side has its own config readers that never pass through the Python
-/// loader's `_extract_accounts_block`, so the rename needs the fallback here
-/// too. It matters more here than it looks: every accessor below is an Option
-/// chain, so reading only one spelling degrades to `None` SILENTLY - a config
-/// in the other spelling would read as "no accounts configured" rather than
-/// as an error.
-fn accounts_block(table: &toml::Table) -> Option<&toml::Table> {
-    table
-        .get("accounts")
-        .or_else(|| table.get("providers"))?
-        .as_table()
-}
-
 /// Global active account: flat `accounts.active` (pre-rename `providers.active`).
 fn parse_global_active(content: &str) -> Option<String> {
-    accounts_block(&cfg_table(content)?)?
+    crate::accounts::records::extract_accounts_block(&cfg_table(content)?)?
         .get("active")?
         .as_str()
         .map(str::to_string)
@@ -321,18 +306,19 @@ fn parse_agent_provider(content: &str, agent: &str) -> Option<String> {
 /// config can carry `[[providers.records]]` with `cli` until its first write.
 fn parse_provider_cli(content: &str, pid: &str) -> Option<String> {
     let table = cfg_table(content)?;
-    let records = accounts_block(&table)?.get("records")?.as_array()?;
-    records.iter().find_map(|rec| {
-        let t = rec.as_table()?;
-        if t.get("id").and_then(|v| v.as_str()) == Some(pid) {
-            t.get("harness")
-                .or_else(|| t.get("cli"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        } else {
-            None
-        }
-    })
+    crate::accounts::records::block_records(&table)
+        .iter()
+        .find_map(|rec| {
+            let t = rec.as_table()?;
+            if t.get("id").and_then(|v| v.as_str()) == Some(pid) {
+                t.get("harness")
+                    .or_else(|| t.get("cli"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })
 }
 
 fn git_show_toplevel(git_bin: &str) -> Option<PathBuf> {

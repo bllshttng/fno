@@ -202,14 +202,9 @@ fn policy(cwd: &Path) -> Value {
 }
 
 /// `{account_id: vendor}` from the account records' `route` first segments.
-/// The legacy `providers.records` alias answers the same question.
 fn account_record_vendors(cwd: &Path) -> Value {
-    let records = crate::agents_config::config_value_deep(cwd, &["accounts", "records"])
-        .or_else(|| crate::agents_config::config_value_deep(cwd, &["providers", "records"]))
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
     let mut out = Map::new();
-    for record in &records {
+    for record in &crate::accounts::records::raw_records(None, cwd) {
         let id = toml_str(record.get("id"));
         let route = toml_str(record.get("route"));
         if id.is_empty() || route.trim().is_empty() {

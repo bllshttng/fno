@@ -500,13 +500,12 @@ fn account_reset_timezones(candidates: &[PathBuf]) -> BTreeMap<String, String> {
     out
 }
 
-/// Zones from config.toml `[[accounts.records]]` (agents_config's candidate
-/// chain, a file the settings.yaml reader never opens), keyed by record id
-/// AND by the provider prefix of its route (`zai/glm-5.3[1m]` keys `zai`),
-/// so a lane whose rows carry only the provider axis still resolves its
-/// vendor stamp.
+/// Zones from `[[accounts.records]]` across the accounts loader's layers,
+/// keyed by record id AND by the provider prefix of its route
+/// (`zai/glm-5.3[1m]` keys `zai`), so a lane whose rows carry only the
+/// provider axis still resolves its vendor stamp.
 fn record_reset_timezones(cwd: &Path) -> BTreeMap<String, String> {
-    record_reset_timezones_from_candidates(&crate::agents_config::config_candidates(cwd))
+    record_reset_timezones_from_candidates(&crate::accounts::records::candidates(None, cwd))
 }
 
 fn record_reset_timezones_from_candidates(candidates: &[PathBuf]) -> BTreeMap<String, String> {
@@ -514,20 +513,7 @@ fn record_reset_timezones_from_candidates(candidates: &[PathBuf]) -> BTreeMap<St
     // Candidates are ordered highest priority first. Walk them in reverse so
     // a higher tier replaces a lower tier for the same record or provider.
     for path in candidates.iter().rev() {
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(table) = raw.parse::<toml::Table>() else {
-            continue;
-        };
-        let Some(records) = table
-            .get("accounts")
-            .and_then(|v| v.get("records"))
-            .and_then(toml::Value::as_array)
-        else {
-            continue;
-        };
-        for rec in records {
+        for rec in crate::accounts::records::layer_records(path) {
             let Some(tz) = rec.get("reset_timezone").and_then(|v| v.as_str()) else {
                 continue;
             };

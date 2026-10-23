@@ -176,31 +176,7 @@ fn tick_once(
         );
         let capacity =
             crate::route_capacity::capacity(&json!({}), config_cwd, now as f64, refreshed.as_ref());
-        let global_ids = crate::agents_config::config_lookup_global(&["accounts", "records"])
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|record| {
-                record
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .map(str::to_string)
-            })
-            .collect::<Vec<_>>();
-        let records = crate::agents_config::config_lookup(config_cwd, &["accounts", "records"])
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|record| {
-                let mut record = serde_json::to_value(record).ok()?;
-                let id = record.get("id").and_then(Value::as_str)?.to_string();
-                record.as_object_mut()?.insert(
-                    "global".to_string(),
-                    json!(global_ids.iter().any(|global| global == &id)),
-                );
-                Some(record)
-            })
-            .collect::<Vec<_>>();
+        let records = tagged_records(config_cwd);
         match decide(
             &capacity["claude"],
             &records,
@@ -291,35 +267,40 @@ fn is_shared_managed_claude(record: &Value) -> bool {
         && shared_dir
 }
 
-/// Shared-slot managed claude record ids, the merge of the global and the
-/// project config rows, exactly the rows the cutover arm may act on.
-fn shared_slot_ids(config_cwd: &Path) -> Vec<String> {
-    let global_ids: Vec<String> =
-        crate::agents_config::config_lookup_global(&["accounts", "records"])
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|record| {
-                record
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .map(str::to_string)
-            })
-            .collect();
-    crate::agents_config::config_lookup(config_cwd, &["accounts", "records"])
-        .and_then(|value| value.as_array().cloned())
+/// The account records merged across the config layers, each tagged
+/// `global` when the global config declares its id.
+fn tagged_records(config_cwd: &Path) -> Vec<Value> {
+    let global_ids: Vec<String> = crate::agents_config::global_config_path()
+        .map(|path| crate::accounts::records::layer_records(&path))
         .unwrap_or_default()
+        .iter()
+        .filter_map(|record| {
+            record
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    crate::accounts::records::raw_records(None, config_cwd)
         .iter()
         .filter_map(|record| {
             let mut record = serde_json::to_value(record).ok()?;
             let id = record.get("id").and_then(Value::as_str)?.to_string();
-            let merged = record.as_object_mut()?;
-            merged.insert(
-                "global".to_string(),
-                json!(global_ids.iter().any(|g| g == &id)),
-            );
-            is_shared_managed_claude(&record).then_some(id)
+            record
+                .as_object_mut()?
+                .insert("global".to_string(), json!(global_ids.contains(&id)));
+            Some(record)
         })
+        .collect()
+}
+
+/// Shared-slot managed claude record ids, the merge of the global and the
+/// project config rows, exactly the rows the cutover arm may act on.
+fn shared_slot_ids(config_cwd: &Path) -> Vec<String> {
+    tagged_records(config_cwd)
+        .into_iter()
+        .filter(is_shared_managed_claude)
+        .filter_map(|record| record.get("id").and_then(Value::as_str).map(str::to_string))
         .collect()
 }
 

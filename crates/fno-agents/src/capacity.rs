@@ -565,86 +565,69 @@ pub(crate) struct AccountRecord {
     pub reset_timezone: Option<String>,
 }
 
-/// `[[accounts.records]]` through the same candidate chain
-/// `record_reset_timezones` reads, so one config file is one truth. The
-/// chain is walked highest priority first and the first record with an id
-/// wins, the same first-hit-wins rule every config key follows.
+/// `[[accounts.records]]` merged across the config layers by the accounts
+/// loader's one reader, so a local record replaces a global one by id. A
+/// duplicate id inside one file keeps its first record.
 pub(crate) fn account_records(cwd: &std::path::Path) -> Vec<AccountRecord> {
-    let paths = crate::agents_config::config_candidates(cwd);
     let mut out: Vec<AccountRecord> = Vec::new();
-    for path in &paths {
-        let Ok(raw) = std::fs::read_to_string(path) else {
+    for rec in &crate::accounts::records::raw_records(None, cwd) {
+        let Some(id) = rec.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
-        let Ok(table) = raw.parse::<toml::Table>() else {
+        if out.iter().any(|known| known.id == id) {
             continue;
-        };
-        let Some(records) = table
-            .get("accounts")
-            .and_then(|v| v.get("records"))
-            .and_then(toml::Value::as_array)
-        else {
-            continue;
-        };
-        for rec in records {
-            let Some(id) = rec.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            if out.iter().any(|known| known.id == id) {
-                continue;
-            }
-            // A record may name its route (provider/model) or skip it: an
-            // OAuth entry identifies its account without the model axis. A
-            // route-less record folds no tokens (no provider to match), but
-            // it stays in the state so the config is never silently dropped.
-            let (provider, route_model) = match rec.get("route").and_then(|v| v.as_str()) {
-                Some(route) => match route.split_once('/') {
-                    Some((p, m)) if !p.is_empty() => (p, m),
-                    _ => continue,
-                },
-                None => ("", ""),
-            };
-            let billing = rec
-                .get("billing")
-                .and_then(|v| v.as_str())
-                .unwrap_or("subscription");
-            if billing != "subscription" && billing != "metered" {
-                continue;
-            }
-            let windows: Vec<String> = rec
-                .get("windows")
-                .and_then(toml::Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|v| v.as_str())
-                        .filter(|w| *w == "5h" || *w == "weekly")
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
-            out.push(AccountRecord {
-                id: id.to_string(),
-                provider: provider.to_string(),
-                route_model: route_model.to_string(),
-                billing: billing.to_string(),
-                show: rec
-                    .get("show")
-                    .and_then(toml::Value::as_bool)
-                    .unwrap_or(true),
-                windows: match billing {
-                    "subscription" => windows,
-                    _ => Vec::new(),
-                },
-                limit_tokens: rec
-                    .get("limit_tokens")
-                    .and_then(toml::Value::as_integer)
-                    .map(|v| v as u64),
-                reset_timezone: rec
-                    .get("reset_timezone")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-            });
         }
+        // A record may name its route (provider/model) or skip it: an
+        // OAuth entry identifies its account without the model axis. A
+        // route-less record folds no tokens (no provider to match), but
+        // it stays in the state so the config is never silently dropped.
+        let (provider, route_model) = match rec.get("route").and_then(|v| v.as_str()) {
+            Some(route) => match route.split_once('/') {
+                Some((p, m)) if !p.is_empty() => (p, m),
+                _ => continue,
+            },
+            None => ("", ""),
+        };
+        let billing = rec
+            .get("billing")
+            .and_then(|v| v.as_str())
+            .unwrap_or("subscription");
+        if billing != "subscription" && billing != "metered" {
+            continue;
+        }
+        let windows: Vec<String> = rec
+            .get("windows")
+            .and_then(toml::Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|w| *w == "5h" || *w == "weekly")
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(AccountRecord {
+            id: id.to_string(),
+            provider: provider.to_string(),
+            route_model: route_model.to_string(),
+            billing: billing.to_string(),
+            show: rec
+                .get("show")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true),
+            windows: match billing {
+                "subscription" => windows,
+                _ => Vec::new(),
+            },
+            limit_tokens: rec
+                .get("limit_tokens")
+                .and_then(toml::Value::as_integer)
+                .map(|v| v as u64),
+            reset_timezone: rec
+                .get("reset_timezone")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
     }
     out
 }

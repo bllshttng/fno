@@ -67,21 +67,17 @@ fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String>
             }
         }
     }
-    if let Some(records) = crate::agents_config::config_lookup(cwd, &["accounts", "records"])
-        .and_then(|v| v.as_array().cloned())
-    {
-        for rec in &records {
-            let bound = rec
-                .get("harness")
-                .or_else(|| rec.get("cli"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if bound != harness {
-                continue;
-            }
-            if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
-                push(id);
-            }
+    for rec in &crate::accounts::records::raw_records(None, cwd) {
+        let bound = rec
+            .get("harness")
+            .or_else(|| rec.get("cli"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if bound != harness {
+            continue;
+        }
+        if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
+            push(id);
         }
     }
     out
