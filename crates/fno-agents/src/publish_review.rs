@@ -328,6 +328,57 @@ pub(crate) fn newest_branch_attestation(journals: &[PathBuf], branch: &str) -> O
     newest.map(|(_, data)| data)
 }
 
+/// The level and round the summary line names. The row's own fields win.
+/// A row without them still names both: an emitter from an install staged
+/// before the fields existed (a plugin stage lags every merge until it is
+/// restaged) wrote none, and every summary it fed read `level=unset
+/// round=unscoped`. The level falls back to the diff-sized tier of the row's
+/// own reviewed counts, the rule `fno do review resolve-level` applies, and
+/// the round to the chain counter `fno do pr review-hold round` reads, over
+/// the same journals this row came from. Only a row that carries neither
+/// count, or a chain that counts no round, keeps the placeholder.
+fn summary_level_and_round(
+    att: &Value,
+    journals: &[PathBuf],
+    branch: &str,
+    reviewed_head: &str,
+) -> (String, String) {
+    let level = att
+        .get("level")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && *s != "unset")
+        .map(str::to_string)
+        .or_else(|| {
+            let files = att.get("reviewed_file_count").and_then(Value::as_u64)?;
+            let lines = att.get("reviewed_line_count").and_then(Value::as_u64)?;
+            Some(crate::review_level::level_for_diff(files, lines).to_string())
+        })
+        .unwrap_or_else(|| "unset".to_string());
+    let round = att
+        .get("review_round")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            let text: Vec<String> = journals
+                .iter()
+                .filter_map(|p| {
+                    crate::loopcheck::event_lines_of(p, &["review_attestation"])
+                        .ok()
+                        .map(|l| l.join("\n"))
+                })
+                .collect();
+            let used = crate::loopcheck::rounds_since_last_pass(
+                &text.join("\n"),
+                branch,
+                reviewed_head,
+                None,
+            );
+            (used > 0).then_some(used)
+        })
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "unscoped".to_string());
+    (level, round)
+}
+
 /// The one marker a round's review ends with; idempotency keys on it. Also
 /// read by `merge_gates::review_posted_gate` to decide whether an attested
 /// round at a given head has landed as a GitHub review yet.
@@ -558,17 +609,7 @@ pub fn publish_round(payload: &Value, gh: &dyn Gh, journals: &[PathBuf]) -> Roun
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let level = att
-        .get("level")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("unset")
-        .to_string();
-    let round_label = att
-        .get("review_round")
-        .and_then(Value::as_i64)
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "unscoped".to_string());
+    let (level, round_label) = summary_level_and_round(&att, journals, &branch, &reviewed_head);
     let verdict = att
         .get("verdict")
         .and_then(Value::as_str)
@@ -1426,5 +1467,69 @@ mod tests {
         assert_eq!(no_att.exit(), 2);
         let refused = Answer::done("refused", "bot identity b is the PR author");
         assert_eq!(refused.exit(), 1);
+    }
+
+    /// The posted summary names a level and a round whenever the journal can
+    /// supply them. The rows mirror the ones a stale plugin stage wrote for a
+    /// real PR: two reviewed heads, no `level`, no `review_round`, 3 files and
+    /// 53 lines. That PR's summary read `level=unset round=unscoped`.
+    #[test]
+    fn round_summary_names_level_and_round() {
+        let dir = temp_repo("round-summary");
+        let journal = dir.join("events.jsonl");
+        let row = |ts: &str, head: &str, extra: &str| {
+            format!(
+                "{{\"type\":\"review_attestation\",\"ts\":\"{ts}\",\"data\":{{\"reviewer\":\"code-review\",\"head_sha\":\"{head}\",\"verdict\":\"pass\",\"branch\":\"feat/x\",\"reviewed_file_count\":3,\"reviewed_line_count\":53,\"findings\":[]{extra}}}}}\n"
+            )
+        };
+        let view = || {
+            GhOut {
+            ok: true,
+            code: 0,
+            stdout: r#"{"number": 931, "headRefOid": "head2", "headRefName": "feat/x", "url": "https://github.com/o/r/pull/931"}"#.to_string(),
+            stderr: String::new(),
+        }
+        };
+        let empty_list = || GhOut {
+            ok: true,
+            code: 0,
+            stdout: "[]".to_string(),
+            stderr: String::new(),
+        };
+        let posted_summary = |journal_text: String| {
+            std::fs::write(&journal, journal_text).unwrap();
+            let fake = GhFake::new(vec![view(), empty_list(), post_ok()]);
+            let answer = publish_round(
+                &json!({"pr_number": 931, "cwd": dir.to_string_lossy()}),
+                &fake,
+                &[journal.clone()],
+            );
+            assert_eq!(answer.status, "posted");
+            let calls = fake.calls();
+            calls[2]
+                .iter()
+                .find_map(|a| a.strip_prefix("body=").map(str::to_string))
+                .unwrap()
+        };
+
+        let legacy = posted_summary(format!(
+            "{}{}",
+            row("2026-10-23T05:47:52Z", "head1", ""),
+            row("2026-10-23T05:49:12Z", "head2", "")
+        ));
+        assert!(
+            legacy.starts_with("fno review: level=low round=2 "),
+            "{legacy}"
+        );
+
+        let declared = posted_summary(row(
+            "2026-10-23T05:49:12Z",
+            "head2",
+            ",\"level\":\"high\",\"review_round\":5",
+        ));
+        assert!(
+            declared.starts_with("fno review: level=high round=5 "),
+            "{declared}"
+        );
     }
 }
