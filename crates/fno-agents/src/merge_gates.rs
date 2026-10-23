@@ -626,7 +626,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
     // paint files, and the mux shots embedded, deduped per head. Best-effort:
     // a failed filing never softens the hold, it only names the remedy.
     let root = vault_root(cwd);
-    if answered_question_names_pr(&root, pr) || role_chat_clears_pr(probes, cwd, pr, head) {
+    if answered_question_names_pr(&root, pr, head) || role_chat_clears_pr(probes, cwd, pr, head) {
         return None;
     }
     let node_id = entry.as_ref().and_then(crate::graph_store::entry_id);
@@ -637,7 +637,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         .unwrap_or_default();
     let mut detail = format!(
         "PR {pr} touches the paint surface the config lists ({}); the user's look is \
-         the only clear: an answered question page naming the PR, or a role-recorded \
+         the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
          decision whose rationale attests the chat and whose text names the PR and \
          its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
          --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
@@ -849,10 +849,14 @@ fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
 }
 
 /// True when an ANSWERED question page in this project's questions directory
-/// names the PR and its answer picks the approve option: the pages the lead
-/// check-in reads, parsed the same way. "Hold for changes" or "none of these"
-/// is an answer too, and it must keep the hold.
-fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
+/// names the PR at this exact head and its answer picks the approve option:
+/// the pages the lead check-in reads, parsed the same way. "Hold for
+/// changes" or "none of these" is an answer too, and it must keep the hold.
+/// Head-scoped like the role row: a push after the user looked holds again.
+fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
+    if head.is_empty() {
+        return false;
+    }
     let dir = crate::escalation::questions_dir(root);
     // Answered pages are archived into done/ after the fact; an approval
     // must not lapse because its page moved there.
@@ -868,6 +872,7 @@ fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
                     })
                     .unwrap_or(false)
                     && page_names_pr(text, pr)
+                    && text.contains(head)
             })
         })
     })

@@ -1924,14 +1924,22 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
             "answer {answer:?} must not clear"
         );
     }
-    // The page answers with the approve option, the hold clears.
-    std::fs::write(
-        &page,
-        "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
-         answer: 1. Merge as painted\n---\nbody\n",
-    )
-    .unwrap();
+    // An approve answer on a page that names no head keeps the hold: the
+    // user's look binds to the head they saw.
+    let approved = |body: &str| {
+        format!(
+            "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+             answer: 1. Merge as painted\n---\n{body}\n"
+        )
+    };
+    std::fs::write(&page, approved("body")).unwrap();
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    // The page answers with the approve option at this head, the hold clears.
+    std::fs::write(&page, approved(&format!("PR 7 at head {head}"))).unwrap();
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
+    // A push after the user looked holds again.
+    let pushed: String = "b".repeat(40);
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
     // The page archives into done/; the approval must not lapse.
     let donedir = qdir.join("done");
     std::fs::create_dir_all(&donedir).unwrap();
