@@ -55,7 +55,7 @@ Three caller states decide which of those get written, and the third fails close
 2. No identity, and a terminal on stdin. `attested_by` is written. With no `--authority`, the row records as operator law, the same lane `fno inbox law set` gives this caller.
 3. No identity, and no terminal. Superuser authority is REFUSED. `decided_by` says `unattributed-caller`.
 
-Law is defaulted in state 2 only, and only for the person at the terminal. A `--decided-by` name other than `operator`, or a mail origin below operator, is someone else's ruling and records with no authority. On 2026-10-23 a user's own `fno backlog decide` at a terminal recorded with no authority. It read `unattributed` and could not lift the merge hold it answered. A flag the law door never asked for bought no protection, because the law door already gives this caller the operator lane.
+Law is defaulted in state 2 only, and only for the person at the terminal. A `--decided-by` name other than `operator`, or a mail origin below operator, is someone else's ruling and records with no authority. On 2026-10-23 a user's own `fno backlog decide` at a terminal recorded with no authority. It read `unattributed`, so the merge hold it answered refused it. A flag the law door never asked for bought no protection, because the law door already gives this caller the operator lane.
 
 State 3 exists because state 2 used to be everything that was not state 1. That made attendance an ABSENCE, and `env -u CLAUDE_CODE_SESSION_ID fno backlog decide --authority operator` was enough to forge an attested row in the law lane.
 
