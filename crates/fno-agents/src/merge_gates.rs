@@ -961,7 +961,13 @@ fn row_is_chat_attested(row: &Value) -> bool {
 /// it), a chat-attested rationale, and text naming both the PR and the exact
 /// head sha the user looked at. Head-scoped like the operator head grant: a
 /// push invalidates the approval. An unreadable index never clears.
-fn role_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str, node: &str) -> bool {
+pub(crate) fn role_chat_clears_pr<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    pr: u64,
+    head: &str,
+    node: &str,
+) -> bool {
     if head.is_empty() {
         return false;
     }

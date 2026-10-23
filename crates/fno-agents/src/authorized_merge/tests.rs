@@ -2012,20 +2012,6 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         "merge.visual_paint_paths = [\"crates/fno/src/client/**\"]\n",
     )
     .unwrap();
-    // Bind a node to PR 7: the role row must name it as its subject.
-    let mut graph =
-        crate::backlog::open(&crate::org_board::scope::graph_json_path(&tmp)).expect("graph");
-    let node = crate::backlog::model::Node::from_json(&json!({
-        "id": "x-paint",
-        "slug": "paint",
-        "title": "Paint",
-        "type": "feature",
-        "status": "in_review",
-        "priority": "p2",
-        "pr_number": 7,
-    }))
-    .expect("node json");
-    crate::backlog::nodes::save(&mut graph, &node).expect("saves");
     let head: String = "a".repeat(40);
     let pushed: String = "b".repeat(40);
     let row_at = |subject: &str,
@@ -2042,7 +2028,10 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     };
     let mut fake = clean();
     fake.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
-    // The lead's transcription, head-scoped: clears.
+    let clears = |fake: &Fake, head: &str| {
+        crate::merge_gates::role_chat_clears_pr(fake, &tmp, 7, head, "x-paint")
+    };
+    // The lead's transcription at the PR's node, head-scoped: clears.
     fake.decisions_stdout = Some(
         row(
             "Approved: PR 7 at <head> as built",
@@ -2053,12 +2042,15 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
-    // A head push invalidates the approval: held again.
+    assert!(clears(&fake, &head));
+    // A head push invalidates the approval.
     assert!(
-        crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some(),
+        !clears(&fake, &pushed),
         "an approval recorded for head a..a must not clear head b..b"
     );
+    // With no node bound to the PR, even that row holds: the subject rule
+    // has no node to match.
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
     // A role row on another subject never clears: the door scopes the role
     // to the lead whose territory covers the subject, so only the PR's own
     // node carries that scope.
@@ -2073,7 +2065,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // No chat attestation in the rationale: held.
     fake.decisions_stdout = Some(
         row(
@@ -2085,7 +2077,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // The row's authority is not role: held.
     fake.decisions_stdout = Some(
         row(
@@ -2097,7 +2089,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // A retracted approval never clears: held.
     fake.decisions_stdout = Some(
         row(
@@ -2109,7 +2101,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // The gate is closed again with the empty index the Fake serves by
     // default; the head-scoped grant text stays out of a held detail.
     fake.decisions_stdout = None;
