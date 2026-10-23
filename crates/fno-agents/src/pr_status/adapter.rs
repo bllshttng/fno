@@ -1,12 +1,12 @@
-//! The fixed-purpose gh adapter the `fno-gh-loopcheck` and
-//! `fno-gh-coverage` binaries serve: metadata, CI, and review coverage are
-//! translated from REST helpers, remaining GraphQL shapes run through the
-//! serialized quota broker with a purpose fixed by the executable name, so
+//! The fixed-purpose gh adapter behind `fno-agents gh-adapter
+//! coverage|discretionary` (spawned under the logical names
+//! `fno-gh-coverage` and `fno-gh-loopcheck`): metadata, CI, and review
+//! coverage are translated from REST helpers, remaining GraphQL shapes run
+//! through the serialized quota broker with a purpose fixed by the argv, so
 //! an environment variable cannot promote a discretionary read into the
 //! coverage reserve. Ported from `cli/src/fno/pr/_internal_gh.py` (the pr
-//! port 7 retirement); the Rust stop gate and finalize spawn these names as
-//! executables, so the interface is "a gh-shaped argv in, gh-shaped streams
-//! and an exit code out".
+//! port 7 retirement); the interface is "a gh-shaped argv in, gh-shaped
+//! streams and an exit code out".
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -524,6 +524,23 @@ pub fn run_main(purpose: &str, args: Vec<String>) -> i32 {
         }
     }
     result.returncode
+}
+
+/// The client's gh transport arms: `gh <args>` is the proxy the gh shim
+/// execs, `gh-adapter <purpose> <args>` the fixed-purpose read. None for
+/// any other argv.
+pub fn gh_transport_door(args: &[String]) -> Option<i32> {
+    match args.first().map(String::as_str)? {
+        "gh" => Some(crate::pr_status::proxy::run_proxy_main(args[1..].to_vec())),
+        "gh-adapter" => Some(match args.get(1).map(String::as_str) {
+            Some(purpose @ ("coverage" | "discretionary")) => run_main(purpose, args[2..].to_vec()),
+            _ => {
+                eprintln!("fno-agents gh-adapter: the purpose must be coverage or discretionary");
+                2
+            }
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

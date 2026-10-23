@@ -21,10 +21,7 @@ if [[ -z "$BIN" ]]; then
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    # --bins, not --bin: the quota helper family (fno-gh-loopcheck and kin)
-    # resolves beside this binary, and a lone fno-agents build strands the
-    # probe in advisory mode.
-    (cd "$ROOT/crates/fno-agents" && cargo build --bins >/dev/null 2>&1)
+    (cd "$ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
     BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
 fi
 [[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary missing at $BIN" >&2; exit 1; }

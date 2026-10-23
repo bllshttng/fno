@@ -5,6 +5,7 @@
 
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::Read as _;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
@@ -35,9 +36,12 @@ pub(crate) const PROXY_DIR_ENV: &str = "FNO_GH_PROXY_DIR";
 /// The proxy stamps this into the env it hands its execve successor, so its
 /// own successor can recognize itself. Good for that one hop only.
 pub(crate) const PROXY_DEPTH_ENV: &str = "FNO_GH_PROXY_DEPTH";
-/// The exec line `ensure_proxy` writes into the gh shim; the content anchor
-/// both shim detectors match.
+/// The exec line older installs wrote into the gh shim, when the proxy was
+/// its own binary. Still classified, so a stale shim reads as ours.
 pub(crate) const PROXY_EXEC_LINE: &str = "exec fno-gh-proxy \"$@\"";
+/// The tail of the exec line `ensure_proxy` writes now:
+/// `exec <abs path>/fno-agents gh "$@"`.
+const PROXY_EXEC_TAIL: &str = " gh \"$@\"";
 /// The OTHER shape a shim takes: a pip/uv console script importing the entry
 /// point, with no exec line. Kept classifiable so an already-installed stale
 /// shim reads as ours, never as a real gh.
@@ -82,8 +86,20 @@ pub(crate) fn is_proxy_shim(path: &Path) -> bool {
     let text = String::from_utf8_lossy(&head);
     text.lines().any(|line| {
         let line = line.trim();
-        line == PROXY_EXEC_LINE || line == PROXY_IMPORT_LINE
+        line == PROXY_EXEC_LINE || line == PROXY_IMPORT_LINE || execs_client_proxy(line)
     })
+}
+
+/// `exec <path>/fno-agents gh "$@"`, the path bare or single-quoted.
+fn execs_client_proxy(line: &str) -> bool {
+    let Some(program) = line
+        .strip_prefix("exec ")
+        .and_then(|rest| rest.strip_suffix(PROXY_EXEC_TAIL))
+    else {
+        return false;
+    };
+    let program = program.trim().trim_matches('\'');
+    Path::new(program).file_name().and_then(|n| n.to_str()) == Some("fno-agents")
 }
 
 /// Every directory one of our own shims can sit in. Fails closed: a proxy
@@ -108,22 +124,67 @@ pub(crate) fn proxy_dirs() -> Result<Vec<PathBuf>, ProxyIdentityError> {
     Ok(paths)
 }
 
-/// Resolve one of the gh helper binaries by name: a sibling of the running
-/// executable first (cargo installs put the whole bin family in one dir and
-/// the release wheel stages them side by side in `_bin`), then the bare name
-/// for a PATH install. The stop gate, finalize and review-coverage spawn
-/// these names; a wheel-only install has no PATH entry for them, so the
-/// sibling lookup is what keeps the spawns answering there.
-pub(crate) fn helper_bin(name: &str) -> String {
+/// The `fno-agents` subcommand behind each gh helper name. The names stay
+/// the logical spawn targets (budget, spend and probe logic read them), but
+/// no file carries them: a reinstall that dropped the helper binaries once
+/// broke gh in every session, the stop hook and every review read.
+fn helper_subcommand(program: &OsStr) -> Option<&'static [&'static str]> {
+    match program.to_str()? {
+        "fno-gh-proxy" => Some(&["gh"][..]),
+        "fno-gh-loopcheck" => Some(&["gh-adapter", "discretionary"][..]),
+        "fno-gh-coverage" => Some(&["gh-adapter", "coverage"][..]),
+        _ => None,
+    }
+}
+
+/// The `fno-agents` client: this process when it is the client, else its
+/// sibling (the daemon and worker ship beside it), else the PATH name.
+fn client_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join(name);
+        if exe.file_name().and_then(|n| n.to_str()) == Some("fno-agents") {
+            return exe;
+        }
+        if let Some(sibling) = exe.parent().map(|dir| dir.join("fno-agents")) {
             if sibling.is_file() {
-                return sibling.to_string_lossy().into_owned();
+                return sibling;
             }
         }
     }
-    name.to_string()
+    PathBuf::from("fno-agents")
+}
+
+/// `Command::new(program)`, except a bare helper name runs the matching
+/// `fno-agents` subcommand. A path is spawned as given, so a staged fake
+/// helper still wins.
+pub(crate) fn helper_command(program: &OsStr) -> std::process::Command {
+    match helper_subcommand(program) {
+        Some(prefix) => {
+            let mut cmd = std::process::Command::new(client_exe());
+            cmd.args(prefix);
+            cmd
+        }
+        None => std::process::Command::new(program),
+    }
+}
+
+/// `cmd` rebuilt through `helper_command`, for a door handed a finished
+/// Command. Cwd and env edits carry over; the door sets stdio itself.
+pub(crate) fn dispatch_helper(cmd: std::process::Command) -> std::process::Command {
+    if helper_subcommand(cmd.get_program()).is_none() {
+        return cmd;
+    }
+    let mut out = helper_command(cmd.get_program());
+    out.args(cmd.get_args());
+    if let Some(dir) = cmd.get_current_dir() {
+        out.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => out.env(key, value),
+            None => out.env_remove(key),
+        };
+    }
+    out
 }
 
 /// The state-root's `bin/github-cli` dir (the `fno.paths.github_cli_proxy_dir`
@@ -747,11 +808,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shim_detection_matches_both_anchor_lines_by_content() {
+    fn shim_detection_matches_every_anchor_line_by_content() {
         let dir = tempfile::tempdir().unwrap();
         let shim = dir.path().join("gh");
         std::fs::write(&shim, format!("#!/bin/sh\n{PROXY_EXEC_LINE}\n")).unwrap();
         assert!(is_proxy_shim(&shim));
+        // The shape setup writes now, the path bare or quoted by shlex.
+        for line in [
+            "exec /opt/fno/bin/fno-agents gh \"$@\"",
+            "exec '/Users/a b/fno-agents' gh \"$@\"",
+        ] {
+            let current = dir.path().join("gh-current");
+            std::fs::write(&current, format!("#!/bin/sh\n{line}\n")).unwrap();
+            assert!(is_proxy_shim(&current), "{line}");
+        }
+        let other = dir.path().join("gh-other");
+        std::fs::write(&other, "#!/bin/sh\nexec /usr/bin/hub gh \"$@\"\n").unwrap();
+        assert!(!is_proxy_shim(&other));
         let console = dir.path().join("gh2");
         std::fs::write(&console, format!("#!/bin/sh\n{PROXY_IMPORT_LINE}\n")).unwrap();
         assert!(is_proxy_shim(&console));
@@ -762,6 +835,36 @@ mod tests {
         )
         .unwrap();
         assert!(!is_proxy_shim(&real));
+    }
+
+    #[test]
+    fn helper_names_run_fno_agents_subcommands_and_paths_run_as_given() {
+        let words = |cmd: &std::process::Command| -> (String, Vec<String>) {
+            let args = cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            (cmd.get_program().to_string_lossy().into_owned(), args)
+        };
+        for (name, want) in [
+            ("fno-gh-proxy", vec!["gh"]),
+            ("fno-gh-loopcheck", vec!["gh-adapter", "discretionary"]),
+            ("fno-gh-coverage", vec!["gh-adapter", "coverage"]),
+        ] {
+            let (program, args) = words(&helper_command(OsStr::new(name)));
+            assert!(program.ends_with("fno-agents"), "{name} ran {program}");
+            assert_eq!(args, want, "{name}");
+        }
+        // A staged fake keeps winning: a path is never rewritten.
+        let (program, args) = words(&helper_command(OsStr::new("/tmp/bin/fno-gh-coverage")));
+        assert_eq!(program, "/tmp/bin/fno-gh-coverage");
+        assert!(args.is_empty());
+        let mut built = std::process::Command::new("fno-gh-coverage");
+        built.arg("pr").current_dir("/tmp").env_remove("GH_TOKEN");
+        let rebuilt = dispatch_helper(built);
+        assert_eq!(words(&rebuilt).1, ["gh-adapter", "coverage", "pr"]);
+        assert_eq!(rebuilt.get_current_dir(), Some(Path::new("/tmp")));
+        assert_eq!(rebuilt.get_envs().count(), 1);
     }
 
     #[test]

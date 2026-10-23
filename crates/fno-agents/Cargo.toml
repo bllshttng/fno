@@ -38,18 +38,6 @@ path = "src/bin/daemon.rs"
 name = "fno-agents-worker"
 path = "src/bin/worker.rs"
 
-[[bin]]
-name = "fno-gh-loopcheck"
-path = "src/bin/fno-gh-loopcheck.rs"
-
-[[bin]]
-name = "fno-gh-proxy"
-path = "src/bin/fno-gh-proxy.rs"
-
-[[bin]]
-name = "fno-gh-coverage"
-path = "src/bin/fno-gh-coverage.rs"
-
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"

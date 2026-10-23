@@ -860,11 +860,11 @@ pub(crate) fn refused_output(line: String) -> std::process::Output {
 
 /// Command::output() behind the budget: the door for a direct gh spawn. A
 /// refusal never spawns a child; everything else is the command's own output.
-pub(crate) fn output(mut cmd: std::process::Command) -> std::io::Result<std::process::Output> {
+pub(crate) fn output(cmd: std::process::Command) -> std::io::Result<std::process::Output> {
     if let Some(line) = admit_command(&cmd) {
         return Ok(refused_output(line));
     }
-    cmd.output()
+    crate::pr_status::quota::dispatch_helper(cmd).output()
 }
 
 /// Whether the in-process consult is armed. A unit-test build runs dozens of
