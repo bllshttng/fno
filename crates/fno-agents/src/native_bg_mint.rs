@@ -391,18 +391,25 @@ fn prepare_row(
         Some(r) => ("spawn", crate::native_adopt::launcher_lineage(r)),
         None => ("adopted", Lineage::unproven(LINEAGE_REASON)),
     };
+    let node = record.and_then(|r| r.launch.node.clone()).or(node);
     RegistryEntry {
         name: record
             .and_then(|r| r.launch.name.clone())
             .or_else(|| row.name.as_deref().map(listing_name_slug))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| crate::claude_adopt::synthesized_entry_name(session, &row.short_id)),
+            // A listing that shows only the short id names nothing.
+            .filter(|s| !s.is_empty() && *s != row.short_id)
+            .unwrap_or_else(|| {
+                let node_name = node
+                    .as_deref()
+                    .and_then(|n| crate::naming::node_worker_name(n, Path::new(&cwd)));
+                crate::claude_adopt::synthesized_entry_name(session, &row.short_id, node_name)
+            }),
         origin: Some(origin.into()),
         status: AgentStatus::Live,
         short_id: row.short_id.clone(),
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
-        node: record.and_then(|r| r.launch.node.clone()).or(node),
+        node,
         created_at: crate::daemon::now_rfc3339_like(),
         // The listing pid can be a pre-warmed spare in claude's bg daemon,
         // not this session; the row stays pidless and routes by short id.

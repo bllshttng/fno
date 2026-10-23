@@ -106,9 +106,10 @@ pub fn transcript_title(session_id: &str) -> Option<String> {
 /// cell), else the linked node id, else the derivable `t-<short>` form
 /// (`t-` is the bridge's manual form: no provenance). A bare short id reads
 /// as a phantom row, never as work.
-pub fn synthesized_entry_name(session: &str, short: &str) -> String {
+pub fn synthesized_entry_name(session: &str, short: &str, node_name: Option<String>) -> String {
     transcript_title(session)
         .map(|t| t.chars().take(48).collect::<String>())
+        .or(node_name)
         .unwrap_or_else(|| format!("t-{short}"))
 }
 
@@ -432,11 +433,16 @@ mod tests {
             uuid,
             &[format!(r#"{{"type":"summary","summary":"{long}"}}"#)],
         );
-        let named = synthesized_entry_name(uuid, "a1b2c3d4");
+        let named = synthesized_entry_name(uuid, "a1b2c3d4", None);
         assert_eq!(named.chars().count(), 48, "the title is capped");
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
         // No title: the derivable t- form (the bridge's manual form).
-        assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4"), "t-a1b2c3d4");
+        assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4", None), "t-a1b2c3d4");
+        // A resolved node name beats the short-id form.
+        assert_eq!(
+            synthesized_entry_name(uuid, "a1b2c3d4", Some("t-books-index".into())),
+            "t-books-index"
+        );
     }
 
     /// Write a minimal transcript for `uuid` under a fresh temp projects dir
