@@ -80,22 +80,15 @@ fn run(
     }
 }
 
-fn host() -> String {
-    crate::claims::hostname()
-}
-
-fn text(value: &str) -> SqlValue {
-    SqlValue::Text(value.to_string())
-}
-
-fn row_args(entry: &NameHistoryEntry, host: &str) -> [SqlValue; 6] {
+/// One row's identity, in column order: the dedup key and the insert args.
+fn key(entry: &NameHistoryEntry, host: &str) -> [String; 6] {
     [
-        text(&entry.name.to_ascii_lowercase()),
-        text(&entry.scope),
-        text(entry.session.as_deref().unwrap_or("")),
-        text(&entry.kind),
-        text(&entry.ts),
-        text(host),
+        entry.name.to_ascii_lowercase(),
+        entry.scope.clone(),
+        entry.session.clone().unwrap_or_default(),
+        entry.kind.clone(),
+        entry.ts.clone(),
+        host.to_string(),
     ]
 }
 
@@ -105,28 +98,15 @@ fn insert(remote: &Remote, entries: &[&NameHistoryEntry]) -> Result<(), String> 
     if entries.is_empty() {
         return Ok(());
     }
-    let host = host();
-    let mut args = Vec::with_capacity(entries.len() * 6);
-    let mut rows = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let at = args.len();
-        rows.push(format!(
-            "(?{},?{},?{},?{},?{},?{})",
-            at + 1,
-            at + 2,
-            at + 3,
-            at + 4,
-            at + 5,
-            at + 6
-        ));
-        args.extend(row_args(entry, &host));
-    }
+    let host = crate::claims::hostname();
+    let args: Vec<SqlValue> = entries
+        .iter()
+        .flat_map(|e| key(e, &host).map(SqlValue::Text))
+        .collect();
+    let rows = vec!["(?,?,?,?,?,?)"; entries.len()].join(",");
     run(
         remote,
-        &format!(
-            "INSERT OR IGNORE INTO name_history (name, scope, session, kind, ts, host) VALUES {}",
-            rows.join(",")
-        ),
+        &format!("INSERT OR IGNORE INTO name_history (name, scope, session, kind, ts, host) VALUES {rows}"),
         &args,
     )
     .map(drop)
@@ -187,7 +167,7 @@ fn push_missing(
     shared: &[NameHistoryEntry],
     local: &[NameHistoryEntry],
 ) -> Result<usize, String> {
-    let host = host();
+    let host = crate::claims::hostname();
     let seen: BTreeSet<[String; 6]> = shared
         .iter()
         .map(|e| key(e, e.host.as_deref().unwrap_or("")))
@@ -198,17 +178,6 @@ fn push_missing(
         .collect();
     insert(remote, &missing)?;
     Ok(missing.len())
-}
-
-fn key(entry: &NameHistoryEntry, host: &str) -> [String; 6] {
-    [
-        entry.name.to_ascii_lowercase(),
-        entry.scope.clone(),
-        entry.session.clone().unwrap_or_default(),
-        entry.kind.clone(),
-        entry.ts.clone(),
-        host.to_string(),
-    ]
 }
 
 fn select_all(remote: &Remote) -> Result<Vec<NameHistoryEntry>, String> {
