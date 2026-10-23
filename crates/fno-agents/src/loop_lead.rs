@@ -500,7 +500,10 @@ pub(crate) const WALK_SESSION_KEY_ENV: &str = "FNO_LEAD_WALK_SESSION_KEY";
 /// same {alias: canonical} project map the Python guard canonicalizes with -
 /// a row stored as `alpha` and a walk for the short name `a` are one
 /// territory, not two.
-fn canonical_members(scope: &str, projects: &HashMap<String, String>) -> HashSet<String> {
+pub(crate) fn canonical_members(
+    scope: &str,
+    projects: &HashMap<String, String>,
+) -> HashSet<String> {
     scope
         .split(',')
         .map(str::trim)
