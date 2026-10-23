@@ -77,7 +77,7 @@ pub fn join(root: &Path, harness: &str, session_id: &str) -> Result<JoinOutcome,
         write_marker(root, harness, session_id)?;
         return Ok(JoinOutcome::SpawnedWorker);
     }
-    crate::mail_cli::hold::register_existing_session(harness, session_id)?;
+    crate::mail_cli::hold::register_existing_session(harness, session_id, false)?;
     write_marker(root, harness, session_id)?;
     Ok(JoinOutcome::Joined)
 }
@@ -257,6 +257,16 @@ mod tests {
         assert_eq!(join(home.root(), "claude", sid), Ok(JoinOutcome::Joined));
         assert!(is_joined(home.root(), "claude", sid));
         assert_eq!(rows_for(sid), 1);
+        // A join is not a hold: the row carries no bus-only stamp, and it
+        // has a birth date the orphan sweep can age.
+        let row = crate::state::load_registry(&AgentsHome::shared_registry_json())
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|e| e.harness_session_id.as_deref() == Some(sid))
+            .unwrap();
+        assert_eq!(row.delivery_policy, None);
+        assert!(!row.created_at.is_empty());
         assert_eq!(
             join(home.root(), "claude", sid),
             Ok(JoinOutcome::AlreadyJoined)

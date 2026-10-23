@@ -1814,9 +1814,9 @@ mod keys_settings;
 mod messages_detail;
 mod messages_reply;
 mod overlay_lines;
-pub(crate) use overlay_lines::{
-    humanize_age, nav_agent_tokens, nav_overlay_lines, peek_overlay_lines,
-};
+#[cfg(test)]
+pub(crate) use overlay_lines::nav_overlay_lines;
+pub(crate) use overlay_lines::{humanize_age, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
 mod org_detail;
@@ -3976,26 +3976,32 @@ impl View {
         for s in &self.layout.squads {
             // Always SelectSquad (unlike the sideline's active-squad
             // CycleSection): the navigator is a jump, never a view-state cycle.
-            out.push(NavRow::new(
-                s.name.clone(),
-                PaneState::Idle,
-                None,
-                None,
-                ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
-                &[],
-            ));
+            out.push(
+                NavRow::new(
+                    s.name.clone(),
+                    PaneState::Idle,
+                    None,
+                    None,
+                    ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
+                    &[],
+                )
+                .with_menu(row_menu::NavMenu::Squad(s.id)),
+            );
             for (t, tab) in s.tabs.iter().enumerate() {
                 let tab_text = tab_label_text(&tab.name, t, tab.named);
-                out.push(NavRow::new(
-                    format!("{} › {}", s.name, tab_text),
-                    PaneState::Idle,
-                    // SelectTab resolves the squad server-side, so one command
-                    // switches squad+tab (row_action's tab arm, gemini review).
-                    None,
-                    None,
-                    ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
-                    std::slice::from_ref(&s.name),
-                ));
+                out.push(
+                    NavRow::new(
+                        format!("{} › {}", s.name, tab_text),
+                        PaneState::Idle,
+                        // SelectTab resolves the squad server-side, so one command
+                        // switches squad+tab (row_action's tab arm, gemini review).
+                        None,
+                        None,
+                        ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
+                        std::slice::from_ref(&s.name),
+                    )
+                    .with_menu(row_menu::NavMenu::Tab(tab.id)),
+                );
                 // Plain panes of the tab (v22): a pane already shown as an agent
                 // row is skipped (the agent row is the richer view of the same
                 // pane); the rest become goto-able so a bare shell pane in any
@@ -4025,31 +4031,37 @@ impl View {
                     Some(TabContext::Ordinal(n)) => format!("{} › {} ·{n}", s.name, a.name),
                     None => format!("{} › {}", s.name, a.name),
                 };
-                out.push(NavRow::new(
-                    label,
-                    nav_agent_state(a),
-                    // Switch to the agent's squad first when it is not active, so
-                    // the following FocusPane lands there (the server resolves the
-                    // pane's tab on focus; the ordinal is display-only).
-                    cross(s.id),
-                    None,
-                    agent_hit(a, self.layout.active_squad),
-                    &nav_agent_tokens(a, Some(&s.name)),
-                ));
+                out.push(
+                    NavRow::new(
+                        label,
+                        nav_agent_state(a),
+                        // Switch to the agent's squad first when it is not active, so
+                        // the following FocusPane lands there (the server resolves the
+                        // pane's tab on focus; the ordinal is display-only).
+                        cross(s.id),
+                        None,
+                        agent_hit(a, self.layout.active_squad),
+                        &nav_agent_tokens(a, Some(&s.name)),
+                    )
+                    .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
+                );
             }
         }
         // Orphan agents (no live squad), mirroring display_rows' orphan section.
         for a in self.layout.agents.iter().filter(
             |a| !matches!(a.squad, Some(id) if self.layout.squads.iter().any(|s| s.id == id)),
         ) {
-            out.push(NavRow::new(
-                a.name.clone(),
-                nav_agent_state(a),
-                None,
-                None,
-                agent_hit(a, self.layout.active_squad),
-                &nav_agent_tokens(a, None),
-            ));
+            out.push(
+                NavRow::new(
+                    a.name.clone(),
+                    nav_agent_state(a),
+                    None,
+                    None,
+                    agent_hit(a, self.layout.active_squad),
+                    &nav_agent_tokens(a, None),
+                )
+                .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
+            );
         }
         out
     }
@@ -4869,6 +4881,8 @@ impl View {
             // key-table poster (opaque, sectioned, scrollable).
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.row_menu {
+            // A menu opened from the navigator paints over it, not instead.
+            self.draw_nav(&mut cells, rows, cols, overlay_origin, overlay_dims);
             // US2: the anchored row context menu, drawn at the pointer.
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.aux {
@@ -5042,29 +5056,8 @@ impl View {
             // pickers, centered or full-screen overlay - paints from its
             // own module (the file-budget gate keeps client.rs shrinking).
             self.draw_board(&mut cells, rows, cols);
-        } else if let Some(nav) = &self.nav {
-            // navigator: the filtered flat catalog + query/chip line. Rows
-            // recompute per frame from the live layout (no cache), so a push
-            // repopulates it.
-            let filtered = self.nav_filtered(nav);
-            let lines = nav_overlay_lines(&filtered, nav);
-            let chrome = chrome::Chrome::new("navigator", Anchor::Center)
-                .footer("type to filter · esc close");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &lines,
-                &self.theme,
-                // The navigator is the uncapped selector this whole change
-                // points operators at, so its cursor must stay on screen too:
-                // a session with more rows than the viewport would otherwise
-                // drive the selection below the fold. +1 for the query line.
-                Some(nav.cursor + 1),
-            );
+        } else if self.nav.is_some() {
+            self.draw_nav(&mut cells, rows, cols, overlay_origin, overlay_dims);
         } else if self.org_board.is_some() && self.board_full {
             org_board::paint(self, &mut cells, rows, cols, cols, rows);
         } else if self.messages_board.is_some() {
@@ -6753,6 +6746,8 @@ pub(crate) struct NavRow {
     /// FocusPane/AttachAgent for an agent, the dispatch confirm / focus for a
     /// card, or a [`ChromeHit::Notice`] that keeps the navigator open.
     hit: ChromeHit,
+    /// What the row menu (Ctrl-o) acts on; set by [`NavRow::with_menu`].
+    menu: row_menu::NavMenu,
 }
 
 impl NavRow {
@@ -6778,6 +6773,7 @@ impl NavRow {
             goto_squad,
             goto_tab,
             hit,
+            menu: row_menu::NavMenu::None,
         }
     }
 }

@@ -582,6 +582,7 @@ pub mod territory;
 pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
+mod test_run_journal;
 pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
@@ -1618,6 +1619,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // the footprint command killed on the daemon's behalf.
     "orphan_test_binary_reaped",
     "orphan_owner_server_reaped",
+    // One local test run through `fno doctor test`: a started and a finished
+    // row joined by run_id (test_run_journal.rs).
+    "test_run",
     // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
     // spawn-time bind window expired got its `harness_session_id` resolved on
     // a later reconcile tick, from the pane-tree rollout probe. Makes "the row
