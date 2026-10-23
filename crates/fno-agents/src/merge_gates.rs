@@ -626,10 +626,14 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
     // paint files, and the mux shots embedded, deduped per head. Best-effort:
     // a failed filing never softens the hold, it only names the remedy.
     let root = vault_root(cwd);
-    if answered_question_names_pr(&root, pr, head) || role_chat_clears_pr(probes, cwd, pr, head) {
+    let node_id = entry.as_ref().and_then(crate::graph_store::entry_id);
+    if answered_question_names_pr(&root, pr, head)
+        || node_id
+            .as_deref()
+            .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
+    {
         return None;
     }
-    let node_id = entry.as_ref().and_then(crate::graph_store::entry_id);
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let shots = node_id
         .as_deref()
@@ -952,11 +956,12 @@ fn row_is_chat_attested(row: &Value) -> bool {
 }
 
 /// True when a live role decision row transcribes the user's chat approval
-/// of this PR at this head: authority `role` (the decide door scopes who may
-/// mint one), a chat-attested rationale, and text naming both the PR and the
-/// exact head sha the user looked at. Head-scoped like the operator head
-/// grant: a push invalidates the approval. An unreadable index never clears.
-fn role_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
+/// of this PR at this head: authority `role`, the PR's bound node as subject
+/// (the decide door lets only the lead whose territory covers that node mint
+/// it), a chat-attested rationale, and text naming both the PR and the exact
+/// head sha the user looked at. Head-scoped like the operator head grant: a
+/// push invalidates the approval. An unreadable index never clears.
+fn role_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str, node: &str) -> bool {
     if head.is_empty() {
         return false;
     }
@@ -986,6 +991,7 @@ fn role_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -
         .is_some_and(|rows| {
             rows.iter().any(|row| {
                 row.get("authority_source").and_then(Value::as_str) == Some("role")
+                    && row.get("subject").and_then(Value::as_str) == Some(node)
                     && matches!(
                         row.get("lifecycle").and_then(Value::as_str),
                         Some("live") | Some("unscoped")

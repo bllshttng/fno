@@ -43,8 +43,8 @@ const AUTHORITY_SOURCES: &[&str] = &["operator", "role", "agent", "beastmode"];
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
 /// or a scrubbed identity (`None`), the seam the tests drive where the law
-/// door injects a caller. `ForcedLead` injects a handle that holds a live
-/// team; a `Forced` handle holds none.
+/// door injects a caller. `ForcedLead` injects a handle whose team covers
+/// every subject; a `Forced` handle holds no team.
 #[derive(Clone, Copy)]
 pub(crate) enum DecideIdentity {
     Ambient,
@@ -78,15 +78,62 @@ impl DecideIdentity {
         }
     }
 
-    /// Whether `handle` holds a live team in the registry. A registry read
-    /// error reads as no team (fail closed).
-    fn holds_live_team(self, handle: &str) -> bool {
+    /// Whether `handle` holds a live team whose territory covers `subject`.
+    /// An unreadable registry or graph reads as no cover (fail closed).
+    fn role_covers(self, handle: &str, subject: &str) -> bool {
         match self {
-            Self::Ambient => crate::question_clear::handle_holds_live_team(handle),
+            Self::Ambient => ambient_role_covers(handle, subject),
             Self::Forced(_) => false,
             Self::ForcedLead(_) => true,
         }
     }
+}
+
+fn ambient_role_covers(handle: &str, subject: &str) -> bool {
+    let registry = crate::paths::AgentsHome::from_env().registry_json();
+    let Ok(teams) = crate::territory::live_teams(&registry) else {
+        return false;
+    };
+    let mine: Vec<crate::territory::Team> = teams
+        .into_iter()
+        .filter(|t| crate::question_clear::holds_team(std::slice::from_ref(t), handle))
+        .collect();
+    let Ok(entries) = crate::backlog::decisions_cli::read_graph_entries() else {
+        return false;
+    };
+    let projects = std::env::current_dir()
+        .map_err(|e| e.to_string())
+        .and_then(|cwd| crate::org_board::scope::project_map(&cwd));
+    role_covers_subject(&mine, subject, &entries, &projects)
+}
+
+/// The role-scope rule: the caller holds a team, and a subject that names a
+/// node (by id or slug) must sit inside one of the caller's territories. A
+/// topic subject names no node, so holding a team is enough there.
+fn role_covers_subject(
+    mine: &[crate::territory::Team],
+    subject: &str,
+    entries: &[Value],
+    projects: &Result<std::collections::HashMap<String, String>, String>,
+) -> bool {
+    if mine.is_empty() {
+        return false;
+    }
+    let field = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
+    let Some(node) = entries
+        .iter()
+        .find(|e| {
+            field(e, "id").as_deref() == Some(subject)
+                || field(e, "slug").as_deref() == Some(subject)
+        })
+        .and_then(|e| field(e, "id"))
+    else {
+        return true;
+    };
+    mine.iter().any(|t| {
+        crate::territory::compile_scope_ids(&t.scope, entries, projects)
+            .is_ok_and(|ids| ids.contains(&node))
+    })
 }
 
 /// The authority lanes the origin floor can cap (`enforce_origin_floor`): an
@@ -646,12 +693,13 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         }
         Err(DecideRefusal::UnattributedAuthority) => return decide_unattributed_refusal(),
     };
-    // The role lane is a lead's ruling, and gates read it (the visual gate
-    // clears on a role row). An agent session must hold a live team; a
-    // caller with no identity and no terminal holds none.
+    // The role lane is a lead's ruling inside its own scope, and gates read
+    // it (the visual gate clears on a role row). An agent session must hold
+    // a live team that covers the subject; a caller with no identity and no
+    // terminal holds none.
     if provenance.authority_source.as_deref() == Some("role") {
         let allowed = match caller_session.as_deref() {
-            Some(handle) => id.holds_live_team(handle),
+            Some(handle) => id.role_covers(handle, &subject),
             None => provenance.decided_by != "unattributed-caller",
         };
         if !allowed {
@@ -982,12 +1030,12 @@ this refusal. Append agent findings without replacing node details with \
     3
 }
 
-/// The role-lane refusal: the caller holds no live team.
+/// The role-lane refusal: no live team of the caller covers the subject.
 fn decide_role_refusal(caller: &str) -> i32 {
     eprintln!(
-        "decide: refused. --authority role is a lead's ruling, and {caller} holds no live \
-team. Nothing was recorded. Omit --authority to record it as agent, or ask your lead to \
-record it."
+        "decide: refused. --authority role is a lead's ruling inside its own scope, and \
+{caller} holds no live team whose territory covers this subject. Nothing was recorded. \
+Omit --authority to record it as agent, or ask the lead who owns the node to record it."
     );
     3
 }
@@ -1323,6 +1371,38 @@ mod tests {
             rows.last().expect("a row")["authority_source"],
             json!("role")
         );
+    }
+
+    #[test]
+    fn role_scope_covers_only_the_callers_territory() {
+        let team = crate::territory::Team {
+            scope: "e-1".to_string(),
+            level: 2,
+            holder: "lead-a".to_string(),
+            holder_session: Some("s-lead".to_string()),
+        };
+        let entries = vec![
+            json!({"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"}),
+            json!({"id": "e-1a", "slug": "inside", "parent": "e-1", "project": "alpha", "status": "ready"}),
+            json!({"id": "e-outs", "project": "beta", "status": "ready"}),
+        ];
+        let projects = Err("no projects".to_string());
+        let mine = [team];
+        assert!(role_covers_subject(&mine, "e-1a", &entries, &projects));
+        assert!(role_covers_subject(&mine, "inside", &entries, &projects));
+        assert!(!role_covers_subject(&mine, "e-outs", &entries, &projects));
+        assert!(role_covers_subject(
+            &mine,
+            "release-cadence",
+            &entries,
+            &projects
+        ));
+        assert!(!role_covers_subject(
+            &[],
+            "release-cadence",
+            &entries,
+            &projects
+        ));
     }
 
     #[test]

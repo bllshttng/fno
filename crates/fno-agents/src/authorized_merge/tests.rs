@@ -2012,12 +2012,33 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         "merge.visual_paint_paths = [\"crates/fno/src/client/**\"]\n",
     )
     .unwrap();
+    // Bind a node to PR 7: the role row must name it as its subject.
+    let mut graph =
+        crate::backlog::open(&crate::org_board::scope::graph_json_path(&tmp)).expect("graph");
+    let node = crate::backlog::model::Node::from_json(&json!({
+        "id": "x-paint",
+        "slug": "paint",
+        "title": "Paint",
+        "type": "feature",
+        "status": "in_review",
+        "priority": "p2",
+        "pr_number": 7,
+    }))
+    .expect("node json");
+    crate::backlog::nodes::save(&mut graph, &node).expect("saves");
     let head: String = "a".repeat(40);
     let pushed: String = "b".repeat(40);
-    let row = |decision: &str, rationale: &str, authority: &str, lifecycle: &str| {
+    let row_at = |subject: &str,
+                  decision: &str,
+                  rationale: &str,
+                  authority: &str,
+                  lifecycle: &str| {
         format!(
-            r#"{{"decisions":[{{"decision_id":"d-xc39f","authority_source":"{authority}","lifecycle":"{lifecycle}","decision":"{decision}","rationale":"{rationale}"}}]}}"#
+            r#"{{"decisions":[{{"decision_id":"d-xc39f","subject":"{subject}","authority_source":"{authority}","lifecycle":"{lifecycle}","decision":"{decision}","rationale":"{rationale}"}}]}}"#
         )
+    };
+    let row = |decision: &str, rationale: &str, authority: &str, lifecycle: &str| {
+        row_at("x-paint", decision, rationale, authority, lifecycle)
     };
     let mut fake = clean();
     fake.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
@@ -2038,6 +2059,21 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some(),
         "an approval recorded for head a..a must not clear head b..b"
     );
+    // A role row on another subject never clears: the door scopes the role
+    // to the lead whose territory covers the subject, so only the PR's own
+    // node carries that scope.
+    fake.decisions_stdout = Some(
+        row_at(
+            "release-cadence",
+            "Approved: PR 7 at <head> as built",
+            "user in chat: approved",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
     // No chat attestation in the rationale: held.
     fake.decisions_stdout = Some(
         row(
