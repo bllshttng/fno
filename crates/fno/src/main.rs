@@ -1099,15 +1099,17 @@ fn main() {
         let peeled = match fno::spawn_floor::peel(&names) {
             Ok(peeled) => peeled,
             Err(message) => {
-                eprintln!("fno agents spawn --floor: {message}");
+                eprintln!("fno agents spawn: {message}");
                 std::process::exit(2);
             }
         };
         if peeled.help {
             eprintln!(
                 "fno agents spawn --floor N: set [agents.capacity] floor in the user config, \
-                 then spawn if a name or payload follows. The front door reads this flag, \
-                 so the list below does not show it."
+                 then spawn if a name or payload follows.\n\
+                 fno agents spawn --mux: show a headless one-shot (--once) in the mux while \
+                 it runs; without it the run keeps no registry row.\n\
+                 The front door reads these flags, so the list below does not show them."
             );
         }
         // Help forwards with no write, even when a floor came with it.
@@ -1126,6 +1128,10 @@ fn main() {
                     std::process::exit(err.code);
                 }
             }
+        }
+        if peeled.mux {
+            // The forwarded spawn inherits it; the headless lane reads it.
+            std::env::set_var(fno::spawn_floor::SHOW_ROW_ENV, "1");
         }
         args = peeled.rest.iter().map(OsString::from).collect();
         if let Err(failure) = fno::process_admission::admit_agent_spawn() {

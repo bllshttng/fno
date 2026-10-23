@@ -654,8 +654,25 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
     let _lock = crate::graph_store::BoundedLock::acquire(&db.with_extension("share"), FLUSH_WAIT)
         .map_err(|e| e.to_string())?;
     let mut connection = replica(graph)?;
+    // Each renumbered insert costs one more request; a batch with more
+    // clashing inserts than this finishes on the next flush.
+    for _ in 0..RENUMBER_LIMIT {
+        if let Some(sent) = send(&remote, &db, &mut connection)? {
+            return Ok(sent);
+        }
+    }
+    Err(format!(
+        "backlog-share: {RENUMBER_LIMIT} clashing keys renumbered in one flush."
+    ))
+}
+
+const RENUMBER_LIMIT: usize = 8;
+
+/// One outbox batch to the primary. `None` means a clashing key was
+/// renumbered and the batch re-queued, so the caller sends again.
+fn send(remote: &Remote, db: &Path, connection: &mut Connection) -> Result<Option<usize>, String> {
     let mut sending =
-        crate::backlog::meta(&connection, SENDING)?.and_then(|v| v.parse::<i64>().ok());
+        crate::backlog::meta(connection, SENDING)?.and_then(|v| v.parse::<i64>().ok());
     if let Some(mark) = sending {
         let held: bool = connection
             .query_row(
@@ -685,7 +702,7 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
         rows
     };
     let Some(&(last, _)) = rows.last() else {
-        return Ok(0);
+        return Ok(Some(0));
     };
     let changes = net(rows
         .iter()
@@ -704,8 +721,8 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
             .map_err(|e| e.to_string())
     };
     if changes.is_empty() {
-        clear(&connection)?;
-        return Ok(0);
+        clear(&*connection)?;
+        return Ok(Some(0));
     }
     let origin = crate::claims::machine_id();
     // The content hash keeps a reused outbox id (a rebuilt or restored
@@ -715,15 +732,15 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
         db.display(),
         fnv1a(ops_json(&changes).as_bytes())
     );
-    crate::backlog::stamp_meta(&connection, SENDING, &last.to_string())?;
-    match publish(&remote, &origin, &batch, &changes) {
+    crate::backlog::stamp_meta(connection, SENDING, &last.to_string())?;
+    match publish(remote, &origin, &batch, &changes) {
         Ok(()) => {
-            clear(&connection)?;
-            Ok(changes.len())
+            clear(&*connection)?;
+            Ok(Some(changes.len()))
         }
         Err(refusal) if landed_before(&refusal.message) => {
-            clear(&connection)?;
-            Ok(changes.len())
+            clear(&*connection)?;
+            Ok(Some(changes.len()))
         }
         Err(refusal)
             if crate::store_remote::is_unreachable(&refusal.message)
@@ -732,9 +749,17 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
             Err(refusal.message)
         }
         Err(refusal) => {
+            let reader: &Connection = connection;
+            let clash = refusal
+                .change
+                .filter(|&i| rowid_clash(reader, &refusal.message, &changes[i]));
+            if let Some(i) = clash {
+                renumber(remote, connection, &changes, i, last)?;
+                return Ok(None);
+            }
             repair(
-                &remote,
-                &mut connection,
+                remote,
+                connection,
                 &changes,
                 refusal.change,
                 last,
@@ -744,6 +769,116 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
             Err(refusal.message)
         }
     }
+}
+
+/// The primary refused `change`, an insert, because its rowid key (an
+/// `INTEGER PRIMARY KEY`, such as `decisions.seq`) is taken. Each replica
+/// mints that key as its own local max plus one, so two machines that write
+/// before they sync mint the same value. The key is a surrogate: no row
+/// refers to it, so a new value loses nothing.
+fn rowid_clash(connection: &Connection, error: &str, change: &Change) -> bool {
+    let Some(rest) = error.split("UNIQUE constraint failed: ").nth(1) else {
+        return false;
+    };
+    let named = rest.split(['.', ',', ' ']).take(2).collect::<Vec<_>>();
+    let [table, column] = named.as_slice() else {
+        return false;
+    };
+    let single = rest
+        .strip_prefix(&format!("{table}.{column}"))
+        .is_some_and(|tail| !tail.starts_with(','));
+    let key: Option<String> = connection
+        .query_row(
+            &format!(
+                "SELECT name FROM pragma_table_info('{table}')
+                 WHERE pk = 1 AND upper(type) = 'INTEGER'
+                   AND (SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE pk > 0) = 1"
+            ),
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    single && change.op == Op::Insert && change.table == *table && key.as_deref() == Some(*column)
+}
+
+/// Give the refused insert `changes[refused]` a rowid key past the
+/// primary's, this replica's and this batch's highest, move the local row
+/// to it, and re-queue the whole batch. Nothing is taken back: the
+/// primary refused only a key value, never a peer's change.
+fn renumber(
+    remote: &Remote,
+    connection: &mut Connection,
+    changes: &[Change],
+    refused: usize,
+    last: i64,
+) -> Result<(), String> {
+    let change = &changes[refused];
+    let table = &change.table;
+    let key = column_info(connection, table)?
+        .into_iter()
+        .find(|(_, pk)| *pk == 1)
+        .map(|(name, _)| name)
+        .ok_or_else(|| format!("{table} has no rowid key"))?;
+    let at = change
+        .columns
+        .iter()
+        .position(|c| *c == key)
+        .ok_or_else(|| format!("the {table} insert carries no {key}"))?;
+    let max_sql = format!("SELECT COALESCE(MAX(\"{key}\"), 0) FROM \"{table}\"");
+    let on_primary = remote
+        .execute(&max_sql, &[])?
+        .rows
+        .first()
+        .and_then(|r| r[0].integer())
+        .unwrap_or(0);
+    let local: i64 = connection
+        .query_row(&max_sql, [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let queued = changes
+        .iter()
+        .filter(|c| c.table == *table && c.op == Op::Insert)
+        .filter_map(|c| c.new.get(at).and_then(SqlValue::integer))
+        .max()
+        .unwrap_or(0);
+    let next = on_primary.max(local).max(queued) + 1;
+    let mut moved = change.clone();
+    moved.new[at] = SqlValue::Integer(next);
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    // A sync may already have replaced the local row with the peer's row
+    // that holds the key; matching every column leaves that row alone.
+    remove(
+        &transaction,
+        table,
+        &match_all(&change.columns, 1),
+        &change.new,
+    )?;
+    replace(&transaction, table, &change.columns, &moved.new)?;
+    transaction
+        .execute_batch(&format!(
+            "DELETE FROM backlog_outbox WHERE id <= {last};
+             DELETE FROM graph_meta WHERE key = '{SENDING}';"
+        ))
+        .map_err(|e| e.to_string())?;
+    for (i, c) in changes.iter().enumerate() {
+        let c = if i == refused { &moved } else { c };
+        transaction
+            .execute(
+                "INSERT INTO backlog_outbox (change) VALUES (?1)",
+                [&c.to_json().to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    stamp_fresh(&transaction, "renumber")?;
+    transaction.commit().map_err(|e| e.to_string())?;
+    let was = change.new[at].integer().unwrap_or_default();
+    eprintln!(
+        "backlog-share: a peer holds {table}.{key} {was} on the primary; this machine's row moved to {key} {next} and the batch is sent again."
+    );
+    Ok(())
 }
 
 /// 64-bit FNV-1a: a stable hash, the same in every build.
@@ -764,7 +899,8 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// primary never received must not die one write later; a real peer delete
 /// reaches the local row through sync instead. When the refusal names no
 /// node (a global table, or the request itself failed), the take-back covers
-/// the whole batch and its INSERTs re-queue instead of dying with it.
+/// the whole batch and its INSERTs re-queue instead of dying with it, all
+/// but the refused one, which keeps its local row.
 /// Newer queued writes to the refused node ride outbox rows past the
 /// snapshot; the take-back already reverted their effects locally, so they
 /// drop with the batch. After the commit, the operator notice (stderr plus a
@@ -878,17 +1014,19 @@ fn repair(
         ))
         .map_err(|e| e.to_string())?;
     // An unnamed refusal takes the whole batch back, so its INSERTs would
-    // die with it; they re-queue instead, since the primary either takes
-    // them (no row there) or refuses them again as a recorded clash.
+    // die with it; they re-queue instead. The insert the primary refused
+    // stays out: resent, it refuses again, and every later batch with it.
     let requeued: Vec<&Change> = changes
         .iter()
-        .filter(|c| {
+        .enumerate()
+        .filter(|&(i, c)| {
             if refused_ids.is_empty() {
-                c.op == Op::Insert
+                c.op == Op::Insert && Some(i) != refused
             } else {
                 !taken_back(c)
             }
         })
+        .map(|(_, c)| c)
         .collect();
     for change in &requeued {
         transaction
@@ -1849,6 +1987,66 @@ mod tests {
         add_node(&a, "x-2", "waits");
         assert!(flush(&a.graph).unwrap_err().contains("is unreachable"));
         assert!(outbox(&a) > 0);
+        route_to_primary(None);
+    }
+
+    /// Two machines record a decision before either syncs, so both mint the
+    /// same `decisions.seq`. A decision names no node, so the old take-back
+    /// covered the whole batch: every flush after that reverted the
+    /// machine's other writes and re-queued the clashing insert forever.
+    #[test]
+    fn two_writers_minting_one_decision_seq_both_land() {
+        fn decide(m: &Machine, id: &str) {
+            let event = json!({"type": "operator_decision", "source": "test",
+                               "data": {"decision_id": id, "decision": id}});
+            let connection = crate::backlog::open(&m.graph).unwrap();
+            crate::backlog::decisions::record(&connection, &event).unwrap();
+        }
+        fn seq_of(connection: &Connection, id: &str) -> i64 {
+            connection
+                .query_row("SELECT seq FROM decisions WHERE event_id = ?1", [id], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        }
+        let primary = test_primary::start();
+        let (a, b) = (machine(), machine());
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-1", "first");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        sync(&b.graph).unwrap();
+
+        on(&primary, &a);
+        decide(&a, "d-a");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        decide(&b, "d-b");
+        retitle(&b, "x-1", "from b");
+        flush(&b.graph).unwrap();
+
+        assert_eq!(outbox(&b), 0);
+        let held = primary.db.lock().unwrap();
+        let (on_a, on_b) = (seq_of(&*held, "d-a"), seq_of(&*held, "d-b"));
+        let retitled: String = held
+            .query_row("SELECT title FROM nodes WHERE id = 'x-1'", [], |r| r.get(0))
+            .unwrap();
+        drop(held);
+        assert!(on_b > on_a, "d-b moved past d-a: {on_a} {on_b}");
+        assert_eq!(retitled, "from b", "the batch's other write landed");
+        let local = crate::backlog::open(&b.graph).unwrap();
+        assert_eq!(seq_of(&local, "d-b"), on_b, "the replica row moved with it");
+        drop(local);
+
+        // The next local decision mints past the moved key.
+        decide(&b, "d-b2");
+        flush(&b.graph).unwrap();
+        assert_eq!(outbox(&b), 0);
+        on(&primary, &a);
+        sync(&a.graph).unwrap();
+        let synced = crate::backlog::open(&a.graph).unwrap();
+        assert_eq!(seq_of(&synced, "d-b"), on_b);
         route_to_primary(None);
     }
 
