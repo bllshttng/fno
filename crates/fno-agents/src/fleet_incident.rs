@@ -903,6 +903,33 @@ fn write_transition_locked(
     {
         return Err("a stop is already armed".into());
     }
+    // A reserve replaces only the machine arm's hold and an older reserve,
+    // and the daemon lifts only its own reserve.
+    if let Some(origin @ (crate::reserve::RESERVE_ORIGIN | crate::reserve::RESERVE_AUTO_ORIGIN)) =
+        metadata.origin.as_deref()
+    {
+        let current = match read_at(path) {
+            Verdict::Stopped(record) => Some(record),
+            Verdict::Clear(_) => None,
+            Verdict::Unavailable(detail) => {
+                return Err(format!("existing breaker is unreadable: {detail}"))
+            }
+        };
+        let owned = current
+            .as_ref()
+            .is_some_and(|r| r.origin.as_deref() == Some(crate::reserve::RESERVE_AUTO_ORIGIN));
+        if state == "clear" && !owned {
+            return Err("the daemon's reserve no longer holds the breaker".into());
+        }
+        if let Some(record) = current.filter(|_| state == "stopped") {
+            if !crate::reserve::may_replace(origin, record.origin.as_deref()) {
+                return Err(format!(
+                    "a stop is already armed (generation {}, reason: {}); a reserve never replaces it",
+                    record.generation, record.reason
+                ));
+            }
+        }
+    }
     let generation = current_generation(path)? + 1;
     let record = IncidentRecord {
         version: STATE_VERSION,
@@ -990,7 +1017,7 @@ fn parse_hold_list(value: &str) -> Result<Vec<String>, String> {
 
 /// One receipt line, JSON, on stdout: the resulting state, its generation,
 /// and the typed reach it carries.
-fn print_receipt(record: &IncidentRecord) {
+pub(crate) fn print_receipt(record: &IncidentRecord) {
     let (holds, admits) = reach(record);
     println!(
         "{}",
@@ -1010,7 +1037,7 @@ fn print_receipt(record: &IncidentRecord) {
 
 fn print_usage() {
     println!(
-        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
+        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | reserve stream|edit [--for <dur>, default 2h] [--reason <text>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
     );
 }
 
@@ -1105,7 +1132,7 @@ fn check_json(verdict: &Verdict, scope: &str) -> serde_json::Value {
     })
 }
 
-/// Binary entry: `fleet-incident stop|clear|status|check`.
+/// Binary entry: `fleet-incident stop|clear|reserve|status|check`.
 pub fn run_fleet_incident(args: &[String]) -> i32 {
     let Some(action) = args.first() else {
         print_usage();
@@ -1366,6 +1393,7 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
             }
         }
         "claim" => crate::incident_claim::run_claim(rest),
+        "reserve" => crate::reserve::run_reserve(rest),
         "check" => {
             // Admission verdict for callers that cannot link this crate (the
             // spawn gate). Asks one scope's question - the spawn gate's own

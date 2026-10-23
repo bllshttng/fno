@@ -36,7 +36,7 @@ pub(crate) fn persist_footprint_cache(raw: &str) {
 /// written inside `max_age`; `None` on a miss, a stale row, a future-stamped
 /// row, or anything unparseable. Every failure mode degrades to the live
 /// probe.
-fn fresh_footprint_cache(max_age: Duration) -> Option<String> {
+pub(crate) fn fresh_footprint_cache(max_age: Duration) -> Option<String> {
     let home = crate::paths::AgentsHome::from_env();
     let raw = std::fs::read_to_string(home.footprint_cache_json()).ok()?;
     let row: Value = serde_json::from_str(&raw).ok()?;

@@ -807,6 +807,24 @@ fn table_max_cargo_runs(t: &toml::Table) -> Option<u32> {
         .filter(|v| *v > 0)
 }
 
+/// The default for [`max_local_runs`]: how many direct-set `fno doctor test`
+/// runs an agent may hold on the machine at once.
+pub const DEFAULT_MAX_LOCAL_RUNS: u32 = 2;
+
+/// Resolve `test.max_local_runs`, the local test slot pool, with the same
+/// fail-open degrade as [`max_cargo_runs`].
+pub fn max_local_runs(cwd: &Path) -> u32 {
+    resolve(cwd, |t| {
+        t.get("test")?
+            .as_table()?
+            .get("max_local_runs")?
+            .as_integer()
+            .and_then(|i| u32::try_from(i).ok())
+            .filter(|v| *v > 0)
+    })
+    .unwrap_or(DEFAULT_MAX_LOCAL_RUNS)
+}
+
 #[cfg(test)]
 pub(crate) fn read_max_cargo_runs(content: &str) -> Option<u32> {
     table_max_cargo_runs(&parse_config(content)?)
