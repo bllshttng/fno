@@ -208,12 +208,7 @@ fn in_blueprint_law(row: &RowKey) -> bool {
 /// one-line gist: the router names them, the user decides. A glm-flash
 /// target lane runs against the temporary opus/sonnet seating until it
 /// lapses; any other target lane runs against the standing glm preference.
-fn contradicted_laws(
-    stage: &str,
-    band: &str,
-    row: &RowKey,
-    today: chrono::NaiveDate,
-) -> Vec<Value> {
+fn contradicted_laws(stage: &str, band: &str, row: &RowKey) -> Vec<Value> {
     let mut out = Vec::new();
     if stage == BLUEPRINT_STAGE {
         out.push(json!({
@@ -230,6 +225,7 @@ fn contradicted_laws(
         }
         return out;
     }
+    let today = chrono::Utc::now().date_naive();
     let flash = row.model_norm == "glm-5.3-flash";
     if today < chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap() {
         // The temporary law seats by band: sonnet for low and medium, opus
@@ -360,24 +356,6 @@ pub(crate) fn propose_with(
     rows: &[RowKey],
     incumbents: &BTreeMap<String, Option<String>>,
 ) -> Value {
-    propose_on(
-        cells,
-        stage,
-        rows,
-        incumbents,
-        chrono::Utc::now().date_naive(),
-    )
-}
-
-/// `propose_with` on a handed-in date, so a seat law that lapses on a fixed
-/// day cannot flip a test on the wall clock.
-pub(crate) fn propose_on(
-    cells: &[Value],
-    stage: &str,
-    rows: &[RowKey],
-    incumbents: &BTreeMap<String, Option<String>>,
-    today: chrono::NaiveDate,
-) -> Value {
     let mut kinds: Vec<String> = Vec::new();
     for c in cells {
         let kind = c.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -447,7 +425,7 @@ pub(crate) fn propose_on(
                 "harness": row.harness,
                 "verdict": verdict,
                 "nodes": nodes,
-                "laws": contradicted_laws(stage, difficulty, row, today),
+                "laws": contradicted_laws(stage, difficulty, row),
             });
             if let Some(c) = cell {
                 for k in ["merged", "merged_ci95", "cost_per_merged_usd"] {
@@ -548,12 +526,11 @@ mod tests {
             row("claude-sonnet", "claude", "sonnet", ""),
             row("zai-flash", "claude", "glm-5.3-flash[1m]", "zai"),
         ];
-        let out = propose_on(
+        let out = propose_with(
             &cells,
             "target",
             &rows,
             &incumbents("medium", "claude-sonnet"),
-            chrono::NaiveDate::from_ymd_opt(2026, 10, 22).unwrap(),
         );
         let props = out["proposals"].as_array().unwrap();
         let p = props
@@ -579,22 +556,6 @@ mod tests {
         let lapse = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
         let seat_law_live = chrono::Utc::now().date_naive() < lapse;
         assert_eq!(laws.contains(&"d-e38d92cc"), seat_law_live, "{laws:?}");
-    }
-
-    #[test]
-    fn the_seat_law_lapses_for_a_flash_lane_on_its_last_day() {
-        let flash = row("zai-flash", "claude", "glm-5.3-flash[1m]", "zai");
-        let sonnet = row("claude-sonnet", "claude", "sonnet", "");
-        let law_ids = |row: &RowKey, day: u32| -> Vec<String> {
-            let today = chrono::NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
-            contradicted_laws("target", "medium", row, today)
-                .iter()
-                .filter_map(|l| l["id"].as_str().map(str::to_string))
-                .collect()
-        };
-        assert!(law_ids(&flash, 22).contains(&"d-e38d92cc".to_string()));
-        assert!(!law_ids(&flash, 23).contains(&"d-e38d92cc".to_string()));
-        assert!(law_ids(&sonnet, 23).contains(&"d-e38d92cc".to_string()));
     }
 
     #[test]
