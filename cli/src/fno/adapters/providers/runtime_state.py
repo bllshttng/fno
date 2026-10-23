@@ -318,8 +318,8 @@ def mark_window_warned(
             "provider_id": provider_id,
             "repo_root": None if repo_root is None else str(repo_root),
         })
-    except CommandUnavailable:
-        logger.warning("runtime_state: could not mark window warned for %r", provider_id, exc_info=True)
+    except CommandUnavailable as exc:
+        logger.warning("runtime_state: could not mark window warned for %r: %s", provider_id, exc)
         return False
     return bool(out.get("set"))
 
@@ -345,8 +345,8 @@ def stamp_window_open(
             "label": label,
             "repo_root": None if repo_root is None else str(repo_root),
         })
-    except CommandUnavailable:
-        logger.warning("runtime_state: could not stamp window open for %r", provider_id, exc_info=True)
+    except CommandUnavailable as exc:
+        logger.warning("runtime_state: could not stamp window open for %r: %s", provider_id, exc)
         return False
     return bool(out.get("written"))
 
@@ -829,12 +829,12 @@ def write_usage_snapshot(
             "now": now,
             "repo_root": None if repo_root is None else str(repo_root),
         })
-    except CommandUnavailable:
+    except CommandUnavailable as exc:
         logger.warning(
             "runtime_state: usage write skipped for %r (snapshot degrades to "
-            "UNKNOWN until the next successful probe)",
+            "UNKNOWN until the next successful probe): %s",
             snapshot.provider_id,
-            exc_info=True,
+            exc,
         )
         return False
     return bool(out.get("persisted"))
