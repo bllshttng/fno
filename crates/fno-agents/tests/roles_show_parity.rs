@@ -3,7 +3,7 @@
 //!
 //! Characterization for `fno agents roles show`, on the Rust door as
 //! `fno-agents spawn-overlay roles show`. The goldens under
-//! tests/golden/roles_show/ were captured from the Python verb on this same
+//! tests/golden/roles_show/ were captured from the Python command on this same
 //! fixture before it was deleted (step 2 of the port protocol,
 //! docs/architecture/dual-implementation-inventory.md). Capture mode now
 //! refuses: a golden can only be captured while the old leg runs.

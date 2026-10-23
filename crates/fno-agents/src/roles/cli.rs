@@ -294,7 +294,7 @@ fn show(mut options: GroupOptions, tail: &[String]) -> i32 {
             )
         }
     };
-    // Discovery runs before the token parse, the order the Python verb
+    // Discovery runs before the token parse, the order the Python command
     // read them in, so a bad `--source` wins over a bad token.
     let records = match discover(&options, &command, USAGE) {
         Ok(records) => records,
