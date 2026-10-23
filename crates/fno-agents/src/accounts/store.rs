@@ -125,7 +125,8 @@ impl Host for SystemHost {
                 pid: row.pid,
                 name: None,
                 cmdline: row.command.split_whitespace().map(str::to_string).collect(),
-                started: crate::process_probe::process_started_epoch(row.pid),
+                // Sampled per pin in the scan, not for every row here.
+                started: None,
             })
             .collect()
     }
@@ -577,7 +578,7 @@ fn pinning_sessions(
             found.push(PinningSession {
                 pid: proc.pid,
                 cmdline: proc.cmdline.join(" "),
-                started: proc.started,
+                started: proc.started.or_else(|| host.started_at(proc.pid)),
             });
         }
     }
