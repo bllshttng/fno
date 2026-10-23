@@ -6,10 +6,10 @@
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
@@ -67,36 +67,17 @@ impl SystemExternal {
         let account = std::env::var("USER")
             .or_else(|_| std::env::var("USERNAME"))
             .unwrap_or_else(|_| "user".to_string());
-        let mut child = Command::new("security")
-            .args(["find-generic-password", "-s", service, "-a", &account, "-w"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|_| ExternalFailure::Unavailable)?;
-        let deadline = Instant::now() + SECURITY_TIMEOUT;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Ok(None) | Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(ExternalFailure::Unavailable);
-                }
-            }
-        };
-        let mut stdout = String::new();
-        child
-            .stdout
-            .take()
-            .ok_or(ExternalFailure::Unavailable)?
-            .read_to_string(&mut stdout)
-            .map_err(|_| ExternalFailure::Unavailable)?;
-        if status.code() == Some(SECURITY_ITEM_NOT_FOUND) {
+        let mut command = Command::new("security");
+        command.args(["find-generic-password", "-s", service, "-a", &account, "-w"]);
+        let (code, stdout, _) =
+            match crate::accounts::store::run_bounded(&mut command, SECURITY_TIMEOUT) {
+                Ok(Some(run)) => run,
+                Ok(None) | Err(_) => return Err(ExternalFailure::Unavailable),
+            };
+        if code == SECURITY_ITEM_NOT_FOUND {
             return Ok(None);
         }
-        if !status.success() {
+        if code != 0 {
             return Err(ExternalFailure::Unavailable);
         }
         let blob = stdout.trim().to_string();
@@ -472,7 +453,7 @@ fn sync_live(
         return (4, Receipt::new(action, "ambiguous-record", None));
     }
     let record = &matches[0];
-    let stored_path = options.store.join(record).join("blob");
+    let stored_path = crate::accounts::store::blob_path(&options.store, record);
     let stored = match fs::read_to_string(&stored_path) {
         Ok(stored) => stored,
         Err(_) => {
@@ -530,7 +511,7 @@ fn refresh(options: &Options, external: &dyn External) -> (i32, Receipt) {
             Receipt::new(action, "non-ascii-config-dir", Some(id.to_string())),
         );
     }
-    let meta = match read_json(&options.store.join(id).join("meta.json")) {
+    let meta = match read_json(&crate::accounts::store::meta_path(&options.store, id)) {
         Some(meta) => meta,
         None => return (4, Receipt::new(action, "unproven", Some(id.to_string()))),
     };
@@ -552,7 +533,7 @@ fn refresh(options: &Options, external: &dyn External) -> (i32, Receipt) {
 /// the fleet works.
 fn refresh_stored(options: &Options, id: &str, external: &dyn External) -> (i32, Receipt) {
     let action = "refresh";
-    let path = options.store.join(id).join("blob");
+    let path = crate::accounts::store::blob_path(&options.store, id);
     let blob = match fs::read_to_string(&path) {
         Ok(blob) => blob,
         Err(_) => {
@@ -630,7 +611,7 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
     let Some(id) = options.id.as_deref() else {
         return (2, Receipt::new(action, "missing-id", None));
     };
-    let meta = read_json(&options.store.join(id).join("meta.json"));
+    let meta = read_json(&crate::accounts::store::meta_path(&options.store, id));
     let expected = meta.as_ref().and_then(principal_from_meta);
     let expected_email = expected
         .as_ref()
@@ -750,26 +731,7 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
     let proven_blobs: Vec<&String> = proven.iter().map(|(blob, _)| blob).collect();
     let best = newest_blob(&proven_blobs);
     let (blob, principal) = proven.swap_remove(best);
-    let dir = options.store.join(id);
-    if fs::create_dir_all(&dir).is_err() || crate::paths::set_dir_mode_0700(&dir).is_err() {
-        return (
-            1,
-            Receipt::new(action, "store-unavailable", Some(id.to_string())),
-        );
-    }
-    if atomic_write(&dir.join("blob"), &blob).is_err() {
-        return (
-            1,
-            Receipt::new(action, "store-write-failed", Some(id.to_string())),
-        );
-    }
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let mut meta = json!({
-        "harness": "claude",
-        "account_id": id,
-        "captured_at": now,
-        "kind": "keychain",
-    });
+    let now = chrono::Utc::now().timestamp() as f64;
     let mut principal_json = json!({
         "account_uuid": principal.account_uuid,
         "organization_uuid": principal.organization_uuid,
@@ -777,20 +739,16 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
     if let Some(email) = &principal.email {
         principal_json["email"] = json!(email);
     }
-    meta["principal"] = principal_json;
-    meta["principal_at"] = json!(now);
-    if atomic_write(
-        &dir.join("meta.json"),
-        &serde_json::to_string_pretty(&meta).unwrap_or_default(),
-    )
-    .is_err()
+    let store = &options.store;
+    if crate::accounts::store::write_snapshot(store, id, "claude", id, &blob, true, now).is_err()
+        || crate::accounts::store::write_record_principal(store, id, &principal_json, now).is_err()
     {
         return (
             1,
             Receipt::new(action, "store-write-failed", Some(id.to_string())),
         );
     }
-    if atomic_write(&options.store.join(".active-claude"), id).is_err() {
+    if crate::accounts::store::stamp_active_slot(store, "claude", id).is_err() {
         return (
             1,
             Receipt::new(action, "stamp-write-failed", Some(id.to_string())),
@@ -831,7 +789,7 @@ pub(crate) fn stored_health(
         Ok(blobs) => blobs,
         Err(_) => return None,
     };
-    let stored_refresh = fs::read_to_string(store.join(id).join("blob"))
+    let stored_refresh = fs::read_to_string(crate::accounts::store::blob_path(store, id))
         .ok()
         .and_then(|blob| oauth(&blob).and_then(|item| item.refresh_token));
     // Refreshing the record whose stored token IS the slot's live token would
