@@ -1744,7 +1744,7 @@ fn squad_prune(args: &[OsString]) -> i32 {
     }
 
     let evidence = crate::squad_cascade::fold_cascade_verdicts(member_evidence());
-    let (tabs, live_cwds, answered_names, unreachable) = live_tabs(DeadSessions::for_run(dry_run));
+    let (tabs, live_cwds, answered_names, unreachable) = live_tabs(!dry_run);
     let scope = sweep_scope(answered_names.len(), &unreachable);
     // `--dead-only` ALONE skips the tab fold (store-only scope), but
     // the combined `--tabs-only --dead-only` scope runs BOTH halves - the
@@ -3727,7 +3727,7 @@ pub mod web_ctl;
 mod prune_sync;
 // (v71) The live-tab fold, same rule; its tests moved with it.
 mod tab_prune;
-use tab_prune::{live_tabs, prune_live_tabs_measuring_named, DeadSessions, TabPruneOutcome};
+use tab_prune::{live_tabs, prune_live_tabs_measuring_named, TabPruneOutcome};
 // (v72) The `fno mux thread reseat` command, same child-module pattern.
 mod reseat_command;
 pub use reseat_command::reseat;

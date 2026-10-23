@@ -34,27 +34,6 @@ pub(super) struct LiveTab {
     pub(super) release: Option<String>,
 }
 
-/// What [`live_tabs`] does with a proven-dead session's leftover files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeadSessions {
-    /// Read-only caller: count it, say nothing.
-    Keep,
-    /// `--dry-run`: count it and name the removal a real run makes.
-    Preview,
-    /// Remove its files and name them.
-    Reap,
-}
-
-impl DeadSessions {
-    pub(super) fn for_run(dry_run: bool) -> Self {
-        if dry_run {
-            Self::Preview
-        } else {
-            Self::Reap
-        }
-    }
-}
-
 /// Read every live tab once, keeping WHICH sessions answered. The same
 /// snapshot supplies squad liveness cwds and the empty-tab candidates, so the
 /// receipt and the destructive pass cannot disagree because one probe was
@@ -69,10 +48,8 @@ impl DeadSessions {
 ///
 /// A session whose socket is [`proven_listenerless`] has no server and so no
 /// panes: it counts as answered with zero cwds instead of blocking the store
-/// pass forever. `dead` says what happens to its leftover session files.
-pub(super) fn live_tabs(
-    dead: DeadSessions,
-) -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String>) {
+/// pass forever. With `reap_dead` its leftover session files are removed.
+pub(super) fn live_tabs(reap_dead: bool) -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String>) {
     let Ok(names) = session_names() else {
         // The session list itself is unreadable: nothing was probed, so no
         // session answered, and the refusal below must name that hole rather
@@ -142,18 +119,7 @@ pub(super) fn live_tabs(
                 }
             }
             _ if proven_listenerless(&sock) => {
-                if dead == DeadSessions::Preview {
-                    eprintln!(
-                        "fno mux workspace prune: would remove dead session {name:?} (no listener, no live pid)"
-                    );
-                } else if dead == DeadSessions::Reap {
-                    // Re-proved right before the unlink: a server that
-                    // restarted since the first proof keeps its fresh socket,
-                    // and its unread panes keep the store pass closed.
-                    if !proven_listenerless(&sock) {
-                        unreachable.push(name);
-                        continue;
-                    }
+                if reap_dead && !proto::startup_sidecar_path(&sock).exists() {
                     match proto::remove_session_files(&sock) {
                         Ok(()) => eprintln!(
                             "fno mux workspace prune: removed dead session {name:?} (no listener, no live pid)"
