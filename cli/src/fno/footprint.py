@@ -140,7 +140,13 @@ def is_claude_spare_pool(command: str) -> bool:
     argv = command.split()
     if len(argv) < 2:
         return False
-    return argv[0].rsplit("/", 1)[-1] == "claude" and argv[1] in _CLAUDE_SPARE_POOL_ARGS
+    if argv[0].rsplit("/", 1)[-1] != "claude" or argv[1] not in _CLAUDE_SPARE_POOL_ARGS:
+        return False
+    # A claimed spare keeps this argv, but Claude Code removes its claim
+    # socket: no socket on disk is a working session (memory_groups.rs).
+    marks = [i for i, token in enumerate(argv) if token == "--bg-spare"]
+    sock = argv[marks[-1] + 1] if marks and marks[-1] + 1 < len(argv) else ""
+    return not (sock.endswith(".claim.sock") and not Path(sock).exists())
 
 
 class _Process(NamedTuple):
