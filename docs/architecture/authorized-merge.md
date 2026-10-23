@@ -116,7 +116,7 @@ Per outside, non-bot PR the steward takes one action per pass, tracked in stage 
 
 ## The merge freeze
 
-A merge freeze holds a release window. The team sets it, and only the user lifts it. The code is `merge_freeze.rs`. With `store.remote_url` set, the record lives in the primary's `merge_freeze` table, so a freeze set on one machine holds a merge made from any other. Without it, the record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. A machine with a primary still reads its local file when the primary holds no record, so a freeze an older build wrote keeps holding. An unreachable primary holds the merge. The lift is a ruling, so it reaches another machine only through the shared backlog (`store.share_backlog`).
+A merge freeze holds a release window. The team sets it, and only the user lifts it. The code is `merge_freeze.rs`. With `store.remote_url` set, the record lives in the primary's `merge_freeze` table, so a freeze set on one machine holds a merge made from any other. Without it, the record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. If the primary holds no record, a machine with a primary still reads its local file, so a freeze an older build wrote keeps holding. An unreachable primary holds the merge. The lift is a ruling, so it reaches another machine only through the shared backlog (`store.share_backlog`).
 
 The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` command:
 
