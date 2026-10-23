@@ -4,6 +4,7 @@ Run: cd cli && uv run pytest src/fno/adapters/providers/test_cli.py -v
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,20 @@ from fno.adapters.providers.cli import cli as providers_app
 
 
 runner = CliRunner()
+
+
+def _seed_state(path: Path, **blocks: dict) -> None:
+    """Write a runtime-state file as the Rust writer leaves it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(blocks), encoding="utf-8")
+
+
+def _usage(probed_at: float, used_pct: float | None = None) -> dict:
+    """One usage row; ``used_pct`` adds a 5h window resetting in an hour."""
+    windows = [] if used_pct is None else [
+        {"label": "5h", "used_pct": used_pct, "resets_at": probed_at + 3600}
+    ]
+    return {"windows": windows, "probed_at": probed_at, "source": "oauth-endpoint"}
 
 
 # Wider help width for chip subcommands so options don't column-wrap
@@ -177,30 +192,12 @@ class TestListUsageColumn:
                 assert "usage=never" in line
 
     def test_stale_snapshot_reports_its_age_with_ttl(self, tmp_path: Path):
-        import os as _os
         import time
-
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot
 
         settings_path = tmp_path / ".fno" / "config.toml"
         _write_settings(settings_path, _two_record_config())
         state_path = tmp_path / "provider-runtime-state.json"
-        now = time.time()
-
-        # write_usage_snapshot resolves its path the same way `list`'s read
-        # does - via FNO_RUNTIME_STATE_PATH - so seed through that env var.
-        _os.environ["FNO_RUNTIME_STATE_PATH"] = str(state_path)
-        try:
-            write_usage_snapshot(
-                UsageSnapshot(
-                    provider_id="claude-primary", windows=(), probed_at=now - 900,
-                    source="oauth-endpoint",
-                ),
-                now=now,
-            )
-        finally:
-            _os.environ.pop("FNO_RUNTIME_STATE_PATH", None)
+        _seed_state(state_path, usage={"claude-primary": _usage(time.time() - 900)})
 
         result = runner.invoke(
             providers_app, ["list"],
@@ -213,30 +210,14 @@ class TestListUsageColumn:
         assert "usage=15m (STALE, ttl=5m)" in line
 
     def test_configured_ttl_renders_in_stale_label(self, tmp_path: Path):
-        import os as _os
         import time
-
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot
 
         settings_path = tmp_path / ".fno" / "config.toml"
         config = _two_record_config()
         config["config"]["providers"]["quota"] = {"probe_ttl_seconds": 900}
         _write_settings(settings_path, config)
         state_path = tmp_path / "provider-runtime-state.json"
-        now = time.time()
-
-        _os.environ["FNO_RUNTIME_STATE_PATH"] = str(state_path)
-        try:
-            write_usage_snapshot(
-                UsageSnapshot(
-                    provider_id="claude-primary", windows=(), probed_at=now - 3600,
-                    source="oauth-endpoint",
-                ),
-                now=now,
-            )
-        finally:
-            _os.environ.pop("FNO_RUNTIME_STATE_PATH", None)
+        _seed_state(state_path, usage={"claude-primary": _usage(time.time() - 3600)})
 
         result = runner.invoke(
             providers_app, ["list"],
@@ -304,7 +285,7 @@ class TestListUsageColumn:
 class TestListDisarmedFooter:
     def test_footer_names_both_flags_when_neither_is_set(self, tmp_path: Path):
         """Two decisions, two flags, and `observe` is recommended first because
-        it is the reversible half (x-763a)."""
+        it is the reversible half."""
         settings_path = tmp_path / ".fno" / "config.toml"
         _write_settings(settings_path, _two_record_config())
         result = _invoke(["list"], cwd=tmp_path, home=tmp_path)
@@ -635,7 +616,7 @@ class TestSmokeDispatchEnv:
 
 # ---------------------------------------------------------------------------
 # CG4: fno providers combos {add, list, remove, test, use}
-# Plan B (Spec 4, ab-0e5a921e). AC4.1-4.5.
+# Plan B (Spec 4). AC4.1-4.5.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -789,8 +770,7 @@ class TestCombosRemove:
 class TestCombosTest:
     def test_test_reports_per_member_health(self, combos_cli_env: Path):
         """AC4.5-FR: test surfaces a-in-cooldown-b-ok-c-ok shape + verdict."""
-        from fno.adapters.providers.error_taxonomy import ErrorRule
-        from fno.adapters.providers.runtime_state import update_provider_health
+        import time
 
         _invoke(
             [
@@ -800,9 +780,10 @@ class TestCombosTest:
             cwd=combos_cli_env, home=combos_cli_env,
         )
         # Cooldown 'claude-primary' so the verdict becomes partial_cooldown.
-        update_provider_health(
-            "claude-primary", ErrorRule(status=401, cooldown_ms=60_000),
-        )
+        now = time.time()
+        _seed_state(combos_cli_env / "runtime-state.json", provider_health={"claude-primary": {
+            "backoff_level": 0, "rate_limited_until": now + 60, "last_error_at": now,
+        }})
 
         result = _invoke(
             ["combos", "test", "my-stack"],
@@ -841,7 +822,7 @@ class TestCombosUse:
 
 
 # ---------------------------------------------------------------------------
-# x-84d7 task 1.1: providers list -J emitter (Connections UI read plane)
+# providers list -J emitter (Connections UI read plane)
 # ---------------------------------------------------------------------------
 
 class TestListJson:
@@ -905,7 +886,7 @@ class TestCombosListActiveField:
 
 
 # ---------------------------------------------------------------------------
-# x-84d7 task 1.1: atomic `combos update` command (kills the remove+add hazard)
+# atomic `combos update` command (kills the remove+add hazard)
 # ---------------------------------------------------------------------------
 
 class TestCombosUpdate:
@@ -1016,11 +997,10 @@ class TestCombosUpdate:
 
     def test_update_resets_round_robin_cursor(self, combos_cli_env: Path):
         """Reordering members invalidates the stored cursor (hash change)."""
+        import time
+
         from fno.adapters.providers.rotation import compute_providers_hash
-        from fno.adapters.providers.runtime_state import (
-            advance_cursor,
-            read_cursor,
-        )
+        from fno.adapters.providers.runtime_state import read_cursor
 
         _invoke(
             [
@@ -1031,9 +1011,10 @@ class TestCombosUpdate:
             cwd=combos_cli_env, home=combos_cli_env,
         )
         old_hash = compute_providers_hash(("claude-primary", "gemini-backup"))
-        advance_cursor(
-            "main", sticky_limit=1, providers_hash=old_hash, providers_count=2,
-        )
+        _seed_state(combos_cli_env / "runtime-state.json", combo_cursors={"main": {
+            "cursor_index": 0, "consecutive_use_count": 1,
+            "providers_hash": old_hash, "last_rotated_at": time.time(),
+        }})
         assert read_cursor("main", old_hash) is not None
 
         _invoke(
@@ -1294,21 +1275,13 @@ class TestPick:
     def test_picks_the_first_candidate_with_headroom(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-
         import time as _time
 
         _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
         now = _time.time()  # headroom reads against the wall clock, not a fixture epoch
-        write_usage_snapshot(
-            UsageSnapshot("readyrule", (UsageWindow("5h", 100.0, now + 3600),), now, "t"),
-            now=now,
-        )
-        write_usage_snapshot(
-            UsageSnapshot("makers", (UsageWindow("5h", 4.0, now + 3600),), now, "t"),
-            now=now,
-        )
+        _seed_state(tmp_path / "runtime-state.json", usage={
+            "readyrule": _usage(now, 100.0), "makers": _usage(now, 4.0),
+        })
         verdict = _pick_verdict(tmp_path)
         assert verdict.account == "makers"
         assert verdict.exit_code == 0
@@ -1316,18 +1289,13 @@ class TestPick:
     def test_every_launchable_candidate_exhausted_exits_3(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-
         import time as _time
 
         _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
         now = _time.time()
-        for rid in ("readyrule", "makers"):
-            write_usage_snapshot(
-                UsageSnapshot(rid, (UsageWindow("5h", 100.0, now + 3600),), now, "t"),
-                now=now,
-            )
+        _seed_state(tmp_path / "runtime-state.json", usage={
+            "readyrule": _usage(now, 100.0), "makers": _usage(now, 100.0),
+        })
         result = _invoke(["pick"], cwd=tmp_path, home=tmp_path)
         assert result.exit_code == 3, result.output
         assert "exhausted" in result.output
@@ -1512,7 +1480,7 @@ class TestPickOptInAndOverlay:
 
 
 # ---------------------------------------------------------------------------
-# x-4b8d: fno config accounts reconcile-slot (the taint's missing clearer)
+# fno config accounts reconcile-slot (the taint's missing clearer)
 # ---------------------------------------------------------------------------
 
 
@@ -1871,7 +1839,9 @@ class TestWindowCommand:
         monkeypatch.setattr(
             rs, "_record_window_seconds", lambda _pid: 300 * 60, raising=True
         )
-        rs.stamp_window_open("readyrule", _time.time() - 2 * 3600)
+        _seed_state(tmp_path / "runtime-state.json", windows_opened={
+            "readyrule": {"window": {"opened_at": _time.time() - 2 * 3600, "warned": False}},
+        })
 
         result = _invoke(["window", "--json"], cwd=tmp_path, home=tmp_path)
         assert result.exit_code == 0, result.output
@@ -1984,7 +1954,7 @@ class TestUsageNamesTheServingAccount:
 
 
 class TestListIdentityColumn:
-    """AC1/AC2 (x-3fc6): the accounts list answers who each row is really
+    """AC1/AC2: the accounts list answers who each row is really
     signed in as, from the same binding owner usage and doctor read. The
     stimulus was a live drift: list said `* makers headroom=ok` in the same
     minute doctor reported the slot serving jason@readyrule.com."""

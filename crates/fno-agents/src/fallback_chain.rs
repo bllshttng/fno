@@ -14,53 +14,21 @@
 //! run. A malformed LINK is different: it answers `{"error": ...}` so the
 //! caller can refuse the config rather than mis-bill it.
 
+use crate::accounts::state::{
+    Health, Snapshot, Window, DEFAULT_THRESHOLD_PCT, DEFAULT_USAGE_TTL_SECONDS,
+    PROVIDER_HEALTH_TTL_SECONDS,
+};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::io::{self, Read};
-
-/// Bounds a reactive provider-health observation; a lock alone cannot keep an
-/// account classified forever (runtime_state.PROVIDER_HEALTH_TTL_SECONDS).
-const PROVIDER_HEALTH_TTL_SECONDS: f64 = 60.0 * 60.0;
-/// A usage snapshot older than this reads as absent (runtime_state.DEFAULT_USAGE_TTL_SECONDS).
-const USAGE_TTL_SECONDS: f64 = 300.0;
-/// A fresh window at or above this share of the quota reads LOW.
-const THRESHOLD_PCT: f64 = 90.0;
 
 fn f64_of(v: Option<&Value>) -> Option<f64> {
     v.and_then(Value::as_f64)
 }
 
-pub(crate) struct Health {
-    rate_limited_until: Option<f64>,
-    last_error_at: Option<f64>,
-}
-
-pub(crate) struct Window {
-    used_pct: f64,
-    resets_at: Option<f64>,
-}
-
-pub(crate) struct Snapshot {
-    probed_at: f64,
-    partial: bool,
-    windows: Vec<Window>,
-}
-
-impl Snapshot {
-    /// A snapshot from a freshly probed row (the `--refresh --json` map): the
-    /// in-memory observation wins over the disk read, source `window`.
-    pub(crate) fn from_refresh_row(row: &Value) -> Option<Snapshot> {
-        let obj = row.as_object()?;
-        Some(Snapshot {
-            probed_at: f64_of(obj.get("probed_at"))?,
-            partial: obj.get("partial").and_then(Value::as_bool).unwrap_or(false),
-            windows: parse_windows(obj.get("windows"))?,
-        })
-    }
-}
-
 /// One account's headroom verdict, mirroring the Python rotation invariant.
 #[derive(PartialEq, Clone, Copy, Debug)]
-pub(crate) enum Verdict {
+pub enum Verdict {
     Exhausted,
     Low,
     Ok,
@@ -71,7 +39,7 @@ pub(crate) enum Verdict {
 /// `.verdict` only; the capacity map (route_capacity) carries the rest as the
 /// account's provenance, exactly as the Python `_headroom_from` did.
 #[derive(PartialEq, Clone, Copy, Debug)]
-pub(crate) struct HeadroomVerdict {
+pub struct HeadroomVerdict {
     pub verdict: Verdict,
     /// `lock` | `window` | `stale` | `absent` | `empty`.
     pub source: &'static str,
@@ -79,10 +47,36 @@ pub(crate) struct HeadroomVerdict {
     pub resets_at: Option<f64>,
 }
 
+/// The capacity read's verdict at the default TTL and threshold. A stale
+/// reading was still observed, so its probe time names the evidence age and
+/// only a never-probed account reads age=never.
 pub(crate) fn headroom(
     health: Option<&Health>,
     usage: Option<&Snapshot>,
     now: f64,
+) -> HeadroomVerdict {
+    let mut hv = headroom_at(
+        health,
+        usage,
+        now,
+        DEFAULT_USAGE_TTL_SECONDS,
+        DEFAULT_THRESHOLD_PCT,
+    );
+    if hv.source == "stale" {
+        hv.observed_at = usage.map(|s| s.probed_at);
+    }
+    hv
+}
+
+/// `runtime_state._headroom_from` over a health entry and a usage snapshot:
+/// a snapshot older than `ttl` reads as absent, and a fresh window at or
+/// above `threshold_pct` reads LOW.
+pub(crate) fn headroom_at(
+    health: Option<&Health>,
+    usage: Option<&Snapshot>,
+    now: f64,
+    ttl: f64,
+    threshold_pct: f64,
 ) -> HeadroomVerdict {
     // Record-level health TTL: an aged-out last_error_at drops the whole
     // entry, locks included.
@@ -96,7 +90,7 @@ pub(crate) fn headroom(
     // stop binding - the same treatment read_usage gives a stale row.
     let (snap, window): (Option<&Snapshot>, &'static str) = match usage {
         None => (None, "absent"),
-        Some(s) if s.probed_at < now - USAGE_TTL_SECONDS => (None, "stale"),
+        Some(s) if s.probed_at < now - ttl => (None, "stale"),
         Some(s) => (Some(s), "fresh"),
     };
 
@@ -167,7 +161,7 @@ pub(crate) fn headroom(
                     a
                 }
             });
-            if worst >= THRESHOLD_PCT {
+            if worst >= threshold_pct {
                 let worst_reset = binding
                     .iter()
                     .copied()
@@ -199,14 +193,12 @@ pub(crate) fn headroom(
         };
     }
     // Absent, stale, or window-less: UNKNOWN never means exhausted and stays
-    // a legal failover destination. A stale reading was still observed: its
-    // probe time names the real evidence age, so only a never-probed account
-    // reads age=never.
+    // a legal failover destination.
     if snap.is_none() {
         return HeadroomVerdict {
             verdict: Verdict::Unknown,
             source: window,
-            observed_at: usage.map(|s| s.probed_at),
+            observed_at: None,
             resets_at: None,
         };
     }
@@ -229,7 +221,7 @@ pub(crate) fn worst_binding_used_pct(usage: Option<&Snapshot>, now: f64) -> Opti
         // percentage; the caller keeps the coarse state label (today's verdict).
         return None;
     }
-    if snap.probed_at < now - USAGE_TTL_SECONDS {
+    if snap.probed_at < now - DEFAULT_USAGE_TTL_SECONDS {
         return None;
     }
     let worst = snap
@@ -240,83 +232,6 @@ pub(crate) fn worst_binding_used_pct(usage: Option<&Snapshot>, now: f64) -> Opti
         .fold(f64::NAN, f64::max);
     (!worst.is_nan()).then_some(worst)
 }
-pub(crate) fn parse_windows(raw: Option<&Value>) -> Option<Vec<Window>> {
-    let arr = raw?.as_array()?;
-    let mut out = Vec::new();
-    for w in arr {
-        let obj = w.as_object()?;
-        if !obj.get("label")?.is_string() {
-            return None;
-        }
-        let used_pct = clamp_pct(f64_of(obj.get("used_pct"))?);
-        let resets_at = match obj.get("resets_at") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(f64_of(Some(v))?),
-        };
-        out.push(Window {
-            used_pct,
-            resets_at,
-        });
-    }
-    Some(out)
-}
-
-fn clamp_pct(v: f64) -> f64 {
-    v.clamp(0.0, 100.0)
-}
-
-pub(crate) fn parse_usage(raw: &Value) -> Map<String, Value> {
-    let mut out = Map::new();
-    if let Some(block) = raw.get("usage").and_then(Value::as_object) {
-        for (pid, entry) in block {
-            let Some(obj) = entry.as_object() else {
-                continue;
-            };
-            let Some(windows) = parse_windows(obj.get("windows")) else {
-                continue;
-            };
-            let Some(probed_at) = f64_of(obj.get("probed_at")) else {
-                continue;
-            };
-            out.insert(
-                pid.clone(),
-                json!({
-                    "probed_at": probed_at,
-                    "partial": obj.get("partial").and_then(Value::as_bool).unwrap_or(false),
-                    "windows": windows
-                        .iter()
-                        .map(|w| json!({"used_pct": w.used_pct, "resets_at": w.resets_at}))
-                        .collect::<Vec<Value>>(),
-                }),
-            );
-        }
-    }
-    out
-}
-
-/// The provider_health table as `{account: {rate_limited_until, last_error_at}}`,
-/// shared with the spawn gate's quota-lock read (one parse, no second impl).
-pub(crate) fn parse_provider_health(raw: &Value) -> Map<String, Value> {
-    let mut out = Map::new();
-    if let Some(block) = raw.get("provider_health").and_then(Value::as_object) {
-        for (pid, entry) in block {
-            let Some(obj) = entry.as_object() else {
-                continue;
-            };
-            let rlu = f64_of(obj.get("rate_limited_until"));
-            let lea = f64_of(obj.get("last_error_at"));
-            if rlu.is_none() && lea.is_none() {
-                continue;
-            }
-            out.insert(
-                pid.clone(),
-                json!({"rate_limited_until": rlu, "last_error_at": lea}),
-            );
-        }
-    }
-    out
-}
-
 /// Canonicalize one RAW config link: config `harness` becomes the axis
 /// `provider` and is name-checked, mirroring spawn_overlay's table
 /// canonicalization. Err carries the operator-facing reason.
@@ -378,45 +293,14 @@ pub(crate) fn type_name(v: &Value) -> &'static str {
     }
 }
 
-/// A `Health` from a parsed provider-health map value, shared with the
-/// capacity read (one construction, no second impl).
-pub(crate) fn health_from_map(v: Option<&Value>) -> Option<Health> {
-    let obj = v?.as_object()?;
-    Some(Health {
-        rate_limited_until: f64_of(obj.get("rate_limited_until")),
-        last_error_at: f64_of(obj.get("last_error_at")),
-    })
-}
-
-/// A `Snapshot` from a parsed usage-map value, shared with the capacity read.
-pub(crate) fn snapshot_from_map(v: Option<&Value>) -> Option<Snapshot> {
-    let obj = v?.as_object()?;
-    Some(Snapshot {
-        probed_at: f64_of(obj.get("probed_at")).unwrap_or(0.0),
-        partial: obj.get("partial").and_then(Value::as_bool).unwrap_or(false),
-        windows: obj
-            .get("windows")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .map(|w| Window {
-                        used_pct: f64_of(w.get("used_pct")).unwrap_or(0.0),
-                        resets_at: f64_of(w.get("resets_at")),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-    })
-}
-
 /// The worst headroom verdict across the link's accounts. Callers that must
 /// treat UNKNOWN differently from exhausted (the provider-cap destination
 /// filter, trap 3) read this instead of the collapsed bool.
 fn worst_link_verdict(
     link: &Value,
     accounts: Option<&Value>,
-    health: &Map<String, Value>,
-    usage: &Map<String, Value>,
+    health: &BTreeMap<String, Health>,
+    usage: &BTreeMap<String, Snapshot>,
     now: f64,
 ) -> Verdict {
     let get = |k: &str| {
@@ -448,9 +332,7 @@ fn worst_link_verdict(
     }
     let mut worst = Verdict::Ok;
     for pid in &ids {
-        let h = health_from_map(health.get(pid));
-        let u = snapshot_from_map(usage.get(pid));
-        match headroom(h.as_ref(), u.as_ref(), now).verdict {
+        match headroom(health.get(pid), usage.get(pid), now).verdict {
             Verdict::Exhausted => return Verdict::Exhausted,
             Verdict::Unknown => worst = Verdict::Unknown,
             _ => {}
@@ -501,8 +383,8 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
                 .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         })
         .unwrap_or_else(|| json!({}));
-    let health = parse_provider_health(&state);
-    let usage = parse_usage(&state);
+    let health = crate::accounts::state::parse_health(&state);
+    let usage = crate::accounts::state::parse_usage(&state);
     let mut eligible = Vec::new();
     for (i, raw) in links.iter().enumerate() {
         let link = match canonicalize_link(raw) {

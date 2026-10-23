@@ -1346,7 +1346,7 @@ const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
 
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
-/// the PR. A configured list wins, and an explicit empty list disarms the
+/// the PR at its head. A configured list wins, and an explicit empty list disarms the
 /// gate. With no key in any tier, a checkout that carries the mux client gets
 /// the built-in paint list, so a stock footnote tree holds its own UI PRs;
 /// any other project stays disarmed until it names its paint surface here.

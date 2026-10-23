@@ -11,10 +11,8 @@
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-use crate::fallback_chain::{
-    headroom, health_from_map, parse_provider_health, parse_usage, snapshot_from_map, Snapshot,
-    Verdict,
-};
+use crate::accounts::state::{parse_health, parse_usage};
+use crate::fallback_chain::{headroom, Verdict};
 
 /// The harnesses the Python default named, plus every inventory row's harness.
 pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
@@ -24,29 +22,11 @@ pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "o
 /// at most once per call.
 pub(crate) const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The provider runtime-state payload: `$FNO_RUNTIME_STATE_PATH`, else the
-/// configured state root's `state/provider-runtime-state.json`, reading the
-/// legacy root spelling while it exists (the Python writer renames it on its
-/// first resolve). An unreadable file is an empty payload (unlocked),
-/// matching the Python reader's None arm.
+/// The provider runtime-state payload at `provider_cap::runtime_state_path`.
+/// An unreadable file is an empty payload (unlocked), matching the Python
+/// reader's None arm.
 pub(crate) fn runtime_state_payload(config_cwd: &Path) -> Value {
-    let path: PathBuf = match std::env::var_os("FNO_RUNTIME_STATE_PATH") {
-        Some(override_) => PathBuf::from(override_),
-        None => {
-            let root =
-                crate::agents_config::state_dir(config_cwd).unwrap_or_else(default_state_dir);
-            let new = root.join("state").join("provider-runtime-state.json");
-            let legacy = root.join("provider-runtime-state.json");
-            if !new.exists() && legacy.exists() {
-                legacy
-            } else {
-                new
-            }
-        }
-    };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+    crate::accounts::state::read_raw(&crate::provider_cap::runtime_state_path(config_cwd))
         .unwrap_or(Value::Null)
 }
 
@@ -69,7 +49,7 @@ fn providers_root(cwd: &Path) -> PathBuf {
 /// first, then `[[accounts.records]]` bound to it, de-duplicated in that
 /// order. A row's `route` names a vendor, never an account id, and
 /// contributes nothing (the Python row.accounts() rule verbatim).
-fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String> {
+fn harness_accounts(harness: &str, inventory: &Value, records: &[toml::Value]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |a: &str| {
         let a = a.trim();
@@ -87,21 +67,17 @@ fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String>
             }
         }
     }
-    if let Some(records) = crate::agents_config::config_lookup(cwd, &["accounts", "records"])
-        .and_then(|v| v.as_array().cloned())
-    {
-        for rec in &records {
-            let bound = rec
-                .get("harness")
-                .or_else(|| rec.get("cli"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if bound != harness {
-                continue;
-            }
-            if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
-                push(id);
-            }
+    for rec in records {
+        let bound = rec
+            .get("harness")
+            .or_else(|| rec.get("cli"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if bound != harness {
+            continue;
+        }
+        if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
+            push(id);
         }
     }
     out
@@ -187,12 +163,13 @@ pub(crate) fn capacity(
         }
     }
     let raw = runtime_state_payload(cwd);
-    let health = parse_provider_health(&raw);
+    let health = parse_health(&raw);
     let usage = parse_usage(&raw);
     let roots = providers_root(cwd);
+    let records = crate::accounts::records::raw_records(None, cwd);
     let mut out = Map::new();
     for harness in &harnesses {
-        let accounts = harness_accounts(harness, inventory, cwd);
+        let accounts = harness_accounts(harness, inventory, &records);
         let evidence = identity_evidence(harness, &accounts, &roots);
         let mut detail: Map<String, Value> = Map::new();
         let mut sources: Map<String, Value> = Map::new();
@@ -205,7 +182,7 @@ pub(crate) fn capacity(
                 match refreshed.and_then(|m| m.get(account)) {
                     // The in-memory observation wins over the disk read.
                     Some(row) if row.get("windows").is_some() => {
-                        let snap = Snapshot::from_refresh_row(row);
+                        let snap = crate::accounts::state::parse_snapshot(row);
                         let hv = headroom(None, snap.as_ref(), now);
                         (
                             word(hv.verdict).to_string(),
@@ -229,11 +206,7 @@ pub(crate) fn capacity(
                         )
                     }
                     None => {
-                        let hv = headroom(
-                            health_from_map(health.get(account)).as_ref(),
-                            snapshot_from_map(usage.get(account)).as_ref(),
-                            now,
-                        );
+                        let hv = headroom(health.get(account), usage.get(account), now);
                         (
                             word(hv.verdict).to_string(),
                             hv.source.to_string(),
@@ -453,9 +426,10 @@ mod tests {
             {"name": "opus-x", "harness": "claude", "model": "o", "route": "zai/glm-5.3"},
             {"name": "flash-x", "harness": "claude", "model": "f", "account": "paid-lane"},
         ]));
-        let accounts = harness_accounts("claude", &inventory, env.dir.path());
+        let records = crate::accounts::records::raw_records(None, env.dir.path());
+        let accounts = harness_accounts("claude", &inventory, &records);
         assert_eq!(accounts, vec!["paid-lane".to_string(), "rec-a".to_string()]);
-        let accounts = harness_accounts("codex", &inventory, env.dir.path());
+        let accounts = harness_accounts("codex", &inventory, &records);
         assert_eq!(accounts, vec!["rec-b".to_string()]);
     }
 }

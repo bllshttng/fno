@@ -5,13 +5,13 @@ phase-scoped ``failover-state.json`` (storm-cap, no-swap-back): this
 file owns per-provider exponential backoff state that survives target
 spawns within a megawalk campaign.
 
-State path: ``.fno/provider-runtime-state.json`` (project-local).
+State path: machine-wide, ``fno.paths.runtime_state_json()``.
 Override via ``FNO_RUNTIME_STATE_PATH`` env var (used by tests).
 
-Concurrency: writes serialize via filelock (which dispatches to
-``fcntl.flock`` on Unix) on a sidecar lockfile. Reads acquire the same
-lock for a brief shared-style window via ``read_text`` after the write
-side has committed via ``os.replace``.
+Concurrency: every write goes through the Rust writer
+(``fno-agents spawn-overlay accounts state <op>``), which serializes on a
+``<file>.update.lock`` flock and commits via an atomic rename. Reads here are
+lock-free.
 
 TTL: ProviderHealth entries are dropped lazily on the next state read or locked
 write when ``last_error_at`` is older than ``PROVIDER_HEALTH_TTL_SECONDS`` (1h).
@@ -29,12 +29,9 @@ import enum
 import json
 import logging
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
-
-import filelock
 
 from fno.adapters.providers.error_taxonomy import ErrorRule
 from fno.adapters.providers.usage import UsageSnapshot, UsageWindow, _clamp_pct
@@ -42,14 +39,10 @@ from fno.adapters.providers.usage import UsageSnapshot, UsageWindow, _clamp_pct
 logger = logging.getLogger(__name__)
 
 
-BASE_BACKOFF_MS = 2_000
-MAX_BACKOFF_MS = 5 * 60 * 1000
 MAX_BACKOFF_LEVEL = 15
 PROVIDER_HEALTH_TTL_SECONDS = 60 * 60
 COMBO_CURSOR_TTL_SECONDS = 24 * 60 * 60  # Plan B (Spec 4): cursor goes stale after 24h
 DEFAULT_USAGE_TTL_SECONDS = 300  # quota.probe_ttl_seconds default; snapshot freshness
-RUNTIME_STATE_PATH = ".fno/provider-runtime-state.json"
-LOCK_TIMEOUT_SECONDS = 5
 SCHEMA_VERSION = 2  # Plan B: combo_cursors added; v1 files migrate transparently on read
 
 
@@ -57,8 +50,7 @@ SCHEMA_VERSION = 2  # Plan B: combo_cursors added; v1 files migrate transparentl
 class ProviderHealth:
     """Per-provider backoff state.
 
-    ``backoff_level`` is 0 immediately after a successful call (see
-    reset_provider_health) and increments by 1 on each consecutive
+    ``backoff_level`` starts at 0 and increments by 1 on each consecutive
     backoff-class error, capped at ``MAX_BACKOFF_LEVEL`` (15).
 
     ``model_locks`` (Plan A1) is a dict mapping
@@ -107,9 +99,9 @@ class ComboCursor:
     """Per-combo round-robin cursor state.
 
     Plan B (Spec 4). One entry per round-robin combo, keyed by
-    combo name in ``ProviderRuntimeState.combo_cursors``. The cursor sticks
-    on ``cursor_index`` for ``sticky_limit`` consecutive ``advance_cursor``
-    calls before rolling to the next index.
+    combo name in ``ProviderRuntimeState.combo_cursors``. The cursor sat on
+    ``cursor_index`` for ``sticky_limit`` advances before rolling to the next
+    index; nothing advances it today, so it is read-only.
 
     ``providers_hash`` invalidates the cursor when the user edits the combo
     mid-session (add/remove/reorder providers): on a hash mismatch the cursor
@@ -117,7 +109,7 @@ class ComboCursor:
 
     ``last_rotated_at`` is the unix epoch seconds of the last advance and
     drives the 24h TTL: a quiescent combo's cursor is dropped on the next
-    locked write and a future advance starts fresh at idx=0.
+    locked write.
     """
 
     combo_name: str
@@ -175,183 +167,29 @@ def _resolve_state_path(repo_root: Path | None = None) -> Path:
 
     Machine-wide by design (M5): quota is a property of an ACCOUNT at a vendor,
     so the same account rate-limited in one repo is rate-limited everywhere and
-    a per-cwd file cannot hold it. Provider health and usage follow the resolved
-    state root (``~/.fno`` by default) via :func:`fno.paths.runtime_state_json`.
-    The RECORD SET stays resolved per repo - it is config - which is the split
-    the old project-local docstring conflated. ``repo_root`` no longer moves the
-    file and survives only to widen the legacy fold (its per-cwd file folds
-    too). The env override still wins (it is how tests pin a state file). A
-    first resolve folds any legacy per-cwd file into the machine-wide one.
+    a per-cwd file cannot hold it. ``repo_root`` no longer moves the file. The
+    env override wins (it is how tests pin a state file). The Rust writer folds
+    any legacy per-cwd file into this one before it writes.
     """
     override = os.environ.get("FNO_RUNTIME_STATE_PATH")
     if override:
         return Path(override)
-    _fold_legacy_state_files(repo_root)
     from fno.paths import runtime_state_json
 
     return runtime_state_json()
 
 
-def _fold_legacy_state_files(repo_root: Path | None = None) -> None:
-    """Fold legacy per-cwd state files into the machine-wide one. Newest wins.
+def _state_write(op: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """One call to ``fno-agents spawn-overlay accounts state <op>``.
 
-    ``_resolve_state_path`` used to return the RELATIVE ``RUNTIME_STATE_PATH``,
-    so every distinct process cwd kept its own state file and the two halves of
-    the signal sat in different ones (measured 2026-08-27: a live provider lock
-    in ``~/.fno`` beside a usage row in the repo). Fold candidates are the
-    process cwd's file and, when a caller names one, ``repo_root``'s - a
-    cross-project dispatch's node repo is the one other location that matters.
-    Merge per key: provider_health by newest ``last_error_at``, usage by newest
-    ``probed_at``, cursors and window-opens by their newest inner timestamp.
-    Leave each legacy file untouched rather than deleting it, so a rolled-back
-    binary loses nothing. Steady state pays two stats per candidate (the fold
-    is skipped once the machine-wide file is at least as new) and never runs
-    under the env override, which names one explicit file.
+    The Rust writer is the one writer of the file: it takes the
+    ``<file>.update.lock`` flock, re-reads under it, drops stale entries and
+    replaces the file atomically. Raises ``CommandUnavailable`` when the
+    binary is missing or the write fails.
     """
-    try:
-        from fno.paths import runtime_state_json
+    from fno.rust_binary import command_call
 
-        target = runtime_state_json()
-    except Exception:  # noqa: BLE001 - a path failure degrades to "no legacy"
-        return
-    candidates = [Path.cwd() / RUNTIME_STATE_PATH]
-    if repo_root is not None:
-        candidates.append(Path(repo_root) / RUNTIME_STATE_PATH)
-    for legacy in candidates:
-        try:
-            _fold_one_legacy_file(target, legacy)
-        except (filelock.Timeout, OSError):
-            logger.warning(
-                "runtime_state: legacy per-cwd fold skipped for %s (lock/IO); "
-                "both files left as-is",
-                legacy,
-                exc_info=True,
-            )
-
-
-def _fold_one_legacy_file(target: Path, legacy: Path) -> None:
-    if not legacy.is_file():
-        return
-    if legacy.resolve() == target.resolve():
-        return
-    if target.is_file() and target.stat().st_mtime >= legacy.stat().st_mtime:
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with filelock.FileLock(str(_lock_path(target)), timeout=LOCK_TIMEOUT_SECONDS):
-        # Re-check under the lock: a racing process may have folded already.
-        if target.is_file() and target.stat().st_mtime >= legacy.stat().st_mtime:
-            return
-        dst = _read_disk_payload(target) or {}
-        src = _read_disk_payload(legacy) or {}
-        health = _parse_state_payload(dst)
-        for pid, entry in _parse_state_payload(src).items():
-            prior_health = health.get(pid)
-            if (
-                prior_health is None
-                or _ts(entry.last_error_at) > _ts(prior_health.last_error_at)
-            ):
-                health[pid] = entry
-        usage = _parse_usage_payload(dst)
-        for uid, snap in _parse_usage_payload(src).items():
-            prior_snap = usage.get(uid)
-            if prior_snap is None or _ts(snap.probed_at) > _ts(prior_snap.probed_at):
-                usage[uid] = snap
-        cursors = _parse_cursors_payload(dst)
-        for name, cur in _parse_cursors_payload(src).items():
-            prior_cur = cursors.get(name)
-            if (
-                prior_cur is None
-                or _ts(cur.last_rotated_at) > _ts(prior_cur.last_rotated_at)
-            ):
-                cursors[name] = cur
-        windows_opened = _parse_windows_opened(dst)
-        for wid, labels in _parse_windows_opened(src).items():
-            for label, opened in labels.items():
-                prior_open = (windows_opened.get(wid) or {}).get(label)
-                if prior_open is None or _ts(opened.get("opened_at")) > _ts(
-                    prior_open.get("opened_at")
-                ):
-                    windows_opened.setdefault(wid, {})[label] = opened
-        now = time.time()
-        health, _dropped = _drop_stale(health, now)
-        _write_state_atomic(
-            target,
-            _serialize_state(
-                ProviderRuntimeState(
-                    provider_health=health,
-                    combo_cursors=cursors,
-                    usage=usage,
-                    windows_opened=windows_opened,
-                    schema_version=int(dst.get("schema_version", SCHEMA_VERSION)),
-                )
-            ),
-        )
-
-
-def _ts(value: float | None) -> float:
-    """None-safe timestamp compare key (absent reads as oldest)."""
-    return value if value is not None else 0.0
-
-
-def _lock_path(state_path: Path) -> Path:
-    """Sidecar lock path for runtime_state writes.
-
-    Uses a distinct suffix (`.update.lock`) so it never collides with
-    `state.io.atomic_write`'s internal lock at `path + ".lock"`. The two
-    paths are independent contention boundaries; sharing them would
-    self-deadlock when the outer + inner locks both target this file.
-    """
-    return Path(str(state_path) + ".update.lock")
-
-
-def _write_state_atomic(state_path: Path, content: str) -> None:
-    """Atomic write under tempfile + os.replace.
-
-    Caller is responsible for holding the outer lock; this helper does
-    not acquire one (avoids re-acquiring the same path lock).
-    """
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=state_path.parent,
-            prefix=f".{state_path.name}.",
-            suffix=".tmp",
-            delete=False,
-            encoding="utf-8",
-        ) as tmp:
-            tmp.write(content)
-            tmp_path = Path(tmp.name)
-        os.replace(tmp_path, state_path)
-        tmp_path = None
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-
-
-def _compute_exponential_cooldown_ms(level: int) -> int:
-    """Pure: BASE * 2 ** level, capped at MAX. Defensive against >MAX_LEVEL."""
-    capped_level = min(max(0, level), MAX_BACKOFF_LEVEL)
-    raw = BASE_BACKOFF_MS * (2 ** capped_level)
-    return min(raw, MAX_BACKOFF_MS)
-
-
-def _serialize_state(state: ProviderRuntimeState) -> str:
-    payload = {
-        "schema_version": state.schema_version,
-        "provider_health": {
-            pid: dataclasses.asdict(h) for pid, h in state.provider_health.items()
-        },
-        "combo_cursors": {
-            name: dataclasses.asdict(c) for name, c in state.combo_cursors.items()
-        },
-        "usage": {
-            pid: dataclasses.asdict(s) for pid, s in state.usage.items()
-        },
-        "windows_opened": state.windows_opened,
-    }
-    return json.dumps(payload, indent=2, sort_keys=True)
+    return command_call(["spawn-overlay", "accounts", "state", op], payload)
 
 
 WINDOW_LABEL = "window"
@@ -471,33 +309,19 @@ def mark_window_warned(
 
     The flag lives beside the recorded open, so a new window (a fresh stamp,
     which always writes ``warned: False``) re-arms the warning by construction.
+    A writer that could not run reads as not set.
     """
-    state_path = _resolve_state_path(repo_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
+    from fno.rust_binary import CommandUnavailable
+
     try:
-        with filelock.FileLock(str(_lock_path(state_path)), timeout=LOCK_TIMEOUT_SECONDS):
-            raw = _read_disk_payload(state_path) or {}
-            windows_opened = _parse_windows_opened(raw)
-            entry = (windows_opened.get(provider_id) or {}).get(WINDOW_LABEL)
-            if entry is None or entry.get("warned"):
-                return False
-            entry["warned"] = True
-            now = time.time()
-            health_map, _ = _drop_stale(_parse_state_payload(raw), now)
-            cursors, _ = _drop_stale_cursors(_parse_cursors_payload(raw), now)
-            _write_state_atomic(state_path, _serialize_state(ProviderRuntimeState(
-                provider_health=health_map,
-                combo_cursors=cursors,
-                usage=_parse_usage_payload(raw),
-                windows_opened=windows_opened,
-                schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
-            )))
-            return True
-    except filelock.Timeout:
-        logger.warning(
-            "runtime_state: lock contention marking window warned for %r", provider_id
-        )
+        out = _state_write("mark-warned", {
+            "provider_id": provider_id,
+            "repo_root": None if repo_root is None else str(repo_root),
+        })
+    except CommandUnavailable as exc:
+        logger.warning("runtime_state: could not mark window warned for %r: %s", provider_id, exc)
         return False
+    return bool(out.get("set"))
 
 
 def stamp_window_open(
@@ -512,36 +336,19 @@ def stamp_window_open(
     Idempotent against a window still in force: a second stamp inside the same
     window is a no-op, so a repeated dispatch never resets the countdown.
     """
-    state_path = _resolve_state_path(repo_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    span = _record_window_seconds(provider_id)
+    from fno.rust_binary import CommandUnavailable
+
     try:
-        with filelock.FileLock(str(_lock_path(state_path)), timeout=LOCK_TIMEOUT_SECONDS):
-            raw = _read_disk_payload(state_path) or {}
-            windows_opened = _parse_windows_opened(raw)
-            prior = (windows_opened.get(provider_id) or {}).get(label)
-            if prior is not None and span:
-                if prior["opened_at"] + span > opened_at:
-                    return False  # the recorded window has not closed yet
-            windows_opened.setdefault(provider_id, {})[label] = {
-                "opened_at": float(opened_at), "warned": False,
-            }
-            now = time.time()
-            health_map, _ = _drop_stale(_parse_state_payload(raw), now)
-            cursors, _ = _drop_stale_cursors(_parse_cursors_payload(raw), now)
-            _write_state_atomic(state_path, _serialize_state(ProviderRuntimeState(
-                provider_health=health_map,
-                combo_cursors=cursors,
-                usage=_parse_usage_payload(raw),
-                windows_opened=windows_opened,
-                schema_version=int(raw.get("schema_version", SCHEMA_VERSION)),
-            )))
-            return True
-    except filelock.Timeout:
-        logger.warning(
-            "runtime_state: lock contention stamping window open for %r", provider_id
-        )
+        out = _state_write("stamp-window", {
+            "provider_id": provider_id,
+            "opened_at": opened_at,
+            "label": label,
+            "repo_root": None if repo_root is None else str(repo_root),
+        })
+    except CommandUnavailable as exc:
+        logger.warning("runtime_state: could not stamp window open for %r: %s", provider_id, exc)
         return False
+    return bool(out.get("written"))
 
 
 def _parse_windows_opened(
@@ -853,9 +660,8 @@ def read_state(now: float | None = None) -> ProviderRuntimeState:
     malformed. Stale entries (``last_error_at`` older than
     ``PROVIDER_HEALTH_TTL_SECONDS``) are filtered from the returned
     state but NOT rewritten to disk - that would be a lock-free write
-    that could clobber a concurrent ``update_provider_health`` /
-    ``reset_provider_health`` mutation. Disk cleanup happens in those
-    write paths instead, which already hold the exclusive lock.
+    that could clobber a concurrent write. Disk cleanup happens in the
+    Rust writer instead, which holds the exclusive lock.
 
     This means a long-quiet provider's stale entry can persist on disk
     until the next write touches the file. That is acceptable: the
@@ -884,81 +690,6 @@ def read_state(now: float | None = None) -> ProviderRuntimeState:
     )
 
 
-def _next_health(
-    current: ProviderHealth,
-    rule: ErrorRule,
-    now: float,
-    model: str | None = None,
-    resets_at: float | None = None,
-) -> ProviderHealth:
-    """Compute the next ProviderHealth given an ErrorRule + current state.
-
-    For a backoff rule, the level increments by 1 (capped at
-    MAX_BACKOFF_LEVEL) and the cooldown is computed from the OLD level:
-    1st hit (level 0 -> 1) -> BASE * 2^0 = 2000ms; 2nd hit (1 -> 2) ->
-    BASE * 2^1 = 4000ms. This matches AC2.1-HP's "+2000ms on first 429"
-    contract. The cap fires at level 15 (BASE * 2^14 already exceeds
-    MAX_BACKOFF_MS so subsequent hits stay at the cap).
-
-    When ``model`` is provided (Plan A1) the cooldown is
-    written to ``model_locks[model]`` and ``rate_limited_until`` is
-    preserved untouched. The cooldown ramp (``backoff_level``) is per
-    provider regardless of model so a second 429 on a sibling model
-    feels the longer step. When ``model`` is None, behavior is the
-    Plan A baseline (write ``rate_limited_until`` only).
-
-    When ``resets_at`` is supplied and lies in the future, it replaces the
-    computed cooldown as ``rate_limited_until``. This is the whole point of
-    harvesting it: a 429 whose body said the window reopens nine hours out was
-    writing a 2000ms lock, so the provider unlocked seconds after a multi-hour
-    cap and every reroute path routed straight back in. The backoff LEVEL still
-    increments, because the ramp is a per-provider property and a second cap
-    should still feel the longer step.
-
-    A harvested reset writes ``rate_limited_until`` even on the model path: an
-    account-wide usage cap is not a per-model throttle, and ``headroom()`` reads
-    only the provider-level lock. The model lock is still written alongside, so
-    that path loses nothing. When ``resets_at`` is None or already past, the
-    arithmetic is untouched and the write is byte-identical to today.
-    """
-    if rule.backoff:
-        old_level = current.backoff_level
-        next_level = min(old_level + 1, MAX_BACKOFF_LEVEL)
-        cooldown_ms = _compute_exponential_cooldown_ms(old_level)
-    else:
-        # Fixed-cooldown rule: do NOT increment backoff_level.
-        next_level = current.backoff_level
-        cooldown_ms = rule.cooldown_ms or 0
-    until_ts = now + (cooldown_ms / 1000.0)
-    # A reset the provider itself named beats a backoff we guessed. Guarded on
-    # "in the future" so a stale or misparsed stamp can never SHORTEN a lock.
-    harvested = resets_at if (resets_at is not None and resets_at > now) else None
-    if model is not None:
-        new_locks = dict(current.model_locks)
-        new_locks[model] = until_ts
-        return ProviderHealth(
-            provider_id=current.provider_id,
-            backoff_level=next_level,
-            rate_limited_until=(
-                harvested if harvested is not None else current.rate_limited_until
-            ),
-            last_error_at=now,
-            model_locks=new_locks,
-        )
-    # Defensive copy on the provider-level path matches the model
-    # branch above. Frozen dataclass prevents reassignment but does
-    # not seal the inner dict, so sharing the reference would alias
-    # the new instance's model_locks with the old. Cheap copy keeps
-    # the two branches structurally symmetric.
-    return ProviderHealth(
-        provider_id=current.provider_id,
-        backoff_level=next_level,
-        rate_limited_until=harvested if harvested is not None else until_ts,
-        last_error_at=now,
-        model_locks=dict(current.model_locks),
-    )
-
-
 def update_provider_health(
     provider_id: str,
     rule: ErrorRule,
@@ -968,171 +699,34 @@ def update_provider_health(
 ) -> ProviderHealth:
     """Atomically increment backoff state for ``provider_id``.
 
-    Returns the freshly written ``ProviderHealth``. On lock-contention
-    timeout (>``LOCK_TIMEOUT_SECONDS``), logs a warning, skips the
-    write, and returns the last-known-good ``ProviderHealth`` (or a
-    zero state if no prior entry exists).
+    Returns the freshly written ``ProviderHealth``. On lock contention past
+    five seconds, or when the writer cannot run, the write is skipped and the
+    last-known-good entry (or a zero state) comes back.
 
-    When ``model`` is provided (Plan A1), the cooldown is
-    written to ``model_locks[model]`` and ``rate_limited_until`` is
-    untouched (Locked Decision 2: model-locks-only when model is
-    known). The provider-level ``backoff_level`` still increments
-    because the cooldown ramp is a per-provider property regardless of
-    which model errored (Locked Decision 5). When ``model`` is None,
-    behavior matches the Plan A baseline.
-
-    ``resets_at`` is the epoch harvested from the refusal body by
-    ``error_taxonomy.normalize``. Supplied and in the future, it becomes
-    ``rate_limited_until`` in place of the computed cooldown, so the lock
-    holds for the real window rather than for a backoff step. It is written
-    to the lock and NOT to the usage snapshot on purpose: ``headroom()``
-    reads the lock with no TTL and drops a snapshot older than
-    ``DEFAULT_USAGE_TTL_SECONDS``, and a snapshot-based write decays to
-    UNKNOWN after five minutes - which never means exhausted.
-
-    Does NOT swallow programmer errors: ValueError on a malformed
-    ErrorRule, TypeError from a future refactor mismatch, etc.,
-    propagate to the caller so they surface in CI. IO failures
-    (OSError, JSONDecodeError) and lock contention (filelock.Timeout)
-    are caught locally and degrade to the last-known-good fallback.
+    When ``model`` is provided the cooldown lands in ``model_locks[model]`` and
+    ``rate_limited_until`` is untouched; ``backoff_level`` still ramps per
+    provider. ``resets_at``, the epoch harvested from the refusal body, becomes
+    ``rate_limited_until`` when it lies in the future, so the lock holds for the
+    real window. It also stamps the window it closed when the record has a
+    ``window_minutes``.
     """
-    if now is None:
-        now = time.time()
-    state_path = _resolve_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = _lock_path(state_path)
+    from fno.rust_binary import CommandUnavailable
 
     try:
-        with filelock.FileLock(str(lock_path), timeout=LOCK_TIMEOUT_SECONDS):
-            raw = _read_disk_payload(state_path)
-            if raw is None:
-                health_map: dict[str, ProviderHealth] = {}
-                schema_version = SCHEMA_VERSION
-            else:
-                health_map = _parse_state_payload(raw)
-                schema_version = int(raw.get("schema_version", SCHEMA_VERSION))
-
-            # Drop stale entries while we hold the lock so disk cleanup
-            # happens incrementally on every write rather than via a
-            # racy lock-free path in read_state.
-            health_map, _dropped = _drop_stale(health_map, now)
-            cursors = _parse_cursors_payload(raw or {})
-            cursors, _ = _drop_stale_cursors(cursors, now)
-            usage = _parse_usage_payload(raw or {})
-            windows_opened = _parse_windows_opened(raw or {})
-
-            current = health_map.get(
-                provider_id, ProviderHealth(provider_id=provider_id)
-            )
-            new_health = _next_health(
-                current, rule, now, model=model, resets_at=resets_at
-            )
-            health_map[provider_id] = new_health
-
-            # A harvested reset is the ONLY exact window boundary footnote ever
-            # sees for a provider with no usage probe. The window that just
-            # refused closes at ``resets_at``, so it opened one window-length
-            # before that, and the projection derived from the pair is right to
-            # the second. Stamped inside the lock we already hold - no second
-            # write, no second lock. No configured length means no stamp, and
-            # the record honestly reads unknown.
-            if resets_at is not None and resets_at > now:
-                span = _record_window_seconds(provider_id)
-                if span:
-                    labels = windows_opened.setdefault(provider_id, {})
-                    opened_at = resets_at - span
-                    prior = labels.get(WINDOW_LABEL)
-                    # Preserve `warned` while the window is the SAME one, and
-                    # never touch a sibling label. Several workers hit one cap
-                    # at once, so a blind overwrite re-armed the once-per-window
-                    # warning on every refusal and `provider_window_closing`
-                    # fired again for a window already reported.
-                    same = (
-                        prior is not None
-                        and abs(float(prior["opened_at"]) - opened_at) < 1.0
-                    )
-                    labels[WINDOW_LABEL] = {
-                        "opened_at": opened_at,
-                        "warned": (
-                            bool(prior.get("warned")) if prior is not None and same else False
-                        ),
-                    }
-
-            new_state = ProviderRuntimeState(
-                provider_health=health_map,
-                combo_cursors=cursors,
-                usage=usage,
-                windows_opened=windows_opened,
-                schema_version=schema_version,
-            )
-            _write_state_atomic(state_path, _serialize_state(new_state))
-            return new_health
-    except filelock.Timeout:
-        # AC2.7-ERR: log warning, skip write, return last-known-good.
-        logger.warning(
-            "runtime_state: lock contention >%.1fs at %s for provider %r; "
-            "skipping write and returning last-known-good.",
-            LOCK_TIMEOUT_SECONDS,
-            state_path,
-            provider_id,
-        )
-        # Read without acquiring the lock - eventual consistency is OK
-        # for the read-only fallback path.
-        raw = _read_disk_payload(state_path)
-        if raw is not None:
-            health_map = _parse_state_payload(raw)
-            if provider_id in health_map:
-                return health_map[provider_id]
-        return ProviderHealth(provider_id=provider_id)
-
-
-def reset_provider_health(
-    provider_id: str,
-    now: float | None = None,
-) -> None:
-    """Clear backoff state for ``provider_id``.
-
-    Idempotent: removing an absent entry is a no-op. Acquires the same
-    fcntl lock as ``update_provider_health`` so a concurrent increment
-    cannot land between read and write.
-    """
-    state_path = _resolve_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = _lock_path(state_path)
-
-    if now is None:
-        now = time.time()
-    try:
-        with filelock.FileLock(str(lock_path), timeout=LOCK_TIMEOUT_SECONDS):
-            raw = _read_disk_payload(state_path)
-            if raw is None:
-                return  # nothing to reset
-            health_map = _parse_state_payload(raw)
-            # Reset is a targeted mutation. Do not run unrelated stale-entry
-            # cleanup here: a clear for one account must not delete another
-            # account's still-binding lock.
-            cursors = _parse_cursors_payload(raw)
-            if provider_id not in health_map:
-                # No-op fast path: preserve every unrelated state entry.
-                return
-            health_map.pop(provider_id, None)
-            usage = _parse_usage_payload(raw)
-            windows_opened = _parse_windows_opened(raw)
-            schema_version = int(raw.get("schema_version", SCHEMA_VERSION))
-            new_state = ProviderRuntimeState(
-                provider_health=health_map,
-                combo_cursors=cursors,
-                usage=usage,
-                windows_opened=windows_opened,
-                schema_version=schema_version,
-            )
-            _write_state_atomic(state_path, _serialize_state(new_state))
-    except filelock.Timeout:
-        logger.warning(
-            "runtime_state: lock contention on reset for provider %r; "
-            "skipping (entry remains until next successful reset or TTL).",
-            provider_id,
-        )
+        return ProviderHealth(**_state_write("update-health", {
+            "provider_id": provider_id,
+            "backoff": rule.backoff,
+            "cooldown_ms": rule.cooldown_ms,
+            "model": model,
+            "now": now,
+            "resets_at": resets_at,
+        }))
+    except CommandUnavailable as exc:
+        # The recovery sweep calls this with no guard of its own, so a writer
+        # that cannot run degrades like lock contention instead of raising.
+        logger.warning("runtime_state: health write skipped for %r: %s", provider_id, exc)
+        raw = _read_disk_payload(_resolve_state_path()) or {}
+        return _parse_state_payload(raw).get(provider_id, ProviderHealth(provider_id=provider_id))
 
 
 def is_in_cooldown(
@@ -1226,47 +820,33 @@ def write_usage_snapshot(
 ) -> bool:
     """Persist ``snapshot`` under ``usage[provider_id]``; True if it landed.
 
-    Serializes on the same ``.update.lock`` as health/cursor writes. On lock
-    timeout the write is skipped (last-known-good stays on disk) and logged -
-    a stale snapshot degrades to UNKNOWN on the next read, never an error.
+    On lock timeout, or when the writer could not run, the write is skipped
+    (last-known-good stays on disk) - a stale snapshot degrades to UNKNOWN on
+    the next read, never an error.
 
     The bool exists so a caller can report persistence degradation WITHOUT
     discarding the snapshot it already holds in memory: losing the write race
     is a cache outcome, not a probe outcome, and collapsing the two is how a
     successful live probe turns into a displayed ``unknown``.
     """
-    if now is None:
-        now = time.time()
-    state_path = _resolve_state_path(repo_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = _lock_path(state_path)
+    from fno.rust_binary import CommandUnavailable
+
     try:
-        with filelock.FileLock(str(lock_path), timeout=LOCK_TIMEOUT_SECONDS):
-            raw = _read_disk_payload(state_path) or {}
-            health_map = _parse_state_payload(raw)
-            health_map, _ = _drop_stale(health_map, now)
-            cursors = _parse_cursors_payload(raw)
-            cursors, _ = _drop_stale_cursors(cursors, now)
-            usage = _parse_usage_payload(raw)
-            windows_opened = _parse_windows_opened(raw)
-            usage[snapshot.provider_id] = snapshot
-            schema_version = int(raw.get("schema_version", SCHEMA_VERSION))
-            new_state = ProviderRuntimeState(
-                provider_health=health_map,
-                combo_cursors=cursors,
-                usage=usage,
-                windows_opened=windows_opened,
-                schema_version=schema_version,
-            )
-            _write_state_atomic(state_path, _serialize_state(new_state))
-    except filelock.Timeout:
+        out = _state_write("write-usage", {
+            "provider_id": snapshot.provider_id,
+            "snapshot": dataclasses.asdict(snapshot),
+            "now": now,
+            "repo_root": None if repo_root is None else str(repo_root),
+        })
+    except CommandUnavailable as exc:
         logger.warning(
-            "runtime_state: lock contention on usage write for %r; skipping "
-            "(snapshot degrades to UNKNOWN until next successful probe).",
+            "runtime_state: usage write skipped for %r (snapshot degrades to "
+            "UNKNOWN until the next successful probe): %s",
             snapshot.provider_id,
+            exc,
         )
         return False
-    return True
+    return bool(out.get("persisted"))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1676,14 +1256,11 @@ def evaluate_quota_signal(
 
 
 # ---------------------------------------------------------------------------
-# Combo cursor: read (lock-free, eventual consistency) + advance (locked).
+# Combo cursor: read (lock-free, eventual consistency).
 #
-# Plan B (Spec 4). Mirrors the post-#228 invariant from the
-# health side: lazy cleanup of stale or hash-mismatched entries happens
-# ONLY in locked write paths. read_cursor never writes; it returns None
-# when the entry is stale, hash-mismatched, or absent. Cleanup of the
-# stale on-disk record happens on the next advance_cursor for that combo
-# (or piggybacks on update_provider_health / reset_provider_health).
+# Plan B (Spec 4). Lazy cleanup of stale entries happens ONLY in the locked
+# Rust writer. read_cursor never writes; it returns None when the entry is
+# stale, hash-mismatched, or absent.
 # ---------------------------------------------------------------------------
 
 
@@ -1701,8 +1278,7 @@ def read_cursor(
       * The on-disk entry is malformed (missing fields, bad types).
 
     Eventual consistency is acceptable here: the cursor is a hint for
-    rotation order; ``advance_cursor`` is the source of truth and reseats
-    the cursor under the lock when the read-side observation was wrong.
+    rotation order.
     """
     if now is None:
         now = time.time()
@@ -1719,131 +1295,3 @@ def read_cursor(
     if cursor.last_rotated_at < now - COMBO_CURSOR_TTL_SECONDS:
         return None
     return cursor
-
-
-def _next_cursor(
-    prev: ComboCursor | None,
-    sticky_limit: int,
-    providers_hash: str,
-    providers_count: int,
-    combo_name: str,
-    now: float,
-) -> ComboCursor:
-    """Pure: compute the next cursor state given the previous one.
-
-    Math (matches AC2.1-HP):
-      - Fresh (no prev, hash mismatch, or stale): return (idx=0, count=1).
-      - prev.count < sticky_limit: stay on idx, count += 1.
-      - prev.count >= sticky_limit: advance idx by 1 modulo N, count = 1.
-
-    The single-provider-combo case is short-circuited by the caller
-    (``advance_cursor`` returns idx=0 forever); this helper still handles
-    it correctly via the modulo because (0+1) % 1 == 0.
-    """
-    fresh = (
-        prev is None
-        or prev.providers_hash != providers_hash
-        or prev.last_rotated_at < now - COMBO_CURSOR_TTL_SECONDS
-    )
-    if fresh:
-        return ComboCursor(
-            combo_name=combo_name,
-            cursor_index=0,
-            consecutive_use_count=1,
-            providers_hash=providers_hash,
-            last_rotated_at=now,
-        )
-    assert prev is not None  # `fresh` above is True when prev is None, and returned
-    if prev.consecutive_use_count < sticky_limit:
-        return ComboCursor(
-            combo_name=combo_name,
-            cursor_index=prev.cursor_index,
-            consecutive_use_count=prev.consecutive_use_count + 1,
-            providers_hash=providers_hash,
-            last_rotated_at=now,
-        )
-    # sticky exhausted: advance index, reset count to 1 (we're using the
-    # new index NOW, not at a future call).
-    return ComboCursor(
-        combo_name=combo_name,
-        cursor_index=(prev.cursor_index + 1) % providers_count,
-        consecutive_use_count=1,
-        providers_hash=providers_hash,
-        last_rotated_at=now,
-    )
-
-
-def advance_cursor(
-    combo_name: str,
-    sticky_limit: int,
-    providers_hash: str,
-    providers_count: int,
-    now: float | None = None,
-) -> ComboCursor:
-    """Atomically bump and return the cursor for ``combo_name``.
-
-    On lock-contention timeout, logs a warning and falls back to a
-    locally-computed (lock-free) cursor: this keeps dispatch progressing
-    rather than freezing the loop, at the cost of a possible duplicate
-    rotation across racing processes (acceptable - the cursor is a hint).
-
-    The returned cursor's ``cursor_index`` is what the caller should use
-    for the rotation immediately following this call (see
-    rotation.get_rotated_providers).
-    """
-    if now is None:
-        now = time.time()
-    if providers_count < 1:
-        raise ValueError(
-            f"advance_cursor: providers_count must be >= 1, got {providers_count}"
-        )
-    state_path = _resolve_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = _lock_path(state_path)
-
-    try:
-        with filelock.FileLock(str(lock_path), timeout=LOCK_TIMEOUT_SECONDS):
-            raw = _read_disk_payload(state_path) or {}
-            health_map = _parse_state_payload(raw)
-            health_map, _ = _drop_stale(health_map, now)
-            cursors = _parse_cursors_payload(raw)
-            cursors, _ = _drop_stale_cursors(cursors, now)
-            usage = _parse_usage_payload(raw)
-            windows_opened = _parse_windows_opened(raw)
-
-            new_cursor = _next_cursor(
-                cursors.get(combo_name),
-                sticky_limit=sticky_limit,
-                providers_hash=providers_hash,
-                providers_count=providers_count,
-                combo_name=combo_name,
-                now=now,
-            )
-            cursors[combo_name] = new_cursor
-            schema_version = SCHEMA_VERSION  # always write current version
-            new_state = ProviderRuntimeState(
-                provider_health=health_map,
-                combo_cursors=cursors,
-                usage=usage,
-                windows_opened=windows_opened,
-                schema_version=schema_version,
-            )
-            _write_state_atomic(state_path, _serialize_state(new_state))
-            return new_cursor
-    except filelock.Timeout:
-        logger.warning(
-            "runtime_state: lock contention >%.1fs at %s for combo %r; "
-            "returning lock-free cursor (may duplicate rotation).",
-            LOCK_TIMEOUT_SECONDS,
-            state_path,
-            combo_name,
-        )
-        prev = read_cursor(combo_name, providers_hash, now=now)
-        return _next_cursor(
-            prev,
-            sticky_limit=sticky_limit,
-            providers_hash=providers_hash,
-            providers_count=providers_count,
-            combo_name=combo_name,
-            now=now,
-        )

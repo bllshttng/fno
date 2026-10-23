@@ -91,6 +91,8 @@ The full field contract is `agent_raw_inject` in `cli/src/fno/events/schema.yaml
 
 `--force` keeps every mail semantic and changes only the transport. Before it existed, a live-miss forced the sender to switch commands. Switching commands is what lost the envelope, the message id, the reply handle, and the outbox row.
 
+A thread worker hosts no pane, so `--force` cannot reach it. `fno agents spawn` makes a thread unless the caller asks for `--as pane`. To correct a thread worker that is underway, write the correction on its node with `fno backlog note <node>`. The note has no word cap, and it mails the node's holder a short pointer. The `--force` refusal and the control-lane budget refusal both name this lane.
+
 The bus row records `mail_id` alongside the `pane_id` it was typed into. That one mapping buys three things:
 
 - **Auditability.** A message delivered by keystroke used to be invisible to every mail surface. Now `fno agents mail admin sent` shows it and names the transport.

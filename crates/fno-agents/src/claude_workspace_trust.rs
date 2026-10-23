@@ -48,13 +48,8 @@ pub fn resolved_config_root(account: Option<&str>) -> PathBuf {
 /// project-local accounts block never reaches it, and the preflight that
 /// predicts the pinned dir must not read one either.
 fn account_record_config_dir(id: &str) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(crate::agents_config::global_config_path()?).ok()?;
-    let table = crate::agents_config::parse_config(&content)?;
-    let records = table
-        .get("accounts")
-        .or_else(|| table.get("providers"))?
-        .get("records")?
-        .as_array()?;
+    let records =
+        crate::accounts::records::layer_records(&crate::agents_config::global_config_path()?);
     for record in records.iter().rev() {
         // Last wins, matching Python's by_id dict on a duplicate id.
         if record.get("id").and_then(|v| v.as_str()) == Some(id) {

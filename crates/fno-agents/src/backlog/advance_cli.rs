@@ -89,7 +89,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             if provider.trim().is_empty() {
                 return Err("--provider must not be empty".into());
             }
-            if super::advance_dispatch::launch_harness_axis(provider, None).is_none() {
+            if super::advance_dispatch::launch_harness_axis(provider).is_none() {
                 return Err(format!(
                     "--provider {provider:?} names no known harness or account record"
                 ));

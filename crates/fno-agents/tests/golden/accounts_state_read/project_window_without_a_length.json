@@ -1,0 +1,1 @@
+{"op": "project_window", "state": {"windows_opened": {"zai": {"window": {"opened_at": 1789399400.0, "warned": true}}, "gone": {"window": {"opened_at": 1789380000.0}}}}, "id": "zai", "window_minutes": null, "expect": {"opened_at": 1789399400.0, "closes_at": null, "closes_in_s": null, "warned": false}}

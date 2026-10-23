@@ -101,47 +101,21 @@ def _hosted_dispatch(monkeypatch):
     return calls
 
 
-def test_send_ruling_unknown_node_refuses_before_mail(
+def test_send_has_no_ruling_option_and_touches_no_node(
     runner, ruling_graph, monkeypatch
 ):
+    # `fno backlog note` is the one lane that puts a correction on a node.
     calls = _hosted_dispatch(monkeypatch)
 
     sent = runner.invoke(
         app,
-        [
-            "agents", "mail", "send", "worker-one",
-            "This ruling names no real node.", "--from-name", "lead",
-            "--ruling", "x-dead",
-        ],
+        ["agents", "mail", "send", "w", "msg", "--ruling", "x-511a"],
     )
 
-    assert sent.exit_code != 0
+    assert sent.exit_code == 2
+    assert "No such option" in sent.output and "--ruling" in sent.output
     assert calls == []
     assert _graph_details(ruling_graph) == "Original node details."
-    assert "ruling node not found" in sent.stderr
-
-
-@pytest.mark.parametrize(
-    "lane_args",
-    [
-        ["worker-one", "/review", "--raw"],
-    ],
-    ids=["raw"],
-)
-def test_send_ruling_refuses_non_named_worker_lanes_before_side_effects(
-    runner, ruling_graph, monkeypatch, lane_args
-):
-    calls = _hosted_dispatch(monkeypatch)
-
-    sent = runner.invoke(
-        app,
-        ["agents", "mail", "send", *lane_args, "--ruling", "x-511a"],
-    )
-
-    assert sent.exit_code != 0
-    assert calls == []
-    assert _graph_details(ruling_graph) == "Original node details."
-    assert "--ruling supports only send <worker> <message>" in sent.stderr
 
 
 def test_send_then_unread_then_ack(runner, mailbox):

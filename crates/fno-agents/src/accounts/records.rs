@@ -1103,18 +1103,35 @@ pub fn load(repo_root: Option<&Path>, cwd: &Path) -> Result<Accounts, LoadError>
 
 /// `loader.known_account_ids`: every record id declared in any layer.
 pub fn known_account_ids(repo_root: Option<&Path>, cwd: &Path) -> BTreeSet<String> {
-    let mut ids = BTreeSet::new();
-    for path in candidates(repo_root, cwd) {
-        let data = read_layer(&path);
-        let Some(records) = extract_accounts_block(&data)
-            .and_then(|b| b.get("records"))
-            .and_then(toml::Value::as_array)
-        else {
-            continue;
-        };
-        ids.extend(records.iter().filter_map(record_id).map(str::to_string));
+    candidates(repo_root, cwd)
+        .iter()
+        .flat_map(|path| layer_records(path))
+        .filter_map(|r| record_id(&r).map(str::to_string))
+        .collect()
+}
+
+/// The `records` array of one parsed layer's accounts block.
+pub(crate) fn block_records(data: &toml::Table) -> &[toml::Value] {
+    extract_accounts_block(data)
+        .and_then(|b| b.get("records"))
+        .and_then(toml::Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// One config file's records, unvalidated.
+pub fn layer_records(path: &Path) -> Vec<toml::Value> {
+    block_records(&read_layer(path)).to_vec()
+}
+
+/// Every layer's records merged the way [load] merges them, a local record
+/// replacing a global one by id, but never validated: the reader for callers
+/// that skip a malformed record rather than lose the whole config.
+pub fn raw_records(repo_root: Option<&Path>, cwd: &Path) -> Vec<toml::Value> {
+    let mut acc = Vec::new();
+    for path in candidates(repo_root, cwd).iter().rev() {
+        overlay_records(&mut acc, block_records(&read_layer(path)));
     }
-    ids
+    acc
 }
 
 /// `loader.record_harness`: the harness `record_id` runs on, `None` when

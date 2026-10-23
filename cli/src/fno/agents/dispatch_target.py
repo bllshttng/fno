@@ -9,7 +9,7 @@ it has real callers in the agent routing surfaces, so it stays.
 
 Precedence (highest priority first):
   1. Per-agent pin: config.agents.<name>.provider - single provider.
-  2. TARGET_COMBO env var: rotate via dispatch_with_combo(combo_name, fn).
+  2. TARGET_COMBO env var: the named combo's providers.
   3. settings active_combo: config.providers.active_combo.
   4. settings active provider: config.providers.active.
 

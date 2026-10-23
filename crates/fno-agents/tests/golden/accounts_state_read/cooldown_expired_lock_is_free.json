@@ -1,0 +1,1 @@
+{"op": "is_in_cooldown", "state": {"provider_health": {"x": {"rate_limited_until": 1789399999.0, "last_error_at": 1789399940.0}}}, "id": "x", "model": null, "expect": false}

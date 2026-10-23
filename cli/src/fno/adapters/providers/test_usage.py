@@ -2,27 +2,26 @@
 
 Run: cd cli && uv run pytest src/fno/adapters/providers/test_usage.py -v
 
-Quota-aware dispatch (x-5d3e). Covers the probe fail-open contract, the
+Quota-aware dispatch. Covers the probe fail-open contract, the
 additive snapshot storage carried through the shared lock, and the headroom
 predicate the routing/scheduling consumers act on.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from fno.adapters.providers import loader
-from fno.adapters.providers.error_taxonomy import ErrorRule
 from fno.adapters.providers.model import ProviderRecord
 from fno.adapters.providers.runtime_state import (
     HeadroomState,
     headroom,
     read_state,
     read_usage,
-    update_provider_health,
-    write_usage_snapshot,
 )
 from fno.adapters.providers.usage import (
     UsageSnapshot,
@@ -72,6 +71,23 @@ def _claude_record(creds: Path) -> ProviderRecord:
         auth="oauth_dir",
         credentials_source=creds,
     )
+
+
+def _seed_state(block: str, key: str, entry: dict) -> None:
+    """Add one entry to the pinned state file, as the Rust writer leaves it."""
+    path = Path(os.environ["FNO_RUNTIME_STATE_PATH"])
+    raw = json.loads(path.read_text()) if path.exists() else {}
+    raw.setdefault(block, {})[key] = entry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(raw))
+
+
+def _seed_usage(snap: UsageSnapshot, now: float | None = None) -> None:
+    _seed_state("usage", snap.provider_id, dataclasses.asdict(snap))
+
+
+def _seed_health(provider_id: str, **fields: object) -> None:
+    _seed_state("provider_health", provider_id, fields)
 
 
 def _snap(provider_id: str, *windows: UsageWindow, probed_at: float = 1000.0) -> UsageSnapshot:
@@ -153,7 +169,7 @@ class TestProbeFailOpen:
     def test_claude_probe_parses_real_shape(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Verified /api/oauth/usage shape (x-6bcf): top-level five_hour/seven_day
+        # Verified /api/oauth/usage shape: top-level five_hour/seven_day
         # objects with utilization (0-100) + an ISO-8601 resets_at string.
         (tmp_path / ".credentials.json").write_text(
             json.dumps({"claudeAiOauth": {"accessToken": "tok"}})
@@ -186,7 +202,7 @@ class TestProbeFailOpen:
     def test_claude_probe_includes_model_weekly_windows(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # x-6bcf review: a populated seven_day_opus must NOT be dropped - a maxed
+        # Review: a populated seven_day_opus must NOT be dropped - a maxed
         # Opus weekly has to bind headroom even when the general weekly has room.
         # Obfuscated promo buckets (tangelo) are excluded.
         (tmp_path / ".credentials.json").write_text(
@@ -418,7 +434,7 @@ class TestProbeFailOpen:
     def test_codex_probe_parses_real_shape(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Verified codex shape (x-6bcf): an event_msg line with rate_limits at
+        # Verified codex shape: an event_msg line with rate_limits at
         # payload.rate_limits; each window has used_percent + an ABSOLUTE resets_at.
         sessions = tmp_path / "sessions"
         sessions.mkdir()
@@ -510,7 +526,7 @@ class TestZaiProbe:
         leaves ``()`` and correctly reads unknown. That is why this control
         stayed green through the false green: the defect needs a MIXED row
         list, where a dropped row leaves a survivor to answer in its place.
-        The mixed cases live in ``test_usage_false_green.py`` (x-763a).
+        The mixed cases live in ``test_usage_false_green.py``.
 
         A reset-less row that is otherwise well-formed is no longer one of
         these cases: it is RETAINED with ``resets_at = None`` and binds on its
@@ -581,7 +597,7 @@ class TestZaiProbe:
         repo_root = Path("/project")
         # The clock has to sit near the reset it is reading. A 300-minute
         # window whose reset is 56 YEARS out describes a different span, and
-        # since x-763a that reset is dropped to None rather than published as
+        # since the false-green fix that reset is dropped to None rather than published as
         # this window's (AC9-ERR). One hour before the reset is coherent.
         snapshot, reason = probe(
             _zai_record(), now=1783807404.0 - 3600.0, repo_root=repo_root
@@ -853,27 +869,6 @@ class TestRefreshObservation:
         # The compatibility wrapper still yields the same snapshot.
         assert rs.refresh_usage("p1", ttl_seconds=0, now=2000.0) is snap
 
-    def test_write_reports_success(self, state_path: Path) -> None:
-        assert write_usage_snapshot(_snap("p1", UsageWindow("5h", 1.0, 9000.0))) is True
-
-    def test_write_reports_lock_contention(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import filelock
-
-        from fno.adapters.providers import runtime_state as rs
-
-        class _AlwaysContended:
-            def __init__(self, *a: object, **k: object) -> None: ...
-
-            def __enter__(self) -> None:
-                raise filelock.Timeout("busy")
-
-            def __exit__(self, *a: object) -> None: ...
-
-        monkeypatch.setattr(rs.filelock, "FileLock", _AlwaysContended)
-        assert write_usage_snapshot(_snap("p1", UsageWindow("5h", 1.0, 9000.0))) is False
-
     def test_missing_record_is_named(
         self, state_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -903,7 +898,7 @@ class TestRefreshObservation:
     ) -> None:
         from fno.adapters.providers import runtime_state as rs
 
-        write_usage_snapshot(_snap("p1", probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", probed_at=1000.0), now=1000.0)
         obs = rs.refresh_usage_detailed("p1", ttl_seconds=300, now=1100.0)
         assert obs.snapshot is not None
         assert (obs.reason, obs.known) == ("no-windows", False)
@@ -911,38 +906,17 @@ class TestRefreshObservation:
     def test_a_cache_hit_attempts_no_write(self, state_path: Path) -> None:
         from fno.adapters.providers import runtime_state as rs
 
-        write_usage_snapshot(
-            _snap("p1", UsageWindow("5h", 3.0, 9000.0), probed_at=1000.0), now=1000.0
-        )
+        _seed_usage(_snap("p1", UsageWindow("5h", 3.0, 9000.0), probed_at=1000.0))
         obs = rs.refresh_usage_detailed("p1", ttl_seconds=300, now=1100.0)
         assert obs.known is True
         assert obs.persisted is None  # tri-state: no write was attempted
 
 
 class TestSnapshotStorage:
-    def test_write_read_roundtrip(self, state_path: Path) -> None:
-        snap = _snap("p1", UsageWindow("5h", 50.0, 9000.0), probed_at=1000.0)
-        write_usage_snapshot(snap, now=1000.0)
-        got = read_usage("p1", ttl_seconds=300, now=1100.0)
-        assert got is not None
-        assert got.windows[0].used_pct == 50.0
-        # AC1-HP: persisted under `usage` in the state file.
-        raw = json.loads(state_path.read_text())
-        assert "p1" in raw["usage"]
-
     def test_stale_snapshot_reads_as_absent(self, state_path: Path) -> None:
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 50.0, 9000.0), probed_at=1000.0))
+        _seed_usage(_snap("p1", UsageWindow("5h", 50.0, 9000.0), probed_at=1000.0))
         # 400s later with a 300s TTL -> treated as absent.
         assert read_usage("p1", ttl_seconds=300, now=1400.0) is None
-
-    def test_health_write_preserves_usage(self, state_path: Path) -> None:
-        # Concurrency invariant: a health mutation must not drop the usage
-        # field written under the same lock (and vice versa).
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 50.0, 9000.0), probed_at=1000.0), now=1000.0)
-        update_provider_health("p1", ErrorRule(status=429, backoff=True), now=1001.0)
-        assert read_usage("p1", ttl_seconds=300, now=1002.0) is not None
-        # And the health write landed too.
-        assert read_state(now=1002.0).provider_health["p1"].backoff_level == 1
 
     def test_malformed_entry_self_heals(self, state_path: Path) -> None:
         # AC2-ERR: a hand-corrupted usage entry (string used_pct, missing
@@ -979,33 +953,33 @@ class TestHeadroom:
         assert headroom("p1", now=1000.0).state is HeadroomState.UNKNOWN
 
     def test_empty_windows_is_unknown_not_ok(self, state_path: Path) -> None:
-        write_usage_snapshot(_snap("p1", probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", probed_at=1000.0), now=1000.0)
         assert headroom("p1", now=1000.0).state is HeadroomState.UNKNOWN
 
     def test_exhausted_future_window(self, state_path: Path) -> None:
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 100.0, 5000.0), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 5000.0), probed_at=1000.0), now=1000.0)
         h = headroom("p1", now=1000.0)
         assert h.state is HeadroomState.EXHAUSTED
         assert h.resets_at == 5000.0
 
     def test_low_at_threshold(self, state_path: Path) -> None:
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 90.0, 5000.0), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 90.0, 5000.0), probed_at=1000.0), now=1000.0)
         assert headroom("p1", now=1000.0, threshold_pct=90.0).state is HeadroomState.LOW
 
     def test_ok_below_threshold(self, state_path: Path) -> None:
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 40.0, 5000.0), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 40.0, 5000.0), probed_at=1000.0), now=1000.0)
         assert headroom("p1", now=1000.0, threshold_pct=90.0).state is HeadroomState.OK
 
     def test_stale_exhaustion_never_binds(self, state_path: Path) -> None:
         # AC1-EDGE: a 100% window whose resets_at is in the past does not bind;
         # the limit has reset, so dispatch proceeds (OK).
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 100.0, 500.0), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 500.0), probed_at=1000.0), now=1000.0)
         assert headroom("p1", now=1000.0).state is HeadroomState.OK
 
     def test_provider_rate_limited_until_is_exhausted(self, state_path: Path) -> None:
         # An active provider-level rate_limited_until reads EXHAUSTED even
         # without a usage snapshot.
-        update_provider_health("p1", ErrorRule(status=429, cooldown_ms=60_000), now=1000.0)
+        _seed_health("p1", backoff_level=0, rate_limited_until=1060.0, last_error_at=1000.0)
         h = headroom("p1", now=1000.0)
         assert h.state is HeadroomState.EXHAUSTED
         assert h.resets_at is not None and h.resets_at > 1000.0
@@ -1027,14 +1001,14 @@ class TestEvaluateQuotaDefer:
         from fno.adapters.providers.runtime_state import evaluate_quota_signal
 
         self._quota(monkeypatch, defer_dispatch=False)
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
         assert not evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
 
     def test_p0_never_defers(self, state_path: Path, monkeypatch) -> None:
         from fno.adapters.providers.runtime_state import evaluate_quota_signal
 
         self._quota(monkeypatch, defer_dispatch=True)
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
         assert not evaluate_quota_signal("p1", priority="p0", now=1000.0).defer
 
     def test_exhausted_defers_with_retry_at(self, state_path: Path, monkeypatch) -> None:
@@ -1042,7 +1016,7 @@ class TestEvaluateQuotaDefer:
         from fno.adapters.providers.runtime_state import HeadroomState, evaluate_quota_signal
 
         self._quota(monkeypatch, defer_dispatch=True)
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
         sig = evaluate_quota_signal("p1", priority="p2", now=1000.0)
         assert sig.defer
         assert sig.state is HeadroomState.EXHAUSTED
@@ -1053,7 +1027,7 @@ class TestEvaluateQuotaDefer:
 
         self._quota(monkeypatch, defer_dispatch=True, defer_horizon_minutes=60, defer_threshold_pct=90.0)
         # reset in 30 min (< 60 horizon), 95% -> LOW -> defer.
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 1800), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 1800), probed_at=1000.0), now=1000.0)
         assert evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
 
     def test_defer_wins_when_the_two_windows_overlap(self, state_path: Path, monkeypatch) -> None:
@@ -1065,7 +1039,7 @@ class TestEvaluateQuotaDefer:
 
         self._quota(monkeypatch, defer_dispatch=True, defer_horizon_minutes=60, defer_threshold_pct=90.0)
         # reset in 45 min: inside the 60-min defer horizon AND past a 30-min cutover.
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 2700), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 2700), probed_at=1000.0), now=1000.0)
         sig = evaluate_quota_signal("p1", priority="p2", cutover_low_after_minutes=30, now=1000.0)
         assert sig.defer and not sig.cutover
 
@@ -1074,7 +1048,7 @@ class TestEvaluateQuotaDefer:
 
         self._quota(monkeypatch, defer_dispatch=True, defer_horizon_minutes=60)
         # reset in 2h (> 60 horizon), 95% -> LOW but too far -> proceed.
-        write_usage_snapshot(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 7200), probed_at=1000.0), now=1000.0)
+        _seed_usage(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 7200), probed_at=1000.0), now=1000.0)
         assert not evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
 
     def test_unknown_never_strands(self, state_path: Path, monkeypatch) -> None:
@@ -1120,7 +1094,7 @@ class TestRequiredBotHeadroomCheck:
         monkeypatch.setattr(pcli, "_get_repo_root", lambda: tmp_path)
 
         now = _t.time()
-        write_usage_snapshot(_snap("codex-pro", UsageWindow("5h", 100.0, now + 3600), probed_at=now), now=now)
+        _seed_usage(_snap("codex-pro", UsageWindow("5h", 100.0, now + 3600), probed_at=now), now=now)
 
         warnings = pcli.required_bot_headroom_check()
         assert len(warnings) == 1
@@ -1153,12 +1127,12 @@ class TestRequiredBotHeadroomCheck:
         monkeypatch.setattr(pcli, "_get_repo_root", lambda: tmp_path)
 
         now = _t.time()
-        write_usage_snapshot(_snap("codex-pro", UsageWindow("5h", 20.0, now + 3600), probed_at=now), now=now)
+        _seed_usage(_snap("codex-pro", UsageWindow("5h", 20.0, now + 3600), probed_at=now), now=now)
         assert pcli.required_bot_headroom_check() == []
 
 
 # ---------------------------------------------------------------------------
-# x-4b8d: a fresh probe self-heals a PROVEN false taint (AC4-FR)
+# a fresh probe self-heals a PROVEN false taint (AC4-FR)
 # ---------------------------------------------------------------------------
 
 
@@ -1698,8 +1672,6 @@ def test_usage_cache_is_machine_wide_across_repositories(monkeypatch, tmp_path) 
     in half instead. The newest observation is therefore the one both repos
     read. What stays repo-scoped is the RECORD SET, which is config, not quota.
     """
-    from fno.adapters.providers.runtime_state import read_usage, write_usage_snapshot
-
     # Pin the state file (the documented test hook). An unpinned run would
     # resolve the real ~/.fno file, and the point under test is that repo_root
     # no longer partitions it - not which machine-wide path it lands on.
@@ -1708,21 +1680,11 @@ def test_usage_cache_is_machine_wide_across_repositories(monkeypatch, tmp_path) 
     for r in (repo_a, repo_b):
         (r / ".fno").mkdir(parents=True)
 
-    # Same record id, two observations from two repositories: the second wins.
-    assert write_usage_snapshot(
-        _snap("shared-id", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0),
-        now=1000.0,
-        repo_root=repo_a,
-    )
-    assert write_usage_snapshot(
-        _snap("shared-id", UsageWindow("5h", 1.0, 9e18), probed_at=1001.0),
-        now=1001.0,
-        repo_root=repo_b,
-    )
+    _seed_usage(_snap("shared-id", UsageWindow("5h", 1.0, 9e18), probed_at=1001.0))
 
     a = read_usage("shared-id", now=1001.0, repo_root=repo_a)
     b = read_usage("shared-id", now=1001.0, repo_root=repo_b)
     assert a is not None and b is not None
-    # One machine-wide file: the newest observation answers for both repos.
+    # One machine-wide file: the one observation answers for both repos.
     assert a.windows[0].used_pct == 1.0
     assert b.windows[0].used_pct == 1.0

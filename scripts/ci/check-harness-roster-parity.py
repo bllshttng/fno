@@ -12,8 +12,6 @@ surface as a SUBSET of it, every one-sided difference NAMED, never counted:
                  setup docs tell operators they can host the loop family under
   provider arms  the literal match arms of ``for_name()`` in
                  ``crates/fno-agents/src/provider.rs``: the native dispatch cases
-  adapter rows   literal ``_register("<name>", Class)`` calls in
-                 ``cli/src/fno/adapters/__init__.py``: the Python adapter registry
 
 The subset direction is deliberate: the roster is the source of truth, so a
 name may land in Rust ahead of its evidence (the roster entry IS the support
@@ -53,7 +51,6 @@ from typing import IO, Any, Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PROVIDER_RS = "crates/fno-agents/src/provider.rs"
-ADAPTERS_PY = "cli/src/fno/adapters/__init__.py"
 IDENTITY_PY = "cli/src/fno/harness_identity.py"
 SETUP_GLOB = "SETUP-*.md"
 
@@ -151,26 +148,6 @@ def extract_provider_arms(text: str) -> tuple[str, ...]:
     return tuple(sorted(m.group(1) for m in arms))
 
 
-def extract_adapter_names(text: str) -> tuple[str, ...]:
-    try:
-        tree = ast.parse(text)
-    except SyntaxError as exc:
-        raise GateError(f"{ADAPTERS_PY}: unparseable ({exc})") from exc
-    names: list[str] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_register"
-        ):
-            if not node.args or not isinstance(node.args[0], ast.Constant):
-                raise GateError(f"{ADAPTERS_PY}: a _register call has a non-literal name")
-            names.append(str(node.args[0].value))
-    if not names:
-        raise GateError(f"{ADAPTERS_PY}: no _register calls found")
-    return tuple(sorted(set(names)))
-
-
 def extract_marker_tables(text: str) -> dict[str, tuple[str, ...]]:
     try:
         tree = ast.parse(text)
@@ -218,7 +195,6 @@ def collect(root: Path) -> dict[str, Any]:
         "roster": extract_roster(provider_text),
         "setup docs": extract_setup_harnesses(root),
         "provider dispatch": extract_provider_arms(provider_text),
-        "adapter registry": extract_adapter_names(_read(root, ADAPTERS_PY)),
         "markers": extract_marker_tables(_read(root, IDENTITY_PY)),
     }
 
@@ -227,7 +203,7 @@ def check(facts: dict[str, Any]) -> list[str]:
     """Every divergence, as printable lines. Empty list is the pass."""
     roster = set(facts["roster"])
     problems: list[str] = []
-    for name in ("setup docs", "provider dispatch", "adapter registry"):
+    for name in ("setup docs", "provider dispatch"):
         values: set[str] = set(facts[name])
         if not values:
             problems.append(f"{name}: extracted zero names")
@@ -265,7 +241,7 @@ def check(facts: dict[str, Any]) -> list[str]:
 def report(facts: dict[str, Any], out: IO[str]) -> None:
     roster: tuple[str, ...] = facts["roster"]
     print(f"roster (provider.rs KNOWN_HARNESSES, {len(roster)}): {', '.join(roster)}", file=out)
-    for name in ("setup docs", "provider dispatch", "adapter registry"):
+    for name in ("setup docs", "provider dispatch"):
         values: tuple[str, ...] = facts[name]
         print(f"{name}: {', '.join(values)}", file=out)
 
@@ -336,10 +312,6 @@ def _provider_rs(roster: tuple[str, ...], arms: tuple[str, ...]) -> str:
     )
 
 
-def _adapters_py(names: tuple[str, ...]) -> str:
-    return "".join(f'_register("{name}", Thing)\n' for name in names)
-
-
 def _identity_py(
     markers: tuple[str, ...],
     legacy: tuple[str, ...],
@@ -361,19 +333,15 @@ def _write_tree(
     *,
     roster: tuple[str, ...] = BASE_ROSTER,
     providers: tuple[str, ...] = BASE_PROVIDERS,
-    adapters: tuple[str, ...] = ("hermes",),
     markers: tuple[str, ...] = BASE_MARKERS,
     legacy: tuple[str, ...] = ("CLAUDE_SESSION_ID",),
     extra: tuple[str, ...] = BASE_EXTRA,
     setup_docs: tuple[str, ...] = ("hermes", "openclaw"),
-    adapters_text: Optional[str] = None,
     provider_text: Optional[str] = None,
-    skip_adapters: bool = False,
     skip_roster_const: bool = False,
 ) -> None:
     (root / "docs").mkdir(parents=True, exist_ok=True)
     (root / "cli/src/fno/agents").mkdir(parents=True, exist_ok=True)
-    (root / "cli/src/fno/adapters").mkdir(parents=True, exist_ok=True)
     (root / "crates/fno-agents/src").mkdir(parents=True, exist_ok=True)
     (root / PROVIDER_RS).write_text(
         provider_text
@@ -383,11 +351,6 @@ def _write_tree(
         ),
         encoding="utf-8",
     )
-    if not skip_adapters:
-        (root / ADAPTERS_PY).write_text(
-            adapters_text if adapters_text is not None else _adapters_py(adapters),
-            encoding="utf-8",
-        )
     (root / IDENTITY_PY).write_text(
         _identity_py(markers, legacy, extra), encoding="utf-8"
     )
@@ -427,22 +390,10 @@ def run_selftest() -> int:
             setup_docs=("hermes", "openclaw", "ghost"),
         ),
         _case(
-            "an adapter row naming an unrostered name fails",
-            1,
-            ("not_in_roster", "ghost", "adapter registry"),
-            adapters=("ghost",),
-        ),
-        _case(
             "a dispatch arm naming an unrostered name fails",
             1,
             ("not_in_roster", "ghost", "provider dispatch"),
             providers=BASE_PROVIDERS + ("ghost",),
-        ),
-        _case(
-            "adapter registry with zero rows fails closed",
-            1,
-            ("FAIL-CLOSED", "no _register calls found"),
-            adapters_text="# registry emptied\n_REGISTRY: dict = {}\n",
         ),
         _case(
             "provider.rs without for_name fails closed",
@@ -461,12 +412,6 @@ def run_selftest() -> int:
             1,
             ("FAIL-CLOSED", "KNOWN_HARNESSES is empty"),
             skip_roster_const=True,
-        ),
-        _case(
-            "missing adapters file fails closed",
-            1,
-            ("FAIL-CLOSED", "unreadable"),
-            skip_adapters=True,
         ),
         _case(
             "HERMES_SESSION_ID promoted to a marker fails on green parity",

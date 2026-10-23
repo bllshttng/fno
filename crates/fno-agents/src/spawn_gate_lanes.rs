@@ -24,11 +24,6 @@ use crate::spawn_gate::status_is_liveish;
 use crate::state::{load_registry, RegistryEntry};
 use crate::AgentStatus;
 
-/// How long a reactive provider-health entry may drive the quota lock
-/// (mirrors runtime_state.PROVIDER_HEALTH_TTL_SECONDS and the bound
-/// fallback_chain already applies to its own health reads).
-const PROVIDER_HEALTH_TTL_SECONDS: f64 = 60.0 * 60.0;
-
 // ponytail: fixed 5-hour hold matches the vendor window in the measured 429;
 // upgrade is parsing the window length from the excerpt.
 const UNKNOWN_RESET_HOLD_S: i64 = 5 * 3600;
@@ -1266,16 +1261,13 @@ fn runtime_state_payload(config_cwd: &Path) -> Value {
 }
 
 /// The account's binding rate-limit deadline, when its health entry is fresh
-/// (the shared record-level TTL) and the lock is in the future. Reuses the
-/// fallback-chain's health parse instead of a second one.
+/// (the shared record-level TTL) and the lock is in the future.
 pub(crate) fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
-    let health = crate::fallback_chain::parse_provider_health(raw).remove(account)?;
-    let rlu = health.get("rate_limited_until").and_then(Value::as_f64)?;
-    match health.get("last_error_at").and_then(Value::as_f64) {
-        Some(at) if at < now - PROVIDER_HEALTH_TTL_SECONDS => return None,
-        _ => {}
-    }
-    (rlu > now).then_some(rlu)
+    let health = crate::accounts::state::parse_health(raw);
+    crate::accounts::state::drop_stale(health, now)
+        .remove(account)?
+        .rate_limited_until
+        .filter(|rlu| *rlu > now)
 }
 
 /// Epoch seconds as a UTC ISO-8601 string for the refusal prose; the receipt
