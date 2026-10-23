@@ -8,7 +8,7 @@
 //! any store write, so a failed save leaves no residue a later registration
 //! would read as a duplicate credential.
 
-use crate::accounts::add::{upsert_record, UpsertError};
+use crate::accounts::add::{split_flag, upsert_record, UpsertError};
 use crate::accounts::binding::{self, SlotProbe};
 use crate::accounts::reconcile::{principal_json, slot_switch_remedy};
 use crate::accounts::records::{self, Record, Scope};
@@ -52,17 +52,7 @@ fn parse(args: &[String]) -> Result<Option<Args>, String> {
     let mut out = Args::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let (flag, inline) = match arg.split_once('=') {
-            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
-            _ if arg.len() > 2
-                && arg.starts_with('-')
-                && !arg.starts_with("--")
-                && arg.is_char_boundary(2) =>
-            {
-                (arg[..2].to_string(), Some(arg[2..].to_string()))
-            }
-            _ => (arg.clone(), None),
-        };
+        let (flag, inline) = split_flag(arg);
         let slot = match flag.as_str() {
             "-h" | "--help" => return Ok(None),
             "-H" | "--harness" => &mut out.harness,

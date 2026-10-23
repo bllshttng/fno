@@ -37,22 +37,28 @@ struct Args {
     force: bool,
 }
 
+/// Click's token split: `--opt=value` and `-Xvalue` carry their value
+/// inline; anything else is the token alone.
+pub(crate) fn split_flag(arg: &str) -> (String, Option<String>) {
+    match arg.split_once('=') {
+        Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+        _ if arg.len() > 2
+            && arg.starts_with('-')
+            && !arg.starts_with("--")
+            && arg.is_char_boundary(2) =>
+        {
+            (arg[..2].to_string(), Some(arg[2..].to_string()))
+        }
+        _ => (arg.to_string(), None),
+    }
+}
+
 /// Click's parse: `--opt value`, `--opt=value`, `-X value`, `-Xvalue`.
 fn parse(args: &[String]) -> Result<Option<Args>, String> {
     let mut out = Args::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let (flag, inline) = match arg.split_once('=') {
-            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
-            _ if arg.len() > 2
-                && arg.starts_with('-')
-                && !arg.starts_with("--")
-                && arg.is_char_boundary(2) =>
-            {
-                (arg[..2].to_string(), Some(arg[2..].to_string()))
-            }
-            _ => (arg.clone(), None),
-        };
+        let (flag, inline) = split_flag(arg);
         let slot = match flag.as_str() {
             "-h" | "--help" => return Ok(None),
             "-F" | "--force" if inline.is_none() => {

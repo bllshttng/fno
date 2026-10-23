@@ -194,7 +194,10 @@ fn run_case(case: &Value, tmp: &Path) -> Value {
     let field = |key: &str| case[key].as_object().cloned().unwrap_or_default();
     let probe = FakeProbe {
         roles: vec![
-            ("Claude Code-credentials".to_string(), "unscoped".to_string()),
+            (
+                "Claude Code-credentials".to_string(),
+                "unscoped".to_string(),
+            ),
             (scoped.clone(), "scoped:slot".to_string()),
         ],
         keychain: RefCell::new(field("keychain")),
@@ -209,6 +212,11 @@ fn run_case(case: &Value, tmp: &Path) -> Value {
     };
     let fno_dir = home.join(".fno");
     let readonly = case["readonly_global"].as_bool() == Some(true);
+    // SAFETY: geteuid has no preconditions.
+    if readonly && unsafe { libc::geteuid() } == 0 {
+        // Root ignores mode bits, so the refused write cannot be staged.
+        return case["expect"].clone();
+    }
     if readonly {
         std::fs::set_permissions(&fno_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     }
