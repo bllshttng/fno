@@ -730,6 +730,7 @@ class TestRequiredBotHeadroomCheck:
 
         helper = Path(__file__).parents[4] / "tests" / "_event_rows.py"
         spec = importlib.util.spec_from_file_location("_event_rows", helper)
+        assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         rows = mod.event_rows(tmp_path / ".fno" / "events.jsonl")
