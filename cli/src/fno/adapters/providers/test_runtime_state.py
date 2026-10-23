@@ -937,9 +937,8 @@ class TestWindowProjection:
 class TestEveryLockWriterHarvestsTheReset:
     """A producer on one of N paths leaves the feature inert on the others.
 
-    Three code paths write the provider lock, and the harvested reset is worth
-    nothing on any path that does not carry it. The taxonomy field alone is
-    decorative; these pin the wiring.
+    Every path that writes the provider lock must carry the harvested reset,
+    or the taxonomy field is decorative. These pin the wiring.
     """
 
     _BODY = "rate limit exceeded; resets at 2026-08-18T07:19:38+08:00"
@@ -955,29 +954,6 @@ class TestEveryLockWriterHarvestsTheReset:
         assert reset_epoch_from(self._BODY) == normalize(429, None, self._BODY).resets_at
         assert reset_epoch_from(None) is None
         assert reset_epoch_from("") is None
-
-    def test_failover_writes_the_harvested_reset(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        seen: dict[str, object] = {}
-        import fno.adapters.providers.failover as fo
-
-        def _spy(provider_id, rule, model=None, now=None, resets_at=None):
-            seen["resets_at"] = resets_at
-            return ProviderHealth(provider_id=provider_id)
-
-        monkeypatch.setattr(fo, "update_provider_health", _spy, raising=True)
-
-        from fno.adapters.providers.error_taxonomy import normalize
-
-        err = normalize(429, None, self._BODY)
-        rule = fo.classify_error(err.raw_status, err.body_excerpt)
-        assert rule is not None
-        # Exercise the same expression the swap path runs, without standing up
-        # a whole controller: the point under test is that the value reaches
-        # the writer, not how attempt_swap decides.
-        _spy("zai", rule, model=err.model, resets_at=err.resets_at)
-        assert seen["resets_at"] == pytest.approx(self._expected())
 
     def test_note_quota_death_writes_the_harvested_reset(
         self, state_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -997,27 +973,6 @@ class TestEveryLockWriterHarvestsTheReset:
         )
 
         dispatch.note_quota_death(None, f"Claude usage limit reached. {self._BODY}")
-        assert seen["resets_at"] == pytest.approx(self._expected())
-
-    def test_rotation_writes_the_harvested_reset(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import fno.adapters.providers.runtime_state as rs
-        from fno.adapters.providers.error_taxonomy import classify_error, reset_epoch_from
-
-        seen: dict[str, object] = {}
-        monkeypatch.setattr(
-            rs, "update_provider_health",
-            lambda provider_id, rule, model=None, now=None, resets_at=None:
-                seen.setdefault("resets_at", resets_at),
-            raising=True,
-        )
-        rule = classify_error(429, self._BODY)
-        assert rule is not None
-        rs.update_provider_health(
-            "zai", rule,
-            resets_at=reset_epoch_from(self._BODY, rs.record_reset_timezone("zai")),
-        )
         assert seen["resets_at"] == pytest.approx(self._expected())
 
     def test_a_naive_stamp_needs_the_records_timezone_at_the_writer(

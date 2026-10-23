@@ -520,8 +520,7 @@ def _safe_read_state(jobs_dir):
 # ---------------------------------------------------------------------------
 # Out-of-usage provider failover
 #
-# This wires the already-built+tested failover engine
-# (``adapters/providers/error_taxonomy`` + ``failover.FailoverController``) into
+# This wires the error taxonomy (``adapters/providers/error_taxonomy``) into
 # the recovery watchdog - the ONLY live autonomous loop in production. The design
 # named an in-loop megawalk path as primary, but that path had zero production
 # call sites and footnote's real autonomous loop (Rust ``loop run`` +

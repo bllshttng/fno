@@ -490,7 +490,7 @@ def normalize(
         # yields None: an invented deadline is worse than an absent one.
         #
         # Scoped to the QUOTA class deliberately. `resets_at` is written
-        # straight through as the provider lock (failover.py, via
+        # straight through as the provider lock (via
         # update_provider_health), replacing the rule's own backoff step, and
         # `for <n> <unit>` is ordinary English that appears in bodies which
         # name no rate-limit window at all. Unscoped, an auth body reading
