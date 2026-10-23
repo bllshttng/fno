@@ -484,7 +484,16 @@ pub fn pending_draw(store_path: &Path, scope: &str) -> Result<Option<String>, St
 /// (history, store, registry) propagates, because a naming decision made on
 /// a half-read set is the bug this module exists to close.
 pub fn used_names(store_path: &Path, registry_path: &Path) -> Result<BTreeSet<String>, String> {
-    let mut used = history_names(store_path)?;
+    used_names_over(history_names(store_path)?, store_path, registry_path)
+}
+
+/// [`used_names`] over a history set the caller already read, so one naming
+/// decision reads the shared ledger once.
+fn used_names_over(
+    mut used: BTreeSet<String>,
+    store_path: &Path,
+    registry_path: &Path,
+) -> Result<BTreeSet<String>, String> {
     let store = read(store_path)?;
     used.extend(
         store
@@ -604,10 +613,11 @@ pub(crate) fn used_for_canon(
     canon: &str,
     live: &BTreeMap<String, crate::territory::Team>,
 ) -> Result<BTreeSet<String>, String> {
-    let mut used = used_names(store_path, registry_path)?;
+    let history = history_names(store_path)?;
+    let mut used = used_names_over(history.clone(), store_path, registry_path)?;
     if let Some(team) = live.get(canon) {
         let holder = team.holder.to_ascii_lowercase();
-        if !history_names(store_path)?.contains(&holder) {
+        if !history.contains(&holder) {
             used.remove(&holder);
         }
     }
@@ -1086,6 +1096,12 @@ pub fn carry_holder_name(
     }
     let canon = crate::territory::canonical_scope(scope);
     if canon.is_empty() {
+        return Ok(None);
+    }
+    // Already named: the name belongs to the team. Answered before the
+    // ledger read, so a rescope that already carried never waits on (or
+    // fails with) the shared primary. The closure re-checks under the lock.
+    if read(store_path)?.teams.contains_key(&canon) {
         return Ok(None);
     }
     // Another session bound this name, here or on a peer machine: the spawn
