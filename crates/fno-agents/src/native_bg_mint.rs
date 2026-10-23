@@ -63,13 +63,15 @@ pub(crate) fn mint_missing_native_bg(
     // for rows born before their transcript existed. The write closure
     // re-decides both under the lock.
     let mut prepared = Vec::new();
+    // (child, parent, child pid): a fork takes its parent's row, never a new one.
+    let mut forks: Vec<(String, String, u32)> = Vec::new();
     let mut deferred = false;
     // State alone lies: a died session keeps its last `working`/`blocked`
     // row with no pid. A listing that carries pids makes the missing pid a
     // death witness, so liveness runs through `has_live_process`.
     let carries_pids = listing.carries_pids();
     for row in rows.iter().filter(|r| r.has_live_process(carries_pids)) {
-        if prepared.len() >= BUDGET_PER_BEAT {
+        if prepared.len() + forks.len() >= BUDGET_PER_BEAT {
             deferred = true;
             break;
         }
@@ -85,6 +87,21 @@ pub(crate) fn mint_missing_native_bg(
             || crate::session_report::find_row(&entries, "claude", session, None).is_some()
         {
             continue;
+        }
+        if crate::native_adopt::superseded(&entries, session) {
+            continue;
+        }
+        let fork_parent = row
+            .pid
+            .and_then(|pid| crate::native_adopt::claude_fork_parent(session, Some(pid)));
+        if let Some((parent, pid)) = fork_parent {
+            if entries
+                .iter()
+                .any(|e| e.harness_session_id.as_deref() == Some(parent.as_str()))
+            {
+                forks.push((session.to_string(), parent, pid));
+                continue;
+            }
         }
         // Only a session that joined fno, or one a launch record names, is
         // adopted; the listing then only rescues a row that went missing.
@@ -167,6 +184,11 @@ pub(crate) fn mint_missing_native_bg(
     let mut filled: Vec<Value> = Vec::new();
     let mut parent_filled: Vec<Value> = Vec::new();
     let write = crate::state::update_registry(&home.registry_json(), |r| {
+        for (child, parent, pid) in forks {
+            if crate::session_report::find_row(&r.entries, "claude", &child, None).is_none() {
+                crate::native_adopt::bind_fork_child(&mut r.entries, &parent, &child, Some(pid));
+            }
+        }
         for cand in prepared {
             let session = cand
                 .harness_session_id

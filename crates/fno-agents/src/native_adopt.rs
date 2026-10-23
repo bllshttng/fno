@@ -71,7 +71,9 @@ pub(crate) fn prepare_mint(
     let entries = crate::daemon::load_registry_asserted(&home.registry_json())
         .ok()?
         .entries;
-    if crate::session_report::find_row(&entries, harness, session_id, agent_self).is_some() {
+    if crate::session_report::find_row(&entries, harness, session_id, agent_self).is_some()
+        || superseded(&entries, session_id)
+    {
         return None;
     }
     let native = mint_flavor(record.is_some(), agent_self.is_some());
@@ -186,6 +188,69 @@ pub(crate) fn retired_session(
     record.is_none_or(|r| r.launched_at_ms <= retired_at_ms)
 }
 
+/// The session a claude fork was copied from, read off its launch argv:
+/// `--fork-session` with `--resume <parent>`. Claude's bg host writes that
+/// argv when `claude --bg --resume` meets a session still held, and replays
+/// it on every daemon respawn, so the copy keeps naming its parent.
+pub(crate) fn fork_parent_in_argv(argv: &[String], session_id: &str) -> Option<String> {
+    if !argv.iter().any(|a| a == "--fork-session") {
+        return None;
+    }
+    argv.windows(2)
+        .find(|pair| pair[0] == "--resume" && pair[1] != session_id)
+        .map(|pair| pair[1].clone())
+}
+
+/// The fork parent of a live claude bg session and the fork's own pid, from
+/// the argv of the pid the claude agents listing names for it.
+pub(crate) fn claude_fork_parent(session_id: &str, pid: Option<u32>) -> Option<(String, u32)> {
+    let pid = pid.or_else(|| {
+        let short = crate::client_commands::derived_short_id(session_id);
+        crate::claude_roster::read_all_agents_union().live_bg_pid(&short)
+    })?;
+    let parent = fork_parent_in_argv(&crate::census::process_argv(pid)?, session_id)?;
+    Some((parent, pid))
+}
+
+/// A session a row has already moved past. It never mints a row of its own:
+/// the row that holds its successor is its row.
+pub(crate) fn superseded(entries: &[RegistryEntry], session_id: &str) -> bool {
+    entries
+        .iter()
+        .any(|e| e.predecessor_session_ids.iter().any(|id| id == session_id))
+}
+
+/// Bind a fork to the row that holds its parent: the copy does the parent's
+/// work, so it keeps that row and the parent id moves to the predecessors.
+/// `None` when no row holds the parent, and the caller mints as before.
+pub(crate) fn bind_fork_child(
+    entries: &mut [RegistryEntry],
+    parent: &str,
+    child: &str,
+    pid: Option<u32>,
+) -> Option<usize> {
+    let i = entries
+        .iter()
+        .position(|e| e.harness_session_id.as_deref() == Some(parent))?;
+    let e = &mut entries[i];
+    if !e.apply_succession(parent, child) {
+        return None;
+    }
+    // The child's later reports find the row through this field.
+    if e.harness_name() == "claude" {
+        e.claude_session_uuid = Some(child.to_string());
+    }
+    if e.session_id.as_deref() == Some(parent) {
+        e.session_id = Some(child.to_string());
+    }
+    e.short_id = crate::client_commands::derived_short_id(child);
+    if pid.is_some() {
+        e.pid = pid;
+        e.pid_start_time = None;
+    }
+    Some(i)
+}
+
 fn auto_register_sessions(report_cwd: Option<&str>) -> bool {
     let cwd = report_cwd
         .map(std::path::PathBuf::from)
@@ -210,6 +275,65 @@ pub(crate) fn assert_birth_superset(native: &serde_json::Value, spawned: &serde_
         assert!(
             n.contains_key(key),
             "native birth is missing the spawned key `{key}`"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PARENT: &str = "3feca5b6-585e-479f-a88c-cb83bce0444e";
+    const CHILD: &str = "8789fe29-0e28-4d8e-aa00-8171920ce205";
+
+    /// A claude bg worker resumed while still held comes back as a fork: the
+    /// argv claude 2.1.309 writes names the parent, the fork takes the
+    /// parent's row, and the parent never mints a second one.
+    #[test]
+    fn a_forked_native_row_keeps_one_row() {
+        let argv = |line: String| {
+            line.split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let forked = argv(format!(
+            "/u/claude/versions/2.1.309 --session-id {CHILD} --fork-session --resume {PARENT}"
+        ));
+        assert_eq!(fork_parent_in_argv(&forked, CHILD).as_deref(), Some(PARENT));
+        let plain = argv(format!("claude --resume {PARENT}"));
+        assert_eq!(fork_parent_in_argv(&plain, PARENT), None);
+
+        let mut worker =
+            RegistryEntry::new(Some(PARENT.to_string()), Lineage::unproven("test fixture"));
+        worker.name = "fno-books-eval5".into();
+        worker.harness = Some("claude".into());
+        worker.node = Some("fb-e47c".into());
+        worker.short_id = "3feca5b6".into();
+        worker.claude_session_uuid = Some(PARENT.into());
+        let mut entries = vec![worker];
+
+        assert_eq!(
+            bind_fork_child(&mut entries, PARENT, CHILD, Some(1600)),
+            Some(0)
+        );
+        assert_eq!(entries.len(), 1);
+        let row = &entries[0];
+        assert_eq!(row.name, "fno-books-eval5");
+        assert_eq!(row.node.as_deref(), Some("fb-e47c"));
+        assert_eq!(row.harness_session_id.as_deref(), Some(CHILD));
+        assert_eq!(row.claude_session_uuid.as_deref(), Some(CHILD));
+        assert_eq!(row.short_id, "8789fe29");
+        assert_eq!(row.pid, Some(1600));
+        assert_eq!(row.predecessor_session_ids, vec![PARENT.to_string()]);
+        assert!(crate::session_report::find_row(&entries, "claude", CHILD, None).is_some());
+        assert!(crate::session_report::find_row(&entries, "claude", PARENT, None).is_none());
+        assert!(superseded(&entries, PARENT));
+        assert!(!superseded(&entries, CHILD));
+
+        // A fork of a session no row holds binds nothing: the caller mints.
+        assert_eq!(
+            bind_fork_child(&mut entries, "unheld-parent", "c-2", None),
+            None
         );
     }
 }
