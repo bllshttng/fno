@@ -15,6 +15,7 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "pick",
     "test",
     "doctor",
+    "list",
     "use",
     "combos",
     "window",
@@ -68,6 +69,8 @@ mod tests {
         assert_eq!(rest, oss(&["window", "-J"]));
         let rest = classify(&oss(&["config", "accounts", "doctor", "-J"])).unwrap();
         assert_eq!(rest, oss(&["doctor", "-J"]));
+        let rest = classify(&oss(&["config", "accounts", "list", "-J"])).unwrap();
+        assert_eq!(rest, oss(&["list", "-J"]));
         let rest = classify(&oss(&[
             "config", "accounts", "use", "alt", "--scope", "global",
         ]))
@@ -75,7 +78,6 @@ mod tests {
         assert_eq!(rest, oss(&["use", "alt", "--scope", "global"]));
         let rest = classify(&oss(&["config", "accounts", "benchmarks", "show"])).unwrap();
         assert_eq!(rest, oss(&["benchmarks", "show"]));
-        assert_eq!(classify(&oss(&["config", "accounts", "list"])), None);
         assert_eq!(classify(&oss(&["config", "accounts"])), None);
         assert_eq!(classify(&oss(&["config", "paths", "show"])), None);
     }
