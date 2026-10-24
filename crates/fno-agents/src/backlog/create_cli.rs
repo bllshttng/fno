@@ -665,7 +665,7 @@ fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
 /// read-only archive open.
 fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let Some(conn) = crate::graph_store::open_archive_conn(path) else {
+    let Some(conn) = crate::graph_store::open_read_only_wal_safe(path) else {
         return out;
     };
     for sql in [
