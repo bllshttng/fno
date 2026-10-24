@@ -490,6 +490,7 @@ pub mod route_settings;
 pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
+pub mod rules;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
@@ -1505,6 +1506,9 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // The daemon trust-answer sweep: one row per attempt to answer a parked
+    // codex folder-trust modal itself (daemon/sweeps.rs).
+    "trust_prompt_answered",
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
     // birth write, a node or parent filled on a later beat, a short-id row
     // renamed, and the per-beat budget deferral.
