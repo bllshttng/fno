@@ -1549,7 +1549,7 @@ def _resolve_node_model(
 
 
 def _model_reachable_by(model: str, provider: str) -> bool:
-    """True if ``model`` maps to the ``provider`` harness (per the benchmark map).
+    """True if ``model`` maps to the ``provider`` harness (per the declared inventory).
 
     A tier resolves the cheapest model clearing its floor across ALL harnesses, so
     it can pick a model mapped to a different provider than the spawn lane uses.
@@ -1557,10 +1557,10 @@ def _model_reachable_by(model: str, provider: str) -> bool:
     the guard only ever DROPS a confirmed cross-harness pick, never a valid one.
     """
     try:
-        from fno.adapters.providers import benchmarks as bm
+        from fno.route_resolve import resolve_inventory
 
-        reach = bm.reachable(model)
-        return reach is None or reach[0] == provider
+        row = resolve_inventory().rows.get(model)
+        return row is None or not row.harness or not row.model or row.harness == provider
     except Exception:  # noqa: BLE001 - never block a dispatch on a lookup error
         return True
 

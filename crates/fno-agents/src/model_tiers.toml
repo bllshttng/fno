@@ -1,7 +1,7 @@
 # model_tiers.toml - the benchmark-model reachability and static tier tables.
-# ONE owner. build.rs projects a byte copy to cli/src/fno/agents/model_tiers.toml;
-# benchmarks.py reads the copy with tomllib, route_gather.rs include_str!s the
-# canonical file. A row absent from reachability is invisible to routing.
+# ONE owner: route_gather.rs include_str!s it, and accounts/benchmarks.rs and
+# review_level.rs read it through route_gather::load_model_tiers. A row absent
+# from reachability is invisible to routing.
 #
 # Reachability: benchmark model name -> [harness, --model value]. The declared
 # inventory (config.routing.models) is the only reachability SOURCE; this

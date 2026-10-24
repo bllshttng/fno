@@ -1,0 +1,12 @@
+{
+ "args": [
+  "show"
+ ],
+ "snapshot": "{\n  \"fetched_at\": \"{NOW}\",\n  \"source\": \"https://openrouter.ai/api/v1/benchmarks\",\n  \"models\": [\n    {\n      \"name\": \"claude-opus\",\n      \"coding_percentile\": 95.5\n    },\n    {\n      \"name\": \"codex-terra\",\n      \"coding_percentile\": 80\n    },\n    {\n      \"name\": \"glm-x\",\n      \"coding_percentile\": 71.0\n    },\n    {\n      \"name\": \"mystery-1\",\n      \"coding_percentile\": null\n    }\n  ]\n}",
+ "config": "[[routing.models]]\nname = \"glm-x\"\nharness = \"claude\"\nmodel = \"glm-4.6\"\n",
+ "expect": {
+  "exit": 0,
+  "stdout": "source: https://openrouter.ai/api/v1/benchmarks  fetched_at: {NOW}\n  claude-opus              coding=95.5   -> claude:opus\n  codex-terra              coding=80     -> codex:terra\n  glm-x                    coding=71.0   -> claude:glm-4.6\n  mystery-1                coding=None   -> unmapped (not routable)\n",
+  "stderr": ""
+ }
+}

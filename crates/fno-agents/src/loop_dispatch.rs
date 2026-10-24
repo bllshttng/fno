@@ -221,7 +221,7 @@ fn executable_by_caller(path: &std::path::Path) -> bool {
 }
 
 /// Walk `$PATH` to find a binary. Returns `Some(path)` on success.
-/// Does not use an external crate; pure std.
+/// The execute check is `access(X_OK)` through libc, as `shutil.which` does.
 pub fn which_binary(name: &str) -> Option<PathBuf> {
     // If the name contains a path separator, check it directly.
     if name.contains('/') {
