@@ -146,6 +146,13 @@ One scannable table per harness: `symptom | cause | fix`. Every row names the ca
 | The install script could not find the staged plugin at the documented `~/.gemini/antigravity-cli/plugins/` path | agy 1.1.16 stages installed plugins at `~/.gemini/config/plugins/<name>/`, not the path its CLI reference documents | The script checks both, config first, and verifies success by grepping `agy plugin list` for the plugin name rather than checking that a file landed |
 | `plugin.json` refused a version or permissions block | The root manifest validates against a published schema with `additionalProperties: false` over `name` and `description`; permissions live only in `~/.gemini/antigravity-cli/settings.json` | `scripts/release/sync-version.sh` leaves the root manifest out of `JSON_MANIFESTS` while tracking every other release manifest |
 
+### codex
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| A command typed into a codex session never ran, or ran under the wrong spelling | Codex reserves `/` for its own commands, so an fno command there is `$fno:command` | `fno agents mail send <full-session-id> --raw <payload>` types any single-line payload verbatim. `/fno:command` and `$fno:command` both name an fno command, and the lane rewrites it to the form of the receiving harness (`mail_inject.rs`, `mux_cli.rs`) |
+| A non-review payload sent to a codex app-server thread looked lost | The app-server lane has no pane to type into | The lane sends a non-review payload over `turn/start`. The dispatch returns no submit receipt naming the accepted command yet, so read the thread's transcript to confirm it landed |
+
 ### Human-approved law
 
 `/fno:law` is portable on every harness, because it is one step and needs no harness-specific approval event. The operator types the ruling and `fno inbox law set` records it, returning a `d-` id in the same turn. A recording made from a chat carries `authority_source: chat_attested` and never claims the `operator` lane, so a reader can tell the two apart on any harness.
