@@ -38,13 +38,22 @@ pub(crate) struct ParkedRow {
 }
 
 impl ParkedRow {
-    /// The check-in line: the finding and the remedy in one sentence.
+    /// The check-in line: the finding and the remedy in one sentence. A codex
+    /// folder-trust row names the daemon as the answerer: it auto-answers
+    /// within its interval, so a lead pressing 1 after it lands would inject
+    /// a stray digit into the idle composer.
     pub(crate) fn line(&self) -> String {
         let head = if self.prompt_head.is_empty() {
             self.rule_id.as_str()
         } else {
             self.prompt_head.as_str()
         };
+        if self.rule_id == "trust_prompt" && self.harness == "codex" && self.answer_key.is_some() {
+            return format!(
+                "WAITING ON APPROVAL: {} ({}) pane {} {} - the daemon answers this itself",
+                self.holder, self.harness, self.pane_id, head
+            );
+        }
         match &self.answer_key {
             Some(key) => format!(
                 "WAITING ON APPROVAL: {} ({}) pane {} {} - answer with: fno mux pane send {} --raw {}",
@@ -361,6 +370,11 @@ mod tests {
         let row = classify_pane("t-trust-cx", "codex", 9, &codex, screen).expect("parked");
         assert_eq!(row.rule_id, "trust_prompt");
         assert_eq!(row.answer_key.as_deref(), Some("1"));
+        assert!(
+            row.line().contains("the daemon answers this itself"),
+            "{}",
+            row.line()
+        );
         // The old wording still classifies: the question arm keeps both
         // spellings.
         let screen = "Do you trust the files in this folder?\n\

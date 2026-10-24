@@ -230,6 +230,11 @@ fn ensure_codex_folder_trust(cwd: &std::path::Path) -> bool {
         return false;
     };
     let key = cwd.to_string_lossy().to_string();
+    // A `projects` key that is not a table means the config is not the shape
+    // codex reads; refuse rather than index through or replace it.
+    if doc.get("projects").is_some_and(|p| !p.is_table_like()) {
+        return false;
+    }
     let trusted = doc
         .get("projects")
         .and_then(|p| p.get(&key))

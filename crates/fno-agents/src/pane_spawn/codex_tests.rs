@@ -465,6 +465,13 @@ fn the_launch_cwd_is_pre_trusted_in_the_codex_config() {
         std::fs::read_to_string(home.path().join("config.toml")).unwrap(),
         "not toml [ at all"
     );
+    // A `projects` key that is not a table is refused untouched too.
+    std::fs::write(home.path().join("config.toml"), "projects = \"nope\"\n").unwrap();
+    assert!(!super::ensure_codex_folder_trust(project.path()));
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("config.toml")).unwrap(),
+        "projects = \"nope\"\n"
+    );
     match saved {
         Some(v) => std::env::set_var("CODEX_HOME", v),
         None => std::env::remove_var("CODEX_HOME"),
