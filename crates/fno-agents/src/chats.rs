@@ -540,7 +540,7 @@ pub(crate) fn message_sender_at(chats_dir: &Path, db: &Path, id: &str) -> Option
 }
 
 /// The stored message line for `id`: the bus envelope verbatim, with its
-/// `thread_id`, `kind`, `from` and `to`. `None` when no chat holds the id.
+/// `thread`, `kind`, `from` and `to`. `None` when no chat holds the id.
 pub(crate) fn message_row_at(chats_dir: &Path, db: &Path, id: &str) -> Option<Value> {
     let chat_id = chat_of_message(chats_dir, db, id).ok()??;
     let text = std::fs::read_to_string(chats_dir.join(&chat_id).join("messages.jsonl")).ok()?;
@@ -2188,8 +2188,7 @@ mod tests {
 
         // --- record: a note kind is a message, and a reply finds its parent's
         // thread, kind and sender in the stored row (no markdown render).
-        let mut note = bus_line("fmail-dddddddddddd", "web", "fno", "heads-up");
-        note["thread_id"] = serde_json::json!("fmail-dddddddddddd");
+        let note = bus_line("fmail-dddddddddddd", "web", "fno", "heads-up");
         assert!(matches!(
             record_at(&chats, &db, &bus, &note).unwrap(),
             Recorded::Message { .. }
@@ -2197,7 +2196,7 @@ mod tests {
         let parent = message_row_at(&chats, &db, "fmail-dddddddddddd").expect("note recorded");
         assert_eq!(parent["kind"], "heads-up");
         assert_eq!(parent["from"], "web");
-        assert_eq!(parent["thread_id"], "fmail-dddddddddddd");
+        assert_eq!(parent["thread"], "fmail-dddddddddddd");
         assert!(message_row_at(&chats, &db, "fmail-ffffffffffff").is_none());
 
         // --- record: announce scopes diverge; unregistered addressee keys raw;
