@@ -303,6 +303,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `OPENCODE_CONFIG` | rs | Points the plugin-array audit at one extra OpenCode config file; unset, the audit reads only the standard paths. |
 | `OPENCODE_CONFIG_DIR` | py+rs | Moves OpenCode's config dir; the installer, the doctor leg and the scratch-install tests read it. |
 | `OPENCODE_DB` | rs | Points the intel fold at one opencode store; unset, every `opencode*.db` in the data dir is read. |
+| `OPENROUTER_API_KEY` | rs | OpenRouter API key for `fno config accounts benchmarks refresh`; the refresh refuses without it, naming this var. |
 | `OUT_DIR` | rs | unclear: crates/fno-agents/build.rs:51 |
 | `PATH` | py+rs | Executable search path. |
 | `PI_CODING_AGENT_DIR` | rs | pi's agent dir; fno installs the extension under it and resolves the session store from it. |
