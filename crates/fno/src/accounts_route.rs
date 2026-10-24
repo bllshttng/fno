@@ -5,7 +5,8 @@
 use std::ffi::OsString;
 
 /// The account commands served by `fno-agents spawn-overlay accounts`.
-pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &["show", "add", "reconcile-slot", "register", "doctor"];
+pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] =
+    &["show", "add", "reconcile-slot", "register", "doctor"];
 
 /// `fno config accounts <command> ...` for a native command: the args from the
 /// command on, ready for `fno-agents spawn-overlay accounts`.
