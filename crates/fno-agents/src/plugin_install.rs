@@ -341,7 +341,7 @@ impl StageCheck {
         if let Some(head) = &self.stage_head {
             out.push_str(&format!(
                 "; staged from {} at {}",
-                &head[..head.len().min(12)],
+                head.chars().take(12).collect::<String>(),
                 self.built_at.as_deref().unwrap_or("?")
             ));
             if let Some(n) = self.commits_behind {
