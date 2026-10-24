@@ -715,5 +715,6 @@ mod tests {
         assert!(log.borrow().is_empty());
         let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW + 300);
         assert_eq!(out.reads, 2, "the next beat retries the read");
+        assert_eq!(list_calls, 2, "the listing read itself retried");
     }
 }
