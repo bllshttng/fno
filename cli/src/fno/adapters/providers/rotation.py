@@ -15,25 +15,14 @@ A Combo is a named ordered list of provider IDs with a strategy:
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import logging
 from typing import Any, Collection, Literal
 
-from fno.adapters.providers.model import ProviderConfigError
 
 logger = logging.getLogger(__name__)
 
 
 _VALID_STRATEGIES = ("fallback", "round_robin")
-
-
-class ComboNotFoundError(ProviderConfigError):
-    """Raised when a referenced combo does not exist at dispatch time.
-
-    Distinct from generic ProviderConfigError so callers (dispatch_target,
-    CLI commands) can catch it and fall through to the no-combo path
-    without swallowing other config-shape errors.
-    """
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,19 +54,6 @@ class Combo:
         # a zero-width budget).
         if self.sticky_limit < 1:
             object.__setattr__(self, "sticky_limit", 1)
-
-
-def compute_providers_hash(providers: tuple[str, ...]) -> str:
-    """Stable short hash of an ordered providers tuple.
-
-    Used by the cursor system to detect mid-session combo edits: when
-    the user adds/removes/reorders providers, the stored cursor's hash
-    no longer matches and the cursor resets cleanly to index 0.
-    Order-sensitive because rotation is meaningful only relative to a
-    fixed order.
-    """
-    payload = "|".join(providers).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()[:16]
 
 
 def next_healthy_provider(

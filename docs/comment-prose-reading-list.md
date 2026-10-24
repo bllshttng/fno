@@ -305,7 +305,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.43x | 10 | 7 | `cli/src/fno/worker/review.py:271` | `_warn_unknown_agent_keys` |
 | 1.43x | 10 | 7 | `cli/src/fno/worktree_paths.py:362` | `_worktrees_base_from` |
 | 1.42x | 17 | 12 | `cli/src/fno/adapters/providers/loader.py:110` | `_extract_accounts_block` |
-| 1.42x | 34 | 24 | `cli/src/fno/adapters/providers/loader.py:144` | `mutable_accounts_block` |
 | 1.42x | 17 | 12 | `cli/src/fno/plan/brief.py:423` | `filter_acs_for_task` |
 | 1.4x | 7 | 5 | `cli/src/fno/adapters/providers/managed.py:650` | `codex_pinning_sessions` |
 | 1.4x | 7 | 5 | `cli/src/fno/adapters/providers/managed.py:723` | `snapshot_current` |
