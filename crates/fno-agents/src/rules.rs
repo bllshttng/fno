@@ -694,4 +694,30 @@ mod tests {
             .unwrap()
             .contains("not live"));
     }
+
+    #[test]
+    fn rules_measure_scores_bm25_and_the_keyword_baseline() {
+        let laws = vec![
+            json!({"decision_id": "d-1", "subject": "merge-approval", "decision": "merge the pull request when review passes"}),
+            json!({"decision_id": "d-2", "subject": "merge-freeze", "decision": "a freeze holds every release merge"}),
+            json!({"decision_id": "d-3", "subject": "review-lane", "decision": "review inside the session"}),
+        ];
+        let cases = r#"{"cases": [{"name": "freeze", "stage": "review", "query": "may I merge during the freeze", "expected": ["d-2"]}]}"#;
+        let keywords = |stage: &str| {
+            if stage == "review" {
+                vec!["review"]
+            } else {
+                vec![]
+            }
+        };
+        let answer = measure_answer(cases, &laws, keywords);
+        assert_eq!(answer["cases"], 1);
+        assert_eq!(answer["per_case"][0]["bm25_top10"][0], "d-2");
+        assert_eq!(answer["mean"]["bm25_recall_at_5"], 1.0);
+        assert_eq!(answer["mean"]["bm25_precision_at_10"], 0.1);
+        // The keyword baseline picks the two review laws and misses the freeze.
+        assert_eq!(answer["per_case"][0]["keywords_picked"], 2);
+        assert_eq!(answer["mean"]["keywords_recall"], 0.0);
+        assert_eq!(measure_answer("not json", &laws, keywords)["ok"], false);
+    }
 }
