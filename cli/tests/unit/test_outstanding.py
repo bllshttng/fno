@@ -1,22 +1,14 @@
-"""Tests for `fno outstanding` - the operator-facing read of what is piled up.
+"""Tests for the Python verbs of `fno inbox outstanding`: ask, clear, reindex.
 
-Two legs, both over stores that already exist: unharvested carve-outs and open
-operator questions. The command exists because the carve-out ledger reached 39 rows
-over 29 days with nothing ever asking a human to look at it - `consume_carveouts`
-was wired the whole time, but a wire nobody is told to pull is not a surface.
-
-Every assertion here names a POSITIVE marker rather than an absence. An
-absence has two explanations (the real outcome, or the instrument never ran)
-and a test built on one cannot tell them apart; test_hook_block_positive_control
-is the pair that closes that gap for the silent-on-zero case.
+The listing itself is native; its tests live beside it in
+crates/fno-agents/src/outstanding_tests.rs. These tests read the open set back
+through `read_open_questions`, the reader the lead escalation still uses.
 """
 
 from __future__ import annotations
-from tests.fixtures.graph_seed import seed_graph
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -25,9 +17,8 @@ from fno.paths import project_log
 from typer.testing import CliRunner
 
 from fno.harness_identity import OwnedHarnessIdentity
-from fno.lead.lane import LaneItem
 from fno.outstanding.cli import outstanding_app
-from fno.outstanding.core import Outstanding, Question, VerdictRow, render
+from fno.outstanding.core import Question, read_open_questions
 
 # Same loaded-worker hazard as test_done.py: liveness forks a child per
 # report, and the captures break under interleaving. One dedicated loadgroup
@@ -37,28 +28,6 @@ pytestmark = [pytest.mark.xdist_group("done-audit-serial")]
 runner = CliRunner()
 
 requires_rust = pytest.mark.dev_build
-
-
-def _write_carveouts(root: Path, rows: list[dict]) -> Path:
-    ledger = root / ".fno" / "carveouts.jsonl"
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    ledger.write_text(
-        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-    )
-    return ledger
-
-
-def _carveout(cid: str, kind: str, ts: str = "2026-07-14T04:27:55Z") -> dict:
-    return {
-        "id": cid,
-        "ts": ts,
-        "session_id": "sess-a",
-        "kind": kind,
-        "priority": None,
-        "need": None,
-        "description": f"{cid} description",
-        "truncated": False,
-    }
 
 
 @pytest.fixture()
@@ -117,50 +86,11 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         lambda: tmp_path / "questions.jsonl",
         raising=False,
     )
-    # Every test in this module that calls `collect()` without an explicit
-    # `lane=` must never touch the real machine's ~/.fno/my-priorities.md -
-    # pin it to a sandbox path that starts out missing (an empty lane).
-    monkeypatch.setattr(
-        "fno.paths.operator_lane",
-        lambda: tmp_path / "my-priorities.md",
-        raising=False,
-    )
-    # The verdict leg shells the fno-agents binary; pin it to a clean read so
-    # these tests never touch the machine's real FAIL rows (tests that assert
-    # the leg patch this seam themselves).
-    monkeypatch.setattr(
-        "fno.outstanding.core._read_open_verdicts",
-        lambda: ([], None),
-    )
     (tmp_path / ".fno").mkdir(parents=True, exist_ok=True)
     return tmp_path
 
 
-# --- 2.1 both legs -----------------------------------------------------------
-
-
-@requires_rust
-def test_both_legs_report_a_count_each(root: Path):
-    _write_carveouts(
-        root,
-        [
-            _carveout("cv-1", "oos-bug"),
-            _carveout("cv-2", "oos-bug"),
-            _carveout("cv-3", "deferred"),
-        ],
-    )
-    assert runner.invoke(outstanding_app, ["ask", "should the gate refuse?", "--ask", "finish the lane"]).exit_code == 0
-    assert runner.invoke(outstanding_app, ["ask", "which base do we rebase on?", "--ask", "finish the lane"]).exit_code == 0
-
-    result = runner.invoke(outstanding_app, [])
-    assert result.exit_code == 0, result.output
-
-    # The carve-out leg names the split, not just a total: only `deferred`
-    # blocks a node close, so a bare total hides which rows have a gate.
-    assert "3 carve-out" in result.output
-    assert "2 oos-bug" in result.output
-    assert "1 deferred" in result.output
-    assert "2 open question" in result.output
+# --- 2.1 the ask door ---------------------------------------------------------
 
 
 @requires_rust
@@ -175,79 +105,6 @@ def test_a_plain_ask_is_refused_for_context_and_records_nothing(root: Path):
     assert len(_question_rows(root)) == 0, "the refused ask recorded nothing"
 
 
-def test_carveout_leg_names_the_command_that_clears_it(root: Path):
-    _write_carveouts(root, [_carveout("cv-1", "oos-bug")])
-    result = runner.invoke(outstanding_app, [])
-    assert result.exit_code == 0
-    # The whole fix for "nothing clears them": the ledger sat 29 days because
-    # nobody was ever told what to run.
-    assert "fno backlog retro sweep-carveouts" in result.output
-
-
-# --- prove-it verdict leg (x-6d64) -------------------------------------------
-
-
-def _open_fail_row() -> VerdictRow:
-    return VerdictRow(
-        node="x-70e1",
-        report="/plans/a.md.artifacts/coverage-audit-20260908/REPORT.md",
-        verdict="FAIL",
-        claim="The retirement done probe rejects incomplete evidence and requires the outcome",
-        status="done",
-        mtime="2026-09-08T20:56:56Z",
-    )
-
-
-def test_an_open_fail_verdict_renders_with_node_claim_and_ruling_command(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setattr(
-        "fno.outstanding.core._read_open_verdicts", lambda: ([_open_fail_row()], None)
-    )
-    result = runner.invoke(outstanding_app, [])
-    assert result.exit_code == 0, result.output
-    assert "1 prove-it FAIL verdict with no ruling." in result.output
-    assert "x-70e1 (done):" in result.output
-    assert "The retirement done probe rejects incomplete evidence" in result.output
-    assert "/plans/a.md.artifacts/coverage-audit-20260908/REPORT.md" in result.output
-    assert "fno inbox decide" in result.output
-
-
-@requires_rust
-def test_a_failed_verdict_read_names_itself_and_keeps_the_questions_leg(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """AC2-ERR: the verdict reader failing must not blank the other legs."""
-    monkeypatch.setattr(
-        "fno.outstanding.core._read_open_verdicts", lambda: ([], "the binary refused")
-    )
-    assert runner.invoke(outstanding_app, ["ask", "should the gate refuse?", "--ask", "finish the lane"]).exit_code == 0
-    result = runner.invoke(outstanding_app, [])
-    assert result.exit_code == 0, result.output
-    assert "prove-it verdicts could not be read (the binary refused)." in result.output
-    assert "1 open question" in result.output
-
-
-# --- 2.2 an unreadable ledger is a stated failure ----------------------------
-
-
-def test_unreadable_ledger_is_a_stated_failure_not_silence(root: Path):
-    ledger = root / ".fno" / "carveouts.jsonl"
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    # Present but undecodable. read_carveouts raises rather than returning []
-    # for exactly this case; the new command must not re-introduce the masquerade.
-    ledger.write_bytes(b"\xff\xfe not utf-8 at all\n")
-
-    result = runner.invoke(outstanding_app, [])
-
-    assert result.exit_code != 0
-    # Positive marker in the FAILURE text, pinned to the thing measured.
-    assert "cannot read" in result.output or "failed to read" in result.output
-    # And never the success line: a failed read reported as "nothing
-    # outstanding" is the exact absence-as-success trap.
-    assert "nothing outstanding" not in result.output.lower()
-
-
 # --- 2.3 ask then clear ------------------------------------------------------
 
 
@@ -258,18 +115,14 @@ def test_ask_clear_round_trip_and_idempotence(root: Path):
     qid = asked.stdout.strip().splitlines()[-1].strip()
     assert qid, "ask must print the new question id on stdout"
 
-    listed = runner.invoke(outstanding_app, ["--json"])
-    assert listed.exit_code == 0
-    payload = json.loads(listed.stdout)
-    assert [q["id"] for q in payload["questions"]] == [qid]
+    assert [q["id"] for q in _open_questions(root)] == [qid]
 
     cleared = runner.invoke(outstanding_app, ["clear", qid, "--answer", "yes, widen it"])
     assert cleared.exit_code == 0, cleared.output
     assert f"outstanding: closed {qid} (decision d-" in cleared.stdout
     assert "recorded)" in cleared.stdout
 
-    after = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)
-    assert after["questions"] == []
+    assert _open_questions(root) == []
 
     # Idempotent clears name each id instead of returning an unlabeled count.
     again = runner.invoke(outstanding_app, ["clear", qid])
@@ -291,6 +144,12 @@ def _journal_events(events_path):
     from tests._event_rows import event_rows
 
     return event_rows(events_path)
+
+
+def _open_questions(root: Path, resolver=lambda _asker: (None, [])) -> list[dict]:
+    """The open set as the listing ranks it, read from the machine index."""
+    questions = read_open_questions(root, liveness_budget_seconds=1.0, resolver=resolver)
+    return [q.as_dict(rank=rank) for rank, q in enumerate(questions, 1)]
 
 
 @requires_rust
@@ -331,11 +190,9 @@ def test_asker_ask_field_options_and_blocks_are_recorded(
     assert event["data"]["session_id"] == "ledger-run-id"
     assert "live" not in event["data"], "liveness is computed, never stored"
 
-    monkeypatch.setattr(
-        "fno.agents.discover.resolve_reachable",
-        lambda asker: (object(), []) if asker == "01234567" else (None, []),
-    )
-    question = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)["questions"][0]
+    question = _open_questions(
+        root, lambda asker: (object(), []) if asker == "01234567" else (None, [])
+    )[0]
     assert question == {
         "id": event["data"]["question_id"],
         "ts": event["ts"],
@@ -457,8 +314,6 @@ class TestAskRefusedWhenLiveLawRules:
 def test_live_is_computed_for_json_and_missing_asker_is_stale(
     root: Path,
 ):
-    from fno.outstanding.core import read_open_questions
-
     def resolve(asker: str):
         return (object(), []) if asker == "live-ask" else (None, [])
 
@@ -485,17 +340,7 @@ def test_live_is_computed_for_json_and_missing_asker_is_stale(
         clock=lambda: 0.0,
         resolver=resolve,
     )
-    report = Outstanding(
-        carveout_total=0,
-        carveout_by_kind={},
-        carveout_oldest_ts=None,
-        questions=questions,
-        captures=[],
-    )
-
-    payload = report.as_dict()["questions"]
-
-    assert {row["id"]: row["live"] for row in payload} == {
+    assert {q.id: q.live for q in questions} == {
         "q-live": True,
         "q-stale": False,
         "q-legacy": False,
@@ -508,8 +353,6 @@ def test_liveness_budget_expiry_is_unknown_and_does_not_block_report(
     """AC-ERR: a blocked durable-store scan expires as explicit unknown."""
     import multiprocessing
     import threading
-
-    from fno.outstanding.core import read_open_questions
 
     _write_indexed_questions(
         root,
@@ -541,11 +384,6 @@ def test_liveness_budget_expiry_is_unknown_and_does_not_block_report(
     # the answer, live lands True and the assert below fails.
     assert lingering == []
     assert questions[0].as_dict()["live"] is None
-    output = render(
-        Outstanding(0, {}, None, questions, [])
-    )
-    assert "Questions with unknown liveness" in output
-    assert "Stale questions" not in output
 
 
 def _write_indexed_questions(root: Path, rows: list[dict]) -> None:
@@ -572,135 +410,6 @@ def _indexed_question(
             "blocks": blocks,
         },
     }
-
-
-def test_question_rank_orders_newest_first_within_a_liveness_lane(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """Rewrites the old blocks-then-oldest rank (x-0dc5): the 19 rows carrying
-    blocks were all filed before 09-08 and held the whole 10-row window against
-    every ask filed since, so recency outranks blocks. Liveness still lanes
-    first; blocks breaks same-second ties."""
-    monkeypatch.setattr(
-        "fno.agents.discover.resolve_reachable",
-        lambda asker: (object(), []) if asker == "live" else (None, []),
-    )
-    _write_indexed_questions(
-        root,
-        [
-            _indexed_question(
-                "q-zero", "2026-08-19T03:00:00Z", asker="live", blocks=[]
-            ),
-            _indexed_question(
-                "q-two", "2026-08-19T02:00:00Z", asker="live", blocks=["x-a", "x-b"]
-            ),
-            _indexed_question(
-                "q-one", "2026-08-19T01:00:00Z", asker="live", blocks=["x-a"]
-            ),
-            _indexed_question(
-                "q-stale", "2026-08-19T00:00:00Z", asker="stale", blocks=["x-a", "x-b", "x-c"]
-            ),
-        ],
-    )
-
-    payload = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)["questions"]
-
-    assert [row["id"] for row in payload] == ["q-zero", "q-two", "q-one", "q-stale"]
-    assert [row["rank"] for row in payload] == [1, 2, 3, 4]
-
-
-def test_question_render_cap_shows_ten_and_names_true_total(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setattr("fno.agents.discover.resolve_reachable", lambda _asker: (None, []))
-    rows = [
-        _indexed_question(
-            f"q-{i:02d}", f"2026-08-19T{i:02d}:00:00Z", asker="stale", blocks=[]
-        )
-        for i in range(11)
-    ]
-    _write_indexed_questions(root, rows)
-
-    out = runner.invoke(outstanding_app, []).stdout
-
-    assert sum(row["data"]["question_id"] in out for row in rows) == 10
-    assert "Showing 10 of 11 open questions" in out
-
-
-def test_a_long_body_renders_bounded_with_the_trim_footer():
-    """AC6-HP (x-0dc5): a 2000-character body prints as one bounded line that
-    ends in the ellipsis, and the footer names the way to the full text."""
-    from fno.outstanding.core import QUESTION_BODY_CAP
-
-    body = "x" * 2000
-    report = Outstanding(
-        carveout_total=0,
-        carveout_by_kind={},
-        carveout_oldest_ts=None,
-        questions=[Question("q-long", "2026-08-19T00:00:00Z", body, live=False)],
-        captures=[],
-    )
-
-    output = render(report)
-
-    body_line = next(line for line in output.splitlines() if "q-long" in line)
-    printed_body = body_line.split("  ", 2)[2].split("  (")[0]
-    assert len(printed_body) == QUESTION_BODY_CAP
-    assert printed_body.endswith("…")
-    assert "Rows are trimmed to one line" in output
-    assert "fno inbox outstanding -J" in output
-
-
-def test_stale_questions_render_under_visible_heading_with_age(
-):
-    stale_ts = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    report = Outstanding(
-        carveout_total=0,
-        carveout_by_kind={},
-        carveout_oldest_ts=None,
-        questions=[
-            Question(
-                "q-stale",
-                stale_ts,
-                "which lane?",
-                asker="gone-ask",
-                ask="pick a lane",
-                live=False,
-            )
-        ],
-        captures=[],
-    )
-
-    output = render(report)
-
-    assert "Stale questions" in output
-    assert "2 days old" in output
-    assert "records the decision but reaches nobody" in output
-
-
-def test_askerless_questions_have_their_own_human_header():
-    report = Outstanding(
-        carveout_total=0,
-        carveout_by_kind={},
-        carveout_oldest_ts=None,
-        questions=[
-            Question("q-unaddressed", "2026-08-19T00:00:00Z", "triage fleet", live=False),
-            Question(
-                "q-stale",
-                "2026-08-19T00:00:01Z",
-                "choose lane",
-                asker="gone-ask",
-                live=False,
-            ),
-        ],
-        captures=[],
-    )
-
-    output = render(report)
-
-    assert "Questions for you (no agent is waiting):" in output
-    assert output.index("q-unaddressed") < output.index("Stale questions:")
-    assert output.count("records the decision but reaches nobody") == 1
 
 
 @requires_rust
@@ -816,9 +525,8 @@ def test_a_refused_answer_leaves_the_question_open(root: Path, monkeypatch):
     assert refused.exit_code != 0, refused.output
     assert "Nothing was closed" in refused.output
 
-    still_open = runner.invoke(outstanding_app, [])
-    assert still_open.exit_code == 0, still_open.output
-    assert qid in still_open.output, "the question must survive its refused close"
+    still_open = [q["id"] for q in _open_questions(root)]
+    assert qid in still_open, "the question must survive its refused close"
 
     # A batch refuses whole, never halfway. The refusal turns on the ambient
     # identity and the one --authority value, both invocation-wide, so it
@@ -834,8 +542,8 @@ def test_a_refused_answer_leaves_the_question_open(root: Path, monkeypatch):
         ["clear", qid, qid2, "--answer", "fold", "--authority", "operator"],
     )
     assert batch.exit_code != 0, batch.output
-    after = runner.invoke(outstanding_app, [])
-    assert qid in after.output and qid2 in after.output, "neither may close"
+    after = [q["id"] for q in _open_questions(root)]
+    assert qid in after and qid2 in after, "neither may close"
 
 
 # --- 2.2 machine-wide question index ---------------------------------------
@@ -880,25 +588,6 @@ def test_question_index_failure_names_id_and_reindex(root: Path, monkeypatch: py
     assert durable["data"]["question_id"] in result.output
 
 
-def test_missing_question_index_reports_empty_with_reindex_hint(root: Path):
-    result = runner.invoke(outstanding_app, ["--json"])
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["questions"] == []
-    assert "fno inbox outstanding reindex" in result.stderr
-
-
-def test_unreadable_question_index_is_a_failed_read(root: Path):
-    index_path = root / "questions.jsonl"
-    index_path.mkdir()
-
-    result = runner.invoke(outstanding_app, ["--json"])
-
-    assert result.exit_code == 1
-    assert "failed to read" in result.output
-    assert "questions.jsonl" in result.output
-
-
 def test_reindex_is_idempotent_and_machine_wide(
     root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -937,10 +626,8 @@ def test_reindex_is_idempotent_and_machine_wide(
     assert indexed_again.exit_code == 0, indexed_again.output
     assert "0 event(s) added" in indexed_again.output
 
-    monkeypatch.setattr("fno.outstanding.cli._storage_root", lambda: root)
-    from_first = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)["questions"]
-    monkeypatch.setattr("fno.outstanding.cli._storage_root", lambda: sibling)
-    from_second = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)["questions"]
+    from_first = _open_questions(root)
+    from_second = _open_questions(sibling)
     assert from_first == from_second
     assert [row["id"] for row in from_first] == ["q-second"]
 
@@ -948,25 +635,7 @@ def test_reindex_is_idempotent_and_machine_wide(
     assert indexed_events == [first, closed, second]
 
 
-# --- 3rd leg: the capture fold -----------------------------------------------
-
-
-def _write_inbox(root: Path, lines: list[str]) -> Path:
-    inbox = root / "internal" / "fno" / "backlog" / "inbox.md"
-    inbox.parent.mkdir(parents=True, exist_ok=True)
-    inbox.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return inbox
-
-
-def _capture_event(fu_id: str, ts: str) -> str:
-    return json.dumps(
-        {
-            "ts": ts,
-            "type": "capture_add",
-            "source": "backlog",
-            "data": {"session_id": "manual", "fu_id": fu_id, "title": "t"},
-        }
-    )
+# --- project roots the reindex walks -----------------------------------------
 
 
 def test_capture_project_roots_preserves_external_backend_sidecars(
@@ -992,162 +661,6 @@ def test_capture_project_roots_preserves_external_backend_sidecars(
     )
 
     assert _capture_project_roots(this) == [sibling.resolve(), this.resolve()]
-
-
-@pytest.fixture()
-def capture_roots(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> "tuple[Path, Path]":
-    """A hermetic THIS project plus one sibling project, both known to the
-    machine-wide graph so the fold finds the sibling's inbox."""
-    this = tmp_path / "this"
-    other = tmp_path / "other"
-    for p in (this, other):
-        p.mkdir(parents=True)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(this))
-    (this / ".fno").mkdir(exist_ok=True)
-    graph = tmp_path / "graph.json"
-    seed_graph(graph, json.dumps(
-            {
-                "entries": [
-                    {"id": "x-0001", "title": "a", "cwd": str(this)},
-                    {"id": "x-0002", "title": "b", "cwd": str(other)},
-                ]
-            }
-        )
-        + "\n")
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph)
-    monkeypatch.setattr(gs, "GRAPH_JSON", graph)
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-    return this, other
-
-
-def test_capture_leg_folds_every_project_and_renders_true_count(capture_roots):
-    """Three legs; the capture leg renders Showing N of M, oldest D
-    days, with M folded across projects."""
-    this, other = capture_roots
-    _write_inbox(this, ["- [ ] fu-aaaaaa - alpha (p1)", "- [ ] fu-bbbbbb - beta"])
-    _write_inbox(other, ["- [ ] fu-cccccc - gamma", "- [x] fu-dddddd - done -> ab-1"])
-
-    res = runner.invoke(outstanding_app, [])
-    assert res.exit_code == 0, res.output
-    assert "3 captures" in res.output, res.output
-    assert "Showing 3 of 3" in res.output, res.output
-
-    as_json = runner.invoke(outstanding_app, ["--json"])
-    payload = json.loads(as_json.stdout)
-    assert payload["captures"]["total"] == 3
-    assert payload["captures"]["resolved_files"] == 2
-    assert payload["captures"]["parsed_open_rows"] == 3
-    assert payload["captures"]["repeated_ids"] == 0
-    assert payload["captures"]["by_project"][this.name] == 2
-    assert payload["captures"]["by_project"][other.name] == 2 - 1
-
-
-def test_capture_leg_reports_oldest_age_from_capture_add_events(capture_roots):
-    """The inbox markdown carries no dates; age comes from capture_add in the
-    events journal."""
-    this, other = capture_roots
-    _write_inbox(this, ["- [ ] fu-aaaaaa - alpha", "- [ ] fu-bbbbbb - beta"])
-    events = this / ".fno" / "events.jsonl"
-    events.parent.mkdir(exist_ok=True)
-    old = (datetime.now(timezone.utc) - timedelta(days=62)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    events.write_text(
-        _capture_event("fu-aaaaaa", old) + "\n" + _capture_event("fu-bbbbbb", recent) + "\n",
-        encoding="utf-8",
-    )
-
-    res = runner.invoke(outstanding_app, [])
-    assert res.exit_code == 0, res.output
-    assert "oldest 62 days" in res.output, res.output
-
-
-def test_unreadable_inbox_contributes_zero_and_never_raises(capture_roots):
-    """A missing or unreadable sibling inbox contributes zero captures
-    and the other projects still report."""
-    this, other = capture_roots
-    _write_inbox(this, ["- [ ] fu-aaaaaa - alpha"])
-    # other/ has no inbox at all; also plant a graph cwd that does not exist.
-    import fno.graph._constants as gc
-
-    seed_graph(
-        gc.GRAPH_JSON,
-        [{"id": "x-dead", "title": "d", "cwd": "/nonexistent/project"}],
-    )
-
-    res = runner.invoke(outstanding_app, [])
-    assert res.exit_code == 0, res.output
-    assert "1 capture" in res.output, res.output
-
-
-def test_hook_block_positive_control(root: Path):
-    """The pair for the test above.
-
-    An empty-output assertion alone cannot distinguish a genuinely clean state
-    from a block that is permanently broken and renders nothing either way.
-    This is the control that makes the silence meaningful.
-    """
-    assert runner.invoke(outstanding_app, []).stdout.strip() == ""
-    _write_carveouts(root, [_carveout("cv-1", "oos-bug")])
-    assert runner.invoke(outstanding_app, []).stdout.strip() != ""
-
-
-# --- 2.6 the superuser lane --------------------------------------------------
-
-
-def _lane_item(text, **kw):
-    return LaneItem(text=text, node=None, parked=None, done=False, line=1, **kw)
-
-
-def test_lane_leads_the_block_above_carveouts(root: Path):
-    """AC1-HP: any session sees the lane count and top item first."""
-    (root / "my-priorities.md").write_text(
-        "- [ ] ship 981 and 971 tonight\n- [ ] call the dentist\n", encoding="utf-8"
-    )
-    out = runner.invoke(outstanding_app, []).stdout
-    assert out.startswith("## Outstanding for you\n\n2 items on your lane, top first.")
-    assert "ship 981 and 971 tonight" in out
-
-
-def test_render_hides_the_action_line_when_unpromoted():
-    """AC6-HP: an unpromoted session gets the count and top item, no action line."""
-    outstanding = Outstanding(0, {}, None, [], [], lane=[_lane_item("ship it")])
-    block = render(outstanding, promoted=False)
-    assert "1 item on your lane, top first." in block
-    assert "ship it" in block
-    assert "File one with:" not in block
-
-
-# --- 5.2 the asking session's own questions lead -----------------------------
-
-
-@requires_rust
-def test_own_rows_are_labelled_and_rank_is_newest_first(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """Rewrites the old own-first order assert (x-0dc5): rank is newest-first
-    inside a lane, so the newer row outranks this session's. Ownership shows
-    as the [this session] label, never as rank."""
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-mine")
-    runner.invoke(outstanding_app, ["ask", "MINE: do we ship the fold arm?", "--ask", "finish the lane"])
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-other")
-    runner.invoke(outstanding_app, ["ask", "THEIRS: which base branch?", "--ask", "finish the lane"])
-
-    monkeypatch.setenv("CLAUDECODE_SESSION_ID", "sess-mine")
-    out = runner.invoke(outstanding_app, []).stdout
-    assert "MINE:" in out
-    assert "THEIRS:" in out
-    assert out.index("THEIRS:") < out.index("MINE:")
-    # Labelled as this session's, so the agent that asked is the one prompted.
-    assert "this session" in out.lower()
 
 
 # --- delivery edge: an answered close reaches its asker -----------------------
@@ -1328,23 +841,6 @@ def test_a_stored_asker_that_is_not_live_is_never_mailed(monkeypatch: pytest.Mon
     assert "fno backlog decisions" in line
 
 
-# --- named roots: every stream states where it read (BREAK 3) ----------------
-
-
-def test_payload_names_the_root_each_stream_read(root: Path):
-    """AC2: a zero has two explanations - clean and misdirected. Name the root."""
-    _write_carveouts(root, [_carveout("cv-1", "oos-bug")])
-
-    payload = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)
-
-    roots = payload["roots"]
-    assert roots["carveouts"]["scope"] == "project"
-    assert roots["carveouts"]["root"] == str(root)
-    assert roots["questions"]["scope"] == "machine"
-    assert roots["captures"]["scope"] == "machine"
-    assert roots["lane"]["scope"] == "machine"
-
-
 # --- BREAK 4 read-side pin: render paths never slice --------------------------
 
 
@@ -1386,5 +882,4 @@ def test_operator_authority_refusal_names_the_drop_flag_remedy(
     assert "/fno:law" not in refused.output
 
     # The question really is still open: a refused answer must never retire it.
-    after = json.loads(runner.invoke(outstanding_app, ["--json"]).stdout)
-    assert [q["id"] for q in after["questions"]] == [qid]
+    assert [q["id"] for q in _open_questions(root)] == [qid]
