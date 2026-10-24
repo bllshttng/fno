@@ -382,6 +382,13 @@ impl Core {
     /// (focus reports, query replies, mouse encodings) is not steering, so
     /// a viewed row witnesses nothing.
     pub(super) fn input_tail(&mut self, focus: u64, bytes: &[u8]) {
+        self.input_tail_at(focus, bytes, Instant::now());
+    }
+
+    /// `input_tail` with the burst clock supplied: the window verdict is one
+    /// comparison on the caller's instant, so the tests drive it instead of
+    /// sleeping out a real coalesce window on a loaded machine.
+    pub(super) fn input_tail_at(&mut self, focus: u64, bytes: &[u8], now: Instant) {
         if !has_human_keystroke(bytes) {
             return;
         }
@@ -390,7 +397,7 @@ impl Core {
         // end of the draft); a non-submit burst writes one `operator_typing`
         // row per [`TOUCH_COALESCE_WINDOW`].
         let submit = is_submit(bytes);
-        let burst = touch_coalesce(&mut self.touch_last_emit, focus, Instant::now());
+        let burst = touch_coalesce(&mut self.touch_last_emit, focus, now);
         if burst {
             self.touch(focus, "inject", false);
             if !submit {
@@ -775,9 +782,23 @@ mod tests {
     }
 
     fn journal_rows(dir: &Path, event_type: &str) -> Vec<serde_json::Value> {
-        assert!(crate::pane_send_audit::flush_agents_journal(
-            Duration::from_secs(10)
-        ));
+        // The one journal writer fsyncs every commit and the suite runs
+        // tests in parallel, so on a loaded machine the commit can lag the
+        // queue past any fixed bound. A false ack means "not done yet",
+        // never a broken contract: every row this test queued sits ahead of
+        // the flush in the FIFO, so the first proved flush commits them
+        // all. The callers' row asserts judge the content.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let proved = crate::pane_send_audit::flush_agents_journal(Duration::from_secs(5));
+            let rows = journal_rows_query(dir, event_type);
+            if proved || Instant::now() >= deadline {
+                return rows;
+            }
+        }
+    }
+
+    fn journal_rows_query(dir: &Path, event_type: &str) -> Vec<serde_json::Value> {
         crate::event_store::query_events(
             &dir.join("events.jsonl"),
             &crate::event_store::EventQuery::of_types(&[event_type]),
@@ -894,18 +915,11 @@ mod tests {
 
     #[test]
     fn two_bursts_within_the_window_write_one_typing_row() {
-        use crate::server::CoreMsg;
         let (guard, dir) = witness_env("coalesce");
         let mut core = typing_client_core();
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"a".to_vec(),
-        });
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"b".to_vec(),
-        });
+        let t0 = Instant::now();
+        core.input_tail_at(7, b"a", t0);
+        core.input_tail_at(7, b"b", t0 + Duration::from_secs(1));
         assert_eq!(
             journal_rows(&dir, "operator_typing").len(),
             1,
@@ -918,18 +932,15 @@ mod tests {
 
     #[test]
     fn a_burst_after_the_window_writes_a_second_typing_row() {
-        use crate::server::CoreMsg;
         let (guard, dir) = witness_env("window");
         let mut core = typing_client_core();
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"a".to_vec(),
-        });
-        std::thread::sleep(super::TOUCH_COALESCE_WINDOW + std::time::Duration::from_secs(1));
-        core.handle(CoreMsg::Input {
-            id: 1,
-            bytes: b"b".to_vec(),
-        });
+        let t0 = Instant::now();
+        core.input_tail_at(7, b"a", t0);
+        core.input_tail_at(
+            7,
+            b"b",
+            t0 + super::TOUCH_COALESCE_WINDOW + Duration::from_secs(1),
+        );
         assert_eq!(
             journal_rows(&dir, "operator_typing").len(),
             2,
