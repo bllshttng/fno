@@ -247,7 +247,9 @@ use local_attestation::{
     local_attestation_verdict, local_latest_attestations, local_refused_verdicts,
     zero_evidence_attestation, LocalPass,
 };
-pub use local_attestation::{disposition_blockers, mark_owed_verdicts, rounds_since_last_pass};
+pub use local_attestation::{
+    disposition_blockers, mark_owed_verdicts, rounds_since_last_pass, verify_invocation_ids,
+};
 use plan_fidelity::FIDELITY_TIMEOUT;
 #[cfg(test)]
 use posture::resolved_required_bots;
