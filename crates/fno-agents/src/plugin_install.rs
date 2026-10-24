@@ -268,6 +268,13 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
             return Err(e);
         }
     };
+    if let Ok(head) = run_checked(
+        &["git".to_string(), "rev-parse".into(), "HEAD".into()],
+        Some(source_root),
+    ) {
+        let stamp = json!({"source_head": head, "built_at": chrono::Utc::now().to_rfc3339()});
+        let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
+    }
 
     for marketplace in [MARKETPLACE_REL, CODEX_MARKETPLACE_REL] {
         let manifest = new_dir.join(marketplace);
@@ -298,7 +305,7 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     Ok((dest, copied))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct StageCheck {
     status: &'static str,
     stage: String,
@@ -309,6 +316,40 @@ struct StageCheck {
     sample: Vec<String>,
     remedy: String,
     detail: Option<String>,
+    /// From the stage stamp; None for a stage built before stamps existed.
+    stage_head: Option<String>,
+    built_at: Option<String>,
+    /// Commits from `stage_head` to source HEAD, when git can count them.
+    commits_behind: Option<u64>,
+    /// Drift (differing + missing) per top-level directory.
+    groups: std::collections::BTreeMap<String, usize>,
+}
+
+impl StageCheck {
+    /// "skills 3, hooks 1; staged from <rev> at <when>, N commit(s) behind",
+    /// or empty when there is no drift to explain.
+    fn lag_summary(&self) -> String {
+        let mut out = self
+            .groups
+            .iter()
+            .map(|(group, n)| format!("{group} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if out.is_empty() {
+            return out;
+        }
+        if let Some(head) = &self.stage_head {
+            out.push_str(&format!(
+                "; staged from {} at {}",
+                &head[..head.len().min(12)],
+                self.built_at.as_deref().unwrap_or("?")
+            ));
+            if let Some(n) = self.commits_behind {
+                out.push_str(&format!(", {n} commit(s) behind"));
+            }
+        }
+        out
+    }
 }
 
 fn absent_check(stage: &Path, source: &Path) -> StageCheck {
@@ -322,6 +363,7 @@ fn absent_check(stage: &Path, source: &Path) -> StageCheck {
         sample: Vec::new(),
         remedy: String::new(),
         detail: None,
+        ..Default::default()
     }
 }
 
@@ -336,6 +378,7 @@ fn unknown_check(stage: &Path, source: &Path, detail: String) -> StageCheck {
         sample: Vec::new(),
         remedy: String::new(),
         detail: Some(detail),
+        ..Default::default()
     }
 }
 
@@ -470,6 +513,35 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
     } else {
         "stale"
     };
+    let mut groups = std::collections::BTreeMap::new();
+    for path in &combined {
+        let group = path.split_once('/').map_or("(root)", |(top, _)| top);
+        *groups.entry(group.to_string()).or_insert(0) += 1;
+    }
+    let stamp: Option<Value> = std::fs::read_to_string(stage.join(STAGE_STAMP))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let stamp_field = |key: &str| {
+        stamp
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let stage_head = stamp_field("source_head");
+    let commits_behind = stage_head.as_ref().and_then(|from| {
+        run_checked(
+            &[
+                "git".to_string(),
+                "rev-list".into(),
+                "--count".into(),
+                format!("{from}..HEAD"),
+            ],
+            Some(&root),
+        )
+        .ok()
+        .and_then(|n| n.parse().ok())
+    });
     let source_root = root.display().to_string();
     StageCheck {
         status,
@@ -481,6 +553,10 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         sample: combined.into_iter().take(10).collect(),
         remedy: format!("fno config plugin install claude --source {source_root}"),
         detail: None,
+        stage_head,
+        built_at: stamp_field("built_at"),
+        commits_behind,
+        groups,
     }
 }
 
@@ -683,8 +759,20 @@ struct RootsReport {
     enumeration_detail: Vec<String>,
 }
 
-fn root_note(live: bool, drift: usize, remedy: &str) -> String {
-    let mut note = format!(" ({drift} file(s) differ from source HEAD)");
+fn root_note(live: bool, check: &StageCheck) -> String {
+    if let Some(detail) = check
+        .detail
+        .as_deref()
+        .filter(|_| check.status == "unknown")
+    {
+        return format!(" (check could not run: {detail})");
+    }
+    let drift = check.differing_count + check.missing_count;
+    let remedy = check.remedy.as_str();
+    let mut note = format!(
+        " ({drift} file(s) differ from source HEAD: {})",
+        check.lag_summary()
+    );
     if drift == 0 {
         note.clear();
     }
@@ -731,10 +819,11 @@ fn check_roots_report(
         let blocker = if check.status == "stale" && !retired {
             let role = if root.live { "live" } else { "second copy" };
             Some(format!(
-                "plugin root {} ({}) differs from source HEAD in {} file(s) (e.g. {}). Fix: {}",
+                "plugin root {} ({}) differs from source HEAD in {} file(s) ({}; e.g. {}). Fix: {}",
                 root.path.display(),
                 role,
                 drift,
+                check.lag_summary(),
                 check.sample.first().map(String::as_str).unwrap_or("?"),
                 check.remedy
             ))
@@ -746,7 +835,7 @@ fn check_roots_report(
              the harness loads the live root in place)"
                 .to_string()
         } else {
-            root_note(root.live, drift, &check.remedy)
+            root_note(root.live, &check)
         };
         let last_status = check.status;
         roots.push(RootVerdict {
@@ -1257,9 +1346,10 @@ fn print_check(report: &StageCheck, json: bool) {
             &report.source_head[..report.source_head.len().min(12)]
         ),
         "stale" => println!(
-            "plugin stage: stale ({} differing, {} missing; e.g. {})",
+            "plugin stage: stale ({} differing, {} missing: {}; e.g. {})",
             report.differing_count,
             report.missing_count,
+            report.lag_summary(),
             report.sample.first().map(String::as_str).unwrap_or("?")
         ),
         "absent" => println!("plugin stage: absent"),
@@ -2115,6 +2205,11 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
 /// must agree on it.
 const STAGE_DIR: &str = "fno";
 
+/// Written into the stage at build: the source HEAD it was built from and
+/// when, so the check can say how far behind a stale stage is. HEAD never
+/// tracks it, and the check ignores files HEAD lacks.
+const STAGE_STAMP: &str = ".fno-stage.json";
+
 fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<String, String> {
     let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
@@ -2794,9 +2889,24 @@ mod tests {
         let live = stage.join("hooks/live.sh");
         let old_handle = fs::File::open(&live).unwrap();
 
+        let built_from = run_checked(
+            &["git".to_string(), "rev-parse".into(), "HEAD".into()],
+            Some(&source),
+        )
+        .unwrap();
         fs::write(source.join("hooks/live.sh"), "updated\n").unwrap();
         git_in(&source, &["add", "-A"]);
         git_in(&source, &["commit", "-q", "-m", "c2"]);
+
+        // Before the rebuild the stage trails by one commit in hooks/, and
+        // the check says so from the stamp.
+        let lag = check_stage_report(&stage, &source);
+        assert_eq!(lag.status, "stale");
+        assert_eq!(lag.stage_head.as_deref(), Some(built_from.as_str()));
+        assert_eq!(lag.commits_behind, Some(1));
+        let summary = lag.lag_summary();
+        assert!(summary.starts_with("hooks 1; staged from "), "{summary}");
+        assert!(summary.ends_with(", 1 commit(s) behind"), "{summary}");
 
         let stage_parent = stage.parent().unwrap().to_path_buf();
         let (_, copied) = build_stage(&source, &stage_parent).unwrap();

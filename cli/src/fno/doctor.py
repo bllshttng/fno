@@ -2132,27 +2132,6 @@ def _blockers(result: dict[str, Any]) -> list[str]:
 
     plugin_cache = result.get("plugin_cache") or {}
     blockers.extend(r["blocker"] for r in plugin_cache.get("roots") or [] if r.get("blocker"))
-    if plugin_cache.get("roots"):
-        return blockers
-    if plugin_cache.get("kind") == "stage" and plugin_cache.get("status") == "stale":
-        sample = plugin_cache.get("sample") or []
-        drift = plugin_cache.get("differing_count", 0) + plugin_cache.get("missing_count", 0)
-        blockers.append(
-            f"plugin stage {plugin_cache.get('stage')} differs from source HEAD in {drift} "
-            f"file(s) (e.g. {sample[0] if sample else '?'}). Fix: {plugin_cache.get('remedy')}"
-        )
-    elif plugin_cache.get("status") == "stale":
-        deleted = plugin_cache.get("deleted_hook_scripts") or []
-        if deleted:
-            blockers.append(
-                "deployed plugin cache is stale and the range deleted hook "
-                f"script(s) live sessions still reference: {', '.join(deleted)}. "
-                "Every pre-merge session loses all Bash calls until restarted "
-                "or reloaded; drain live sessions before updating the cache."
-            )
-        else:
-            blockers.append("deployed plugin cache is stale; hooks run pre-HEAD bytes.")
-
     return blockers
 
 
@@ -2836,31 +2815,8 @@ def _emit_human(
     for root in pc.get("roots") or []:
         role = "live" if root.get("live") else "second copy"
         out(f"fno doctor: plugin root ({root.get('origin')}, {role}): {root.get('path')}: {root.get('status')}{root.get('note') or ''}")
-    if pc.get("roots"):
-        pass
-    elif pc.get("kind") == "stage" and pc.get("status") == "stale":
-        sample = pc.get("sample") or []
-        out(
-            f"fno doctor: plugin stage STALE ({pc.get('differing_count', 0)} differing, "
-            f"{pc.get('missing_count', 0)} missing; e.g. {sample[0] if sample else '?'}). "
-            f"Fix: {pc.get('remedy')}, then restart sessions to pick up new hook text."
-        )
-    elif pc.get("status") == "stale":
-        sha = str(pc.get("sha") or "")[:12]
-        when = str(pc.get("installed_at") or "")[:10] or "?"
-        # `fno update` cannot refresh this: installed_plugins.json is claude's
-        # install registry, which mints its own gitCommitSha. update.py names
-        # ~/.claude/plugins only as a SOURCE to install FROM. The old
-        # prescription exited 0 having changed nothing, so the line has to say
-        # so or a reader who already ran it runs it again.
-        out(
-            f"fno doctor: deployed claude plugin cache STALE (pinned {sha}, "
-            f"{when}; hooks run pre-HEAD bytes). Fix: `claude plugin update "
-            "fno@footnote`, then restart the session. `fno doctor update` does "
-            "NOT refresh this cache; it updates the fno CLI."
-        )
-    elif pc.get("status") == "fresh":
-        out("fno doctor: deployed claude plugin cache: fresh (pinned at source HEAD).")
+    if pc and not pc.get("roots"):
+        out(f"fno doctor: plugin stage check did not run ({pc.get('detail')}); stage freshness is unknown.")
 
     if surf.get("codex_hooks_dual"):
         out(
@@ -4674,20 +4630,6 @@ def doctor_command(
                 )
                 said = (proc.stdout or "").strip() or f"rc={proc.returncode}"
             typer.echo(f"fno doctor: --fix pr-watch {cure}: {said}", err=True)
-
-        # A stale plugin cache is counted in `blockers`, and nothing on this path
-        # clears it: the exec below is `fno update`, which does not own claude's
-        # install registry. Say so here rather than exit past a declared blocker
-        # in silence. Advisory, like the two around it - the exit code is settled
-        # by the blocker list, and the defect this closes is the silence.
-        pc = result.get("plugin_cache") or {}
-        if pc.get("status") == "stale" and not pc.get("roots") and not json_out:
-            typer.echo(
-                "fno doctor: --fix cannot refresh the claude plugin cache; that "
-                "registry belongs to claude. Run: `claude plugin update "
-                "fno@footnote`, then restart.",
-                err=True,
-            )
 
         # Install the groom agent when the pass has never run and nothing is
         # scheduled to run it. The receipt already reports the BOOTSTRAP result
