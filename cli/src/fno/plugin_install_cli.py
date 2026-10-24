@@ -52,7 +52,7 @@ def install(
     Side effects. It builds a stage under ~/.fno/plugin-stage/fno and points
     the harness at it. It removes stale plugin copies. It strips the machine-wide
     CARGO_BUILD_BUILD_DIR and SCCACHE_DIR lines an older install wrote, from
-    ~/.zshrc, ~/.bashrc, ~/.claude/settings.json and the Codex config.toml.
+    ~/.zshrc, ~/.bashrc, the Claude settings.json and the Codex config.toml.
     It then runs a reclaim pass over fno's own caches, without the uv cache
     prune. The receipt names every file it rewrote.
     """
