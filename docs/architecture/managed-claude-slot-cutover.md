@@ -10,7 +10,7 @@ Not for: registering or refreshing managed credentials. See [provider rotation](
 
 The arm reads managed Claude records that use the shared slot. When the current account identity is proven and usage is low or exhausted, it acts. It chooses the first other globally declared shared-slot record with a fresh usage window below the low threshold. Project-only records are skipped because the switch updates the global active pointer. A five-minute cooldown limits repeated switches.
 
-The arm switches with `fno config accounts use <account-id> --scope global`, then checks that the slot now proves the selected account. Failed switches and failed identity checks produce a tick receipt and an operator notification. A successful switch records its timestamp for the cooldown.
+The arm switches the way `fno config accounts use <account-id> --scope global` does, in process with no subprocess, then checks that the slot now proves the selected account. A dead stored login fails the switch: the daemon never runs the interactive vault login. Failed switches and failed identity checks produce a tick receipt and an operator notification. A successful switch records its timestamp for the cooldown.
 
 The arm does not stop the daemon or restart Claude workers. Claude sessions that use the shared slot resolve the account from the managed credential slot.
 

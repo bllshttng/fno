@@ -1,0 +1,1 @@
+{"records": [{"id": "alt", "harness": "claude", "auth": "managed", "config_dir": "{TMP}/gone"}], "now": 1800000000.0, "expect": {"findings": [{"record": "alt", "problem": "missing-config-dir", "detail": "config_dir <TMP>/gone does not exist"}], "store": {}}}

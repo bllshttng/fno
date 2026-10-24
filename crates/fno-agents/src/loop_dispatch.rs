@@ -214,8 +214,14 @@ pub fn resolve_driver_binary(driver: &str, cli_alias: Option<&str>) -> String {
     }
 }
 
+fn executable_by_caller(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0)
+}
+
 /// Walk `$PATH` to find a binary. Returns `Some(path)` on success.
-/// Does not use an external crate; pure std.
+/// The execute check is `access(X_OK)` through libc, as `shutil.which` does.
 pub fn which_binary(name: &str) -> Option<PathBuf> {
     // If the name contains a path separator, check it directly.
     if name.contains('/') {
@@ -231,15 +237,10 @@ pub fn which_binary(name: &str) -> Option<PathBuf> {
             continue;
         }
         let candidate = PathBuf::from(dir).join(name);
-        if candidate.is_file() {
-            // Check any executable bit (owner, group, or other) so that
-            // root-owned binaries with mode 0o555 are recognised correctly.
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&candidate) {
-                if meta.permissions().mode() & 0o111 != 0 {
-                    return Some(candidate);
-                }
-            }
+        // `shutil.which`: the caller itself must be able to execute it, so a
+        // file executable only by another user keeps the walk going.
+        if candidate.is_file() && executable_by_caller(&candidate) {
+            return Some(candidate);
         }
     }
     None
