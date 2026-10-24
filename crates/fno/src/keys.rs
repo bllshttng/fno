@@ -1974,13 +1974,14 @@ fn esc_chord(seq: &[u8]) -> EscScan {
         }
         // Might still be the Ctrl-arrow prefix (ESC [ 1 ...).
         if seq[2] != b'1' {
-            // PageUp/PageDown (`ESC [ 5 ~` / `ESC [ 6 ~`): PgUp enters
-            // keyboard scroll mode on the focused pane; PgDn after the
-            // prefix is unbound (the mode's own folder consumes it inside).
-            if seq.len() == 5 && seq[2] == b'5' && seq[3] == b'~' {
+            // PageUp (`ESC [ 5 ~`, 4 bytes here - the prefix byte is consumed
+            // by the Prefix state before PrefixEsc starts) enters keyboard
+            // scroll mode; PgDn after the prefix is unbound (the mode's own
+            // folder consumes it inside).
+            if seq.len() == 4 && seq[2] == b'5' && seq[3] == b'~' {
                 return EscScan::Complete(Event::ScrollModeOpen);
             }
-            if seq.len() < 5 && seq[2] == b'5' {
+            if seq.len() < 4 && seq[2] == b'5' {
                 return EscScan::Partial;
             }
             return EscScan::Invalid;

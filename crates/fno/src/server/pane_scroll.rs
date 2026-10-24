@@ -122,13 +122,21 @@ impl Core {
         self.broadcast_pane(pane);
     }
 
+    /// The largest single keyboard-scroll delta accepted from the wire. The
+    /// scrollback ceiling is 100k lines, so anything past ten of those is
+    /// meaningless; the bound keeps alacritty's `display_offset as i32 +
+    /// count` add overflow-free however the offset sits.
+    const MAX_SCROLL_DELTA: i32 = 1_000_000;
+
     /// Apply one keyboard-scroll op to `pane` (v118). Both move the SHARED
     /// per-pane offset the wheel drives and broadcast, so every co-viewer
     /// tracks (tmux copy-mode precedent). The relative move clamps at the
-    /// history top / live bottom inside `vt.scroll`; the edge arm anchors
-    /// exactly. A missing pane (focus raced a close) is a visible notice,
-    /// never a silent drop.
+    /// history top / live bottom inside `vt.scroll` (and at
+    /// [`MAX_SCROLL_DELTA`] here, before the delta reaches that add); the
+    /// edge arm anchors exactly. A missing pane (focus raced a close) is a
+    /// visible notice, never a silent drop.
     pub(super) fn pane_scroll(&mut self, client_id: u64, pane: u64, delta: i32) {
+        let delta = delta.clamp(-Self::MAX_SCROLL_DELTA, Self::MAX_SCROLL_DELTA);
         match self.panes.get_mut(&pane) {
             Some(e) => {
                 e.vt.scroll(delta);
