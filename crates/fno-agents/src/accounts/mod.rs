@@ -13,7 +13,7 @@
 //! `tests/accounts_*_parity.rs`.
 //!
 //! `fno-agents spawn-overlay accounts <command>` is where the
-//! `fno config accounts` commands land: [show], [add], [doctor], [reconcile], [register], [remove], [usage], [pick], [use_switch], [launch_check], [combos] and [benchmarks] so far. They nest
+//! `fno config accounts` commands land: [show], [add], [doctor], [reconcile], [register], [remove], [usage], [pick], [use_switch], [launch_check], [combos], [window] and [benchmarks] so far. They nest
 //! under `spawn-overlay` so they add no fno-agents root action. `state <op>`
 //! is the runtime-state writer the Python transports call ([state::run]), and
 //! `switch` is the managed switch recovery's sweep transports ([use_switch::run_switch]).
@@ -38,9 +38,10 @@ pub mod store;
 pub mod usage;
 pub mod usage_probe;
 pub mod use_switch;
+pub mod window;
 pub mod writer;
 
-const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts doctor [--json]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]\n       fno-agents spawn-overlay accounts register <id> [-H <harness>] [--config-dir <path>] [OPTIONS]\n       fno-agents spawn-overlay accounts remove <id> [--force] [--scope global|project]\n       fno-agents spawn-overlay accounts usage [--refresh] [--json]\n       fno-agents spawn-overlay accounts pick [--combo <name>] [--exclude <id>]... [--json] [--print-env] [--if-armed]\n       fno-agents spawn-overlay accounts use <id> [--scope project|global]\n       fno-agents spawn-overlay accounts combos <add|list|remove|test|use|update> [ARGS]\n       fno-agents spawn-overlay accounts switch  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts test <id> [--smoke]\n       fno-agents spawn-overlay accounts benchmarks <refresh|show|tiers>\n       fno-agents spawn-overlay accounts state <op>  (a JSON payload on stdin)";
+const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts doctor [--json]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]\n       fno-agents spawn-overlay accounts register <id> [-H <harness>] [--config-dir <path>] [OPTIONS]\n       fno-agents spawn-overlay accounts remove <id> [--force] [--scope global|project]\n       fno-agents spawn-overlay accounts usage [--refresh] [--json]\n       fno-agents spawn-overlay accounts pick [--combo <name>] [--exclude <id>]... [--json] [--print-env] [--if-armed]\n       fno-agents spawn-overlay accounts use <id> [--scope project|global]\n       fno-agents spawn-overlay accounts combos <add|list|remove|test|use|update> [ARGS]\n       fno-agents spawn-overlay accounts window [--json] [--warn-seconds N]\n       fno-agents spawn-overlay accounts switch  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts test <id> [--smoke]\n       fno-agents spawn-overlay accounts benchmarks <refresh|show|tiers>\n       fno-agents spawn-overlay accounts state <op>  (a JSON payload on stdin)";
 
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
@@ -57,6 +58,7 @@ pub fn run(args: &[String]) -> i32 {
         Some("use") => use_switch::run(&args[1..]),
         Some("switch") => use_switch::run_switch(&args[1..]),
         Some("combos") => combos::run(&args[1..]),
+        Some("window") => window::run(&args[1..]),
         Some("benchmarks") => benchmarks::run(&args[1..]),
         Some("-h" | "--help") => {
             println!("{USAGE}");

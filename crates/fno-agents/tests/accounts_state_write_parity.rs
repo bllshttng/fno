@@ -1,15 +1,14 @@
-//! parity-stage: differential
-//! parity-oracle: fno.adapters.providers.runtime_state
+//! parity-stage: characterization
+//! parity-oracle: fno.adapters.providers.runtime_state._write_state_atomic
 //!
-//! Differential parity for the write side of `accounts::state`, the one
-//! writer of the runtime-state file. Each
-//! `tests/golden/accounts_state_write/*.json` case carries the file it was
-//! captured against, the writer and its inputs, and the Python writer's
-//! answer plus the file it left under `expect`, frozen at `NOW` by
-//! `accounts_state_write_golden_driver.py` (the case table lives there). A
-//! `locked` case holds the update lock first, so the writer takes its timeout
-//! branch. This test runs the Rust writer on the same file and asserts equal
-//! JSON for both.
+//! Characterization for the write side of `accounts::state`, the one writer
+//! of the runtime-state file. Each `tests/golden/accounts_state_write/*.json`
+//! case carries the file it was captured against, the writer and its inputs,
+//! and the Python writer's answer plus the file it left under `expect`,
+//! frozen at `NOW` while that writer lived. The Python writers are transports
+//! over this one now, so the goldens are not recaptured. A `locked` case
+//! holds the update lock first, so the writer takes its timeout branch. This
+//! test runs the Rust writer on the same file and asserts equal JSON.
 
 use fno_agents::accounts::state::{self, Rule};
 use serde_json::{json, Value};

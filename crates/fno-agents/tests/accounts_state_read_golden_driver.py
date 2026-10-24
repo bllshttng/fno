@@ -137,10 +137,6 @@ def head(pid, ttl=300.0, threshold=90.0):
     return dict(op="headroom", state=HEAD, id=pid, ttl=ttl, threshold=threshold)
 
 
-def project(pid, minutes):
-    return dict(op="project_window", state=WINDOWS, id=pid, window_minutes=minutes)
-
-
 CASES = {
     "read_state_missing_file_is_empty": read_state(None),
     "read_state_empty_file_is_empty": read_state(""),
@@ -178,10 +174,6 @@ CASES = {
     "headroom_resetless_full_window_is_exhausted": head("noreset"),
     "headroom_short_ttl_makes_usage_stale": head("cool", ttl=10.0),
     "headroom_live_lock_beside_stale_window_is_exhausted": head("stalewin"),
-    "project_window_nothing_recorded": project("ghost", 300),
-    "project_window_without_a_length": project("zai", None),
-    "project_window_rolled_window": project("gone", 300),
-    "project_window_open_window": project("zai", 300),
     "read_cursor_valid": dict(op="read_cursor", state=FULL, combo="fast", hash="h1"),
     "read_cursor_edited_combo": dict(op="read_cursor", state=FULL, combo="fast", hash="other"),
     "read_cursor_stale": dict(op="read_cursor", state=FULL, combo="stale", hash="h2"),
@@ -249,25 +241,27 @@ def run_case(case: dict, path: Path):
             "source": h.source,
             "observed_at": h.observed_at,
         }
-    if op == "project_window":
-        minutes = case["window_minutes"]
-        rs._record_window_seconds = lambda _pid: float(minutes) * 60.0 if minutes else None
-        p = rs.project_window(case["id"], now=NOW)
-        return {
-            "opened_at": p.opened_at,
-            "closes_at": p.closes_at,
-            "closes_in_s": p.closes_in_s,
-            "warned": p.warned,
-        }
     if op == "read_cursor":
         return _cursor(rs.read_cursor(case["combo"], case["hash"], now=NOW))
     raise ValueError(op)
 
 
+# Cases whose Python oracle is deleted: runtime_state.project_window went
+# with the window port. Their goldens stay frozen, and the Rust parity
+# replays them; a re-run never rewrites or removes them.
+FROZEN = {
+    "project_window_nothing_recorded",
+    "project_window_without_a_length",
+    "project_window_rolled_window",
+    "project_window_open_window",
+}
+
+
 def main() -> int:
     GOLDEN.mkdir(parents=True, exist_ok=True)
     for stale in GOLDEN.glob("*.json"):
-        stale.unlink()
+        if stale.stem not in FROZEN:
+            stale.unlink()
     for name, case in CASES.items():
         tmp = Path(tempfile.mkdtemp(prefix="acct-state-"))
         path = tmp / "provider-runtime-state.json"

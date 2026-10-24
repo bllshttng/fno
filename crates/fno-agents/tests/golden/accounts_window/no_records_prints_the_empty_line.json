@@ -1,0 +1,1 @@
+{"args": [], "files": [{"rel": ".fno/config.toml", "text": "[accounts]\nrecords = []\n"}], "warned": {}, "stderr_prefix": false, "expect": {"exit": 0, "stdout": "No accounts configured.\n", "stderr": "", "warn_calls": [], "events": []}}
