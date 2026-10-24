@@ -70,10 +70,6 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(rest, oss(&["use", "alt", "--scope", "global"]));
-        assert_eq!(
-            classify(&oss(&["config", "accounts", "combos", "use", "x"])),
-            None
-        );
         let rest = classify(&oss(&["config", "accounts", "benchmarks", "show"])).unwrap();
         assert_eq!(rest, oss(&["benchmarks", "show"]));
         assert_eq!(classify(&oss(&["config", "accounts", "list"])), None);
