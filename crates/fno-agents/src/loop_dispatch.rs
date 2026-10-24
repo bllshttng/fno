@@ -250,61 +250,21 @@ pub fn which_binary(name: &str) -> Option<PathBuf> {
 /// The single env var a picked account contributes to the driver's environment.
 const PICKED_ENV_KEY: &str = "CLAUDE_CONFIG_DIR";
 
-/// The exact command this file shells, as one named constant.
-///
-/// It is a constant so a cross-language test can assert this argv still resolves
-/// to a real command. That check is not ceremony: this command was spelled
-/// `fno providers pick` until the surface was renamed to `fno config accounts`,
-/// and because every failure here is advisory the loop would have degraded
-/// silently forever rather than failing loudly once.
-pub const PICK_ARGV: [&str; 5] = ["config", "accounts", "pick", "--if-armed", "--print-env"];
-
 /// One picked account's complete env overlay: `(key, value)` pairs where an
 /// EMPTY value means "clear this variable in the child".
 type PickedEnv = Vec<(String, String)>;
 
-/// Interpret a `fno config accounts pick --if-armed --print-env` result.
-///
-/// Pure, so the advisory contract is testable without a live `fno`. Success is
-/// exit 0 plus at least one `CLAUDE_CONFIG_DIR=<non-empty>` line; the command also
-/// emits the auth vars to clear as `KEY=` and those are carried through, because
-/// applying half an overlay is what lets an inherited ANTHROPIC_API_KEY bill a
-/// different account than the receipt names. The command's non-zero exits (3 = every
-/// launchable candidate exhausted, 4 = no launchable candidate, 5 = picking not
-/// armed) are ordinary answers here, not errors.
-fn interpret_pick(ok: bool, stdout: &str, stderr: &str) -> Result<PickedEnv, String> {
-    if !ok {
-        let reason = stderr
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .next_back()
-            .unwrap_or("no reason given");
-        return Err(reason.to_string());
+/// Accept a picked overlay only when it pins an account. With nothing but
+/// clear-lines there is no account, only a scrubbed environment, so it is
+/// never half-applied. The pin is ANY value-carrying key, not
+/// CLAUDE_CONFIG_DIR specifically: a claude api_key record's overlay is an
+/// ANTHROPIC_API_KEY and is just as valid an account.
+fn pinned(env: PickedEnv) -> Result<PickedEnv, String> {
+    if env.iter().any(|(k, v)| !k.is_empty() && !v.is_empty()) {
+        Ok(env)
+    } else {
+        Err("pick output carried no account pin".to_string())
     }
-    let mut env: PickedEnv = Vec::new();
-    let mut pinned = false;
-    for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        match line.split_once('=') {
-            Some((k, v)) if !k.is_empty() => {
-                if !v.is_empty() {
-                    pinned = true;
-                }
-                env.push((k.to_string(), v.to_string()));
-            }
-            _ => return Err(format!("unparseable pick output: {line:?}")),
-        }
-    }
-    if !pinned {
-        // A drifted command must never have its output half-applied: with nothing
-        // but clear-lines there is no account, only a scrubbed environment.
-        // The pin is ANY value-carrying key, not CLAUDE_CONFIG_DIR specifically
-        // - a claude api_key record's overlay is an ANTHROPIC_API_KEY and is
-        // just as valid an account, and requiring the config dir would have the
-        // loop reject an overlay Python accepts.
-        return Err("pick output carried no account pin".to_string());
-    }
-    Ok(env)
 }
 
 /// True when this dispatcher drives `claude`, the only harness that reads
@@ -355,25 +315,19 @@ fn pick_would_undo_a_route_with(
     })
 }
 
-/// Ask `fno config accounts pick` which account the next iteration should launch on.
+/// Which account the next iteration launches on, from the one pick.
 ///
-/// Shells the command rather than reimplementing the predicate: headroom, combo
-/// order, launchability AND the `pick_on_launch` opt-in have exactly one
-/// implementation, and it is not this one - `--if-armed` is what lets the command
-/// honor the knob on this caller's behalf, so a default-off install can never
-/// have the loop change which account it bills. Every failure mode - a stale
-/// `fno`, an absent `fno`, a refusal - is an `Err` the caller logs and ignores,
-/// so the loop cannot be wedged by it.
+/// `--if-armed` semantics: a default-off install never has the loop change
+/// which account it bills. Every refusal (3 = every launchable candidate
+/// exhausted, 4 = no launchable candidate, 5 = picking not armed) is an
+/// `Err` the caller logs and ignores, so the loop cannot be wedged by it.
 fn pick_account_env() -> Result<PickedEnv, String> {
-    let out = Command::new(crate::scrape::fno_bin())
-        .args(PICK_ARGV)
-        .output()
-        .map_err(|e| format!("could not run `fno config accounts pick`: {e}"))?;
-    interpret_pick(
-        out.status.success(),
-        &String::from_utf8_lossy(&out.stdout),
-        &String::from_utf8_lossy(&out.stderr),
-    )
+    let cwd = std::env::current_dir().map_err(|e| format!("no working dir: {e}"))?;
+    let verdict = crate::accounts::pick::pick_live(&cwd, None, &[], true)?;
+    let Some(account) = verdict.account else {
+        return Err(format!("pick: {}", verdict.reason));
+    };
+    pinned(crate::accounts::pick::env_lines(&account, &cwd)?)
 }
 
 // ── ShelloutDispatcher ────────────────────────────────────────────────────────
@@ -598,9 +552,7 @@ impl Dispatcher for ShelloutDispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        interpret_pick, pick_would_undo_a_route, pick_would_undo_a_route_with, retry_etxtbsy,
-    };
+    use super::{pick_would_undo_a_route, pick_would_undo_a_route_with, pinned, retry_etxtbsy};
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
@@ -668,43 +620,17 @@ mod tests {
         }));
     }
 
-    // The scrub half of the overlay: an inherited ANTHROPIC_API_KEY or routed
-    // base URL outranks CLAUDE_CONFIG_DIR, so applying only the pin would let
-    // the worker bill an account the receipt does not name.
     #[test]
-    fn auth_vars_to_clear_are_carried_as_empty_values() {
-        let stdout = "ANTHROPIC_API_KEY=\nANTHROPIC_BASE_URL=\nCLAUDE_CONFIG_DIR=/alt\n";
-        let env = interpret_pick(true, stdout, "").expect("overlay parses");
-        assert_eq!(env.len(), 3);
-        assert_eq!(env[0], ("ANTHROPIC_API_KEY".to_string(), String::new()));
-        assert_eq!(env[1], ("ANTHROPIC_BASE_URL".to_string(), String::new()));
-        assert_eq!(
-            env[2],
-            ("CLAUDE_CONFIG_DIR".to_string(), "/alt".to_string())
-        );
-    }
-
-    // AC13-ERR: a refusing picker is an answer, not a wedge. The reason reaches
-    // the log so an operator can tell "exhausted" from "not set up".
-    #[test]
-    fn a_refusal_surfaces_its_reason_instead_of_erroring_out() {
-        let stderr = "  readyrule: exhausted\npick: every launchable candidate is exhausted\n";
-        assert_eq!(
-            interpret_pick(false, "", stderr),
-            Err("pick: every launchable candidate is exhausted".to_string())
-        );
-        assert!(interpret_pick(false, "", "").is_err());
-    }
-
-    #[test]
-    fn unparseable_output_is_declined_rather_than_guessed() {
-        // A drifted command must not have its output half-applied: with no pinned
-        // config dir there is no account, only a scrubbed environment.
-        assert!(interpret_pick(true, "readyrule\n", "").is_err());
-        assert!(interpret_pick(true, "CLAUDE_CONFIG_DIR=\n", "").is_err());
-        assert!(interpret_pick(true, "ANTHROPIC_API_KEY=\n", "").is_err());
-        assert!(interpret_pick(true, "=/tmp\n", "").is_err());
-        assert!(interpret_pick(true, "", "").is_err());
+    fn an_overlay_without_a_pin_is_declined_rather_than_half_applied() {
+        assert!(pinned(vec![pair("CLAUDE_CONFIG_DIR", "")]).is_err());
+        assert!(pinned(vec![pair("ANTHROPIC_API_KEY", "")]).is_err());
+        assert!(pinned(vec![pair("", "/tmp")]).is_err());
+        assert!(pinned(Vec::new()).is_err());
+        let env = pinned(vec![
+            pair("ANTHROPIC_API_KEY", ""),
+            pair("CLAUDE_CONFIG_DIR", "/alt"),
+        ]);
+        assert_eq!(env.map(|e| e.len()), Ok(2));
     }
 
     // AC12-CON: one call site, all harnesses. A picker call inside any driver
