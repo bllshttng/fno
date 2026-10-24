@@ -1,0 +1,31 @@
+{
+ "global": "# operator note: keep this comment\n[review]\nmax_rounds = 2\n\n[accounts]\nactive = \"work\"\nauto_switch = true\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n\n[[accounts.records]]\nid = \"alt\"\nname = \"alt\"\nharness = \"codex\"\nauth = \"managed\"\npriority = 20\n",
+ "args": [
+  "work",
+  "--force"
+ ],
+ "expect": {
+  "exit": 0,
+  "stdout": "Account 'work' removed (scope=global).\n",
+  "stderr": "",
+  "global": {
+   "review": {
+    "max_rounds": 2
+   },
+   "accounts": {
+    "auto_switch": true,
+    "records": [
+     {
+      "id": "alt",
+      "name": "alt",
+      "harness": "codex",
+      "auth": "managed",
+      "priority": 20,
+      "account_id": "alt"
+     }
+    ]
+   }
+  },
+  "project": null
+ }
+}

@@ -49,7 +49,6 @@ crossing	crates/fno-agents/src/lead_checkin.rs	let mut argv = vec![fno_bin()];
 crossing	crates/fno-agents/src/lead_checkin_prompt_parked.rs	let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
 crossing	crates/fno-agents/src/lifecycle_child.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/loop_dispatch.rs	return Command::new(crate::scrape::fno_bin());
-crossing	crates/fno-agents/src/loop_dispatch.rs	let out = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/loop_target.rs	let fno_bin = crate::loopcheck::loopcheck_fno_bin();
 crossing	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
 crossing	crates/fno-agents/src/loopcheck.rs	let fno_bin = loopcheck_fno_bin();

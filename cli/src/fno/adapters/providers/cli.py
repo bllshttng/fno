@@ -717,16 +717,8 @@ def register_provider(
 
 
 # ---------------------------------------------------------------------------
-# pick (launch-time headroom picking)
-#
-# The ONE picker. No in-session credential swap is possible - a claude process
-# reads CLAUDE_CONFIG_DIR once at launch - so every switch has to happen at a
-# process boundary, and the only useful moment is just before one starts.
-#
-# Selection is the EXISTING `next_healthy_provider` walk over the active combo,
-# filtered to candidates footnote could actually launch on. No second ranking
-# function: combo order plus the existing EXHAUSTED skip is the policy, and the
-# operator expresses preference by combo order as they already do.
+# pick (launch-time headroom picking): `fno-agents spawn-overlay accounts pick`
+# owns it; the function and the command here are transports.
 # ---------------------------------------------------------------------------
 
 PICK_EXIT_NO_HEADROOM = 3
@@ -748,147 +740,53 @@ class PickVerdict(NamedTuple):
     exit_code: int
 
 
-def _pick_candidate_ids(config: "ProvidersConfig", combo_name: Optional[str]) -> list[str]:
-    """Candidate ids in the operator's preferred order.
-
-    The active combo when one is configured, else the records in config order.
-    An unknown or empty combo degrades to config order rather than refusing: a
-    stale combo name must not wedge a launch.
-    """
-    from fno.adapters.providers.loader import load_active_combo, load_combos
-    from fno.adapters.providers.rotation import ComboNotFoundError
-
-    repo_root = _get_repo_root()
-    name = combo_name or load_active_combo(repo_root=repo_root)
-    if name:
-        try:
-            combo = load_combos(repo_root=repo_root).get(name)
-        except (ProviderConfigError, ComboNotFoundError):
-            combo = None
-        if combo is not None and combo.providers:
-            return list(combo.providers)
-    return [r.id for r in config.records]
-
-
 def pick_account(
     *,
     combo_name: Optional[str] = None,
     exclude: tuple[str, ...] = (),
     if_armed: bool = False,
 ) -> PickVerdict:
-    """Choose an account with headroom that footnote can actually launch on.
+    """Transport only: `fno-agents spawn-overlay accounts pick --json` owns the pick.
 
-    The launchability filter is what keeps the command honest: a managed account
-    that is not the slot occupant has no correct env overlay, so offering it as
-    a choice would promise a spawn that cannot happen. Filtering it out here is
-    also why exit 4 exists - "no launchable candidate" is a setup instruction,
-    not a quota condition, and collapsing the two would hide it.
+    Raises ``CommandUnavailable`` when the binary is missing or answers no
+    verdict; both callers treat any exception as "pick unavailable".
     """
-    from fno.adapters.providers.loader import load_quota_config
-    from fno.adapters.providers.rotation import Combo, next_healthy_provider
-    from fno.adapters.providers.runtime_state import headroom, refresh_usage
-    from fno.agents.account_env import (
-        AccountResolutionError,
-        login_probe_refusal,
-        resolve_account_overlay,
-    )
+    import json
+    import subprocess
 
-    config = _load()
-    quota = load_quota_config(repo_root=_get_repo_root())
-    if if_armed and not quota.pick_on_launch:
-        # The caller wants the knob honored but cannot read config itself (the
-        # Rust loop). Keeping the check here means `pick_on_launch` has ONE
-        # implementation; a copy in Rust would let the two disagree about
-        # whether a run is allowed to change which account gets billed.
+    from fno.rust_binary import CommandUnavailable, find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        raise CommandUnavailable("the fno-agents binary was not found; set FNO_AGENTS_BIN")
+    argv = [str(binary), "spawn-overlay", "accounts", "pick", "--json"]
+    if combo_name:
+        argv += ["--combo", combo_name]
+    for account in exclude:
+        argv += ["--exclude", account]
+    if if_armed:
+        argv.append("--if-armed")
+    # The pick probes each candidate's usage over the network.
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CommandUnavailable(f"fno-agents accounts pick failed: {exc}") from exc
+    try:
+        out = json.loads(proc.stdout)
         return PickVerdict(
-            None,
-            "launch picking is not armed (providers.quota.pick_on_launch = false)",
-            [],
-            PICK_EXIT_NOT_ARMED,
+            out["account"],
+            out["reason"],
+            [(c["id"], c["state"]) for c in out["candidates"]],
+            proc.returncode,
         )
-    excluded = set(exclude)
-
-    ordered = _pick_candidate_ids(config, combo_name)
-    rows: list[tuple[str, str]] = []
-    launchable: list[str] = []
-    for pid in ordered:
-        if pid in excluded:
-            rows.append((pid, "excluded"))
-            continue
-        try:
-            overlay = resolve_account_overlay(pid)
-        except AccountResolutionError as exc:
-            rows.append((pid, f"not launchable: {str(exc).splitlines()[0]}"))
-            continue
-        if overlay.lane == "managed-active":
-            # A managed account reaches a worker only through the daemon-wide
-            # ~/.claude slot, so two workers can never run on two such accounts
-            # at once and "picking" it just names the default. Excluded on
-            # purpose: the exit-4 receipt below is the setup instruction that
-            # turns this invisible degradation into an actionable one.
-            rows.append((
-                pid,
-                "not a picker candidate: managed, rides the shared ~/.claude slot",
-            ))
-            continue
-        if (refusal := login_probe_refusal(pid, overlay.env.get("CLAUDE_CONFIG_DIR"))) is not None:
-            # The gate already refused this login; skip, pick the next live one.
-            rows.append((pid, f"login probe refused: {refusal}"))
-            continue
-        launchable.append(pid)
-
-    if not launchable:
-        named = ", ".join(pid for pid, _ in rows) or "(no records)"
-        reason = (
-            f"no launchable candidate among {named}: only an account with its "
-            "own config dir can be pinned to a worker. Register one with "
-            "`fno config accounts register <id> --config-dir <path>` (a full second "
-            "login in its own dir)"
-        )
-        if any(s.startswith("login probe refused") for _, s in rows):
-            reason += " login refused; remedy: CLAUDE_CONFIG_DIR=<config dir> claude /login"
-        return PickVerdict(None, reason, rows, PICK_EXIT_NO_CANDIDATE)
-
-    # Fill the TTL cache once per candidate before reading headroom, so a pick
-    # acts on fresh numbers. refresh_usage is a no-op inside probe_ttl_seconds.
-    for pid in launchable:
-        refresh_usage(pid, ttl_seconds=quota.probe_ttl_seconds)
-    for pid in launchable:
-        rows.append((pid, headroom(
-            pid,
-            ttl_seconds=quota.probe_ttl_seconds,
-            threshold_pct=quota.defer_threshold_pct,
-        ).state.value))
-
-    chosen = next_healthy_provider(
-        Combo(name="pick", providers=tuple(launchable)), quota=quota
-    )
-    if chosen is not None:
-        # The window this account is about to spend opens here, unless one is
-        # already recorded and still running. Without this the only writer of
-        # `windows_opened` is the harvested reset, which lands AFTER a cap - so
-        # `fno config accounts window` would read unknown right up until the
-        # moment the operator no longer needs it, and the whole point is lead
-        # time. Idempotent inside a live window and best-effort: a projection
-        # is advisory and must never fail a pick.
-        try:
-            from fno.adapters.providers.runtime_state import stamp_window_open
-
-            stamp_window_open(chosen, _resolve_time())
-        except Exception:  # noqa: BLE001 - a projection never blocks a launch
-            pass
-    if chosen is None:
-        return PickVerdict(
-            None,
-            "every launchable candidate is exhausted",
-            rows,
-            PICK_EXIT_NO_HEADROOM,
-        )
-    return PickVerdict(chosen, "first launchable candidate with headroom", rows, 0)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise CommandUnavailable(
+            f"fno-agents accounts pick exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+        ) from exc
 
 
 @cli.command("pick")
-def pick_provider(
+def pick_forward(
     combo: Optional[str] = typer.Option(
         None, "--combo", help="Combo to pick from (default: config.providers.active_combo)."
     ),
@@ -899,74 +797,19 @@ def pick_provider(
         False, "--json", "-J", help="Emit the full verdict as one JSON object."
     ),
     print_env: bool = typer.Option(
-        False,
-        "--print-env",
-        help=(
-            "Emit the picked account's full env overlay instead of the bare id: "
-            "the auth vars to clear as KEY= (empty), then CLAUDE_CONFIG_DIR=<path>."
-        ),
+        False, "--print-env", help="Emit the picked account's full env overlay instead of the bare id."
     ),
     if_armed: bool = typer.Option(
-        False,
-        "--if-armed",
-        help=(
-            "Decline with exit 5 unless providers.quota.pick_on_launch is true. "
-            "For callers that honor the opt-in but cannot read config themselves."
-        ),
+        False, "--if-armed", help="Decline with exit 5 unless providers.quota.pick_on_launch is true."
     ),
 ) -> None:
-    """Print the account to launch on: the first with headroom footnote can use.
-
-    stdout is the bare account id (machine-readable); stderr always carries the
-    reason and every candidate's headroom. Exit 0 chose one, 3 means every
-    launchable candidate is exhausted, 4 means there is no launchable candidate
-    at all - a setup problem, not a quota one - and 5 (only with --if-armed)
-    means launch picking is switched off.
-    """
-    import json as _json
-
-    verdict = pick_account(
-        combo_name=combo, exclude=tuple(exclude), if_armed=if_armed
-    )
-
-    for pid, state in verdict.candidates:
-        typer.echo(f"  {pid}: {state}", err=True)
-    typer.echo(f"pick: {verdict.reason}", err=True)
-
-    if json_output:
-        typer.echo(_json.dumps({
-            "account": verdict.account,
-            "reason": verdict.reason,
-            "candidates": [{"id": p, "state": s} for p, s in verdict.candidates],
-        }))
-    elif verdict.account is not None:
-        if print_env:
-            for line in pick_env_lines(verdict.account):
-                typer.echo(line)
-        else:
-            typer.echo(verdict.account)
-
-    if verdict.exit_code:
-        raise typer.Exit(verdict.exit_code)
-
-
-def pick_env_lines(account_id: str) -> list[str]:
-    """The picked account's COMPLETE env overlay, as ``KEY=VALUE`` lines.
-
-    An empty value means "clear this variable". Pinning only CLAUDE_CONFIG_DIR
-    is not enough: an inherited ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or
-    routed ANTHROPIC_BASE_URL outranks it, so the worker would authenticate or
-    bill through a different route while the receipt named the picked account.
-    Every Python spawn substrate already scrubs SCRUB_AUTH_VARS before applying
-    an overlay; emitting that same list here is what lets a non-Python caller
-    apply the whole overlay instead of half of it, from one source of truth.
-    """
-    from fno.agents.account_env import SCRUB_AUTH_VARS, resolve_account_overlay
-
-    overlay = resolve_account_overlay(account_id).env
-    lines = [f"{key}=" for key in SCRUB_AUTH_VARS if key not in overlay]
-    lines.extend(f"{key}={value}" for key, value in overlay.items())
-    return lines
+    """Print the account to launch on: the first with headroom footnote can use."""
+    argv = ["pick", *(["--combo", combo] if combo else [])]
+    for account in exclude:
+        argv += ["--exclude", account]
+    argv += [flag for flag, on in (("--json", json_output), ("--print-env", print_env),
+                                   ("--if-armed", if_armed)) if on]
+    _forward_accounts(*argv)
 
 
 # ---------------------------------------------------------------------------
@@ -1387,60 +1230,13 @@ def use_provider(
 # ---------------------------------------------------------------------------
 
 @cli.command("remove")
-def remove_provider(
+def remove_forward(
     provider_id: str = typer.Argument(...),
     force: bool = typer.Option(False, "--force", "-F", help="Allow removing the active provider"),
     scope: str = typer.Option("global", "--scope", help="global|project"),
 ) -> None:
     """Remove an account record. Refuses to remove the active account without --force."""
-    # Scope-own read: removal edits ONE file's records; the merged view would
-    # freeze every other layer's records into the file being written.
-    try:
-        config = load_scope_config(scope)  # type: ignore[arg-type]
-    except ProviderConfigError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1)
-
-    if provider_id not in config.by_id:
-        typer.echo(f"error: account '{provider_id}' not found", err=True)
-        raise typer.Exit(1)
-
-    # Cross-layer pointers are legitimate now, so the refusal must see every
-    # layer's own active, not just this scope's: deleting a record any layer
-    # points at bricks that layer's loader.
-    if not force:
-        from fno.adapters.providers.loader import (
-            _extract_accounts_block,
-            _provider_candidates,
-            _read_parsed,
-        )
-
-        pointed_at = any(
-            (_extract_accounts_block(_read_parsed(path)) or {}).get("active")
-            == provider_id
-            for path in _provider_candidates()
-        )
-        if pointed_at:
-            typer.echo(
-                f"error: '{provider_id}' is an active provider (some config "
-                "layer points at it). Use --force to remove it.",
-                err=True,
-            )
-            raise typer.Exit(1)
-
-    new_records = [r for r in config.records if r.id != provider_id]
-    new_active = config.active if config.active != provider_id else None
-
-    from fno.adapters.providers.model import ProvidersConfig
-    new_config = ProvidersConfig(records=new_records, active=new_active)
-
-    try:
-        save_providers(new_config, scope=scope)  # type: ignore[arg-type]
-    except OSError as exc:
-        typer.echo(f"error: failed to write settings.yaml: {exc}", err=True)
-        raise typer.Exit(1)
-
-    typer.echo(f"Account '{provider_id}' removed (scope={scope}).")
+    _forward_accounts("remove", provider_id, "--scope", scope, *(["--force"] if force else []))
 
 
 # ---------------------------------------------------------------------------
