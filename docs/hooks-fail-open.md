@@ -32,7 +32,7 @@ These hooks decide something, so they do not ride the load budget. A decision he
 
 ## Four hook classes
 
-Every hook fno registers is one of four classes. `hooks/hook-classes.tsv` holds the class of each registration, one row per harness, event and script. `scripts/ci/check-hook-classes.sh` fails CI when a registration has no row, so a new hook must declare its class.
+Every hook fno registers is one of four classes. `hooks/hook-classes.tsv` holds the class of each registration, one row per harness, event and script. If a registration has no row, `scripts/ci/check-hook-classes.sh` fails CI. So a new hook must declare its class.
 
 | Class | Runs | May deny | Bound | Fails |
 |---|---|---|---|---|
@@ -45,9 +45,9 @@ Only fixed-trigger checks belong in block. The gate also reads the manifest flag
 
 Per harness:
 
-- **Claude.** All four classes are native. The PostToolUse runs of `law-stage-inject.sh` (the `Skill` and `Edit|Write` matchers) are next-turn: the law context arrives at the next model request, and the tool call does not wait for the read. They carry `FNO_HOOK_ASYNC=1`, so `hook_budget_secs` gives them a 10s budget that load does not shorten. The overload skip still applies. The UserPromptSubmit run stays wait, because a law must arrive before the reply. No fno hook is rewake yet.
+- **Claude.** All four classes are native. Two runs of `law-stage-inject.sh` are next-turn: the PostToolUse `Skill` and `Edit|Write` matchers. The law context arrives at the next model request. The tool call does not wait for the read. They carry `FNO_HOOK_ASYNC=1`, so `hook_budget_secs` gives them a 10s budget that load does not shorten. The overload skip still applies. The UserPromptSubmit run stays wait, because a law must arrive before the reply. No fno hook is rewake yet.
 - **Codex.** `hooks/codex-hooks.json` has no async flag, so every Codex row is block or wait. A next-turn or rewake result on Codex has to ride the mail bus and arrive through the turn-boundary delivery ([mail-push-first-delivery](architecture/mail-push-first-delivery.md)). No Codex hook does that yet.
-- **fnh.** fnh runs block (with fail closed), next-turn, and rewake natively. A rewake that ends after the fnh process exits is lost; a wake across processes needs the launcher.
+- **fnh.** fnh runs block (with fail closed), next-turn, and rewake natively. A rewake that ends after the fnh process exits is lost. A wake across processes needs the launcher.
 - **OpenCode and Pi.** Their hooks are in-process plugin callbacks, not manifest entries, so the table does not cover them.
 
 ## Third-party hooks: give yours the same budget
