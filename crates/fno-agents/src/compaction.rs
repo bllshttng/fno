@@ -326,9 +326,10 @@ pub fn run_compaction(args: &[String]) -> i32 {
         Some((action, rest)) if action == "operator-turns" => crate::operator_turns::run(rest),
         Some((action, rest)) if action == "ack" => crate::operator_turns::run_ack(rest),
         Some((action, rest)) if action == "inbox-peers" => crate::inbox_peers::run(rest),
+        Some((action, rest)) if action == "approvals" => crate::approvals::run(rest),
         _ => {
             eprintln!(
-                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json]"
+                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json] | approvals ls|show|decide ..."
             );
             2
         }

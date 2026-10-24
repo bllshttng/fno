@@ -1,0 +1,50 @@
+{
+  "request_digest": "cbac9777437fe6c312ad7dead7e5a40a93436322f8a827efa420f3ba83be4441",
+  "request_id": "req-5",
+  "principal_id": "agent-1",
+  "work_order_id": "wo-5",
+  "work_order_attempt": "att-5",
+  "effect_id": "eff-5",
+  "effect_class": "communication.external",
+  "destination": "mail:list-e",
+  "action_digest": "act-5",
+  "created_at": "2025-01-05T00:00:00+00:00",
+  "expires_at": "<FUTURE>",
+  "expired": false,
+  "decision": "approved",
+  "deciding_principal_id": "founder",
+  "decided_at": "2025-02-03T09:00:00+00:00",
+  "decision_transport": null,
+  "effect_attempts": [
+    {
+      "effect_id": "eff-5",
+      "work_order_id": "wo-5",
+      "attempt_id": "att-5",
+      "request_digest": "cbac9777437fe6c312ad7dead7e5a40a93436322f8a827efa420f3ba83be4441",
+      "idempotency_key": "key-a",
+      "action_digest": "act-5",
+      "destination": "mail:list-e",
+      "effect_class": "communication.external",
+      "adapter_id": "mail-adapter",
+      "adapter_version": "1.2.0",
+      "state": "acknowledged",
+      "external_ref": "msg-9",
+      "reconciliation_ref": null
+    },
+    {
+      "effect_id": "eff-5",
+      "work_order_id": "wo-5",
+      "attempt_id": "att-5",
+      "request_digest": "cbac9777437fe6c312ad7dead7e5a40a93436322f8a827efa420f3ba83be4441",
+      "idempotency_key": "key-b",
+      "action_digest": "act-5",
+      "destination": "mail:list-e",
+      "effect_class": "communication.external",
+      "adapter_id": "mail-adapter",
+      "adapter_version": "1.2.0",
+      "state": "unknown",
+      "external_ref": null,
+      "reconciliation_ref": "recon-1"
+    }
+  ]
+}

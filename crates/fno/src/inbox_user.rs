@@ -99,6 +99,27 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
+/// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
+/// `fno-agents compaction approvals`. Any `--help` forwards to the Python
+/// group, which only lists the verbs; the runtime owns every other argument.
+pub fn classify_inbox_approvals(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3 || args[0].to_str()? != "inbox" || args[1].to_str()? != "approvals" {
+        return None;
+    }
+    if !matches!(args[2].to_str()?, "ls" | "show" | "decide") {
+        return None;
+    }
+    if args[3..]
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help" | "-h")))
+    {
+        return None;
+    }
+    let mut argv = vec![OsString::from("approvals")];
+    argv.extend_from_slice(&args[2..]);
+    Some(argv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +175,20 @@ mod tests {
             Some(mk(&["inbox-peers", "--json"]))
         );
         assert!(classify_inbox_peers(&mk(&["inbox", "user", "status"])).is_none());
+    }
+
+    #[test]
+    fn approvals_verbs_run_native_and_help_forwards() {
+        assert_eq!(
+            classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--pending", "-J"])),
+            Some(mk(&["approvals", "ls", "--pending", "-J"]))
+        );
+        assert_eq!(
+            classify_inbox_approvals(&mk(&["inbox", "approvals", "decide", "d", "--as", "p"])),
+            Some(mk(&["approvals", "decide", "d", "--as", "p"]))
+        );
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--help"])).is_none());
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals"])).is_none());
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "nope"])).is_none());
     }
 }
