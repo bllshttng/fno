@@ -133,6 +133,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
 | `FNO_INBOX_ROOT` | py+rs | unclear: cli/src/fno/inbox/store.py:218 |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
+| `FNO_KEEP_GOING` | py+rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
 | `FNO_LAUNCH_ACCOUNT` | py+rs | Launch account resolved onto a spawn's exec seam; scrubbed before resolve so a stale value never mislabels the next spawn. |

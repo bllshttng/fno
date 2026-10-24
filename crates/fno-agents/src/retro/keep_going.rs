@@ -25,9 +25,6 @@ pub const OUTCOME_FILED: &str = "filed";
 pub const OUTCOME_CAPPED: &str = "capped";
 pub const OUTCOME_FAILED: &str = "failed";
 
-/// The explicit force on or off, above config.
-pub const ENV_OVERRIDE: &str = "FNO_KEEP_GOING";
-
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn truthy_word(s: &str) -> bool {
@@ -38,12 +35,12 @@ fn truthy_word(s: &str) -> bool {
 }
 
 /// Whether the engine is armed: the autonomy master switch first, then the
-/// `FNO_KEEP_GOING` override, then `keep_going.enabled`, default off.
+/// `FNO_KEEP_GOING` force on or off, then `keep_going.enabled`, default off.
 pub fn enabled(project_root: Option<&Path>) -> bool {
     if !crate::backlog::advance_settings::autonomy_master_enabled(project_root) {
         return false;
     }
-    if let Ok(v) = std::env::var(ENV_OVERRIDE) {
+    if let Ok(v) = std::env::var("FNO_KEEP_GOING") {
         return truthy_word(&v);
     }
     match crate::backlog::advance_settings::load_merged(project_root).pointer("/keep_going/enabled")
@@ -133,7 +130,7 @@ fn spawn_target_worker(node_id: &str, cwd: Option<&str>) -> bool {
             return false;
         }
     };
-    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    let mut cmd = fno_command(None);
     cmd.args(["agents", "spawn", "--harness", "claude"]);
     match cwd.filter(|d| !d.is_empty()) {
         Some(dir) => cmd.args(["--cwd", dir]),

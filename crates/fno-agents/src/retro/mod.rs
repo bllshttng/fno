@@ -1,6 +1,6 @@
 //! `fno backlog retro`: file the work a merged PR left out as backlog nodes.
 //!
-//! Pipeline: harvest -> classify -> dedup -> land. Three verbs share it:
+//! Pipeline: harvest -> classify -> dedup -> land. Three commands share it:
 //! `run` consumes the retro-pending sentinels (plus the plain-run postmortem
 //! drain and gate-escape summary), `drain-postmortems` runs only the
 //! postmortem pass, and `sweep-carveouts` reads the whole carve-out ledger

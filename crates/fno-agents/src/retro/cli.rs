@@ -1,4 +1,4 @@
-//! `fno backlog retro`: the three verbs.
+//! `fno backlog retro`: the three commands.
 //!
 //! `run` consumes the retro-pending sentinels `fno backlog reconcile` drops
 //! for PRs merged outside the ship gate, plus the worktree's
@@ -90,7 +90,7 @@ pub fn run(tail: &[String]) -> i32 {
     }
 }
 
-/// The two roots every verb needs: the worktree (for COMPLETION.md and the
+/// The two roots every command needs: the worktree (for COMPLETION.md and the
 /// fast path) and the canonical checkout (a filed node outlives the
 /// worktree it was captured in, and the carve-out ledger is shared).
 fn roots() -> (PathBuf, PathBuf) {
