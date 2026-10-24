@@ -20,7 +20,7 @@ Below 80 columns the explorer paints alone, and the bottom bar names `F` for ful
 
 ## Keys
 
-Use `j` and `k` or the arrows to move in the explorer. A pod opens when the cursor reaches it. Use `h` and `l` to change tab, or `1` to `5` to pick one. Press `u` or Backspace to go up from a seat to its pod, its machine and the fleet. PageUp and PageDown scroll the right pane. `F` toggles full screen, `?` shows the keys and Esc returns to Agents. The tab persists across client restarts.
+Use `j` and `k` or the arrows to move in the explorer. The cursor opens each pod it reaches. Use `h` and `l` to change tab, or `1` to `5` to pick one. Press `u` or Backspace to go up from a seat to its pod, its machine and the fleet. PageUp and PageDown scroll the right pane. `F` toggles full screen, `?` shows the keys and Esc returns to Agents. The tab persists across client restarts.
 
 Enter on the fleet, a machine or a pod moves to the next row, so Enter on a pod opens its first seat. Enter on a seat attaches it. Space peeks, `x` stops and `P` opens the portal picker. A tap selects a row, a tab or a graph box. A second tap on the selected seat acts like Enter.
 
