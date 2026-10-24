@@ -169,5 +169,16 @@ mod tests {
             Some(mk(&["inbox-peers", "--json"]))
         );
         assert!(classify_inbox_peers(&mk(&["inbox", "user", "status"])).is_none());
+        assert_eq!(
+            classify_inbox_outstanding(&mk(&["inbox", "outstanding"])),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            classify_inbox_outstanding(&mk(&["inbox", "outstanding", "-J"])),
+            Some(mk(&["-J"]))
+        );
+        for verb in ["mine", "ask", "clear", "reindex", "--help"] {
+            assert!(classify_inbox_outstanding(&mk(&["inbox", "outstanding", verb])).is_none());
+        }
     }
 }
