@@ -2050,6 +2050,8 @@ mod tests {
             tcp_answers("127.0.0.1", port),
             "repro premise: the stranger holds the port"
         );
+        // The test mux dir is a cleaned path, not a created one: make it.
+        std::fs::create_dir_all(proto::mux_dir()).unwrap();
         let state = proto::mux_dir().join("web-turldead.json");
         std::fs::write(
             &state,
@@ -2086,6 +2088,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let own_start =
             proto::pid_start_time(std::process::id()).expect("start time on test platform");
+        std::fs::create_dir_all(proto::mux_dir()).unwrap();
         let state = proto::mux_dir().join("web-turllive.json");
         std::fs::write(
             &state,
