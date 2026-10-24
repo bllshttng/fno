@@ -360,9 +360,12 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::mail_remote::run(&args[1..]);
     }
 
-    // The cross-machine hand-off relay; binary-direct like `mail-remote`. Contract: org_remote's module docs.
+    // The cross-machine relays, binary-direct like `mail-remote` (contract: each module's docs).
     if matches!(command, "org-remote") {
         return fno_agents::org_remote::run(&args[1..]);
+    }
+    if matches!(command, "spawn-remote") {
+        return fno_agents::spawn_remote::run(&args[1..]);
     }
 
     // Binary-direct mail transport for the events/note Python adapters; not routable.
@@ -1447,8 +1450,7 @@ async fn run(args: Vec<String>) -> i32 {
         {
             return code;
         }
-        if let Some(code) = fno_agents::footnote_harness::maybe_run_ask(&home, &params, &agent_name)
-        {
+        if let Some(code) = fno_agents::thread_host::maybe_run_ask(&home, &params, &agent_name) {
             return code;
         }
         // Opencode `ask` is intercepted client-side: opencode is
@@ -1884,10 +1886,9 @@ fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option
     }
 
     let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        fno_agents::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // ask is a follow-up to an already-registered session: dispatch_claude_ask
     // takes the cwd as `_cwd` and never launches in it. So resolve only an
     // explicit --cwd (canonicalized, Python's `Path(cwd).resolve()`; empty is
@@ -2366,10 +2367,9 @@ fn maybe_run_spawn(
         params.get("message").and_then(|v| v.as_str()).unwrap_or(""),
         substrate,
     );
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        fno_agents::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // --cwd > --here (caller) > default canonical; resolve_dispatch_cwd
     // canonicalizes an explicit --cwd and shells to git on the default path
     // (no --cwd, no --here). Resolve only for CLIENT-SIDE spawns, which are the
@@ -2794,27 +2794,12 @@ fn maybe_run_spawn(
             params.get("node").and_then(|v| v.as_str()),
         )),
 
-        // footnote headless: footnote's own loop, run in this process.
-        ("footnote", "headless") => emit!(fno_agents::footnote_harness::dispatch_once(
-            home,
-            name,
-            &message,
-            from_name,
-            &cwd,
-            fno_agents::footnote_harness::fenced_model(params).as_deref(),
-            timeout,
-            params,
-        )),
-        // footnote thread: an fno-owned host holds fnh's ACP session open.
-        ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
-            home,
-            name,
-            &message,
-            from_name,
-            &cwd,
-            fno_agents::footnote_harness::fenced_model(params).as_deref(),
-            params,
-        )),
+        // footnote (ACP) and muse (MSP): an fno-owned host holds the session.
+        (h @ ("footnote" | "muse"), s @ ("headless" | "bg")) => {
+            emit!(fno_agents::thread_host::dispatch(
+                home, h, s, name, &message, from_name, &cwd, timeout, params
+            ))
+        }
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`
         // preserves the request's `substrate=thread` so the daemon can own the

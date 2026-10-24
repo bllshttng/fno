@@ -291,9 +291,7 @@ fn raw_send(
     }
 
     let transport_sender = crate::identity::ambient_agent_handle();
-    let sender = transport_sender
-        .clone()
-        .unwrap_or_else(|| "fno".to_string());
+    let sender = crate::system_sender::stamp_or_unknown(None, || transport_sender.clone());
     let raw_recipient = crate::identity::canonical_handle(&session_id);
     let authored_words = crate::backlog::style_check::word_count(stripped);
     let mut failure_reasons: Vec<String> = Vec::new();

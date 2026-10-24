@@ -217,17 +217,14 @@ pub(crate) fn own_identity() -> Option<(String, String)> {
     }
 }
 
-/// Python `stamp_from`: explicit `--from-name` wins verbatim, else the own
-/// canonical handle, else the `"fno"` floor.
-/// `pub(crate)`: the reply leaf stamps its origin row's sender.
-pub(crate) fn stamp_from(from_name: Option<&str>) -> String {
-    match from_name {
-        Some(name) => name.to_string(),
-        None => match own_identity() {
-            Some((sid, _)) => crate::identity::canonical_handle(&sid),
-            None => "fno".to_string(),
-        },
-    }
+/// Explicit `--from-name` wins, else the own canonical handle, else the
+/// `unknown` floor ([`crate::system_sender::stamp_or_unknown`]).
+/// Public: the reply leaf, the ask and spawn routes and the bin stamp
+/// through it.
+pub fn stamp_from(from_name: Option<&str>) -> String {
+    crate::system_sender::stamp_or_unknown(from_name, || {
+        own_identity().map(|(sid, _)| crate::identity::canonical_handle(&sid))
+    })
 }
 
 fn resolve_self_session() -> Option<String> {
@@ -1815,6 +1812,20 @@ pub fn run(args: &[String]) -> i32 {
     let mut name = name;
     let mut message = message;
 
+    // --from-self resolves before the origin record stamps a sender, so a
+    // refused self-stamp never first stamps the unknown floor.
+    if args.from_self {
+        if from_name.is_some() {
+            eprintln!("error: --from-self and --from-name are mutually exclusive");
+            return 2;
+        }
+        let Some((sid, _harness)) = own_identity() else {
+            eprintln!("error: --from-self: no ambient harness identity - cannot self-stamp");
+            return 2;
+        };
+        from_name = Some(crate::identity::canonical_handle(&sid));
+    }
+
     let classified_origin = match classify_origin(args.origin.as_deref()) {
         Ok(origin) => origin,
         Err(msg) => {
@@ -1948,18 +1959,6 @@ pub fn run(args: &[String]) -> i32 {
             "error: --check applies to --raw (the keystroke lane); a wrapped send always has the durable fallback"
         );
         return 2;
-    }
-
-    if args.from_self {
-        if from_name.is_some() {
-            eprintln!("error: --from-self and --from-name are mutually exclusive");
-            return 2;
-        }
-        let Some((sid, _harness)) = own_identity() else {
-            eprintln!("error: --from-self: no ambient harness identity - cannot self-stamp");
-            return 2;
-        };
-        from_name = Some(crate::identity::canonical_handle(&sid));
     }
 
     if args.kind.is_some() {

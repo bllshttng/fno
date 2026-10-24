@@ -31,6 +31,9 @@ pub const DEFAULT_THRESHOLD_PCT: f64 = 90.0;
 const MAX_BACKOFF_LEVEL: i64 = 15;
 const SCHEMA_VERSION: i64 = 2;
 pub(crate) const WINDOW_LABEL: &str = "window";
+/// The warn lead for a projected window close, in seconds. Half an hour is the
+/// smallest lead that lets work be parked rather than lost to the cap.
+pub const DEFAULT_WINDOW_WARN_SECONDS: f64 = 1800.0;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Health {

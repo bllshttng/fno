@@ -223,10 +223,10 @@ fn account_record_vendors(cwd: &Path) -> Value {
 }
 
 /// The snapshot at `<state_dir>/cache/benchmarks.json` (the root spelling
-/// still reads while it exists: the Python writer renames it into `cache/`
-/// on its first resolve), or None when absent, unreadable, or missing
+/// still reads while it exists; `accounts::benchmarks` writes only `cache/`),
+/// or None when absent, unreadable, or missing
 /// `fetched_at`/`source` (invalid is ignored, never a dead gather).
-fn load_snapshot(cwd: &Path) -> Option<Value> {
+pub(crate) fn load_snapshot(cwd: &Path) -> Option<Value> {
     let root = crate::agents_config::state_dir(cwd)?;
     let new = root.join("cache").join("benchmarks.json");
     let legacy = root.join("benchmarks.json");
@@ -345,7 +345,7 @@ fn snapshot_percentiles(snapshot: Option<Value>) -> Map<String, Value> {
 /// one name overriding per field. A snapshot percentile derives a band only
 /// when the row carries none of its own; the objective is validated against
 /// the three-word vocabulary. Never fails: an unreadable piece answers empty.
-fn inventory(cwd: &Path) -> Value {
+pub(crate) fn inventory(cwd: &Path) -> Value {
     let (tiers, reach) = load_model_tiers();
     let cfg_rows: Vec<toml::Value> =
         crate::agents_config::config_value_deep(cwd, &["routing", "models"])

@@ -302,7 +302,7 @@ fn py_repr(v: &toml::Value) -> String {
     }
 }
 
-fn py_float(f: f64) -> String {
+pub(crate) fn py_float(f: f64) -> String {
     if f.fract() == 0.0 && f.is_finite() && f.abs() < 1e16 {
         format!("{f:.1}")
     } else {
@@ -310,7 +310,7 @@ fn py_float(f: f64) -> String {
     }
 }
 
-fn py_list_repr<S: AsRef<str>>(items: &[S]) -> String {
+pub(crate) fn py_list_repr<S: AsRef<str>>(items: &[S]) -> String {
     let inner: Vec<String> = items.iter().map(|s| py_repr_str(s.as_ref())).collect();
     format!("[{}]", inner.join(", "))
 }
@@ -1251,14 +1251,11 @@ pub fn load_combos(repo_root: Option<&Path>, cwd: &Path) -> Result<Vec<Combo>, L
                 LoadError::bare(format!("combo {quoted} sticky_limit must be an integer"))
             })?,
         };
-        if providers.is_empty() {
-            return Err(LoadError::bare(format!(
-                "Combo {quoted} has empty providers list (combos must name at least one provider)"
-            )));
-        }
         let strategy = match spec.get("strategy") {
             None => "fallback".to_string(),
-            Some(toml::Value::String(s)) if VALID_STRATEGIES.contains(&s.as_str()) => s.clone(),
+            Some(toml::Value::String(s)) => s.clone(),
+            // The empty-list refusal comes first, as `Combo.__post_init__` orders them.
+            Some(_) if providers.is_empty() => String::new(),
             Some(other) => {
                 return Err(LoadError::bare(format!(
                     "Combo {quoted} has invalid strategy {}; valid: ('fallback', 'round_robin')",
@@ -1266,14 +1263,37 @@ pub fn load_combos(repo_root: Option<&Path>, cwd: &Path) -> Result<Vec<Combo>, L
                 )))
             }
         };
-        out.push(Combo {
-            name: name.clone(),
-            strategy,
-            sticky_limit: sticky_limit.max(1),
-            providers,
-        });
+        out.push(combo(name, &strategy, sticky_limit, providers).map_err(LoadError::bare)?);
     }
     Ok(out)
+}
+
+/// `rotation.Combo`: refuse an empty member list or an unknown strategy, and
+/// clamp `sticky_limit` to 1.
+pub fn combo(
+    name: &str,
+    strategy: &str,
+    sticky_limit: i64,
+    providers: Vec<String>,
+) -> Result<Combo, String> {
+    let quoted = py_repr_str(name);
+    if providers.is_empty() {
+        return Err(format!(
+            "Combo {quoted} has empty providers list (combos must name at least one provider)"
+        ));
+    }
+    if !VALID_STRATEGIES.contains(&strategy) {
+        return Err(format!(
+            "Combo {quoted} has invalid strategy {}; valid: ('fallback', 'round_robin')",
+            py_repr_str(strategy)
+        ));
+    }
+    Ok(Combo {
+        name: name.to_string(),
+        strategy: strategy.to_string(),
+        sticky_limit: sticky_limit.max(1),
+        providers,
+    })
 }
 
 /// `loader.load_active_combo`: the first layer naming one wins.

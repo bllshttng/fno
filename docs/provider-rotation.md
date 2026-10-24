@@ -883,7 +883,7 @@ The sidecar feeds:
 | File | Owner | Reset on |
 |---|---|---|
 | `.fno/turn-attribution.jsonl` | dispatch layer | session boundary (gitignored, re-created per session) |
-| `~/.fno/config.toml.lock` | atomic_mutate_settings, save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
+| `~/.fno/config.toml.lock` | save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
 
 ---
 
@@ -1139,7 +1139,10 @@ fno config accounts combos list [--json]
 fno config accounts combos remove <name> [--scope project|global]
 fno config accounts combos test <name>      # config-only validation; reports per-member health
 fno config accounts combos use <name> [--scope project|global]
+fno config accounts combos update <name> --providers a,b,c [--strategy S] [--sticky N] [--scope project|global]
 ```
+
+`fno-agents spawn-overlay accounts combos` answers every argument; the Python command only forwards. `combos update` replaces one combo in a single write and keeps the stored strategy and sticky limit when their flags are omitted.
 
 `combos test` does NOT issue real API calls (smoke-pinging every member multiplies cost). For an active liveness probe, run `fno config accounts test <id> --smoke` per member.
 
@@ -1211,7 +1214,7 @@ All paths terminate in setting `TARGET_COMBO=<name>` in the environment of spawn
 - **Invalid strategy:** raised at construction-time.
 - **Unknown provider id in `--providers`:** rejected before `config.toml` mutation.
 - **Combo deleted mid-dispatch:** `agents.dispatch_target.resolve_dispatch_target` logs the unknown combo and falls through.
-- **YAML round-trip via PyYAML loses comments:** documented limitation. Use `fno config accounts combos add/remove` for safe edits, or hand-edit and re-add.
+- **Comments in the config file:** the combos writers edit the file in place, so comments and other keys survive a write.
 
 ## Quota-aware dispatch
 
@@ -1253,9 +1256,7 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 - **Lane routing** (review panel `alternate` selection): a kind whose records
   are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit
   per-agent pins and role→provider config mappings are never overridden.
-- **Promise-time warning** (`fno config accounts required-bot-check`): read-only,
-  warns when a `config.review` required-bot's provider is `EXHAUSTED`, naming
-  the reset, so a coming review-gate wedge surfaces immediately.
+- **Promise-time warning** (`fno config accounts required-bot-check`): read-only. When every account behind a `config.review` required bot is `EXHAUSTED`, it warns. It names the reset, so a coming review-gate wedge surfaces at once.
 
 Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
 

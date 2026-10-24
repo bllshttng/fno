@@ -339,6 +339,7 @@ mod mint_guard_tests;
 pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
+pub mod muse;
 pub mod name_draw;
 pub mod name_ledger;
 pub mod naming;
@@ -536,6 +537,7 @@ pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_promote;
+pub mod spawn_remote;
 pub mod spawn_route;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
@@ -585,6 +587,7 @@ pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+pub mod thread_host;
 pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
@@ -1971,6 +1974,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The managed slot switch (accounts/use_switch.rs): `use`, `switch` and
     // the daemon's slot cutover.
     "account_switched",
+    // The once-per-window close warning (accounts/window.rs).
+    "provider_window_closing",
+    // The pre-promise review-bot quota warning (accounts/required_bot.rs).
+    "quota_required_bot_exhausted",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

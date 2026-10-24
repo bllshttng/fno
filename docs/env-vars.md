@@ -158,6 +158,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MAIL_SUBJECT` | py+rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
 | `FNO_MCP_SIDECAR_LOG` | py | unclear: cli/src/fno/mcp/sidecar.py:646 |
 | `FNO_MERGE_AUTHORITY` | rs | Selects the `fno do pr merge` authority arm: `durable_grant` swaps the manifest posture for the durable-grant resolution a parked worker rides; unset or any other value rides the manifest fields as written. |
+| `FNO_MUSE_BIN` | rs | The `muse` binary `-H muse` launches for `muse serve` and `muse exec`; unset, fno-agents looks on PATH. |
 | `FNO_MUX_ADMISSION_NAMESPACE` | rs | unclear: crates/fno/src/process_admission.rs:733 |
 | `FNO_MUX_DIR` | rs | unclear: crates/fno/src/mux_cli.rs:1533 |
 | `FNO_MUX_IMAGE_PROTOCOL` | rs | Forces the mux client's image protocol for the file viewer: `kitty`, `iterm2`, `sixel` or `halfblocks`. Unset, the client asks the terminal once at start. |
@@ -303,6 +304,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `OPENCODE_CONFIG` | rs | Points the plugin-array audit at one extra OpenCode config file; unset, the audit reads only the standard paths. |
 | `OPENCODE_CONFIG_DIR` | py+rs | Moves OpenCode's config dir; the installer, the doctor leg and the scratch-install tests read it. |
 | `OPENCODE_DB` | rs | Points the intel fold at one opencode store; unset, every `opencode*.db` in the data dir is read. |
+| `OPENROUTER_API_KEY` | rs | OpenRouter API key for `fno config accounts benchmarks refresh`; the refresh refuses without it, naming this var. |
 | `OUT_DIR` | rs | unclear: crates/fno-agents/build.rs:51 |
 | `PATH` | py+rs | Executable search path. |
 | `PI_CODING_AGENT_DIR` | rs | pi's agent dir; fno installs the extension under it and resolves the session store from it. |

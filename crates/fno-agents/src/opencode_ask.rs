@@ -59,10 +59,9 @@ pub fn maybe_run_opencode_ask(
         entry.harness_name() == "opencode" && entry.substrate.as_deref() == Some("thread")
     }) {
         let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-        let from_name = params
-            .get("from_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("fno");
+        let from_name_stamped =
+            crate::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+        let from_name = from_name_stamped.as_str();
         let model = params.get("model").and_then(|v| v.as_str());
         let timeout = params
             .get("timeout")

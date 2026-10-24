@@ -1,0 +1,11 @@
+{
+ "args": [
+  "show"
+ ],
+ "legacy": "{\n  \"fetched_at\": \"{NOW}\",\n  \"source\": \"https://openrouter.ai/api/v1/benchmarks\",\n  \"models\": [\n    {\n      \"name\": \"codex-sol\",\n      \"coding_percentile\": 99\n    }\n  ]\n}",
+ "expect": {
+  "exit": 0,
+  "stdout": "source: https://openrouter.ai/api/v1/benchmarks  fetched_at: {NOW}\n  codex-sol                coding=99     -> codex:sol\n",
+  "stderr": ""
+ }
+}
