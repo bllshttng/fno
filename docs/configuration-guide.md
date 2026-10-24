@@ -20,7 +20,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
-| `paths.inbox_dir` | str (optional) | _(none)_ | never | Override path to the cross-project messaging inbox dir. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
 | `paths.handoffs_dir` | str (optional) | _(none)_ | never | Override path to the handoffs dir. |
 | `paths.retro_pending_dir` | str (optional) | _(none)_ | never | Override path to the retro-pending dir. |
@@ -33,7 +32,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `obsidian.vault` | str (optional) | _(none)_ | always | Vault area name (NOT a filesystem path). |
 | `project.id` | str (optional) | _(none)_ | advanced | Project identifier. |
 | `project.vision` | str (optional) | _(none)_ | always | One-paragraph statement of what this codebase is and why. |
-| `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`). |
+| `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge). |
 | `inbox.landed_abandon_ttl` | int | `21600` | advanced | Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again. |
 | `inbox.tool_boundary_ordinary` | bool | `false` | advanced | true lands ordinary mail at the next tool call (Claude PreToolUse), so a worker busy in one long turn reads it without waiting for its next prompt. Default false: ordinary mail waits for the prompt boundary; control mail lands at the tool call either way. |
 | `user.name` | str | `` | always | What fno calls you. Empty falls back to `git config user.name`. |

@@ -189,9 +189,8 @@ Actions schedules - non-zero exit pages a monitoring tool.
 
 ## `fno agents mail` (cross-project messaging)
 
-Each agent owns a folder at `~/your-vault/internal/agents/{project}/` with `inbox.md`
-as the live inbox inside it. Agents send messages to other agents' inboxes, read
-their own inbox at the top of every megawalk iteration, and ack each message after handling.
+Every message is one envelope on the bus log, and the chats store records it.
+Agents read their mail with `fno agents mail unread` and ack each message after handling.
 
 Set `project: <name>` in your `.fno/config.toml` to identify the
 sender. Without this field, `fno agents mail` errors with the fix string.
@@ -200,35 +199,15 @@ sender. Without this field, `fno agents mail` errors with the fix string.
 
 - `fno agents mail send --to-project <project> --kind <kind> --body "..."` - send a message
 - `fno agents mail unread [--json]` - list unread messages in own inbox
-- `fno agents mail ack <msg-id> [--triaged-into ab-...]` - mark a message handled
-- `fno agents mail reply --to <msg-id> --kind <kind> --body "..."` - reply to a message
-- `fno agents mail list [--all]` - list all messages in own inbox
-- `fno agents mail lint [<project>]` - find malformed messages
-- `fno agents mail triage <msg-id>` - LLM triage for heads-up kind (returns JSON plan)
+- `fno agents mail ack <msg-id>` - mark a message handled
+- `fno agents mail reply --to <msg-id> "..."` - reply to a message
+- `fno agents mail show <msg-id>` - print one message
 
 ### Message kinds
 
-| Kind | Use |
-|---|---|
-| `question` | Ask another agent something. Interrupts mid-feature work. |
-| `answer` | Reply to a question. Threads via `reply_to`. |
-| `heads-up` | "This might affect you, you decide what to do." Triggers LLM triage. |
-| `notification` | Pure FYI, no action expected. |
-| `lesson` | Cross-project memory write (supervisor -> worker). |
-
-### Cross-project behavior
-
-`fno agents mail` writes to the recipient's inbox file. Each agent reads only its
-own inbox. Replies go to the original sender's inbox with `reply_to:` set.
-
-The `com.fno.backlog-sync` launchd job already mirrors
-`~/.fno/graph.json` to obsidian; the inbox files live directly in
-the obsidian vault, so no separate sync is needed.
-
-### See also
-
-- Design doc: `~/your-vault/internal/fno/design/2026-05-04-cross-project-inbox-fleet.md`
-- Megawalk drain integration: `skills/megawalk/references/inbox-handlers.md`
+`--kind` takes `send` (the default), `heads-up`, `question` or `fyi`. A
+`question` also escalates to a human. A reply joins the original message's
+thread and goes back to its sender.
 
 ## `fno whoami` / `fno whoami status` (self-introspection)
 

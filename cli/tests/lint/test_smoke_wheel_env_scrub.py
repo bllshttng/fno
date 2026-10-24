@@ -192,14 +192,9 @@ NON_INSTALL_SMOKES = {
     "test_done.sh",
     "test_find_new.sh",
     "test_help.sh",
-    "test_inbox_cross_project.sh",
     "test_inbox_cross_project_e2e.sh",
     "test_inbox_drain_e2e.sh",
-    "test_inbox_reply_thread.sh",
-    "test_inbox_roundtrip.sh",
-    "test_inbox_triage_subprocess.sh",
     "test_json_flag.sh",
-    "test_migrate_inbox_path.sh",
     "test_postinstall.sh",  # greps the installer's TEXT; runs no installer
     "test_postinstall_clobber_guard.sh",  # stub uv refuses every install; imports nothing
     "test_preflight_hermetic.sh",  # sets PYTHONPATH on purpose, installs nothing

@@ -123,7 +123,6 @@ class PathsBlock(BaseModel):
     cargo_targets_base: Optional[str] = None
     memory_dir: Optional[str] = None
     hook_logs_dir: Optional[str] = None
-    inbox_dir: Optional[str] = None
     inbox_path: Optional[str] = None
     handoffs_dir: Optional[str] = None
     retro_pending_dir: Optional[str] = None
@@ -143,7 +142,6 @@ class PathsBlock(BaseModel):
         "cargo_targets_base",
         "memory_dir",
         "hook_logs_dir",
-        "inbox_dir",
         "inbox_path",
         "handoffs_dir",
         "retro_pending_dir",
