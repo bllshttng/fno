@@ -59,7 +59,7 @@ platform_wheel_notice() {
     Darwin/arm64|Darwin/x86_64|Linux/x86_64|Linux/aarch64) return 0 ;;
   esac
   log "no prebuilt wheel for $(uname -s)/$(uname -m). PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
-  log "This install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: 'cargo install --locked --path $(dirname "$SCRIPT_DIR")/crates/fno' builds the fno front door, and its native update installs the other binaries."
+  log "This install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
 }
 # Printed after a successful install so a new user knows the one configuration
 # step exists (install never prompts). Optional: defaults work without it.
