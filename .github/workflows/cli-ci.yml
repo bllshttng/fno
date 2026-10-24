@@ -221,7 +221,7 @@ jobs:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.skill_bundles == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -244,6 +244,25 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           version: "0.12.20"
+      # Pack verification's role-resolution family answers through the
+      # fno-agents binary; verify is fail-closed (all-passed or exit 1), so a
+      # runner without the binary fails every pack. The dev-binary finder
+      # reads crates/fno-agents/target/debug, so a debug build satisfies it.
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+          key: ${{ runner.os }}-cargo-bundles-${{ hashFiles('crates/fno-agents/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bundles-
+      - name: Build fno-agents for pack verification
+        run: cargo build -p fno-agents
       - name: Run the bundle freshness check
         run: bash scripts/lint/check-skill-bundles-fresh.sh
 
