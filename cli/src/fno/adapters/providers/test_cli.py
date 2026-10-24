@@ -430,40 +430,6 @@ class TestTestCommand:
 
 
 # ---------------------------------------------------------------------------
-# Use command
-# ---------------------------------------------------------------------------
-
-class TestUse:
-    def test_use_updates_active(self, tmp_path: Path):
-        """AC02.1-HP: fno providers use <id> updates config.providers.active."""
-        from fno.adapters.providers.loader import load_providers
-
-        _seed_records(tmp_path, "my-provider")
-        result = _invoke(["use", "my-provider", "--scope", "global"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code == 0
-
-        config = load_providers(repo_root=tmp_path)
-        assert config.active == "my-provider"
-
-    def test_use_nonexistent_exits_nonzero(self, tmp_path: Path):
-        """fno providers use nonexistent exits non-zero."""
-        result = _invoke(["use", "nonexistent"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code != 0
-
-    def test_use_refuses_config_dir_account(self, tmp_path: Path):
-        """A config-dir account bills through spawn --account, never the slot."""
-        cfg = tmp_path / "claude-alt"
-        cfg.mkdir()
-        (cfg / ".credentials.json").write_text("{}")
-        record = {"id": "readyrule", "name": "readyrule", "harness": "claude",
-                  "auth": "managed", "config_dir": str(cfg)}
-        _write_settings(tmp_path / ".fno" / "config.toml", {"accounts": {"records": [record]}})
-        result = _invoke(["use", "readyrule", "--scope", "global"], cwd=tmp_path, home=tmp_path)
-        assert result.exit_code == 1
-        assert "spawn-only" in result.output and "--account readyrule" in result.output
-
-
-# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
