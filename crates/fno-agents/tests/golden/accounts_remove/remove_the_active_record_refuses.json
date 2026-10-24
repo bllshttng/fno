@@ -1,0 +1,38 @@
+{
+ "global": "# operator note: keep this comment\n[review]\nmax_rounds = 2\n\n[accounts]\nactive = \"work\"\nauto_switch = true\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n\n[[accounts.records]]\nid = \"alt\"\nname = \"alt\"\nharness = \"codex\"\nauth = \"managed\"\npriority = 20\n",
+ "args": [
+  "work"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: 'work' is an active provider (some config layer points at it). Use --force to remove it.\n",
+  "global": {
+   "review": {
+    "max_rounds": 2
+   },
+   "accounts": {
+    "active": "work",
+    "auto_switch": true,
+    "records": [
+     {
+      "id": "work",
+      "name": "work",
+      "harness": "claude",
+      "auth": "oauth_dir",
+      "credentials_source": "<TMP>/creds",
+      "priority": 10
+     },
+     {
+      "id": "alt",
+      "name": "alt",
+      "harness": "codex",
+      "auth": "managed",
+      "priority": 20
+     }
+    ]
+   }
+  },
+  "project": null
+ }
+}

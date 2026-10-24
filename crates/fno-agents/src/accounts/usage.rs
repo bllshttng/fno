@@ -231,17 +231,22 @@ pub fn render(
     text_lines(records, rows, threshold, now, remedy).join("\n")
 }
 
-/// The live report for `cwd`: the configured records, the runtime-state
-/// cache, the Keychain and the probe endpoints.
-pub fn report(cwd: &Path, refresh: bool, now: f64) -> Result<(Vec<Record>, Vec<Row>, f64), String> {
-    let accounts = records::load(Some(cwd), cwd).map_err(|e| e.to_string())?;
-    let quota = crate::backlog::quota_route::load_quota_config(cwd.to_str());
+/// Run `f` over the live world for `cwd`: the runtime-state cache, the
+/// Keychain and the probe endpoints. Only a refresh writes, so only a
+/// refresh folds the legacy files first; a plain read stays a read.
+fn with_live<T>(
+    cwd: &Path,
+    records: &[Record],
+    refresh: bool,
+    ttl: f64,
+    now: f64,
+    f: impl FnOnce(&Inputs<'_>) -> T,
+) -> T {
     let path = crate::provider_cap::runtime_state_path(cwd);
-    // Only a refresh writes, so only a refresh folds; a plain read stays a read.
     if refresh {
         state::fold_legacy_files(&path, cwd, None);
     }
-    let rows = usage_probe::with_system(cwd, Some(cwd), &accounts.records, |ctx| {
+    usage_probe::with_system(cwd, Some(cwd), records, |ctx| {
         let probe = |r: &Record| {
             let (snap, reason) = usage_probe::probe_detail(ctx, r, now);
             (snap, reason.map(str::to_string))
@@ -249,19 +254,41 @@ pub fn report(cwd: &Path, refresh: bool, now: f64) -> Result<(Vec<Record>, Vec<R
         let persist = |r: &Record, s: &Snapshot| {
             state::write_usage(&path, &r.id, s.clone(), now, state::LOCK_TIMEOUT).unwrap_or(false)
         };
-        collect(&Inputs {
-            records: &accounts.records,
+        f(&Inputs {
+            records,
             state: &path,
             store: ctx.store.as_deref(),
             slot: ctx.slot,
             probe: &probe,
             persist: &persist,
             refresh,
-            ttl: quota.probe_ttl_seconds,
+            ttl,
             now,
         })
-    });
+    })
+}
+
+/// The live report for `cwd`: the configured records and every row.
+pub fn report(cwd: &Path, refresh: bool, now: f64) -> Result<(Vec<Record>, Vec<Row>, f64), String> {
+    let accounts = records::load(Some(cwd), cwd).map_err(|e| e.to_string())?;
+    let quota = crate::backlog::quota_route::load_quota_config(cwd.to_str());
+    let rows = with_live(
+        cwd,
+        &accounts.records,
+        refresh,
+        quota.probe_ttl_seconds,
+        now,
+        collect,
+    );
     Ok((accounts.records, rows, quota.defer_threshold_pct))
+}
+
+/// `refresh_usage` for one record: a cached reading inside `ttl` stands,
+/// else a probe whose snapshot lands in the cache.
+pub fn refresh_one(cwd: &Path, records: &[Record], record: &Record, ttl: f64, now: f64) {
+    with_live(cwd, records, true, ttl, now, |inp| {
+        observe(inp, record, ttl);
+    });
 }
 
 /// `usage --refresh --json` in process: the map the route gate and the
