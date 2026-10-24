@@ -370,7 +370,7 @@ pub fn build_receipt(
     let mut value = receipt_to_value(&receipt);
     receipt.content_sha = content_sha_of(&value);
     value["content_sha"] = json!(receipt.content_sha);
-    receipt
+    Ok(receipt)
 }
 
 pub fn receipt_filename(identity: &ReceiptIdentity) -> String {

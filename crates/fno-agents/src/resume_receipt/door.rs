@@ -434,7 +434,7 @@ fn run_validate(args: &[String]) -> i32 {
         // `session_id` here is the CANONICAL flag's presence, not the merged
         // value: the deprecated --session spelling never feeds the expect.
         let expect = if value_of(&pairs, "--session-id").is_some() {
-            json!({"node": node, "session": session.unwrap_or_default()})
+            json!({"node": node, "session": session.as_deref().unwrap_or_default()})
         } else {
             json!({"node": node})
         };
