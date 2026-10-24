@@ -1,0 +1,26 @@
+{
+  "args": [],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\n\n[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    },
+    {
+      "rel": "runtime-state.json",
+      "text": "{\"usage\": {\"readyrule\": {\"windows\": [{\"label\": \"5h\", \"used_pct\": 100.0, \"resets_at\": 1789403600.0}], \"probed_at\": 1789400000.0, \"source\": \"oauth-endpoint\"}, \"makers\": {\"windows\": [{\"label\": \"5h\", \"used_pct\": 4.0, \"resets_at\": 1789403600.0}], \"probed_at\": 1789400000.0, \"source\": \"oauth-endpoint\"}}}"
+    }
+  ],
+  "expect": {
+    "stdout": "makers\n",
+    "stderr": "  readyrule: exhausted\n  makers: ok\npick: first launchable candidate with headroom\n",
+    "exit": 0
+  }
+}

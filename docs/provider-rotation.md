@@ -260,7 +260,7 @@ Pinning `CLAUDE_CONFIG_DIR` alone is only half an overlay: an inherited `ANTHROP
 Every Python spawn substrate already scrubs that list before applying an overlay; emitting it here is what lets a non-Python caller apply the whole thing from one source of truth.
 
 `--if-armed` makes the command itself honor `pick_on_launch`, declining with exit 5 when it is false.
-It exists for callers that must respect the opt-in but cannot read config themselves (the Rust loop dispatcher), so the knob keeps exactly one implementation.
+It exists for callers that must respect the opt-in: the Python spawn seams pass it, and the Rust loop dispatcher runs the same pick in process with it set, so the knob keeps exactly one implementation.
 A bare `fno config accounts pick` you type by hand always answers: you asked.
 
 Footnote does not own your interactive `claude` invocation and does not pretend to; you relaunch.

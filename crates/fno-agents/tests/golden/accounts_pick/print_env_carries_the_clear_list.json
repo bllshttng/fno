@@ -1,0 +1,24 @@
+{
+  "args": [
+    "--print-env"
+  ],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\n\n[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    }
+  ],
+  "expect": {
+    "stdout": "ANTHROPIC_API_KEY=\nCLAUDE_CODE_OAUTH_TOKEN=\nANTHROPIC_BASE_URL=\nANTHROPIC_AUTH_TOKEN=\nFNO_ROUTE_PROVIDER=\nANTHROPIC_MODEL=\nANTHROPIC_DEFAULT_OPUS_MODEL=\nANTHROPIC_DEFAULT_SONNET_MODEL=\nANTHROPIC_DEFAULT_HAIKU_MODEL=\nANTHROPIC_DEFAULT_FABLE_MODEL=\nCLAUDE_CONFIG_DIR={dir}/claude-alt\n",
+    "stderr": "  readyrule: unknown\n  makers: unknown\npick: first launchable candidate with headroom\n",
+    "exit": 0
+  }
+}

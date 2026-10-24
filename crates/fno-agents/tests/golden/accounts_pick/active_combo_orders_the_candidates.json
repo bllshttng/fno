@@ -1,0 +1,22 @@
+{
+  "args": [],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\nactive_combo = \"pair\"\n\n[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n\n[accounts.combos.pair]\nproviders = [\n    \"makers\",\n    \"readyrule\",\n]\n"
+    }
+  ],
+  "expect": {
+    "stdout": "makers\n",
+    "stderr": "  makers: unknown\n  readyrule: unknown\npick: first launchable candidate with headroom\n",
+    "exit": 0
+  }
+}
