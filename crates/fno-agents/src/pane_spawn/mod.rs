@@ -27,7 +27,7 @@
 //! lands with the Rust settings reader, not here.
 pub mod claude;
 pub mod codex;
-mod env_wrap;
+pub(crate) mod env_wrap;
 pub mod placement;
 pub mod readiness;
 pub mod simple;

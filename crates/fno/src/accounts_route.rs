@@ -12,6 +12,7 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "register",
     "remove",
     "usage",
+    "pick",
     "doctor",
 ];
 

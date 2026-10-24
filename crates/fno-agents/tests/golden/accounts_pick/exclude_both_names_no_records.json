@@ -1,0 +1,26 @@
+{
+  "args": [
+    "--exclude",
+    "readyrule",
+    "--exclude=makers"
+  ],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\n\n[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "  readyrule: excluded\n  makers: excluded\npick: no launchable candidate among readyrule, makers: only an account with its own config dir can be pinned to a worker. Register one with `fno config accounts register <id> --config-dir <path>` (a full second login in its own dir)\n",
+    "exit": 4
+  }
+}
