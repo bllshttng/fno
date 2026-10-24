@@ -8,11 +8,6 @@ Phase 1 surface:
   that catches the "wrong provider on follow-up" mistake before any
   subprocess fires.
 
-The ask follow-up orchestration that used to live here
-(``dispatch_ask``) was ported to the Rust runtime and deleted; its
-parity harnesses frozen against goldens are the surviving contract
-(``crates/fno-agents/tests/{claude_ask,codex_ask}_parity.rs``).
-
 The spawn subprocess invocation per provider lives in
 ``fno.agents.harnesses.{claude,codex}``. Gemini is a legacy readable identity,
 not a maintained Python dispatch provider.
