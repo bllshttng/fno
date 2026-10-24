@@ -6387,6 +6387,25 @@ event_types:
         reason:
           type: string
 
+  - name: shell_writers_sweep
+    description: "The daemon's hourly legacy shell-writer rendezvous sweep: entries older than a day under any events.jsonl.shell-writers.d are unlinked and an emptied directory is dropped. The rendezvous is residue of the retired shell append path; no current writer creates entries. Emitted for every run including a zero-count one, so a quiet run is never mistaken for a sweep that did not run."
+    sources: [daemon]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          description: "'ok' when the sweep ran; 'skipped' names why it did not."
+        swept:
+          type: integer
+          description: "Stale rendezvous entries unlinked this pass."
+        dirs_removed:
+          type: integer
+          description: "Rendezvous directories dropped once empty."
+        reason:
+          type: string
+          description: "The dispatch pause's skip reason when outcome is 'skipped'."
+
   - name: pr_watch_tick
     description: "Heartbeat and positive sweep receipt emitted at the end of every successful PR-state watcher poll interval, including quiet ticks with no actionable PRs."
     sources: [daemon, agents]
