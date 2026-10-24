@@ -118,8 +118,8 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 
 # The bus-era inbox commands moved under fno agents mail; fno inbox view has no
 # one-for-one successor. The python plan stamper was ported to plan_doc.
-fno inbox view|fno agents mail list --all [--from P] [--json], or fno agents mail unread [-n NAME]|the mail-command fold
-fno inbox drain|fno agents mail drain|the mail-command fold
+fno inbox view|fno agents mail unread [-n NAME]|the mail-command fold
+fno inbox drain|fno agents mail drain-self|the mail-command fold
 fno inbox migrate-bus|nothing: the bus log is the mail record|the mail-command fold
 stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
 
@@ -128,6 +128,13 @@ stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
 fno agents mail lint|fno agents mail unread|d-64ef8f90
 fno agents mail migrate-bus|nothing: the bus log is the mail record|d-64ef8f90
 fno agents mail rebuild-render|fno agents mail unread|d-64ef8f90
+
+# The per-message markdown inbox is gone: the bus delivers and the chats store
+# records, so the commands that read the markdown files went with it.
+fno agents mail list|fno agents mail unread [-n NAME] [--json]|the markdown inbox retirement
+fno agents mail drain|fno agents mail drain-self|the markdown inbox retirement
+fno agents mail status|fno agents mail unread|the markdown inbox retirement
+fno agents mail triage|fno agents mail show <id>|the markdown inbox retirement
 
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.

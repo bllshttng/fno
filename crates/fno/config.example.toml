@@ -55,8 +55,6 @@ agent_freeze = false
 # memory_dir = <unset>   # optional; no default
 # Override path to hook logs.
 # hook_logs_dir = <unset>   # optional; no default
-# Override path to the cross-project messaging inbox dir.
-# inbox_dir = <unset>   # optional; no default
 # Override path to the capture-tier inbox/parking-lot file.
 # inbox_path = <unset>   # optional; no default
 # Override path to the handoffs dir.
@@ -87,7 +85,7 @@ enabled = false
 # vision = <unset>   # optional; no default
 
 [inbox]
-# Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`).
+# Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge).
 unclaimed_ttl = 1800
 # Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again.
 landed_abandon_ttl = 21600

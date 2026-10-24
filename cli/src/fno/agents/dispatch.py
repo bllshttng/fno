@@ -7506,7 +7506,7 @@ def dispatch_send_to_project(
     )
 
     try:
-        handle = write_new_thread(
+        sent_id = write_new_thread(
             recipient=project,
             sender=from_name,
             kind="send",
@@ -7534,11 +7534,11 @@ def dispatch_send_to_project(
         "agent_send_done",
         name=project,
         provider=provider or "",
-        msg_id=handle.thread_id,
+        msg_id=sent_id,
         delivery="durable",
     )
     return DispatchSendResult(
-        msg_id=handle.thread_id,
+        msg_id=sent_id,
         delivery="durable",
         recipient=None,
         to_project=project,

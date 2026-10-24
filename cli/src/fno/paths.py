@@ -1534,21 +1534,6 @@ def agents_runtime_registry_path() -> Path:
     return agents_home_dir() / "registry.json"
 
 
-def inbox_dir(project_root: Optional[Path] = None) -> Path:
-    """Return the inbox directory.
-
-    Default is the space: <space>/inbox/.
-    """
-    settings = _settings()
-    override = settings.paths.inbox_dir
-    if override is not None:
-        return _resolve(override, project_root=project_root)
-    root = project_root or resolve_repo_root()
-    space = space_dir(root) / "inbox"
-    migrate_from_checkout(root / ".fno" / "inbox", space)
-    return space.resolve()
-
-
 def project_log(name: str, project_root: Optional[Path] = None) -> Path:
     """Return ``<space>/<name>`` for a project log/state file.
 
@@ -1570,9 +1555,6 @@ def status_sinks_dir(project_root: Optional[Path] = None) -> Path:
     return project_log("status-sinks", project_root=project_root)
 
 
-_INBOX_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
 def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
     """Filesystem path of the configured Obsidian vault, or None.
 
@@ -1590,83 +1572,11 @@ def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
     return expanded if expanded.is_absolute() else Path.home() / expanded
 
 
-def inbox_agents_root() -> Path:
-    """Base directory holding per-project cross-project inbox folders.
-
-    Each project's inbox lives at ``<base>/<project>/inbox``. The base is:
-
-      1. Vault-derived ``<vault>/internal/agents`` when ``obsidian.enabled``
-         and ``obsidian.vault`` are set. For a ``myvault`` vault this resolves
-         to ``~/myvault/internal/agents`` - the path live cross-project
-         messaging has always used - so this default is behavior-preserving
-         for vault-based setups.
-      2. A neutral ``state_dir()/inbox/agents`` fallback otherwise, so a
-         fresh install with no Obsidian vault never points at a stranger's
-         ``~/myvault``.
-
-    ``config.paths.inbox_dir`` still overrides everything; callers that
-    resolve a concrete per-project path consult it first.
-    """
-    root = vault_root()
-    if root is not None:
-        return root / "internal" / "agents"
-    return state_dir() / "inbox" / "agents"
-
-
-def inbox_root_for(project_name: str) -> Path:
-    """Return the inbox directory for a SPECIFIC project (not the current one).
-
-    Unlike inbox_dir(), this explicitly substitutes the `{project}` template
-    with the given project_name rather than the sender's config.project.id.
-    Used by cross-project messaging: when sender fno writes to
-    recipient acme-web, the recipient's inbox path must use
-    "acme-web" as the project name regardless of which project the
-    sender's git repo lives in.
-
-    Strict validation: project_name must match ``[A-Za-z0-9][A-Za-z0-9._-]*``
-    and contain no path separators or ``..`` segments. paths.py is a shared
-    utility module - the validation belongs here at the entry point, not
-    only at one call site up the stack (e.g. inbox.store.inbox_dir_for).
-    This closes the path-traversal class first surfaced in PR #225
-    (feedback_project_name_path_traversal).
-
-    Resolution order:
-      1. config.paths.inbox_dir from settings.yaml (substitute {project},
-         then run the standard {vault}/$VAR/~ resolution).
-      2. Otherwise ``inbox_agents_root()/{project_name}/inbox`` - vault-derived
-         when Obsidian is enabled (``<vault>/internal/agents/...``), else a
-         neutral ``state_dir()/inbox/agents/...`` default.
-    """
-    if "/" in project_name or "\\" in project_name:
-        raise ValueError(f"project name must not contain path separators: {project_name!r}")
-    if ".." in project_name:
-        raise ValueError(f"project name must not contain '..': {project_name!r}")
-    if not _INBOX_PROJECT_NAME_RE.match(project_name):
-        raise ValueError(
-            f"project name must match {_INBOX_PROJECT_NAME_RE.pattern}: {project_name!r}"
-        )
-    settings = _settings()
-    override = settings.paths.inbox_dir
-    if override is not None:
-        # Substitute {project} explicitly with project_name BEFORE handing
-        # off to _resolve, so the standard {project}-from-config-or-cwd
-        # behavior in _resolve doesn't pick up the sender's name.
-        substituted = override.replace("{project}", project_name)
-        # Pass project_root=repo_root so any relative `paths.inbox_dir`
-        # (e.g. `.fno/inbox/{project}`) anchors at the git root
-        # instead of the caller's cwd. Without this, inbox commands run
-        # from subdirectories read/write distinct inbox locations and
-        # cross-project messages are lost (Codex review P2 on PR #267).
-        return _resolve(substituted, project_root=resolve_repo_root())
-    return (inbox_agents_root() / project_name / "inbox").resolve()
-
-
 def inbox_path(project_root: Optional[Path] = None) -> Path:
     """Return the path to the backlog *capture-tier* inbox markdown file.
 
-    Distinct from inbox_dir() above: that resolver owns the cross-project
-    messaging inbox; this one owns the markdown holding-pen of fu-* items
-    that sits below idea nodes. Do not conflate them.
+    This is the markdown holding-pen of fu-* items that sits below idea
+    nodes, not agent mail.
 
     Resolution order:
       1. ``config.paths.inbox_path`` explicit override (template-expanded).
