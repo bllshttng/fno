@@ -767,7 +767,10 @@ def pick_account(
     if if_armed:
         argv.append("--if-armed")
     # The pick probes each candidate's usage over the network.
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CommandUnavailable(f"fno-agents accounts pick failed: {exc}") from exc
     try:
         out = json.loads(proc.stdout)
         return PickVerdict(
