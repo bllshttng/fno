@@ -104,7 +104,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CURSOR_AGENT_MODEL` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:326 |
 | `FNO_CURSOR_AGENT_PROVIDER` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:321 |
 | `FNO_DEBUG` | py | unclear: cli/src/fno/agents/mux_spawn.py:1854 |
-| `FNO_DIE_WITH_PARENT` | py | Names the spawner pid; only a direct child honors it. The reader removes the var from its own environment when the flight arms, so descendants never inherit it. A value that does not name the reader's parent is ignored, unless that parent is already gone (ppid 1). When the named parent dies the holder releases its flight and exits 129; the `FNO_FLIGHT_BUDGET_S` budget trip keeps 124. Opt-in: unset means the holder never trips on parent death. |
 | `FNO_DISPATCH_ACCOUNT_ENV` | py | unclear: cli/src/fno/agents/cli.py:1905 |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/finalize.rs:849 |
 | `FNO_DRIVER_LIB_DIR` | rs | unclear: crates/fno-agents/src/loop_target.rs:616 |
@@ -114,7 +113,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_E2E_DROP_RESIZE_FRAME` | rs | E2E fault seam: with `FNO_E2E` set, drops the first n (default 1) keeper resize frames the server sends, holding panes at their pre-change sizes the way a full keeper frame queue or a pre-ResizeAck keeper build would; the 1s grid reconciliation pass then converges the diff. |
 | `FNO_E2E_PTY_OUTPUT_DELAY_MS` | rs | unclear: crates/fno/src/pty.rs:1873 |
 | `FNO_EVENTS_PATH` | py+rs | Redirects the agents journal (events.jsonl) to one file; the hermetic guard honors it on both legs. |
-| `FNO_FLIGHT_BUDGET_S` | py | Overrides the seconds a live single-flight holder tolerates before its watchdog releases the flight and exits 124; the default trips a minute before the 30-minute TTL. |
 | `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |
 | `FNO_GH_BUDGET_POINTS_PER_MIN` | rs | Overrides the fleet GitHub request budget cap in points per 60s window (default 450). |
 | `FNO_GH_BUDGET_TEST_ARMED` | rs | Re-arms the in-process budget consult inside a unit-test build, which disarms it by default so the suite's gh-named stubs never stamp the machine-wide ledger; production builds ignore it. |
