@@ -998,14 +998,10 @@ pub(crate) struct View {
     /// input line / counter. Client-local: opening never sends a message and
     /// never reserves a row (no Resize -> no reflow -> no dropped highlight).
     search: Option<SearchView>,
-    /// (v118) Keyboard scroll mode (prefix+PgUp), when active on the focused
-    /// pane. While true, stdin diverts to `scroll_mode_keys` and the bottom
-    /// row shows the `scroll · line N of M` readout. Client-local state; the
-    /// moves ride the shared server-side offset the wheel drives.
+    /// (v118) Keyboard scroll mode (prefix+PgUp): stdin diverts to
+    /// `scroll_mode_keys`; the moves ride the shared server-side offset.
     scroll_mode: bool,
-    /// Pending escape bytes in scroll mode, carried ACROSS reads so a split
-    /// PageUp sequence never leaks its tail into the pane (the `search_esc`
-    /// contract).
+    /// Pending escape bytes in scroll mode, the `search_esc` contract.
     scroll_esc: Vec<u8>,
     /// Pending escape bytes in search mode, carried ACROSS reads so a split
     /// arrow sequence can never half-close the search or leak its tail into the
