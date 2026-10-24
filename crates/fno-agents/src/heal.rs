@@ -2974,6 +2974,7 @@ fn run_one(a: &Args, pr: &str) -> (i32, Vec<String>) {
         force: false,
         // heal never rebases, so its push is always a plain fast-forward.
         lease: None,
+        remote_branch: None,
     };
     match crate::pr_push::guarded_push(&ctx, &head) {
         crate::pr_push::PushOutcome::Pushed { .. } => {

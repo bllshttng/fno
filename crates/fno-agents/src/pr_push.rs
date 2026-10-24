@@ -506,6 +506,83 @@ fn remote_only_refusal(remote_ref: &str, branch: &str, detail: &str) -> i32 {
     3
 }
 
+/// Whether an open PR has `name` as its head branch. A row whose `head.ref`
+/// names another branch is not a match, so a read that ignored the filter
+/// cannot bind the push to the wrong PR.
+fn open_pr_has_head(gh_bin: &str, cwd: &Path, name: &str) -> Result<bool, String> {
+    let raw = gh_api(
+        gh_bin,
+        cwd,
+        &format!(
+            "repos/{{owner}}/{{repo}}/pulls?state=open&head={{owner}}:{}",
+            crate::claims::encode_key(name)
+        ),
+        &[],
+    )?;
+    let prs: Value = serde_json::from_str(&raw).map_err(|e| format!("unparseable PR list: {e}"))?;
+    Ok(prs.as_array().is_some_and(|rows| {
+        rows.iter().any(|pr| {
+            pr.pointer("/head/ref")
+                .and_then(Value::as_str)
+                .is_none_or(|head| head == name)
+        })
+    }))
+}
+
+/// The origin branch a push of `branch` lands on. A worktree branch can
+/// track a PR head under another name; pushing `HEAD:<branch>` then makes a
+/// stray remote branch and leaves the PR head where it was. The upstream
+/// wins when an open PR has it as head. A protected upstream (a branch born
+/// off origin/main) or no upstream keeps the same name. Err carries the exit
+/// code and the refusal line: 3 when no open PR names either branch, 4 when
+/// the PR read fails.
+pub(crate) fn push_target(
+    git_bin: &str,
+    gh_bin: &str,
+    cwd: &Path,
+    branch: &str,
+) -> Result<String, (i32, String)> {
+    let upstream = run_labeled(
+        "pr-push",
+        git_bin,
+        &["rev-parse", "--symbolic-full-name", "@{u}"],
+        cwd,
+        READ_TIMEOUT,
+    )
+    .ok()
+    .filter(|(ok, _, _)| *ok)
+    .and_then(|(_, out, _)| {
+        out.trim()
+            .strip_prefix("refs/remotes/origin/")
+            .map(str::to_string)
+    });
+    let upstream = match upstream {
+        Some(up) if up != branch && !PROTECTED.contains(&up.as_str()) => up,
+        _ => return Ok(branch.to_string()),
+    };
+    for name in [upstream.as_str(), branch] {
+        match open_pr_has_head(gh_bin, cwd, name) {
+            Ok(true) => return Ok(name.to_string()),
+            Ok(false) => {}
+            Err(e) => {
+                return Err((
+                    4,
+                    format!("could not read the open PR for '{name}' ({e}); nothing pushed"),
+                ))
+            }
+        }
+    }
+    Err((
+        3,
+        format!(
+            "refusing: branch '{branch}' tracks origin/{upstream}, and no open PR has \
+             '{upstream}' or '{branch}' as head. Point the upstream at the PR head with \
+             git branch --set-upstream-to origin/<pr-head>, or run git branch \
+             --unset-upstream to push a new '{branch}' branch. Nothing pushed."
+        ),
+    ))
+}
+
 /// Everything a push needs. The `bin` seams exist for the same reason heal's
 /// do: push discipline is provable against stub executables instead of a
 /// real remote, without mutating the process PATH.
@@ -524,14 +601,24 @@ pub(crate) struct PushCtx {
     /// the push plain: heal's callers never rebase, and a first push has no
     /// same-name remote to replace.
     pub lease: Option<String>,
+    /// The origin branch the push lands on, from [`push_target`]. `None`
+    /// resolves it at push time (heal's caller).
+    pub remote_branch: Option<String>,
 }
 
 /// What a push decision ended as. `ci` names why the push went out:
 /// `settled` (no run in flight), `bypassed` (--force-ci-cancel), or
 /// `red-cancel` (a red head's stale run was cancelled first).
 pub(crate) enum PushOutcome {
-    Pushed { sha: String, ci: &'static str },
-    InFlight { check: String, job: Option<String> },
+    Pushed {
+        sha: String,
+        ci: &'static str,
+        remote_branch: String,
+    },
+    InFlight {
+        check: String,
+        job: Option<String>,
+    },
     Unreadable(String),
     PushFailed(String),
 }
@@ -607,20 +694,27 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
             Err(msg) => return PushOutcome::Unreadable(msg),
         }
     }
-    // Push exactly once, to the same-name remote branch, upstream or not.
+    let target = match &ctx.remote_branch {
+        Some(target) => target.clone(),
+        None => match push_target(&ctx.git_bin, &ctx.gh_bin, &ctx.cwd, &branch) {
+            Ok(target) => target,
+            Err((_, msg)) => return PushOutcome::PushFailed(msg),
+        },
+    };
+    // Push exactly once, to the resolved remote branch, upstream or not.
     // A bare `git push` cannot be used here: push.default=simple refuses
     // when the branch's upstream name differs from its own name (a branch
     // born off origin/main carries exactly that tracking), and the create
-    // path has no upstream at all. `--set-upstream origin HEAD:<branch>`
+    // path has no upstream at all. `--set-upstream origin HEAD:<target>`
     // covers both and pins correct tracking on the first push.
-    let refspec = format!("HEAD:{branch}");
+    let refspec = format!("HEAD:{target}");
     // The lease flag rides after the positionals: git's option parser
     // accepts it there, and the `push --set-upstream origin HEAD:<branch>`
     // prefix stays byte-identical for `a_first_push_sets_the_upstream`.
     let mut push_args: Vec<&str> = vec!["push", "--set-upstream", "origin", refspec.as_str()];
     let lease_flag;
     if let Some(sha) = &ctx.lease {
-        lease_flag = format!("--force-with-lease=refs/heads/{branch}:{sha}");
+        lease_flag = format!("--force-with-lease=refs/heads/{target}:{sha}");
         push_args.push(lease_flag.as_str());
     }
     let (ok, _, err) =
@@ -641,6 +735,7 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         .map(|(_, out, _)| out.trim().to_string())
         .unwrap_or_default(),
         ci,
+        remote_branch: target,
     }
 }
 
@@ -1239,6 +1334,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             stamps_dir: a.stamps_dir,
             force: false,
             lease: None,
+            remote_branch: None,
         };
         return match in_flight(&ctx, probe_branch, &head) {
             Ok(Some(flight)) => print_in_flight(
@@ -1291,6 +1387,16 @@ pub fn run_push(argv: &[String]) -> i32 {
         return 4;
     }
 
+    // (2b) The origin branch this push lands on, read after the fetch so a
+    // tracked PR head is current. Every remote read and the push use it.
+    let target = match push_target(&git, &a.gh_bin, &cwd, &branch) {
+        Ok(target) => target,
+        Err((code, msg)) => {
+            eprintln!("pr-push: {msg}");
+            return code;
+        }
+    };
+
     // (3) behind-before.
     let before = behind(&git, &cwd);
 
@@ -1303,7 +1409,7 @@ pub fn run_push(argv: &[String]) -> i32 {
     let integrate = if before == "0" {
         "none"
     } else {
-        match pr_merge_state(&a.gh_bin, &cwd, &branch).as_deref() {
+        match pr_merge_state(&a.gh_bin, &cwd, &target).as_deref() {
             Some("dirty") | Some("behind") => match integrate_origin_main(&git, &cwd) {
                 Ok(which) => which,
                 Err(rc) => return rc,
@@ -1368,14 +1474,14 @@ pub fn run_push(argv: &[String]) -> i32 {
         }
     }
 
-    // (6) The fetched remote head of the SAME-NAME branch, read BEFORE
+    // (6) The fetched remote head of the TARGET branch, read BEFORE
     // preflight: a doomed push must not first spend a rehearsal of up to an
     // hour. This is the head both the lease and the in-flight read pin to;
     // `@{u}` is wrong for both - a branch born off origin/main tracks main
     // until its first command push re-points the upstream, and main's checks
-    // would read as this branch's runs. A branch with no same-name remote
+    // would read as this branch's runs. A target with no remote branch
     // has an empty head: first push, nothing in flight, no lease.
-    let remote_ref = format!("origin/{branch}");
+    let remote_ref = format!("origin/{target}");
     let remote_head = run_labeled(
         "pr-push",
         &git,
@@ -1417,7 +1523,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             .unwrap_or_default();
             println!(
                 "pr-push: origin/main behind-before={before} behind-after={after} \
-                 integrate=none sha={sha} pushed=0 nothing to push"
+                 integrate=none sha={sha} ref=refs/heads/{target} pushed=0 nothing to push"
             );
             return 0;
         }
@@ -1451,7 +1557,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             .collect::<Vec<_>>()
             .join(" ");
         if !remote_only.is_empty() {
-            return remote_only_refusal(&remote_ref, &branch, &remote_only);
+            return remote_only_refusal(&remote_ref, &target, &remote_only);
         }
         // A merge commit has no patch to pair: --no-merges skips it, so a
         // merge whose tree holds hand-resolved content (a web-UI conflict
@@ -1481,7 +1587,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             };
             let parents: Vec<&str> = fields.collect();
             if parents.len() != 2 {
-                return remote_only_refusal(&remote_ref, &branch, &format!("merge {sha}"));
+                return remote_only_refusal(&remote_ref, &target, &format!("merge {sha}"));
             }
             let (ok, mout, merr) = read_remote(
                 &git,
@@ -1497,7 +1603,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             if !ok {
                 return remote_only_refusal(
                     &remote_ref,
-                    &branch,
+                    &target,
                     &format!("the hand-resolved merge {sha}"),
                 );
             }
@@ -1509,7 +1615,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             if tout.trim() != auto {
                 return remote_only_refusal(
                     &remote_ref,
-                    &branch,
+                    &target,
                     &format!("the hand-resolved merge {sha}"),
                 );
             }
@@ -1525,6 +1631,7 @@ pub fn run_push(argv: &[String]) -> i32 {
         stamps_dir: a.stamps_dir.clone(),
         force: a.force,
         lease,
+        remote_branch: Some(target.clone()),
     };
 
     // (7) Read the in-flight state before preflight: a doomed push must not
@@ -1582,10 +1689,14 @@ pub fn run_push(argv: &[String]) -> i32 {
     // when the branch was rebased.
     let outcome = guarded_push(&ctx, &remote_head);
     match outcome {
-        PushOutcome::Pushed { sha, ci } => {
+        PushOutcome::Pushed {
+            sha,
+            ci,
+            remote_branch,
+        } => {
             println!(
                 "pr-push: origin/main behind-before={before} behind-after={after} integrate={integrate} \
-                 preflight={} ci={ci} sha={sha} pushed=1",
+                 preflight={} ci={ci} sha={sha} ref=refs/heads/{remote_branch} pushed=1",
                 mode.label()
             );
             0
@@ -1628,6 +1739,7 @@ mod tests {
             stamps_dir: dir.path().to_path_buf(),
             force: true,
             lease: None,
+            remote_branch: None,
         };
         let failed = match guarded_push(&ctx, "") {
             PushOutcome::PushFailed(msg) => msg,
