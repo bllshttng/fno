@@ -79,10 +79,12 @@ fn parse_table() -> Result<Vec<Row>, String> {
             ("warn", _) => "nudge",
             ("inform", "notify") => "notify",
             ("inform", "emit") => "emit",
-            (action, deliver) => return Err(format!(
+            (action, deliver) => {
+                return Err(format!(
                 "event_rules.toml: {}: action {action} with deliver {deliver} has no Stop runtime",
                 rule.id
-            )),
+            ))
+            }
         };
         let [event] = rule.when.events.as_slice() else {
             return Err(format!(

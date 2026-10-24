@@ -552,14 +552,22 @@ fn stage_keywords(stage: &str) -> Vec<&'static str> {
 }
 
 /// Read the named file and the live laws, then answer with `f`. An
-/// unreadable file or store is an `ok: false` answer, never silence.
+/// unreadable file or store is an `ok: false` answer, never silence, and so
+/// is a store with damaged rows: a law in a damaged row reads as missing.
 fn rules_answer(path: &str, f: impl Fn(&str, &[Value]) -> Value) -> Value {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) => return json!({"ok": false, "error": format!("{path}: {e}")}),
     };
     match decision_index::default_store_live().map(decision_index::laws_of) {
-        Ok(index) => f(&text, &index.rows),
+        Ok(index) => {
+            let mut answer = f(&text, &index.rows);
+            answer["damaged"] = json!(index.damaged);
+            if index.damaged > 0 {
+                answer["ok"] = json!(false);
+            }
+            answer
+        }
         Err(e) => json!({"ok": false, "error": format!("the decision index: {e}")}),
     }
 }

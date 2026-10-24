@@ -371,17 +371,22 @@ pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(Strin
         .collect();
     let n = docs.len() as f64;
     let avg = (lens.iter().sum::<f64>() / n.max(1.0)).max(1.0);
-    let query: BTreeSet<String> = crate::law_match::tokens(query);
+    let idf: Vec<(String, f64)> = crate::law_match::tokens(query)
+        .into_iter()
+        .map(|q| {
+            let df = bags.iter().filter(|b| b.contains_key(&q)).count() as f64;
+            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+            (q, idf)
+        })
+        .collect();
     let mut scored: Vec<(String, f64)> = docs
         .iter()
         .zip(bags.iter().zip(&lens))
         .map(|((id, _), (bag, len))| {
-            let score = query
+            let score = idf
                 .iter()
-                .filter_map(|q| {
+                .filter_map(|(q, idf)| {
                     let tf = *bag.get(q)? as f64;
-                    let df = bags.iter().filter(|b| b.contains_key(q)).count() as f64;
-                    let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
                     Some(idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avg)))
                 })
                 .sum::<f64>();
@@ -445,11 +450,14 @@ pub fn check_answer(text: &str, laws: &[Value]) -> Value {
             count(&mut tier0_by_family, family);
         }
     }
+    let ruled: BTreeSet<&str> = file.rule.iter().filter_map(|r| r.law.as_deref()).collect();
     for d in &file.disposition {
         if !DISPOSITIONS.contains(&d.kind.as_str()) {
             invalid.push(json!({"id": d.law, "reason": format!("{}: unknown disposition {:?}", d.law, d.kind)}));
         }
-        if live.contains(d.law.as_str()) {
+        if ruled.contains(d.law.as_str()) {
+            invalid.push(json!({"id": d.law, "reason": format!("{}: a law carries a rule or a disposition, not both", d.law)}));
+        } else if live.contains(d.law.as_str()) {
             covered.insert(d.law.clone());
         } else {
             invalid.push(
@@ -540,7 +548,7 @@ pub fn measure_answer(
         let row = [
             ratio(hits(5), expected.len()),
             ratio(hits(10), expected.len()),
-            ratio(hits(10), ranked.len().min(10)),
+            ratio(hits(10), 10),
             ratio(picked_hits, expected.len()),
             ratio(picked_hits, picked.len()),
         ];
@@ -670,6 +678,13 @@ mod tests {
         assert_eq!(answer["laws_missing"], json!(["d-33333333"]));
         assert_eq!(answer["laws_annotated"], 2);
         assert_eq!(answer["tier0_by_family"]["naming"], 1);
+        let both = format!(
+            "{text}\n[[disposition]]\nlaw = \"d-11111111\"\nkind = \"grant\"\nreason = \"x\"\n"
+        );
+        assert!(check_answer(&both, &laws)["invalid"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not both"));
         let with_gone = format!(
             "{text}\n[[disposition]]\nlaw = \"d-99999999\"\nkind = \"retire\"\nreason = \"x\"\n"
         );
