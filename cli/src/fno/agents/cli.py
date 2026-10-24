@@ -92,9 +92,18 @@ def _spawn_guard_decision(
         })
     except CommandUnavailable as exc:
         # Fail closed: an unanswered guard must never read as dispatchable.
-        detail = f"spawn guard unavailable: {exc}; not dispatching"
+        import subprocess
+
+        timed_out = isinstance(exc.__cause__, subprocess.TimeoutExpired)
+        cause = (
+            "; the guard reads node claims on the shared primary when "
+            "store.remote_url is set, so a slow primary is the likely cause"
+            if timed_out else ""
+        )
+        detail = f"spawn guard unavailable: {exc}{cause}; not dispatching"
         line = (
-            f"node dispatch refused: node={node_id} verdict=error reason=error; "
+            f"node dispatch refused: node={node_id} verdict=error "
+            f"reason={'guard-timeout' if timed_out else 'error'}; "
             f"no worker launched detail={detail!r}"
         )
         return {"verdict": "error", "detail": detail, "refusal_line": line}, 3

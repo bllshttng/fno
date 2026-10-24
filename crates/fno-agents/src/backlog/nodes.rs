@@ -540,8 +540,15 @@ pub(crate) fn node_claims_by_id() -> Result<std::collections::HashMap<String, No
     // claims outage must not take the board read with it - the selection
     // and territory gates re-check liveness on their own and refuse closed
     // there (list_strict, never this map).
-    let mut claims = node_claims_from_db().unwrap_or_default();
-    match list_node_claims(Some("node:")) {
+    // With a primary both reads scan the same remote table, so the listing
+    // alone answers and the db read runs only when the listing failed.
+    let listed = list_node_claims(Some("node:"));
+    let mut claims = if primary && listed.is_ok() {
+        Default::default()
+    } else {
+        node_claims_from_db().unwrap_or_default()
+    };
+    match listed {
         Ok(records) => {
             let mut live: std::collections::HashMap<String, NodeClaim> = Default::default();
             for record in records {
