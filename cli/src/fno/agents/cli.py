@@ -85,11 +85,13 @@ def _spawn_guard_decision(
     from fno.rust_binary import CommandUnavailable, command_call
 
     try:
+        # With store.remote_url set each claim read is a round trip that may
+        # wait 15s on the primary, so the 30s local-resolver bound is too short.
         answer = command_call(["backlog", "advance", "--stdin"], {
             "op": "spawn-guard", "node_id": node_id, "holder": holder, "ttl": ttl,
             "no_reserve": no_reserve, "cwd": cwd, "handover_holder": handover_holder,
             "pid": os.getpid(),
-        })
+        }, timeout=90)
     except CommandUnavailable as exc:
         # Fail closed: an unanswered guard must never read as dispatchable.
         import subprocess
