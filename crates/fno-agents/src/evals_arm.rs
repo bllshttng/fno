@@ -158,17 +158,17 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
 /// The checkout whose `evals/bank` the scheduled run grades. `fno doctor
 /// evals run` resolves the bank from its cwd, and the launchd tick runs from
 /// `$HOME`, so the child must be handed a repo: `--repo` when the caller
-/// names one, else the cwd, else the first registered project that carries
-/// a bank. None means no bank anywhere, and the tick skips instead of
-/// launching a run that can only fail.
+/// names one, else the cwd or an ancestor, else the first registered
+/// project that carries a bank. None means no bank anywhere, and the tick
+/// skips instead of launching a run that can only fail.
 fn bank_repo(o: &Opts) -> Option<PathBuf> {
     let has_bank = |root: &PathBuf| root.join("evals").join("bank").is_dir();
     if let Some(repo) = &o.repo {
         return Some(repo.clone()).filter(has_bank);
     }
-    std::env::current_dir()
-        .ok()
-        .into_iter()
+    let cwd = std::env::current_dir().ok();
+    cwd.iter()
+        .flat_map(|c| c.ancestors().map(Path::to_path_buf))
         .chain(crate::backlog::settings::project_roots())
         .find(has_bank)
 }
