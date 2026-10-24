@@ -4053,6 +4053,9 @@ event_types:
           type: string
           enum: [no_claim, gone, held_by_other, stale, contended, write_failed, harness, not_async, codex_unroutable, emit_failed]
           description: "Optional. Set ONLY when the fire carried a watching intent and the idle was refused: why the watch lease or the idle posture refused. 'no_claim' = the manifest recorded no claim pair at init; 'gone'/'held_by_other'/'stale' are permanent for the session (arming another watcher cannot help); 'contended'/'write_failed' can succeed on retry; 'harness'/'not_async' = the idle posture itself refused before any lease read."
+        dur_ms:
+          type: integer
+          description: "Optional. Milliseconds from fire start to the watching idle decision, on the watching idle rows only: the lease-only idle's own cost, the number the watching-stop latency budget reads."
     consumers: [operator]
 
   - name: pr_watch_draft_flip
