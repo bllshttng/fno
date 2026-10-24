@@ -433,9 +433,6 @@ pub fn write_receipt(
     Ok(path)
 }
 
-/// `json.dumps(obj, indent=2, sort_keys=True)` in Rust: every object's keys
-/// sorted, two-space indent, `": "` separators, empty container as `[]`/`{}`
-/// (json.dumps prints no inner newline for empties).
 /// `json.dumps(sort_keys=True, indent=2)`: sorted keys, two-space indent,
 /// `": "` separators, empty container as `[]`/`{}` (json.dumps prints no
 /// inner newline for empties). ensure_ascii escaping throughout.
