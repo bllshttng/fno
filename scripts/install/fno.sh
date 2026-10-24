@@ -593,12 +593,10 @@ main() {
 	esac
 
 	detect_channel
-	resolve_source
 	# Name the channel before the slow provision: a nightly or rc run must say
 	# why it is not touching the stable PyPI package (AC7-UI's installer twin).
 	case "$FNO_CHANNEL" in
 		nightly) say "channel nightly (${FNO_DECLARED_VERSION}): installing this platform's wheel from the nightly GitHub release." ;;
-		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
 	esac
 
 	# Honor FNO_INSTALL_DIR by handing it to uv as the tool-bin location.
@@ -654,6 +652,14 @@ main() {
 			fi
 		fi
 	fi
+
+	# Resolve the source only once we know a provision is needed. A nightly
+	# source lookup hits the GitHub release, which can lack a wheel (not yet
+	# published, or a rate limit), and a no-op rerun must not die on it.
+	resolve_source
+	case "$FNO_CHANNEL" in
+		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
+	esac
 
 	ensure_uv
 
