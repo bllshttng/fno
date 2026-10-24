@@ -237,7 +237,10 @@ pub fn report(cwd: &Path, refresh: bool, now: f64) -> Result<(Vec<Record>, Vec<R
     let accounts = records::load(Some(cwd), cwd).map_err(|e| e.to_string())?;
     let quota = crate::backlog::quota_route::load_quota_config(cwd.to_str());
     let path = crate::provider_cap::runtime_state_path(cwd);
-    state::fold_legacy_files(&path, cwd, None);
+    // Only a refresh writes, so only a refresh folds; a plain read stays a read.
+    if refresh {
+        state::fold_legacy_files(&path, cwd, None);
+    }
     let rows = usage_probe::with_system(cwd, Some(cwd), &accounts.records, |ctx| {
         let probe = |r: &Record| {
             let (snap, reason) = usage_probe::probe_detail(ctx, r, now);
