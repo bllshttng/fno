@@ -101,7 +101,7 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
 
 /// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
 /// `fno-agents compaction approvals`. Any `--help` forwards to the Python
-/// group, which only lists the verbs; the runtime owns every other argument.
+/// group, which only lists the commands; the runtime owns every other argument.
 pub fn classify_inbox_approvals(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 3 || args[0].to_str()? != "inbox" || args[1].to_str()? != "approvals" {
         return None;
@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn approvals_verbs_run_native_and_help_forwards() {
+    fn approvals_commands_run_native_and_help_forwards() {
         assert_eq!(
             classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--pending", "-J"])),
             Some(mk(&["approvals", "ls", "--pending", "-J"]))

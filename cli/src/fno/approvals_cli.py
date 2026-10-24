@@ -1,7 +1,7 @@
 """CLI surface for approvals: fno inbox approvals ls | show | decide (forwarder leaves).
 
 All three commands answer natively (crates/fno-agents/src/approvals.rs); this
-front keeps the group so `--help` lists the verbs and `fno approvals` still
+front keeps the group so `--help` lists the commands and `fno approvals` still
 reaches the same native lane through the one Rust classify.
 """
 from __future__ import annotations
@@ -17,11 +17,11 @@ approvals_app = typer.Typer(
 _FORWARD = {"allow_extra_args": True, "ignore_unknown_options": True}
 
 
-def _forward_native(verb: str, ctx: typer.Context) -> None:
+def _forward_native(command: str, ctx: typer.Context) -> None:
     """Exec the Rust front with the same argv, propagating its exit code."""
     from fno.cli import _run_rust_front
 
-    _run_rust_front(["inbox", "approvals", verb, *ctx.args])
+    _run_rust_front(["inbox", "approvals", command, *ctx.args])
 
 
 @approvals_app.command("ls", context_settings=_FORWARD)
