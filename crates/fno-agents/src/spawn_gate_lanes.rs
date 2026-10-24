@@ -1565,7 +1565,13 @@ mod tests {
     fn an_idle_leads_seats_lend_until_a_lead_under_its_share_asks() {
         let dir = std::env::temp_dir().join(format!("fno-lanes-lend-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
+        // The first read migrates registry.json into a store directory, so
+        // each state gets its own registry path.
+        let fresh = |state: &str| {
+            let sub = dir.join(state);
+            std::fs::create_dir_all(&sub).unwrap();
+            sub.join("registry.json")
+        };
         let lead = |sid: &str| {
             format!(
                 r#"{{"name":"lead-{sid}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{sid}"}}"#
@@ -1585,6 +1591,7 @@ mod tests {
             rows
         };
 
+        let reg = fresh("5-1-1");
         write_registry(&reg, &rows(5, 1, 1));
         let a = share_reading(&reg, 16, Some("a"), None);
         assert_eq!(
@@ -1595,10 +1602,12 @@ mod tests {
         let a = share_reading(&reg, 15, Some("a"), None);
         assert_eq!(a.refuses(15), Some(true), "no spare seat at 15");
 
+        let reg = fresh("6-1-1");
         write_registry(&reg, &rows(6, 1, 1));
         let b = share_reading(&reg, 16, Some("b"), None);
         assert_eq!(b.refuses(16), Some(false), "B under its share admits");
 
+        let reg = fresh("6-2-1");
         write_registry(&reg, &rows(6, 2, 1));
         let a = share_reading(&reg, 16, Some("a"), None);
         assert_eq!(
@@ -1608,6 +1617,7 @@ mod tests {
         );
 
         // No teamed lead: nothing to lend, so the share of 1 still refuses.
+        let reg = fresh("solo");
         write_registry(&reg, &[spawned_row("w-solo", "s-0", "solo")]);
         let solo = share_reading(&reg, 15, Some("solo"), None);
         assert_eq!(solo.refuses(15), Some(true), "no team, no borrow");
