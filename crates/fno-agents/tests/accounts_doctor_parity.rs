@@ -1,14 +1,13 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.cli._doctor_findings
 //!
-//! Differential parity for `accounts::doctor`, the port of the
-//! `fno config accounts doctor` findings. Each
+//! Characterization for `accounts::doctor`, the port of the
+//! `fno config accounts doctor` findings, whose Python leg is gone. Each
 //! `tests/golden/accounts_doctor/*.json` case lays down a store tree, config
 //! dir files, Keychain items keyed by role and a profile endpoint keyed by
-//! bearer; `expect` holds the findings and the store tree the Python leg left,
-//! captured by `accounts_doctor_golden_driver.py` (the case table lives
-//! there). This test runs the same findings through a fake probe and asserts
-//! equal JSON.
+//! bearer; `expect` holds the findings and the store tree the Python leg left
+//! before deletion. This test runs the same findings through a fake probe and
+//! asserts equal JSON.
 
 use fno_agents::accounts::binding::{self, SlotProbe};
 use fno_agents::accounts::doctor;
