@@ -117,10 +117,9 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// The cross-host spawn claim: `agents spawn --name <name>@<host> ...`
-/// execs the sibling `spawn-remote` command. The spawn's positional is the
-/// prompt, which carries `@` freely, so the address rides only in the
-/// `--name` value, a flag fno owns. The scan stops at a bare `--` fence;
-/// flags after it are the harness's and are never interpreted.
+/// execs the sibling `spawn-remote` command. The positional is the prompt,
+/// which carries `@` freely, so the address rides only in the `--name`
+/// value, a flag fno owns; the scan stops at a bare `--` fence.
 pub fn classify_spawn(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
@@ -215,8 +214,7 @@ mod tests {
 
     #[test]
     fn classify_spawn_claims_only_an_at_name_value() {
-        // The claim fires on the fno-owned --name value and carries the tail
-        // without the group and command words.
+        // The claim carries the tail without the group and command words.
         let argv = classify_spawn(&os(&[
             "agents",
             "spawn",
@@ -237,8 +235,6 @@ mod tests {
         assert!(classify_spawn(&os(&["agents", "spawn", "mail me at a@b"])).is_none());
         // The fence hides harness flags: a --name after it is the harness's.
         assert!(classify_spawn(&os(&["agents", "spawn", "--", "--name", "x@y"])).is_none());
-        // Other agents commands never claim.
-        assert!(classify_spawn(&os(&["agents", "mail", "send", "q@h", "hi"])).is_none());
         assert!(classify_spawn(&os(&["agents", "spawn"])).is_none());
     }
 

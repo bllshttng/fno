@@ -899,17 +899,26 @@ pub fn run(args: &[String]) -> i32 {
 pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
 
 /// Exec an argv, inherit stdio, return the exit code (same-host forwards).
-fn run_pass_through(argv: &[OsString]) -> i32 {
+/// The relay family's shared same-host forward: exec an argv, inherit
+/// stdio, return the exit code. `mail_env` stamps the mail-only re-entry
+/// marker, which a spawn forward must not carry into its worker.
+pub fn exec_forward(argv: &[OsString], label: &str, mail_env: bool) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
-    cmd.env(LOCAL_FORWARD_ENV, "1");
+    if mail_env {
+        cmd.env(LOCAL_FORWARD_ENV, "1");
+    }
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents mail: local forward failed: {e}");
+            eprintln!("{label}: local forward failed: {e}");
             1
         }
     }
+}
+
+fn run_pass_through(argv: &[OsString]) -> i32 {
+    exec_forward(argv, "fno agents mail", true)
 }
 
 #[cfg(test)]

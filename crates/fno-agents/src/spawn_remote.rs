@@ -11,8 +11,7 @@
 //! store lane and no queue: a spawn is a command execution, not a payload;
 //! an unreachable host fails loudly and the caller retries.
 //!
-//! The sending machine's spawn gate admits the caller before the claim; the
-//! hop carries no session identity, so the remote leg runs as a shell. A
+//! The sending machine's spawn gate admits the caller before the claim. A
 //! `--cwd` or `--add-dir` value names a path ON THE TARGET HOST: the relay
 //! forwards byte-verbatim and the remote command validates.
 
@@ -71,9 +70,8 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
     };
     let host = normalize_host(&host);
     let same_host = host == normalize_host(local_host);
-    // Rebuild the words: the --name value loses its @host part, and the flag
-    // disappears entirely when the name is empty. Every other word keeps its
-    // order byte-verbatim.
+    // The --name value loses its @host part; the flag disappears when the
+    // name is empty. Every other word keeps its order byte-verbatim.
     let mut words: Vec<String> = vec!["agents".to_string(), "spawn".to_string()];
     for (i, word) in args.iter().enumerate() {
         if i == idx {
@@ -92,20 +90,6 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
     })
 }
 
-/// The same-host local forward. The argv carries no `@` name, so the front
-/// door forwards to the local command instead of re-entering this relay.
-fn pass_through(argv: &[OsString]) -> i32 {
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("fno agents spawn: local forward failed: {e}");
-            1
-        }
-    }
-}
-
 /// Binary-direct entry from `fno-agents spawn-remote <tail...>`, where the
 /// tail is the spawn argv after the command word.
 pub fn run(args: &[String]) -> i32 {
@@ -122,7 +106,8 @@ pub fn run(args: &[String]) -> i32 {
         for word in &plan.words {
             argv.push(OsString::from(word));
         }
-        return pass_through(&argv);
+        // No @ name rides, so the front door forwards, never re-enters.
+        return crate::mail_remote::exec_forward(&argv, "fno agents spawn", false);
     }
     let argv = crate::mail_remote::ssh_argv(&plan.host, &plan.words);
     let mut cmd = Command::new(&argv[0]);
