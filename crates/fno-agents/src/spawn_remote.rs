@@ -34,26 +34,35 @@ pub struct SpawnPlan {
 /// from the exec'd words, so the remote slug mint answers and no recursion
 /// survives the strip.
 pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String> {
-    let mut name_at: Option<(usize, String)> = None;
+    let mut name_at: Option<(usize, String, usize)> = None;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
-            "--name" => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or_else(|| "--name needs a value".to_string())?;
-                if value.contains('@') && name_at.is_some() {
-                    return Err("spawn takes one cross-host --name".to_string());
-                }
-                if value.contains('@') {
-                    name_at = Some((i, value.clone()));
-                }
-                i += 2;
+        let word = args[i].as_str();
+        // `taken` is the flag's argv span: the bare form is two slots
+        // (flag, value), the typer equals spelling is one.
+        let hit = |v: &str, taken: usize| -> Result<(), String> {
+            if v.contains('@') && name_at.is_some() {
+                return Err("spawn takes one cross-host --name".to_string());
             }
-            _ => i += 1,
+            if v.contains('@') {
+                name_at = Some((i, v.to_string(), taken));
+            }
+            Ok(())
+        };
+        if word == "--name" {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| "--name needs a value".to_string())?;
+            hit(&value, 2)?;
+            i += 2;
+        } else if let Some(v) = word.strip_prefix("--name=") {
+            hit(v, 1)?;
+            i += 1;
+        } else {
+            i += 1;
         }
     }
-    let Some((idx, value)) = name_at else {
+    let Some((idx, value, taken)) = name_at else {
         return Err("usage: fno agents spawn --name <name>@<host> [args...] <prompt>".to_string());
     };
     let (name, host) = if let Some(rest) = value.strip_prefix('@') {
@@ -75,7 +84,7 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
                 words.push("--name".to_string());
                 words.push(name.clone());
             }
-        } else if i != idx + 1 {
+        } else if !(taken == 2 && i == idx + 1) {
             words.push(word.clone());
         }
     }
@@ -184,6 +193,15 @@ mod tests {
         );
         assert!(plan.words.contains(&"q".to_string()));
         assert!(plan.words.contains(&"plain".to_string()));
+        // The typer equals spelling parses the same as the bare form.
+        let plan = spawn_plan(
+            &["--name=q@mbp3".to_string(), "hi".to_string()],
+            "imac2d2",
+        )
+        .expect("plans");
+        assert!(!plan.same_host);
+        assert!(plan.words.contains(&"q".to_string()));
+        assert!(!plan.words.iter().any(|w| w.contains('@')));
         // Each refusal shape: no @ name, a double @, empty host, bare @,
         // missing value.
         assert!(spawn_plan(&["hi".to_string()], "x").is_err());

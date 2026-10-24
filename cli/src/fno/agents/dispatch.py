@@ -2059,12 +2059,6 @@ def validate_spawn_name(name: str) -> None:
             f"({bad!r} would corrupt subprocess env injection)",
             exit_code=2,
         )
-    if "@" in name:
-        raise DispatchAskError(
-            f"agent name {name!r} must not contain '@': the cross-host spawn "
-            "spells it --name <name>@<host>",
-            exit_code=2,
-        )
 def restore_route_for_relaunch(entry: "AgentEntry") -> Optional[Mapping[str, str]]:
     """The route a relaunch of ``entry`` must come back on, or ``None``.
 

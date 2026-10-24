@@ -118,7 +118,8 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
 /// The cross-host spawn claim: `agents spawn --name <name>@<host> ...`
 /// execs the sibling `spawn-remote` command. The positional is the prompt,
 /// which carries `@` freely, so the address rides only in the `--name`
-/// value, a flag fno owns; the scan stops at a bare `--` fence.
+/// value (space or `=` spelling), a flag fno owns; the scan stops at a
+/// bare `--` fence.
 pub fn classify_spawn(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
@@ -134,6 +135,10 @@ pub fn classify_spawn(args: &[OsString]) -> Option<Vec<OsString>> {
         if word == "--name" {
             let value = args.get(i + 1).and_then(|a| a.to_str())?;
             if value.contains('@') {
+                return Some(args[2..].to_vec());
+            }
+        } else if let Some(v) = word.strip_prefix("--name=") {
+            if v.contains('@') {
                 return Some(args[2..].to_vec());
             }
         }
@@ -224,10 +229,14 @@ mod tests {
         ]))
         .expect("@host name is claimed");
         assert_eq!(argv, os(&["--name", "quinlan@mbp3", "fix", "it"]));
-        // `@host` alone mints the name remotely; it claims too.
+        // `@host` alone mints remotely, and the typer equals spelling
+        // claims the same: both relay.
         let argv = classify_spawn(&os(&["agents", "spawn", "--name", "@mbp3", "hi"]))
             .expect("@host-only name is claimed");
         assert_eq!(argv, os(&["--name", "@mbp3", "hi"]));
+        let argv = classify_spawn(&os(&["agents", "spawn", "--name=q@mbp3", "hi"]))
+            .expect("equals spelling is claimed");
+        assert_eq!(argv, os(&["--name=q@mbp3", "hi"]));
         // A plain name, a flag value with an @ that is not a --name value,
         // and an @ riding in the prompt positional all forward.
         assert!(classify_spawn(&os(&["agents", "spawn", "--name", "quinlan", "hi"])).is_none());
