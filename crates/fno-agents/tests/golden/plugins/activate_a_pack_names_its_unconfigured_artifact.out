@@ -1,0 +1,4 @@
+activated alpha 1.0.0 digest=90c203a5275d
+  wrote plugin/alpha/writer.json
+  wrote plugin/alpha/editor.json
+  unconfigured artifact 'style-guide' - add it under [context.artifacts] in .fno/config.toml or resolution will block (pack example: assets/style.md)

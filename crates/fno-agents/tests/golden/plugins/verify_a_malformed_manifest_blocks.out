@@ -1,0 +1,14 @@
+{
+  "conditions": [
+    {
+      "checked": true,
+      "detail": "malformed YAML in manifest <PACKS>/malformed/plugin.yaml: <ERROR>",
+      "family": "schema",
+      "name": "manifest-load",
+      "result": "blocked"
+    }
+  ],
+  "ok": false,
+  "pack_path": "<PACKS>/malformed",
+  "version": 1
+}
