@@ -2565,7 +2565,7 @@ class KeepGoingBlock(BaseModel):
     ``config.think_spawn.daily_cap`` (the same per-install per-day counter
     ``fno do think dispatch`` bumps) so think + target dispatches share ONE budget -
     a single ceiling on total autonomous fan-out per day. The classify + dispatch
-    logic lives in :mod:`fno.retro.keep_going`.
+    logic lives in the native retro keep-going engine (crates/fno-agents/src/retro/keep_going.rs).
     """
 
     model_config = ConfigDict(extra="ignore")

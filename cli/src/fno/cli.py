@@ -158,11 +158,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "retro": (
-        "fno.retro.cli:retro_app",
-        "Consume retro-triage triggers; file left-out work as backlog nodes.",
-        {"hidden": True},
-    ),
     "think": (
         "fno.provenance.cli:think_app",
         "Think inspection and explicit conversational dispatch.",
@@ -308,7 +303,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plugins": set(),
     "pr-watch": set(),
     "resume": set(),
-    "retro": set(),
     "roles": set(),
     "route": set(),
     "setup": set(),

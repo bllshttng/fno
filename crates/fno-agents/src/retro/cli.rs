@@ -674,7 +674,7 @@ fn cmd_run(rest: &[String]) -> i32 {
     let mut pm_failed = false;
     if args.node.is_none() && args.pr.is_none() {
         pm_failed = postmortem_pass(&node_root).0;
-        let summary = super::gate_escape::summarize(&node_root.join(".fno").join("events.jsonl"));
+        let summary = super::gate_escape::summarize(&crate::paths::events_path(&node_root));
         for line in super::gate_escape::render(&summary) {
             eprintln!("{line}");
         }
