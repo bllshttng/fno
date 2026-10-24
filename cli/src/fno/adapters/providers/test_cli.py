@@ -1738,8 +1738,9 @@ class TestListIdentityColumn:
         assert "!serves" not in readyrule_row
         assert "identity=readyrule" in readyrule_row
         # AC1-HP names doctor as the agreeing witness in the same store.
-        doctor = _invoke(["doctor", "-J"], cwd=tmp_path, home=tmp_path)
-        assert "slot-identity-drift" in doctor.output
+        from fno.adapters.providers.cli import _doctor_findings
+
+        assert "slot-identity-drift" in {f["problem"] for f in _doctor_findings()}
         # Once the stamp names readyrule, makers is simply off the slot: the
         # slot serving someone else is expected, so its cell is no fault.
         managed.stamp_active_slot("claude", "readyrule", root)
