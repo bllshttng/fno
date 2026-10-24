@@ -16,6 +16,7 @@
 //! exception: its failure is a stated line, so it never blanks the others.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
@@ -41,7 +42,9 @@ pub const LIVENESS_BUDGET: Duration = Duration::from_millis(500);
 const QUESTION_EVENT: &str = "operator_question";
 const QUESTION_CLOSED_EVENT: &str = "operator_question_closed";
 
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Every row type serializes in field order: that order is the `--json`
+/// contract.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Question {
     pub id: String,
     pub ts: String,
@@ -57,46 +60,16 @@ pub struct Question {
     pub live: Option<bool>,
 }
 
-impl Question {
-    pub fn as_json(&self, rank: usize) -> Value {
-        json!({
-            "id": self.id,
-            "ts": self.ts,
-            "question": self.question,
-            "session_id": self.session_id,
-            "cwd": self.cwd,
-            "node": self.node,
-            "asker": self.asker,
-            "ask": self.ask,
-            "options": self.options,
-            "blocks": self.blocks,
-            "subject": self.subject,
-            "live": self.live,
-            "rank": rank,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Capture {
+    #[serde(rename = "id")]
     pub fu_id: String,
     pub title: String,
     pub project: String,
     pub added_at: Option<String>,
 }
 
-impl Capture {
-    pub fn as_json(&self) -> Value {
-        json!({
-            "id": self.fu_id,
-            "title": self.title,
-            "project": self.project,
-            "added_at": self.added_at,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Verdict {
     pub node: String,
     pub report: String,
@@ -106,20 +79,7 @@ pub struct Verdict {
     pub mtime: Option<String>,
 }
 
-impl Verdict {
-    pub fn as_json(&self) -> Value {
-        json!({
-            "node": self.node,
-            "report": self.report,
-            "verdict": self.verdict,
-            "claim": self.claim,
-            "status": self.status,
-            "mtime": self.mtime,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LaneRow {
     pub text: String,
     pub line: usize,
@@ -171,15 +131,12 @@ impl Outstanding {
             .questions
             .iter()
             .enumerate()
-            .map(|(i, q)| q.as_json(i + 1))
+            .map(|(i, q)| {
+                let mut row = json!(q);
+                row["rank"] = json!(i + 1);
+                row
+            })
             .collect();
-        let captures: Vec<Value> = self.captures.iter().map(Capture::as_json).collect();
-        let lane: Vec<Value> = self
-            .lane
-            .iter()
-            .map(|i| json!({"text": i.text, "line": i.line}))
-            .collect();
-        let verdicts: Vec<Value> = self.verdicts.iter().map(Verdict::as_json).collect();
         let total = self.captures.len() as u64;
         json!({
             "roots": {
@@ -200,17 +157,17 @@ impl Outstanding {
                 "parsed_open_rows": self.capture_row_total,
                 "repeated_ids": self.capture_row_total.saturating_sub(total),
                 "by_project": Value::Object(by_project),
-                "items": captures,
+                "items": self.captures,
             },
             "lane": {
                 "total": self.lane.len(),
                 "parked": self.lane_parked,
-                "items": lane,
+                "items": self.lane,
             },
             "verdicts": {
                 "total": self.verdicts.len(),
                 "error": self.verdicts_error,
-                "items": verdicts,
+                "items": self.verdicts,
             },
         })
     }
@@ -764,7 +721,7 @@ fn one_line(text: &str, cap: usize) -> (String, bool) {
 }
 
 /// What the human block reads besides the fold.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RenderCtx {
     pub session_id: Option<String>,
     /// Only a session holding a role gets the lane's action line.
