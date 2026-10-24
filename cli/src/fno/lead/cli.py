@@ -877,7 +877,9 @@ def board_cmd(
 def escalate_cmd(
     scope_arg: str = typer.Argument("", help="Role scope for the verdict read."),
     stalled: str = typer.Option(
-        "", "--stalled", help="Comma-separated board rows nothing is clearing."
+        "",
+        "--stalled",
+        help="Comma-separated board rows nothing is clearing. Omit to escalate the verdict itself.",
     ),
     reason: str = typer.Option(
         "NoProgress", "--reason", "-R", help="The terminal reason that triggered this."
@@ -916,6 +918,11 @@ def escalate_cmd(
         summary, verdict_scope = payload.get("summary"), payload.get("scope")
     except Exception as exc:  # noqa: BLE001 - escalation never goes silent
         summary = f"unreadable {exc}"
+    # A degraded or unknown verdict has no stalled row, so the verdict is the
+    # reading. The crate mints this id too (`reading_verdict`) and refuses a
+    # converging one.
+    if not ids:
+        ids = ["reading:verdict:" + (verdict_scope or scope_arg).replace(",", "+")]
     presiding = resolve_presiding_lead(session_id)
     try:
         outcome, qid = escalate(
