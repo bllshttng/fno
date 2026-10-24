@@ -459,7 +459,7 @@ pub fn read_node_events(paths: &[std::path::PathBuf]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resume_receipt::model::load_receipt_bytes;
+    use crate::resume_receipt::model::{load_receipt_bytes, ReceiptError};
     use serde_json::json;
 
     fn ev(ts: &str, kind: &str, node: &str) -> Value {
@@ -617,8 +617,7 @@ mod tests {
 
     #[test]
     fn load_helpers_stay_reachable() {
-        // The model's load functions are re-exported through this module's
-        // use list; pin that the byte-parse answers for a corrupt body.
+        // The model's byte-parse answers for a corrupt body even from here.
         let err = load_receipt_bytes("{not json", "<t>").unwrap_err();
         assert!(matches!(err, ReceiptError::Malformed(m) if m.contains("not valid JSON")));
     }
