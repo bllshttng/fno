@@ -386,6 +386,12 @@ fn probe_artifact(artifact: &str) -> ArtifactVerdict {
         Some(pair) => pair,
         None => return ArtifactVerdict::Live(format!("unparseable artifact {artifact:?}")),
     };
+    // The write side records `file:<path>=>why` - the pointer names the
+    // evidence, never part of the path. Split it before every class check.
+    let rest = match rest.split_once("=>") {
+        Some((head, _)) => head,
+        None => rest,
+    };
     match class {
         "file" | "doc" => {
             if Path::new(rest).exists() {
