@@ -39,10 +39,10 @@ envelope:
     source:
       type: string
       # single unified envelope. 'active-backlog' added (real emitter at
-      # daemon.rs). 'cli' added: provider_window_closing declared it in its
-      # own sources: list, but it was never in this enum, so every real emit
-      # (adapters/providers/cli.py:538) silently failed inside its own
-      # broad try/except and no row ever landed. Per-agent worker sources
+      # daemon.rs). 'cli' is the source of the Python CLI's own emits. An
+      # event type that names a source missing from this enum fails every
+      # real emit, and a broad try/except around the emit hides that no
+      # row landed. Per-agent worker sources
       # (worker:<id>, stream-worker:<id>) are pattern sources, validated by
       # both the Python and bash validators via the `patterns` list below
       # (previously only the parity-script layer checked them).
