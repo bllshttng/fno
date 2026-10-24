@@ -40,7 +40,6 @@ def _invoke(isolated, runner: CliRunner, *args: str):
 
 def test_kind_lane_send_subject_rides_bus_row_and_receipt(isolated, runner, monkeypatch) -> None:
     from fno.bus.log import iter_messages
-    from fno.inbox.store import read_unread_threads
 
     monkeypatch.setenv("FNO_MAIL_SUBJECT", "schema freeze Friday")
     result = _invoke(
@@ -59,8 +58,6 @@ def test_kind_lane_send_subject_rides_bus_row_and_receipt(isolated, runner, monk
     # The kind lane's durable row carries the inbox kind, not "send".
     rows = [m for m in iter_messages() if m.subject == "schema freeze Friday"]
     assert rows and rows[-1].to == "acme-docs"
-    threads = read_unread_threads("acme-docs")
-    assert len(threads) == 1
 
     # No env, no subject: the receipt's subject reads null.
     monkeypatch.delenv("FNO_MAIL_SUBJECT")

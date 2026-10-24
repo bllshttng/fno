@@ -47,6 +47,14 @@ def _no_real_mail_inject(monkeypatch):
 # Helper: write a registry entry for "red" (live claude peer)
 # ---------------------------------------------------------------------------
 
+def _queued(to: str) -> list:
+    """Durable bus rows addressed to ``to``, one per message id."""
+    from fno.bus.log import iter_messages
+
+    rows = {m.id: m for m in iter_messages() if m.to == to and m.delivery != "hosted"}
+    return list(rows.values())
+
+
 def _register_claude_peer(
     name: str = "red", short_id: str = "abcd1234", mux: dict | None = None
 ) -> None:
@@ -128,8 +136,7 @@ def test_dispatch_send_happy_path_live_claude(
     assert f" · {result.msg_id}`" in header, f"missing envelope id: {header!r}"
 
     # Bus demotion: a hosted delivery is NOT also written to the durable store.
-    from fno.inbox.store import read_all_threads
-    assert read_all_threads("abcd1234") == [], "hosted delivery must not queue durable"
+    assert _queued("abcd1234") == [], "hosted delivery must not queue durable"
 
 
 def test_dispatch_send_self_proof_beats_same_bucket_registry_sibling(
@@ -455,7 +462,6 @@ def test_dispatch_send_refuses_same_name_identity_change_under_lock(
     from fno.agents import discover as discover_mod
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.registry import AgentEntry, ResolvedAgent, write_registry
-    from fno.inbox.store import read_all_threads
 
     original = AgentEntry(
         name="red",
@@ -509,7 +515,7 @@ def test_dispatch_send_refuses_same_name_identity_change_under_lock(
 
     assert calls["count"] == 2
     assert delivered == []
-    assert read_all_threads("abcd1234") == []
+    assert _queued("abcd1234") == []
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +570,6 @@ def test_dispatch_send_rejects_over_1mib_body(tmp_path: Path, monkeypatch) -> No
     _register_claude_peer()
 
     from fno.agents.dispatch import DispatchAskError, dispatch_send
-    from fno.inbox.store import read_all_threads
 
     body = "x" * (1024 * 1024 + 1)  # 1MiB + 1 byte
 
@@ -580,7 +585,7 @@ def test_dispatch_send_rejects_over_1mib_body(tmp_path: Path, monkeypatch) -> No
 
     assert exc_info.value.exit_code == 2
     # No envelope should have been written
-    threads = read_all_threads("abcd1234")
+    threads = _queued("abcd1234")
     assert len(threads) == 0, "No envelope should be written on body-size rejection"
 
 
@@ -609,7 +614,6 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(dispatch_mod, "_mail_inject_claude", _fail_inject)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -628,9 +632,9 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
     assert inject_attempt_count[0] == 1, f"Expected 1 inject attempt, got {inject_attempt_count[0]}"
 
     # Envelope is in the store (survived the failed inject)
-    threads = read_all_threads("abcd1234")
+    threads = _queued("abcd1234")
     assert len(threads) == 1, f"Envelope must survive inject failure; got {len(threads)} threads"
-    assert "important message" in threads[0].messages[0].body
+    assert "important message" in threads[0].body
 
 
 # ---------------------------------------------------------------------------
@@ -647,7 +651,6 @@ def test_dispatch_send_unknown_agent(tmp_path: Path, monkeypatch) -> None:
         UNKNOWN_AGENT_EXIT_CODE,
         dispatch_send,
     )
-    from fno.inbox.store import read_all_threads
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -667,7 +670,7 @@ def test_dispatch_send_unknown_agent(tmp_path: Path, monkeypatch) -> None:
     assert "blue" in msg
 
     # No envelope written
-    threads = read_all_threads("blue")
+    threads = _queued("blue")
     assert len(threads) == 0
 
 
@@ -862,7 +865,6 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     from fno.agents import dispatch as dispatch_mod
     from fno.agents import registry as registry_mod
     from fno.harness_identity import canonical_handle
-    from fno.inbox.store import read_all_threads
 
     registry_mod.write_registry([
         registry_mod.AgentEntry(
@@ -897,14 +899,14 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     )
 
     assert result.delivery == "durable"
-    original_threads = read_all_threads(canonical_handle(original_id))
+    original_threads = _queued(canonical_handle(original_id))
     assert len(original_threads) == 1
     # The durable body is the delivered shape (header line, then the body),
     # and it lives under the ORIGINAL session's thread, not the replacement.
-    assert original_threads[0].messages[0].body.endswith("\nsecret for A")
-    assert original_threads[0].messages[0].body.startswith("`@lead · ")
-    assert read_all_threads(canonical_handle(replacement_id)) == []
-    assert read_all_threads("victim") == []
+    assert original_threads[0].body.endswith("\nsecret for A")
+    assert original_threads[0].body.startswith("`@lead · ")
+    assert _queued(canonical_handle(replacement_id)) == []
+    assert _queued("victim") == []
     row = registry_mod.load_registry()[0]
     assert row.harness_session_id == replacement_id
     assert row.last_message_at is None
@@ -919,7 +921,6 @@ def test_dispatch_send_refuses_durable_fallback_without_full_session_id(
 
     from fno.agents import dispatch as dispatch_mod
     from fno.agents import registry as registry_mod
-    from fno.inbox.store import read_all_threads
 
     registry_mod.write_registry([
         registry_mod.AgentEntry(
@@ -944,8 +945,8 @@ def test_dispatch_send_refuses_durable_fallback_without_full_session_id(
         )
 
     assert exc.value.exit_code == 12
-    assert read_all_threads("legacy") == []
-    assert read_all_threads("transportA") == []
+    assert _queued("legacy") == []
+    assert _queued("transportA") == []
 
 
 # ---------------------------------------------------------------------------
@@ -1009,7 +1010,6 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
 
     from fno.agents import dispatch as dispatch_mod
     from fno.bus import log as bus_log
-    from fno.inbox.store import read_all_threads
     from fno.mail.cli import mail_app
 
     monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *_args, **_kwargs: False)
@@ -1032,7 +1032,7 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
     assert "delivered" not in result.stdout
     assert "queued (durable)" not in result.stdout
     assert not bus_log.bus_log_path().exists()
-    assert read_all_threads("abcd1234") == []
+    assert _queued("abcd1234") == []
 
 
 def test_dispatch_send_rejects_nonterminating_agent_lock_timeout(
@@ -1151,7 +1151,6 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
     from fno import paths
     from fno.agents.dispatch import dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.inbox.store import read_all_threads
 
     lock_path = _agent_lock_path("red", paths.agents_registry_path())
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1175,9 +1174,9 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
     assert result.delivery == "durable"
     assert result.reason == "agent-lock-timeout"
 
-    threads = read_all_threads("abcd1234")
+    threads = _queued("abcd1234")
     assert len(threads) == 1, f"the message must survive the timeout: {threads}"
-    assert "hello" in threads[0].messages[0].body
+    assert "hello" in threads[0].body
 
 
 def test_dispatch_send_control_refusal_clears_dispatch_context(
@@ -1401,7 +1400,6 @@ def test_dispatch_send_lock_timeout_sees_a_reclaim_committed_under_the_lock(
     from fno import paths
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.inbox.store import read_all_threads
 
     registry_path = paths.agents_registry_path()
     lock_path = _agent_lock_path("red", registry_path)
@@ -1432,8 +1430,8 @@ def test_dispatch_send_lock_timeout_sees_a_reclaim_committed_under_the_lock(
 
     # Delivery first: the defect was a message queued to the dead session, so
     # that is what must be asserted before any wording.
-    assert read_all_threads("abcd1234") == [], "queued to the former owner"
-    assert read_all_threads("99999999") == [], "queued to a guessed new owner"
+    assert _queued("abcd1234") == [], "queued to the former owner"
+    assert _queued("99999999") == [], "queued to a guessed new owner"
     assert exc_info.value.exit_code == 2
     assert "retry the send" in str(exc_info.value)
 
