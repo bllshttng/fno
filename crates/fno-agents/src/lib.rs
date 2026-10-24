@@ -1965,6 +1965,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "attention_delivery",
     "day_boundary",
     "legacy_journal_retired",
+    // The managed slot switch (accounts/use_switch.rs): `use`, `switch` and
+    // the daemon's slot cutover.
+    "account_switched",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

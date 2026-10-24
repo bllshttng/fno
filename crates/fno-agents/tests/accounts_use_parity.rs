@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.managed.switch
 //!
-//! Characterization for `accounts::use_verb`, the port of the Python
+//! Characterization for `accounts::use_switch`, the port of the Python
 //! `fno config accounts use` body and `managed.switch`, which are gone. Each
 //! `tests/golden/accounts_use/*.json` case lays down the global and project
 //! config, a store tree, Keychain items keyed by role, a codex auth.json, the
@@ -12,12 +12,12 @@
 //! and the outside calls in order. Scoped Keychain service names were replaced
 //! by their role at capture, because the name hashes the temp path. A `switch`
 //! case drives the JSON op recovery transports, against `managed.switch` with
-//! the defer policy. The cases run in one test because the verb reads HOME and
+//! the defer policy. The cases run in one test because the command reads HOME and
 //! the state dir from the environment.
 
 use fno_agents::accounts::binding;
 use fno_agents::accounts::store::{self, CodexRun, Host, ProcInfo, SecurityRun, StoreError};
-use fno_agents::accounts::use_verb::{self, Outside};
+use fno_agents::accounts::use_switch::{self, Outside};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::os::unix::fs::PermissionsExt;
@@ -278,13 +278,13 @@ fn run_case(case: &Value, tmp: &Path) -> Value {
         std::fs::set_permissions(&fno_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     }
     let got = if case["mode"] == "switch" {
-        use_verb::run_switch_with(&case["payload"], &repo, &world, &world)
+        use_switch::run_switch_with(&case["payload"], &repo, &world, &world)
     } else {
         let args: Vec<String> = case["args"].as_array().unwrap()[1..]
             .iter()
             .map(|a| a.as_str().unwrap().to_string())
             .collect();
-        use_verb::run_with(&args, &repo, &world, &world)
+        use_switch::run_with(&args, &repo, &world, &world)
     };
     std::fs::set_permissions(&fno_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut stderr = got.stderr.clone();

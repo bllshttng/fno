@@ -160,16 +160,16 @@ impl Drop for InFlight {
 /// The global `use` in process: the daemon never runs the interactive login
 /// a dead stored credential asks for.
 fn switch_slot(config_cwd: &Path, to: &str) -> bool {
-    let outside = crate::accounts::use_verb::SystemOutside {
+    let outside = crate::accounts::use_switch::SystemOutside {
         cwd: config_cwd.to_path_buf(),
         interactive: false,
     };
-    crate::accounts::use_verb::use_account(
+    crate::accounts::use_switch::use_account(
         to,
         "global",
         Some(config_cwd),
         config_cwd,
-        crate::accounts::use_verb::PinPolicy::Warn,
+        crate::accounts::use_switch::PinPolicy::Warn,
         &crate::accounts::store::SystemHost,
         &outside,
     )

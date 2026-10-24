@@ -131,7 +131,7 @@ impl Outside for SystemOutside {
         else {
             return;
         };
-        let emitter = crate::events::EventEmitter::new(&path, "agents");
+        let emitter = crate::events::EventEmitter::new(&path, "rust");
         if let Err(e) = emitter.emit_fields("account_switched", fields) {
             eprintln!(
                 "fno agents: warning: events.emit('account_switched') to {}: {e}",
@@ -555,7 +555,7 @@ fn print_switched(record: &Record, result: &SwitchResult, run: &mut Run) {
     }
 }
 
-/// The `use` verb: the checks, the switch for a managed record, then the
+/// The `use` command: the checks, the switch for a managed record, then the
 /// pointer write in `scope_word`'s own file. Every check runs before the
 /// switch, because a materialized slot cannot be taken back.
 pub fn use_account(

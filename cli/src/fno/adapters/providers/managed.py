@@ -14,7 +14,7 @@ materialized back into the slot on switch. Two guards make a switch safe:
      using that slot (the live-pty lesson: a slot a running CLI holds must
      not rotate). A pinned slot defers.
 
-The switch itself is Rust (crates/fno-agents/src/accounts/use_verb.rs). The
+The switch itself is Rust (crates/fno-agents/src/accounts/use_switch.rs). The
 store helpers here stay for the reconcile and store golden drivers.
 """
 from __future__ import annotations
