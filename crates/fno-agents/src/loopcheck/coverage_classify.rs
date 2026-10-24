@@ -313,7 +313,7 @@ pub fn classify_coverage_tiled(
     }
     if local_passes.iter().any(|lp| answered_fail(lp)) {
         let chain = in_scope_chain(events_text, head_branch, head_sha);
-        let blockers = disposition_blockers_on_chain(&chain);
+        let blockers = disposition_blockers_on_chain(&chain, &verify_invocation_ids(events_text));
         if !blockers_withhold(&blockers, rounds_exhausted) {
             for lp in local_passes.iter().filter(|lp| answered_fail(lp)) {
                 verdicts.push(local_attestation_verdict(
