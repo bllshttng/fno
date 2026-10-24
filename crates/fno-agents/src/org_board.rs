@@ -43,7 +43,7 @@ mod queues;
 pub(crate) mod scope;
 mod stranded;
 
-pub(crate) use queues::{not_read_status, unreadable_status};
+pub(crate) use queues::{not_read_status, unreadable_status, NODE_ID_BODY};
 
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};

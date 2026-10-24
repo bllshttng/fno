@@ -142,13 +142,6 @@ else
   pass "internal:notify" "ran in-package (rc=$RC, on its own merits)"
 fi
 
-# `fno cost --help` (above) proves the command is wired; also assert all three cost
-# MODULES ship + import on a bare install - _register is not
-# imported by the --help path, so this covers the AC2-EDGE sibling-travels case.
-run_capture "$BIN/python" -c "import fno.cost._session_cost, fno.cost._register"
-if [ "$RC" -eq 0 ]; then pass "internal:cost-modules" "import OK on bare install"
-else miss "internal:cost-modules" "rc=$RC: $(printf '%s' "$OUT" | head -1)"; fi
-
 # --- class 4: clone-only commands degrade loudly (US3, AC5-FR) ---
 check_degrade() {  # name + argv: must exit !=0 with the plugin message, no 127/traceback
   local name="$1"; shift

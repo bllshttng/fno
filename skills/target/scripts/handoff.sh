@@ -240,7 +240,7 @@ _parse_manifest_field() {
 # (unterminated frontmatter) or the field is absent from the body, we fall back
 # to a whole-file scan so the false-park modes stay fixed. Mirrors
 # the placement-independent, shape-validated reader in
-# cli/src/fno/cost/_register.py.
+# crates/fno-agents/src/ledger_register.rs.
 _parse_body_field() {
   local file="$1" key="$2" line raw close
   set +o pipefail
@@ -276,7 +276,7 @@ _parse_body_field() {
 # like `ab-old (deprecated)`, or any CR/quote residue - is echoed back as empty
 # so it routes to the genuine-missing park and is NEVER carried into the
 # node:<id> claim lookup or the ${NODE_ID:3:8} child-name slice. Mirrors the
-# _GRAPH_NODE_ID_SHAPE gate in cli/src/fno/cost/_register.py.
+# _GRAPH_NODE_ID_SHAPE gate in crates/fno-agents/src/ledger_register.rs.
 _validate_node_id() {
   local raw="$1"
   if printf '%s\n' "$raw" | grep -Eq '^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$'; then

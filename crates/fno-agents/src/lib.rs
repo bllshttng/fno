@@ -284,6 +284,7 @@ pub mod lead_verdict_inputs;
 pub mod lead_wake;
 pub mod lease_heartbeat;
 pub mod ledger_axes;
+pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
 pub mod list_row;

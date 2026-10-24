@@ -21,8 +21,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fno.cost._register import LEDGER_SESSION_UNRESOLVED
-from fno.plan._doc import FrontmatterError, ParseError, load_plan_text
+# The recorded value when a ledger row's sessions resolved to nothing; the
+# same sentinel the native ledger writer stamps (ledger_axes.rs). Formerly
+# fno.cost._register.LEDGER_SESSION_UNRESOLVED, read here since the cost
+# family ported to Rust.
+LEDGER_SESSION_UNRESOLVED = "unresolved:no-harness-session"
+
+from fno.plan._doc import FrontmatterError, ParseError, load_plan_text  # noqa: E402
 from fno.plan.brief import BriefParseError, parse_execution_strategy
 from fno.rust_binary import find_dev_binary, resolve_binary
 from fno.scoreboard.fold import (
