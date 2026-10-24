@@ -130,7 +130,8 @@ fno agents mail migrate-bus|nothing: the bus log is the mail record|d-64ef8f90
 fno agents mail rebuild-render|fno agents mail unread|d-64ef8f90
 
 # The per-message markdown inbox is gone: the bus delivers and the chats store
-# records, so the commands that read the markdown files went with it.
+# records. The four readers stay one release as stubs that print the
+# replacement and exit 1, then retire.
 fno agents mail list|fno agents mail unread [-n NAME] [--json]|the markdown inbox retirement
 fno agents mail drain|fno agents mail drain-self|the markdown inbox retirement
 fno agents mail status|fno agents mail unread|the markdown inbox retirement

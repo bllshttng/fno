@@ -156,6 +156,35 @@ def mail_reply_forward(ctx: typer.Context) -> None:
     _forward_mail(["reply", *ctx.args], label="fno agents mail reply")
 
 
+# The markdown inbox these read is gone. Each stub stays one release so a
+# caller learns the chats-store replacement, then the stubs retire.
+_RETIRED_READERS = {
+    "list": "fno agents mail unread [-n NAME] [--json]",
+    "drain": "fno agents mail drain-self",
+    "status": "fno agents mail unread",
+    "triage": "fno agents mail show <id>",
+}
+
+
+def _retired_reader(name: str, replacement: str) -> None:
+    @mail_app.command(
+        name,
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+        help=f"Retired: the markdown inbox is gone. Use {replacement}.",
+    )
+    def _stub(ctx: typer.Context) -> None:
+        typer.echo(
+            f"fno agents mail {name} is retired: the markdown inbox is gone. "
+            f"Use {replacement}.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
+for _name, _replacement in _RETIRED_READERS.items():
+    _retired_reader(_name, _replacement)
+
+
 @mail_app.command("pane-prepare", hidden=True)
 def cmd_pane_prepare_forward(
     session: Optional[str] = typer.Option(
