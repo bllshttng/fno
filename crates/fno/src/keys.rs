@@ -458,7 +458,7 @@ pub enum Event {
     /// layer interprets that, not here.
     OpenTeam,
     /// Open or close the Org board view in one press: the sideline's org
-    /// board (tree, table, graph), from any sideline view. From Org it
+    /// board (fleet, machines, pods, seats), from any sideline view. From Org it
     /// closes back to the agents list. The client's view layer interprets
     /// this, like OpenTeam.
     OpenOrgView,
@@ -1339,7 +1339,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "org-view",
             OpenOrgView,
             Global,
-            "org view (tree, table, graph)",
+            "org view (fleet, machines, pods, seats)",
         ),
         b(
             b'q',
