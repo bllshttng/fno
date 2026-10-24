@@ -40,7 +40,7 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
         let word = args[i].as_str();
         // `taken` is the flag's argv span: the bare form is two slots
         // (flag, value), the typer equals spelling is one.
-        let hit = |v: &str, taken: usize| -> Result<(), String> {
+        let mut hit = |v: &str, taken: usize| -> Result<(), String> {
             if v.contains('@') && name_at.is_some() {
                 return Err("spawn takes one cross-host --name".to_string());
             }
@@ -194,11 +194,8 @@ mod tests {
         assert!(plan.words.contains(&"q".to_string()));
         assert!(plan.words.contains(&"plain".to_string()));
         // The typer equals spelling parses the same as the bare form.
-        let plan = spawn_plan(
-            &["--name=q@mbp3".to_string(), "hi".to_string()],
-            "imac2d2",
-        )
-        .expect("plans");
+        let plan =
+            spawn_plan(&["--name=q@mbp3".to_string(), "hi".to_string()], "imac2d2").expect("plans");
         assert!(!plan.same_host);
         assert!(plan.words.contains(&"q".to_string()));
         assert!(!plan.words.iter().any(|w| w.contains('@')));
