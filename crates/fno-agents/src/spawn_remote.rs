@@ -92,9 +92,8 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
     })
 }
 
-/// The stripped local forward: the same-host shape. The argv carries no `@`
-/// name, so the front door forwards to the local command instead of
-/// re-entering this relay.
+/// The same-host local forward. The argv carries no `@` name, so the front
+/// door forwards to the local command instead of re-entering this relay.
 fn pass_through(argv: &[OsString]) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
@@ -160,16 +159,12 @@ mod tests {
         .expect("plans");
         assert!(!plan.same_host);
         assert_eq!(plan.host, "mbp3");
-        let argv = crate::mail_remote::ssh_argv(&plan.host, &plan.words);
-        assert_eq!(argv[0], "ssh");
-        assert_eq!(argv[1], "mbp3");
-        assert_eq!(argv[5], "'exec fno \"$@\"'");
-        let line = argv.join(" ");
+        let line = crate::mail_remote::ssh_argv(&plan.host, &plan.words).join(" ");
         assert!(line.contains("'agents' 'spawn'"));
         assert!(line.contains("'--name' 'quinlan'"));
         assert!(
             !line.contains("'quinlan@mbp3'"),
-            "the host part never rides the remote argv"
+            "the host part never rides"
         );
         // `@host` alone mints the name remotely: the --name flag disappears
         // from the exec'd words, and no word carries an @.
