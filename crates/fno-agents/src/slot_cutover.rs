@@ -527,11 +527,18 @@ mod tests {
         let providers = state_dir.join("providers");
         std::fs::create_dir_all(&providers).unwrap();
         std::fs::write(providers.join(".active-claude"), "readyrule\n").unwrap();
-        let stub = crate::write_exec_stub(
-            dir.path(),
-            "fno-stub.sh",
-            "#!/bin/sh\nif [ \"$3\" = usage ]; then printf '%s\\n' '{\"readyrule\":{\"probed_at\":1000,\"partial\":false,\"windows\":[{\"label\":\"session\",\"used_pct\":95.0,\"resets_at\":null}]},\"makers\":{\"probed_at\":1000,\"partial\":false,\"windows\":[{\"label\":\"session\",\"used_pct\":10.0,\"resets_at\":null}]}}'; exit 0; fi\nexit 1\n",
-        );
+        let _refresh = crate::route_capacity::RefreshStub::install(|| {
+            serde_json::json!({
+                "readyrule": {"probed_at": 1000, "partial": false, "windows": [
+                    {"label": "session", "used_pct": 95.0, "resets_at": null}]},
+                "makers": {"probed_at": 1000, "partial": false, "windows": [
+                    {"label": "session", "used_pct": 10.0, "resets_at": null}]},
+            })
+            .as_object()
+            .cloned()
+        });
+        // Every other fno command the tick runs fails, so the switch fails.
+        let stub = crate::write_exec_stub(dir.path(), "fno-stub.sh", "#!/bin/sh\nexit 1\n");
         let _env = SavedEnv::set(&config, &usage, &stub, &global_dir.join("settings.json"));
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
         super::tick_once(&home, dir.path(), 1000, |_, _| {});

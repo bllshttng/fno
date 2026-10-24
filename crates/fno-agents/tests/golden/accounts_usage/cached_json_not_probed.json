@@ -1,0 +1,25 @@
+{
+  "args": [
+    "--json"
+  ],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    }
+  ],
+  "probe": {},
+  "slot": null,
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "{\"readyrule\": {\"state\": \"unknown\", \"reason\": \"not-probed\"}, \"makers\": {\"state\": \"unknown\", \"reason\": \"not-probed\"}}\n"
+}

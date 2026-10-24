@@ -1,0 +1,23 @@
+{
+  "args": [],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[accounts]\nrecords = []\n"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    }
+  ],
+  "probe": {},
+  "slot": null,
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "No accounts configured.\n"
+}

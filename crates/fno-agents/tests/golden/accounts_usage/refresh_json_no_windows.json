@@ -1,0 +1,32 @@
+{
+  "args": [
+    "--refresh",
+    "--json"
+  ],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    }
+  ],
+  "probe": {
+    "readyrule": {
+      "windows": [],
+      "probed_at": 1789399970.0,
+      "source": "oauth-endpoint"
+    }
+  },
+  "slot": null,
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "{\"readyrule\": {\"state\": \"unknown\", \"reason\": \"no-windows\"}, \"makers\": {\"state\": \"unknown\", \"reason\": \"probe-failed\"}}\n"
+}

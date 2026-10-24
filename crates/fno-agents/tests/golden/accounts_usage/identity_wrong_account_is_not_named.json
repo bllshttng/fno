@@ -1,0 +1,45 @@
+{
+  "args": [
+    "--refresh"
+  ],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    },
+    {
+      "rel": ".fno/providers/readyrule/meta.json",
+      "text": "{\n  \"principal\": {\n    \"account_uuid\": \"acct-a\",\n    \"organization_uuid\": \"org-1\"\n  },\n  \"principal_at\": \"2026-10-23T23:58:07Z\"\n}"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    }
+  ],
+  "probe": {
+    "readyrule": {
+      "windows": [
+        [
+          "5h",
+          12.0,
+          1800000000.0
+        ]
+      ],
+      "probed_at": 1789399970.0,
+      "source": "oauth-endpoint"
+    }
+  },
+  "slot": {
+    "account_uuid": "acct-b",
+    "organization_uuid": "org-1",
+    "email": "other@example.com"
+  },
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "readyrule  [claude]  5h        12.0%  in 2944h26m\nreadyrule  [claude]  account_identity_mismatch: 'readyrule' is pinned, but {dir}/claude-alt serves other@example.com; sign that account in where it belongs, or pin the record whose identity it is\nmakers  [claude]  unknown (probe-failed)\n"
+}
