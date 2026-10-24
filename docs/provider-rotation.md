@@ -1256,9 +1256,7 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 - **Lane routing** (review panel `alternate` selection): a kind whose records
   are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit
   per-agent pins and role→provider config mappings are never overridden.
-- **Promise-time warning** (`fno config accounts required-bot-check`): read-only,
-  warns when a `config.review` required-bot's provider is `EXHAUSTED`, naming
-  the reset, so a coming review-gate wedge surfaces immediately.
+- **Promise-time warning** (`fno config accounts required-bot-check`): read-only. When every account behind a `config.review` required bot is `EXHAUSTED`, it warns. It names the reset, so a coming review-gate wedge surfaces at once.
 
 Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
 

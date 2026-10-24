@@ -20,6 +20,7 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "combos",
     "window",
     "benchmarks",
+    "required-bot-check",
 ];
 
 /// `fno config accounts <command> ...` for a native command: the args from the
@@ -67,6 +68,8 @@ mod tests {
         assert_eq!(rest, oss(&["combos", "list", "-J"]));
         let rest = classify(&oss(&["config", "accounts", "window", "-J"])).unwrap();
         assert_eq!(rest, oss(&["window", "-J"]));
+        let rest = classify(&oss(&["config", "accounts", "required-bot-check", "-J"])).unwrap();
+        assert_eq!(rest, oss(&["required-bot-check", "-J"]));
         let rest = classify(&oss(&["config", "accounts", "doctor", "-J"])).unwrap();
         assert_eq!(rest, oss(&["doctor", "-J"]));
         let rest = classify(&oss(&["config", "accounts", "list", "-J"])).unwrap();
