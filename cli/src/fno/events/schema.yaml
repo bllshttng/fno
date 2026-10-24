@@ -8642,7 +8642,7 @@ event_types:
       required: []
   - name: account_switched
     description: "The provider switch materialized one record's stored credential into the active slot. Rust-owned: fno-agents spawn-overlay accounts use and switch, and the daemon's slot cutover."
-    sources: [rust]
+    sources: [daemon]
     data:
       required: [provider, account_id]
   - name: node_undeferred

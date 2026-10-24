@@ -221,7 +221,7 @@ jobs:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.skill_bundles == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -229,18 +229,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The generator fail-closes when it cannot verify pack manifests through
+      # the in-tree fno-py (`uv run --project cli`); without uv the job dies
+      # refusing every pack, never green.
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "0.12.20"
       - name: Install PyYAML
         run: python3 -m pip install --quiet "pyyaml>=6"
-      # The generator fail-closes when it cannot verify pack manifests through
-      # the in-tree fno-py (`uv run --project cli`); without uv the job dies
-      # refusing every pack, never green.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      # Pack verify resolves each role through fno-agents (roles resolve is
+      # Rust-owned), so the in-tree fno-py needs a binary built from this
+      # checkout. Without one every pack refuses.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Build fno-agents
+        run: cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
       - name: Run the bundle freshness check
+        env:
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
         run: bash scripts/lint/check-skill-bundles-fresh.sh
 
   # Early, explicitly partial feedback. It runs BESIDE the canonical smoke job,

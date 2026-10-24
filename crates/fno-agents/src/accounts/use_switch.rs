@@ -131,7 +131,7 @@ impl Outside for SystemOutside {
         else {
             return;
         };
-        let emitter = crate::events::EventEmitter::new(&path, "rust");
+        let emitter = crate::events::EventEmitter::new(&path, "daemon");
         if let Err(e) = emitter.emit_fields("account_switched", fields) {
             eprintln!(
                 "fno agents: warning: events.emit('account_switched') to {}: {e}",
