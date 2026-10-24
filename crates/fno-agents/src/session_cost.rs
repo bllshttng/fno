@@ -8,6 +8,7 @@ use crate::census::ProcRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -740,12 +741,14 @@ fn parse_since(raw: &str) -> Option<f64> {
     if let Ok(nd) = chrono::NaiveDateTime::parse_from_str(stripped, "%Y-%m-%dT%H:%M:%S%.f") {
         return Some(nd.and_utc().timestamp_millis() as f64 / 1000.0);
     }
-    chrono::NaiveDate::parse_from_str(stripped, "%Y-%m-%d")
-        .ok()?
-        .and_hms_opt(0, 0, 0)?
-        .and_utc()
-        .timestamp_millis() as f64
-        / 1000.0
+    Some(
+        chrono::NaiveDate::parse_from_str(stripped, "%Y-%m-%d")
+            .ok()?
+            .and_hms_opt(0, 0, 0)?
+            .and_utc()
+            .timestamp_millis() as f64
+            / 1000.0,
+    )
 }
 
 fn parse_transcript(
@@ -795,7 +798,7 @@ fn parse_transcript(
             user_texts.push(text);
         }
     }
-    count_user_vs_mail(&mut metrics, user_texts);
+    count_user_vs_mail(&mut metrics, &user_texts);
     if skipped_lines > 0 {
         eprintln!(
             "Warning: {skipped_lines} malformed lines in {}",
@@ -1223,14 +1226,17 @@ fn print_by_provider() -> i32 {
         }
     }
     buckets.sort_by(|a, b| {
-        let key = |b: &(String, usize, f64)| {
-            if b.0 == "unattributed" {
-                "\u{ff}"
-            } else {
-                &b.0
-            }
+        let ka: &str = if a.0 == "unattributed" {
+            "\u{ff}"
+        } else {
+            &a.0
         };
-        key(a).cmp(key(b))
+        let kb: &str = if b.0 == "unattributed" {
+            "\u{ff}"
+        } else {
+            &b.0
+        };
+        ka.cmp(kb)
     });
     let count = entries.len();
     println!("{}", "─".repeat(60));
@@ -1243,7 +1249,7 @@ fn print_by_provider() -> i32 {
         } else {
             0.0
         };
-        println!("  {key:<35} {count:>7} ${cost:>9.2} ({pct:.0f}%)");
+        println!("  {key:<35} {count:>7} ${cost:>9.2} ({pct:.0}%)");
     }
     println!("  {}", "─".repeat(55));
     println!("  {:<35} {:>7} ${:>9.2}", "TOTAL", count, total_cost);
@@ -1406,7 +1412,7 @@ fn print_branch_breakdown(path: &Path, session_id: &str) {
             0.0
         };
         println!(
-            "  {branch_name:<45} {:>5} ${:>8.2} ({pct:.0f}%)",
+            "  {branch_name:<45} {:>5} ${:>8.2} ({pct:.0}%)",
             m.assistant_messages, m.cost_usd
         );
     }

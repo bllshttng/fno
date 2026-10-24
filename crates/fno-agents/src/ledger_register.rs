@@ -211,9 +211,9 @@ fn registry_axes(state: &Map<String, Value>) -> Map<String, Value> {
     };
     for row in &rows {
         let legacy_key = match row.get("harness").and_then(Value::as_str) {
-            "claude" => Some("claude_session_uuid"),
-            "codex" => Some("codex_session_id"),
-            "gemini" => Some("gemini_session_id"),
+            Some("claude") => Some("claude_session_uuid"),
+            Some("codex") => Some("codex_session_id"),
+            Some("gemini") => Some("gemini_session_id"),
             _ => None,
         };
         let sid = value_str(row, "harness_session_id")
@@ -818,6 +818,13 @@ fn load_ledger(tasks_path: &Path) -> Result<Value, String> {
                 Ok(backup_and_reset(tasks_path))
             }
         }
+        Ok(_) => {
+            eprintln!(
+                "Warning: {} unexpected shape, creating backup",
+                tasks_path.display()
+            );
+            Ok(backup_and_reset(tasks_path))
+        }
         Err(_) => {
             eprintln!("Warning: {} corrupt, creating backup", tasks_path.display());
             Ok(backup_and_reset(tasks_path))
@@ -1238,7 +1245,7 @@ mod tests {
         // An unknown status preserves the raw value.
         let mut state = minimal_state();
         state.insert("status".into(), json!("WEIRD"));
-        let entry = build_entry(status_dir.path(), &state, "tid", None, None);
+        let entry = build_entry(dir.path(), &state, "tid", None, None);
         assert_eq!(entry["status"], "unknown");
         assert_eq!(entry["raw_status"], "WEIRD");
     }
