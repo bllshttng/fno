@@ -354,7 +354,7 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     // The gate scopes its ladder to this repo's project and answers clear
     // when the graph names no project for the root, so the door walks the
     // same filter and one candidate set serves both readers.
-    let Some(project) = crate::backlog_ready::detect_project(&rows, &root.to_string_lossy()) else {
+    let Some(project) = crate::backlog_ready::detect_project(&rows, &root) else {
         hold_clear(&mut flow, pr);
         return flow;
     };
