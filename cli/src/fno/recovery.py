@@ -1015,17 +1015,16 @@ def _materialize_managed_switch(record_id: str, repo_root: Optional[str] = None)
     is stopped (so it no longer pins the slot) and BEFORE the replacement spawns.
     Loads the dead session's project-local config (``repo_root`` = its worktree)
     so a worktree-local ``auto_switch`` / record set is honored. Re-checks
-    ``auto_switch`` as defense-in-depth (the caller already gated it). A live-pin
-    defer by ANOTHER live session (``SwitchDeferred``) or any store/keychain
-    failure returns False - never redispatch onto un-switched (exhausted) creds.
-    Reuses ``managed.switch`` (capture-before-overwrite + live-pin gate) and its
-    ``account_switched`` emit from the manual `use` path (US2); no new switch
-    logic here.
+    ``auto_switch`` as defense-in-depth (the caller already gated it). The switch
+    is ``fno-agents spawn-overlay accounts switch``: the same Rust switch the
+    manual `use` runs, with a live pin by ANOTHER session deferring and no
+    routing pointer written. A deferral or any store/keychain failure exits
+    nonzero and returns False - never redispatch onto un-switched (exhausted)
+    creds.
     """
     try:
         from fno.adapters.providers.loader import load_providers
-        from fno.adapters.providers import managed
-        from fno.agents.events import emit as _emit
+        from fno.rust_binary import command_call
 
         config = load_providers(repo_root=Path(repo_root) if repo_root else None)
         if not getattr(config, "auto_switch", False):
@@ -1033,8 +1032,14 @@ def _materialize_managed_switch(record_id: str, repo_root: Optional[str] = None)
         record = config.by_id.get(record_id)
         if record is None or record.auth != "managed":
             return False
-        managed.switch(record, by_id=config.by_id, emit_fn=_emit, pin_policy="defer")
-        return True
+        # The switch waits up to 10s on its mutex, then makes several 10s vault
+        # round trips; a 30s kill would land mid-write on the shared slot.
+        receipt = command_call(
+            ["spawn-overlay", "accounts", "switch"],
+            {"id": record_id, "repo_root": repo_root},
+            timeout=120,
+        )
+        return receipt.get("active") == record_id
     except Exception:  # noqa: BLE001 - a materialize miss must never crash the sweep; degrade to nudge
         return False
 

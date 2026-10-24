@@ -1,0 +1,1 @@
+{"records": [{"id": "key", "harness": "claude", "auth": "api_key", "config_dir": null}, {"id": "cx", "harness": "codex", "auth": "managed", "config_dir": null}], "now": 1800000000.0, "expect": {"findings": [], "store": {}}}
