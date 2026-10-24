@@ -64,7 +64,7 @@ boolean is how a verifier starts reporting green for a condition it never
 evaluated. The command exits zero only when every condition is checked and
 passed, so an unverified pack is never mistaken for a verified one.
 
-The compatibility family goes beyond schema. It checks each role's `default_topology` against the closed four-word vocabulary, and it runs the role resolver against a maximally permissive synthetic work order. So a manifest that would fail resolution is caught before activation, not at execution. The vocabulary is a recorded dual with `fno.company.topology` until the company topology port deletes the Python leg.
+The compatibility family goes beyond schema. It checks each role's `default_topology` against the closed four-word vocabulary, and it runs the role resolver against a maximally permissive synthetic work order. So verify catches a manifest that cannot resolve before activation, not at execution. The vocabulary is a recorded dual with `fno.company.topology` until the company topology port deletes the Python leg.
 
 A corrupt manifest reports `blocked` naming the file and the parse error and
 never reports the pack as absent, mirroring the role registry's rule that a
@@ -120,7 +120,7 @@ The single shared seam is the closed topology vocabulary. The Rust verifier hold
 
 ## Function-agnostic invariant
 
-`crates/fno-agents/src/plugins/` contains no branch on a pack id or a function name. The first pack is discovered by path and validated by schema. `scripts/ci/check-plugins-function-agnostic.sh` scans the module's string literals in production code for the pack id and function names. It skips comment lines and test modules, and it fails loudly with file:line when one appears. The scan carries a positive control, so an empty result is never trusted.
+`crates/fno-agents/src/plugins/` contains no branch on a pack id or a function name. The first pack is discovered by path and validated by schema. `scripts/ci/check-plugins-function-agnostic.sh` scans the module's string literals in production code for the pack id and function names. It skips comment lines and test modules. When one appears, it fails loudly with file:line. The scan carries a positive control, so an empty result is never trusted.
 
 The broader module-layer map, pack-projection rule, and extraction threshold are recorded in [Company Boundaries](company-boundaries.md).
 
