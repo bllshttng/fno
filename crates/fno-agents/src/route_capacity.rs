@@ -12,7 +12,7 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::accounts::state::{parse_health, parse_usage};
-use crate::fallback_chain::{headroom, Verdict};
+use crate::fallback_chain::headroom;
 
 /// The harnesses the Python default named, plus every inventory row's harness.
 pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
@@ -172,15 +172,6 @@ fn rank(state: &str) -> i32 {
     }
 }
 
-fn word(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Exhausted => "exhausted",
-        Verdict::Low => "low",
-        Verdict::Ok => "ok",
-        _ => "unknown",
-    }
-}
-
 /// The capacity map the walk reads: `{harness: {state, window, accounts,
 /// sources, observed_at, evidence, resets}}`, byte-compatible with what the
 /// Python resolver produced and `route_slot::row_capacity` already reads.
@@ -224,7 +215,7 @@ pub(crate) fn capacity(
                         let snap = crate::accounts::state::parse_snapshot(row);
                         let hv = headroom(None, snap.as_ref(), now);
                         (
-                            word(hv.verdict).to_string(),
+                            hv.verdict.as_str().to_string(),
                             hv.source.to_string(),
                             hv.observed_at,
                             hv.resets_at,
@@ -247,7 +238,7 @@ pub(crate) fn capacity(
                     None => {
                         let hv = headroom(health.get(account), usage.get(account), now);
                         (
-                            word(hv.verdict).to_string(),
+                            hv.verdict.as_str().to_string(),
                             hv.source.to_string(),
                             hv.observed_at,
                             hv.resets_at,

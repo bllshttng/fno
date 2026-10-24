@@ -1968,6 +1968,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The managed slot switch (accounts/use_switch.rs): `use`, `switch` and
     // the daemon's slot cutover.
     "account_switched",
+    // The once-per-window close warning (accounts/window.rs).
+    "provider_window_closing",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the
