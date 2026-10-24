@@ -1304,7 +1304,11 @@ pub(crate) fn reply_parent(msg_id: &str) -> Option<ReplyParent> {
     Some(ReplyParent {
         thread: field("thread").unwrap_or_else(|| msg_id.to_string()),
         from: field("from").unwrap_or_default(),
-        kind: field("kind").unwrap_or_default(),
+        // An announce parent is a fleet broadcast: its reply keeps the
+        // caller's kind, or the reply would land on the channel.
+        kind: field("kind")
+            .filter(|k| matches!(k.as_str(), "send" | "fyi" | "heads-up" | "question"))
+            .unwrap_or_default(),
     })
 }
 
