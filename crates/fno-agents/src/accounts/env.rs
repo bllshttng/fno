@@ -253,12 +253,12 @@ pub struct Overlay {
 /// `account_env._login_present`: a credential specific to `dir`, on disk or
 /// in its scoped Keychain item. `.claude.json` is metadata a logged-out dir
 /// also holds, so it never counts.
-fn login_present(dir: &Path, src: &Sources<'_>) -> bool {
+pub(crate) fn login_present(dir: &Path, slot: &dyn SlotProbe) -> bool {
     if dir.join(".credentials.json").exists() {
         return true;
     }
     binding::keychain_service(dir)
-        .and_then(|service| src.slot.keychain(&service).ok().flatten())
+        .and_then(|service| slot.keychain(&service).ok().flatten())
         .is_some_and(|blob| !blob.trim().is_empty())
 }
 
@@ -321,7 +321,7 @@ pub fn overlay(
                 cfg.display()
             ));
         }
-        if !login_present(cfg, src) {
+        if !login_present(cfg, src.slot) {
             return Err(format!(
                 "account '{account_id}' config_dir {0} holds no claude login \
                  (run: CLAUDE_CONFIG_DIR={0} claude /login)",
@@ -347,7 +347,7 @@ pub fn overlay(
             // verify_staged checks only the symlink and its target, so a
             // logged-out staged dir would spawn an auth-prompt zombie.
             if let Some(staged) = env.get("CLAUDE_CONFIG_DIR") {
-                if !login_present(Path::new(staged), src) {
+                if !login_present(Path::new(staged), src.slot) {
                     return Err(format!(
                         "account '{account_id}' staged dir {staged} holds no claude login \
                          (run: CLAUDE_CONFIG_DIR={staged} claude /login)"

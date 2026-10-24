@@ -969,23 +969,7 @@ def doctor_providers(
     holds and a config_dir that holds no login;
     then checks each CLI's slot for taint. Usable as a check in a script.
     """
-    import json as _json
-
-    findings = _doctor_findings()
-
-    if json_output:
-        typer.echo(_json.dumps(findings))
-    elif not findings:
-        typer.echo("providers doctor: no problems found.")
-    else:
-        for f in findings:
-            typer.echo(f"{f['record']}: {f['problem']}: {f['detail']}")
-        typer.echo("")
-        n = len(findings)
-        typer.echo(f"{n} problem{'' if n == 1 else 's'} found.")
-
-    if findings:
-        raise typer.Exit(1)
+    _forward_accounts("doctor", *(["--json"] if json_output else []))
 
 
 # ---------------------------------------------------------------------------
