@@ -152,6 +152,39 @@ fn canonical_payload(receipt_value: &Value) -> String {
     compact_sorted_json(&sorted)
 }
 
+/// A JSON string literal with Python's ensure_ascii escaping: non-ASCII
+/// escapes to \\uXXXX (lowercase hex, surrogate pairs past the BMP), controls
+/// to the short forms, 0x20-0x7E verbatim - `json.dumps` byte parity.
+pub fn py_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        let cp = ch as u32;
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            _ if cp < 0x20 || cp > 0x7e => {
+                if cp > 0xFFFF {
+                    let v = cp - 0x10000;
+                    let hi = 0xD800 + (v >> 10);
+                    let lo = 0xDC00 + (v & 0x3FF);
+                    out.push_str(&format!("\\u{hi:04x}\\u{lo:04x}"));
+                } else {
+                    out.push_str(&format!("\\u{cp:04x}"));
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// serde_json with the preserve-order feature keeps insertion order, so the
 /// canonical form walks the object tree and sorts keys itself.
 fn compact_sorted_json(value: &Value) -> String {
@@ -164,7 +197,7 @@ fn compact_sorted_json(value: &Value) -> String {
                 .map(|k| {
                     format!(
                         "{}:{}",
-                        serde_json::to_string(k).unwrap_or_default(),
+                        py_json_string(k),
                         compact_sorted_json(&map[k.clone()])
                     )
                 })
@@ -175,6 +208,7 @@ fn compact_sorted_json(value: &Value) -> String {
             let body: Vec<String> = items.iter().map(compact_sorted_json).collect();
             format!("[{}]", body.join(","))
         }
+        Value::String(s) => py_json_string(s),
         other => other.to_string(),
     }
 }
@@ -191,7 +225,7 @@ fn req_str(d: &Map<String, Value>, key: &str, origin: &str) -> Result<String, Re
     match v.and_then(Value::as_str) {
         Some(s) if !s.trim().is_empty() => Ok(s.to_string()),
         _ => Err(ReceiptError::Malformed(format!(
-            "{origin}: missing/empty string field {key:?}"
+            "{origin}: missing/empty string field '{key}'"
         ))),
     }
 }
@@ -201,7 +235,7 @@ fn req_str(d: &Map<String, Value>, key: &str, origin: &str) -> Result<String, Re
 /// type system here.
 fn req_int(d: &Map<String, Value>, key: &str, origin: &str) -> Result<i64, ReceiptError> {
     d.get(key).and_then(Value::as_i64).ok_or_else(|| {
-        ReceiptError::Malformed(format!("{origin}: field {key:?} must be an integer"))
+        ReceiptError::Malformed(format!("{origin}: field '{key}' must be an integer"))
     })
 }
 
@@ -214,7 +248,7 @@ fn opt_obj(d: &Map<String, Value>, key: &str, origin: &str) -> Result<Option<Val
         None | Some(Value::Null) => Ok(None),
         Some(v) if v.is_object() => Ok(Some(v.clone())),
         Some(_) => Err(ReceiptError::Malformed(format!(
-            "{origin}: field {key:?} must be an object when present"
+            "{origin}: field '{key}' must be an object when present"
         ))),
     }
 }
@@ -229,7 +263,7 @@ fn str_tuple(d: &Map<String, Value>, key: &str, origin: &str) -> Result<Vec<Stri
                     Some(s) => out.push(s.to_string()),
                     None => {
                         return Err(ReceiptError::Malformed(format!(
-                            "{origin}: field {key:?} must be a list of strings"
+                            "{origin}: field '{key}' must be a list of strings"
                         )))
                     }
                 }
@@ -237,7 +271,7 @@ fn str_tuple(d: &Map<String, Value>, key: &str, origin: &str) -> Result<Vec<Stri
             Ok(out)
         }
         Some(_) => Err(ReceiptError::Malformed(format!(
-            "{origin}: field {key:?} must be a list of strings"
+            "{origin}: field '{key}' must be a list of strings"
         ))),
     }
 }
@@ -367,9 +401,12 @@ pub fn write_receipt(
     })?;
     let path = receipt_path(&receipt.identity, artifacts_dir);
     if path.exists() {
+        // The message embeds the deleted leg's dataclass repr: successors
+        // and tests match on it.
         return Err(ReceiptError::AlreadyExists(format!(
-            "resume receipt already exists for {}-{}-g{}-{}: {} (completed receipts are immutable)",
+            "resume receipt already exists for ReceiptIdentity(node='{}', session='{}', phase='{}', generation={}, candidate_sha='{}'): {} (completed receipts are immutable)",
             receipt.identity.node,
+            receipt.identity.session,
             receipt.identity.phase,
             receipt.identity.generation,
             receipt.identity.candidate_sha,
@@ -399,7 +436,10 @@ pub fn write_receipt(
 /// `json.dumps(obj, indent=2, sort_keys=True)` in Rust: every object's keys
 /// sorted, two-space indent, `": "` separators, empty container as `[]`/`{}`
 /// (json.dumps prints no inner newline for empties).
-fn pretty_sorted_json(value: &Value, depth: usize) -> String {
+/// `json.dumps(sort_keys=True, indent=2)`: sorted keys, two-space indent,
+/// `": "` separators, empty container as `[]`/`{}` (json.dumps prints no
+/// inner newline for empties). ensure_ascii escaping throughout.
+pub(super) fn pretty_sorted_json(value: &Value, depth: usize) -> String {
     let pad = |n: usize| " ".repeat(n * 2);
     match value {
         Value::Object(map) => {
@@ -414,7 +454,7 @@ fn pretty_sorted_json(value: &Value, depth: usize) -> String {
                     format!(
                         "{}{}: {}",
                         pad(depth + 1),
-                        serde_json::to_string(k).unwrap_or_default(),
+                        py_json_string(k),
                         pretty_sorted_json(&map[k.clone()], depth + 1)
                     )
                 })
@@ -431,16 +471,60 @@ fn pretty_sorted_json(value: &Value, depth: usize) -> String {
                 .collect();
             format!("[\n{}\n{}]", inner.join(",\n"), pad(depth))
         }
+        Value::String(s) => py_json_string(s),
         other => other.to_string(),
     }
+}
+
+/// Translate a serde_json parse error into the deleted leg's
+/// `json.JSONDecodeError` display shape: `<phrase>: line L column C (char N)`.
+/// Positions are byte/character indices, identical on ASCII; receipts are
+/// ASCII in practice. Unmapped categories keep serde's own words rather than
+/// inventing a shape nothing pins.
+pub(crate) fn py_parse_error(raw: &str, e: &serde_json::Error) -> String {
+    let text = e.to_string();
+    let Some((msg, rest)) = text.split_once(" at line ") else {
+        return text;
+    };
+    let Some((line_s, col_s)) = rest.split_once(" column ") else {
+        return text;
+    };
+    let (Ok(line), Ok(col)) = (line_s.parse::<usize>(), col_s.parse::<usize>()) else {
+        return text;
+    };
+    let phrase = match msg {
+        "expected value" | "EOF while parsing a value" => "Expecting value",
+        "expected `:`" => "Expecting ':' delimiter",
+        "expected `,` or `}`" | "expected `,` or `]`" => "Expecting ',' delimiter",
+        "key must be a string" => "Expecting property name enclosed in double quotes",
+        "trailing characters" => "Extra data",
+        "invalid escape" => "Invalid \\escape",
+        m if m.starts_with("control character (") => "Invalid control character at",
+        // Python prints a two-position shape here ("Unterminated string
+        // starting at: line .. column .. (char ..)"). One position is the
+        // honest approximation; nothing pins the second.
+        "EOF while parsing a string" => "Unterminated string starting at",
+        _ => return text,
+    };
+    let line_start: usize = raw
+        .lines()
+        .take(line.saturating_sub(1))
+        .map(|l| l.len() + 1)
+        .sum();
+    let ch = line_start + col;
+    format!("{phrase}: line {line} column {} (char {ch})", col + 1)
 }
 
 /// Parse + validate a receipt file's bytes. A MISSING file is NOT malformed
 /// (the caller distinguishes); a present-but-corrupt file IS malformed and
 /// must fail closed, never read as empty evidence.
 pub fn load_receipt_bytes(raw: &str, origin: &str) -> Result<ResumeReceipt, ReceiptError> {
-    let value: Value = serde_json::from_str(raw)
-        .map_err(|e| ReceiptError::Malformed(format!("{origin}: not valid JSON: {e}")))?;
+    let value: Value = serde_json::from_str(raw).map_err(|e| {
+        ReceiptError::Malformed(format!(
+            "{origin}: not valid JSON: {}",
+            py_parse_error(raw, &e)
+        ))
+    })?;
     receipt_from_value(&value, origin)
 }
 
@@ -458,15 +542,27 @@ pub fn receipt_from_value(value: &Value, origin: &str) -> Result<ResumeReceipt, 
             "{origin}: top-level is not an object"
         )));
     };
-    let Some(ident_raw) = d.get("identity").and_then(Value::as_object) else {
-        return Err(ReceiptError::Malformed(format!(
-            "{origin}: identity is missing or not an object"
-        )));
-    };
-    let Some(next_raw) = d.get("next_action").and_then(Value::as_object) else {
-        return Err(ReceiptError::Malformed(format!(
-            "{origin}: next_action is missing or not an object"
-        )));
+    // The deleted leg indexed d["identity"]/d["next_action"] directly: an
+    // ABSENT key raised KeyError (wrapped as `<origin>: 'identity'`), while a
+    // present-but-non-object value fell into the req_str chain and failed on
+    // its first field. Both shapes keep that exact precedence here.
+    let empty = Map::new();
+    let (ident_raw, next_raw) = {
+        let absent = |k: &str| ReceiptError::Malformed(format!("{origin}: '{k}'"));
+        if !d.contains_key("identity") {
+            return Err(absent("identity"));
+        }
+        if !d.contains_key("next_action") {
+            return Err(absent("next_action"));
+        }
+        (
+            d.get("identity")
+                .and_then(Value::as_object)
+                .unwrap_or(&empty),
+            d.get("next_action")
+                .and_then(Value::as_object)
+                .unwrap_or(&empty),
+        )
     };
     let identity = ReceiptIdentity {
         node: req_str(ident_raw, "node", origin)?,
