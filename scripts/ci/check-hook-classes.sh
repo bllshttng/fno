@@ -7,7 +7,9 @@
 # a row has no registration, or the manifest flags disagree with the class:
 # a Claude "async": true entry must be next-turn, "asyncRewake": true must be
 # rewake, a sync entry must be block or wait, and a block row must name its
-# fail mode. Codex has no async flag, so a Codex row is block or wait.
+# fail mode. An async entry carries FNO_HOOK_ASYNC=1 on its command, and a
+# sync one does not. Codex has no async path, so a Codex entry carries no
+# async flag.
 #
 # Run: bash scripts/ci/check-hook-classes.sh [--self-test]
 set -euo pipefail
@@ -60,6 +62,12 @@ for harness, path in (("claude", claude_path), ("codex", codex_path)):
                 if klass is None:
                     errors.append(f"{path}: {harness} {event} {script} has no row in {table_path}; declare its class")
                     continue
+                is_async = bool(hook.get("async") or hook.get("asyncRewake"))
+                if is_async and harness == "codex":
+                    errors.append(f"{path}: {event} {script} carries an async flag; Codex has no async path, so a Codex hook is block or wait")
+                    continue
+                if is_async != ("FNO_HOOK_ASYNC=1" in hook.get("command", "")):
+                    errors.append(f"{path}: {event} {script}: an async entry and FNO_HOOK_ASYNC=1 on its command go together (the async budget reads the env)")
                 if hook.get("asyncRewake"):
                     want = {"rewake"}
                 elif hook.get("async"):
@@ -83,7 +91,7 @@ PY
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d -t hook-classes-XXXXXX)"
   trap 'rm -rf "$tmp"' EXIT
-  printf '{"hooks":{"PostToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"bash \\"${R}/hooks/a.sh\\"","async":true}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"\\"${R}/hooks/g.sh\\""}]}]}}' > "$tmp/claude.json"
+  printf '{"hooks":{"PostToolUse":[{"matcher":"Skill","hooks":[{"type":"command","command":"FNO_HOOK_ASYNC=1 bash \\"${R}/hooks/a.sh\\"","async":true}]}],"PreToolUse":[{"hooks":[{"type":"command","command":"\\"${R}/hooks/g.sh\\""}]}]}}' > "$tmp/claude.json"
   printf '{"hooks":{}}' > "$tmp/codex.json"
   printf 'claude\tPostToolUse\ta.sh\tnext-turn\t-\nclaude\tPreToolUse\tg.sh\tblock\tclosed\n' > "$tmp/good.tsv"
   check "$tmp/good.tsv" "$tmp/claude.json" "$tmp/codex.json" >/dev/null \
@@ -99,6 +107,15 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf 'claude\tPostToolUse\ta.sh\tnext-turn\t-\nclaude\tPreToolUse\tg.sh\tblock\t-\n' > "$tmp/nofail.tsv"
   if check "$tmp/nofail.tsv" "$tmp/claude.json" "$tmp/codex.json" 2>/dev/null; then
     echo "check-hook-classes: self-test: a block row with no fail mode must refuse" >&2; exit 1
+  fi
+  sed 's/FNO_HOOK_ASYNC=1 //' "$tmp/claude.json" > "$tmp/noenv.json"
+  if check "$tmp/good.tsv" "$tmp/noenv.json" "$tmp/codex.json" 2>/dev/null; then
+    echo "check-hook-classes: self-test: an async entry without FNO_HOOK_ASYNC=1 must refuse" >&2; exit 1
+  fi
+  printf '{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"FNO_HOOK_ASYNC=1 \\"${R}/hooks/c.sh\\"","async":true}]}]}}' > "$tmp/codex-async.json"
+  printf 'claude\tPostToolUse\ta.sh\tnext-turn\t-\nclaude\tPreToolUse\tg.sh\tblock\tclosed\ncodex\tPostToolUse\tc.sh\tnext-turn\t-\n' > "$tmp/codex.tsv"
+  if check "$tmp/codex.tsv" "$tmp/claude.json" "$tmp/codex-async.json" 2>/dev/null; then
+    echo "check-hook-classes: self-test: a Codex entry with an async flag must refuse" >&2; exit 1
   fi
   echo "check-hook-classes: self-test ok"
   exit 0
