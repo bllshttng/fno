@@ -936,6 +936,11 @@ mod tests {
         let mut core = typing_client_core();
         let t0 = Instant::now();
         core.input_tail_at(7, b"a", t0);
+        // The row stamps typed_ms at wall-clock millisecond resolution and
+        // the store reads a byte-identical line as an idempotent retry, so
+        // two bursts inside one real millisecond collapse into one row. Let
+        // the wall clock move; the burst clock stays synthetic.
+        std::thread::sleep(Duration::from_millis(2));
         core.input_tail_at(
             7,
             b"b",
