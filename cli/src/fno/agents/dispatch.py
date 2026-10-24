@@ -2061,7 +2061,8 @@ def validate_spawn_name(name: str) -> None:
         )
     if "@" in name:
         raise DispatchAskError(
-            f"agent name {name!r} must not contain '@': the cross-host spawn spells it --name <name>@<host>",
+            f"agent name {name!r} must not contain '@': the cross-host spawn "
+            "spells it --name <name>@<host>",
             exit_code=2,
         )
 def restore_route_for_relaunch(entry: "AgentEntry") -> Optional[Mapping[str, str]]:

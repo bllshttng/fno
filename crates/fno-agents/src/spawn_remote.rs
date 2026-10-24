@@ -1,15 +1,11 @@
-//! `spawn-remote`: the cross-host spawn relay command.
-//!
-//! The front door claims `agents spawn --name <name>@<host>` and execs this
-//! command on the sibling `fno-agents` binary. One ssh hop runs the spawn ON
-//! the target host: the remote machine's own `fno agents spawn` answers with
-//! its own gate, registry, config, and lanes (thread, pane, headless, cloud),
-//! and its output and exit code pass through byte-verbatim. A target whose
-//! host normalizes to this machine strips the `@host` and execs the local
-//! front door with the stripped argv, so the local command's refusals stay
-//! the only voice for a spawn that never leaves this machine. There is no
-//! store lane and no queue: a spawn is a command execution, not a payload;
-//! an unreachable host fails loudly and the caller retries.
+//! `spawn-remote`: the cross-host spawn relay command. One ssh hop runs the
+//! spawn ON the target host: the remote machine's own `fno agents spawn`
+//! answers with its own gate, registry, config, and lanes, and its output
+//! and exit code pass through byte-verbatim. A target whose host normalizes
+//! to this machine strips the `@host` and execs the local front door, so
+//! the local command's refusals stay the only voice. No store lane and no
+//! queue: a spawn is a command execution, not a payload; an unreachable
+//! host fails loudly and the caller retries.
 //!
 //! The sending machine's spawn gate admits the caller before the claim. A
 //! `--cwd` or `--add-dir` value names a path ON THE TARGET HOST: the relay
