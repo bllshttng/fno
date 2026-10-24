@@ -69,7 +69,11 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// a superseded one and rides nowhere) and the check-in names
 /// each on its own line with its age. Per workflow with head rows the
 /// newest COMPLETED run decides - red on fail or cancel, naming the
-/// workflow and the sha it ran on; a workflow whose newest head run is
+/// workflow and the sha it ran on - except that a cancelled run whose
+/// workflow already has a newer in-flight run on the same sha reduces to
+/// that newer run's verdict, pending included: the rerun is the live one,
+/// and a red read on the cancelled predecessor holds every merge for the
+/// length of the rerun. A workflow whose newest head run is
 /// still in flight reads pending; no head rows at all reads pending, never
 /// green. The stale list reports within a bounded window (`now` minus
 /// [`STALE_REPORT_WINDOW_DAYS`]): the branch page is one un-paginated read,
@@ -165,6 +169,38 @@ fn main_ci_token_from_pages<'a>(
         .filter_map(|(_, _, completed)| *completed)
         .filter(|run| matches!(crate::pr_push::rest_bucket(run), "fail" | "cancel"))
         .max_by_key(|run| run.get("created_at").and_then(Value::as_str).unwrap_or(""));
+    // A cancelled red pick whose workflow already has a newer in-flight run
+    // on the same sha is a rerun victim, not a verdict: it reduces to that
+    // newer run's verdict, pending included. Only a cancel demotes - a
+    // failure stays red no matter what queues behind it - and the newer run
+    // must match the stable `workflow_id`, never the display `name` alone:
+    // two workflow files can share a name. Push rows ride the fold's
+    // `newest` pointer; a rerun from another trigger lands on the branch
+    // page outside the fold, so it is scanned directly.
+    let red_superseded_inflight = red
+        .filter(|run| crate::pr_push::rest_bucket(run) == "cancel")
+        .is_some_and(|run| {
+            let name = run.get("name").and_then(Value::as_str).unwrap_or("");
+            let Some(wf_id) = run.get("workflow_id").and_then(Value::as_u64) else {
+                return false;
+            };
+            let created = run.get("created_at").and_then(Value::as_str).unwrap_or("");
+            let newer_inflight = |other: &Value| {
+                other.get("status").and_then(Value::as_str) != Some("completed")
+                    && other.get("name").and_then(Value::as_str).unwrap_or("") == name
+                    && other.get("workflow_id").and_then(Value::as_u64) == Some(wf_id)
+                    && other
+                        .get("created_at")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        > created
+            };
+            head.iter().any(|(_, newest, _)| newer_inflight(newest))
+                || on_main
+                    .iter()
+                    .any(|other| at_head(other) && !is_push(other) && newer_inflight(other))
+        });
+    let red = if red_superseded_inflight { None } else { red };
     let mut token = match red {
         Some(run) => json!({
             "verdict": "red",
@@ -172,9 +208,10 @@ fn main_ci_token_from_pages<'a>(
             "sha": run.get("head_sha").and_then(Value::as_str).unwrap_or("unknown"),
         }),
         None => {
-            let inflight = head.iter().any(|(_, newest, _)| {
-                newest.get("status").and_then(Value::as_str) != Some("completed")
-            });
+            let inflight = red_superseded_inflight
+                || head.iter().any(|(_, newest, _)| {
+                    newest.get("status").and_then(Value::as_str) != Some("completed")
+                });
             json!({ "verdict": if head.is_empty() || inflight { "pending" } else { "green" } })
         }
     };
@@ -606,6 +643,138 @@ mod tests {
         ];
         assert_eq!(
             token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
+        );
+    }
+
+    /// The pending-rerun case the completed-supersede pass never covered:
+    /// cli-ci's newest completed run at the head is a cancel and its newer
+    /// rerun on the same sha is still queued. The verdict rides the rerun -
+    /// pending - never red on the cancelled predecessor.
+    #[test]
+    fn a_cancelled_run_with_a_pending_rerun_on_the_same_sha_reads_pending() {
+        let at_sha = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-10-18T13:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "queued",
+                "",
+                "2026-10-18T14:00:00Z",
+                "push",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &[]),
+            serde_json::json!({"verdict": "pending"})
+        );
+    }
+
+    /// A rerun from another trigger (a re-dispatch still in flight) demotes
+    /// the cancel too: the workflow has a newer live run at the head, so the
+    /// verdict is that run's pending, not the predecessor's red.
+    #[test]
+    fn a_pending_rerun_from_another_trigger_also_reads_pending() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-10-18T13:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-10-18T13:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "in_progress",
+                "",
+                "2026-10-18T14:00:00Z",
+                "workflow_dispatch",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "pending"})
+        );
+    }
+
+    /// A queued run of a DIFFERENT workflow sharing the display name never
+    /// answers for the cancelled one: the verdict stays red on the cancel,
+    /// the same `workflow_id` discrimination the completed-supersede pass
+    /// applies.
+    #[test]
+    fn a_pending_rerun_of_a_different_workflow_sharing_the_name_demotes_nothing() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-10-18T13:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "queued",
+            "",
+            "2026-10-18T14:00:00Z",
+            "push",
+            99,
+        )];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
+        );
+    }
+
+    /// A failure is a verdict, never a rerun victim: a failed run stays red
+    /// even while a newer run queues behind it. Only a cancel demotes.
+    #[test]
+    fn a_failed_run_stays_red_even_with_a_newer_pending_run() {
+        let at_sha = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-18T13:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "queued",
+                "",
+                "2026-10-18T14:00:00Z",
+                "push",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &[]),
             serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
         );
     }
