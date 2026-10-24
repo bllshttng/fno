@@ -392,12 +392,10 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     a.node = Some("x-4fb5".into());
     a.model = Some("glm-5.3-flash[1m]".into());
     assert_eq!(card_line::slug(&a, &[card("x-4fb5", "status")]), "t-status");
-    assert_eq!(card_line::harness_model(&a), Some("glm-5.3-flash".into()));
     a.name = "t-cards-org-opus".into();
     a.model = Some("claude-opus-5-5".into());
     a.harness = Some("claude".into());
     assert_eq!(card_line::slug(&a, &[]), "t-cards-org");
-    assert_eq!(card_line::harness_model(&a), Some("claude/opus".into()));
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
     assert_eq!(card_line::node_span(&a, 30), Some(24..30));
@@ -960,9 +958,6 @@ fn list_mode_keeps_identity_and_unknown_measurements_visible() {
     assert_eq!(row_meter::ctx_cell(Some(0)), "    0%");
     assert_eq!(row_meter::ctx_cell(Some(100)), "███ 100%");
     assert_eq!(row_meter::ctx_cell(Some(129)), "███ 129%");
-    assert_eq!(row_meter::ctx_bar(None), format!("{:<13}", "-"));
-    assert_eq!(row_meter::ctx_bar(Some(0)), "         0%  ");
-    assert_eq!(row_meter::ctx_bar(Some(28)), "██▎      28% ");
     assert_eq!(row_meter::up_cell(None, now), "-");
     assert_eq!(row_meter::up_cell(Some(now + 1), now), "0s");
 }

@@ -393,16 +393,6 @@ pub(super) fn model_label(a: &AgentRow) -> Option<String> {
         .filter(|m| !m.is_empty())
 }
 
-/// The board's model badge includes the harness; card line 2 keeps just the
-/// model label so the lead name or role remains visible.
-pub(super) fn harness_model(a: &AgentRow) -> Option<String> {
-    match (a.harness.as_deref(), model_label(a)) {
-        (Some(h), Some(m)) => Some(format!("{h}/{m}")),
-        (Some(h), None) => Some(h.to_string()),
-        (None, model) => model,
-    }
-}
-
 /// The card's name: the worker name without the node and model the card
 /// now shows in their own columns. `t-<node>-opus` keeps only `t`, so it
 /// reads `t-<node slug>` when the board knows the node; with no slug, it
