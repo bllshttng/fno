@@ -320,7 +320,8 @@ enum Role {
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
-    PluginsCli(Vec<OsString>),
+    /// The bool is the moved spelling, which prints its one stderr note.
+    PluginsCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -541,11 +542,11 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
 }
 
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
-fn classify_plugins(args: &[OsString]) -> Option<Vec<OsString>> {
+fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     if args.first()?.to_str()? == "plugins" {
-        return Some(args[1..].to_vec());
+        return Some((args[1..].to_vec(), true));
     }
-    classify_group_command(args, "config", "plugins")
+    classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
 }
 
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
@@ -798,8 +799,8 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
-    if let Some(rest) = classify_plugins(args) {
-        return Role::PluginsCli(rest);
+    if let Some((rest, moved)) = classify_plugins(args) {
+        return Role::PluginsCli(rest, moved);
     }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
@@ -1235,11 +1236,16 @@ fn main() {
             &["spawn-overlay", "accounts"],
             &rest,
         )),
-        Role::PluginsCli(rest) => std::process::exit(fno_agents_exec(
-            "fno config plugins",
-            &["spawn-overlay", "plugins"],
-            &rest,
-        )),
+        Role::PluginsCli(rest, moved) => {
+            if moved {
+                eprintln!("fno plugins is now fno config plugins");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config plugins",
+                &["spawn-overlay", "plugins"],
+                &rest,
+            ))
+        }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
@@ -1893,15 +1899,15 @@ mod tests {
         // The function-pack group is native whole, under both spellings.
         assert_eq!(
             decide_role(&os(&["config", "plugins", "-J", "ls"]), false),
-            Role::PluginsCli(os(&["-J", "ls"]))
+            Role::PluginsCli(os(&["-J", "ls"]), false)
         );
         assert_eq!(
             decide_role(&os(&["plugins", "verify", "p"]), false),
-            Role::PluginsCli(os(&["verify", "p"]))
+            Role::PluginsCli(os(&["verify", "p"]), true)
         );
         assert_ne!(
             decide_role(&os(&["config", "plugin", "claude"]), false),
-            Role::PluginsCli(os(&["claude"]))
+            Role::PluginsCli(os(&["claude"]), false)
         );
     }
 
