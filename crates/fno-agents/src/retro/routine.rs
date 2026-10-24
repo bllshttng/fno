@@ -256,7 +256,7 @@ pub fn triage_postmortems(
             .split_once(':')
             .map_or("", |(_, f)| f)
             .to_string();
-        let mut do_stamp = |report: &mut PostmortemReport| match stamp(&dir.join(&file)) {
+        let do_stamp = |report: &mut PostmortemReport| match stamp(&dir.join(&file)) {
             Ok(()) => report.stamped += 1,
             Err(e) => report
                 .warnings
