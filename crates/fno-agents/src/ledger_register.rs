@@ -908,7 +908,7 @@ fn append_locked(tasks_path: &Path, entry: &Value) -> Result<(), String> {
     // for the same node - the backstop has no fno_id, so the scalar dedup
     // above cannot catch it and this drop is the only guard against a
     // double-counted cost rollup.
-    if let Some(node) = scalar_id_of_graph_node(entry) {
+    if let Some(node) = value_str(entry, "graph_node_id") {
         entries.retain(|e| !drop_backstop_row(e, &node));
     }
     entries.push(entry.clone());
@@ -916,14 +916,6 @@ fn append_locked(tasks_path: &Path, entry: &Value) -> Result<(), String> {
     crate::ledger_axes::write_ledger(tasks_path, &data)?;
     eprintln!("Appended entry #{count} to {}", tasks_path.display());
     Ok(())
-}
-
-fn scalar_id_of_graph_node(entry: &Value) -> Option<String> {
-    entry
-        .get("graph_node_id")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 /// Replace `entries[index]` with the promoted row: existing fields kept, the
@@ -949,7 +941,7 @@ fn promote_entry(entries: &mut Vec<Value>, index: usize, entry: &Value) {
             }
         }
     }
-    let promoted_node = scalar_id_of_graph_node(&promoted);
+    let promoted_node = value_str(&promoted, "graph_node_id");
     if !aliases.is_empty() {
         if let Some(dst) = promoted.as_object_mut() {
             dst.insert("sessions".into(), Value::Array(aliases));
