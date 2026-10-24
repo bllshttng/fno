@@ -53,7 +53,9 @@ fn fleet_beacon_each_machine_replaces_only_its_own_rows() {
     )
     .unwrap();
 
-    let (machines, sessions) = read(&primary.remote).unwrap();
+    let Fleet {
+        machines, sessions, ..
+    } = read(&primary.remote).unwrap();
     assert_eq!(machines.len(), 2);
     assert_eq!(
         machines
@@ -68,6 +70,66 @@ fn fleet_beacon_each_machine_replaces_only_its_own_rows() {
         .map(|s| (s.machine_id.as_str(), s.name.as_str()))
         .collect();
     assert_eq!(names, vec![("mac-a", "w3"), ("mac-b", "w2")]);
+}
+
+/// A new daemon's seats round trip with whole-second ages; an old
+/// daemon's sessions read with null seat facts; a seat whose session row is
+/// gone drops; and no seat row carries the text of a last turn.
+#[test]
+fn fleet_beacon_seats_join_their_sessions_and_never_carry_message_text() {
+    let primary = test_primary::start();
+    let top = json!({"workers": [{
+        "name": "sorrel", "handle": "sorrel", "harness": "claude", "status": "writing",
+        "status_age_s": 53.4, "role": "L1 fno", "session_id": "aaaa1111-2222",
+        "model": "opus", "model_basis": "registry", "started_at": "2026-10-23T09:00:00Z",
+        "last_message": "private turn text", "last_message_at": "2026-10-23T10:00:00Z",
+        "cwd": "/w/fno", "project": "fno", "context_pct": 41
+    }]});
+    let new = sessions_from_top("mac-a", &top);
+    assert_eq!(new[0].age_s, Some(53));
+    publish(&primary.remote, &machine("mac-a", "mbp", 1000), &new).unwrap();
+    // An old daemon writes only its nine session columns.
+    publish(
+        &primary.remote,
+        &machine("mac-b", "r2d2", 1000),
+        &[session("mac-b", "w2", "bbbb2222", None)],
+    )
+    .unwrap();
+    // A seat left behind by a session that has since ended.
+    primary
+        .remote
+        .execute(
+            "INSERT INTO fleet_seat (machine_id, name, model) VALUES ('mac-b', 'gone', 'opus')",
+            &[],
+        )
+        .unwrap();
+
+    let fleet = read(&primary.remote).unwrap();
+    assert_eq!(fleet.seat_error, None);
+    let names: Vec<_> = fleet.sessions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["sorrel", "w2"]);
+    let map = map_json(
+        &fleet.machines,
+        &fleet.sessions,
+        "mac-a",
+        1010,
+        DEFAULT_FRESH_S,
+    );
+    let seat = &map["machines"][0]["sessions"][0];
+    for (key, want) in [
+        ("model", json!("opus")),
+        ("started_at", json!("2026-10-23T09:00:00Z")),
+        ("last_message_at", json!("2026-10-23T10:00:00Z")),
+        ("cwd", json!("/w/fno")),
+        ("project", json!("fno")),
+        ("role", json!("L1 fno")),
+        ("age_s", json!(53)),
+    ] {
+        assert_eq!(seat[key], want, "{key}");
+    }
+    assert!(!map.to_string().contains("private turn text"));
+    let old = &map["machines"][1]["sessions"][0];
+    assert!(old["model"].is_null() && old["cwd"].is_null(), "{old}");
 }
 
 #[test]
