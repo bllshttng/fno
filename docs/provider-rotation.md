@@ -1367,7 +1367,7 @@ later.
 
 ### The credential-shape discriminator: `managed` vs `api_key`
 
-A rotation onto a `managed` record needs a human at a login prompt. One Claude/codex login shares the CLI's one credential slot. `managed.switch` materializes the *stored* snapshot into the slot, but a slot with only one account registered has nowhere to rotate to without a fresh `/login`.
+A rotation onto a `managed` record needs a human at a login prompt. One Claude/codex login shares the CLI's one credential slot. The switch (`fno config accounts use`) materializes the *stored* snapshot into the slot, but a slot with only one account registered has nowhere to rotate to without a fresh `/login`.
 
 An `api_key` record has no such ceiling. Its credential rides the env overlay (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`). `pick_account` and the recovery sweep can select it with nobody watching. Every `managed` record shares one failure domain, the subscription, not the account row. A Claude-wide outage takes them all down together but never touches this lane.
 
