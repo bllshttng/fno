@@ -836,7 +836,7 @@ fn plan_frontmatter_ids_in(dir: &Path) -> std::collections::BTreeSet<String> {
 
 /// The dedup net: score the just-born node against every live node plus the
 /// archived residents. Warn-only; stderr keeps stdout machine-readable.
-fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
+pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
     let candidates = relatedness::similar_nodes(node, entries, 3, None);
     if candidates.is_empty() {
         return;

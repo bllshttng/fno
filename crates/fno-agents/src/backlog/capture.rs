@@ -1639,6 +1639,21 @@ pub fn run_capture(tail: &[String]) -> i32 {
     }
 }
 
+/// The locked inbox append for an in-process writer (the retro nit tier),
+/// through the same writer and lock as `capture add`.
+pub(crate) fn add_inbox_item(
+    title: &str,
+    source: &str,
+    why: &str,
+    priority: &str,
+) -> Result<(), String> {
+    add_item(&inbox_path(), title, source, why, None, priority)
+        .map(|_| ())
+        .map_err(|e| match e {
+            CaptureError::Validation(m) | CaptureError::Refusal(m) | CaptureError::Lock(m) => m,
+        })
+}
+
 fn cmd_add(rest: &[String]) -> i32 {
     let Some(title) = rest.first() else {
         eprintln!("Error: Missing argument 'TITLE'.");
