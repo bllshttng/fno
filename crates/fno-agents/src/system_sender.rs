@@ -69,9 +69,49 @@ pub fn guard_sender(sender: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The sender stamped when nobody named one and no session resolves.
+pub const UNKNOWN_SENDER: &str = "unknown";
+
+/// The one sender floor. An explicit name wins, except a bare `fno`, which
+/// reads `unknown`: Python callers still pass `fno` as
+/// their default and it is not a name. With no name, `own` supplies the
+/// caller's handle. With neither, the stamp is `unknown` and stderr names
+/// the remedy, because a send that cannot name its origin must not read as
+/// a system voice.
+pub fn stamp_or_unknown(explicit: Option<&str>, own: impl FnOnce() -> Option<String>) -> String {
+    let resolved = match explicit.filter(|name| !name.is_empty()) {
+        Some("fno") => None,
+        Some(name) => Some(name.to_string()),
+        None => own().filter(|handle| !handle.is_empty()),
+    };
+    resolved.unwrap_or_else(|| {
+        // One send stamps its sender at several legs; say the remedy once.
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!(
+                "mail sender unresolved: stamped '{UNKNOWN_SENDER}'. Pass --from-name fno/<arm> \
+                 (the daemon arm or command that sends), or send from a session."
+            );
+        }
+        UNKNOWN_SENDER.to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sender_floor_reads_unknown_and_never_fno() {
+        assert_eq!(stamp_or_unknown(Some("candor"), || None), "candor");
+        assert_eq!(
+            stamp_or_unknown(Some("fno"), || Some("own".to_string())),
+            UNKNOWN_SENDER
+        );
+        assert_eq!(stamp_or_unknown(None, || Some("own".to_string())), "own");
+        assert_eq!(stamp_or_unknown(Some(""), || None), UNKNOWN_SENDER);
+        assert_eq!(stamp_or_unknown(None, || None), UNKNOWN_SENDER);
+    }
 
     #[test]
     fn system_names_map_and_the_bare_fno_guard_hold() {

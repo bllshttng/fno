@@ -272,14 +272,9 @@ fn stamp_from_identity(from_name: Option<&str>, ident: &OwnedIdentity) -> (&'sta
     ) && ident.session_id.as_deref().is_some_and(|s| !s.is_empty())
         && ident.harness.as_deref().is_some_and(|h| !h.is_empty());
     let kind = if owned { "agent" } else { "operator" };
-    let sender = match from_name {
-        Some(name) => name.to_string(),
-        None if owned => {
-            let sid = ident.session_id.clone().unwrap_or_default();
-            crate::identity::canonical_handle(&sid)
-        }
-        None => "fno".to_string(),
-    };
+    let sender = crate::system_sender::stamp_or_unknown(from_name, || {
+        owned.then(|| crate::identity::canonical_handle(ident.session_id.as_deref().unwrap_or("")))
+    });
     (kind, sender)
 }
 
@@ -302,7 +297,7 @@ mod tests {
     }
 
     /// The oracle matrix: kind follows the owned proof; the sender is the
-    /// explicit name, else the canonical handle, else `fno`.
+    /// explicit name, else the canonical handle, else `unknown`.
     #[test]
     fn sender_stamp_matches_oracle_matrix() {
         let owned = ident(
@@ -328,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             stamp_from_identity(None, &unowned),
-            ("operator", "fno".to_string())
+            ("operator", "unknown".to_string())
         );
     }
 }

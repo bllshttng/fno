@@ -1767,10 +1767,9 @@ pub fn maybe_run_codex_ask(
     }
 
     let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        crate::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // cv-16eb2200: resolve_ask_cwd warns at the canonicalize-fallback point.
     let cwd = crate::subprocess_ask::resolve_ask_cwd(params.get("cwd").and_then(|v| v.as_str()));
     let timeout = params

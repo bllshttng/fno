@@ -217,17 +217,14 @@ pub(crate) fn own_identity() -> Option<(String, String)> {
     }
 }
 
-/// Python `stamp_from`: explicit `--from-name` wins verbatim, else the own
-/// canonical handle, else the `"fno"` floor.
-/// `pub(crate)`: the reply leaf stamps its origin row's sender.
-pub(crate) fn stamp_from(from_name: Option<&str>) -> String {
-    match from_name {
-        Some(name) => name.to_string(),
-        None => match own_identity() {
-            Some((sid, _)) => crate::identity::canonical_handle(&sid),
-            None => "fno".to_string(),
-        },
-    }
+/// Explicit `--from-name` wins, else the own canonical handle, else the
+/// `unknown` floor ([`crate::system_sender::stamp_or_unknown`]).
+/// Public: the reply leaf, the ask and spawn routes and the bin stamp
+/// through it.
+pub fn stamp_from(from_name: Option<&str>) -> String {
+    crate::system_sender::stamp_or_unknown(from_name, || {
+        own_identity().map(|(sid, _)| crate::identity::canonical_handle(&sid))
+    })
 }
 
 fn resolve_self_session() -> Option<String> {

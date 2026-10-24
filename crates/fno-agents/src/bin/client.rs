@@ -1884,10 +1884,9 @@ fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option
     }
 
     let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        fno_agents::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // ask is a follow-up to an already-registered session: dispatch_claude_ask
     // takes the cwd as `_cwd` and never launches in it. So resolve only an
     // explicit --cwd (canonicalized, Python's `Path(cwd).resolve()`; empty is
@@ -2366,10 +2365,9 @@ fn maybe_run_spawn(
         params.get("message").and_then(|v| v.as_str()).unwrap_or(""),
         substrate,
     );
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        fno_agents::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // --cwd > --here (caller) > default canonical; resolve_dispatch_cwd
     // canonicalizes an explicit --cwd and shells to git on the default path
     // (no --cwd, no --here). Resolve only for CLIENT-SIDE spawns, which are the
