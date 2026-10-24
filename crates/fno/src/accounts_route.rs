@@ -10,6 +10,7 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "add",
     "reconcile-slot",
     "register",
+    "remove",
     "usage",
     "doctor",
 ];
@@ -51,6 +52,8 @@ mod tests {
         assert_eq!(rest, oss(&["reconcile-slot"]));
         let rest = classify(&oss(&["config", "accounts", "register", "alt"])).unwrap();
         assert_eq!(rest, oss(&["register", "alt"]));
+        let rest = classify(&oss(&["config", "accounts", "remove", "alt", "--force"])).unwrap();
+        assert_eq!(rest, oss(&["remove", "alt", "--force"]));
         let rest = classify(&oss(&["config", "accounts", "doctor", "-J"])).unwrap();
         assert_eq!(rest, oss(&["doctor", "-J"]));
         assert_eq!(classify(&oss(&["config", "accounts", "list"])), None);
