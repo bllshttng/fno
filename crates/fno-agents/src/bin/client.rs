@@ -365,6 +365,11 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::org_remote::run(&args[1..]);
     }
 
+    // The cross-host spawn relay; binary-direct like `mail-remote`. Contract: spawn_remote's module docs.
+    if matches!(command, "spawn-remote") {
+        return fno_agents::spawn_remote::run(&args[1..]);
+    }
+
     // Binary-direct mail transport for the events/note Python adapters; not routable.
     if matches!(command, "machine-mail-send") {
         return fno_agents::machine_mail::run(&args[1..]).await;

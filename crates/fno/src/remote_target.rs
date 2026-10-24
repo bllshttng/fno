@@ -8,8 +8,11 @@
 //! byte-verbatim when nothing binds, so the local command's ladder, holds, and
 //! refusal voice stay the only path for a name it knows. `org promote` with
 //! an `@host` target execs the sibling `org-remote` command, the cross-machine
-//! hand-off. Every other argv forwards byte-verbatim, so the Python commands
-//! change nothing.
+//! hand-off. `agents spawn` claims when the fno-owned `--name` value carries
+//! `@` (`--name <name>@<host>`, or `--name @<host>` to mint the name
+//! remotely) and execs the sibling `spawn-remote` command; words after a bare
+//! `--` fence are the harness's own flags and are never scanned. Every other
+//! argv forwards byte-verbatim, so the Python commands change nothing.
 
 use std::ffi::OsString;
 
@@ -113,6 +116,35 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[2..].to_vec())
 }
 
+/// The cross-host spawn claim: `agents spawn --name <name>@<host> ...`
+/// execs the sibling `spawn-remote` command. The spawn's positional is the
+/// prompt, which carries `@` freely, so the address rides only in the
+/// `--name` value, a flag fno owns. The scan reads the fno-owned words up to
+/// a bare `--` fence; flags after it belong to the harness and are never
+/// interpreted. Targets without an `@` name forward byte-verbatim.
+pub fn classify_spawn(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first()?.to_str()? != "agents" {
+        return None;
+    }
+    if args.get(1)?.to_str()? != "spawn" {
+        return None;
+    }
+    let mut i = 2;
+    while let Some(word) = args.get(i).and_then(|a| a.to_str()) {
+        if word == "--" {
+            return None;
+        }
+        if word == "--name" {
+            let value = args.get(i + 1).and_then(|a| a.to_str())?;
+            if value.contains('@') {
+                return Some(args[2..].to_vec());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +212,35 @@ mod tests {
         .is_none());
         assert!(classify_org(&os(&["agents", "org", "grant", "quinlan@imac2d2"])).is_none());
         assert!(classify_org(&os(&["agents", "org", "promote"])).is_none());
+    }
+
+    #[test]
+    fn classify_spawn_claims_only_an_at_name_value() {
+        // The claim fires on the fno-owned --name value and carries the tail
+        // without the group and command words.
+        let argv = classify_spawn(&os(&[
+            "agents",
+            "spawn",
+            "--name",
+            "quinlan@mbp3",
+            "fix",
+            "it",
+        ]))
+        .expect("@host name is claimed");
+        assert_eq!(argv, os(&["--name", "quinlan@mbp3", "fix", "it"]));
+        // `@host` alone mints the name remotely; it claims too.
+        let argv = classify_spawn(&os(&["agents", "spawn", "--name", "@mbp3", "hi"]))
+            .expect("@host-only name is claimed");
+        assert_eq!(argv, os(&["--name", "@mbp3", "hi"]));
+        // A plain name, a flag value with an @ that is not a --name value,
+        // and an @ riding in the prompt positional all forward.
+        assert!(classify_spawn(&os(&["agents", "spawn", "--name", "quinlan", "hi"])).is_none());
+        assert!(classify_spawn(&os(&["agents", "spawn", "mail me at a@b"])).is_none());
+        // The fence hides harness flags: a --name after it is the harness's.
+        assert!(classify_spawn(&os(&["agents", "spawn", "--", "--name", "x@y"])).is_none());
+        // Other agents commands never claim.
+        assert!(classify_spawn(&os(&["agents", "mail", "send", "q@h", "hi"])).is_none());
+        assert!(classify_spawn(&os(&["agents", "spawn"])).is_none());
     }
 
     #[test]
