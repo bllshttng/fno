@@ -1,4 +1,3 @@
-cli/src/fno/adapters/providers/test_cli.py::TestTestCommand.test_test_valid_record_returns_zero::pytest.skip  # on main before this ratchet
 cli/tests/_native_door.py::run_native::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_agy_spawn_journey.py::test_AC1_HP_the_spawn_seam_journey_on_a_real_agy_thread::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_ask_e2e_dispatch.py::<module>::mark.skipif  # on main before this ratchet

@@ -8,7 +8,6 @@ Phase 03 will wire in staging.stage(record) inside the `add` command.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time as time_module
 from pathlib import Path
