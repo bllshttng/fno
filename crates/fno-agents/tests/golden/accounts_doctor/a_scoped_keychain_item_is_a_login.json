@@ -1,0 +1,1 @@
+{"records": [{"id": "alt", "harness": "claude", "auth": "managed", "config_dir": "{TMP}/alt"}], "keychain": {"scoped:alt": "{\"claudeAiOauth\": {\"accessToken\": \"t-alt\", \"refreshToken\": \"r\"}}"}, "now": 1800000000.0, "expect": {"findings": [], "store": {}}}

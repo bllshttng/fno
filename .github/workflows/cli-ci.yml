@@ -1071,6 +1071,14 @@ jobs:
           echo "FNO_HOME=$RUNNER_TEMP/fno" >> "$GITHUB_ENV"
           echo "FNO_AGENTS_HOME=$RUNNER_TEMP/fno-agents" >> "$GITHUB_ENV"
 
+      # Every shard links every tests/*.rs binary, and on 2026-10-24 two
+      # shards on two PRs died with "No space left on device" before a
+      # test failed. The image's unused toolchains are about 25 GB.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
