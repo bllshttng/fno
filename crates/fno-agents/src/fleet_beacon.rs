@@ -19,6 +19,9 @@
 //! The seat facts (model, start, directory, project, role, context) ride a
 //! side table, `fleet_seat`, so an old daemon's nine-column session insert
 //! keeps working and an old reader never selects them. Its seats read null.
+//! A seat row carries the beat that wrote it, and a read keeps it only when
+//! that beat is still the machine's newest, so a seat left behind by a newer
+//! daemon never attaches to an old daemon's session of the same name.
 //! The text of a session's last turn stays on its own machine: the seat row
 //! carries only the stamp of that turn.
 
@@ -83,6 +86,7 @@ CREATE TABLE IF NOT EXISTS fleet_seat (
     project TEXT,
     role TEXT,
     context_pct INTEGER,
+    beat_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, name)
 );";
 
@@ -91,7 +95,7 @@ const MACHINE_COLUMNS: &str = "machine_id, host, owner, role, beat_at, cpu, mem_
 const SESSION_COLUMNS: &str =
     "machine_id, name, session, harness, node, status, age_s, rss_mb, parent";
 const SEAT_COLUMNS: &str = "machine_id, name, session_id, model, model_basis, started_at, \
-     last_message_at, cwd, project, role, context_pct";
+     last_message_at, cwd, project, role, context_pct, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Machine {
@@ -353,7 +357,7 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
         steps.push((
             format!(
                 "INSERT OR REPLACE INTO fleet_seat ({SEAT_COLUMNS}) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
             ),
             vec![
                 id.clone(),
@@ -367,6 +371,7 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
                 opt_text(&s.project),
                 opt_text(&s.role),
                 opt_int(s.context_pct),
+                SqlValue::Integer(machine.beat_at),
             ],
         ));
     }
@@ -395,7 +400,7 @@ pub struct Fleet {
 
 /// Every machine row and every session row on the primary, each session
 /// with its `fleet_seat` row when one exists. A seat whose session row is
-/// gone is dropped. A seat read that fails leaves the sessions as read and
+/// gone, or whose beat is not its machine's newest, is dropped. A seat read that fails leaves the sessions as read and
 /// names the failure in `seat_error`.
 pub fn read(remote: &Remote) -> Result<Fleet, String> {
     remote.script(SCHEMA)?;
@@ -452,6 +457,12 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
         Ok(reply) => {
             for r in &reply.rows {
                 let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                let current = fleet.machines.iter().any(|m| {
+                    Some(&m.machine_id) == machine_id.as_ref() && Some(m.beat_at) == r[11].integer()
+                });
+                if !current {
+                    continue;
+                }
                 let Some(s) = fleet.sessions.iter_mut().find(|s| {
                     Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
                 }) else {

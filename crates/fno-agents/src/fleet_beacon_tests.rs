@@ -95,11 +95,13 @@ fn fleet_beacon_seats_join_their_sessions_and_never_carry_message_text() {
         &[session("mac-b", "w2", "bbbb2222", None)],
     )
     .unwrap();
-    // A seat left behind by a session that has since ended.
+    // A seat left behind by a session that has since ended, and one a newer
+    // daemon wrote on an earlier beat for a name the old daemon reuses.
     primary
         .remote
         .execute(
-            "INSERT INTO fleet_seat (machine_id, name, model) VALUES ('mac-b', 'gone', 'opus')",
+            "INSERT INTO fleet_seat (machine_id, name, model, beat_at) \
+             VALUES ('mac-b', 'gone', 'opus', 1000), ('mac-b', 'w2', 'opus', 940)",
             &[],
         )
         .unwrap();

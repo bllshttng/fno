@@ -242,17 +242,34 @@ fn opt_str(value: Option<&str>) -> Value {
 /// The longest `last_message` a row carries, in characters.
 const LAST_MESSAGE_CHARS: usize = 240;
 
+/// The project a directory belongs to: its own `[project] id`, else its git
+/// remote slug, else its basename. The home config is not consulted: it
+/// names the caller's project, not the seat's. Cached for the process,
+/// because the remote read shells out to git and the daemon reads every
+/// worker on every beat.
+fn project_of(dir: &str) -> String {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(dir) {
+        return hit.clone();
+    }
+    let name = crate::finalize::resolve_project_name(None, None, Path::new(dir));
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(dir.to_string(), name.clone());
+    name
+}
+
 /// The seat facts a fleet page shows beside the status: the full session
 /// id, the model and where it was read, the start, the newest turn and its
 /// stamp, the directory and its project, and the context reading. A fact
-/// no source answers is null. `projects` caches the project name per
-/// directory, because the resolver can shell out to git.
+/// no source answers is null.
 fn seat_facts(
     w: &Worker,
     entry: Option<&RegistryEntry>,
     probe: Option<&crate::truth_probe::TruthProbe>,
-    home: Option<&Path>,
-    projects: &mut HashMap<String, String>,
 ) -> Map<String, Value> {
     let registry_model = entry
         .and_then(|e| e.model.as_deref())
@@ -271,12 +288,7 @@ fn seat_facts(
     let root = entry
         .map(|e| e.project_root.as_str())
         .filter(|d| !d.is_empty());
-    let project = root.or(cwd).map(|dir| {
-        projects
-            .entry(dir.to_string())
-            .or_insert_with(|| crate::finalize::resolve_project_name(None, home, Path::new(dir)))
-            .clone()
-    });
+    let project = root.or(cwd).map(project_of);
     let last_message = probe
         .and_then(|p| p.last_message.as_deref())
         .map(|m| m.chars().take(LAST_MESSAGE_CHARS).collect::<String>());
@@ -312,8 +324,6 @@ fn worker_rows(
         .iter()
         .filter_map(|e| e.harness_session_id.as_deref().map(|sid| (sid, e)))
         .collect();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut projects: HashMap<String, String> = HashMap::new();
     let mut out: Vec<Value> = census
         .workers
         .iter()
@@ -338,7 +348,7 @@ fn worker_rows(
                 .as_deref()
                 .and_then(|s| sessions.get(&s.trim().to_ascii_lowercase()));
             let pid = w.session_pid.or(w.pid);
-            let seat = seat_facts(w, entry, probe, home.as_deref(), &mut projects);
+            let seat = seat_facts(w, entry, probe);
             let mut row = json!({
                 "source": w.source,
                 "name": w.name,
