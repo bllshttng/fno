@@ -631,13 +631,13 @@ fn list_core_over(
         };
         let lane_derived = decision_lane(&row);
         row["lane"] = json!(lane_derived);
-        let probe = graduation_probe(&row);
+        let (retire_evidence, unproved_reason) = graduation_probe(&row);
         let lifecycle: String = if let Some((_, reason)) = latest_retractions.get(&key) {
             row["lifecycle_reason"] = json!(reason);
             "retracted".to_string()
         } else if winner.is_some() {
             "superseded".to_string()
-        } else if let Some(retirement) = probe.0 {
+        } else if let Some(retirement) = retire_evidence {
             row["lifecycle_reason"] = json!("graduated to enforced artifact");
             row["lifecycle_evidence"] = retirement;
             "retired".to_string()
@@ -659,7 +659,7 @@ fn list_core_over(
         } else if lane_derived == "unattributed" {
             "unscoped".to_string()
         } else {
-            if let Some(reason) = probe.1 {
+            if let Some(reason) = unproved_reason {
                 row["lifecycle_evidence"] = json!(reason);
             }
             "live".to_string()
@@ -1160,11 +1160,7 @@ fn run_share(args: &[String]) -> i32 {
                 let id = rows_str(row, "decision_id").to_string();
                 match probe_artifact(&artifact) {
                     ArtifactVerdict::Retired(_) => bound += 1,
-                    verdict => {
-                        let reason = match verdict {
-                            ArtifactVerdict::Live(reason) => reason,
-                            ArtifactVerdict::Retired(_) => unreachable!("matched above"),
-                        };
+                    ArtifactVerdict::Live(reason) => {
                         unproved.push((id.clone(), reason));
                     }
                 }
