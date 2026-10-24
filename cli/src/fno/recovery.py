@@ -1032,8 +1032,12 @@ def _materialize_managed_switch(record_id: str, repo_root: Optional[str] = None)
         record = config.by_id.get(record_id)
         if record is None or record.auth != "managed":
             return False
+        # The switch waits up to 10s on its mutex, then makes several 10s vault
+        # round trips; a 30s kill would land mid-write on the shared slot.
         receipt = command_call(
-            ["spawn-overlay", "accounts", "switch"], {"id": record_id, "repo_root": repo_root}
+            ["spawn-overlay", "accounts", "switch"],
+            {"id": record_id, "repo_root": repo_root},
+            timeout=120,
         )
         return receipt.get("active") == record_id
     except Exception:  # noqa: BLE001 - a materialize miss must never crash the sweep; degrade to nudge
