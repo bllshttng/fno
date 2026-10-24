@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import time as time_module
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Optional, cast
@@ -23,9 +22,7 @@ from fno.adapters.providers.loader import (
     is_effective_active,
     load_providers,
     load_quota_config,
-    load_scope_config,
     mutable_accounts_block,
-    save_providers,
 )
 from fno.adapters.providers.model import (
     ProviderConfigError,
@@ -1250,136 +1247,12 @@ def test_provider(
 # ---------------------------------------------------------------------------
 
 @cli.command("use")
-def use_provider(
+def use_forward(
     provider_id: str = typer.Argument(...),
     scope: str = typer.Option("project", "--scope", help="project|global"),
 ) -> None:
     """Set the active account (default scope: project)."""
-    # Merged view for the lookup (the pointer may legitimately target a
-    # record declared in another layer); the save below writes only the
-    # target scope's own records so it cannot freeze the merge.
-    repo_root = _get_repo_root()
-    try:
-        config = load_providers(repo_root=repo_root)
-    except ProviderConfigError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1)
-
-    if provider_id not in config.by_id:
-        typer.echo(f"error: account '{provider_id}' not found", err=True)
-        raise typer.Exit(1)
-
-    record = config.by_id[provider_id]
-
-    # A config-dir account lives in its own dir; there is no shared-slot
-    # snapshot to materialize, so a daemon-wide `use` switch does not apply. Refuse
-    # cleanly instead of letting managed.switch fail with a cryptic no-snapshot
-    # error. Use it per-worker via `fno agents spawn --account <id>`.
-    if record.config_dir is not None:
-        typer.echo(
-            f"error: '{provider_id}' is a config-dir account (its own "
-            f"{record.config_dir}); it is spawn-only. Use it per-worker with "
-            f"`fno agents spawn --account {provider_id}`, not a daemon-wide switch.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    # Validate the pointer target BEFORE any side effects: managed.switch
-    # materializes credentials into the shared slot irreversibly, and a
-    # validation failure after it leaves the slot switched with no routing
-    # pointer.
-    try:
-        scope_records = load_scope_config(scope).records  # type: ignore[arg-type]
-    except ProviderConfigError as exc:
-        typer.echo(f"error loading existing config: {exc}", err=True)
-        raise typer.Exit(1)
-    if scope == "global" and provider_id not in {r.id for r in scope_records}:
-        # Same rule `config set` enforces: a GLOBAL pointer must name a
-        # globally declared record, or every project without that record
-        # bricks its loader.
-        typer.echo(
-            f"error: account '{provider_id}' is not declared in the global "
-            "config; declare it there first or set the pointer per project.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    # Managed records materialize the account's credentials into the shared
-    # slot (capture-before-overwrite + live-pin gate); oauth_dir/api_key records
-    # only re-point active routing (spawns pick up the env), as before.
-    if record.auth == "managed":
-        from fno.agents.events import emit as _emit
-
-        try:
-            result = managed.switch(record, by_id=config.by_id, emit_fn=_emit)
-        except managed.SwitchDeferred as exc:
-            typer.echo(f"switch deferred: {exc}", err=True)
-            raise typer.Exit(2)
-        except managed.NeedsLogin as exc:
-            if not (sys.stdin.isatty() and sys.stdout.isatty()):
-                typer.echo(f"{exc} Run in a terminal: fno config accounts use {provider_id}", err=True)
-                raise typer.Exit(1)
-            if managed.run_vault_login(provider_id) != 0:
-                raise typer.Exit(1)
-            result = managed.SwitchResult(active=provider_id)
-        except managed.ManagedStoreError as exc:
-            typer.echo(f"switch failed: {exc}", err=True)
-            raise typer.Exit(1)
-        except KeyboardInterrupt as exc:
-            for note in getattr(exc, "__notes__", ()):
-                typer.echo(f"switch interrupted: {note}", err=True)
-            raise
-        if record.harness == "codex":
-            if not result.slot_changed:
-                typer.echo(
-                    f"Managed Codex account '{result.active}' is already materialized "
-                    f"(structural; {result.reason})."
-                )
-            elif result.verification == "codex-recognized":
-                typer.echo(
-                    f"Materialized managed Codex account '{result.active}' into the slot; "
-                    "Codex recognized the local auth."
-                )
-            else:
-                typer.echo(
-                    f"Materialized managed Codex account '{result.active}' into the slot "
-                    f"(structural fallback: {result.reason})."
-                )
-        else:
-            typer.echo(f"Materialized managed account '{result.active}' into the slot (verified).")
-        if result.pinned_by:
-            typer.echo(
-                f"warning: swapped under {len(result.pinned_by)} live {record.harness} "
-                "session(s); they keep their in-memory auth, and a token refresh "
-                "from one may overwrite the slot",
-                err=True,
-            )
-
-    from fno.adapters.providers.model import ProvidersConfig
-    new_config = ProvidersConfig(
-        records=scope_records,
-        active=provider_id,
-    )
-
-    try:
-        save_providers(new_config, scope=scope)  # type: ignore[arg-type]
-    except OSError as exc:
-        # For a managed record the slot + its per-CLI stamp are already switched
-        # (that IS the operative state managed dispatch reads); only the routing
-        # pointer failed to persist. Say so, so the user retries the save rather
-        # than believing the switch did not happen.
-        if record.auth == "managed":
-            typer.echo(
-                f"warning: slot switched to '{provider_id}' but saving the active "
-                f"routing pointer failed ({exc}); re-run `fno config accounts use "
-                f"{provider_id}` to persist it.",
-                err=True,
-            )
-        else:
-            typer.echo(f"error: failed to write settings.yaml: {exc}", err=True)
-        raise typer.Exit(1)
-
-    typer.echo(f"Active account set to '{provider_id}' (scope={scope}).")
+    _forward_accounts("use", provider_id, "--scope", scope)
 
 
 # ---------------------------------------------------------------------------

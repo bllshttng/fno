@@ -482,44 +482,49 @@ class TestMaterializeManagedSwitch:
         return ProviderRecord(id="claude-secondary", name="B", harness="claude", auth="managed")
 
     def test_auto_switch_off_returns_false_without_touching_slot(self, monkeypatch):
+        from fno import rust_binary
         from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import managed as managed_mod
 
         rec = self._managed_record()
         monkeypatch.setattr(loader_mod, "load_providers",
                             lambda *a, **k: self._fake_config(False, rec))
         switched = {"called": False}
-        monkeypatch.setattr(managed_mod, "switch",
+        monkeypatch.setattr(rust_binary, "command_call",
                             lambda *a, **k: switched.__setitem__("called", True))
         assert recovery._materialize_managed_switch("claude-secondary") is False
         assert switched["called"] is False   # disarmed: slot never mutated
 
     def test_auto_switch_on_materializes(self, monkeypatch):
+        from fno import rust_binary
         from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import managed as managed_mod
 
         rec = self._managed_record()
         monkeypatch.setattr(loader_mod, "load_providers",
                             lambda *a, **k: self._fake_config(True, rec))
         seen: dict = {}
-        monkeypatch.setattr(managed_mod, "switch",
-                            lambda r, **k: seen.update(id=r.id, by_id=k.get("by_id"),
-                                                       pin_policy=k.get("pin_policy")))
-        assert recovery._materialize_managed_switch("claude-secondary") is True
-        assert seen["id"] == "claude-secondary"
-        assert seen["pin_policy"] == "defer"  # recovery must never swap under live pins
+
+        def _switch(command, payload, *a, **k):
+            seen.update(command=command, payload=payload)
+            return {"active": payload["id"], "slot_changed": True}
+        monkeypatch.setattr(rust_binary, "command_call", _switch)
+        assert recovery._materialize_managed_switch("claude-secondary", "/repo") is True
+        # The switch op defers under live pins and writes no routing pointer.
+        assert seen["command"] == ["spawn-overlay", "accounts", "switch"]
+        assert seen["payload"] == {"id": "claude-secondary", "repo_root": "/repo"}
 
     def test_switch_deferred_returns_false(self, monkeypatch):
+        from fno import rust_binary
         from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import managed as managed_mod
 
         rec = self._managed_record()
         monkeypatch.setattr(loader_mod, "load_providers",
                             lambda *a, **k: self._fake_config(True, rec))
 
         def _defer(*a, **k):
-            raise managed_mod.SwitchDeferred("slot pinned by pid 42")
-        monkeypatch.setattr(managed_mod, "switch", _defer)
+            raise rust_binary.CommandUnavailable(
+                "fno-agents spawn-overlay accounts switch exited 2: switch deferred: slot pinned by pid 42"
+            )
+        monkeypatch.setattr(rust_binary, "command_call", _defer)
         assert recovery._materialize_managed_switch("claude-secondary") is False
 
 
