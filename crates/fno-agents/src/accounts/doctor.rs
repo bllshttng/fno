@@ -172,7 +172,11 @@ fn slot_identity(
     if observed == bound {
         return None;
     }
-    let who = got.observed_label.as_deref().unwrap_or(observed);
+    let who = got
+        .observed_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+        .unwrap_or(observed);
     finding(
         "slot-identity-drift",
         format!(
@@ -274,7 +278,10 @@ mod tests {
         );
         assert_eq!(
             render(&[one], true),
-            r#"[{"record": "a", "problem": "tainted-slot", "detail": "x \"q\" é"}]"#
+            format!(
+                r#"[{{"record": "a", "problem": "tainted-slot", "detail": "x \"q\" {}u00e9"}}]"#,
+                '\\'
+            )
         );
     }
 }
