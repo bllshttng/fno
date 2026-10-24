@@ -157,13 +157,8 @@ fn run_in(args: &[String], cwd: &Path) -> Out {
         out.code = 2;
         return out;
     }
-    // Every merged reader announces a legacy block once, as the loader does.
-    if word != "remove"
-        && records::candidates(Some(cwd), cwd)
-            .iter()
-            .any(|path| records::reads_legacy_block(&records::read_layer(path)))
-    {
-        out.err(LEGACY_NOTICE);
+    if matches!(word, "list" | "test" | "use") {
+        legacy_notice(cwd, &mut out);
     }
     match word {
         "add" => add(parsed, cwd, out),
@@ -172,6 +167,17 @@ fn run_in(args: &[String], cwd: &Path) -> Out {
         "test" => test(&parsed.name.unwrap_or_default(), cwd, out),
         "use" => use_combo(parsed, cwd, out),
         _ => update(parsed, cwd, out),
+    }
+}
+
+/// The loader announces a legacy `providers` block once, the first time a
+/// merged read returns one; `remove` reads only its own file raw, so it never does.
+fn legacy_notice(cwd: &Path, out: &mut Out) {
+    if records::candidates(Some(cwd), cwd)
+        .iter()
+        .any(|path| records::reads_legacy_block(&records::read_layer(path)))
+    {
+        out.err(LEGACY_NOTICE);
     }
 }
 
@@ -190,7 +196,7 @@ fn now() -> f64 {
 
 /// The `--providers` csv, trimmed and with blanks dropped, checked against the
 /// merged records. `Err` is the stderr line.
-fn members(name: &str, csv: &str, cwd: &Path) -> Result<Vec<String>, String> {
+fn members(name: &str, csv: &str, cwd: &Path, out: &mut Out) -> Result<Vec<String>, String> {
     let list: Vec<String> = csv
         .split(',')
         .map(str::trim)
@@ -200,6 +206,7 @@ fn members(name: &str, csv: &str, cwd: &Path) -> Result<Vec<String>, String> {
     if list.is_empty() {
         return Err("error: --providers must list at least one provider id".to_string());
     }
+    legacy_notice(cwd, out);
     let accounts = records::load(Some(cwd), cwd).map_err(|e| format!("error: {e}"))?;
     let unknown: Vec<&String> = list
         .iter()
@@ -279,14 +286,19 @@ fn add(args: Args, cwd: &Path, out: Out) -> Out {
     let strategy = args.strategy.unwrap_or_else(|| "fallback".to_string());
     let sticky = args.sticky.unwrap_or(1);
     let scope = args.scope.unwrap_or_else(|| "project".to_string());
-    let providers = match members(&name, args.providers.as_deref().unwrap_or_default(), cwd) {
+    let mut out = out;
+    let providers = match members(
+        &name,
+        args.providers.as_deref().unwrap_or_default(),
+        cwd,
+        &mut out,
+    ) {
         Ok(list) => list,
         Err(line) => return out.fail(&line),
     };
     if let Err(msg) = records::combo(&name, &strategy, sticky, providers.clone()) {
         return out.fail(&format!("error: {msg}"));
     }
-    let mut out = out;
     // The raw --sticky is written; only the loader clamps it.
     let written = write_scope(&scope, cwd, &mut out, |block| {
         let combos = combos_table(block);
@@ -494,11 +506,16 @@ fn use_combo(args: Args, cwd: &Path, out: Out) -> Out {
 fn update(args: Args, cwd: &Path, out: Out) -> Out {
     let name = args.name.unwrap_or_default();
     let scope = args.scope.unwrap_or_else(|| "project".to_string());
-    let providers = match members(&name, args.providers.as_deref().unwrap_or_default(), cwd) {
+    let mut out = out;
+    let providers = match members(
+        &name,
+        args.providers.as_deref().unwrap_or_default(),
+        cwd,
+        &mut out,
+    ) {
         Ok(list) => list,
         Err(line) => return out.fail(&line),
     };
-    let mut out = out;
     let mut applied = (String::new(), 0);
     let written = write_scope(&scope, cwd, &mut out, |block| {
         let combos = combos_table(block);
