@@ -548,7 +548,9 @@ fn truncated_status_frame_falls_back_to_the_status_bar() {
         strategy.status_bar_pattern.is_some(),
         "codex row declares the bar pattern"
     );
-    let truncated = "Model: gpt-5.6\nEsc to interrupt";
+    // The narrow-pane frame: the /status line truncates mid-token and the
+    // status bar carries the full pair, both in one pane read.
+    let truncated = "Model: gpt-5.6\nEsc to interrupt    gpt-5.6-luna xhigh";
     assert_eq!(status_tier(&strategy, truncated), None);
     assert_eq!(
         status_tier_or_bar(&strategy, truncated),
