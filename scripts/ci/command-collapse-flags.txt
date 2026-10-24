@@ -38,8 +38,6 @@ mail send !--origin
 mail send !--provider
 resume receipt validate !--session
 resume receipt write !--session
-retro run !--pr
-retro run !--session
 agents pane-identity !--session
 agents pane-identity !--session-id
 state init !--allow-stub
