@@ -629,7 +629,7 @@ where
             }
             Ok((state, _url)) if state == "UNKNOWN" => {
                 failure = Some(PrReadError::new(
-                    format!("PR #{pr_number}: REST reader returned UNKNOWN state"),
+                    "REST reader returned UNKNOWN state",
                     "malformed",
                 ));
             }
