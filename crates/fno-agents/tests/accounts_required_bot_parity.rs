@@ -41,9 +41,9 @@ fn run_case(case: &Value, dir: &Path) -> Value {
     let (bots, both) =
         required_bot::configured_bots(review("github_apps"), review("required_bots"));
     let stderr = if both {
-        "settings.yaml: both config.review.github_apps and the legacy config.review.required_bots are set; using github_apps\n"
+        format!("{}\n", required_bot::BOTH_KEYS_WARNING)
     } else {
-        ""
+        String::new()
     };
     let found = match records::scope_accounts(&table) {
         Ok(accounts) if !bots.is_empty() => required_bot::warnings(

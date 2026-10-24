@@ -46,6 +46,18 @@ fn bot_cli(bot: &str) -> Option<&'static str> {
         .map(|(_, kind)| *kind)
 }
 
+/// What the Python settings loader logged when both bot keys are set.
+pub const BOTH_KEYS_WARNING: &str = "settings.yaml: both config.review.github_apps and the legacy config.review.required_bots are set; using github_apps";
+
+/// The layered config's review bots for `cwd`, through [configured_bots].
+pub(crate) fn review_bots(cwd: &Path) -> (Vec<String>, bool) {
+    let key = |name: &str| {
+        crate::agents_config::config_value_deep(cwd, &["review", name])
+            .and_then(|v| serde_json::to_value(v).ok())
+    };
+    configured_bots(key("github_apps"), key("required_bots"))
+}
+
 /// `config.review.github_apps`, or its legacy alias `required_bots` when
 /// github_apps is unset, deduped in order. A value that is not an array of
 /// strings names no bot. The bool is true when both keys are set.
@@ -185,15 +197,9 @@ pub fn run(args: &[String]) -> i32 {
     };
     let cwd = crate::accounts::show::pwd();
     let now = state::wall_now();
-    let deep = |key: &str| crate::agents_config::config_value_deep(&cwd, &["review", key]);
-    let (bots, both) = configured_bots(
-        deep("github_apps").and_then(|v| serde_json::to_value(v).ok()),
-        deep("required_bots").and_then(|v| serde_json::to_value(v).ok()),
-    );
+    let (bots, both) = review_bots(&cwd);
     if both {
-        eprintln!(
-            "settings.yaml: both config.review.github_apps and the legacy config.review.required_bots are set; using github_apps"
-        );
+        eprintln!("{BOTH_KEYS_WARNING}");
     }
     let found = if bots.is_empty() {
         Vec::new()
@@ -214,7 +220,7 @@ pub fn run(args: &[String]) -> i32 {
             "daemon",
         );
         for w in &found {
-            // Best effort: a warning that cannot be logged was still printed.
+            // Best effort: a warning that cannot be logged still prints.
             let _ = emitter.emit_fields("quota_required_bot_exhausted", event_data(w));
         }
     }
