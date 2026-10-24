@@ -12,10 +12,8 @@
 
 use serde_json::{Map, Value};
 
-use super::model::{load_receipt_bytes, ResumeReceipt, SUPERSEDED_KINDS};
+use super::model::{ResumeReceipt, SUPERSEDED_KINDS};
 use chrono::{DateTime, Local};
-
-pub(super) use super::model::ReceiptError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevalidationResult {
@@ -461,6 +459,7 @@ pub fn read_node_events(paths: &[std::path::PathBuf]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resume_receipt::model::load_receipt_bytes;
     use serde_json::json;
 
     fn ev(ts: &str, kind: &str, node: &str) -> Value {
