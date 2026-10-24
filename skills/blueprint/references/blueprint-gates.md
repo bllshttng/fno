@@ -482,7 +482,7 @@ A probe is what forces that last mile before the session can claim done.
 
 ```yaml
 done_probes:
-  - "fno agents mail list --kind report --since 24h | grep -o groom"
+  - "fno agents mail unread --json | grep -o groom"
 ```
 
 **Assert freshness, never bare existence.**
