@@ -377,6 +377,7 @@ pub(super) fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
         cursor_col: 0,
         cursor_visible: true,
         scroll_offset: 0,
+        history_lines: 0,
     }
 }
 
@@ -14033,6 +14034,7 @@ fn a_long_name_wraps_so_the_whole_name_and_cursor_show() {
             cursor_col: 0,
             cursor_visible: false,
             scroll_offset: 0,
+            history_lines: 0,
         })
     };
     let shot = screen(&cells);

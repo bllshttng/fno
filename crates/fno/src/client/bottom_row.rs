@@ -29,6 +29,7 @@ impl View {
                 || self.move_to.is_some()
                 || self.recruit.is_some()
                 || self.search.is_some()
+                || self.scroll_mode
                 || self.hint
                 // The open row selector reserves the row its key hint
                 // paints: the hint is the discoverability the selector
@@ -98,10 +99,17 @@ impl View {
             return;
         }
         // Search line takes the bottom row when active (precedence: search >
-        // which-key hint > status row). It OVERLAYS whatever held the row - no
-        // reserved row, so opening search never triggered a Resize/reflow.
+        // scroll mode > which-key hint > status row). It OVERLAYS whatever
+        // held the row - no reserved row, so opening search never triggered a
+        // Resize/reflow.
         if let Some(sv) = &self.search {
             self.draw_search_line(cells, rows, cols, sv);
+            return;
+        }
+        // The scroll-mode readout, same overlay discipline as the search
+        // line: the mode's live position, painted over the row's last life.
+        if self.scroll_mode {
+            scroll_mode::draw_scroll_line(self, cells, rows, cols);
             return;
         }
         let r = rows - 1;
