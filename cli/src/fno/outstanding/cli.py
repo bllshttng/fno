@@ -92,7 +92,7 @@ def report(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
     # The front door runs the listing in fno-agents and forwards only the
-    # verbs here, so a bare call that reaches Python prints the group help.
+    # commands here, so a bare call that reaches Python prints the group help.
     typer.echo(ctx.get_help())
 
 

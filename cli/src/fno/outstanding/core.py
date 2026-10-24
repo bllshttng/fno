@@ -1,7 +1,7 @@
 """The operator-question store behind `fno inbox outstanding`.
 
 The report itself is native (crates/fno-agents/src/outstanding.rs). What
-stays here is the question store the ask, clear, and reindex verbs and the
+stays here is the question store the ask, clear, and reindex commands and the
 lead escalation still read and write.
 """
 

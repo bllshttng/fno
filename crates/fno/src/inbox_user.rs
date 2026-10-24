@@ -184,8 +184,8 @@ mod tests {
             classify_inbox_outstanding(&mk(&["outstanding", "--json"])),
             Some(mk(&["--json"]))
         );
-        for verb in ["mine", "ask", "clear", "reindex", "--help"] {
-            assert!(classify_inbox_outstanding(&mk(&["inbox", "outstanding", verb])).is_none());
+        for sub in ["mine", "ask", "clear", "reindex", "--help"] {
+            assert!(classify_inbox_outstanding(&mk(&["inbox", "outstanding", sub])).is_none());
         }
     }
 }

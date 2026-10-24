@@ -1,4 +1,4 @@
-"""Tests for the Python verbs of `fno inbox outstanding`: ask, clear, reindex.
+"""Tests for the Python commands of `fno inbox outstanding`: ask, clear, reindex.
 
 The listing itself is native; its tests live beside it in
 crates/fno-agents/src/outstanding_tests.rs. These tests read the open set back
