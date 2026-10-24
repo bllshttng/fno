@@ -1040,7 +1040,13 @@ pub(crate) fn decide_with_payload(
             .as_ref()
             .map(|(key, holder)| crate::claims::renew(key, holder, window_ms, None));
         let renewed = matches!(renew_outcome.as_ref(), Some(Ok(true)));
-        if can_idle && renewed && routable == Ok(true) {
+        // An unclaimed session may still idle on a LOCAL watch: its wake is
+        // its own harness-tracked task exit, and it holds no node claim a
+        // renewal could keep alive. A PR wait still requires the renewed
+        // lease.
+        let claimless_local =
+            watch_lease::local_watch_without_claim(claim.is_some(), reason, task_id.as_deref());
+        if can_idle && (renewed || claimless_local) && routable == Ok(true) {
             let (blocker, pr_number) = watch_target(reason, pr.as_deref());
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1094,7 +1100,7 @@ pub(crate) fn decide_with_payload(
                 );
             }
             watching_codex_refusal = Some((EMIT_FAILED_REFUSAL, "emit_failed"));
-        } else if can_idle && renewed && routable != Ok(true) {
+        } else if can_idle && (renewed || claimless_local) && routable != Ok(true) {
             // A codex session that could idle except for the channel: the
             // routability refusal, not the generic harness text. Only when
             // the lease ALSO failed does the generic path keep the more
