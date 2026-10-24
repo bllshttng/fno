@@ -1387,60 +1387,13 @@ def use_provider(
 # ---------------------------------------------------------------------------
 
 @cli.command("remove")
-def remove_provider(
+def remove_forward(
     provider_id: str = typer.Argument(...),
     force: bool = typer.Option(False, "--force", "-F", help="Allow removing the active provider"),
     scope: str = typer.Option("global", "--scope", help="global|project"),
 ) -> None:
     """Remove an account record. Refuses to remove the active account without --force."""
-    # Scope-own read: removal edits ONE file's records; the merged view would
-    # freeze every other layer's records into the file being written.
-    try:
-        config = load_scope_config(scope)  # type: ignore[arg-type]
-    except ProviderConfigError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1)
-
-    if provider_id not in config.by_id:
-        typer.echo(f"error: account '{provider_id}' not found", err=True)
-        raise typer.Exit(1)
-
-    # Cross-layer pointers are legitimate now, so the refusal must see every
-    # layer's own active, not just this scope's: deleting a record any layer
-    # points at bricks that layer's loader.
-    if not force:
-        from fno.adapters.providers.loader import (
-            _extract_accounts_block,
-            _provider_candidates,
-            _read_parsed,
-        )
-
-        pointed_at = any(
-            (_extract_accounts_block(_read_parsed(path)) or {}).get("active")
-            == provider_id
-            for path in _provider_candidates()
-        )
-        if pointed_at:
-            typer.echo(
-                f"error: '{provider_id}' is an active provider (some config "
-                "layer points at it). Use --force to remove it.",
-                err=True,
-            )
-            raise typer.Exit(1)
-
-    new_records = [r for r in config.records if r.id != provider_id]
-    new_active = config.active if config.active != provider_id else None
-
-    from fno.adapters.providers.model import ProvidersConfig
-    new_config = ProvidersConfig(records=new_records, active=new_active)
-
-    try:
-        save_providers(new_config, scope=scope)  # type: ignore[arg-type]
-    except OSError as exc:
-        typer.echo(f"error: failed to write settings.yaml: {exc}", err=True)
-        raise typer.Exit(1)
-
-    typer.echo(f"Account '{provider_id}' removed (scope={scope}).")
+    _forward_accounts("remove", provider_id, "--scope", scope, *(["--force"] if force else []))
 
 
 # ---------------------------------------------------------------------------
