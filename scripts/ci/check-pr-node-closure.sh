@@ -117,7 +117,7 @@ fi
 # The approved Retarget line, mirroring the Rust grammar in
 # org_board/pr_closure.rs (retarget/retargeted_from): keyword case-insensitive
 # with optional colon, then exactly three tokens - two differing node ids and
-# an approval (msg-... or d-...). Ids stay case-sensitive, so no lowercasing
+# an approval (fmail-..., msg-... or d-...). Ids stay case-sensitive, so no lowercasing
 # here. The LAST well-formed line wins; prose never erases it.
 retarget_from=""
 retarget_to=""
@@ -130,7 +130,7 @@ while IFS= read -r rline; do
   if [[ ${#rtok[@]} -ne 3 ]]; then continue; fi
   if [[ "${rtok[0]}" =~ ^${node_id_re}$ && "${rtok[1]}" =~ ^${node_id_re}$ \
        && "${rtok[0]}" != "${rtok[1]}" \
-       && "${rtok[2]}" =~ ^(msg-[0-9a-f]{6,}|d-[0-9a-f]{8})$ ]]; then
+       && "${rtok[2]}" =~ ^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$ ]]; then
     retarget_from="${rtok[0]}"
     retarget_to="${rtok[1]}"
     retarget_approval="${rtok[2]}"
