@@ -35,6 +35,8 @@ use crate::paths::AgentsHome;
 pub const CONFIRM_WINDOW: Duration = Duration::from_secs(10);
 const OPEN_WAIT: Duration = Duration::from_secs(30);
 const CALL_WAIT: Duration = Duration::from_secs(5);
+/// How long an approval waits for `--answer` before the host denies it.
+const ASK_WINDOW: Duration = crate::footnote_harness::thread::ASK_WINDOW;
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -166,6 +168,11 @@ impl Tracker {
         None
     }
 
+    /// Drop a submit whose receipt was answered and owes no late record.
+    pub fn forget(&mut self, command_id: &str) {
+        self.subs.remove(command_id);
+    }
+
     pub fn is_settled(&self, command_id: &str) -> bool {
         self.subs.get(command_id).is_some_and(|s| settled(s.state))
     }
@@ -234,6 +241,8 @@ struct Session<'a> {
     waiters: Vec<(String, mpsc::Sender<Value>, Instant)>,
     late: HashSet<String>,
     delivery_log: PathBuf,
+    /// The pending approval's id and when this host first saw it.
+    ask_since: Option<(String, Instant)>,
 }
 
 impl Session<'_> {
@@ -285,25 +294,16 @@ impl Session<'_> {
                         return Ok(());
                     }
                 };
-                let Some(approval) = self.tracker.approval.clone() else {
+                if self.tracker.approval.is_none() {
                     reply(json!({"ok": false, "error": "no approval is pending"}));
                     return Ok(());
-                };
-                let Some(choice) = pick_choice(&approval, allow) else {
-                    reply(json!({"ok": false, "error": "muse offered no matching choice"}));
-                    return Ok(());
-                };
-                let id = self.client.request(
-                    "approval/decide",
-                    json!({
-                        "sessionId": sid,
-                        "commandId": mint_uuid_v7(),
-                        "approvalId": approval["approvalId"],
-                        "requirementId": approval["currentRequirementId"],
-                        "choiceId": choice,
-                    }),
-                )?;
-                self.pending.insert(id, Pending::Reply(job.reply));
+                }
+                match self.decide(allow)? {
+                    Some(id) => {
+                        self.pending.insert(id, Pending::Reply(job.reply));
+                    }
+                    None => reply(json!({"ok": false, "error": "muse offered no matching choice"})),
+                }
             }
             Some("interrupt") => {
                 let id = self.client.request(
@@ -335,6 +335,7 @@ impl Session<'_> {
                 if let Some(cid) = self.tracker.observe(&method, &params) {
                     if self.late.remove(&cid) {
                         self.record_late(&cid);
+                        self.tracker.forget(&cid);
                     }
                 }
             }
@@ -363,11 +364,15 @@ impl Session<'_> {
         for (cid, tx, deadline) in std::mem::take(&mut self.waiters) {
             if self.tracker.is_settled(&cid) {
                 let _ = tx.send(self.tracker.receipt(&cid));
+                self.tracker.forget(&cid);
             } else if now >= deadline {
-                if self.tracker.subs[&cid].envelope.is_some() {
-                    self.late.insert(cid.clone());
-                }
                 let _ = tx.send(self.tracker.receipt(&cid));
+                // Only a mail owes a late-landing record; drop anything else.
+                if self.tracker.subs[&cid].envelope.is_some() {
+                    self.late.insert(cid);
+                } else {
+                    self.tracker.forget(&cid);
+                }
             } else {
                 keep.push((cid, tx, deadline));
             }
@@ -375,28 +380,55 @@ impl Session<'_> {
         self.waiters = keep;
     }
 
-    /// Deny a pending approval, interrupt the running turn, leave.
-    fn shut(&mut self) {
-        let sid = self.spec.session_id.clone();
-        if let Some(choice) = self
+    /// Send `approval/decide` for the pending approval with the choice Muse
+    /// offered for `allow`. None when nothing is pending or no choice fits.
+    fn decide(&mut self, allow: bool) -> Result<Option<u64>, MspError> {
+        let Some(approval) = self.tracker.approval.clone() else {
+            return Ok(None);
+        };
+        let Some(choice) = pick_choice(&approval, allow) else {
+            return Ok(None);
+        };
+        let params = json!({
+            "sessionId": self.spec.session_id,
+            "commandId": mint_uuid_v7(),
+            "approvalId": approval["approvalId"],
+            "requirementId": approval["currentRequirementId"],
+            "choiceId": choice,
+        });
+        self.client.request("approval/decide", params).map(Some)
+    }
+
+    /// Deny an approval nobody answered within ASK_WINDOW, the footnote
+    /// host's bound, so a lead who is away never stalls the session's queue.
+    fn expire_ask(&mut self) -> Result<(), MspError> {
+        let id = self
             .tracker
             .approval
             .as_ref()
-            .and_then(|a| pick_choice(a, false))
-        {
-            let approval = self.tracker.approval.clone().unwrap_or_default();
-            let _ = self.client.call(
-                "approval/decide",
-                json!({
-                    "sessionId": sid,
-                    "commandId": mint_uuid_v7(),
-                    "approvalId": approval["approvalId"],
-                    "requirementId": approval["currentRequirementId"],
-                    "choiceId": choice,
-                }),
-                CALL_WAIT,
-            );
+            .and_then(|a| a["approvalId"].as_str());
+        match (id, &self.ask_since) {
+            (None, _) => self.ask_since = None,
+            (Some(id), Some((seen, at))) if seen == id => {
+                if at.elapsed() >= ASK_WINDOW {
+                    let id = id.to_string();
+                    eprintln!(
+                        "muse-host: approval {id} unanswered for {}s; denied",
+                        ASK_WINDOW.as_secs()
+                    );
+                    self.decide(false)?;
+                    self.ask_since = Some((id, Instant::now()));
+                }
+            }
+            (Some(id), _) => self.ask_since = Some((id.to_string(), Instant::now())),
         }
+        Ok(())
+    }
+
+    /// Deny a pending approval, interrupt the running turn, leave.
+    fn shut(&mut self) {
+        let sid = self.spec.session_id.clone();
+        let _ = self.decide(false);
         if self.tracker.running.is_some() {
             let params = json!({"sessionId": sid, "commandId": mint_uuid_v7()});
             let _ = self.client.call("turn/interrupt", params, CALL_WAIT);
@@ -416,6 +448,7 @@ fn run(session: &mut Session, jobs: &mpsc::Receiver<Job>) -> Result<(), MspError
             session.frame(frame);
         }
         session.settle();
+        session.expire_ask()?;
     }
     Ok(())
 }
@@ -585,6 +618,7 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
         pending: HashMap::new(),
         waiters: Vec::new(),
         late: HashSet::new(),
+        ask_since: None,
         delivery_log: socket.with_file_name(format!("{}.delivery.jsonl", spec.session_id)),
     };
     let ran = run(&mut session, &jobs);

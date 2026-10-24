@@ -242,8 +242,16 @@ pub fn deliver(entry: &RegistryEntry, body: &str) -> Value {
     let envelope = crate::mail_header::delivered_msg_id(body);
     let req = json!({"op": "prompt", "text": body, "envelope_id": envelope});
     match host_call(&socket, &req) {
-        Ok(r) if r["state"].is_string() => {
-            let mut r = r;
+        Ok(mut r) if r["state"] == "parked" => {
+            // Muse took the submit into its own queue and runs it when the
+            // turn ends, so the send writes no durable copy: a second copy
+            // would reach the worker twice. `queued` is the footnote host's
+            // word for the same answer.
+            r["delivered"] = json!(true);
+            r["queued"] = json!(true);
+            r
+        }
+        Ok(mut r) if r["state"].is_string() => {
             if r["delivered"] != true && r["reason"].is_null() {
                 r["reason"] = json!(r["state"]);
             }

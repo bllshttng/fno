@@ -232,6 +232,12 @@ fn live_echo_thread_takes_mail_and_a_stop() {
     assert_eq!(receipt["state"], "accepted-new-turn", "{receipt}");
     assert_eq!(receipt["envelope_id"], "fmail-0123456789ab");
     let pid = entry.pid.unwrap();
+    let socket = entry.messaging_socket_path.clone().unwrap();
+    let child: Value = serde_json::from_str(
+        &std::fs::read_to_string(Path::new(&socket).with_extension("child")).unwrap(),
+    )
+    .unwrap();
+    let serve = child["pid"].as_i64().unwrap() as libc::pid_t;
     // SAFETY: the host leads its own group (setsid in dispatch_thread).
     unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) };
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -242,6 +248,8 @@ fn live_echo_thread_takes_mail_and_a_stop() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    let socket = entry.messaging_socket_path.unwrap();
     assert!(!Path::new(&socket).exists(), "the host removed its socket");
+    // SAFETY: signal 0 sends nothing; it only asks whether the pid exists.
+    let alive = unsafe { libc::kill(serve, 0) } == 0;
+    assert!(!alive, "muse serve ({serve}) outlived its host");
 }
