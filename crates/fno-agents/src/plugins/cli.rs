@@ -112,7 +112,8 @@ fn group_usage_error(message: &str) -> i32 {
 fn envelope(payload: Value) -> Value {
     let mut payload = payload;
     if let Value::Object(map) = &mut payload {
-        map.insert("version".into(), json!(RESPONSE_VERSION));
+        // The payload's own `version` (a pack version) outranks the envelope's.
+        map.entry("version").or_insert(json!(RESPONSE_VERSION));
     }
     payload
 }
