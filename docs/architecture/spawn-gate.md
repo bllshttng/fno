@@ -51,7 +51,7 @@ What still bounds a burst:
 - the provider lane caps
 - the CPU hold, which re-holds a turning machine's spawn until two consecutive under-ceiling samples
 - the RAM floor re-read at dequeue
-- lead_share, which divides the burst cap and lends idle seats
+- lead_share, which divides the burst cap
 - the per-territory cap and the blueprint cap
 - the 240-second queue timeout
 
@@ -67,9 +67,11 @@ The queue gives up after 240 seconds with exit 75. It used to wait 600 seconds. 
 
 A `--no-wait` pass takes no ticket. Its refusal receipt carries `queue_place`, `queue_size` and `waiting_on`, where the place is the back of the queue. A queue timeout carries them too. A refused native launch line names the place: `spawn gate refused the native launch (no_wait, place 3 of 3 waiting on max_live): ...`. The ticket leaves the queue as the gate returns.
 
-## Lead share lends idle seats
+## Lead share: the floor, the spare seat, and finished workers
 
-Each teamed lead gets an even share of the cap: `max_live` divided by the lead count. The share is a floor, not a ceiling. A lead at its share can borrow a seat that other leads leave idle. The borrow admits only while the free seats cover every seat the other leads still lack to reach their share. A lead under its share always passes this axis, so an idle lead that starts work takes its seats back before the borrower gets another. With `max_live` 15 and leads holding 5, 1 and 1, the first lead borrows a sixth seat. When the second lead then spawns, it admits, and the first lead's seventh is refused. On 2026-10-24 the even split refused one lead with a 15-node queue while the Mac ran 7 of 15. The refusal receipt carries `free` and `owed` beside `held` and `share`.
+Each teamed lead gets an even share of the cap: `max_live` divided by the lead count. The share is a floor that every lead keeps. A lead at its share can borrow a free seat only when one is left over after every seat the other leads still lack to reach their share. A lead under its share always passes this axis. With `max_live` 16 and leads holding 5, 1 and 1, the first lead borrows the spare sixth seat. When the second lead then spawns, it admits, and the first lead's seventh is refused. At `max_live` 15 there is no spare seat, so the first lead is refused at 5.
+
+A worker that finished stops charging its lead. Two facts mark it finished: its hook reported `done` for its turn, and the graph records every node it names as merged. The reaper's own verdict reads the merge, so the gate and the reaper agree. The row still takes a fleet seat until the reaper removes it. On 2026-10-24 seven such workers held one lead at 7 of 7, and the gate refused that lead with a 15-node queue. A worker whose run left a terminal-run receipt is skipped the same way. The refusal receipt carries `free` and `owed` beside `held` and `share`.
 
 ## The exit-code allocation table
 

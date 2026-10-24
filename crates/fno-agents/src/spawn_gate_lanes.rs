@@ -847,12 +847,11 @@ pub(crate) struct ShareReading {
 }
 
 impl ShareReading {
-    /// A lead at its share can borrow a seat the other leads leave idle,
-    /// while the free seats still cover what those leads are owed. A lead
-    /// under its share always passes, so an idle lead that starts work takes
-    /// its seats back before the borrower gets another. With no teamed lead
-    /// there is no lead seat to lend, and the share of 1 holds. `None` when
-    /// unread.
+    /// A lead at its share can borrow a free seat only when one is left over
+    /// after every seat the other leads still lack to reach their share, so
+    /// the borrow never takes a floor. A lead under its share always passes.
+    /// With no teamed lead there is no lead seat to lend, and the share of 1
+    /// holds. `None` when unread.
     pub(crate) fn refuses(&self, cap: usize) -> Option<bool> {
         let (share, held, fleet, owed) = (self.share?, self.held?, self.fleet?, self.owed?);
         if held < share {
@@ -861,8 +860,7 @@ impl ShareReading {
         if self.leads? == 0 {
             return Some(true);
         }
-        let free = cap.saturating_sub(fleet);
-        Some(free == 0 || free < owed)
+        Some(cap.saturating_sub(fleet) <= owed)
     }
 
     pub(crate) fn free(&self, cap: usize) -> Option<usize> {
@@ -875,6 +873,37 @@ pub(crate) fn share_reading(
     cap: usize,
     caller: Option<&str>,
     terminal_runs: Option<&Path>,
+) -> ShareReading {
+    let home = crate::paths::AgentsHome::at(registry_path.parent().unwrap_or(Path::new(".")));
+    share_reading_with(registry_path, cap, caller, terminal_runs, &mut || {
+        crate::gc_sweep::read_graph_entries(&home)
+    })
+}
+
+/// The graph records every node this session names as merged. The reaper's
+/// own verdict decides it, so the gate and the reaper never disagree about
+/// which rows are finished.
+fn named_work_merged(e: &RegistryEntry, sid: &str, graph: &crate::gc_sweep::GraphRead) -> bool {
+    let verdict = crate::gc_sweep::provenance_verdict(e, sid, graph, None, None);
+    if verdict.hold.is_some() {
+        return false;
+    }
+    match &verdict.work {
+        crate::graph_store::WorkState::AllDone { .. } => {
+            !verdict.merge_note.is_empty()
+                && verdict.merge_note.iter().all(|n| n.ends_with(":merged"))
+        }
+        crate::graph_store::WorkState::Open { .. } => verdict.merged_but_open.is_some(),
+        crate::graph_store::WorkState::NoProvenance => false,
+    }
+}
+
+fn share_reading_with(
+    registry_path: &Path,
+    cap: usize,
+    caller: Option<&str>,
+    terminal_runs: Option<&Path>,
+    load_graph: &mut dyn FnMut() -> Option<crate::gc_sweep::GraphRead>,
 ) -> ShareReading {
     let registry = match load_registry(registry_path) {
         Ok(registry) => registry,
@@ -896,6 +925,8 @@ pub(crate) fn share_reading(
     let mut by_spawner: std::collections::HashMap<String, usize> = Default::default();
     let mut fleet = 0usize;
     let terminal = terminal_runs.map(crate::terminal_run::read_keys);
+    // Read only when a row's turn ended: the graph read is the costly part.
+    let mut graph: Option<Option<crate::gc_sweep::GraphRead>> = None;
     for e in &registry.entries {
         // A team counts until it is cleared or its row is permanently dead.
         // A reboot leaves every teamed row reading exited while the team
@@ -912,6 +943,9 @@ pub(crate) fn share_reading(
         if !status_is_liveish(&e.status) || e.role_level.is_some() {
             continue;
         }
+        // A finished row still takes a fleet seat; it only stops charging
+        // its lead.
+        fleet += 1;
         // A row whose run reported a releasing terminal reason is a parked
         // finished worker, not active work: it stops charging its lead's
         // share while it stays alive for late review mail. No session id or
@@ -924,7 +958,20 @@ pub(crate) fn share_reading(
                 continue;
             }
         }
-        fleet += 1;
+        // A worker whose turn ended (its hook reported `done`) on merged work
+        // is finished, not a held seat. The graph is read only when such a
+        // row exists; an unread graph charges the row.
+        let turn_ended = e
+            .inside_leg
+            .as_ref()
+            .is_some_and(|r| r.state == crate::state::InsideLegState::Done);
+        if let (true, Some(sid)) = (turn_ended, e.harness_session_id.as_deref()) {
+            if let Some(read) = graph.get_or_insert_with(&mut *load_graph) {
+                if named_work_merged(e, sid, read) {
+                    continue;
+                }
+            }
+        }
         match e.spawned_by_session.as_deref() {
             Some(spawner) if Some(spawner) == caller => held_rows.push(e.name.clone()),
             Some(spawner) => *by_spawner.entry(spawner.to_string()).or_default() += 1,
@@ -1509,10 +1556,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An idle lead's seats lend to a lead at its share: with max_live 15
-    /// and leads A=5, B=1, C=1, A borrows a sixth seat. B then starts work
-    /// and admits, and A's seventh is refused because the free seats are
-    /// owed to B and C.
+    /// A lead at its share borrows only a seat left over after every floor:
+    /// with max_live 16 and leads A=5, B=1, C=1, A borrows the spare sixth
+    /// seat. B then starts work and admits, and A's seventh is refused
+    /// because the free seats are owed to B and C. At max_live 15 nothing is
+    /// spare, so A is refused at its share.
     #[test]
     fn an_idle_leads_seats_lend_until_a_lead_under_its_share_asks() {
         let dir = std::env::temp_dir().join(format!("fno-lanes-lend-{}", std::process::id()));
@@ -1538,21 +1586,23 @@ mod tests {
         };
 
         write_registry(&reg, &rows(5, 1, 1));
-        let a = share_reading(&reg, 15, Some("a"), None);
+        let a = share_reading(&reg, 16, Some("a"), None);
         assert_eq!(
             (a.share, a.held, a.fleet, a.owed),
             (Some(5), Some(5), Some(7), Some(8))
         );
-        assert_eq!(a.refuses(15), Some(false), "A borrows an idle seat");
+        assert_eq!(a.refuses(16), Some(false), "A borrows the spare seat");
+        let a = share_reading(&reg, 15, Some("a"), None);
+        assert_eq!(a.refuses(15), Some(true), "no spare seat at 15");
 
         write_registry(&reg, &rows(6, 1, 1));
-        let b = share_reading(&reg, 15, Some("b"), None);
-        assert_eq!(b.refuses(15), Some(false), "B under its share admits");
+        let b = share_reading(&reg, 16, Some("b"), None);
+        assert_eq!(b.refuses(16), Some(false), "B under its share admits");
 
         write_registry(&reg, &rows(6, 2, 1));
-        let a = share_reading(&reg, 15, Some("a"), None);
+        let a = share_reading(&reg, 16, Some("a"), None);
         assert_eq!(
-            a.refuses(15),
+            a.refuses(16),
             Some(true),
             "the free seats are owed to B and C"
         );
@@ -1561,6 +1611,54 @@ mod tests {
         write_registry(&reg, &[spawned_row("w-solo", "s-0", "solo")]);
         let solo = share_reading(&reg, 15, Some("solo"), None);
         assert_eq!(solo.refuses(15), Some(true), "no team, no borrow");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A worker whose hook reported `done` on a node recorded merged stops
+    /// charging its lead and still takes a fleet seat. The same row with no
+    /// recorded merge keeps counting.
+    #[test]
+    fn a_turn_ended_on_merged_work_stops_charging_the_lead() {
+        let dir = std::env::temp_dir().join(format!("fno-lanes-merged-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let done = r#"{"name":"w-done","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"d-1","spawned_by_session":"a","inside_leg":{"state":"done","seq":1,"received_at":"2026-10-24T16:00:00Z"}}"#;
+        write_registry(&reg, &[done.to_string(), spawned_row("w-live", "l-1", "a")]);
+        let graph = |merge: Option<&str>| {
+            let index = std::collections::HashMap::from([(
+                "d-1".to_string(),
+                vec![("N1".to_string(), "done".to_string())],
+            )]);
+            crate::gc_sweep::GraphRead {
+                work_index: index.clone(),
+                index,
+                open_do: Default::default(),
+                phases: Default::default(),
+                closed_planning: Default::default(),
+                plan_written: Default::default(),
+                statuses: [("N1".to_string(), "done".to_string())].into(),
+                pr_state: [("N1".to_string(), (merge.map(str::to_string), 0, 0))].into(),
+                pr_number: Default::default(),
+                plan_paths: Default::default(),
+                delivery_merged_refs: Default::default(),
+                do_nodes: Default::default(),
+                pr_reads: Default::default(),
+            }
+        };
+
+        let read = share_reading_with(&reg, 15, Some("a"), None, &mut || {
+            Some(graph(Some("merged")))
+        });
+        assert_eq!(
+            read.held_rows,
+            Some(vec!["w-live".to_string()]),
+            "merged and idle skips"
+        );
+        assert_eq!(read.fleet, Some(2), "the finished row still takes a seat");
+
+        let read = share_reading_with(&reg, 15, Some("a"), None, &mut || Some(graph(None)));
+        assert_eq!(read.held, Some(2), "no recorded merge: the row counts");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
