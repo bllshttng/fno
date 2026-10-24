@@ -33,6 +33,14 @@ Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. 
 
 AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
 
+### Codex RPC
+
+`fno agents mail send <full-session-id> --raw <payload>` types any single-line payload verbatim. /fno:command and $fno:command both name an fno command. The lane rewrites the command to the form of the receiving harness. The codex app-server lane sends a non-review payload over turn/start.
+
+- specimens: mail_inject.rs, mux_cli.rs
+- graduates-to: Codex RPC dispatch returns a submit receipt naming the accepted command.
+- added: 2026-08-24
+
 ## Repository
 
 ```
