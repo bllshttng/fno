@@ -1,4 +1,3 @@
-"""The spawn --name rules: @ is the cross-host separator, never a name char."""
 import pytest
 
 from fno.agents.dispatch import DispatchAskError, validate_spawn_name

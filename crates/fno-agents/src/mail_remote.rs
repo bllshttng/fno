@@ -899,9 +899,8 @@ pub fn run(args: &[String]) -> i32 {
 pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
 
 /// Exec an argv, inherit stdio, return the exit code (same-host forwards).
-/// The relay family's shared same-host forward: exec an argv, inherit
-/// stdio, return the exit code. `mail_env` stamps the mail-only re-entry
-/// marker, which a spawn forward must not carry.
+/// The relay family's shared same-host forward: exec an argv, inherit stdio,
+/// return the exit code. `mail_env` stamps the mail-only re-entry marker.
 pub fn exec_forward(argv: &[OsString], label: &str, mail_env: bool) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
