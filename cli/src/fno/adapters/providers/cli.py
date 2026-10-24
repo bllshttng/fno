@@ -350,31 +350,8 @@ def _identity_for(record, by_id: dict, now: float):
         return None
 
 
-def _identity_lines(record, got, worst_pct: float, threshold: float, now: float) -> list[str]:
-    """The identity and manual-switch lines for one record's usage row.
-
-    An unproven identity is named rather than passed over. Silence there reads
-    as a proven account.
-    """
-    from fno.adapters.providers.binding import MATCHED
-
-    if got is None:
-        return []
-    prefix = f"{record.id}  [{record.harness}]  "
-    if got.status == MATCHED:
-        # None when two records share the identity, still a match for the pin.
-        served = got.matched_record or got.requested_record
-        age = max(0, int((now - got.observed_at) // 60))
-        lines = [f"{prefix}identity: {served} (observed {age}m ago)"]
-    else:
-        lines = [prefix + got.receipt]
-    if worst_pct >= threshold:
-        lines.append(prefix + "manual switch: " + managed.slot_switch_remedy("the other account"))
-    return lines
-
-
 @cli.command("usage")
-def usage_providers(
+def usage_forward(
     refresh: bool = typer.Option(
         False, "--refresh", help="Force a fresh probe (bypass the TTL cache)."
     ),
@@ -382,107 +359,8 @@ def usage_providers(
         False, "--json", "-J", help="Emit a one-line JSON object keyed by provider id."
     ),
 ) -> None:
-    """Show per-account rate-limit windows: used % and reset time.
-
-    A provider with no fresh snapshot (never probed, probe failed, or CLI
-    without a probe) shows ``unknown`` and the command still exits 0 - probing
-    is advisory and fail-open (AC1-ERR).
-
-    ``--refresh`` renders the observation the probe just produced, in memory,
-    with no second cache read: re-reading the cache after refreshing creates a
-    SECOND observation, and a losing write race or a TTL edge then turns a
-    successful live probe into a displayed ``unknown``.
-    Every unknown names the boundary it failed at, so an operator can tell
-    "repair attribution" from "the endpoint moved" (AC3-ERR).
-    """
-    import json as _json
-    import time as _time
-
-    from fno.adapters.providers.loader import load_quota_config
-    from fno.adapters.providers.runtime_state import (
-        UsageRefresh,
-        read_usage,
-        refresh_usage_detailed,
-    )
-
-    config = _load()
-    now = _time.time()
-    quota = load_quota_config(repo_root=_get_repo_root())
-    ttl = quota.probe_ttl_seconds
-    identities: dict = {}
-
-    out: dict[str, object] = {}
-    for record in config.records:
-        if refresh:
-            obs = refresh_usage_detailed(record.id, ttl_seconds=0, now=now)
-        else:
-            cached = read_usage(record.id, ttl_seconds=ttl, now=now)
-            obs = (
-                UsageRefresh(None, "not-probed")
-                if cached is None
-                else UsageRefresh(cached, None if cached.windows else "no-windows")
-            )
-        if not obs.known:
-            # No identity on an unknown row: identity attributes an observation.
-            out[record.id] = {"state": "unknown", "reason": obs.reason or "unknown"}
-            continue
-        snap = obs.snapshot
-        assert snap is not None  # obs.known implies a snapshot with windows
-        entry: dict[str, object] = {
-            "source": snap.source,
-            "probed_at": snap.probed_at,
-            # Both travel to the surface. A partial reading that renders like a
-            # whole one re-collapses exactly what the marker was added to keep
-            # apart, and a coarse reading that renders like a precise one is
-            # the same mistake in the other axis.
-            "partial": snap.partial,
-            "confidence": snap.confidence,
-            "windows": [
-                {"label": w.label, "used_pct": w.used_pct, "resets_at": w.resets_at}
-                for w in snap.windows
-            ],
-        }
-        if obs.persisted is False:
-            # Additive: the reading is good, only its cache write lost the race.
-            entry["persisted"] = False
-        got = identities[record.id] = _identity_for(record, config.by_id, now)
-        if got is not None:
-            entry["identity"] = {
-                "status": got.status,
-                "account": got.matched_record,
-                "reason": got.reason,
-                "observed_at": got.observed_at,
-            }
-        out[record.id] = entry
-
-    if json_output:
-        typer.echo(_json.dumps(out))
-        return
-
-    if not config.records:
-        typer.echo("No accounts configured.")
-        return
-    for record in config.records:
-        row = out[record.id]
-        assert isinstance(row, dict)
-        if row.get("state") == "unknown":
-            typer.echo(f"{record.id}  [{record.harness}]  unknown ({row['reason']})")
-            continue
-        suffix = ""
-        if row.get("confidence") and row["confidence"] != "exact":
-            suffix += f"  ({row['confidence']})"
-        if row.get("partial"):
-            suffix += "  PARTIAL: a window was rejected, treat as a floor"
-        for w in row["windows"]:
-            typer.echo(
-                f"{record.id}  [{record.harness}]  {w['label']:<8} "
-                f"{w['used_pct']:5.1f}%  {_fmt_resets_in(w['resets_at'], now)}{suffix}"
-            )
-        worst = max((w["used_pct"] for w in row["windows"]), default=0.0)
-        for line in _identity_lines(
-            record, identities.get(record.id), worst, quota.defer_threshold_pct, now
-        ):
-            typer.echo(line)
+    """Show per-account rate-limit windows: used % and reset time."""
+    _forward_accounts("usage", *(["--refresh"] if refresh else []), *(["--json"] if json_output else []))
 
 
 @cli.command("window")

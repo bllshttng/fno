@@ -104,10 +104,9 @@ fn two_live_zai_rows() -> String {
 /// the pick the gate would make, without a manual refresh first.
 #[test]
 fn states_walk_refreshes_a_stale_lane_and_rows_read_the_judged_map() {
-    let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
+    let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
     let marker = env.dir.path().join("marker");
-    let stub = write_refresh_stub(env.dir.path(), &fresh_codex_row(), &marker);
-    std::env::set_var("FNO_BIN", &stub);
+    let _stub = write_refresh_stub(&fresh_codex_row(), &marker);
     let out = resolve_slot_payload(&slot_env_payload(json!({
         "mode": "states",
     })));
@@ -126,15 +125,12 @@ fn states_walk_refreshes_a_stale_lane_and_rows_read_the_judged_map() {
     assert!(marker.exists(), "the readout never ran the refresh stub");
 }
 
-/// AC2-ERR: a refresh that fails (non-zero exit) fails OPEN: the readout
-/// judges the stale map, the codex lane stays unknown, and the fresh claude
-/// fallback answers. Non-zero exit returns immediately, well inside the
-/// transport bound.
+/// AC2-ERR: a refresh that fails fails OPEN: the readout judges the stale
+/// map, the codex lane stays unknown, and the fresh claude fallback answers.
 #[test]
 fn states_walk_survives_a_failing_refresh_and_judges_the_stale_map() {
-    let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
-    let stub = crate::write_exec_stub(env.dir.path(), "fail-stub.sh", "#!/bin/sh\nexit 1\n");
-    std::env::set_var("FNO_BIN", &stub);
+    let _env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
+    let _stub = crate::route_capacity::RefreshStub::install(|| None);
     let out = resolve_slot_payload(&slot_env_payload(json!({
         "mode": "states",
     })));
@@ -198,7 +194,7 @@ fn all_lanes_unknown_refuses_as_unknown_not_exhausted() {
 
 #[test]
 fn gathered_full_vendor_lane_is_skipped_using_its_count() {
-    let env = CapacityEnv::new(&state_json(None), None);
+    let env = CapacityEnv::new(&state_json(None));
     let pins = pin_vendor_state(&env, &two_live_zai_rows());
     let input = without_vendor_maps(payload(json!({"lanes_raw": ["flash-x", "sonnet-x"]})));
 
@@ -218,7 +214,7 @@ fn gathered_full_vendor_lane_is_skipped_using_its_count() {
 /// AC6-ERR: an unreadable registry is a lane-count error and fails closed.
 #[test]
 fn unreadable_registry_refuses_a_gathered_capped_lane() {
-    let env = CapacityEnv::new(&state_json(None), None);
+    let env = CapacityEnv::new(&state_json(None));
     let pins = pin_vendor_state(&env, "not json");
     let input = without_vendor_maps(payload(json!({"lanes_raw": ["flash-x"]})));
 
