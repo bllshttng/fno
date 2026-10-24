@@ -113,8 +113,7 @@ ownership rather than overwriting.
 This substrate shares an epic with the company package. The split is the
 ownership treaty:
 
-- The company package owns execution-topology selection. Its campaign
-  coordinator had no caller and was deleted.
+- The company package owns execution-topology selection. Its campaign coordinator had no caller and was deleted.
 - The function-pack substrate owns pack manifests, verification, registry,
   activation, packaged roles, workflows, evaluators, assets, and progressive
   capability exposure.
