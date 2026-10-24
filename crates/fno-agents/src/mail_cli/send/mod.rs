@@ -1812,6 +1812,20 @@ pub fn run(args: &[String]) -> i32 {
     let mut name = name;
     let mut message = message;
 
+    // --from-self resolves before the origin record stamps a sender, so a
+    // refused self-stamp never first stamps the unknown floor.
+    if args.from_self {
+        if from_name.is_some() {
+            eprintln!("error: --from-self and --from-name are mutually exclusive");
+            return 2;
+        }
+        let Some((sid, _harness)) = own_identity() else {
+            eprintln!("error: --from-self: no ambient harness identity - cannot self-stamp");
+            return 2;
+        };
+        from_name = Some(crate::identity::canonical_handle(&sid));
+    }
+
     let classified_origin = match classify_origin(args.origin.as_deref()) {
         Ok(origin) => origin,
         Err(msg) => {
@@ -1945,18 +1959,6 @@ pub fn run(args: &[String]) -> i32 {
             "error: --check applies to --raw (the keystroke lane); a wrapped send always has the durable fallback"
         );
         return 2;
-    }
-
-    if args.from_self {
-        if from_name.is_some() {
-            eprintln!("error: --from-self and --from-name are mutually exclusive");
-            return 2;
-        }
-        let Some((sid, _harness)) = own_identity() else {
-            eprintln!("error: --from-self: no ambient harness identity - cannot self-stamp");
-            return 2;
-        };
-        from_name = Some(crate::identity::canonical_handle(&sid));
     }
 
     if args.kind.is_some() {
