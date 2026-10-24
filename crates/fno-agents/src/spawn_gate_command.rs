@@ -1128,6 +1128,8 @@ fn share_json(reading: &spawn_gate_lanes::ShareReading) -> Value {
     share.insert("leads".into(), json!(reading.leads));
     share.insert("share".into(), json!(reading.share));
     share.insert("held".into(), json!(reading.held));
+    share.insert("fleet".into(), json!(reading.fleet));
+    share.insert("owed".into(), json!(reading.owed));
     share.insert(
         "held_rows".into(),
         json!(reading.held_rows.clone().unwrap_or_default()),

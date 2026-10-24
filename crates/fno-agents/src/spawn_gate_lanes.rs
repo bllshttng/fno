@@ -850,11 +850,16 @@ impl ShareReading {
     /// A lead at its share can borrow a seat the other leads leave idle,
     /// while the free seats still cover what those leads are owed. A lead
     /// under its share always passes, so an idle lead that starts work takes
-    /// its seats back before the borrower gets another. `None` when unread.
+    /// its seats back before the borrower gets another. With no teamed lead
+    /// there is no lead seat to lend, and the share of 1 holds. `None` when
+    /// unread.
     pub(crate) fn refuses(&self, cap: usize) -> Option<bool> {
         let (share, held, fleet, owed) = (self.share?, self.held?, self.fleet?, self.owed?);
         if held < share {
             return Some(false);
+        }
+        if self.leads? == 0 {
+            return Some(true);
         }
         let free = cap.saturating_sub(fleet);
         Some(free == 0 || free < owed)
@@ -1551,6 +1556,11 @@ mod tests {
             Some(true),
             "the free seats are owed to B and C"
         );
+
+        // No teamed lead: nothing to lend, so the share of 1 still refuses.
+        write_registry(&reg, &[spawned_row("w-solo", "s-0", "solo")]);
+        let solo = share_reading(&reg, 15, Some("solo"), None);
+        assert_eq!(solo.refuses(15), Some(true), "no team, no borrow");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
