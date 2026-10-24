@@ -392,14 +392,17 @@ fn fleet_rows_from(
         });
     }
 
+    // Advisory, never blocking: an unattributable row is unmeasurable
+    // liveness, so the read answers from the rows it can vouch for instead of
+    // refusing (one stuck no-provenance pane blanked the unplanned queue).
     if skipped_no_sid > 0 {
         warnings.push(format!(
-            "{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped"
+            "{ADVISORY}{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped"
         ));
     }
     if skipped_nonclaude_no_id > 0 {
         warnings.push(format!(
-            "{skipped_nonclaude_no_id} non-claude row(s) carried no session id, unmeasurable, skipped"
+            "{ADVISORY}{skipped_nonclaude_no_id} non-claude row(s) carried no session id, unmeasurable, skipped"
         ));
     }
     warnings.extend(unmapped);
@@ -1248,5 +1251,46 @@ mod tests {
             Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
+    }
+
+    // An unattributable no-sid row is unmeasurable liveness, never a refusal:
+    // the skip's summary warns advisory-classified so the roster reading
+    // stays consulted. Blocking-classified, one stuck no-provenance pane
+    // blanked the unplanned queue.
+    #[test]
+    fn an_unattributable_no_sid_row_skips_advisory_never_blocks() {
+        let mut ghost = crate::state::RegistryEntry::default();
+        ghost.harness = Some("codex".into());
+        ghost.name = "c3po-codex".into();
+        ghost.status = crate::AgentStatus::Live;
+        let empty_vendor = RawAgents {
+            rows: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let (rows, warnings) = fleet_rows_from(empty_vendor, Some(&[ghost]));
+        assert!(rows.is_empty());
+        let summary = warnings
+            .iter()
+            .find(|w| w.contains("non-claude row(s) carried no session id"))
+            .expect("the skip is named");
+        assert!(summary.starts_with(ADVISORY), "{summary}");
+
+        // The claude-leg twin: a vendor row with no session id skips the
+        // same way.
+        let headless = RawAgents {
+            rows: vec![serde_json::json!({
+                "name": "headless",
+                "state": "working",
+                "cwd": "/tmp/nowhere"
+            })],
+            warnings: Vec::new(),
+        };
+        let (rows, warnings) = fleet_rows_from(headless, None);
+        assert!(rows.is_empty());
+        let summary = warnings
+            .iter()
+            .find(|w| w.contains("row(s) carried no session id"))
+            .expect("the skip is named");
+        assert!(summary.starts_with(ADVISORY), "{summary}");
     }
 }
