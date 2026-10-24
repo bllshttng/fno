@@ -30,7 +30,7 @@ pub const DEFAULT_USAGE_TTL_SECONDS: f64 = 300.0;
 pub const DEFAULT_THRESHOLD_PCT: f64 = 90.0;
 const MAX_BACKOFF_LEVEL: i64 = 15;
 const SCHEMA_VERSION: i64 = 2;
-const WINDOW_LABEL: &str = "window";
+pub(crate) const WINDOW_LABEL: &str = "window";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Health {

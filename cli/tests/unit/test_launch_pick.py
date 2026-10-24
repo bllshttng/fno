@@ -86,6 +86,7 @@ def armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 class TestPickAtLaunch:
 
+    @pytest.mark.dev_build  # the pick is the fno-agents verb
     def test_receipt_names_the_picked_account_and_its_headroom(
         self, armed: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -124,6 +125,7 @@ class TestSpawnSeam:
         monkeypatch.setattr(dispatch_mod, "_emit_ev", lambda *a, **k: None)
         return seen
 
+    @pytest.mark.dev_build  # the pick is the fno-agents verb
     def test_direct_call_applies_the_picked_overlay(
         self, armed: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -213,6 +215,7 @@ class TestPaneSeam:
     at the latter would leave every default interactive spawn on the exhausted
     account while the option read enabled."""
 
+    @pytest.mark.dev_build  # the pick is the fno-agents verb
     def test_the_pane_path_picks_too(
         self, armed: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
