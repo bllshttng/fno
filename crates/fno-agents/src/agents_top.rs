@@ -239,6 +239,65 @@ fn opt_str(value: Option<&str>) -> Value {
     value.map_or(Value::Null, |s| json!(s))
 }
 
+/// The longest `last_message` a row carries, in characters.
+const LAST_MESSAGE_CHARS: usize = 240;
+
+/// The seat facts a fleet page shows beside the status: the full session
+/// id, the model and where it was read, the start, the newest turn and its
+/// stamp, the directory and its project, and the context reading. A fact
+/// no source answers is null. `projects` caches the project name per
+/// directory, because the resolver can shell out to git.
+fn seat_facts(
+    w: &Worker,
+    entry: Option<&RegistryEntry>,
+    probe: Option<&crate::truth_probe::TruthProbe>,
+    home: Option<&Path>,
+    projects: &mut HashMap<String, String>,
+) -> Map<String, Value> {
+    let registry_model = entry
+        .and_then(|e| e.model.as_deref())
+        .filter(|m| !m.is_empty());
+    let observed_model = probe
+        .map(|p| &p.observed_model)
+        .filter(|om| om.get("kind").and_then(Value::as_str) == Some("observed"))
+        .and_then(|om| om.get("model").and_then(Value::as_str))
+        .filter(|m| !m.is_empty());
+    let (model, model_basis) = match (registry_model, observed_model) {
+        (Some(m), _) => (Some(m), Some("registry")),
+        (None, Some(m)) => (Some(m), Some("observed")),
+        (None, None) => (None, None),
+    };
+    let cwd = entry.map(|e| e.cwd.as_str()).filter(|d| !d.is_empty());
+    let root = entry
+        .map(|e| e.project_root.as_str())
+        .filter(|d| !d.is_empty());
+    let project = root.or(cwd).map(|dir| {
+        projects
+            .entry(dir.to_string())
+            .or_insert_with(|| crate::finalize::resolve_project_name(None, home, Path::new(dir)))
+            .clone()
+    });
+    let last_message = probe
+        .and_then(|p| p.last_message.as_deref())
+        .map(|m| m.chars().take(LAST_MESSAGE_CHARS).collect::<String>());
+    let facts = json!({
+        "session_id": w.session_id.as_deref().or(entry.and_then(|e| e.harness_session_id.as_deref())),
+        "model": model,
+        "model_basis": model_basis,
+        "started_at": entry.map(|e| e.created_at.as_str()).filter(|s| !s.is_empty()),
+        "last_message": last_message,
+        "last_message_at": probe.and_then(|p| p.last_event_at.as_deref()),
+        "cwd": cwd,
+        "project_root": root,
+        "project": project,
+        "context_pct": entry.and_then(|e| e.context_used_pct),
+    });
+    match facts {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
 /// The worker rows: the census joined to truth, the session-to-node map,
 /// and the process-table RSS. Heaviest first.
 fn worker_rows(
@@ -253,6 +312,8 @@ fn worker_rows(
         .iter()
         .filter_map(|e| e.harness_session_id.as_deref().map(|sid| (sid, e)))
         .collect();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut projects: HashMap<String, String> = HashMap::new();
     let mut out: Vec<Value> = census
         .workers
         .iter()
@@ -277,7 +338,8 @@ fn worker_rows(
                 .as_deref()
                 .and_then(|s| sessions.get(&s.trim().to_ascii_lowercase()));
             let pid = w.session_pid.or(w.pid);
-            json!({
+            let seat = seat_facts(w, entry, probe, home.as_deref(), &mut projects);
+            let mut row = json!({
                 "source": w.source,
                 "name": w.name,
                 "handle": handle,
@@ -303,7 +365,11 @@ fn worker_rows(
                 "pr": joined.and_then(|j| j.get("pr")).cloned().unwrap_or(Value::Null),
                 "pr_basis": joined.and_then(|j| j.get("pr_basis")).cloned().unwrap_or(Value::Null),
                 "role": entry.and_then(role_label),
-            })
+            });
+            if let Value::Object(map) = &mut row {
+                map.extend(seat);
+            }
+            row
         })
         .collect();
     out.sort_by(|a, b| {
