@@ -15,6 +15,15 @@
 //!
 //! With `store.remote_url` unset nothing publishes, and the reader shows
 //! this machine alone with a notice naming the key.
+//!
+//! The seat facts (model, start, directory, project, role, context) ride a
+//! side table, `fleet_seat`, so an old daemon's nine-column session insert
+//! keeps working and an old reader never selects them. Its seats read null.
+//! A seat row carries the beat that wrote it, and a read keeps it only when
+//! that beat is still the machine's newest, so a seat left behind by a newer
+//! daemon never attaches to an old daemon's session of the same name.
+//! The text of a session's last turn stays on its own machine: the seat row
+//! carries only the stamp of that turn.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,12 +73,29 @@ CREATE TABLE IF NOT EXISTS fleet_session (
     rss_mb REAL,
     parent TEXT,
     PRIMARY KEY (machine_id, name)
+);
+CREATE TABLE IF NOT EXISTS fleet_seat (
+    machine_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    session_id TEXT,
+    model TEXT,
+    model_basis TEXT,
+    started_at TEXT,
+    last_message_at TEXT,
+    cwd TEXT,
+    project TEXT,
+    role TEXT,
+    context_pct INTEGER,
+    beat_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, name)
 );";
 
 const MACHINE_COLUMNS: &str = "machine_id, host, owner, role, beat_at, cpu, mem_used, \
      mem_pressure, watts, gpu, verdict, cap, ceiling, takes_work";
 const SESSION_COLUMNS: &str =
     "machine_id, name, session, harness, node, status, age_s, rss_mb, parent";
+const SEAT_COLUMNS: &str = "machine_id, name, session_id, model, model_basis, started_at, \
+     last_message_at, cwd, project, role, context_pct, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Machine {
@@ -102,6 +128,31 @@ pub struct Session {
     pub rss_mb: Option<f64>,
     /// The spawner's session id prefix, when the row recorded one.
     pub parent: Option<String>,
+    /// The seat facts, from `fleet_seat`. Null for a machine whose daemon
+    /// predates the table.
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    /// `registry` or `observed`: where the model was read.
+    pub model_basis: Option<String>,
+    pub started_at: Option<String>,
+    pub last_message_at: Option<String>,
+    pub cwd: Option<String>,
+    pub project: Option<String>,
+    pub role: Option<String>,
+    pub context_pct: Option<i64>,
+}
+
+impl Session {
+    fn has_seat(&self) -> bool {
+        self.session_id.is_some()
+            || self.model.is_some()
+            || self.started_at.is_some()
+            || self.last_message_at.is_some()
+            || self.cwd.is_some()
+            || self.project.is_some()
+            || self.role.is_some()
+            || self.context_pct.is_some()
+    }
 }
 
 /// The local flag the spawn gate reads: present means this machine takes no
@@ -212,9 +263,22 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 harness: text(row, "harness"),
                 node: text(row, "node"),
                 status: text(row, "status"),
-                age_s: row.get("status_age_s").and_then(Value::as_i64),
+                // The top row carries the age as a float (53.0).
+                age_s: row
+                    .get("status_age_s")
+                    .and_then(Value::as_f64)
+                    .map(|a| a.round() as i64),
                 rss_mb: row.get("rss_mb").and_then(Value::as_f64),
                 parent: text(row, "lead"),
+                session_id: text(row, "session_id"),
+                model: text(row, "model"),
+                model_basis: text(row, "model_basis"),
+                started_at: text(row, "started_at"),
+                last_message_at: text(row, "last_message_at"),
+                cwd: text(row, "cwd"),
+                project: text(row, "project"),
+                role: text(row, "role"),
+                context_pct: row.get("context_pct").and_then(Value::as_i64),
             })
         })
         .collect()
@@ -264,6 +328,10 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
             "DELETE FROM fleet_session WHERE machine_id = ?1".to_string(),
             vec![id.clone()],
         ),
+        (
+            "DELETE FROM fleet_seat WHERE machine_id = ?1".to_string(),
+            vec![id.clone()],
+        ),
     ];
     for s in sessions {
         steps.push((
@@ -283,6 +351,29 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
                 opt_text(&s.parent),
             ],
         ));
+        if !s.has_seat() {
+            continue;
+        }
+        steps.push((
+            format!(
+                "INSERT OR REPLACE INTO fleet_seat ({SEAT_COLUMNS}) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+            ),
+            vec![
+                id.clone(),
+                SqlValue::Text(s.name.clone()),
+                opt_text(&s.session_id),
+                opt_text(&s.model),
+                opt_text(&s.model_basis),
+                opt_text(&s.started_at),
+                opt_text(&s.last_message_at),
+                opt_text(&s.cwd),
+                opt_text(&s.project),
+                opt_text(&s.role),
+                opt_int(s.context_pct),
+                SqlValue::Integer(machine.beat_at),
+            ],
+        ));
     }
     remote.transaction(&steps).map(drop).map_err(|(_, e)| e)
 }
@@ -299,8 +390,20 @@ fn text(v: &SqlValue) -> Option<String> {
     v.text().map(str::to_string)
 }
 
-/// Every machine row and every session row on the primary.
-pub fn read(remote: &Remote) -> Result<(Vec<Machine>, Vec<Session>), String> {
+/// What [`read`] answers: every machine, every session with its seat facts
+/// joined on, and why the seat read failed when it did.
+pub struct Fleet {
+    pub machines: Vec<Machine>,
+    pub sessions: Vec<Session>,
+    pub seat_error: Option<String>,
+}
+
+/// Every machine row and every session row on the primary, each session
+/// with its `fleet_seat` row when one exists. A seat whose session row is
+/// gone, or whose beat is not its machine's newest, is dropped. A seat read
+/// that fails leaves the sessions as read and names the failure in
+/// `seat_error`.
+pub fn read(remote: &Remote) -> Result<Fleet, String> {
     remote.script(SCHEMA)?;
     let machines = remote
         .execute(
@@ -343,9 +446,43 @@ pub fn read(remote: &Remote) -> Result<(Vec<Machine>, Vec<Session>), String> {
             age_s: r[6].integer(),
             rss_mb: real(&r[7]),
             parent: text(&r[8]),
+            ..Session::default()
         })
         .collect();
-    Ok((machines, sessions))
+    let mut fleet = Fleet {
+        machines,
+        sessions,
+        seat_error: None,
+    };
+    match remote.execute(&format!("SELECT {SEAT_COLUMNS} FROM fleet_seat"), &[]) {
+        Ok(reply) => {
+            for r in &reply.rows {
+                let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                let current = fleet.machines.iter().any(|m| {
+                    Some(&m.machine_id) == machine_id.as_ref() && Some(m.beat_at) == r[11].integer()
+                });
+                if !current {
+                    continue;
+                }
+                let Some(s) = fleet.sessions.iter_mut().find(|s| {
+                    Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
+                }) else {
+                    continue;
+                };
+                s.session_id = text(&r[2]);
+                s.model = text(&r[3]);
+                s.model_basis = text(&r[4]);
+                s.started_at = text(&r[5]);
+                s.last_message_at = text(&r[6]);
+                s.cwd = text(&r[7]);
+                s.project = text(&r[8]);
+                s.role = text(&r[9]);
+                s.context_pct = r[10].integer();
+            }
+        }
+        Err(error) => fleet.seat_error = Some(error),
+    }
+    Ok(fleet)
 }
 
 /// The map as JSON: one entry per machine with `fresh`, `age_s`, `local`
@@ -571,16 +708,26 @@ pub fn run(args: &[String]) -> i32 {
     let local = local_machine(&home, now);
     let map = match crate::store_remote::configured() {
         Ok(Some(remote)) => match read(&remote) {
-            Ok((mut machines, sessions)) => {
+            Ok(mut fleet) => {
                 // A toggle shows at once on this machine, before the next beat.
-                if let Some(row) = machines
+                if let Some(row) = fleet
+                    .machines
                     .iter_mut()
                     .find(|m| m.machine_id == local.machine_id)
                 {
                     row.takes_work = local.takes_work;
                 }
-                let mut map = map_json(&machines, &sessions, &local.machine_id, now, fresh_s);
+                let mut map = map_json(
+                    &fleet.machines,
+                    &fleet.sessions,
+                    &local.machine_id,
+                    now,
+                    fresh_s,
+                );
                 map["remote"] = json!(remote.url());
+                if let Some(error) = fleet.seat_error {
+                    map["seat_error"] = json!(error);
+                }
                 map
             }
             Err(error) => {
