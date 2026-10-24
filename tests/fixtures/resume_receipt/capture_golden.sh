@@ -1,24 +1,33 @@
 #!/usr/bin/env bash
-# Capture the resume receipt goldens from the Python leg, BEFORE its
-# deletion (port protocol step 2). Run from the repo root:
+# Capture (and re-freeze) the resume receipt goldens by driving the native
+# door. Run from the repo root:
 #
-#   bash tests/fixtures/resume_receipt/capture_golden.sh
+#   FNO_CAPTURE_BIN=<path-to-fno-agents> bash tests/fixtures/resume_receipt/capture_golden.sh
 #
 # Writes crates/fno-agents/tests/golden/resume_receipt/<case>.{exit,out,err}
 # and asserts stability by running the whole set twice: the second pass must
 # be byte-identical (the FNO_CAPTURE_GOLDEN convention: new equals old before
-# anything freezes). The Python leg answers through the source tree
-# (PYTHONPATH), never the installed binary, so the capture reads the exact
-# bytes this PR deletes.
+# anything freezes).
+#
+# Provenance: the FIRST capture ran the deleted Python leg
+# (cli/src/fno/resume/receipt.py) through the source tree before this PR
+# deleted it, so the goldens carry the Python leg's exact bytes. From here on
+# the script drives `fno-agents resume-receipt` (FNO_CAPTURE_BIN), the same
+# argv the forwarding leaf passes, so a contract change re-freezes the
+# goldens against the door that answers them. The characterization test in
+# crates/fno-agents/tests/resume_receipt_parity.rs re-derives every fixture
+# and asserts the frozen bytes.
 #
 # Determinism: every fixture commit pins author/committer dates, the write
-# verb pins --written-at, and each golden masks the fixture base as FIXTURE.
-# The goldens freeze whatever the Python leg answers, byte for byte; the
-# Rust door must reproduce them exactly.
+# verb pins --written-at, and the fixture base is fixed (the receipt's
+# content_sha digests the raw worktree path). Each golden masks the fixture
+# base as FIXTURE.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-GOLDENS="$ROOT/crates/fno-agents/tests/golden/resume_receipt"
+# The test captures into a scratch dir via FNO_CAPTURE_GOLDEN_OUT; a bare run
+# re-freezes the committed goldens in place.
+GOLDENS="${FNO_CAPTURE_GOLDEN_OUT:-$ROOT/crates/fno-agents/tests/golden/resume_receipt}"
 # A FIXED base, not mktemp: the receipt's content_sha digests the raw
 # worktree path, so a randomized fixture dir would make every digest
 # run-specific and the stability pass would never hold.
@@ -27,16 +36,17 @@ rm -rf "$FIXBASE"
 trap 'rm -rf "$FIXBASE"' EXIT
 mkdir -p "$GOLDENS"
 
-# The source-tree leg: never the installed binary. Ambient FNO_ carriers are
-# stripped so the capture is hermetic (a live FNO_TASK_CONTEXT_FILE would
-# embed this session's binding into the receipts).
-fno_py() {
+# The door, driven by the binary named in FNO_CAPTURE_BIN (the same argv the
+# forwarding leaf passes). Ambient FNO_ carriers are stripped so the capture
+# is hermetic (a live FNO_TASK_CONTEXT_FILE would embed this run's binding
+# into the receipts).
+fno_door() {
   local root="$1"; shift
   env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_CONFIG \
       -u FNO_STATE_DIR -u FNO_EVENTS_PATH -u FNO_HOME \
-      PYTHONPATH="$ROOT/cli/src" FNO_REPO_ROOT="$root" \
-      uv run --project "$ROOT/cli" python -c \
-      'import sys; from fno.cli import main; sys.exit(main())' "$@"
+      FNO_REPO_ROOT="$root" \
+      "${FNO_CAPTURE_BIN:?FNO_CAPTURE_BIN must name the fno-agents binary}" \
+      resume-receipt "$@"
 }
 
 # A fixture: one git repo, one deterministic commit, an empty .fno. Idempotent
@@ -58,7 +68,9 @@ new_fixture() {
 
 head_of() { git -C "$1/repo" rev-parse HEAD; }
 
-# One case: ensure the fixture, run the command, mask, freeze.
+# One case: ensure the fixture, run the door, mask, freeze. The case args
+# keep the old typer-path spelling (`do resume receipt <verb> ...`); the
+# fixed prefix drops here, leaving the verb the door takes.
 #   case_run <name> <fixture-dir> <args...>
 case_run() {
   local name="$1" dir="$2"; shift 2
@@ -66,7 +78,7 @@ case_run() {
   local out err rc
   out="$dir/.stdout"; err="$dir/.stderr"
   set +e
-  fno_py "$dir/repo" "$@" > "$out" 2> "$err"
+  fno_door "$dir/repo" "${@:4}" > "$out" 2> "$err"
   rc=$?
   set -e
   {
@@ -163,15 +175,20 @@ case_run validate-stale-head "$FIXBASE/stale" \
   do resume receipt validate --node x-1 --claims-root "$FIXBASE/stale/claims" \
   --worktree "$FIXBASE/stale/repo" --session-id sess-1
 
-# foreign_claim: a live claim held by another session refuses. Minted through
-# the real claims library so the lockfile layout is never hand-guessed.
+# foreign_claim: a live claim held by another session refuses. The lockfile
+# is the native record format at the native path (root/.fno/claims/), pid
+# pinned to this script's own pid so the holder reads LIVE, not suspect.
 cp -R "$HP" "$FIXBASE/foreign"
-PYTHONPATH="$ROOT/cli/src" uv run --project "$ROOT/cli" python - "$FIXBASE/foreign/claims" <<'PYEOF'
-import sys
-from pathlib import Path
-from fno.claims.core import acquire_claim
-acquire_claim("node:x-1", "someone-else", ttl_ms=3_600_000, root=Path(sys.argv[1]))
-PYEOF
+mkdir -p "$FIXBASE/foreign/claims/.fno/claims"
+{
+  printf 'schema_version: 1\n'
+  printf 'key: node:x-1\n'
+  printf 'holder: someone-else\n'
+  printf 'acquired_at: 1\n'
+  printf 'pid: %s\n' "$$"
+  printf 'host: cap\n'
+  printf 'expires_at: 99999999999999\n'
+} > "$FIXBASE/foreign/claims/.fno/claims/node%3Ax-1.lock"
 case_run validate-foreign-claim "$FIXBASE/foreign" \
   do resume receipt validate --node x-1 --claims-root "$FIXBASE/foreign/claims" \
   --worktree "$FIXBASE/foreign/repo" --session-id sess-1
@@ -179,14 +196,8 @@ case_run validate-foreign-claim "$FIXBASE/foreign" \
 # corrupted_claim: an unreadable lockfile fails CLOSED (placed at the real
 # claim path, not a guessed one).
 cp -R "$HP" "$FIXBASE/corruptclaim"
-PYTHONPATH="$ROOT/cli/src" uv run --project "$ROOT/cli" python - "$FIXBASE/corruptclaim/claims" <<'PYEOF'
-import sys
-from pathlib import Path
-from fno.claims.io import claim_path
-p = claim_path("node:x-1", root=Path(sys.argv[1]))
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text("{not json", encoding="utf-8")
-PYEOF
+mkdir -p "$FIXBASE/corruptclaim/claims/.fno/claims"
+printf '{not json' > "$FIXBASE/corruptclaim/claims/.fno/claims/node%3Ax-1.lock"
 case_run validate-corrupted-claim "$FIXBASE/corruptclaim" \
   do resume receipt validate --node x-1 --claims-root "$FIXBASE/corruptclaim/claims" \
   --worktree "$FIXBASE/corruptclaim/repo" --session-id sess-1
