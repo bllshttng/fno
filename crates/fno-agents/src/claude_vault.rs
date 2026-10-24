@@ -320,6 +320,28 @@ fn run_with_options(action: &str, options: Options, external: &dyn External) -> 
     execute(action, &options, external)
 }
 
+/// `provider-cap vault <action> --store <store> [--id <id>] [--lock-held]` in
+/// process: the exit code and the receipt's verdict. `Err` is the option
+/// refusal `run` prints.
+pub(crate) fn run_action(
+    action: &str,
+    store: &Path,
+    id: Option<&str>,
+    lock_held: bool,
+) -> Result<(i32, String), String> {
+    let mut args = vec!["--store".to_string(), store.to_string_lossy().into_owned()];
+    if let Some(id) = id {
+        args.push("--id".to_string());
+        args.push(id.to_string());
+    }
+    if lock_held {
+        args.push("--lock-held".to_string());
+    }
+    let options = parse_options(action, &args)?;
+    let (code, receipt) = run_with_options(action, options, &SystemExternal);
+    Ok((code, receipt.verdict))
+}
+
 fn execute(action: &str, options: &Options, external: &dyn External) -> (i32, Receipt) {
     match action {
         "sync" => sync(options, external),
