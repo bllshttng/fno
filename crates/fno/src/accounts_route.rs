@@ -15,6 +15,7 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "pick",
     "test",
     "doctor",
+    "use",
 ];
 
 /// `fno config accounts <command> ...` for a native command: the args from the
@@ -60,6 +61,15 @@ mod tests {
         assert_eq!(rest, oss(&["test", "alt", "--smoke"]));
         let rest = classify(&oss(&["config", "accounts", "doctor", "-J"])).unwrap();
         assert_eq!(rest, oss(&["doctor", "-J"]));
+        let rest = classify(&oss(&[
+            "config", "accounts", "use", "alt", "--scope", "global",
+        ]))
+        .unwrap();
+        assert_eq!(rest, oss(&["use", "alt", "--scope", "global"]));
+        assert_eq!(
+            classify(&oss(&["config", "accounts", "combos", "use", "x"])),
+            None
+        );
         assert_eq!(classify(&oss(&["config", "accounts", "list"])), None);
         assert_eq!(classify(&oss(&["config", "accounts"])), None);
         assert_eq!(classify(&oss(&["config", "paths", "show"])), None);
