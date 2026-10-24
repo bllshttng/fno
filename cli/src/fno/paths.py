@@ -1178,27 +1178,6 @@ def evals_history() -> Path:
     return _guard_state_path(_resolve("~/.fno/") / "history" / "evals-history.jsonl")
 
 
-def benchmarks_json() -> Path:
-    """Return the path to the OpenRouter benchmark snapshot (``benchmarks.json``).
-
-    The snapshot is cross-project by nature (one cached routing source of truth
-    per machine), so it follows an absolute ``config.state_dir`` (the ``~/.fno``
-    default and test sandboxes both qualify) and otherwise pins to user-global
-    ``~/.fno`` rather than forking into a repo checkout. No dedicated
-    ``config.paths`` override: callers that need isolation pass an explicit path
-    to the benchmarks module (the refresh/show/load functions all accept one).
-
-    Resolves under ``cache/`` per the state-root tidiness law, renaming the
-    legacy root spelling on first resolve (the same move ladder
-    :func:`state_runtime_file` runs).
-    """
-    settings = _settings()
-    raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return _state_subfile_at(state_dir(), "cache", "benchmarks.json", "benchmarks.json")
-    return _state_subfile_at(_resolve("~/.fno/"), "cache", "benchmarks.json", "benchmarks.json")
-
-
 def runtime_state_json() -> Path:
     """Return the machine-wide provider runtime-state path.
 
@@ -1206,7 +1185,7 @@ def runtime_state_json() -> Path:
     rate-limited from one repo is rate-limited everywhere: the state file must
     be one per machine, not one per process cwd (the relative-path defect M5
     measured as two disjoint files). Follows an absolute ``config.state_dir``
-    exactly like :func:`benchmarks_json`, EXCEPT that a config that fails to
+    the way the other machine-wide state paths do, EXCEPT that a config that fails to
     load falls back to ``~/.fno`` instead of raising: this path sits on the
     429-lock WRITE path, and a bad config must never turn a rate-limit into a
     crash that loses the lock. Tests pin an explicit file via the

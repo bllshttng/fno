@@ -510,7 +510,6 @@ K3	crates/fno-agents/tests/resume_route_matrix.rs	rs	8
 K3	crates/fno-agents/tests/test_owned_keeper_reap.rs	rs	6
 K4	cli/src/fno/adapters/providers/cli.py	py	1
 K4	cli/src/fno/adapters/providers/test_account_binding.py	py	16
-K4	cli/src/fno/adapters/providers/test_benchmarks.py	py	13
 K4	cli/src/fno/adapters/providers/test_cli.py	py	113
 K4	cli/src/fno/adapters/providers/test_error_taxonomy.py	py	69
 K4	cli/src/fno/adapters/providers/test_loader.py	py	63
@@ -1801,7 +1800,6 @@ K10	cli/tests/unit/test_test_cmd.py	py	57
 K10	cli/tests/unit/test_test_cmd_lanes.py	py	15
 K10	cli/tests/unit/test_test_cmd_parallel.py	py	6
 K10	cli/tests/unit/test_text_or_file.py	py	6
-K10	cli/tests/unit/test_tier_table.py	py	10
 K10	cli/tests/unit/test_tracker.py	py	18
 K10	cli/tests/unit/test_tracker_consumer_seam.py	py	7
 K10	cli/tests/unit/test_unknown_subcommand_exit.py	py	3
