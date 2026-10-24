@@ -223,8 +223,8 @@ fn account_record_vendors(cwd: &Path) -> Value {
 }
 
 /// The snapshot at `<state_dir>/cache/benchmarks.json` (the root spelling
-/// still reads while it exists: the Python writer renames it into `cache/`
-/// on its first resolve), or None when absent, unreadable, or missing
+/// still reads while it exists; `accounts::benchmarks` writes only `cache/`),
+/// or None when absent, unreadable, or missing
 /// `fetched_at`/`source` (invalid is ignored, never a dead gather).
 pub(crate) fn load_snapshot(cwd: &Path) -> Option<Value> {
     let root = crate::agents_config::state_dir(cwd)?;

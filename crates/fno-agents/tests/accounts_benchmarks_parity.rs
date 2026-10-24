@@ -10,7 +10,8 @@
 //! the staleness verdict holds on any date. `tiers.json` is what the Python
 //! `unreachable_tier_ids()` and `empty_bands_for_harness()` answered over the
 //! shipped tables. Recorded deltas: a legacy root snapshot is read in place,
-//! not renamed into `cache/`; a refresh writes the snapshot mode 0600.
+//! not renamed into `cache/`; a refresh writes the snapshot mode 0600
+//! and gives the request curl's 10 s ceiling, not Python's 30 s.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
