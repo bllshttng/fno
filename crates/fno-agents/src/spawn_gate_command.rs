@@ -812,9 +812,12 @@ mod probe {
             reading.share,
             reading.held,
         ) {
-            if !caller.is_empty() && held >= share {
+            if !caller.is_empty() && reading.refuses(cap) == Some(true) {
+                let free = reading.free(cap).unwrap_or(0);
+                let owed = reading.owed.unwrap_or(0);
                 let mut message = format!(
-                    "this lead holds {held} of {} across {leads} leads (share {share})",
+                    "this lead holds {held} of {} across {leads} leads (share {share}); \
+                     {free} seat(s) free and {owed} owed to other leads",
                     learned.clause()
                 );
                 message.push_str(&crate::spawn_gate::held_rows_suffix(
@@ -829,6 +832,8 @@ mod probe {
                         "share": share,
                         "max_live": cap,
                         "leads": leads,
+                        "free": free,
+                        "owed": owed,
                         "held_rows": reading.held_rows.clone().unwrap_or_default(),
                     }),
                     &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
@@ -1625,7 +1630,7 @@ mod tests {
         assert_eq!(answer["reason"], "lead_share");
         assert_eq!(
             answer["message"],
-            "this lead holds 2 of max_live 2 (effective cap unknown, using ceiling) across 1 leads (share 2); the rows charged to you are w1, w2"
+            "this lead holds 2 of max_live 2 (effective cap unknown, using ceiling) across 1 leads (share 2); 0 seat(s) free and 0 owed to other leads; the rows charged to you are w1, w2"
         );
         assert_eq!(answer["held_rows"], json!(["w1", "w2"]));
         let _ = std::fs::remove_dir_all(&dir);

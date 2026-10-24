@@ -840,6 +840,29 @@ pub(crate) struct ShareReading {
     pub held: Option<usize>,
     pub held_rows: Option<Vec<String>>,
     pub unattributed_rows: Option<Vec<String>>,
+    /// Every counted row in the fleet, attributed or not.
+    pub fleet: Option<usize>,
+    /// The seats the other teamed leads still lack to reach their share.
+    pub owed: Option<usize>,
+}
+
+impl ShareReading {
+    /// A lead at its share may borrow a seat the other leads leave idle,
+    /// while the free seats still cover what those leads are owed. A lead
+    /// under its share always passes, so an idle lead that starts work takes
+    /// its seats back before the borrower gets another. `None` when unread.
+    pub(crate) fn refuses(&self, cap: usize) -> Option<bool> {
+        let (share, held, fleet, owed) = (self.share?, self.held?, self.fleet?, self.owed?);
+        if held < share {
+            return Some(false);
+        }
+        let free = cap.saturating_sub(fleet);
+        Some(free == 0 || free < owed)
+    }
+
+    pub(crate) fn free(&self, cap: usize) -> Option<usize> {
+        self.fleet.map(|fleet| cap.saturating_sub(fleet))
+    }
 }
 
 pub(crate) fn share_reading(
@@ -857,12 +880,16 @@ pub(crate) fn share_reading(
                 held: None,
                 held_rows: None,
                 unattributed_rows: None,
+                fleet: None,
+                owed: None,
             }
         }
     };
     let mut teamed: HashSet<String> = HashSet::new();
     let mut held_rows: Vec<String> = Vec::new();
     let mut unattributed: Vec<String> = Vec::new();
+    let mut by_spawner: std::collections::HashMap<String, usize> = Default::default();
+    let mut fleet = 0usize;
     let terminal = terminal_runs.map(crate::terminal_run::read_keys);
     for e in &registry.entries {
         // A team counts until it is cleared or its row is permanently dead.
@@ -892,9 +919,10 @@ pub(crate) fn share_reading(
                 continue;
             }
         }
+        fleet += 1;
         match e.spawned_by_session.as_deref() {
             Some(spawner) if Some(spawner) == caller => held_rows.push(e.name.clone()),
-            Some(_) => {}
+            Some(spawner) => *by_spawner.entry(spawner.to_string()).or_default() += 1,
             None => unattributed.push(e.name.clone()),
         }
     }
@@ -909,12 +937,19 @@ pub(crate) fn share_reading(
     } else {
         (cap / divisor).max(1)
     };
+    let owed = teamed
+        .iter()
+        .filter(|lead| Some(lead.as_str()) != caller)
+        .map(|lead| share.saturating_sub(by_spawner.get(lead).copied().unwrap_or(0)))
+        .sum();
     ShareReading {
         leads: Some(leads),
         share: Some(share),
         held: Some(held_rows.len()),
         held_rows: Some(held_rows),
         unattributed_rows: Some(unattributed),
+        fleet: Some(fleet),
+        owed: Some(owed),
     }
 }
 
@@ -1278,9 +1313,10 @@ fn chrono_like_iso(epoch_s: f64) -> String {
         .unwrap_or_else(|| "unknown (no reset was readable)".to_string())
 }
 
-/// The lead-share axis: one lead holding more than its share of the
-/// effective cap refuses its own spawn, naming the rows it can stop. Lives
-/// beside `share_reading`, the count it refuses on.
+/// The lead-share axis: a lead at its share of the effective cap refuses
+/// its own spawn, naming the rows it can stop, unless it can borrow a seat
+/// the other leads leave idle (`ShareReading::refuses`). Lives beside
+/// `share_reading`, the count it refuses on.
 pub(crate) fn check_lead_share(
     registry_path: &Path,
     learned: &crate::capacity::Effective,
@@ -1299,13 +1335,15 @@ pub(crate) fn check_lead_share(
         // enforce and no zero to fail open on.
         return Ok(());
     };
-    if held < share {
+    if reading.refuses(cap) != Some(true) {
         return Ok(());
     }
+    let free = reading.free(cap).unwrap_or(0);
+    let owed = reading.owed.unwrap_or(0);
     let mut msg = format!(
         "spawn-gate: lead {} holds {held} of {} across {leads} leads (share {share}); \
-         refusing to spawn -- waiting cannot help while your own workers hold the share \
-         (--force to bypass)",
+         {free} seat(s) free and {owed} owed to other leads, so none to borrow; \
+         refusing to spawn (--force to bypass)",
         &caller[..caller.len().min(8)],
         learned.clause()
     );
@@ -1333,6 +1371,8 @@ pub(crate) fn check_lead_share(
             .ev("share", serde_json::json!(share))
             .ev("max_live", serde_json::json!(cap))
             .ev("leads", serde_json::json!(leads))
+            .ev("free", serde_json::json!(free))
+            .ev("owed", serde_json::json!(owed))
             .ev(
                 "held_rows",
                 serde_json::json!(reading.held_rows.clone().unwrap_or_default()),
@@ -1460,6 +1500,57 @@ mod tests {
         // A nonexistent dir reads as no receipts: lead-2's row counts.
         let reading = share_reading(&reg, 3, Some("lead-2"), Some(&dir.join("nope")));
         assert_eq!(reading.held, Some(1), "missing dir: count everything");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An idle lead's seats lend to a lead at its share: with max_live 15
+    /// and leads A=5, B=1, C=1, A borrows a sixth seat. B then starts work
+    /// and admits, and A's seventh is refused because the free seats are
+    /// owed to B and C.
+    #[test]
+    fn an_idle_leads_seats_lend_until_a_lead_under_its_share_asks() {
+        let dir = std::env::temp_dir().join(format!("fno-lanes-lend-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let lead = |sid: &str| {
+            format!(
+                r#"{{"name":"lead-{sid}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{sid}"}}"#
+            )
+        };
+        let rows = |a: usize, b: usize, c: usize| {
+            let mut rows = vec![lead("a"), lead("b"), lead("c")];
+            for (spawner, n) in [("a", a), ("b", b), ("c", c)] {
+                for i in 0..n {
+                    rows.push(spawned_row(
+                        &format!("w-{spawner}{i}"),
+                        &format!("{spawner}-{i}"),
+                        spawner,
+                    ));
+                }
+            }
+            rows
+        };
+
+        write_registry(&reg, &rows(5, 1, 1));
+        let a = share_reading(&reg, 15, Some("a"), None);
+        assert_eq!(
+            (a.share, a.held, a.fleet, a.owed),
+            (Some(5), Some(5), Some(7), Some(8))
+        );
+        assert_eq!(a.refuses(15), Some(false), "A borrows an idle seat");
+
+        write_registry(&reg, &rows(6, 1, 1));
+        let b = share_reading(&reg, 15, Some("b"), None);
+        assert_eq!(b.refuses(15), Some(false), "B under its share admits");
+
+        write_registry(&reg, &rows(6, 2, 1));
+        let a = share_reading(&reg, 15, Some("a"), None);
+        assert_eq!(
+            a.refuses(15),
+            Some(true),
+            "the free seats are owed to B and C"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
