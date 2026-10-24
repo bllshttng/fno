@@ -395,15 +395,19 @@ fn fleet_rows_from(
     // Advisory, never blocking: an unattributable row is unmeasurable
     // liveness, so the read answers from the rows it can vouch for instead of
     // refusing (one stuck no-provenance pane blanked the unplanned queue).
+    // The summary literal is the msg-twin the reachable-paths ratchet
+    // baselines; the prefix rides a second interpolation so the literal
+    // stays intact on both legs.
     if skipped_no_sid > 0 {
-        warnings.push(format!(
-            "{ADVISORY}{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped"
-        ));
+        let summary =
+            format!("{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped");
+        warnings.push(format!("{ADVISORY}{summary}"));
     }
     if skipped_nonclaude_no_id > 0 {
-        warnings.push(format!(
-            "{ADVISORY}{skipped_nonclaude_no_id} non-claude row(s) carried no session id, unmeasurable, skipped"
-        ));
+        let summary = format!(
+            "{skipped_nonclaude_no_id} non-claude row(s) carried no session id, unmeasurable, skipped"
+        );
+        warnings.push(format!("{ADVISORY}{summary}"));
     }
     warnings.extend(unmapped);
     (out, warnings)
