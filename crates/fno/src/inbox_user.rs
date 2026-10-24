@@ -99,19 +99,22 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
-/// Classify `fno inbox outstanding [--json|-J]`: `Some(rest)` is the flag
-/// tail for `fno-agents outstanding`. A subcommand (`mine`, `ask`, `clear`,
+/// Classify `fno inbox outstanding [--json|-J]`, and the hidden legacy
+/// `fno outstanding` spelling of it: `Some(rest)` is the flag tail for
+/// `fno-agents outstanding`. A subcommand (`mine`, `ask`, `clear`,
 /// `reindex`), `--help`, or an unknown flag forwards to Python.
 pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.len() < 2 || args[0].to_str()? != "inbox" || args[1].to_str()? != "outstanding" {
-        return None;
-    }
-    for a in &args[2..] {
+    let rest = match args.first()?.to_str()? {
+        "inbox" if args.get(1)?.to_str()? == "outstanding" => &args[2..],
+        "outstanding" => &args[1..],
+        _ => return None,
+    };
+    for a in rest {
         if !matches!(a.to_str()?, "--json" | "-J") {
             return None;
         }
     }
-    Some(args[2..].to_vec())
+    Some(rest.to_vec())
 }
 
 #[cfg(test)]
@@ -176,6 +179,10 @@ mod tests {
         assert_eq!(
             classify_inbox_outstanding(&mk(&["inbox", "outstanding", "-J"])),
             Some(mk(&["-J"]))
+        );
+        assert_eq!(
+            classify_inbox_outstanding(&mk(&["outstanding", "--json"])),
+            Some(mk(&["--json"]))
         );
         for verb in ["mine", "ask", "clear", "reindex", "--help"] {
             assert!(classify_inbox_outstanding(&mk(&["inbox", "outstanding", verb])).is_none());
