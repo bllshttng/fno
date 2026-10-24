@@ -592,6 +592,17 @@ main() {
 			;;
 	esac
 
+	# PyPI ships prebuilt wheels (all four Rust binaries inside) for four
+	# targets only. Any other platform gets the Python-only install, so name
+	# that before provisioning and give the build route.
+	case "$(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" in
+		Darwin/arm64 | Darwin/x86_64 | Linux/x86_64 | Linux/aarch64) ;;
+		*)
+			say "no prebuilt wheel for $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null): PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
+			say "this install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
+			;;
+	esac
+
 	detect_channel
 	resolve_source
 	# Name the channel before the slow provision: a nightly or rc run must say
