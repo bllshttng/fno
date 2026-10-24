@@ -426,9 +426,13 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
         .iter()
         .filter(|row| matches!(bucket(row), "fail" | "cancel"))
         .collect();
+    // A queued rerun shows in the runs listing before it mints a check row.
     let in_flight = latest
         .iter()
-        .any(|row| !matches!(bucket(row), "pass" | "fail" | "skipping" | "cancel"));
+        .any(|row| !matches!(bucket(row), "pass" | "fail" | "skipping" | "cancel"))
+        || runs
+            .iter()
+            .any(|run| run.get("status").and_then(Value::as_str) != Some("completed"));
     if failed.is_empty() {
         return true;
     }
@@ -681,9 +685,11 @@ mod tests {
             })
         };
         let runs = vec![
-            json!({"id": 7, "run_started_at": "2026-10-22T17:13:00Z"}),
-            json!({"id": 8, "run_started_at": "2026-10-22T16:00:00Z"}),
+            json!({"id": 7, "status": "completed", "run_started_at": "2026-10-22T17:13:00Z"}),
+            json!({"id": 8, "status": "completed", "run_started_at": "2026-10-22T16:00:00Z"}),
         ];
+        let mut queued = runs.clone();
+        queued[0]["status"] = json!("queued");
         let pending =
             json!({"bucket": "pending", "link": "https://github.com/o/r/actions/runs/7/job/2"});
         assert!(
@@ -707,6 +713,10 @@ mod tests {
         assert!(
             !red_is_stale(&[fail(7, "2026-10-22T16:59:00Z")], &runs),
             "nothing in flight: the old failure is final, as after a partial rerun"
+        );
+        assert!(
+            red_is_stale(&[fail(7, "2026-10-22T16:59:00Z")], &queued),
+            "a queued rerun with no job row yet is in flight"
         );
         assert!(
             !red_is_stale(&[fail(7, ""), pending.clone()], &runs),
