@@ -1,0 +1,13 @@
+{
+ "yaml": "accounts:\n  active: alt\n  records:\n    - id: work\n      name: work\n      harness: claude\n      auth: managed\n      priority: 10\n    - id: alt\n      name: alt\n      harness: claude\n      auth: managed\n      priority: 20\n",
+ "args": [
+  "alt"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: 'alt' is an active provider (some config layer points at it). Use --force to remove it.\n",
+  "global": null,
+  "project": null
+ }
+}

@@ -17,7 +17,6 @@ only; nothing on disk that needs to be isolated).
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 from fno.adapters.providers.model import (
@@ -107,23 +106,11 @@ def stage(
         raise ProviderStagingError(
             f"Existing symlink at {link} points to a different target "
             f"({existing_target!r} != {record.credentials_source!r}). "
-            "Remove it manually or call unstage() first."
+            "Remove it manually first."
         )
 
     link.symlink_to(record.credentials_source)
     return account_dir
-
-
-def unstage(
-    record: ProviderRecord,
-    root: Path | None = None,
-) -> None:
-    """Remove the per-account directory. No-op if not staged."""
-    if root is None:
-        root = _default_providers_root()
-    account_dir = root / record.id
-    if account_dir.exists() or account_dir.is_symlink():
-        shutil.rmtree(account_dir)
 
 
 def verify_staged(
