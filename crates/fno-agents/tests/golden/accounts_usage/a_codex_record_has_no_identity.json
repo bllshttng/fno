@@ -1,0 +1,37 @@
+{
+  "args": [
+    "--refresh"
+  ],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[[accounts.records]]\nid = \"codex-pro\"\nname = \"codex-pro\"\nharness = \"codex\"\nauth = \"oauth_dir\"\ncredentials_source = \"{dir}/codex\"\n"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    }
+  ],
+  "probe": {
+    "codex-pro": {
+      "windows": [
+        [
+          "weekly",
+          91.0,
+          1789404000.0
+        ]
+      ],
+      "probed_at": 1789399970.0,
+      "source": "session-events"
+    }
+  },
+  "slot": null,
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "codex-pro  [codex]  weekly    91.0%  in 1h06m\n"
+}

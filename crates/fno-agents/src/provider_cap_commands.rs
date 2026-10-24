@@ -300,8 +300,7 @@ fn run_fno(args: &[&str], cwd: Option<&std::path::Path>, timeout: std::time::Dur
 }
 
 /// `run_fno` with the child's stdout captured: `Some(stdout)` on a zero exit,
-/// `None` on spawn failure, timeout, or non-zero exit. The capacity refresh
-/// reads the `--refresh --json` answer from it; no second process helper.
+/// `None` on spawn failure, timeout, or non-zero exit; no second process helper.
 pub(crate) fn run_fno_output(
     args: &[&str],
     cwd: Option<&std::path::Path>,
@@ -393,11 +392,9 @@ fn real_deps() -> crate::provider_cap::LeaveDeps {
     use crate::provider_cap::LeaveDeps;
     LeaveDeps {
         refresh_usage: Box::new(|| {
-            run_fno(
-                &["config", "accounts", "usage", "--refresh"],
-                None,
-                std::time::Duration::from_secs(90),
-            )
+            let cwd = std::env::current_dir().unwrap_or_default();
+            crate::route_capacity::refresh_usage_readings(&cwd, std::time::Duration::from_secs(90))
+                .is_some()
         }),
         spawn: Box::new(|member, flags, handoff_path| {
             use std::process::{Command, Stdio};

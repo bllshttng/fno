@@ -4349,9 +4349,8 @@ mod tests {
     }
 
     impl CapacityEnv {
-        /// `fno_bin` pins the refresh subprocess: the stub script's path, or
-        /// None to leave no FNO_BIN in the environment.
-        pub(super) fn new(state_json: &str, fno_bin: Option<&str>) -> Self {
+        /// No FNO_BIN: the usage refresh answers from `RefreshStub`.
+        pub(super) fn new(state_json: &str) -> Self {
             let guard = claims::test_env_lock()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -4385,10 +4384,7 @@ mod tests {
             std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
             std::env::set_var("FNO_CLAIMS_ROOT", fake_root());
             std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
-            match fno_bin {
-                Some(path) => std::env::set_var("FNO_BIN", path),
-                None => std::env::remove_var("FNO_BIN"),
-            }
+            std::env::remove_var("FNO_BIN");
             // The claude fallback lane names its account, so the identity
             // check reads the slot stamp: makers is materialized, no taint.
             let providers = dir.path().join("providers");
@@ -4462,22 +4458,20 @@ mod tests {
         )
     }
 
+    /// Answer the usage refresh with `body`, writing `marker` when it runs.
     pub(super) fn write_refresh_stub(
-        dir: &std::path::Path,
         body: &str,
         marker: &std::path::Path,
-    ) -> String {
-        let script = crate::write_exec_stub(
-            dir,
-            "refresh-stub.sh",
-            &format!(
-                "#!/bin/sh\nprintf '%s' '{}' > {}\nprintf '%s' '{}'\n",
-                body,
-                marker.display(),
-                body
-            ),
-        );
-        script.display().to_string()
+    ) -> crate::route_capacity::RefreshStub {
+        let body = body.to_string();
+        let marker = marker.to_path_buf();
+        crate::route_capacity::RefreshStub::install(move || {
+            std::fs::write(&marker, &body).ok()?;
+            match serde_json::from_str::<Value>(&body) {
+                Ok(Value::Object(m)) => Some(m),
+                _ => None,
+            }
+        })
     }
 
     pub(super) fn makers_row() -> String {
@@ -4510,10 +4504,9 @@ mod tests {
     /// decides the pick: lanes[0] codex-luna instead of the sonnet fallthrough.
     #[test]
     fn refresh_gate_probes_a_stale_lane_and_the_pick_uses_the_fresh_reading() {
-        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
+        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
         let marker = env.dir.path().join("marker");
-        let stub = write_refresh_stub(env.dir.path(), &fresh_codex_row(), &marker);
-        std::env::set_var("FNO_BIN", &stub);
+        let _stub = write_refresh_stub(&fresh_codex_row(), &marker);
         let out = resolve_slot_payload(&slot_env_payload(json!({
             "capacity_refresh": true,
         })));
@@ -4533,14 +4526,12 @@ mod tests {
     /// positive-control run with the flag proves the marker would be written.
     #[test]
     fn no_refresh_flag_means_no_probe() {
-        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
+        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
         let marker = env.dir.path().join("marker");
-        let stub = write_refresh_stub(
-            env.dir.path(),
+        let _stub = write_refresh_stub(
             r#"{"codex": {"source": "probe", "probed_at": 0, "partial": false, "windows": []}}"#,
             &marker,
         );
-        std::env::set_var("FNO_BIN", &stub);
         // Negative control: no capacity_refresh -> the stub never runs.
         let out = resolve_slot_payload(&slot_env_payload(json!({})));
         assert_eq!(out["status"], "pick", "the fresh claude fallback answers");

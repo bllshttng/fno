@@ -4,8 +4,8 @@
 //! Before this arm the usage cache filled only on the dispatch path, and only
 //! with `accounts.quota.observe` on. A machine that dispatched nothing for five
 //! minutes read every account as `unknown(stale)` in `accounts list`, the
-//! Connections modal and the route gate alike. One `fno config accounts usage
-//! --refresh` per beat keeps each reading fresh; the command owns the probes, the
+//! Connections modal and the route gate alike. One in-process `usage --refresh`
+//! report per beat keeps each reading fresh; it owns the probes, the
 //! attribution proof and the cache write.
 
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The command probes each claude account over the network (a profile call and a
+/// The report probes each claude account over the network (a profile call and a
 /// usage call), so it gets far more room than one beat needs.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -72,7 +72,7 @@ pub fn maybe_tick(arm: &Arm) {
                 if ok {
                     "recovered"
                 } else {
-                    "`fno config accounts usage --refresh` failed; account usage will read stale"
+                    "the usage refresh failed; account usage will read stale"
                 }
             );
         }

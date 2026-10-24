@@ -4,7 +4,7 @@
 //! Port of the Python `route_resolve.runtime_capacity` + `runtime_state.headrooms`
 //! (both deleted there, law d-b6cc1a2a): one headroom implementation lives in
 //! `fallback_chain::headroom`, one state-file reader here, and one probe path
-//! through the existing `fno config accounts usage --refresh --json` command.
+//! through `accounts::usage::refreshed`, the `usage --refresh --json` report.
 //! The refresh is fail-open: a failed probe leaves the readings as they were
 //! and the walk judges on the stale evidence, naming it in the chain.
 
@@ -104,21 +104,60 @@ fn identity_evidence(harness: &str, accounts: &[String], root: &Path) -> Map<Str
     out
 }
 
-/// Run the existing probe command once and parse its one JSON object. Returns
-/// None on spawn failure, timeout, AC4-EDGE, or bad JSON: fail-open, the
-/// readings stay as they were.
+/// Probe every account once, in process, and return the `usage --refresh
+/// --json` map. Returns None on an unreadable config or past `timeout`:
+/// fail-open, the readings stay as they were. A probe still running at the
+/// deadline finishes on its thread; its cache write is atomic.
+#[cfg(not(test))]
 pub(crate) fn refresh_usage_readings(
     cwd: &Path,
     timeout: std::time::Duration,
 ) -> Option<Map<String, Value>> {
-    let stdout = crate::provider_cap_commands::run_fno_output(
-        &["config", "accounts", "usage", "--refresh", "--json"],
-        Some(cwd),
-        timeout,
-    )?;
-    match serde_json::from_str::<Value>(&stdout) {
-        Ok(Value::Object(m)) => Some(m),
-        _ => None,
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cwd = cwd.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::accounts::usage::refreshed(&cwd));
+    });
+    rx.recv_timeout(timeout).ok().flatten()
+}
+
+/// A test never probes the live machine: the installed stub answers.
+#[cfg(test)]
+pub(crate) fn refresh_usage_readings(
+    _cwd: &Path,
+    _timeout: std::time::Duration,
+) -> Option<Map<String, Value>> {
+    REFRESH_STUB
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|answer| answer())
+}
+
+#[cfg(test)]
+type RefreshAnswer = Box<dyn Fn() -> Option<Map<String, Value>> + Send>;
+
+#[cfg(test)]
+static REFRESH_STUB: std::sync::Mutex<Option<RefreshAnswer>> = std::sync::Mutex::new(None);
+
+/// The refresh answer a test installs; it is removed again on drop.
+#[cfg(test)]
+pub(crate) struct RefreshStub;
+
+#[cfg(test)]
+impl RefreshStub {
+    pub(crate) fn install(
+        answer: impl Fn() -> Option<Map<String, Value>> + Send + 'static,
+    ) -> Self {
+        *REFRESH_STUB.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(answer));
+        RefreshStub
+    }
+}
+
+#[cfg(test)]
+impl Drop for RefreshStub {
+    fn drop(&mut self) {
+        *REFRESH_STUB.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
