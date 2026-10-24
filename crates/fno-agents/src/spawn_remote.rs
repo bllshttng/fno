@@ -164,8 +164,7 @@ mod tests {
             !line.contains("'quinlan@mbp3'"),
             "the host part never rides"
         );
-        // `@host` alone mints the name remotely: the --name flag disappears
-        // from the exec'd words, and no word carries an @.
+        // `@host` alone mints remotely: the flag disappears, no @ rides.
         let plan = spawn_plan(
             &["--name".to_string(), "@mbp3".to_string(), "hi".to_string()],
             "imac2d2",
@@ -173,8 +172,8 @@ mod tests {
         .expect("plans");
         assert!(!plan.words.contains(&"--name".to_string()));
         assert!(!plan.words.iter().any(|w| w.contains('@')));
-        // Same-host: the plan marks it and the stripped words carry no @, so
-        // the local forward cannot re-enter this relay.
+        // Same-host: the stripped words carry no @, so the forward cannot
+        // re-enter this relay.
         let plan = spawn_plan(
             &[
                 "--name".to_string(),
