@@ -38,11 +38,6 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     # Hidden: the menu cap is 12 and config already curates nine visible
     # commands; `fno help config --all` lists these.
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "plugins": (
-        "fno.plugins.cli:plugins_app",
-        "Install, verify, activate, and inspect function packs.",
-        {"hidden": True},
-    ),
     "route": (
         "fno.route_cli:route_app",
         "Provider route lanes: ls / set / unset / env (GLM build lane).",
@@ -66,7 +61,7 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     ),
     "setup": ("fno.setup_cli:app", "Interactive settings.yaml wizard", {"hidden": True}),
     # One local-dev install door for every plugin harness. VISIBLE on
-    # purpose and distinct from the hidden `plugins` function-pack group: this
+    # purpose and distinct from the native `plugins` function-pack group: this
     # installs the footnote plugin itself, from the filtered stage, in one
     # action per harness (claude|codex|opencode|agy).
     "plugin": (

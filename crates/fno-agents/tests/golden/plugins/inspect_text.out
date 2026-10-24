@@ -1,0 +1,3 @@
+alpha 1.0.0
+  declares roles: writer, editor
+  declares effect ceiling: publish -> docs-site

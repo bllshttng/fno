@@ -1,0 +1,224 @@
+{
+  "conditions": [
+    {
+      "checked": true,
+      "detail": "id=broken version=2.0.0",
+      "family": "identity",
+      "name": "pack-id",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "c2425085d514ba1e749dba6139b3b39a0e39ca72c261613f331ed367ff1e8ffc",
+      "family": "identity",
+      "name": "digest-stability",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-ids-safe",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "role id 'Lead' collides case-insensitively",
+      "family": "identity",
+      "name": "role-ids-case-unique",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-and-function-ids-unique",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "ops",
+      "family": "identity",
+      "name": "function-set",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "roles=2; skills=0; workflows=0; adapters=0; evaluators=1; assets=1; permissions=0; scenarios=2",
+      "family": "schema",
+      "name": "declarations-parse",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "agents/shell.md present",
+      "family": "schema",
+      "name": "source:agent:shell",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "agents/bare.md present",
+      "family": "schema",
+      "name": "source:agent:bare",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "../alpha/agents/writer.md missing or escapes the pack directory",
+      "family": "schema",
+      "name": "source:agent:away",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "assets/gone.md missing or escapes the pack directory",
+      "family": "schema",
+      "name": "source:asset:gone",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "role ghost is not declared by this pack",
+      "family": "schema",
+      "name": "agent-role-binding:shell",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "frontmatter identity mismatch: name='shell' pack='broken' role='lead' vs declaration id='shell' pack='broken' role='ghost'",
+      "family": "schema",
+      "name": "agent-frontmatter-identity:shell",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "tools outside the bounded allowlist: Bash, mcp__x__y",
+      "family": "schema",
+      "name": "agent-tools-bounded:shell",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "no role binding declared",
+      "family": "schema",
+      "name": "agent-role-binding:bare",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "frontmatter name/pack/role match the declaration",
+      "family": "schema",
+      "name": "agent-frontmatter-identity:bare",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "no tools frontmatter; the agent would inherit the harness default tool set",
+      "family": "schema",
+      "name": "agent-tools-bounded:bare",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "no role binding declared",
+      "family": "schema",
+      "name": "agent-role-binding:away",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "../alpha/agents/writer.md escapes the pack directory; not read",
+      "family": "schema",
+      "name": "agent-tools-bounded:away",
+      "result": "blocked"
+    },
+    {
+      "checked": true,
+      "detail": "../alpha/agents/writer.md escapes the pack directory; not read",
+      "family": "schema",
+      "name": "agent-frontmatter-identity:away",
+      "result": "blocked"
+    },
+    {
+      "checked": true,
+      "detail": "declared dependency missing-pack (1.0.0..open) is not installed",
+      "family": "dependency",
+      "name": "dependency:missing-pack",
+      "result": "blocked"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "capability",
+      "name": "declarations-are-not-grants",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "running footnote <VERSION> outside 0.0.1..0.0.2",
+      "family": "compatibility",
+      "name": "footnote-compat-range",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "2 role(s) parsed as RoleManifest",
+      "family": "compatibility",
+      "name": "role-manifest-schema",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "Lead default_topology 'solo': set default_topology to one of: direct, loop, squad, pipeline",
+      "family": "compatibility",
+      "name": "topology:Lead",
+      "result": "failed"
+    },
+    {
+      "checked": true,
+      "detail": "lead default_topology=squad",
+      "family": "compatibility",
+      "name": "topology:lead",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "Lead manifest=55e69edaac8e",
+      "family": "compatibility",
+      "name": "resolve:Lead",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "lead manifest=f35672ae7910",
+      "family": "compatibility",
+      "name": "resolve:lead",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "ghost command 'bash' is absent or not executable",
+      "family": "declared-test",
+      "name": "scenario:ghost",
+      "result": "blocked"
+    },
+    {
+      "checked": true,
+      "detail": "flaky command runnable; recorded=unknown",
+      "family": "declared-test",
+      "name": "scenario:flaky",
+      "result": "unknown"
+    },
+    {
+      "checked": true,
+      "detail": "absent command 'no-such-runner-xyz' is absent or not executable",
+      "family": "schema",
+      "name": "evaluator-runnable:absent",
+      "result": "blocked"
+    }
+  ],
+  "ok": false,
+  "pack_path": "<PACKS>/broken",
+  "version": 1
+}
