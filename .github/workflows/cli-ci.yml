@@ -1053,10 +1053,11 @@ jobs:
     # and tests/common spawn bare python3 (yaml, psutil), the claim parity
     # harness imports through cli/.venv, blueprint_judge shells rg, and the
     # real-process tests spawn both built binaries. The aggregator reads
-    # the matrix as one verdict. On a slow runner image a shard's quarter
-    # of the tests plus the build lands near 20 minutes; the cap leaves
+    # the matrix as one verdict. On 2026-10-24 shard 1 ran 22 minutes of
+    # tests after a 2.5 minute disk step, and the cache save after them
+    # pushed it past a 30 minute cap with every test green. The cap leaves
     # room above that.
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
 
