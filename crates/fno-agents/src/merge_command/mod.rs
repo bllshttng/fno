@@ -358,7 +358,7 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
         hold_clear(&mut flow, pr);
         return flow;
     };
-    let (mut candidates, ambiguous) = hold_candidates(
+    let (candidates, ambiguous) = hold_candidates(
         facts.number as i64,
         &facts.head_ref,
         &facts.url,
