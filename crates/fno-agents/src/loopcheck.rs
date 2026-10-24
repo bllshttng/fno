@@ -242,14 +242,13 @@ pub(crate) use intent::read_tail_lines;
 use intent::INTENT_LOOKBACK_ENTRIES;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
+pub(crate) use local_attestation::verify_invocation_ids;
 use local_attestation::{
     author_is_bot, author_is_known_bot, in_scope_chain, line_carries_keyed_findings,
     local_attestation_verdict, local_latest_attestations, local_refused_verdicts,
     zero_evidence_attestation, LocalPass,
 };
-pub use local_attestation::{
-    disposition_blockers, mark_owed_verdicts, rounds_since_last_pass, verify_invocation_ids,
-};
+pub use local_attestation::{disposition_blockers, mark_owed_verdicts, rounds_since_last_pass};
 use plan_fidelity::FIDELITY_TIMEOUT;
 #[cfg(test)]
 use posture::resolved_required_bots;
