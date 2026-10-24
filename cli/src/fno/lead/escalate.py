@@ -124,7 +124,8 @@ def resolve_presiding_lead(session_id: "str | None") -> "dict | None":
         return None
 
 
-def mail_presiding_lead(holder: str, stalled_ids: "list[str]", reason: str) -> bool:
+def mail_presiding_lead(holder: str, stalled_ids: "list[str]", reason: str,
+                        verdict: "str | None" = None) -> bool:
     """True only on a confirmed send; any failure reads False."""
     import shutil
     import subprocess
@@ -135,7 +136,10 @@ def mail_presiding_lead(holder: str, stalled_ids: "list[str]", reason: str) -> b
     from fno.agents.stale_escalate import dedupe_key
 
     ids = sorted(set(stalled_ids))
-    message = _render(ids, dedupe_key(ids), reason)["mail"]
+    answer = _render(ids, dedupe_key(ids), reason, verdict=verdict)
+    if not answer.get("ok"):
+        return False
+    message = answer["mail"]
     try:
         proc = subprocess.run(
             [fno_bin, "agents", "mail", "send", holder, message],

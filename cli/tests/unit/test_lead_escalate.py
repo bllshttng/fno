@@ -212,6 +212,16 @@ def test_mail_presiding_lead_true_only_on_a_zero_exit(monkeypatch) -> None:
         lambda *a, **k: _Proc(0, "msg-1 delivered (hosted)\n"),
     )
     assert mail_presiding_lead("l1-lead", STALLED, "NoProgress") is True
+    # The verdict rides the render, and a refused render reads False, never
+    # a KeyError on the missing mail.
+    seen: list = []
+    monkeypatch.setattr(
+        "fno.lead.escalate._render",
+        lambda *a, verdict=None, **k: seen.append(verdict) or {"ok": False},
+    )
+    assert mail_presiding_lead("l1-lead", STALLED, "Verdict", verdict="degraded") is False
+    assert seen == ["degraded"]
+    monkeypatch.setattr("fno.lead.escalate._render", _fake_render)
 
     monkeypatch.setattr(
         "subprocess.run",
