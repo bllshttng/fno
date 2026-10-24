@@ -39,7 +39,8 @@ pub fn parse_exec(stdout: &str) -> Result<(String, String), String> {
 }
 
 /// The exec argv: the row's form, then the mapped mode, the fenced tokens,
-/// and the message after `--`.
+/// and the message after `--`. The spawn door's `--permission-mode` rides
+/// the fence; exec spells it `--approval-mode`.
 pub fn exec_argv(
     bin: &str,
     session_id: &str,
@@ -58,12 +59,17 @@ pub fn exec_argv(
             .to_vec()
     });
     argv[0] = bin.to_string();
-    if let Some(mode) =
-        permission_mode.filter(|_| !harness_args.iter().any(|a| a == "--approval-mode"))
-    {
+    if let Some(mode) = permission_mode.filter(|_| {
+        !harness_args
+            .iter()
+            .any(|a| a == "--approval-mode" || a == "--permission-mode")
+    }) {
         argv.extend(["--approval-mode".to_string(), mode.to_string()]);
     }
-    argv.extend(harness_args.iter().cloned());
+    argv.extend(harness_args.iter().map(|a| match a.as_str() {
+        "--permission-mode" => "--approval-mode".to_string(),
+        _ => a.clone(),
+    }));
     argv.extend(["--".to_string(), message.to_string()]);
     argv
 }

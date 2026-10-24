@@ -1897,12 +1897,19 @@ status_pattern = ""
 # The default sandbox refuses `touch ~/.fno/...` ("Operation not permitted"),
 # and adding ~/.fno to workspaceRoots did not lift it. Of the four permission
 # profiles (permissionProfile/list), only :unrestricted wrote there, and that
-# is the sandbox off. So no grant short of --yolo exists today.
+# is the sandbox off. So the one carrier is `--yolo`: the thread host maps it
+# to `serve --disable-sandbox` (a userShell touch of ~/.fno then succeeded),
+# and exec takes it as "Disable approval and sandbox" (`muse exec --help`).
+# A spawn without it runs sandboxed and cannot write the state root.
 [harness.muse.state_root_grant]
 pane = "unmeasured"
-thread = "unmeasured"
-headless = "unmeasured"
+thread = "yolo-disable-sandbox"
+headless = "yolo-disable-sandbox"
 
+# spawn: `capable`, footnote's stance. The echo-provider journey passed on
+# 2026-10-24 with an explicit `--as thread|headless`, which the Rust client
+# serves. `native` would seat a spawn with no `--as` on the Python door,
+# which has no muse leg.
 [harness.muse.features.spawn]
 state = "capable"
 

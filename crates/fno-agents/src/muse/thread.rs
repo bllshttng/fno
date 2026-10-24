@@ -27,7 +27,8 @@ pub fn wire_mode(mode: &str) -> Option<&'static str> {
 }
 
 /// The `muse serve` argv for a thread, its wire approval mode, and the turn
-/// effort. serve has no `--yolo`, `--approval-mode` or `--reasoning-effort`,
+/// effort. serve has no `--yolo`, approval mode (`--approval-mode`, or the
+/// spawn door's `--permission-mode`) or `--reasoning-effort`,
 /// so those three are mapped; every other fenced token rides verbatim and
 /// serve refuses an unknown one itself.
 pub fn serve_argv(
@@ -43,7 +44,7 @@ pub fn serve_argv(
     while let Some(a) = args.next() {
         match a.as_str() {
             "--yolo" => yolo = true,
-            "--approval-mode" => mode = args.next().cloned(),
+            "--approval-mode" | "--permission-mode" => mode = args.next().cloned(),
             "--reasoning-effort" | "--effort" => effort = args.next().cloned(),
             _ => argv.push(a.clone()),
         }
