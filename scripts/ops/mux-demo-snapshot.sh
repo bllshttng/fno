@@ -147,7 +147,11 @@ mkdir -p "$ROOT/fleetbin"
 cat >"$ROOT/fleetbin/fno-agents" <<SH
 #!/bin/sh
 if [ "\$*" = "top --machines --json" ]; then exec cat "$ROOT/fleet-top.json"; fi
-PATH="\${PATH#$ROOT/fleetbin:}" exec fno-agents "\$@"
+# Drop this directory wherever it sits in PATH: a process that prepends its
+# own directory would otherwise send the call back here forever.
+PATH="\$(printf '%s' "\$PATH" | tr ':' '\\n' | grep -vxF "$ROOT/fleetbin" | paste -sd: -)"
+export PATH
+exec fno-agents "\$@"
 SH
 chmod +x "$ROOT/fleetbin/fno-agents"
 export PATH="$ROOT/fleetbin:$PATH"
