@@ -581,12 +581,14 @@ mod tests {
             readback_step(&f, "hello", AFFORDANCE, &[], true, true, 3, 12),
             Readback::Submitted
         );
+        // A paste that never rendered: quiet frame, payload absent.
+        let quiet = frame("Ready", false);
         assert_eq!(
-            readback_step(&f, "hello", AFFORDANCE, &[], false, false, 12, 12),
+            readback_step(&quiet, "hello", AFFORDANCE, &[], false, false, 12, 12),
             Readback::Hedge
         );
         assert_eq!(
-            readback_step(&f, "hello", AFFORDANCE, &[], false, false, 11, 12),
+            readback_step(&quiet, "hello", AFFORDANCE, &[], false, false, 11, 12),
             Readback::Poll
         );
     }
