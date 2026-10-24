@@ -171,11 +171,14 @@ fn list(
         for item in items {
             match summary(item) {
                 // ISO-8601 UTC stamps order as strings, and a bare day
-                // sorts before every stamp on that day.
+                // sorts before every stamp on that day. A row with no stamp
+                // stays listed rather than ending the read.
                 Some(row)
-                    if since
-                        .as_deref()
-                        .is_some_and(|day| row["createdAt"].as_str() < Some(day)) =>
+                    if since.as_deref().is_some_and(|day| {
+                        row["createdAt"]
+                            .as_str()
+                            .is_some_and(|created| created < day)
+                    }) =>
                 {
                     past_since = true;
                 }
