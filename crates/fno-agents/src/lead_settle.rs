@@ -61,9 +61,8 @@ fn settle_view(row: &Value) -> Option<SettleView> {
         .get("headRefOid")
         .and_then(Value::as_str)
         .unwrap_or("")
-        .to_string();
-    // The listing rides GraphQL, so the merge state arrives UPPERCASE; the
-    // lowercased word is the form the REST payloads and readers expect.
+        .to_string(); // The listing rides GraphQL, so the merge state arrives UPPERCASE; the
+                      // lowercased word is the form the REST payloads and readers expect.
     let state = row
         .get("mergeStateStatus")
         .and_then(Value::as_str)
@@ -211,7 +210,7 @@ pub(crate) fn evaluate(
         }
         let text = if view.ready {
             format!(
-                "PR #{pr} on {node} settled green at {}. It is ready with no blockers.",
+                "PR #{pr} on {node} settled green at {}. GitHub reads it clean.",
                 head12(&view.head)
             )
         } else {
@@ -503,7 +502,7 @@ mod tests {
         assert_eq!(list_calls, 1, "one listing answers every covered PR");
         assert_eq!(log.borrow().len(), 1);
         assert!(log.borrow()[0].contains("s1: PR #7 on x-1 settled green at abcdef123456"));
-        assert!(log.borrow()[0].contains("It is ready with no blockers."));
+        assert!(log.borrow()[0].contains("GitHub reads it clean."));
         let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW + 300);
         assert_eq!(out.mailed, 0);
         assert_eq!(log.borrow().len(), 1);
