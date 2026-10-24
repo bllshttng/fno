@@ -193,57 +193,13 @@ def _state_write(op: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 WINDOW_LABEL = "window"
-# Default warning threshold for a projected window close, in seconds. The
-# operator learned they were at 90 percent, then 99, then capped, from a
-# dashboard and a pasted 429; half an hour is the smallest lead time that lets
-# work be parked rather than lost.
-DEFAULT_WINDOW_WARN_SECONDS = 1800.0
-
-
-@dataclasses.dataclass(frozen=True)
-class WindowProjection:
-    """Where a provider's rolling usage window is, projected from a recorded open.
-
-    A PROJECTION, never a measurement. ``closes_in_s`` is None when nothing is
-    recorded or the projected window has already rolled - "I do not know" and
-    "it closes in an hour" must never render as the same thing, which is the
-    same discipline that keeps a probe-less record reading UNKNOWN for headroom
-    instead of a confident OK.
-    """
-
-    provider_id: str
-    label: str = WINDOW_LABEL
-    opened_at: float | None = None
-    closes_at: float | None = None
-    closes_in_s: float | None = None
-    warned: bool = False
-
-
-def _record_window_seconds(provider_id: str) -> float | None:
-    """``accounts.<id>.window_minutes`` in seconds, or None.
-
-    Lazy-imported and fail-open: this sits inside the health-write lock, and a
-    config read that raises there would turn "we could not project a window"
-    into "the provider lock was never written", which is far worse.
-    """
-    try:
-        from fno.adapters.providers.cli import _load
-
-        for rec in _load().records:
-            if rec.id == provider_id:
-                minutes = getattr(rec, "window_minutes", None)
-                return float(minutes) * 60.0 if minutes else None
-    except Exception:  # noqa: BLE001 - a config miss must never break the lock path
-        return None
-    return None
 
 
 def record_reset_timezone(provider_id: str) -> str | None:
     """``accounts.<id>.reset_timezone``, or None.
 
-    Only a NAIVE reset stamp needs it. Fail-open for the same reason as
-    :func:`_record_window_seconds`: a config read that raises on the lock-write
-    path would turn "we could not resolve a timezone" into "the lock was never
+    Only a NAIVE reset stamp needs it. Fail-open: a config read that raises on
+    the lock-write path would turn "we could not resolve a timezone" into "the lock was never
     written", which is strictly worse than falling back to the backoff.
     """
     try:
@@ -255,73 +211,6 @@ def record_reset_timezone(provider_id: str) -> str | None:
     except Exception:  # noqa: BLE001 - a config miss refuses the stamp, not the write
         return None
     return None
-
-
-def project_window(
-    provider_id: str,
-    *,
-    now: float | None = None,
-    repo_root: Path | None = None,
-) -> WindowProjection:
-    """Where ``provider_id``'s window is, from the recorded open plus its length.
-
-    Reads local files only. Nothing is asked of any provider, which is the
-    whole reason this surface exists: the one provider that actually caps here
-    is the one the quota layer cannot see.
-    """
-    if now is None:
-        now = time.time()
-    try:
-        raw = _read_disk_payload(_resolve_state_path(repo_root))
-    except Exception:  # noqa: BLE001 - a corrupt read is "unknown", never an error
-        raw = None
-    entry = (_parse_windows_opened(raw or {}).get(provider_id) or {}).get(
-        WINDOW_LABEL
-    )
-    if entry is None:
-        return WindowProjection(provider_id)
-    span = _record_window_seconds(provider_id)
-    if not span:
-        return WindowProjection(provider_id, opened_at=entry["opened_at"])
-    closes_at = entry["opened_at"] + span
-    if closes_at <= now:
-        # The window rolled and nothing has stamped the new one. Report the
-        # open we have and NO projection: a negative countdown read as a
-        # positive number is the confident-wrong reading this whole surface
-        # exists to avoid.
-        return WindowProjection(
-            provider_id, opened_at=entry["opened_at"],
-            warned=bool(entry.get("warned")),
-        )
-    return WindowProjection(
-        provider_id,
-        opened_at=entry["opened_at"],
-        closes_at=closes_at,
-        closes_in_s=closes_at - now,
-        warned=bool(entry.get("warned")),
-    )
-
-
-def mark_window_warned(
-    provider_id: str, repo_root: Path | None = None
-) -> bool:
-    """Flip the once-per-window warn flag. True iff this call set it.
-
-    The flag lives beside the recorded open, so a new window (a fresh stamp,
-    which always writes ``warned: False``) re-arms the warning by construction.
-    A writer that could not run reads as not set.
-    """
-    from fno.rust_binary import CommandUnavailable
-
-    try:
-        out = _state_write("mark-warned", {
-            "provider_id": provider_id,
-            "repo_root": None if repo_root is None else str(repo_root),
-        })
-    except CommandUnavailable as exc:
-        logger.warning("runtime_state: could not mark window warned for %r: %s", provider_id, exc)
-        return False
-    return bool(out.get("set"))
 
 
 def stamp_window_open(

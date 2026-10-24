@@ -7079,8 +7079,8 @@ event_types:
     consumers: [operator]
 
   - name: provider_window_closing
-    description: "A provider record's PROJECTED usage window is within the configured warning threshold of closing. A projection from a recorded window open plus a configured length, never a utilization measurement - a record with no probe still reads UNKNOWN for headroom. Emitted once per window so a long tick loop does not re-warn."
-    sources: [daemon, cli]
+    description: "A provider record's PROJECTED usage window is within the configured warning threshold of closing. A projection from a recorded window open plus a configured length, never a utilization measurement - a record with no probe still reads UNKNOWN for headroom. Emitted once per window so a long tick loop does not re-warn. Rust-owned: fno-agents spawn-overlay accounts window emits it."
+    sources: [daemon]
     data:
       required: [provider_id, closes_in_s]
       properties:
