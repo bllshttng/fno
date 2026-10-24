@@ -1,0 +1,1 @@
+{"op": "zai_windows", "payload": {"success": true, "code": 200, "data": {"limits": [{"type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 10, "nextResetTime": 1789544000000}]}}, "expect": {"windows": [{"label": "5h", "used_pct": 10.0, "resets_at": null}], "partial": false}}

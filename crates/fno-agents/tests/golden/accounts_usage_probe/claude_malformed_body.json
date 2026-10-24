@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "o1", "name": "o", "harness": "claude", "auth": "oauth_dir", "credentials_source": "{dir}/o1"}, "blobs": ["{\"claudeAiOauth\": {\"accessToken\": \"tok-a\", \"refreshToken\": \"r\"}}"], "http": [{"status": 200, "body": "<html>"}], "expect": {"snapshot": null, "reason": "probe-failed"}}

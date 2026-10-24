@@ -1107,6 +1107,14 @@ fn now_ms() -> i64 {
 }
 
 fn curl_json(config: &str) -> Result<(u16, Value), ExternalFailure> {
+    let (status, body) = curl_raw(config)?;
+    let body = serde_json::from_str(&body).map_err(|_| ExternalFailure::Malformed)?;
+    Ok((status, body))
+}
+
+/// One curl request from a `-K` config on stdin, so no secret reaches argv:
+/// the status and the raw body, whatever its shape.
+pub(crate) fn curl_raw(config: &str) -> Result<(u16, String), ExternalFailure> {
     let mut child = Command::new("curl")
         .args(["-sS", "--max-time", "10", "-K", "-", "-w", "\n%{http_code}"])
         .stdin(Stdio::piped())
@@ -1132,11 +1140,10 @@ fn curl_json(config: &str) -> Result<(u16, Value), ExternalFailure> {
         .trim()
         .parse::<u16>()
         .map_err(|_| ExternalFailure::Malformed)?;
-    let body = serde_json::from_str(body).map_err(|_| ExternalFailure::Malformed)?;
-    Ok((status, body))
+    Ok((status, body.to_string()))
 }
 
-fn curl_escape(value: &str) -> String {
+pub(crate) fn curl_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 

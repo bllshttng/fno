@@ -1,0 +1,27 @@
+{
+  "args": [],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "runtime-state.json",
+      "text": "{\"usage\": {\"readyrule\": {\"windows\": [{\"label\": \"weekly\", \"used_pct\": 33.3, \"resets_at\": 1789490000.0}], \"probed_at\": 1789399940.0, \"source\": \"session-events\", \"confidence\": \"exact\"}}}"
+    }
+  ],
+  "probe": {},
+  "slot": null,
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "readyrule  [claude]  weekly    33.3%  in 25h00m\nreadyrule  [claude]  account_identity_unknown: {dir}/claude-alt could not be attributed (unbound-principal)\nmakers  [claude]  unknown (not-probed)\n"
+}

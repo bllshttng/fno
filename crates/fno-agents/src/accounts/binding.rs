@@ -157,7 +157,7 @@ pub(crate) fn token_present(blob: &str) -> bool {
 
 /// `usage._token_from_blob`: `claudeAiOauth.accessToken`, the one bearer the
 /// profile endpoint takes.
-fn bearer_of(blob: &str) -> Option<String> {
+pub(crate) fn bearer_of(blob: &str) -> Option<String> {
     let data: Value = serde_json::from_str(blob).ok()?;
     let token = data.get("claudeAiOauth")?.get("accessToken")?.as_str()?;
     (!token.is_empty()).then(|| token.to_string())

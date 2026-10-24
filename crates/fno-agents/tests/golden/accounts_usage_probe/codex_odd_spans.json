@@ -1,0 +1,1 @@
+{"op": "codex_windows", "payload": {"rate_limits": {"primary": {"used_percent": 1, "resets_at": 1789400000.0, "window_minutes": 10080.0}, "secondary": {"used_percent": 2, "resets_at": 1789400000.0, "window_minutes": true}}}, "expect": [{"label": "unknown", "used_pct": 1.0, "resets_at": 1789400000.0}, {"label": "unknown", "used_pct": 2.0, "resets_at": 1789400000.0}]}

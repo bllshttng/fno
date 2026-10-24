@@ -94,7 +94,7 @@ pub struct WindowProjection {
 }
 
 /// Python `float(v)` for a JSON value: numbers, booleans and numeric strings.
-fn py_float(v: &Value) -> Option<f64> {
+pub(crate) fn py_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
@@ -890,7 +890,26 @@ pub fn fold_legacy(target: &Path, legacy: &Path, now: f64, timeout: Duration) ->
     write_atomic(target, &serialize(&state))
 }
 
-fn wall_now() -> f64 {
+/// Fold the legacy per-cwd files under `cwd` and `repo_root` into `path`
+/// before a write. The env override names one explicit file, so nothing
+/// folds into it.
+pub fn fold_legacy_files(path: &Path, cwd: &Path, repo_root: Option<&Path>) {
+    if std::env::var_os("FNO_RUNTIME_STATE_PATH").is_some() {
+        return;
+    }
+    // A legacy file has the machine file's name under the root's `.fno`.
+    let legacy = Path::new(".fno").join(path.file_name().unwrap_or_default());
+    for root in std::iter::once(cwd).chain(repo_root) {
+        if let Err(error) = fold_legacy(path, &root.join(&legacy), wall_now(), LOCK_TIMEOUT) {
+            eprintln!(
+                "runtime_state: legacy per-cwd fold skipped for {}: {error}",
+                root.display()
+            );
+        }
+    }
+}
+
+pub(crate) fn wall_now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
@@ -927,23 +946,11 @@ pub fn run(args: &[String]) -> i32 {
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let path = crate::provider_cap::runtime_state_path(&cwd);
-    // The env override names one explicit file, so nothing folds into it.
-    if std::env::var_os("FNO_RUNTIME_STATE_PATH").is_none() {
-        // A legacy file has the machine file's name under the root's `.fno`.
-        let legacy = Path::new(".fno").join(path.file_name().unwrap_or_default());
-        let repo_root = payload
-            .get("repo_root")
-            .and_then(Value::as_str)
-            .map(Path::new);
-        for root in std::iter::once(cwd.as_path()).chain(repo_root) {
-            if let Err(error) = fold_legacy(&path, &root.join(&legacy), wall_now(), LOCK_TIMEOUT) {
-                eprintln!(
-                    "runtime_state: legacy per-cwd fold skipped for {}: {error}",
-                    root.display()
-                );
-            }
-        }
-    }
+    let repo_root = payload
+        .get("repo_root")
+        .and_then(Value::as_str)
+        .map(Path::new);
+    fold_legacy_files(&path, &cwd, repo_root);
     let now = payload
         .get("now")
         .and_then(py_float)

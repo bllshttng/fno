@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "m1", "name": "m", "harness": "claude", "auth": "managed"}, "expect": {"snapshot": null, "reason": "unattributed"}}

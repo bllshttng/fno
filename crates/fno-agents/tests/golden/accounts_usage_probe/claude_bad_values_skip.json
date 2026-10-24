@@ -1,0 +1,1 @@
+{"op": "claude_windows", "payload": {"five_hour": {"utilization": "lots", "resets_at": "2026-09-14T12:00:00+00:00"}, "seven_day": {"utilization": 10, "resets_at": "not a date"}, "seven_day_x": {"utilization": null, "resets_at": "2026-09-14T12:00:00+00:00"}, "seven_day_y": {"utilization": -4, "resets_at": 1}}, "expect": [{"label": "weekly-y", "used_pct": 0.0, "resets_at": 1.0}]}
