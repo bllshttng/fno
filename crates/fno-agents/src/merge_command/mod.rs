@@ -326,46 +326,45 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
         hold_clear(&mut flow, pr);
         return flow;
     }
-    // One guarded fetch carries every binding key's source (head ref, url,
-    // body), and the door selects candidates through the ONE predicate the
-    // merge gate selects through (`org_board::prs::pr_binding_keys`). The
-    // door used to match url and number only, so a PR whose branch names a
-    // held node read clear here and refused at the gate.
-    let probes = crate::authorized_merge::RealProbes;
-    let facts = match crate::authorized_merge::Probes::pr_facts(
-        &probes,
-        cwd,
-        Some(u64::try_from(pr).unwrap_or_default()),
+    // One read carries every binding key's source (head ref, url, body), and
+    // the door selects candidates through the ONE predicate the merge gate
+    // selects through (`org_board::prs::pr_binding_keys`). The door used to
+    // match url and number only, so a PR whose branch names a held node read
+    // clear here and refused at the gate.
+    let ctx = match command_call(
+        "pr-closure-context",
+        &json!({"pr": pr, "repo": Value::Null, "cwd": cwd.to_string_lossy()}),
+        Duration::from_secs(60),
     ) {
-        Ok(facts) => facts,
+        Ok(v) => v,
         Err(e) => {
             hold_refusal(
                 &mut flow,
                 pr,
                 &base,
                 &format!(
-                    "dispatch-hold-invalid: hold lookup unavailable: the PR facts read \
-                     failed: {e}; retry the hold lookup; do not edit the PR body"
+                    "dispatch-hold-invalid: hold lookup unavailable: gh call failed before \
+                     PR content was read: {}; retry the hold lookup; do not edit the PR body",
+                    e.message
                 ),
             );
             return flow;
         }
     };
-    // The gate scopes its ladder to this repo's project and answers clear
-    // when the graph names no project for the root, so the door walks the
-    // same filter and one candidate set serves both readers.
-    let Some(project) = crate::backlog_ready::detect_project(&rows, &root) else {
-        hold_clear(&mut flow, pr);
-        return flow;
-    };
+    let url = ctx.get("url").and_then(Value::as_str).unwrap_or("");
+    let body = ctx.get("body").and_then(Value::as_str).unwrap_or("");
+    let head_ref = ctx.get("head_ref").and_then(Value::as_str).unwrap_or("");
+    // The same project scope as the gate. A graph that names no project for
+    // this root scopes nothing, so every row stays a candidate.
+    let project = crate::backlog_ready::detect_project(&rows, &root);
     let (candidates, ambiguous) = hold_candidates(
-        facts.number as i64,
-        &facts.head_ref,
-        &facts.url,
-        facts.body.as_deref(),
+        pr,
+        head_ref,
+        url,
+        Some(body),
         &rows,
         &by_id,
-        &project,
+        project.as_deref(),
     );
     if let Some(bare) = ambiguous {
         hold_refusal(
@@ -727,7 +726,7 @@ fn hold_candidates(
     body: Option<&str>,
     rows: &[Value],
     by_id: &std::collections::BTreeMap<String, &Value>,
-    project: &str,
+    project: Option<&str>,
 ) -> (Vec<String>, Option<Vec<String>>) {
     let keys = crate::org_board::prs::pr_binding_keys(number, head_ref, Some(url), body, rows);
     let mut candidates: Vec<String> = Vec::new();
@@ -743,7 +742,7 @@ fn hold_candidates(
         let Some(entry) = by_id.get(id.as_str()) else {
             continue;
         };
-        if !crate::backlog_ready::row_matches_project(entry, Some(project)) {
+        if !crate::backlog_ready::row_matches_project(entry, project) {
             continue;
         }
         candidates.push(id.clone());
@@ -764,7 +763,7 @@ fn hold_candidates(
             let row_url = row.get("pr_url").and_then(Value::as_str).unwrap_or("");
             if number_ok
                 && row_url.is_empty()
-                && crate::backlog_ready::row_matches_project(row, Some(project))
+                && crate::backlog_ready::row_matches_project(row, project)
             {
                 bare.push(id.to_string());
             }
@@ -1611,9 +1610,10 @@ mod hold_candidates_tests {
     /// The shape the two readers used to disagree on: the PR's branch names
     /// the node, no back-pointer and no closure line does. The door matched
     /// url and number only and read clear; the gate's branch key refused.
+    /// The graph names no project, which scopes nothing rather than clearing.
     #[test]
     fn a_branch_named_node_is_a_candidate_the_url_arms_never_saw() {
-        let rows = vec![json!({"id": "x-aaaa", "project": "fno"})];
+        let rows = vec![json!({"id": "x-aaaa"})];
         let map = by_id(&rows);
         let (candidates, ambiguous) = hold_candidates(
             9,
@@ -1622,7 +1622,7 @@ mod hold_candidates_tests {
             None,
             &rows,
             &map,
-            "fno",
+            None,
         );
         assert_eq!(candidates, vec!["x-aaaa".to_string()]);
         assert!(ambiguous.is_none());
@@ -1645,7 +1645,7 @@ mod hold_candidates_tests {
             Some("Fixes x-eeee"),
             &rows,
             &map,
-            "fno",
+            Some("fno"),
         );
         // Branch first, then trailer, then backref; x-cccc names the branch
         // too but belongs to another project, exactly what the gate skips.
@@ -1671,7 +1671,7 @@ mod hold_candidates_tests {
             None,
             &rows,
             &map,
-            "fno",
+            Some("fno"),
         );
         assert_eq!(candidates, vec!["x-dddd".to_string()]);
         assert!(ambiguous.is_none());
@@ -1691,7 +1691,7 @@ mod hold_candidates_tests {
             None,
             &rows,
             &map,
-            "fno",
+            Some("fno"),
         );
         assert!(candidates.is_empty());
         assert_eq!(
@@ -1715,7 +1715,7 @@ mod hold_candidates_tests {
             None,
             &rows,
             &map,
-            "fno",
+            Some("fno"),
         );
         assert!(candidates.is_empty());
         assert!(ambiguous.is_none());
