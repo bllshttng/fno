@@ -8,22 +8,17 @@ Phase 03 will wire in staging.stage(record) inside the `add` command.
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, Optional, cast
 
 import typer
 
-from fno.adapters.providers.dispatch import dispatch_env
 from fno.adapters.providers.loader import (
     load_providers,
     mutable_accounts_block,
 )
 from fno.adapters.providers.model import (
     ProviderConfigError,
-    ProviderNotFoundError,
-    ProviderUnavailableError,
 )
 
 if TYPE_CHECKING:
@@ -629,72 +624,12 @@ def reconcile_slot_cmd(
 # ---------------------------------------------------------------------------
 
 @cli.command("test")
-def test_provider(
+def test_forward(
     provider_id: str = typer.Argument(...),
     smoke: bool = typer.Option(False, "--smoke", help="Attempt a real CLI invocation (costs quota)"),
 ) -> None:
-    """Validate account config: record lookup + binary on PATH + credentials_source exists.
-
-    With --smoke, also attempt a real CLI invocation (not fully implemented in Phase 02).
-    """
-    config = _load()
-    record = config.by_id.get(provider_id)
-    if record is None:
-        typer.echo(f"error: account '{provider_id}' not found", err=True)
-        raise typer.Exit(1)
-
-    # Check CLI binary on PATH
-    binary = shutil.which(record.harness)
-    if binary is None:
-        typer.echo(
-            f"error: CLI binary '{record.harness}' is not on PATH",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    # Check credentials_source for oauth_dir
-    if record.auth == "oauth_dir":
-        if record.credentials_source is None:
-            typer.echo(
-                f"error: auth=oauth_dir but credentials_source is not set for '{provider_id}'",
-                err=True,
-            )
-            raise typer.Exit(1)
-        if not record.credentials_source.exists():
-            typer.echo(
-                f"error: credentials_source '{record.credentials_source}' does not exist",
-                err=True,
-            )
-            raise typer.Exit(1)
-
-    if smoke:
-        # Resolve dispatch env vars so the subprocess runs under the right
-        # credentials, matching how real target invocations work.
-        try:
-            env_vars = dispatch_env(provider_id, repo_root=_get_repo_root())
-        except (ProviderNotFoundError, ProviderUnavailableError) as exc:
-            typer.echo(f"smoke: dispatch_env failed for '{provider_id}': {exc}", err=True)
-            raise typer.Exit(1)
-
-        try:
-            smoke_result = subprocess.run(
-                [record.harness, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={**os.environ, **env_vars},
-            )
-            if smoke_result.returncode != 0:
-                typer.echo(
-                    f"smoke test: '{record.harness} --help' exited {smoke_result.returncode}",
-                    err=True,
-                )
-                raise typer.Exit(1)
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            typer.echo(f"smoke test error: {exc}", err=True)
-            raise typer.Exit(1)
-
-    typer.echo(f"Account '{provider_id}' looks OK.")
+    """Validate account config: record lookup + binary on PATH + credentials_source exists."""
+    _forward_accounts("test", provider_id, *(["--smoke"] if smoke else []))
 
 
 # ---------------------------------------------------------------------------

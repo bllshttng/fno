@@ -1,0 +1,16 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n",
+ "bin": {
+  "claude": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "work",
+  "--smoke"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "smoke: dispatch_env failed for 'work': Provider 'work' is not staged. Call stage(record) before dispatch_env().\n",
+  "seen": null
+ }
+}

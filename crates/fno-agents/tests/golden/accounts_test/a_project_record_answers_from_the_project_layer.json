@@ -1,0 +1,16 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n",
+ "project": "[accounts]\n\n[[accounts.records]]\nid = \"slot\"\nname = \"slot\"\nharness = \"codex\"\nauth = \"managed\"\n",
+ "bin": {
+  "codex": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "slot"
+ ],
+ "expect": {
+  "exit": 0,
+  "stdout": "Account 'slot' looks OK.\n",
+  "stderr": "",
+  "seen": null
+ }
+}

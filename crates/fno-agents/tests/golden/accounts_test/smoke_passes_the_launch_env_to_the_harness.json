@@ -1,0 +1,16 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"gem\"\nname = \"gem\"\nharness = \"gemini\"\nauth = \"api_key\"\n\n[accounts.records.env]\nGEMINI_API_KEY = \"test-smoke-key\"\n",
+ "bin": {
+  "gemini": "#!/bin/sh\nprintf '%s' \"$GEMINI_API_KEY\" > {TMP}/seen\nexit 0\n"
+ },
+ "args": [
+  "gem",
+  "--smoke"
+ ],
+ "expect": {
+  "exit": 0,
+  "stdout": "Account 'gem' looks OK.\n",
+  "stderr": "",
+  "seen": "test-smoke-key"
+ }
+}
