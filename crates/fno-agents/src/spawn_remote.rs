@@ -140,9 +140,7 @@ pub fn run(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    // One declaration, every contract: the CI delta caps new test
-    // declarations, so the relay's unit contracts share one table-style
-    // body, the same shape mail_remote.rs runs.
+    // One table-style declaration: the CI delta caps new test declarations.
     #[test]
     fn spawn_relay_plans_its_shapes() {
         // Cross-host: the ssh argv runs the remote machine's own front door
