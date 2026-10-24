@@ -1,0 +1,10 @@
+{
+ "args": [
+  "show"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "no benchmark snapshot; run `fno config accounts benchmarks refresh`\n"
+ }
+}

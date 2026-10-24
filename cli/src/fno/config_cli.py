@@ -423,13 +423,9 @@ def _report_review_capability(json_out: bool = False) -> int:
     # no reachability row maps, are both routing holes an operator must see
     # here rather than at dispatch. This table drifted a full model release
     # with nothing detecting it; this line is the tripwire.
-    from fno.adapters.providers.benchmarks import (
-        empty_bands_for_harness,
-        unreachable_tier_ids,
-    )
-
-    dead_ids = unreachable_tier_ids()
-    empty_bands = empty_bands_for_harness()
+    tiers = command_call(["spawn-overlay", "accounts", "benchmarks", "tiers"], {})
+    dead_ids = tiers["unreachable_tier_ids"]
+    empty_bands = tiers["empty_bands"]
 
     if json_out:
         typer.echo(
