@@ -709,7 +709,7 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
     // covers both and pins correct tracking on the first push.
     let refspec = format!("HEAD:{target}");
     // The lease flag rides after the positionals: git's option parser
-    // accepts it there, and the `push --set-upstream origin HEAD:<branch>`
+    // accepts it there, and the `push --set-upstream origin HEAD:<target>`
     // prefix stays byte-identical for `a_first_push_sets_the_upstream`.
     let mut push_args: Vec<&str> = vec!["push", "--set-upstream", "origin", refspec.as_str()];
     let lease_flag;
