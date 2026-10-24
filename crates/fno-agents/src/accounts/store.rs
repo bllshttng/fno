@@ -975,7 +975,7 @@ pub fn clear_record_principal(root: &Path, record_id: &str) {
     let _ = write_private(&meta_path(root, record_id), &pretty(&Value::Object(meta)));
 }
 
-fn is_falsy(v: &Value) -> bool {
+pub(crate) fn is_falsy(v: &Value) -> bool {
     match v {
         Value::Null => true,
         Value::Bool(b) => !b,
