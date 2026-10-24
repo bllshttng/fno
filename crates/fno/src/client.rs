@@ -5334,31 +5334,6 @@ impl View {
         lines
     }
 
-    /// Paint the in-scrollback search line over the bottom row (v12).
-    /// Blank first so the divider-fill pass cannot bleed through (gotcha).
-    /// Typing shows `/query_`; browsing shows `[i/n] /query` or `/query - no
-    /// matches` (total 0).
-    fn draw_search_line(&self, cells: &mut [Cell], rows: usize, cols: usize, sv: &SearchView) {
-        let r = rows - 1;
-        for c in 0..cols {
-            cells[r * cols + c] = Cell::default();
-        }
-        let text = match sv.result {
-            Some((0, _)) => format!(" /{} - no matches", sv.query),
-            Some((total, current)) => format!(" [{current}/{total}] /{}", sv.query),
-            // Typing, or submitted but awaiting the first reply: show the input.
-            None => format!(" /{}_", sv.query),
-        };
-        for (i, ch) in text.chars().take(cols).enumerate() {
-            cells[r * cols + i] = Cell {
-                c: ch,
-                fg: Color::Default,
-                bg: Color::Default,
-                flags: cell_flags::BOLD,
-            };
-        }
-    }
-
     /// The tab-bar spans in paint order: the active squad's name (inert), its
     /// tabs, then a `+` new-tab affordance. The single source both `draw_tab_bar`
     /// and `chrome_hit` walk, so a click always lands on the glyph under it.

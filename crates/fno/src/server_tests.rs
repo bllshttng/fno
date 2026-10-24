@@ -5,6 +5,10 @@ use crate::proto::{AgentRow, TemplateName};
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};
 use crate::server::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
+use crate::server::pane_scroll::{wheel_gate, WHEEL_GATE_BUDGET, WHEEL_GATE_WINDOW};
+
+#[path = "server_tests/pane_scroll_tests.rs"]
+mod pane_scroll_tests;
 
 #[path = "server/server_thread_viewer_tests.rs"]
 mod thread_viewer_tests;
@@ -8732,43 +8736,6 @@ fn folded_scroll_ticks_preserve_per_tick_clamp_at_a_boundary() {
     core.scroll_tick(p1, MOUSE_WHEEL_LINES);
     core.scroll_tick(p1, -MOUSE_WHEEL_LINES);
     assert_eq!(core.scroll_offset(p1), mid, "a real cancel nets to no move");
-}
-
-#[test]
-fn pane_scroll_moves_shared_offset_and_edges_anchor() {
-    // The scroll-mode wire ops move the SAME shared offset the wheel drives,
-    // and the edge arm anchors exactly (g = oldest history line, G = live
-    // bottom) - never past either clamp.
-    let (mut core, _cid, p1, _p2, _rx) = seen_test_core();
-    let hist = 60;
-    core.panes
-        .get_mut(&p1)
-        .unwrap()
-        .vt
-        .feed("row\r\n".repeat(hist).as_bytes());
-    assert_eq!(core.scroll_offset(p1), 0, "starts at the live bottom");
-
-    // j/k-equivalent relative moves clamp both ways.
-    core.pane_scroll(_cid, p1, 5);
-    assert_eq!(core.scroll_offset(p1), 5, "5 lines up into history");
-    core.pane_scroll(_cid, p1, -10);
-    assert_eq!(core.scroll_offset(p1), 0, "10 lines down clamps at live");
-
-    // A missing pane is a notice, never a panic.
-    core.pane_scroll(_cid, 9999, 3);
-    core.pane_scroll_edge(_cid, 9999, true);
-
-    // g/G: top anchors at the full history (36 = 60 fed lines minus the
-    // 24-row viewport), bottom snaps to live.
-    core.pane_scroll(_cid, p1, 5);
-    core.pane_scroll_edge(_cid, p1, true);
-    assert_eq!(
-        core.scroll_offset(p1),
-        hist - 24,
-        "top anchors at the oldest history line"
-    );
-    core.pane_scroll_edge(_cid, p1, false);
-    assert_eq!(core.scroll_offset(p1), 0, "bottom snaps to live");
 }
 
 #[test]

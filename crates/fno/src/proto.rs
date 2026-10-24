@@ -2341,7 +2341,7 @@ pub struct SquadMeta {
 /// A complete rendered screen: `rows * cols` cells in row-major order plus the
 /// cursor. Self-contained by construction - drawing a `Frame` never requires
 /// any earlier message.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Frame {
     pub rows: u16,
     pub cols: u16,
