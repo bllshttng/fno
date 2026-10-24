@@ -400,8 +400,9 @@ pub struct Fleet {
 
 /// Every machine row and every session row on the primary, each session
 /// with its `fleet_seat` row when one exists. A seat whose session row is
-/// gone, or whose beat is not its machine's newest, is dropped. A seat read that fails leaves the sessions as read and
-/// names the failure in `seat_error`.
+/// gone, or whose beat is not its machine's newest, is dropped. A seat read
+/// that fails leaves the sessions as read and names the failure in
+/// `seat_error`.
 pub fn read(remote: &Remote) -> Result<Fleet, String> {
     remote.script(SCHEMA)?;
     let machines = remote
