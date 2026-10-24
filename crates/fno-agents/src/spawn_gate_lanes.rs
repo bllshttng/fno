@@ -847,7 +847,7 @@ pub(crate) struct ShareReading {
 }
 
 impl ShareReading {
-    /// A lead at its share may borrow a seat the other leads leave idle,
+    /// A lead at its share can borrow a seat the other leads leave idle,
     /// while the free seats still cover what those leads are owed. A lead
     /// under its share always passes, so an idle lead that starts work takes
     /// its seats back before the borrower gets another. `None` when unread.

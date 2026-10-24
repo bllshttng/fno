@@ -69,7 +69,7 @@ A `--no-wait` pass takes no ticket. Its refusal receipt carries `queue_place`, `
 
 ## Lead share lends idle seats
 
-Each teamed lead gets an even share of the cap: `max_live` divided by the lead count. The share is a floor, not a ceiling. A lead at its share may borrow a seat that other leads leave idle. The borrow admits only while the free seats cover every seat the other leads still lack to reach their share. A lead under its share always passes this axis, so an idle lead that starts work takes its seats back before the borrower gets another. With `max_live` 15 and leads holding 5, 1 and 1, the first lead borrows a sixth seat. When the second lead then spawns, it admits, and the first lead's seventh is refused. On 2026-10-24 the even split refused one lead with a 15-node queue while the Mac ran 7 of 15. The refusal receipt carries `free` and `owed` beside `held` and `share`.
+Each teamed lead gets an even share of the cap: `max_live` divided by the lead count. The share is a floor, not a ceiling. A lead at its share can borrow a seat that other leads leave idle. The borrow admits only while the free seats cover every seat the other leads still lack to reach their share. A lead under its share always passes this axis, so an idle lead that starts work takes its seats back before the borrower gets another. With `max_live` 15 and leads holding 5, 1 and 1, the first lead borrows a sixth seat. When the second lead then spawns, it admits, and the first lead's seventh is refused. On 2026-10-24 the even split refused one lead with a 15-node queue while the Mac ran 7 of 15. The refusal receipt carries `free` and `owed` beside `held` and `share`.
 
 ## The exit-code allocation table
 
