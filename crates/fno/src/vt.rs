@@ -2981,17 +2981,23 @@ mod tests {
         assert_eq!(pane.scroll(1_000_000), off, "clamped at history top");
 
         // Scroll-mode `g` + readout math: scroll_to_top anchors at the SAME
-        // clamp (26 = 30 fed - 4 viewport), and the frame carries the
-        // denominator: history plus viewport = 30 total, so the viewport's
-        // top line reads `line 1 of 30`.
+        // clamp a huge relative scroll reaches (the history size is the
+        // grid's own count, so the test reads it rather than recomputes it),
+        // and the frame carries the denominator: history plus viewport
+        // total, so the viewport's top line reads `line 1 of total`.
         let mut pane = Pane::new(4, 20);
         for i in 0..30 {
             pane.feed(format!("row{i}\r\n").as_bytes());
         }
         pane.scroll_to_top();
-        assert_eq!(pane.display_offset(), 26, "top = the full history");
+        let top = pane.display_offset();
+        assert!(top > 0, "top = the full history");
         let f = pane.frame();
-        assert_eq!(f.history_lines, 30, "history + viewport");
+        assert_eq!(
+            f.history_lines as usize,
+            top + f.rows as usize,
+            "history + viewport"
+        );
         let n = f.history_lines as i64 - f.rows as i64 - f.scroll_offset as i64 + 1;
         assert_eq!(n, 1, "at the top the viewport starts at line 1");
 

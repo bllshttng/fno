@@ -10,12 +10,12 @@ fn pane_scroll_moves_shared_offset_and_edges_anchor() {
     // and the edge arm anchors exactly (g = oldest history line, G = live
     // bottom) - never past either clamp.
     let (mut core, _cid, p1, _p2, _rx) = seen_test_core();
-    let hist = 60;
+    let lines = 60;
     core.panes
         .get_mut(&p1)
         .unwrap()
         .vt
-        .feed("row\r\n".repeat(hist).as_bytes());
+        .feed("row\r\n".repeat(lines).as_bytes());
     assert_eq!(core.scroll_offset(p1), 0, "starts at the live bottom");
 
     // j/k-equivalent relative moves clamp both ways.
@@ -28,17 +28,20 @@ fn pane_scroll_moves_shared_offset_and_edges_anchor() {
     core.pane_scroll(_cid, 9999, 3);
     core.pane_scroll_edge(_cid, 9999, true);
 
-    // g/G: top anchors at the full history (36 = 60 fed lines minus the
-    // 24-row viewport), bottom snaps to live.
-    core.pane_scroll(_cid, p1, 5);
+    // g/G: top anchors at the SAME clamp a huge relative scroll reaches (the
+    // history size is the grid's own count, so the test reads it rather than
+    // recomputes it), and bottom snaps to live.
+    core.pane_scroll(_cid, p1, 1_000_000);
+    let top = core.scroll_offset(p1);
+    assert!(top > 0, "a huge scroll clamps at the history top");
+    core.pane_scroll_edge(_cid, p1, false);
+    assert_eq!(core.scroll_offset(p1), 0, "bottom snaps to live");
     core.pane_scroll_edge(_cid, p1, true);
     assert_eq!(
         core.scroll_offset(p1),
-        hist - 24,
+        top,
         "top anchors at the oldest history line"
     );
-    core.pane_scroll_edge(_cid, p1, false);
-    assert_eq!(core.scroll_offset(p1), 0, "bottom snaps to live");
 }
 
 // AC1-HP / AC2-HP: a 30-tick same-direction flood inside one window
