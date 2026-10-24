@@ -139,8 +139,6 @@ A	explicit dispatch command must not be empty	py=cli/src/fno/agents/harness_map.
 A	falling back to registry-only view	py=cli/src/fno/agents/harnesses/claude.py|cli/src/fno/claims/roster.py;rs=crates/fno-agents/src/backlog/worked.rs|crates/fno-agents/src/claude_roster.rs	# CLASSIFY protocol|msg-twin|data
 A	false (substrate: spawned/bg worker)	py=cli/src/fno/target/orient.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
 A	fix or remove the declaration, then retry.	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/target_start.rs	# CLASSIFY protocol|msg-twin|data the dispatch-hold remedy tail both legs render
-A	flight:backlog-reconcile	py=cli/src/fno/backlog/single_flight.py;rs=crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data
-A	flight:backlog-reconcile:node:{node}	py=cli/src/fno/backlog/single_flight.py;rs=crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	fn retired_command_pointer(command:	py=cli/src/fno/lint_command_ratchet.py;rs=crates/fno/src/menu_caps.rs	# shared-vocabulary: the source anchor both command guards scan in fno-agents client.rs
 A	fno agents mail drain-self	py=cli/src/fno/mail/cli.py;rs=crates/fno/src/main.rs	# msg-twin: the drain-self missing-binary hint label on both transports names the canonical command form
 A	fno agents mail: {label} from {sender}	py=cli/src/fno/mail/receipts.py;rs=crates/fno-agents/src/mail_cli/send/verify.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
