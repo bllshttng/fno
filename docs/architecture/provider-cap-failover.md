@@ -42,7 +42,7 @@ A mail-based fleet warning is therefore not a cap mitigation, and that is a reco
 | Harvest the reset stamp and write it as the provider lock | a parse and a file write | `error_taxonomy._parse_reset_stamp`, `accounts::state::next_health` (Rust) |
 | Emit `worker_refused` above the staleness gate | an event write | `recovery.recovery_sweep` |
 | Run the fleet leg first and heartbeat it | a file write on a launchd tick | `pr_watch/cli.py`, `fleet_state.py` |
-| Project a probe-less window's close | local reads | `runtime_state.project_window`, `fno config accounts window` |
+| Project a probe-less window's close | local reads | `accounts::state::project_window`, `fno config accounts window` |
 | Stop out of band | a signal | `stop_claude`'s survivor end in `crates/fno-agents/src/daemon/claude_stop.rs` |
 | Re-dispatch across the harness axis | a fresh process | `config.agents.fallback`, `recovery._default_failover` |
 | Turn silence into a finding | a read and an event write | `agents/sweep.py`, `fno agents fleet sweep` |

@@ -36,7 +36,7 @@ pub enum Verdict {
 }
 
 impl Verdict {
-    /// The lowercase name every report prints (`HeadroomState.value`).
+    /// The `HeadroomState` value word the reports print.
     pub fn as_str(self) -> &'static str {
         match self {
             Verdict::Exhausted => "exhausted",
