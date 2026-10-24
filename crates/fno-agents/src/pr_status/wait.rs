@@ -108,9 +108,10 @@ fn emit_tick(payload: &Value, lines: &[String], calls: usize, ticks: usize) -> (
 
 /// The settled/red/green loop. `poll` is one cache-coalesced tick returning
 /// (code, payload, stderr lines, this tick's gh calls); `on_red` cancels
-/// the red head's runs still in flight and returns one line per run;
-/// `sleeper` and `now` are injectable so tests stage the clock. Only the
-/// final tick re-emits.
+/// the red head's runs still in flight and returns one line per run, or
+/// None when the live read shows the red belongs to an earlier attempt, so
+/// the wait keeps waiting; `sleeper` and `now` are injectable so tests
+/// stage the clock. Only the final tick re-emits.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wait_status(
     pr: u64,
@@ -118,7 +119,7 @@ pub(crate) fn wait_status(
     timeout: f64,
     interval: f64,
     mut poll: impl FnMut() -> (i32, Value, Vec<String>, usize),
-    mut on_red: impl FnMut(&Value) -> Vec<String>,
+    mut on_red: impl FnMut(&Value) -> Option<Vec<String>>,
     mut sleeper: impl FnMut(f64),
     now: impl Fn() -> f64,
 ) -> (i32, String, String) {
@@ -163,15 +164,23 @@ pub(crate) fn wait_status(
         let red = until != "green"
             && payload.get("verdict").and_then(Value::as_str) == Some("red")
             && payload.get("stale_reason").is_none();
+        let mut stale_red = false;
         if red {
-            let (stdout, mut stderr) = emit_tick(&payload, &lines, calls, ticks);
-            for line in on_red(&payload) {
-                stderr.push_str(&line);
-                stderr.push('\n');
+            match on_red(&payload) {
+                Some(cancelled) => {
+                    let (stdout, mut stderr) = emit_tick(&payload, &lines, calls, ticks);
+                    for line in cancelled {
+                        stderr.push_str(&line);
+                        stderr.push('\n');
+                    }
+                    return (rc, stdout, stderr);
+                }
+                // A rerun is testing: the red is the old attempt's, and its
+                // settled flag is too. Wait for the rerun, cancel nothing.
+                None => stale_red = true,
             }
-            return (rc, stdout, stderr);
         }
-        if done == Some(true) {
+        if done == Some(true) && !stale_red {
             let (stdout, stderr) = emit_tick(&payload, &lines, calls, ticks);
             return (rc, stdout, stderr);
         }
@@ -390,22 +399,74 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     )
 }
 
-/// Cancel the Actions runs still testing a red `head`, one line per run.
+/// Whether every failure in the live `latest` rows predates its run's
+/// current attempt. A rerun keeps the run id and restarts the run clock,
+/// so a failed job that completed before `run_started_at` is the old
+/// attempt's. Two windows serve that red: a cached status row minted
+/// before the rerun, and the check-runs list before the rerun mints its
+/// jobs. Live rows with no failure at all are stale too: the red was the
+/// cache's. A failed row with no completion time or no listed run is never
+/// stale.
+fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
+    let started: std::collections::HashMap<u64, &str> = runs
+        .iter()
+        .filter_map(|run| {
+            Some((
+                run.get("id")?.as_u64()?,
+                run.get("run_started_at")?.as_str()?,
+            ))
+        })
+        .collect();
+    latest
+        .iter()
+        .filter(|row| row.get("bucket").and_then(Value::as_str) == Some("fail"))
+        .all(|row| {
+            let done = row.get("completedAt").and_then(Value::as_str).unwrap_or("");
+            let link = row.get("link").and_then(Value::as_str).unwrap_or("");
+            match crate::pr_push::run_id(link).and_then(|id| started.get(&id)) {
+                Some(attempt_start) => !done.is_empty() && done < *attempt_start,
+                None => false,
+            }
+        })
+}
+
+/// Cancel the Actions runs still testing a red `head`, one line per run;
+/// None when the live rows show the red belongs to an earlier attempt.
 /// A failed read or cancel is printed, never hidden.
-fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Vec<String> {
+fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<Vec<String>> {
     let short: String = head.chars().take(8).collect();
     if head.is_empty() {
-        return vec!["wait: red, but the status names no head; no run cancelled".into()];
+        return Some(vec![
+            "wait: red, but the status names no head; no run cancelled".into(),
+        ]);
     }
     let rows = match crate::pr_push::read_checks_rows(gh_bin, cwd, head) {
         Ok(rows) => rows,
         Err(e) => {
-            return vec![format!(
+            return Some(vec![format!(
                 "wait: cancel FAILED: cannot read the runs on {short}: {e}"
-            )]
+            )])
         }
     };
     let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
+    // An unreadable runs listing proves nothing stale: the law's cancel runs.
+    let listing: Vec<Value> = crate::pr_push::gh_api_pages(
+        gh_bin,
+        cwd,
+        &format!("repos/{{owner}}/{{repo}}/actions/runs?head_sha={head}&per_page=100"),
+    )
+    .unwrap_or_default()
+    .iter()
+    .filter_map(|page| page.get("workflow_runs").and_then(Value::as_array))
+    .flatten()
+    .cloned()
+    .collect();
+    if red_is_stale(
+        latest.as_array().map(Vec::as_slice).unwrap_or(&[]),
+        &listing,
+    ) {
+        return None;
+    }
     let pending: Vec<&Value> = latest
         .as_array()
         .into_iter()
@@ -419,9 +480,12 @@ fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Vec<String> {
         .collect();
     let runs = crate::pr_push::pending_run_ids(&pending);
     if runs.is_empty() {
-        return vec![format!("wait: red at {short}; no run in flight to cancel")];
+        return Some(vec![format!(
+            "wait: red at {short}; no run in flight to cancel"
+        )]);
     }
-    runs.iter()
+    let cancelled = runs
+        .iter()
         .map(|id| {
             let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel");
             match crate::pr_push::gh_api(gh_bin, cwd, &path, &["-X", "POST"]) {
@@ -429,7 +493,8 @@ fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Vec<String> {
                 Err(e) => format!("wait: red at {short}; cancel of run {id} FAILED: {e}"),
             }
         })
-        .collect()
+        .collect();
+    Some(cancelled)
 }
 
 /// Reviews on `pr` via one conditional REST read; None when the read fails
@@ -519,7 +584,7 @@ mod tests {
             1800.0,
             60.0,
             staged_poll(payloads),
-            |_| Vec::new(),
+            |_| Some(Vec::new()),
             |_| {},
             || 0.0,
         );
@@ -549,7 +614,9 @@ mod tests {
                 staged_poll(payloads),
                 |p| {
                     heads.borrow_mut().push(p["head"].clone());
-                    vec!["wait: red at abcdef12; cancel of run 7 FAILED: 403".into()]
+                    Some(vec![
+                        "wait: red at abcdef12; cancel of run 7 FAILED: 403".into()
+                    ])
                 },
                 |s| t.set(t.get() + s),
                 || t.get(),
@@ -560,6 +627,82 @@ mod tests {
             assert_eq!(*heads.borrow(), vec![json!("abcdef1234")]);
             assert!(stderr.contains("cancel of run 7 FAILED: 403"), "{stderr}");
         }
+    }
+
+    /// A red from the attempt before a rerun cancels nothing and wakes no
+    /// one, even when that stale payload reads settled: the wait rides on
+    /// until the rerun's own verdict lands.
+    #[test]
+    fn a_stale_red_rides_out_to_the_reruns_verdict() {
+        let t = Cell::new(0.0);
+        let payloads = vec![
+            (
+                1,
+                json!({"verdict": "red", "settled": true, "head": "abcdef1234"}),
+            ),
+            (2, json!({"verdict": "pending", "settled": false})),
+            (0, json!({"verdict": "green", "settled": true})),
+        ];
+        let (code, stdout, stderr) = wait_status(
+            9,
+            "settled",
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| None,
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 0, "the rerun's green, not the stale red");
+        assert!(stdout.contains("\"verdict\":\"green\""), "{stdout}");
+        assert!(!stderr.contains("cancel"), "{stderr}");
+    }
+
+    #[test]
+    fn red_is_stale_reads_each_failure_against_its_runs_attempt_start() {
+        let fail = |run: u64, done: &str| {
+            json!({
+                "bucket": "fail",
+                "link": format!("https://github.com/o/r/actions/runs/{run}/job/1"),
+                "completedAt": done,
+            })
+        };
+        let runs = vec![
+            json!({"id": 7, "run_started_at": "2026-10-22T17:13:00Z"}),
+            json!({"id": 8, "run_started_at": "2026-10-22T16:00:00Z"}),
+        ];
+        let pending =
+            json!({"bucket": "pending", "link": "https://github.com/o/r/actions/runs/7/job/2"});
+        assert!(
+            red_is_stale(&[fail(7, "2026-10-22T16:59:00Z"), pending.clone()], &runs),
+            "run 7 restarted after its job failed: the old attempt's red"
+        );
+        assert!(
+            !red_is_stale(&[fail(8, "2026-10-22T16:30:00Z"), pending], &runs),
+            "a failure inside the current attempt is live: the law's cancel runs"
+        );
+        assert!(
+            !red_is_stale(
+                &[
+                    fail(7, "2026-10-22T16:59:00Z"),
+                    fail(8, "2026-10-22T16:30:00Z")
+                ],
+                &runs
+            ),
+            "one live failure keeps the head red"
+        );
+        assert!(
+            !red_is_stale(&[fail(7, "")], &runs),
+            "no completion time is never stale"
+        );
+        assert!(
+            !red_is_stale(&[fail(9, "2026-10-22T16:59:00Z")], &runs),
+            "an unlisted run is never stale"
+        );
+        assert!(
+            red_is_stale(&[json!({"bucket": "pass"})], &runs),
+            "no live failure: the red was a cached row's"
+        );
     }
 
     #[test]
@@ -574,7 +717,7 @@ mod tests {
             30.0,
             10.0,
             staged_poll(payloads),
-            |_| Vec::new(),
+            |_| Some(Vec::new()),
             |s| t.set(t.get() + s),
             || t.get(),
         );
@@ -674,7 +817,7 @@ mod tests {
             100_000.0,
             60.0,
             staged_poll(payloads),
-            |_| Vec::new(),
+            |_| Some(Vec::new()),
             |s| t.set(t.get() + s),
             || t.get(),
         );
@@ -701,7 +844,7 @@ mod tests {
             1500.0,
             600.0,
             staged_poll(payloads),
-            |_| Vec::new(),
+            |_| Some(Vec::new()),
             |s| t.set(t.get() + s),
             || t.get(),
         );
