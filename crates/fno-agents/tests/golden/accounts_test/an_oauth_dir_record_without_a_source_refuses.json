@@ -1,0 +1,15 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"bare\"\nname = \"bare\"\nharness = \"claude\"\nauth = \"oauth_dir\"\n",
+ "bin": {
+  "claude": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "bare"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: invalid provider record 'bare': auth_strategy_mismatch: auth_strategy_mismatch: bare: auth=oauth_dir requires credentials_source\n",
+  "seen": null
+ }
+}

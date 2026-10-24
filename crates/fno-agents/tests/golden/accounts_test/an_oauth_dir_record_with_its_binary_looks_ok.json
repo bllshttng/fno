@@ -1,0 +1,15 @@
+{
+ "global": "[accounts]\nactive = \"work\"\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n",
+ "bin": {
+  "claude": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "work"
+ ],
+ "expect": {
+  "exit": 0,
+  "stdout": "Account 'work' looks OK.\n",
+  "stderr": "",
+  "seen": null
+ }
+}

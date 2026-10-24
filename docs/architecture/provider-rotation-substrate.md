@@ -65,7 +65,7 @@ The substrate package is `cli/src/fno/adapters/providers/`. No code outside this
 |--------|---------------|--------------|
 | `model.py` | ProviderRecord, ProvidersConfig, four exception classes | pydantic, pathlib |
 | `loader.py` | load_providers, save_providers | model, fno.state.io |
-| `cli.py` | `fno config accounts` Typer sub-app | model, loader, staging, dispatch |
+| `cli.py` | `fno config accounts` Typer sub-app | model, loader, managed |
 | `staging.py` | stage, verify_staged | model, pathlib |
 | `dispatch.py` | dispatch_env, resolve_env_value | model, loader, staging, subprocess |
 
