@@ -84,17 +84,17 @@ pub struct Run {
 }
 
 impl Run {
-    fn out(&mut self, line: &str) {
+    pub(crate) fn out(&mut self, line: &str) {
         self.stdout.push_str(line);
         self.stdout.push('\n');
     }
 
-    fn err(&mut self, line: &str) {
+    pub(crate) fn err(&mut self, line: &str) {
         self.stderr.push_str(line);
         self.stderr.push('\n');
     }
 
-    fn fail(mut self, line: &str) -> Run {
+    pub(crate) fn fail(mut self, line: &str) -> Run {
         self.err(line);
         self.code = 1;
         self
