@@ -4,8 +4,8 @@
 //! writer re-dumped the whole file and dropped them.
 //!
 //! Every write holds an exclusive flock on `<path>.lock`, the sidecar
-//! `fno.state.io.atomic_write` and `atomic_mutate_settings` lock, so a Rust
-//! write serializes with every Python writer still live.
+//! `fno.state.io.atomic_write` locks, so a Rust write serializes with
+//! `save_providers`, the one Python writer still live.
 
 use crate::accounts::records::{self, Record};
 use serde_json::Value as Json;
@@ -158,6 +158,48 @@ pub fn set_records(doc: &mut DocumentMut, records: &[Record], active: Option<&st
             accounts.remove("active");
         }
     }
+}
+
+/// `loader.mutable_accounts_block` inside [mutate]: drain `config.accounts`,
+/// `providers` and `config.providers`, keep a top-level `accounts` table or
+/// adopt the first drained block, then lift the rest of `[config]`. Unlike
+/// [set_records], a top-level block beats a wrapped one. Returns the warning
+/// for each non-empty block it dropped.
+pub fn accounts_block(doc: &mut DocumentMut) -> Vec<String> {
+    let root = doc.as_table_mut();
+    let mut drained: Vec<(&str, Table)> = Vec::new();
+    for (in_config, key) in [
+        (true, "accounts"),
+        (false, "providers"),
+        (true, "providers"),
+    ] {
+        let source = if in_config {
+            root.get_mut("config").and_then(Item::as_table_like_mut)
+        } else {
+            Some(&mut *root as &mut dyn toml_edit::TableLike)
+        };
+        if let Some(Ok(found)) = source.and_then(|s| s.remove(key)).map(Item::into_table) {
+            drained.push((key, found));
+        }
+    }
+    let adopted = match root.remove("accounts").map(Item::into_table) {
+        Some(Ok(table)) => table,
+        _ if drained.is_empty() => Table::new(),
+        _ => drained.remove(0).1,
+    };
+    root.insert("accounts", Item::Table(adopted));
+    flatten_config(root);
+    drained
+        .iter()
+        .filter(|(_, table)| !table.is_empty())
+        .map(|(key, table)| {
+            format!(
+                "discarding shadowed account block '{key}' ({} key(s)); a higher-precedence \
+                 block already provides config.accounts",
+                table.len()
+            )
+        })
+        .collect()
 }
 
 /// `loader._flatten_config`: a `config` table's keys move to the top level and
