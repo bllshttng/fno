@@ -9,7 +9,10 @@ use super::*;
 
 // Declared here, not in daemon.rs: that file is over its line budget and
 // may only shrink. This arm block plus this declaration is the sweep's
-// whole wiring footprint.
+// whole wiring footprint. The #[path] pins resolution beside the sibling
+// daemon modules: a mod declared in fleet_arms.rs otherwise looks for a
+// fleet_arms/ child directory, and the packaged crate fails with E0583.
+#[path = "shell_writers_sweep.rs"]
 pub(crate) mod shell_writers_sweep;
 
 /// Arm state used only by the tick arms. The idle-probe locals
