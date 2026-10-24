@@ -101,7 +101,7 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
 
 /// Classify `fno inbox outstanding [--json|-J]`, and the hidden legacy
 /// `fno outstanding` spelling of it: `Some(rest)` is the flag tail for
-/// `fno-agents outstanding`. A subcommand (`mine`, `ask`, `clear`,
+/// `fno-agents compaction outstanding`. A subcommand (`mine`, `ask`, `clear`,
 /// `reindex`), `--help`, or an unknown flag forwards to Python.
 pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest = match args.first()?.to_str()? {

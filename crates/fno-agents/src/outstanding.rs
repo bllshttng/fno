@@ -1026,10 +1026,8 @@ fn storage_root(cwd: &Path) -> PathBuf {
 /// This session's id: the target manifest's `fno_id` or `session_id`, else
 /// `CLAUDECODE_SESSION_ID`.
 fn session_id(cwd: &Path) -> Option<String> {
-    let root = env_nonempty("FNO_REPO_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| crate::paths::worktree_repo_root(cwd));
-    if let Ok(text) = std::fs::read_to_string(root.join(".fno").join("target-state.md")) {
+    let manifest = crate::state_path::resolve("target-state", cwd);
+    if let Some(Ok(text)) = manifest.map(std::fs::read_to_string) {
         let mut lines = text.lines();
         if lines.next().map(str::trim) == Some("---") {
             let mut fields: HashMap<&str, String> = HashMap::new();
@@ -1091,7 +1089,7 @@ fn prove_it_rows() -> Result<Vec<Value>, String> {
     crate::prove_it_verdicts::prove_it_verdict_rows()
 }
 
-/// `fno-agents outstanding [--json|-J]`.
+/// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
     let mut as_json = false;
     for a in args {

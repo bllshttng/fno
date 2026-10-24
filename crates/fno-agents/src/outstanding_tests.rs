@@ -152,7 +152,7 @@ fn a_missing_store_reads_empty_and_an_unreadable_one_is_a_failed_read() {
 #[test]
 fn questions_fold_closes_away_and_rank_live_first_then_newest() {
     let ask = |id: &str, ts: &str, asker: Option<&str>, blocks: &[&str]| {
-        json!({"type": "operator_question", "ts": ts, "data": {
+        json!({"type": QUESTION_EVENT, "ts": ts, "data": {
             "question_id": id, "question": "?", "asker": asker, "blocks": blocks}})
         .to_string()
     };
@@ -161,7 +161,7 @@ fn questions_fold_closes_away_and_rank_live_first_then_newest() {
         ask("q2", "2026-07-21T00:00:00Z", None, &[]),
         ask("q3", "2026-07-19T00:00:00Z", Some("bob"), &[]),
         ask("q4", "2026-07-22T00:00:00Z", Some("carol"), &[]),
-        json!({"type": "operator_question_closed", "data": {"question_id": "q4"}}).to_string(),
+        json!({"type": QUESTION_CLOSED_EVENT, "data": {"question_id": "q4"}}).to_string(),
         ask("q5", "2026-07-21T00:00:00Z", Some("dave"), &["x-1"]),
         "{operator_question not json".to_string(),
     ]
@@ -309,16 +309,16 @@ fn the_capture_leg_folds_every_project_dedupes_ids_and_ages_from_capture_events(
         "- [ ] fu-bb1 \u{2014} second thing\n- [ ] fu-shared - shared\n",
     );
     // An unreadable inbox is one project less, never a failure.
-    std::fs::create_dir_all(c.join(".fno/backlog/parking-lot.md")).unwrap();
+    std::fs::create_dir_all(c.join(".fno").join("backlog").join("parking-lot.md")).unwrap();
     let event = |fu: &str, ts: &str| {
         json!({"type": "capture_add", "ts": ts, "data": {"fu_id": fu}}).to_string() + "\n"
     };
     write(
-        &a.join(".fno/events.jsonl"),
+        &project_log(&a, "events.jsonl"),
         &event("fu-aa1", "2026-07-10T00:00:00Z"),
     );
     write(
-        &b.join(".fno/events.jsonl"),
+        &project_log(&b, "events.jsonl"),
         &event("fu-bb1", "2026-07-04T00:00:00Z"),
     );
     src.backend = "linear".to_string();

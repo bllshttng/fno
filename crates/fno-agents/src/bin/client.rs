@@ -1212,12 +1212,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::day::run_day(&args[1..], &AgentsHome::from_env());
     }
 
-    // `outstanding`: daemon-free, unregistered like `day`; `fno inbox
-    // outstanding` reaches it through the native inbox route.
-    if matches!(command, "outstanding") {
-        return fno_agents::outstanding::run_outstanding(&args[1..]);
-    }
-
     // `status` reports on a *running* daemon: it must NOT lazy-start one just to
     // describe it as up. A down daemon is exit 13 (AC10-ERR).
     if command == "status" {

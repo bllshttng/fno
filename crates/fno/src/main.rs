@@ -344,7 +344,7 @@ enum Role {
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
     /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
-    /// tail is the `fno-agents outstanding` argv.
+    /// tail is the `fno-agents compaction outstanding` argv.
     InboxOutstanding(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
@@ -1417,7 +1417,7 @@ fn main() {
         }
         Role::InboxOutstanding(rest) => std::process::exit(fno_agents_exec(
             "fno inbox outstanding",
-            &["outstanding"],
+            &["compaction", "outstanding"],
             &rest,
         )),
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
