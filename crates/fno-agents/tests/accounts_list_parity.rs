@@ -8,6 +8,12 @@
 //! endpoint keyed by bearer, and the text and `-J` stdout the Python command
 //! printed at `now` before deletion. Scoped Keychain service names read as
 //! `<scoped:slot>`, `<scoped:a>` and `<scoped:b>`, the temp root as `<TMP>`.
+//!
+//! One field was corrected after capture. The Python snapshot age read the
+//! wall clock, which the capture did not pin, so a snapshot stamped
+//! 2027-01-01 read as a future stamp and clamped to `0m`. At the pinned
+//! `now` (2027-01-15) the same Python code prints `14d`, which the goldens
+//! now hold.
 
 use fno_agents::accounts::binding::{self, SlotProbe};
 use fno_agents::accounts::list;
