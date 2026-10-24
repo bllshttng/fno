@@ -16,7 +16,6 @@ from pydantic import (
     model_validator,
 )
 
-from fno.approvals import EffectAttempt, EffectState, evidence_projection
 from fno.company.contracts import (
     CompanyWorkRefs,
     DeliverableRef,
@@ -39,6 +38,17 @@ LEGACY_PR_ADAPTER_VERSION = "legacy-pr-adapter.v1"
 LEGACY_RESEARCH_ADAPTER_VERSION = "legacy-research-adapter.v1"
 APPROVAL_EVENT_ADAPTER_VERSION = "approval-event-adapter.v1"
 EFFECT_EVENT_ADAPTER_VERSION = "effect-event-adapter.v1"
+
+# Only an acknowledgment passes: it is the destination's word on one effect,
+# not an aggregate delivery verdict.
+_EVIDENCE_BY_EFFECT_STATE: dict[str, EvidenceResult] = {
+    "acknowledged": EvidenceResult.PASSED,
+    "failed": EvidenceResult.FAILED,
+    "blocked": EvidenceResult.BLOCKED,
+    "prepared": EvidenceResult.UNKNOWN,
+    "executing": EvidenceResult.UNKNOWN,
+    "unknown": EvidenceResult.UNKNOWN,
+}
 
 
 class _ImmutableModel(BaseModel):
@@ -180,11 +190,10 @@ def adapt_delivery_event(
             return ()
         state = _nonempty(data, "state")
         previous_state = _nonempty(data, "previous_state")
-        states = {state.value: state for state in EffectState}
         if (
-            state not in states
-            or (previous_state is None and state != EffectState.PREPARED.value)
-            or (previous_state is not None and previous_state not in states)
+            state not in _EVIDENCE_BY_EFFECT_STATE
+            or (previous_state is None and state != "prepared")
+            or (previous_state is not None and previous_state not in _EVIDENCE_BY_EFFECT_STATE)
         ):
             return ()
         if not isinstance(approval_request_event, Mapping):
@@ -222,32 +231,9 @@ def adapt_delivery_event(
         action_digest = _nonempty(request_data, "action_digest")
         if request_digest is None or idempotency_key is None or action_digest is None:
             return ()
-        attempt = EffectAttempt(
-            effect_id=binding.id,
-            work_order_id=binding.work_order_id,
-            attempt_id=binding.attempt_id,
-            request_digest=request_digest,
-            idempotency_key=idempotency_key,
-            action_digest=action_digest,
-            destination=binding.destination,
-            effect_class=binding.effect_class,
-            adapter_id="event:approvals",
-            adapter_version=EFFECT_EVENT_ADAPTER_VERSION,
-            state=states[state],
-            external_ref=_nonempty(data, "external_ref"),
-            reconciliation_ref=_nonempty(data, "reconciliation_ref"),
-        )
-        projection = evidence_projection(attempt)
-        if (
-            projection.work_order_id != binding.work_order_id
-            or projection.attempt_id != binding.attempt_id
-            or projection.subject_kind is not EvidenceSubjectKind.EFFECT
-            or projection.subject_id != binding.id
-        ):
-            return ()
         effect_id = binding.id
-        result = projection.result
-        key = _nonempty(data, "idempotency_key")
+        result = _EVIDENCE_BY_EFFECT_STATE[state]
+        key = idempotency_key
         source_revision = f"effect:{key}:state:{state}"
         adapter_version = EFFECT_EVENT_ADAPTER_VERSION
         kinds = [EvidenceSubjectKind.EFFECT]

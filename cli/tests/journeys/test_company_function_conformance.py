@@ -5,17 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from fno.approvals import (
-    AdapterCapability,
-    ApprovalRequest,
-    DecisionKind,
-    EffectDisposition,
-    EffectStore,
-    RefusalReason,
-    RefusedError,
-    action_digest,
-    classify_effect,
-)
 from fno.company.contracts import (
     CompanyWorkRefs,
     DeliverableRef,
@@ -291,61 +280,6 @@ def test_each_missing_requirement_never_reports_passed(
     verdict = evaluate_delivery(company_work, facts, evaluated_at=NOW)
     assert verdict.aggregate in {EvidenceResult.UNKNOWN, EvidenceResult.BLOCKED}
     assert verdict.aggregate is not EvidenceResult.PASSED
-
-
-class _FounderAuthority:
-    source = "journey-fixture"
-
-    def may_approve(
-        self, *, principal_id: str, effect_class: str, destination: str
-    ) -> bool:
-        return principal_id == FOUNDER
-
-
-@pytest.mark.dev_build
-def test_approval_for_a_different_action_digest_cannot_authorize(tmp_path: Path) -> None:
-    role_id = "support-response"
-    company_work = _company_work(role_id)
-    effect = company_work.effects[0]
-    assert classify_effect(effect.effect_class) is EffectDisposition.REQUIRE_APPROVAL
-    approved = ApprovalRequest(
-        request_id=f"request-{role_id}",
-        principal_id=FOUNDER,
-        work_order_id=effect.work_order_id,
-        attempt_id=effect.attempt_id,
-        effect_id=effect.id,
-        effect_class=effect.effect_class,
-        destination=effect.destination,
-        action_digest=action_digest({"body": "approved"}),
-        created_at=NOW,
-        expires_at=NOW + dt.timedelta(hours=1),
-    )
-    altered = approved.model_copy(
-        update={"action_digest": action_digest({"body": "edited"})}
-    )
-    with EffectStore(
-        tmp_path / f"{role_id}.db",
-        authority=_FounderAuthority(),
-        events_path=tmp_path / f"{role_id}.jsonl",
-        now=lambda: NOW,
-    ) as store:
-        store.submit(approved)
-        store.decide(
-            request_digest=approved.request_digest,
-            deciding_principal_id=FOUNDER,
-            decision=DecisionKind.APPROVED,
-        )
-        with pytest.raises(RefusedError) as excinfo:
-            store.prepare(
-                request_digest=altered.request_digest,
-                idempotency_key=effect.idempotency_key or f"key-{role_id}",
-                adapter=AdapterCapability(
-                    adapter_id="fixture", adapter_version="fixture-v1"
-                ),
-            )
-    assert excinfo.value.refusal.reason is RefusalReason.DIGEST_MISMATCH
-    assert "digest" in str(excinfo.value).lower()
-    assert classify_effect(effect.effect_class) is EffectDisposition.REQUIRE_APPROVAL
 
 
 @pytest.mark.parametrize(

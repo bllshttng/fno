@@ -11,8 +11,8 @@ Two declaration families are named as declarations, never as facts:
 
 * ``permissions`` is the pack's MAXIMUM EXPECTED EFFECT ceiling, read for review
   and reported by the verifier. Activation grants none of it.
-* adapter ``conformance`` mirrors :class:`fno.approvals.models.AdapterCapability`
-  field-for-field. ``approvals-and-effects.md`` states the approval store cannot
+* adapter ``conformance`` mirrors the adapter capability the effect journal
+  records, field-for-field. ``approvals-and-effects.md`` states the approval store cannot
   verify these, so the registry records which pack digest declared which
   conformance, making a false declaration attributable after the fact. The
   docstrings say "declares", not "proves".
@@ -168,8 +168,8 @@ class EffectDeclaration(_PackModel):
     """One maximum-expected effect in the pack's review ceiling.
 
     Reuses the effect-class and destination vocabulary that
-    :func:`fno.approvals.models.classify_effect` and the approval authority
-    consult at decision time. A pack cannot know the work order and attempt a
+    the Rust effect gate (``classify`` in crates/fno-agents/src/effect_map.rs)
+    and the approval authority consult at decision time. A pack cannot know the work order and attempt a
     concrete :class:`fno.company.contracts.EffectRef` is bound to, so the ceiling
     carries only the vocabulary the review and authority surfaces read. It
     declares an expected effect; it grants nothing, and activation never acts on

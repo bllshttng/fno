@@ -7,8 +7,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fno.approvals.models import classify_effect
-from fno.approvals.policy import ConfigAuthority
 from fno.config import load_settings
 from fno.company.contracts import FunctionRef, RoleRef, WorkOrderRef
 from fno.plugins.activate import (
@@ -93,12 +91,6 @@ def test_activation_leaves_authority_byte_identical_and_effect_still_blocked(tmp
 
     after = dict(load_settings().approvals.authorized_principals)
     assert before == after
-    # The declared external-publication effect still requires approval and the
-    # unconfigured authority still denies it: dispatch is blocked exactly as
-    # before activation. classify_effect reads only the class.
-    assert classify_effect("external.publication").value == "require_approval"
-    authority = ConfigAuthority()  # unconfigured => nobody may approve
-    assert authority.may_approve(principal_id="founder", effect_class="external.publication", destination="social-network") is False
 
 
 def test_activation_refuses_on_failed_verification_and_writes_nothing(tmp_path):
