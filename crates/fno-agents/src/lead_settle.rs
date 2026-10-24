@@ -506,6 +506,7 @@ mod tests {
         let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW + 300);
         assert_eq!(out.mailed, 0);
         assert_eq!(log.borrow().len(), 1);
+        assert_eq!(list_calls, 2, "the second pass re-reads the same listing");
     }
 
     /// AC4: a covered node that left the fold with a done row mails the
