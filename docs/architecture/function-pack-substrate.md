@@ -110,11 +110,11 @@ ownership rather than overwriting.
 
 ## Ownership treaty
 
-This substrate shares an epic with the company coordinator. The split is the
+This substrate shares an epic with the company package. The split is the
 ownership treaty:
 
-- The coordinator owns objective classification, campaign decomposition,
-  coordination, joins, and execution-topology selection.
+- The company package owns execution-topology selection. Its campaign
+  coordinator had no caller and was deleted.
 - The function-pack substrate owns pack manifests, verification, registry,
   activation, packaged roles, workflows, evaluators, assets, and progressive
   capability exposure.

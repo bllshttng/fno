@@ -4,7 +4,7 @@
 
 The sole layer map lives in `scripts/ci/check-company-boundaries.sh`, and this document intentionally does not duplicate it.
 Dependencies may point within a layer or to a lower-numbered layer, never upward.
-The map is module-granular because `fno.company.contracts` is core vocabulary while `fno.company.campaign`, `coordinator`, `topology`, `execution`, `join`, and `cli` compose that vocabulary with roles.
+The map is module-granular because `fno.company.contracts` is core vocabulary while `fno.company.topology` and `execution` compose that vocabulary with roles.
 A package-granular `fno.company` layer would misclassify that deliberate split and report the shipped topology-to-roles import as a core dependency.
 
 The check scans Python imports with a known-present roles-to-contracts edge as its positive control and reports the importing file, line, layers, and statement for every prohibited dependency.
