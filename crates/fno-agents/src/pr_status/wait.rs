@@ -175,8 +175,9 @@ pub(crate) fn wait_status(
                     }
                     return (rc, stdout, stderr);
                 }
-                // A rerun is testing: the red is the old attempt's, and its
-                // settled flag is too. Wait for the rerun, cancel nothing.
+                // No live verdict: the red is the old attempt's or made only
+                // of cancelled checks, and so is its settled flag. Wait for
+                // the rerun, cancel nothing.
                 None => stale_red = true,
             }
         }
@@ -211,7 +212,9 @@ pub(crate) fn wait_status(
                  Re-arm the wait or read the PR.\n",
                 timeout as i64
             );
-            return (if rc == 0 { 2 } else { rc }, stdout, stderr);
+            // A red with no live verdict times out pending, never red.
+            let code = if rc == 0 || stale_red { 2 } else { rc };
+            return (code, stdout, stderr);
         }
         sleeper(nap);
     }
@@ -399,7 +402,9 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     )
 }
 
-/// Whether every failure in the live `latest` rows predates its run's
+/// Whether the red holds no live verdict. A cancelled check is no result,
+/// so a red made only of cancelled checks reads pending here. Otherwise:
+/// whether every failure in the live `latest` rows predates its run's
 /// current attempt. A rerun keeps the run id and restarts the run clock,
 /// so a failed job that completed before `run_started_at` is the old
 /// attempt's. Two windows serve that red: a cached status row minted
@@ -421,11 +426,8 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
     fn bucket(row: &Value) -> &str {
         row.get("bucket").and_then(Value::as_str).unwrap_or("")
     }
-    // The verdict counts a cancelled check as red, so this read does too.
-    let failed: Vec<&Value> = latest
-        .iter()
-        .filter(|row| matches!(bucket(row), "fail" | "cancel"))
-        .collect();
+    // A timed-out cancel already buckets `fail`; a plain cancel is no result.
+    let failed: Vec<&Value> = latest.iter().filter(|row| bucket(row) == "fail").collect();
     // A queued rerun shows in the runs listing before it mints a check row.
     let in_flight = latest
         .iter()
@@ -673,6 +675,30 @@ mod tests {
         assert_eq!(code, 0, "the rerun's green, not the stale red");
         assert!(stdout.contains("\"verdict\":\"green\""), "{stdout}");
         assert!(!stderr.contains("cancel"), "{stderr}");
+
+        let t = Cell::new(0.0);
+        let only_stale: Vec<(i32, Value)> = (0..100)
+            .map(|_| {
+                (
+                    1,
+                    json!({"verdict": "red", "settled": true, "head": "abcdef1234"}),
+                )
+            })
+            .collect();
+        let (code, _stdout, _stderr) = wait_status(
+            9,
+            "settled",
+            30.0,
+            10.0,
+            staged_poll(only_stale),
+            |_| None,
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(
+            code, 2,
+            "a red with no live verdict times out pending, never red"
+        );
     }
 
     #[test]
@@ -727,8 +753,8 @@ mod tests {
             "an unlisted run is never stale"
         );
         assert!(
-            !red_is_stale(&[json!({"bucket": "cancel"})], &runs),
-            "a settled cancelled-only red is final, as the verdict reads it"
+            red_is_stale(&[json!({"bucket": "cancel"}), pending.clone()], &runs),
+            "a red made only of cancelled checks is no verdict: nothing cancels"
         );
         assert!(
             red_is_stale(&[json!({"bucket": "pass"})], &runs),
