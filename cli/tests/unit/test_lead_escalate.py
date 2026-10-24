@@ -212,6 +212,11 @@ def test_mail_presiding_lead_true_only_on_a_zero_exit(monkeypatch) -> None:
         lambda *a, **k: _Proc(0, "msg-1 delivered (hosted)\n"),
     )
     assert mail_presiding_lead("l1-lead", STALLED, "NoProgress") is True
+    # A verdict reading mails with its verdict; without one the renderer
+    # refuses, and that reads False, never a KeyError.
+    reading = ["reading:verdict:x-aaaa"]
+    assert mail_presiding_lead("l1-lead", reading, "Verdict", verdict="degraded 12 of 3") is True
+    assert mail_presiding_lead("l1-lead", reading, "Verdict") is False
 
     monkeypatch.setattr(
         "subprocess.run",
