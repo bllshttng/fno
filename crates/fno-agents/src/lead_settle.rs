@@ -489,24 +489,18 @@ mod tests {
             "CLEAN",
             green_rollup(),
         )];
-        let mut list_calls = 0;
-        let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> {
-            list_calls += 1;
-            Ok(rows.clone())
-        };
+        let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> { Ok(rows.clone()) };
         let log = Log::new(RefCell::new(Vec::new()));
         let mut mail = mail_log(Rc::clone(&log));
         let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
         assert_eq!(out.mailed, 1);
-        assert_eq!(out.reads, 1);
-        assert_eq!(list_calls, 1, "one listing answers every covered PR");
+        assert_eq!(out.reads, 1, "one listing answers every covered PR");
         assert_eq!(log.borrow().len(), 1);
         assert!(log.borrow()[0].contains("s1: PR #7 on x-1 settled green at abcdef123456"));
         assert!(log.borrow()[0].contains("GitHub reads it clean."));
         let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW + 300);
         assert_eq!(out.mailed, 0);
         assert_eq!(log.borrow().len(), 1);
-        assert_eq!(list_calls, 2, "the second pass re-reads the same listing");
     }
 
     /// AC4: a covered node that left the fold with a done row mails the
@@ -697,9 +691,7 @@ mod tests {
             ]),
         )]});
         let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let mut list_calls = 0;
         let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> {
-            list_calls += 1;
             Err("loop-check: the read timed out".to_string())
         };
         let log = Log::new(RefCell::new(Vec::new()));
@@ -716,6 +708,5 @@ mod tests {
         assert!(log.borrow().is_empty());
         let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW + 300);
         assert_eq!(out.reads, 2, "the next beat retries the read");
-        assert_eq!(list_calls, 2, "the listing read itself retried");
     }
 }
