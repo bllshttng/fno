@@ -46,7 +46,10 @@ def test_missing_report_keys_do_not_raise_and_produce_no_lines():
         ),
         ({"fd_limit": {"verdict": "low", "launchd_soft": 256}}, "256"),
         ({"plugin_hooks": {"failed": 2}}, "2 plugin hook"),
-        ({"plugin_cache": {"status": "stale"}}, "plugin cache is stale"),
+        (
+            {"plugin_cache": {"status": "stale", "roots": [{"blocker": "plugin root /s (live) differs"}]}},
+            "plugin root /s (live) differs",
+        ),
     ],
 )
 def test_each_signal_produces_a_blocker_line(overrides, expect_substring):

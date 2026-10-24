@@ -434,7 +434,7 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
     )
     .then(|| {
         format!(
-            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together (`--published` installs both from the newest published rev; `--no-rust` moves python alone, at your risk)"
+            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel stays as installed (the plugin stage still restages: it is not compiled); the next update moves both halves together (`--published` installs both from the newest published rev; `--no-rust` moves python alone, at your risk)"
         )
     })
 }
@@ -1900,6 +1900,14 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         );
         failed.push("post-install groom agent refresh".into());
     }
+    restage_plugin(resolved, &fno_py, failed);
+}
+
+/// The plugin-stage restage, plus the codex refresh when its channel marker
+/// says dev. The stage holds skills, hooks and scripts, none of them
+/// compiled, so it also rides a Python hold: a skill fix never waits on a
+/// Rust tarball.
+fn restage_plugin(resolved: &Path, fno_py: &Path, failed: &mut Vec<String>) {
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [
             "plugin-install".into(),
@@ -1928,7 +1936,7 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
                 resolved.to_string_lossy().into_owned(),
             ]
             .to_vec();
-            let code = run_inherit(&fno_py, &args);
+            let code = run_inherit(fno_py, &args);
             if code != 0 {
                 eprintln!(
                     "fno doctor update: WARNING: post-install codex refresh exited {code}; continuing"
@@ -2406,8 +2414,8 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
 
     // Python never moves ahead of the rust bins it talks to: a new wheel
     // sends wire kinds an old fno-agents does not know, and every spawn
-    // fails until CI publishes. The wheel and the plugin restage wait for
-    // the update that installs both halves together.
+    // fails until CI publishes. The wheel waits for the update that installs
+    // both halves together; the plugin stage restages regardless.
     let held = python_hold_line(rust_outcome.as_deref());
     let planned_hold = held.is_some() && hold_is_planned(rust_outcome.as_deref());
     if let Some(line) = &held {
@@ -2500,6 +2508,8 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         post_install_steps(&resolved, &mut failed);
     } else if held.is_none() {
         failed.push("uv install".into());
+    } else {
+        restage_plugin(&resolved, &resolve_fno_py(), &mut failed);
     }
 
     release_update_claim();
