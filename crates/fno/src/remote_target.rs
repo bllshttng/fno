@@ -10,9 +10,8 @@
 //! an `@host` target execs the sibling `org-remote` command, the cross-machine
 //! hand-off. `agents spawn` claims when the fno-owned `--name` value carries
 //! `@` (`--name <name>@<host>`, or `--name @<host>` to mint the name
-//! remotely) and execs the sibling `spawn-remote` command; words after a bare
-//! `--` fence are the harness's own flags and are never scanned. Every other
-//! argv forwards byte-verbatim, so the Python commands change nothing.
+//! remotely) and execs the sibling `spawn-remote` command; words after a
+//! bare `--` fence are never scanned. Everything else forwards verbatim.
 
 use std::ffi::OsString;
 

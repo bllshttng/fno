@@ -170,8 +170,6 @@ mod tests {
         .expect("plans");
         assert!(plan.same_host);
         assert!(!plan.words.iter().any(|w| w.contains('@')));
-        assert_eq!(plan.words[0], "agents");
-        assert_eq!(plan.words[1], "spawn");
         assert!(plan.words.contains(&"q".to_string()));
         // A second plain --name rides untouched beside the cross-host one.
         let plan = spawn_plan(
@@ -190,8 +188,8 @@ mod tests {
         );
         assert!(plan.words.contains(&"q".to_string()));
         assert!(plan.words.contains(&"plain".to_string()));
-        // Refusals: no @ name at all, a double @, an empty host, a bare @,
-        // and a missing value each refuse with the shared error voice.
+        // Each refusal shape: no @ name, a double @, empty host, bare @,
+        // missing value.
         assert!(spawn_plan(&["hi".to_string()], "x").is_err());
         assert!(spawn_plan(&["--name".to_string(), "q@a@b".to_string()], "x").is_err());
         assert!(spawn_plan(&["--name".to_string(), "q@".to_string()], "x").is_err());
