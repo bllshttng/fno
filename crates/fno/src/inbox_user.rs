@@ -99,6 +99,21 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
+/// Classify `fno inbox outstanding [--json|-J]`: `Some(rest)` is the flag
+/// tail for `fno-agents outstanding`. A subcommand (`mine`, `ask`, `clear`,
+/// `reindex`), `--help`, or an unknown flag forwards to Python.
+pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 2 || args[0].to_str()? != "inbox" || args[1].to_str()? != "outstanding" {
+        return None;
+    }
+    for a in &args[2..] {
+        if !matches!(a.to_str()?, "--json" | "-J") {
+            return None;
+        }
+    }
+    Some(args[2..].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

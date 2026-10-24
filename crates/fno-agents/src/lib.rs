@@ -366,6 +366,7 @@ pub mod operator_witness;
 pub mod org_board;
 pub mod org_fold;
 pub mod org_remote;
+pub mod outstanding;
 pub mod org_rivals;
 pub mod orphan_reap;
 pub mod osc;
