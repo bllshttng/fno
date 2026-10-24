@@ -1,0 +1,16 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"gem-unset\"\nname = \"gem-unset\"\nharness = \"gemini\"\nauth = \"api_key\"\n\n[accounts.records.env]\nGEMINI_API_KEY = \"${ENV:FNO_NO_SUCH_KEY}\"\n",
+ "bin": {
+  "gemini": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "gem-unset",
+  "--smoke"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "smoke: dispatch_env failed for 'gem-unset': Cannot resolve env value for key 'GEMINI_API_KEY': Environment variable not set: 'FNO_NO_SUCH_KEY' (from reference '${ENV:FNO_NO_SUCH_KEY}')\n",
+  "seen": null
+ }
+}

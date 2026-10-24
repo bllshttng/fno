@@ -1,0 +1,15 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\n",
+ "bin": {
+  "claude": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "work"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: invalid providers config: duplicate_record_ids: duplicate_record_ids: ['work']\n",
+  "seen": null
+ }
+}
