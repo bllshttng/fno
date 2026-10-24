@@ -132,6 +132,7 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             &home,
             &config_cwd,
             crate::provider_cap::now_epoch_secs(),
+            |to| switch_slot(&config_cwd, to),
             |title, body| {
                 crate::operator_notice::notify_operator(title, body, None);
             },
@@ -156,10 +157,31 @@ impl Drop for InFlight {
     }
 }
 
+/// The global `use` in process: the daemon never runs the interactive login
+/// a dead stored credential asks for.
+fn switch_slot(config_cwd: &Path, to: &str) -> bool {
+    let outside = crate::accounts::use_verb::SystemOutside {
+        cwd: config_cwd.to_path_buf(),
+        interactive: false,
+    };
+    crate::accounts::use_verb::use_account(
+        to,
+        "global",
+        Some(config_cwd),
+        config_cwd,
+        crate::accounts::use_verb::PinPolicy::Warn,
+        &crate::accounts::store::SystemHost,
+        &outside,
+    )
+    .code
+        == 0
+}
+
 fn tick_once(
     home: &crate::paths::AgentsHome,
     config_cwd: &Path,
     now: i64,
+    switch: impl Fn(&str) -> bool,
     notify: impl Fn(&str, &str),
 ) {
     let (acted, skip, detail, notice) = if !crate::agents_config::slot_cutover_enabled(config_cwd) {
@@ -192,12 +214,7 @@ fn tick_once(
                 None,
             ),
             Decision::Cutover { from, to } => {
-                let result = crate::provider_cap_commands::run_fno_output(
-                    &["config", "accounts", "use", &to, "--scope", "global"],
-                    Some(config_cwd),
-                    Duration::from_secs(30),
-                );
-                if result.is_none() {
+                if !switch(&to) {
                     let detail = format!("could not switch shared Claude slot to {to}");
                     (0, Some("use_failed"), detail.clone(), Some(detail))
                 } else {
@@ -537,11 +554,22 @@ mod tests {
             .as_object()
             .cloned()
         });
-        // Every other fno command the tick runs fails, so the switch fails.
+        // The switch fails, and so does every fno command the tick runs.
         let stub = crate::write_exec_stub(dir.path(), "fno-stub.sh", "#!/bin/sh\nexit 1\n");
         let _env = SavedEnv::set(&config, &usage, &stub, &global_dir.join("settings.json"));
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
-        super::tick_once(&home, dir.path(), 1000, |_, _| {});
+        let tried = std::cell::RefCell::new(Vec::new());
+        super::tick_once(
+            &home,
+            dir.path(),
+            1000,
+            |to| {
+                tried.borrow_mut().push(to.to_string());
+                false
+            },
+            |_, _| {},
+        );
+        assert_eq!(*tried.borrow(), ["makers"]);
         let text = crate::events::committed_journal_text(&home.events_jsonl());
         let event: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         assert_eq!(event["data"]["arm"], "slot_cutover");

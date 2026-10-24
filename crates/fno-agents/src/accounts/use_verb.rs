@@ -98,9 +98,11 @@ pub trait Outside {
 }
 
 /// The live side: the vault in process, the agents events log under the
-/// state dir `cwd` resolves.
+/// state dir `cwd` resolves. Only an `interactive` caller may run the
+/// browser login.
 pub struct SystemOutside {
     pub cwd: PathBuf,
+    pub interactive: bool,
 }
 
 impl Outside for SystemOutside {
@@ -122,7 +124,7 @@ impl Outside for SystemOutside {
         }
     }
     fn terminal(&self) -> bool {
-        std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+        self.interactive && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
     }
     fn emit(&self, fields: Map<String, Value>) {
         let Some(path) = crate::agents_config::state_dir(&self.cwd).map(|d| d.join("events.jsonl"))
@@ -710,7 +712,10 @@ pub fn run_with(args: &[String], cwd: &Path, host: &dyn Host, outside: &dyn Outs
 
 pub fn run(args: &[String]) -> i32 {
     let cwd = pwd();
-    let outside = SystemOutside { cwd: cwd.clone() };
+    let outside = SystemOutside {
+        cwd: cwd.clone(),
+        interactive: true,
+    };
     let out = run_with(args, &cwd, &store::SystemHost, &outside);
     print!("{}", out.stdout);
     eprint!("{}", out.stderr);
@@ -782,7 +787,10 @@ pub fn run_switch(args: &[String]) -> i32 {
         }
     };
     let cwd = pwd();
-    let outside = SystemOutside { cwd: cwd.clone() };
+    let outside = SystemOutside {
+        cwd: cwd.clone(),
+        interactive: false,
+    };
     let out = run_switch_with(&payload, &cwd, &store::SystemHost, &outside);
     print!("{}", out.stdout);
     eprint!("{}", out.stderr);
