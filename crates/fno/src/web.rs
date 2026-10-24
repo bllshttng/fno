@@ -218,10 +218,12 @@ fn fleet_html_path() -> PathBuf {
 /// session socket, holding the bind/port/token the bind-time print showed
 /// once. Written 0600 (the token is the only URL guard); removed by `Drop`
 /// on every exit path. A SIGKILLed bridge leaves it behind - the reader
-/// (`mux_cli::print_pane_url`) probes the TCP port, so a corpse file reads
-/// as "no bridge", never as a dead URL. `serve --web --stop` is the other
-/// reader: it kills the recorded pid, and the `started` token is what lets
-/// it refuse a recycled pid instead of signalling a stranger.
+/// (`web::print_pane_url`) trusts the URL only while the recorded pid is
+/// live AND the port answers, so a corpse file reads as "no bridge" and a
+/// stranger that took the dead bridge's port never reads as the bridge.
+/// `serve --web --stop` is the other reader: it kills the recorded pid, and
+/// the `started` token is what lets it refuse a recycled pid instead of
+/// signalling a stranger.
 struct WebStateFile(PathBuf);
 
 /// Path of the bridge's live-state marker beside a session socket. The one
@@ -244,9 +246,10 @@ pub(crate) fn web_state_path_for_session(session: &str) -> Option<PathBuf> {
 }
 
 /// Read a session's web-bridge state file and build the pasteable
-/// per-pane URL. The bridge writes `web-<session>.json` at bind; a file whose
-/// port no longer answers is a corpse, not a bridge, so the TCP probe - not
-/// the file's existence - decides liveness. Exit codes follow the mux commands'
+/// per-pane URL. The bridge writes `web-<session>.json` at bind; the file's
+/// existence alone proves nothing, and neither does an answering port: the
+/// recorded pid must still be live and the port must answer before this
+/// prints a URL. Exit codes follow the mux commands'
 /// (0 printed, 1 no usable bridge).
 pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
     let hint = format!(
@@ -290,8 +293,11 @@ pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
         bind
     };
     // Probe liveness for ANY spelling the operator may have bound (codex P2):
-    // a corpse file must not read as a bridge. Same probe --status uses.
-    if !tcp_answers(host, port as u16) {
+    // a corpse file must not read as a bridge. A bare TCP answer is not
+    // ownership - a dead bridge's port can be taken by a stranger - so the
+    // record's pid must still be live, the same identity --stop and --status
+    // already enforce, before the port probe means anything.
+    if !recorded_pid_is_live(&state) || !tcp_answers(host, port as u16) {
         eprintln!("{command}: {hint}");
         return 1;
     }
@@ -478,8 +484,9 @@ fn launching_session_id() -> Option<String> {
 
 /// A state-file record whose pid is alive under its recorded start token.
 /// Dead, zombie, or a reused pid all read as not-live, so a corpse file never
-/// passes as a bridge.
-fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
+/// passes as a bridge. The one liveness read for every state-file consumer
+/// (`--url`, `--stop`, `--status`, and the corpse sweep).
+pub(crate) fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
     let Some(pid) = v
         .get("pid")
         .and_then(|p| p.as_u64())
@@ -2025,6 +2032,73 @@ mod tests {
         }
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_url_refuses_when_the_recorded_pid_is_gone_even_if_a_stranger_answers() {
+        // A dead bridge's port can be taken by another process; a bare TCP
+        // answer is not ownership. A dead or recycled pid in the state file
+        // must refuse the URL even though the port answers.
+        let stranger = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = stranger.local_addr().unwrap().port();
+        // A pid proven dead: spawned, reaped, gone.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        assert!(proto::pid_confirmed_dead(dead_pid as libc::pid_t));
+        assert!(
+            tcp_answers("127.0.0.1", port),
+            "repro premise: the stranger holds the port"
+        );
+        let state = proto::mux_dir().join("web-turldead.json");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "bind": "127.0.0.1", "port": port, "token": "tok",
+                "pid": dead_pid, "started": 1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(print_pane_url("fno mux pane url", "turldead", 0), 1);
+        // A recycled pid reads the same: this live process, wrong start token.
+        let own_start =
+            proto::pid_start_time(std::process::id()).expect("start time on test platform");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "bind": "127.0.0.1", "port": port, "token": "tok",
+                "pid": std::process::id(), "started": own_start.wrapping_add(1)
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(print_pane_url("fno mux pane url", "turldead", 0), 1);
+        let _ = std::fs::remove_file(&state);
+        drop(stranger);
+    }
+
+    #[test]
+    fn pane_url_prints_when_the_recorded_bridge_is_live() {
+        // The identity gate must not over-refuse: live pid, matching start
+        // token, answering port -> the URL prints and the command exits 0.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let own_start =
+            proto::pid_start_time(std::process::id()).expect("start time on test platform");
+        let state = proto::mux_dir().join("web-turllive.json");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "bind": "127.0.0.1", "port": port, "token": "tok",
+                "pid": std::process::id(), "started": own_start
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(print_pane_url("fno mux pane url", "turllive", 3), 0);
+        let _ = std::fs::remove_file(&state);
+        drop(listener);
     }
 
     #[test]
