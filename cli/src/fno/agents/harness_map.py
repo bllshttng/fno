@@ -403,14 +403,19 @@ def _validate_row(harness: str, caps: dict) -> None:
     model_switch = caps["model_switch_strategy"]
     expected_switch_fields = {
         "kind", "tokens", "effort_labels", "status_command", "status_pattern",
+        # Optional: the status-bar fallback a truncated /status frame needs.
+        "status_bar_pattern",
     }
-    if not isinstance(model_switch, dict) or set(model_switch) != expected_switch_fields:
+    if not isinstance(model_switch, dict) or set(model_switch) - expected_switch_fields:
         raise _contract_error(harness, "model_switch_strategy", "malformed strategy")
     switch_kind = model_switch["kind"]
     switch_tokens = model_switch["tokens"]
     effort_labels = model_switch["effort_labels"]
     status_command = model_switch["status_command"]
     status_pattern = model_switch["status_pattern"]
+    status_bar_pattern = model_switch.get("status_bar_pattern")
+    if status_bar_pattern is not None and not isinstance(status_bar_pattern, str):
+        raise _contract_error(harness, "model_switch_strategy", "malformed status bar pattern")
     if switch_kind not in _MODEL_SWITCH_KINDS:
         raise _contract_error(harness, "model_switch_strategy", "unknown kind")
     if not isinstance(switch_tokens, list) or not all(
@@ -438,6 +443,10 @@ def _validate_row(harness: str, caps: dict) -> None:
         )
     if switch_kind == "unsupported":
         if switch_tokens or effort_labels or status_command or status_pattern:
+            raise _contract_error(
+                harness, "model_switch_strategy", "unsupported strategy has executable data"
+            )
+        if status_bar_pattern is not None:
             raise _contract_error(
                 harness, "model_switch_strategy", "unsupported strategy has executable data"
             )
