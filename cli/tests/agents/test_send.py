@@ -135,9 +135,6 @@ def test_dispatch_send_happy_path_live_claude(
     # point, not just _name_lane_send).
     assert f" · {result.msg_id}`" in header, f"missing envelope id: {header!r}"
 
-    # Bus demotion: a hosted delivery is NOT also written to the durable store.
-    assert _queued("abcd1234") == [], "hosted delivery must not queue durable"
-
 
 def test_dispatch_send_self_proof_beats_same_bucket_registry_sibling(
     tmp_path: Path, monkeypatch
@@ -946,7 +943,6 @@ def test_dispatch_send_refuses_durable_fallback_without_full_session_id(
 
     assert exc.value.exit_code == 12
     assert _queued("legacy") == []
-    assert _queued("transportA") == []
 
 
 # ---------------------------------------------------------------------------

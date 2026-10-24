@@ -2188,15 +2188,15 @@ mod tests {
 
         // --- record: a note kind is a message, and a reply finds its parent's
         // thread, kind and sender in the stored row (no markdown render).
-        let note = bus_line("fmail-dddddddddddd", "web", "fno", "heads-up");
+        let note = bus_line("fmail-abcabcabcabc", "web", "fno", "heads-up");
         assert!(matches!(
             record_at(&chats, &db, &bus, &note).unwrap(),
             Recorded::Message { .. }
         ));
-        let parent = message_row_at(&chats, &db, "fmail-dddddddddddd").expect("note recorded");
+        let parent = message_row_at(&chats, &db, "fmail-abcabcabcabc").expect("note recorded");
         assert_eq!(parent["kind"], "heads-up");
         assert_eq!(parent["from"], "web");
-        assert_eq!(parent["thread"], "fmail-dddddddddddd");
+        assert_eq!(parent["thread"], "fmail-abcabcabcabc");
         assert!(message_row_at(&chats, &db, "fmail-ffffffffffff").is_none());
 
         // --- record: announce scopes diverge; unregistered addressee keys raw;

@@ -192,8 +192,6 @@ NON_INSTALL_SMOKES = {
     "test_done.sh",
     "test_find_new.sh",
     "test_help.sh",
-    "test_inbox_cross_project_e2e.sh",
-    "test_inbox_drain_e2e.sh",
     "test_json_flag.sh",
     "test_postinstall.sh",  # greps the installer's TEXT; runs no installer
     "test_postinstall_clobber_guard.sh",  # stub uv refuses every install; imports nothing
