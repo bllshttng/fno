@@ -12,8 +12,8 @@
 
 use super::version::Version;
 use crate::roles::models::{
-    self, check_manifest, lax_bool, object, only_fields, optional_str, required_str,
-    role_ref, Manifest, Obj, RoleRef, CONTEXT_KINDS,
+    self, check_manifest, lax_bool, object, only_fields, optional_str, required_str, role_ref,
+    Manifest, Obj, RoleRef, CONTEXT_KINDS,
 };
 use serde_json::{json, Value};
 

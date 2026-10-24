@@ -64,11 +64,7 @@ pub(crate) fn resolve_path(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// `root/sub` resolves under `anchor`.
-pub(crate) fn contained_under(
-    root: &std::path::Path,
-    sub: &str,
-    anchor: &std::path::Path,
-) -> bool {
+pub(crate) fn contained_under(root: &std::path::Path, sub: &str, anchor: &std::path::Path) -> bool {
     resolve_path(&root.join(sub)).starts_with(resolve_path(anchor))
 }
 

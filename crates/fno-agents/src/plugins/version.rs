@@ -239,7 +239,10 @@ mod tests {
                 "{pair:?}"
             );
         }
-        assert_eq!(Version::parse("1.0.0").unwrap(), Version::parse("1.0").unwrap());
+        assert_eq!(
+            Version::parse("1.0.0").unwrap(),
+            Version::parse("1.0").unwrap()
+        );
         assert_eq!(
             Version::parse("1.0")
                 .unwrap()

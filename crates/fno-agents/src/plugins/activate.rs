@@ -412,9 +412,12 @@ pub fn deactivate(pack_id: &str, store: &Store, root: &Path) -> Result<Deactivat
         return Ok(nothing());
     }
     let plugin_root = root.join("plugin");
-    let _held = store
-        .lock()
-        .map_err(|e| format!("deactivation failed: cannot lock {}: {e}", store.path.display()))?;
+    let _held = store.lock().map_err(|e| {
+        format!(
+            "deactivation failed: cannot lock {}: {e}",
+            store.path.display()
+        )
+    })?;
     let mut registry = store
         .load()
         .map_err(|e| format!("registry corrupt; cannot deactivate safely: {}", e.0))?;

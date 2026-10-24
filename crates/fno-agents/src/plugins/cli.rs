@@ -408,7 +408,11 @@ fn list(ctx: &Ctx) -> i32 {
             pack.pack_id,
             pack.resolved_version,
             &pack.pack_digest[..12],
-            if effects.is_empty() { "none" } else { effects.as_str() }
+            if effects.is_empty() {
+                "none"
+            } else {
+                effects.as_str()
+            }
         );
     }
     0
