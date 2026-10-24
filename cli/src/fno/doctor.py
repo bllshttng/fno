@@ -2816,7 +2816,7 @@ def _emit_human(
         role = "live" if root.get("live") else "second copy"
         out(f"fno doctor: plugin root ({root.get('origin')}, {role}): {root.get('path')}: {root.get('status')}{root.get('note') or ''}")
     if pc and not pc.get("roots"):
-        out(f"fno doctor: plugin stage check did not run ({pc.get('detail')}); stage freshness is unknown.")
+        out(f"fno doctor: plugin stage freshness unknown ({pc.get('detail')}).")
 
     if surf.get("codex_hooks_dual"):
         out(
