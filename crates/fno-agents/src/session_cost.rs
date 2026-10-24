@@ -1257,7 +1257,7 @@ fn print_by_provider() -> i32 {
     0
 }
 
-/// The `fno whoami cost` verb's native body, reached as
+/// The `fno whoami cost` command's native body, reached as
 /// `fno-agents context-run --session-cost [args]`. Flag names, modes, and
 /// exit codes match the argparse CLI the Python leg answered; the JSON
 /// contract (`--json`) is the byte-level one the doctor check reads.

@@ -692,7 +692,7 @@ def cost_command(
     """Forward all args to the native session-cost leg.
 
     Moved under whoami from an eager root command (unit 6). The leaf keeps
-    the verb spelling and forwards verbatim; the native body owns the flag
+    the command spelling and forwards verbatim; the native body owns the flag
     parsing and the exit code, so this wrapper never interprets the args.
     """
     from fno.rust_binary import resolve_binary
