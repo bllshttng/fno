@@ -11,12 +11,10 @@
 //! store lane and no queue: a spawn is a command execution, not a payload;
 //! an unreachable host fails loudly and the caller retries.
 //!
-//! The sending machine's spawn gate (census and ceiling) admits the caller
-//! before the claim fires, so a worker that fans out cross-host has already
-//! passed its own machine's admission. The hop carries no ambient session
-//! identity, so the remote leg runs as a shell on the target host. A `--cwd`
-//! or `--add-dir` value names a path ON THE TARGET HOST: the relay forwards
-//! byte-verbatim and the remote command validates.
+//! The sending machine's spawn gate admits the caller before the claim; the
+//! hop carries no session identity, so the remote leg runs as a shell. A
+//! `--cwd` or `--add-dir` value names a path ON THE TARGET HOST: the relay
+//! forwards byte-verbatim and the remote command validates.
 
 use crate::mail_bus::normalize_host;
 use crate::mail_remote::{fno_binary, split_target, target_error};
@@ -37,9 +35,9 @@ pub struct SpawnPlan {
 /// Build the plan from the relay tail (everything after `spawn-remote`).
 /// `local_host` arrives pre-resolved, so tests pin the shapes without env
 /// reads. The `--name` value is the only slot that may carry the `@host`
-/// address; every other word rides in order. `--name @<host>` mints the name
-/// remotely: the flag disappears from the exec'd words, so the remote
-/// machine's own slug mint answers and no recursion survives the strip.
+/// address; every other word rides in order. `--name @<host>` drops the flag
+/// from the exec'd words, so the remote slug mint answers and no recursion
+/// survives the strip.
 pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String> {
     let mut name_at: Option<(usize, String)> = None;
     let mut i = 0;
@@ -76,21 +74,17 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
     // Rebuild the words: the --name value loses its @host part, and the flag
     // disappears entirely when the name is empty. Every other word keeps its
     // order byte-verbatim.
-    let mut words: Vec<String> = Vec::with_capacity(args.len() + 2);
+    let mut words: Vec<String> = vec!["agents".to_string(), "spawn".to_string()];
     for (i, word) in args.iter().enumerate() {
         if i == idx {
             if !name.is_empty() {
                 words.push("--name".to_string());
                 words.push(name.clone());
             }
-        } else if i == idx + 1 {
-            // The original @host value: replaced above, never copied.
-        } else {
+        } else if i != idx + 1 {
             words.push(word.clone());
         }
     }
-    words.insert(0, "spawn".to_string());
-    words.insert(0, "agents".to_string());
     Ok(SpawnPlan {
         host,
         same_host,

@@ -119,9 +119,8 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
 /// The cross-host spawn claim: `agents spawn --name <name>@<host> ...`
 /// execs the sibling `spawn-remote` command. The spawn's positional is the
 /// prompt, which carries `@` freely, so the address rides only in the
-/// `--name` value, a flag fno owns. The scan reads the fno-owned words up to
-/// a bare `--` fence; flags after it belong to the harness and are never
-/// interpreted. Targets without an `@` name forward byte-verbatim.
+/// `--name` value, a flag fno owns. The scan stops at a bare `--` fence;
+/// flags after it are the harness's and are never interpreted.
 pub fn classify_spawn(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
