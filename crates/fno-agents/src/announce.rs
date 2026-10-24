@@ -635,6 +635,7 @@ fn team_row<'a>(rows: &'a [Value], sender: &str) -> Option<&'a Value> {
     })
 }
 
+#[derive(Debug)]
 struct SendReceipt {
     id: String,
     scope: String,
@@ -1844,7 +1845,9 @@ mod tests {
             "stale news skipped: {out2}"
         );
 
-        // An unreachable primary fails the send closed and the read loud.
+        // An unreachable primary fails the send closed (the supersede and
+        // rate-limit scan reads primary rows before anything is written) and
+        // the read loud.
         let dead = AnnounceStore {
             primary: Some(crate::store_remote::test_primary::dead()),
         };
@@ -1857,7 +1860,10 @@ mod tests {
         )
         .unwrap_err()
         .1;
-        assert!(why.contains("machine-local"), "{why}");
+        assert!(
+            why.contains("unreachable") || why.contains("machine-local"),
+            "{why}"
+        );
         assert!(
             read_render_in(&imac.paths, reader, Boundary::Prompt, &dead).is_err(),
             "an unreachable primary fails the read loud"
