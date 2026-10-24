@@ -192,24 +192,3 @@ def test_factual_check_fails_an_uncited_claim(tmp_path):
         encoding="utf-8",
     )
     assert _run_evaluator("factual-check.sh", draft, truth) != 0
-
-
-def test_resolver_binary_absent_reports_unchecked_unknown(monkeypatch, tmp_path):
-    """A checkout that never built the Rust leg has no fno-agents binary: the
-    resolution family degrades to unchecked/unknown, the dependency family's
-    own shape, instead of crashing the verify."""
-    import fno.plugins.verify as verify_mod
-    from fno.rust_binary import CommandUnavailable
-
-    def _raise(**kwargs):
-        raise CommandUnavailable("the fno-agents binary was not found")
-
-    monkeypatch.setattr(verify_mod, "resolve_role", _raise)
-    pack_dir = _write_pack(tmp_path, _full_pack())
-    report = verify_pack(pack_dir, installed={})
-    resolve_conditions = [c for c in report.conditions if c.name.startswith("resolve:")]
-    assert resolve_conditions
-    for condition in resolve_conditions:
-        assert condition.checked is False, condition.name
-        assert condition.result is EvidenceResult.UNKNOWN, condition.name
-    assert not any(c.result is EvidenceResult.FAILED for c in report.conditions)

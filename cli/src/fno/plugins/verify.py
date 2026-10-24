@@ -49,7 +49,6 @@ from fno.roles.models import (
     Sensitivity,
 )
 from fno.roles.resolver import resolve_role
-from fno.rust_binary import CommandUnavailable
 
 __all__ = [
     "Condition",
@@ -509,33 +508,16 @@ def _resolution_conditions(manifest: PackManifest) -> list[Condition]:
         definitions, facts, catalog, work_order = _synthetic_resolution_inputs(
             role_manifest, revision=revision, source_id=f"plugin/{manifest.id}/{role_manifest.role.id}.json"
         )
-        try:
-            outcome = resolve_role(
-                role=role_manifest.role,
-                definitions=definitions,
-                capability_facts=facts,
-                context_catalog=catalog,
-                work_order=work_order,
-                clock=clock,
-                snapshot_revision=revision,
-                bundle_bounds=ContextBundleBounds(max_references=32, max_bytes=10_000_000),
-            )
-        except CommandUnavailable:
-            # The resolver answers through the fno-agents binary; where it is
-            # absent (a CI checkout that never built the Rust leg) the
-            # condition is unchecked, the same degrade the dependency family
-            # takes for an unknown installed set - never a crash, never a
-            # fabricated pass.
-            conditions.append(
-                Condition(
-                    ConditionFamily.COMPATIBILITY,
-                    f"resolve:{role_manifest.role.id}",
-                    checked=False,
-                    result=EvidenceResult.UNKNOWN,
-                    detail=f"{role_manifest.role.id} unchecked: fno-agents binary unavailable",
-                )
-            )
-            continue
+        outcome = resolve_role(
+            role=role_manifest.role,
+            definitions=definitions,
+            capability_facts=facts,
+            context_catalog=catalog,
+            work_order=work_order,
+            clock=clock,
+            snapshot_revision=revision,
+            bundle_bounds=ContextBundleBounds(max_references=32, max_bytes=10_000_000),
+        )
         if isinstance(outcome, RoleResolutionBlocked):
             structural = outcome.reason.value in {"invalid_manifest", "invalid_overlay", "not_found"}
             conditions.append(
