@@ -866,8 +866,9 @@ mod tests {
 
     #[test]
     fn split_hold_keeps_the_node_open_until_every_listed_pr_merges() {
-        // The recorded x-8ada shape: the primary merged, an additional_prs
-        // entry is still open. The first merge closes nothing.
+        // The recorded incident shape: the primary merged while an
+        // additional_prs entry was still open. The first merge closes
+        // nothing.
         let node = serde_json::json!({
             "id": "ab-1234abcd",
             "status": "in_progress",
