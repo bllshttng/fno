@@ -13,7 +13,7 @@
 //! `tests/accounts_*_parity.rs`.
 //!
 //! `fno-agents spawn-overlay accounts <command>` is where the
-//! `fno config accounts` commands land: [show], [add], [doctor], [reconcile], [register], [remove], [usage], [pick] and [test_verb] so far. They nest
+//! `fno config accounts` commands land: [show], [add], [doctor], [reconcile], [register], [remove], [usage], [pick] and [launch_check] so far. They nest
 //! under `spawn-overlay` so they add no fno-agents root action. `state <op>`
 //! is the runtime-state writer the Python transports call ([state::run]).
 pub mod add;
@@ -21,6 +21,7 @@ pub mod binding;
 pub mod doctor;
 pub mod env;
 pub mod error_class;
+pub mod launch_check;
 pub mod pick;
 pub mod reconcile;
 pub mod records;
@@ -31,7 +32,6 @@ pub mod slot;
 pub mod staging;
 pub mod state;
 pub mod store;
-pub mod test_verb;
 pub mod usage;
 pub mod usage_probe;
 pub mod writer;
@@ -49,7 +49,7 @@ pub fn run(args: &[String]) -> i32 {
         Some("state") => state::run(&args[1..]),
         Some("usage") => usage::run(&args[1..]),
         Some("pick") => pick::run(&args[1..]),
-        Some("test") => test_verb::run(&args[1..]),
+        Some("test") => launch_check::run(&args[1..]),
         Some("-h" | "--help") => {
             println!("{USAGE}");
             0
