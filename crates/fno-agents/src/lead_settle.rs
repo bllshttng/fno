@@ -633,6 +633,35 @@ mod tests {
         assert!(crate::operator_notice::stored_token(&store, &settle_key("s1", "x-1")).is_none());
     }
 
+    /// A covered PR absent from the open listing has left the open set (a
+    /// merge between beats): it skips quietly, and the seen key stays for
+    /// the freed pass to answer.
+    #[test]
+    fn a_pr_absent_from_the_listing_skips_quietly() {
+        let store = temp_store("absent");
+        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
+        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
+        let rows = vec![listed_row(
+            8,
+            "1234abcdef567890",
+            "MERGEABLE",
+            "CLEAN",
+            green_rollup(),
+        )];
+        let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> { Ok(rows.clone()) };
+        let log = Log::new(RefCell::new(Vec::new()));
+        let mut mail = mail_log(Rc::clone(&log));
+        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
+        assert_eq!(out.mailed, 0);
+        assert!(out.note.is_empty(), "the skip names nothing: {}", out.note);
+        assert!(log.borrow().is_empty());
+        assert_eq!(
+            crate::operator_notice::stored_token(&store, &seen_key("s1", "x-1")),
+            Some("7".to_string()),
+            "the seen stamp covers every covered node, read or not"
+        );
+    }
+
     /// A green row GitHub cannot merge names its merge state in the mail.
     #[test]
     fn a_green_blocked_row_names_the_merge_state() {
