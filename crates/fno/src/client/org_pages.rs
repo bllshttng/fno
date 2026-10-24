@@ -156,10 +156,16 @@ pub(crate) fn seat(m: &Machine, p: &Pod, s: &Seat, width: usize, now: u64) -> Ve
         BRole::Body,
     ));
     out.push(blank());
-    out.push(meta(if s.local.is_some() {
-        "   enter attaches \u{b7} space peeks \u{b7} x stops \u{b7} P portals \u{b7} u goes up to the pod"
-    } else {
-        "   this seat runs on another machine: attach there \u{b7} u goes up to the pod"
+    out.push(meta(match (&s.local, m.local) {
+        (Some(_), _) => {
+            "   enter attaches \u{b7} space peeks \u{b7} x stops \u{b7} P portals \u{b7} u goes up to the pod"
+        }
+        (None, true) => {
+            "   no pane here carries this session: run the terminal command \u{b7} u goes up to the pod"
+        }
+        (None, false) => {
+            "   this seat runs on another machine: attach there \u{b7} u goes up to the pod"
+        }
     }));
     out
 }

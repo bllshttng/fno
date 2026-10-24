@@ -36,7 +36,7 @@ A seat's pod is its published project. With no published project, the pod is its
 
 ## Local and remote seats
 
-A seat joins this mux's registry row only by its full harness session id. A short id or a name never joins. Only a joined seat takes Enter, space, `x` or `P`. A seat on another machine shows `fno agents session attach <short> on <host>` and no action keys.
+A seat joins this mux's registry row only by its full harness session id. A short id or a name never joins. Only a joined seat takes Enter, space, `x` or `P`. A seat on another machine shows `fno agents session attach <short> on <host>` and no action keys. An unjoined seat on this machine shows the same command and says no pane here carries the session.
 
 ## Gaps show their basis
 

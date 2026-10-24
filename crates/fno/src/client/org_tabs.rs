@@ -416,7 +416,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_pod: boo
                     .s(fit(&rt, W[2]), BRole::Meta)
                     .s(format!("{} ", fit(&model(r.s), W[3] - 1)), BRole::Meta)
                     .s(fit(r.s.status, W[4]), status_role(r.s.status))
-                    .s(fit(&age, W[5]), BRole::Body)
+                    .s(format!("{} ", fit(&age, W[5] - 1)), BRole::Body)
                     .s(fit(&last, now_w), BRole::Meta)
                     .whole(&key)
                     .band(key == sel)
