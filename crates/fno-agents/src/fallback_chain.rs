@@ -35,6 +35,18 @@ pub enum Verdict {
     Unknown,
 }
 
+impl Verdict {
+    /// The lowercase name every report prints (`HeadroomState.value`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verdict::Exhausted => "exhausted",
+            Verdict::Low => "low",
+            Verdict::Ok => "ok",
+            Verdict::Unknown => "unknown",
+        }
+    }
+}
+
 /// The verdict plus the evidence that produced it. The chain walk reads
 /// `.verdict` only; the capacity map (route_capacity) carries the rest as the
 /// account's provenance, exactly as the Python `_headroom_from` did.

@@ -48,15 +48,6 @@ pub struct World<'a> {
     pub stamp: &'a dyn Fn(&str),
 }
 
-fn word(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Exhausted => "exhausted",
-        Verdict::Low => "low",
-        Verdict::Ok => "ok",
-        Verdict::Unknown => "unknown",
-    }
-}
-
 /// `_pick_candidate_ids`: the active combo's members, else config order. An
 /// unknown or empty combo degrades to config order: a stale name must not
 /// wedge a launch.
@@ -202,7 +193,7 @@ pub fn pick(
         })
         .collect();
     for (id, v) in launchable.iter().zip(&verdicts) {
-        rows.push((id.clone(), word(*v).to_string()));
+        rows.push((id.clone(), v.as_str().to_string()));
     }
     // Exhaustion failover walks in priority order; unknown is never exhausted.
     let chosen = launchable

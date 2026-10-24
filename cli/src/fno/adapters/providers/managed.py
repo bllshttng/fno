@@ -883,8 +883,8 @@ def snapshot_age_label(record_id: str, root: Path | None = None) -> str:
 
     This is the CREDENTIAL BLOB age (when this record was last registered/
     re-registered), not the usage-probe age - the two are unrelated and the
-    TTL governs neither of them the same way. See `_usage_age_col` in cli.py
-    for the usage-probe reading.
+    TTL governs neither of them the same way. `usage_col` in
+    crates/fno-agents/src/accounts/list.rs renders the usage-probe reading.
     """
     meta = read_meta(record_id, root)
     if not meta or "captured_at" not in meta:
