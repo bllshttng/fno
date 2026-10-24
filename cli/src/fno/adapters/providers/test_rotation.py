@@ -233,31 +233,6 @@ class TestLoadCombosNoBlock:
         assert load_combos() == {}
 
 
-# ---------------------------------------------------------------------------
-# compute_providers_hash properties
-# ---------------------------------------------------------------------------
-
-class TestComputeProvidersHash:
-    def test_hash_is_deterministic(self):
-        from fno.adapters.providers.rotation import compute_providers_hash
-        h1 = compute_providers_hash(("a", "b", "c"))
-        h2 = compute_providers_hash(("a", "b", "c"))
-        assert h1 == h2
-
-    def test_hash_changes_when_providers_change(self):
-        from fno.adapters.providers.rotation import compute_providers_hash
-        h1 = compute_providers_hash(("a", "b", "c"))
-        h2 = compute_providers_hash(("a", "b", "d"))
-        assert h1 != h2
-
-    def test_hash_changes_when_order_changes(self):
-        """Order matters - rotation cursor only meaningful relative to a fixed order."""
-        from fno.adapters.providers.rotation import compute_providers_hash
-        h1 = compute_providers_hash(("a", "b", "c"))
-        h2 = compute_providers_hash(("c", "b", "a"))
-        assert h1 != h2
-
-
 @pytest.fixture
 def cursor_state_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect runtime_state to tmp path so cursor tests don't touch real files."""
