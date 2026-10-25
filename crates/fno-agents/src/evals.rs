@@ -6,6 +6,7 @@
 //! (the port protocol in docs/architecture/dual-implementation-inventory.md).
 //! Python owns transport only.
 
+pub mod bank;
 pub mod research_grade;
 
 pub fn run(args: &[String]) -> i32 {
