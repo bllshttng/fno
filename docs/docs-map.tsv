@@ -44,7 +44,6 @@ docs/architecture/cost-accuracy.md	contribute	contributor	keep	-	0	design note f
 docs/architecture/cross-agent-bus-log.md	contribute	contributor	keep	-	2	design note for contributors
 docs/architecture/cross-language-schema-parity.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/cross-model-review.md	daily-driver	concept	keep	-	1	review by a different provider
-docs/architecture/cross-project-inbox.md	contribute	contributor	keep	-	2	design note for contributors
 docs/architecture/decision-record.md	daily-driver	concept	keep	-	7	how a ruling is recorded and found
 docs/architecture/disposable-deletes.md	contribute	contributor	keep	-	5	design note for contributors
 docs/architecture/docs-information-architecture.md	contribute	contributor	keep	-	0	this design

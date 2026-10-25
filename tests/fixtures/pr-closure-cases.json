@@ -9,6 +9,7 @@
     { "body": "Summary paragraph.\nthis also fixes x-dead", "claims": [] },
     { "body": "Fixes x-aaaa not-an-id", "claims": [] },
     { "body": "Fixes x-bbbb\nRetarget x-aaaa x-bbbb msg-447f8f", "claims": ["x-bbbb"], "retargeted_from": ["x-aaaa"], "head_ref": "feature/x-aaaa-watch-expiry", "gate": "pass" },
+    { "body": "Fixes x-bbbb\nRetarget x-aaaa x-bbbb fmail-567c4f503c88", "claims": ["x-bbbb"], "retargeted_from": ["x-aaaa"], "head_ref": "feature/x-aaaa-watch-expiry", "gate": "pass" },
     { "body": "Fixes x-bbbb\r\nRetarget: x-aaaa x-bbbb d-7c502d89\r\n", "claims": ["x-bbbb"], "retargeted_from": ["x-aaaa"], "head_ref": "feature/x-aaaa-watch-expiry", "gate": "pass" },
     { "body": "Fixes x-cccc\nRetarget x-aaaa x-bbbb msg-447f8f", "claims": ["x-cccc"], "retargeted_from": [], "head_ref": "feature/x-aaaa-watch-expiry", "gate": "fail" },
     { "body": "Fixes x-bbbb\nRetarget x-aaaa x-bbbb", "claims": ["x-bbbb"], "retargeted_from": [], "head_ref": "feature/x-aaaa-watch-expiry", "gate": "fail" },

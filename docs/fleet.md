@@ -31,7 +31,7 @@ To dispatch every ready backlog node as a background worker: `/fno:target bg --a
 ## Watch
 
 - [Mux keys](mux-keys.md) and [mux themes](mux-themes.md).
-- [Org view](architecture/org-view.md): one key press, the whole team.
+- [Org view](architecture/org-view.md): one key press, the whole fleet.
 - [Watch panes from a browser](guides/web-view.md).
 - [Open a file from a pane](architecture/mux-open-files.md).
 - [Open delivered mail in Claude Code](architecture/claude-mail-pane.md).

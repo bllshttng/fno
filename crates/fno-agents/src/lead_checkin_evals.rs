@@ -3,15 +3,67 @@
 //! only in `fno doctor evals trend`, so a user who never ran that command
 //! never learned the bank existed; the lead beat now names it.
 
+use std::path::PathBuf;
+
 use serde_json::{json, Value};
 
 use crate::lead_checkin::Reading;
 
-pub(crate) fn reading() -> Result<Value, String> {
-    match crate::backlog::triage_health::evals_summary() {
-        Some(payload) => Ok(payload),
-        None => Ok(unmeasured_json("no bank rows in the eval history")),
+pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
+    let Some(mut payload) = crate::backlog::triage_health::evals_summary() else {
+        return Ok(unmeasured_json("no bank rows in the eval history"));
+    };
+    let behind = payload.get("stale").and_then(Value::as_bool) == Some(true)
+        || payload.get("never_ran").and_then(Value::as_bool) == Some(true);
+    if behind {
+        payload["scheduled"] = json!(scheduled_outcome(events_paths));
     }
+    Ok(payload)
+}
+
+/// How far back the scheduled leg's newest row is read. The tick runs every
+/// ten minutes, so a quiet window this long means the leg itself is down.
+const SCHEDULED_LOOKBACK_MS: i64 = 86_400_000;
+
+/// Why a behind bank did not run, from the newest scheduled-leg row: the
+/// tick's evals arm row (a skip token, or a launch) or the run's
+/// `evals_stale` row (the failure the launch ended in).
+fn scheduled_outcome(events_paths: &[PathBuf]) -> String {
+    let since = chrono::Utc::now().timestamp_millis() - SCHEDULED_LOOKBACK_MS;
+    let query = crate::event_store::EventQuery {
+        types: vec!["control_plane_tick".into(), "evals_stale".into()],
+        since_ms: Some(since),
+        ..Default::default()
+    };
+    let mut newest: Option<(i64, String)> = None;
+    for path in events_paths {
+        for row in crate::event_store::query_events(path, &query).unwrap_or_default() {
+            let Ok(line) = serde_json::from_str::<Value>(&row.line) else {
+                continue;
+            };
+            let data = &line["data"];
+            let text = |a: &str, b: &str| {
+                let detail: String = data[b].as_str().unwrap_or("").chars().take(120).collect();
+                format!("{}: {detail}", data[a].as_str().unwrap_or("?"))
+            };
+            let outcome = if row.r#type == "evals_stale" {
+                text("reason", "detail")
+            } else if data["arm"] != "evals" {
+                continue;
+            } else if data["skip_reason"].is_string() {
+                text("skip_reason", "detail")
+            } else {
+                format!("launched: {}", data["detail"].as_str().unwrap_or(""))
+            };
+            if newest.as_ref().map_or(true, |(ts, _)| row.ts_ms >= *ts) {
+                newest = Some((row.ts_ms, outcome));
+            }
+        }
+    }
+    newest.map_or_else(
+        || "no scheduled-leg row in 24h; is the pr-watch tick running?".to_string(),
+        |(_, outcome)| outcome,
+    )
 }
 
 fn unmeasured_json(reason: &str) -> Value {
@@ -31,8 +83,14 @@ pub(crate) fn lines(readings: &[Reading]) -> Vec<String> {
     if let Some(reason) = reading.value.get("unmeasured").and_then(Value::as_str) {
         return vec![format!("evals: unmeasured ({reason})")];
     }
+    let scheduled = reading
+        .value
+        .get("scheduled")
+        .and_then(Value::as_str)
+        .map(|s| format!(" (scheduled run: {s})"))
+        .unwrap_or_default();
     if reading.value.get("never_ran").and_then(Value::as_bool) == Some(true) {
-        return vec!["evals: regression bank never ran".to_string()];
+        return vec![format!("evals: regression bank never ran{scheduled}")];
     }
     let mut line = String::from("evals:");
     if let Some(rate) = reading
@@ -62,6 +120,7 @@ pub(crate) fn lines(readings: &[Reading]) -> Vec<String> {
     }
     if reading.value.get("stale").and_then(Value::as_bool) == Some(true) {
         line.push_str(" STALE");
+        line.push_str(&scheduled);
     }
     if let Some(alarm) = reading
         .value
@@ -121,10 +180,11 @@ mod tests {
             "age_days": 9.0,
             "stale": true,
             "never_ran": false,
+            "scheduled": "no_bank: no evals/bank in the cwd or any registered project",
         });
         assert_eq!(
             lines(&[Reading::took("evals", stale)]),
-            vec!["evals: flakes 0, last run 9d ago, window 7d, STALE".to_string()]
+            vec!["evals: flakes 0, last run 9d ago, window 7d, STALE (scheduled run: no_bank: no evals/bank in the cwd or any registered project)".to_string()]
         );
 
         let no_age = json!({

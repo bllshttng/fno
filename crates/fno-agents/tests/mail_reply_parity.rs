@@ -108,10 +108,8 @@ fn run_case(
         .collect();
     let mut cmd = Command::new(binary_path());
     let cmd = base_env(&mut cmd, root);
-    // The capture driver pointed inbox_project cases at the fixture root;
-    // without it the child's default inbox root lands under inbox/agents and
-    // the seeded parent thread is never found (the reply orphans instead of
-    // appending).
+    // The capture driver pointed inbox_project cases at the fixture root and
+    // named the known project the sender resolves to.
     let cmd = match inbox_project {
         Some(project) => cmd
             .env("FNO_INBOX_ROOT", root.join("inbox"))
@@ -318,25 +316,14 @@ fn seed_torn_registry(root: &Path) {
     std::fs::write(home.join("registry.json"), "{ not json").unwrap();
 }
 
-/// One existing self-addressed thread under web's inbox plus its bus row:
-/// the append path's parent. The frontmatter's `from:` names web, so the
-/// reply's recipient re-finds the same file and appends.
+/// One self-addressed parent message from web, on the bus and in the chats
+/// store: the reply path's parent. Its `from` names web, so the reply joins
+/// its thread addressed back to web.
 fn seed_project_thread(root: &Path) -> &'static str {
     // The capture seeded through the real write_new_thread, which minted an
     // fmail id; the scrubber folds that shape to fmail-HEX, so the seed mints
     // the same shape and the receipts normalize identically.
     const PARENT_ID: &str = "fmail-a1b2c3d4e5f6";
-    let thread = root
-        .join("inbox")
-        .join("web")
-        .join("inbox")
-        .join("2026-10-12-parent-ping.md");
-    std::fs::create_dir_all(thread.parent().unwrap()).unwrap();
-    std::fs::write(
-        &thread,
-        "---\nthread_id: fmail-a1b2c3d4e5f6\nfrom: web\nto: web\nkind: send\n---\n\n## fmail-a1b2c3d4e5f6 · 2026-10-12T09:00:00Z · from:web\n\nparent ping\n",
-    )
-    .unwrap();
     let row = bus_row(PARENT_ID, "web", "web", "send", None, None);
     seed_bus(root, &[row.clone()]);
     // The real write path records the chats row before the bus write (the
@@ -598,24 +585,8 @@ fn mail_reply_matches_captured_goldens() {
     }
 }
 
-fn dir_named(root: &Path, name: &str) -> Option<PathBuf> {
-    for entry in std::fs::read_dir(root).ok()?.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if path.file_name().is_some_and(|n| n == name) {
-            return Some(path);
-        }
-        if let Some(found) = dir_named(&path, name) {
-            return Some(found);
-        }
-    }
-    None
-}
-
 #[test]
-fn reply_to_a_system_arm_sender_writes_its_durable_floor() {
+fn reply_to_a_system_arm_sender_lands_on_the_bus() {
     let root = temp_root("system-arm");
     seed_bus(
         &root,
@@ -634,11 +605,21 @@ fn reply_to_a_system_arm_sender_writes_its_durable_floor() {
         !output.contains("path separators"),
         "the slash in the arm name must not reach the traversal guard: {output}"
     );
-    let floor = dir_named(&root, "fno.quiet-recovery").expect("the arm's floor directory exists");
-    let threads = std::fs::read_dir(floor.join("inbox"))
-        .expect("floor inbox readable")
-        .flatten()
-        .count();
-    assert_eq!(threads, 1, "the reply landed as one thread: {output}");
+    let log = std::fs::read_to_string(root.join("bus").join("messages.jsonl")).unwrap();
+    let replies: Vec<serde_json::Value> = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|r| r["id"] != "msg-caparm")
+        .collect();
+    assert_eq!(
+        replies.len(),
+        1,
+        "the reply landed as one bus row: {output}"
+    );
+    let to = replies[0]["to"].as_str().unwrap_or_default();
+    assert!(
+        to.contains("quiet-recovery"),
+        "the reply goes to the arm: {to}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -85,16 +85,27 @@ def _spawn_guard_decision(
     from fno.rust_binary import CommandUnavailable, command_call
 
     try:
+        # With store.remote_url set each claim read is a round trip that may
+        # wait 15s on the primary, so the 30s local-resolver bound is too short.
         answer = command_call(["backlog", "advance", "--stdin"], {
             "op": "spawn-guard", "node_id": node_id, "holder": holder, "ttl": ttl,
             "no_reserve": no_reserve, "cwd": cwd, "handover_holder": handover_holder,
             "pid": os.getpid(),
-        })
+        }, timeout=90)
     except CommandUnavailable as exc:
         # Fail closed: an unanswered guard must never read as dispatchable.
-        detail = f"spawn guard unavailable: {exc}; not dispatching"
+        import subprocess
+
+        timed_out = isinstance(exc.__cause__, subprocess.TimeoutExpired)
+        cause = (
+            "; the guard reads node claims on the shared primary when "
+            "store.remote_url is set, so a slow primary is the likely cause"
+            if timed_out else ""
+        )
+        detail = f"spawn guard unavailable: {exc}{cause}; not dispatching"
         line = (
-            f"node dispatch refused: node={node_id} verdict=error reason=error; "
+            f"node dispatch refused: node={node_id} verdict=error "
+            f"reason={'guard-timeout' if timed_out else 'error'}; "
             f"no worker launched detail={detail!r}"
         )
         return {"verdict": "error", "detail": detail, "refusal_line": line}, 3

@@ -1,0 +1,5 @@
+id: bad
+version: 1.0.0
+footnote_compat: {minimum: 0.1.0}
+permissions: [{effect_class: x, destination: y}]
+surprise: true

@@ -51,6 +51,12 @@ pub fn reading_stale_team_doc() -> String {
     "reading:stale-team-doc".to_owned()
 }
 
+/// A verdict escalation states the verdict itself: a degraded or unknown
+/// lead often has no stalled board row to name.
+pub fn reading_verdict(scope: &str) -> String {
+    format!("reading:verdict:{}", scope.replace(',', "+"))
+}
+
 #[derive(Deserialize)]
 pub struct EscalationRequest {
     pub stalled: Vec<String>,
@@ -128,6 +134,13 @@ fn subject_for_reading(id: &str) -> Option<String> {
             "a quiet board whose delivery count for scope {scope} it could not read"
         ));
     }
+    if let Some(scope) = scope_of("reading:verdict:") {
+        return Some(if scope.is_empty() {
+            "its own verdict, with no board row stalled".to_owned()
+        } else {
+            format!("its own verdict for scope {scope}, with no board row stalled")
+        });
+    }
     match id {
         "reading:board-unreadable" => Some("a board it could not read".to_owned()),
         "reading:questions-unreadable" => {
@@ -186,6 +199,8 @@ fn append_verdict(closing: &mut String, verdict: &str, scope: Option<&str>, read
             .or_else(|| {
                 readings.iter().find_map(|r| {
                     r.strip_prefix("reading:undelivered:")
+                        .or_else(|| r.strip_prefix("reading:verdict:"))
+                        .filter(|s| !s.is_empty())
                         .map(|s| s.replace('+', ","))
                 })
             })
@@ -240,6 +255,16 @@ pub fn render(req: &EscalationRequest) -> EscalationAnswer {
 
     let (subject, rows_branch) = if readings.len() == 1 {
         let reading = &readings[0];
+        if reading.starts_with("reading:verdict:") {
+            let name = req.verdict.as_deref().and_then(|v| v.split(' ').next());
+            match name {
+                None => return refused("a verdict reading carries no verdict"),
+                Some("converging") => {
+                    return refused("the verdict reads converging; it states nothing to escalate")
+                }
+                Some(_) => {}
+            }
+        }
         match subject_for_reading(reading) {
             Some(s) => (s, false),
             None => return refused(&format!("unknown reading id [{reading}]")),
@@ -456,6 +481,30 @@ mod tests {
             None,
         ));
         assert!(text.contains("--promote x-bbbb,x-1111 --hand-off"));
+    }
+
+    #[test]
+    fn a_verdict_reading_escalates_with_no_stalled_row() {
+        let reading = reading_verdict("fnh,fno");
+        let text = question(&with_verdict(
+            req(vec![reading.as_str()], Some(true)),
+            "degraded compactions 12 of 3",
+            None,
+        ));
+        assert!(text.contains("stopped on its own verdict for scope fnh, fno"));
+        assert!(text.contains("Verdict degraded compactions 12 of 3."));
+        assert!(text.contains("--promote fnh,fno --hand-off"));
+
+        let ans = render(&with_verdict(
+            req(vec![reading.as_str()], Some(true)),
+            "converging",
+            None,
+        ));
+        assert!(!ans.ok);
+        assert!(ans
+            .message
+            .expect("refusal names itself")
+            .contains("converging"));
     }
 
     #[test]

@@ -359,12 +359,9 @@ cli/src/fno/setup/doctor.py
 cli/src/fno/setup/integration.py
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
-cli/src/fno/setup/recommended_rules.py
-cli/src/fno/setup/test_recommended_rules.py
 cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
 cli/src/fno/test_worktree_paths.py
-cli/src/fno/update.py
 cli/src/fno/wake/detect.py
 cli/src/fno/worker/review.py
 cli/src/fno/worktree_cli/cli.py

@@ -83,16 +83,14 @@ cli.command("worked", hidden=True)(_cmd_worked)
 
 
 # Node-lifecycle sub-apps folded under backlog (unit 6 of the  reorg):
-# annotate findings, carve-out records, and the retro harvest are all node
-# metadata operations. The old top-level spellings stay one-release shims
+# annotate findings and carve-out records are node metadata operations. The
+# retro harvest is native (`fno backlog retro`). The old top-level spellings stay one-release shims
 # (fno.command_moves); the mounts below are the canonical homes.
 from fno.annotate.cli import annotate_app as _annotate_app  # noqa: E402
 from fno.carveout.cli import carveout_app as _carveout_app  # noqa: E402
-from fno.retro.cli import retro_app as _retro_app  # noqa: E402
 
 cli.add_typer(_annotate_app, name="annotate", hidden=True)
 cli.add_typer(_carveout_app, name="carveout", hidden=True)
-cli.add_typer(_retro_app, name="retro", hidden=True)
 
 
 # Selection-time enforcement (): a node another session is actively

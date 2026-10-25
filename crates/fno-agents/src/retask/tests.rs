@@ -533,3 +533,36 @@ fn menu_rows() {
     assert_eq!(receipt["reason"], json!("unsupported_switch_strategy"));
     assert_eq!(receipt["cleared"], json!(false));
 }
+
+#[test]
+fn truncated_status_frame_falls_back_to_the_status_bar() {
+    // A narrow pane cuts the /status line mid-token; the status bar carries
+    // the same pair and survives. The verify passes on the bar alone.
+    let mut strategy = crate::harness_capabilities::HarnessContract::packaged()
+        .expect("packaged contract")
+        .capabilities("codex")
+        .expect("codex row")
+        .model_switch_strategy
+        .clone();
+    assert!(
+        strategy.status_bar_pattern.is_some(),
+        "codex row declares the bar pattern"
+    );
+    // The narrow-pane frame: the /status line truncates mid-token and the
+    // status bar carries the full pair, both in one pane read.
+    let truncated = "Model: gpt-5.6\nEsc to interrupt    gpt-5.6-luna xhigh";
+    assert_eq!(status_tier(&strategy, truncated), None);
+    assert_eq!(
+        status_tier_or_bar(&strategy, truncated),
+        Some(("gpt-5.6-luna".to_string(), "xhigh".to_string()))
+    );
+    // A full frame needs no fallback and reads the same pair either way.
+    let full = status_frame("gpt-5.6-luna", "xhigh");
+    assert_eq!(
+        status_tier_or_bar(&strategy, &full),
+        status_tier(&strategy, &full)
+    );
+    // A harness without a bar pattern never falls back.
+    strategy.status_bar_pattern = None;
+    assert_eq!(status_tier_or_bar(&strategy, truncated), None);
+}

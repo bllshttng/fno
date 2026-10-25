@@ -1,55 +1,15 @@
-"""Inbox store: thread-per-file data layer.
+"""Inbox store: the durable mail write and its shared vocabulary.
 
-Each thread is one markdown file under
-``<inbox-agents-root>/{recipient}/inbox/{YYYY-MM-DD}-{slug}.md`` (the root
-is vault-derived when Obsidian is enabled, else under the state dir; see
-``paths.inbox_agents_root``). Replies append to the same thread file rather
-than creating a new one.
-
-Frontmatter (YAML):
-    thread_id: msg-XXXXXX
-    from: sender-project       # original sender of the root message
-    to: recipient-project
-    kind: heads-up | question | fyi
-    created: 2026-05-08T13:48:58Z
-    read_at: 2026-05-08T14:00:00Z   # optional; absent = unread
-    replies_to: msg-YYYYYY          # optional; cross-thread reference
-    persist_to_memory: true         # optional; only with `--persist memory`
-    ref_pr: 112                     # optional refs (passed through)
-    ref_node: ab-...
-    ref_gate: name
-    mission_id: ...
-    source_mission: ...
-    cascade_of: ...
-
-Body (one or more message blocks):
-    ## msg-{id} · 2026-05-08T13:48:58Z · from:sender
-
-    Message body text.
-
-    ## msg-{id2} · 2026-05-08T14:00:00Z · from:other-sender
-
-    Reply body.
-
-Concurrency:
-    Writes use a ``mkdir <path>.lock.d`` mutex (POSIX-atomic, macOS portable)
-    keyed on the thread file path. Two senders racing on the same thread
-    serialize on the directory create; each releases by removing the lock dir.
+A durable send is one envelope on the jsonl bus log (the system of record).
+The chats store records it, and every reader reads the store. No per-message
+markdown file is written.
 
 Public API:
     Kind                    - enum: HEADS_UP, QUESTION, FYI
-    ThreadMessage           - one message inside a thread
-    ThreadHandle            - one thread (frontmatter + messages)
-    write_new_thread        - create a new thread file, return handle
-    append_to_thread        - append a message to an existing thread file
-    read_thread             - parse one thread file
-    read_unread_threads     - list threads where ``read_at`` is absent
-    read_all_threads        - list every thread file under a recipient
-    mark_thread_read        - set ``read_at`` in frontmatter
-    find_thread_by_msg_id   - find a thread containing a given msg-id
-    inbox_dir_for           - path to a recipient's ``inbox/`` directory
-    generate_msg_id         - generate a unique 'msg-XXXXXX' id
-    resolve_project         - resolve project name from .fno/settings.yaml
+    DurableOwner            - who drains a durable message, and its TTL
+    write_new_thread        - append one durable envelope, return its msg-id
+    generate_msg_id         - generate a unique 'fmail-XXXXXXXXXXXX' id
+    resolve_project         - resolve project name from .fno/config.toml
     ProjectIdentificationError
 """
 from __future__ import annotations
@@ -58,16 +18,12 @@ import json
 import os
 import re
 import secrets
-import subprocess
-import sys
 import time
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-import yaml
 
 from fno.mail.kinds import AUTHORED_MAIL_KINDS
 
@@ -160,46 +116,6 @@ DEPRECATED_KINDS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ThreadMessage:
-    """One message block within a thread file body."""
-    msg_id: str
-    timestamp: datetime
-    from_project: str
-    body: str
-
-
-@dataclass
-class ThreadHandle:
-    """One thread on disk: a single file under ``{recipient}/inbox/``."""
-    thread_id: str
-    path: Path
-    from_project: str
-    to_project: str
-    kind: str
-    created: datetime
-    read_at: Optional[datetime]
-    replies_to: Optional[str]
-    persist_to_memory: bool
-    refs: dict[str, str]
-    origin: Optional[str] = None
-    messages: list[ThreadMessage] = field(default_factory=list)
-
-    @property
-    def is_unread(self) -> bool:
-        return self.read_at is None
-
-    @property
-    def root_msg_id(self) -> str:
-        if self.messages:
-            return self.messages[0].msg_id
-        return self.thread_id
-
-
-# ---------------------------------------------------------------------------
 # Exception
 # ---------------------------------------------------------------------------
 
@@ -211,39 +127,15 @@ class ProjectIdentificationError(Exception):
 # Path helpers
 # ---------------------------------------------------------------------------
 
-def _inbox_root() -> Optional[Path]:
-    """Base directory holding per-project ``<project>/inbox/`` folders.
-
-    Override via ``FNO_INBOX_ROOT`` env var (used by tests). When this
-    override is set, callers compose ``root/<project>/inbox`` themselves.
-
-    Returns ``None`` when no env override exists; production callers route
-    through ``paths.inbox_root_for(project)`` which consults the path-config
-    settings (configurable via ``config.paths.inbox_dir`` in settings.yaml).
-    """
-    override = os.environ.get("FNO_INBOX_ROOT")
-    if override:
-        return Path(override)
-    return None
-
-
 _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
 
-def inbox_dir_for(project: str) -> Path:
-    """Return the ``inbox/`` directory for a recipient project.
+def _validate_recipient(project: str) -> None:
+    """Refuse a recipient that is not one safe address segment.
 
-    Validates ``project`` strictly: it must match
-    ``^[A-Za-z0-9][A-Za-z0-9._:-]*$`` (``:`` admitted so a job address like
-    ``node:<id>`` is a first-class recipient) and contain no ``..`` segments.
-    This closes a path-traversal hole where a maliciously crafted recipient
-    name (``..`` / ``../etc``) would let writes escape the inbox tree.
-
-    Path resolution order:
-      1. ``FNO_INBOX_ROOT`` env var (test override) -> ``$ROOT/<project>/inbox``.
-      2. ``paths.inbox_root_for(project)`` (production) -> consults
-         ``config.paths.inbox_dir`` from settings.yaml with the recipient's
-         project name substituted into the ``{project}`` template.
+    It must match ``^[A-Za-z0-9][A-Za-z0-9._:-]*$`` (``:`` admitted so a job
+    address like ``node:<id>`` is a first-class recipient) and contain no
+    ``..``.
     """
     if "/" in project or "\\" in project:
         raise ValueError(f"project name must not contain path separators: {project!r}")
@@ -253,12 +145,6 @@ def inbox_dir_for(project: str) -> Path:
         raise ValueError(
             f"project name must match {_PROJECT_NAME_RE.pattern}: {project!r}"
         )
-    override_root = _inbox_root()
-    if override_root is not None:
-        return override_root / project / "inbox"
-    # Production path: consult settings.yaml via path-config.
-    from fno import paths as _paths
-    return _paths.inbox_root_for(project)
 
 
 # ---------------------------------------------------------------------------
@@ -291,55 +177,6 @@ def _release_lock(lock_dir: Path) -> None:
         )
 
 
-def _atomic_write_text(target: Path, content: str) -> None:
-    """Write to a sibling temp file then ``os.replace`` so a partial write
-    can never leave the target truncated. Caller must already hold the
-    per-path lock returned by ``_acquire_lock``.
-    """
-    import tempfile
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_str = tempfile.mkstemp(
-        dir=str(target.parent),
-        prefix=f".{target.name}.tmp.",
-        suffix=".part",
-    )
-    tmp = Path(tmp_str)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(str(tmp), str(target))
-    except Exception:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-
-
-# ---------------------------------------------------------------------------
-# Slug helper
-# ---------------------------------------------------------------------------
-
-_SLUG_NONWORD = re.compile(r"[^a-z0-9]+")
-
-
-def _slug_for(body: str, fallback_msg_id: str, max_len: int = 40) -> str:
-    """First 5 words of body, kebab-cased, capped at ``max_len`` chars.
-
-    Falls back to ``msg-{short}`` when the body is empty or sluggified to
-    nothing. The 5-word window picks up topical anchors without dragging
-    in punctuation or markdown tokens.
-    """
-    first_line = body.strip().splitlines()[0] if body.strip() else ""
-    words = first_line.split()[:5]
-    raw = " ".join(words).lower()
-    slug = _SLUG_NONWORD.sub("-", raw).strip("-")
-    if not slug:
-        return fallback_msg_id
-    return slug[:max_len].rstrip("-") or fallback_msg_id
-
-
 # ---------------------------------------------------------------------------
 # ID generation
 # ---------------------------------------------------------------------------
@@ -353,12 +190,6 @@ def generate_msg_id() -> str:
 # Format helpers
 # ---------------------------------------------------------------------------
 
-_MSG_HEADER_RE = re.compile(
-    r"^## ((?:fmail-|msg-)[0-9a-zA-Z]+) · (\S+) · from:(\S+)\s*$"
-)
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-
-
 def _format_dt(ts: datetime) -> str:
     """ISO-8601 UTC. ``2026-05-08T13:48:58Z`` shape."""
     if ts.tzinfo is None:
@@ -366,254 +197,12 @@ def _format_dt(ts: datetime) -> str:
     return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_dt(s) -> Optional[datetime]:
-    """Parse the formats we write. Returns None on failure.
-
-    YAML can pre-parse ``2026-05-08T10:00:00Z``-shaped strings into
-    ``datetime`` already; accept that shape transparently.
-    """
-    if s is None or s == "":
-        return None
-    if isinstance(s, datetime):
-        if s.tzinfo is None:
-            return s.replace(tzinfo=timezone.utc)
-        return s
-    s = str(s).strip().strip('"').strip("'")
-    fmts = (
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %H:%M:%S",
-    )
-    for fmt in fmts:
-        try:
-            dt = datetime.strptime(s, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except ValueError:
-            continue
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _format_thread(handle: ThreadHandle) -> str:
-    """Render a ThreadHandle as the on-disk markdown content."""
-    fm: dict[str, object] = {
-        "thread_id": handle.thread_id,
-        "from": handle.from_project,
-        "to": handle.to_project,
-        "kind": handle.kind,
-        "created": _format_dt(handle.created),
-    }
-    if handle.read_at is not None:
-        fm["read_at"] = _format_dt(handle.read_at)
-    if handle.replies_to:
-        fm["replies_to"] = handle.replies_to
-    if handle.persist_to_memory:
-        fm["persist_to_memory"] = True
-    if handle.origin is not None:
-        fm["origin"] = handle.origin
-    for k, v in handle.refs.items():
-        fm[k] = v
-
-    body_parts: list[str] = []
-    for m in handle.messages:
-        header = f"## {m.msg_id} · {_format_dt(m.timestamp)} · from:{m.from_project}"
-        body_parts.append(header)
-        body_parts.append("")
-        body_parts.append(m.body.rstrip("\n"))
-        body_parts.append("")
-
-    fm_text = yaml.safe_dump(fm, sort_keys=False).strip()
-    return f"---\n{fm_text}\n---\n\n" + "\n".join(body_parts).rstrip("\n") + "\n"
-
-
-def _parse_thread_text(text: str, path: Path) -> Optional[ThreadHandle]:
-    """Parse a thread file's text into a ThreadHandle. Returns None on bad shape."""
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
-        return None
-    fm_text = m.group(1)
-    try:
-        fm = yaml.safe_load(fm_text) or {}
-    except yaml.YAMLError:
-        return None
-    if not isinstance(fm, dict):
-        return None
-
-    thread_id = fm.get("thread_id")
-    from_project = fm.get("from")
-    to_project = fm.get("to")
-    kind = fm.get("kind")
-    origin = fm.get("origin")
-    created = _parse_dt(fm.get("created", ""))
-
-    if not all([thread_id, from_project, to_project, kind, created]):
-        return None
-    assert created is not None  # the all(...) guard above ensures it parsed
-
-    read_at_raw = fm.get("read_at")
-    read_at = _parse_dt(read_at_raw) if read_at_raw else None
-    replies_to = fm.get("replies_to")
-    persist_to_memory = bool(fm.get("persist_to_memory", False))
-    ref_keys = (
-        "ref_pr",
-        "ref_node",
-        "ref_gate",
-        "mission_id",
-        "source_mission",
-        "cascade_of",
-    )
-    refs = {k: str(fm[k]) for k in ref_keys if k in fm and fm[k] is not None}
-
-    body_text = text[m.end():]
-    messages = _parse_messages(body_text)
-
-    return ThreadHandle(
-        thread_id=str(thread_id),
-        path=path,
-        from_project=str(from_project),
-        to_project=str(to_project),
-        kind=str(kind),
-        origin=str(origin) if origin is not None else None,
-        created=created,
-        read_at=read_at,
-        replies_to=str(replies_to) if replies_to else None,
-        persist_to_memory=persist_to_memory,
-        refs=refs,
-        messages=messages,
-    )
-
-
-def _parse_messages(body_text: str) -> list[ThreadMessage]:
-    """Parse ``## {id} · {ts} · from:{sender}`` blocks (fmail- or msg- ids)."""
-    lines = body_text.splitlines()
-    messages: list[ThreadMessage] = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        m = _MSG_HEADER_RE.match(line)
-        if not m:
-            i += 1
-            continue
-        msg_id = m.group(1)
-        ts = _parse_dt(m.group(2))
-        sender = m.group(3)
-        i += 1
-        body_lines: list[str] = []
-        while i < n and not _MSG_HEADER_RE.match(lines[i]):
-            body_lines.append(lines[i])
-            i += 1
-        if ts is None:
-            continue
-        body = "\n".join(body_lines).strip("\n").strip()
-        messages.append(
-            ThreadMessage(
-                msg_id=msg_id,
-                timestamp=ts,
-                from_project=sender,
-                body=body,
-            )
-        )
-    return messages
-
-
 # ---------------------------------------------------------------------------
-# Public API: read
+# Durable write (jsonl-canon)
 # ---------------------------------------------------------------------------
-
-def read_thread(path: Path) -> Optional[ThreadHandle]:
-    """Parse a single thread file. Returns None if the file is malformed."""
-    if not path.exists():
-        return None
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    return _parse_thread_text(text, path)
-
-
-def _withdrawn_thread_ids() -> set[str]:
-    """Thread ids retracted on the bus, or an empty set if the bus is unreadable.
-
-    Fail-open by design: an unreadable bus must SHOW a thread rather than hide
-    it. Every other failure posture in this module errs toward never losing
-    unprocessed mail, and a withdrawal is not important enough to invert that.
-    """
-    try:
-        from fno.bus.log import iter_messages, withdrawn_ids
-
-        return withdrawn_ids(list(iter_messages(warn=False)))
-    except Exception:  # noqa: BLE001 - the inbox must never break on the bus
-        return set()
-
-
-def read_all_threads(recipient: str) -> list[ThreadHandle]:
-    """Return every thread file in ``{recipient}/inbox/`` (oldest-first).
-
-    Withdrawn threads are omitted. The filter lives HERE rather than in
-    ``read_unread_threads`` because this is the one function every reader of the
-    markdown lane passes through - the drain, ``mail list``, ``mail status``,
-    and ``find_thread_by_msg_id``. That lane is a separate delivery path from
-    the bus: ``write_new_thread`` renders a file the drain consumes without ever
-    consulting the bus, so the three bus-side tombstone filters left this one
-    reachable path able to triage, wake on, and persist a message the sender had
-    already retracted.
-
-    A thread is matched by its ROOT id (``thread_id``), which for a fresh send
-    is the withdrawn message's own id. Replies appended later are not surgically
-    excised; a withdrawal retracts a message, and the thread it rooted goes with
-    it while it is still unanswered.
-    """
-    inbox = inbox_dir_for(recipient)
-    if not inbox.exists():
-        return []
-    withdrawn = _withdrawn_thread_ids()
-    out: list[ThreadHandle] = []
-    for p in sorted(inbox.glob("*.md")):
-        h = read_thread(p)
-        if h is not None and h.thread_id not in withdrawn:
-            out.append(h)
-    return out
-
-
-def read_unread_threads(recipient: str) -> list[ThreadHandle]:
-    """Return threads where ``read_at`` is absent (oldest-first)."""
-    return [h for h in read_all_threads(recipient) if h.is_unread]
-
-
-def find_thread_by_msg_id(recipient: str, msg_id: str) -> Optional[ThreadHandle]:
-    """Find the thread file containing ``msg_id`` (root or appended reply).
-
-    Returns None when no thread under the recipient contains that msg-id.
-    """
-    if not msg_id:
-        return None
-    for h in read_all_threads(recipient):
-        for m in h.messages:
-            if m.msg_id == msg_id:
-                return h
-        if h.thread_id == msg_id:
-            return h
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Durable write (jsonl-canon) + derived render (Move A)
-# ---------------------------------------------------------------------------
-# LD2: the global JSONL bus log is the durable-first system of record; the
-# per-recipient markdown thread file is a derived, regenerable render. This is
-# the FLIP of the pre-cutover order, where the markdown was written durable-first
-# and the log was a best-effort mirror. Now:
-#   - ``_append_to_bus`` is the durable write the caller depends on: a failure
-#     RAISES and the send fails (never a silent loss).
-#   - ``_write_render_best_effort`` writes the derived markdown: a failure is
-#     logged loudly but never fatal, because the durable bus append already
-#     landed and the log keeps the message.
+# LD2: the global JSONL bus log is the system of record. ``_append_to_bus`` is
+# the durable write the caller depends on: a failure RAISES and the send fails
+# (never a silent loss).
 
 def _append_to_bus(
     *,
@@ -627,7 +216,6 @@ def _append_to_bus(
     in_reply_to: Optional[str] = None,
     persist_to_memory: bool = False,
     refs: Optional[dict[str, str]] = None,
-    render_path: Optional[Path] = None,
     from_harness: Optional[str] = None,
     to_harness: Optional[str] = None,
     from_session: Optional[str] = None,
@@ -643,8 +231,7 @@ def _append_to_bus(
 
     LD2 : the JSONL bus log is the durable-first system of record.
     A failure here FAILS the caller's send - the message is NOT durably stored,
-    so reporting success would be a silent loss. This raises (it does NOT swallow);
-    the markdown render is the best-effort, regenerable half.
+    so reporting success would be a silent loss. This raises (it does NOT swallow).
     """
     from fno.bus.log import Envelope, append as _bus_append
 
@@ -653,8 +240,6 @@ def _append_to_bus(
         meta["refs"] = dict(refs)
     if persist_to_memory:
         meta["persist_to_memory"] = True
-    if render_path is not None:
-        meta["render_path"] = str(render_path)
     # Terminal classification (US6): stamp who drains this durable thread and
     # when the dead-letter sweep should reclassify it if they have not. The bus
     # envelope is the system of record the sweep reads.
@@ -685,132 +270,6 @@ def _append_to_bus(
             origin=origin,
             subject=subject,
         )
-    )
-
-
-def _write_render_best_effort(target: Path, content: str) -> bool:
-    """Write the derived markdown render under the per-path lock. Best-effort.
-
-    LD2 : the render is derived from the canonical log, so a write
-    failure here is logged loudly but never fatal - the durable bus append has
-    already landed, and the log keeps the message.
-    Returns True on success, False on a logged failure.
-    """
-    try:
-        lock = _acquire_lock(target)
-        try:
-            _atomic_write_text(target, content)
-        finally:
-            _release_lock(lock)
-        return True
-    except Exception as exc:  # noqa: BLE001 - render is derived; never fail the send
-        log_inbox_error(
-            "render_write_failed",
-            path=str(target),
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        print(
-            f"warning: markdown render write failed for {target} "
-            f"({type(exc).__name__}: {exc}); the message is durable on the bus log",
-            file=sys.stderr,
-        )
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Public API: write
-# ---------------------------------------------------------------------------
-
-@dataclass
-class PostResult:
-    """Outcome of :func:`post_inbox_message`.
-
-    ``appended`` is True when the body was threaded onto an existing
-    thread (``reply_to`` matched); ``orphan`` is True when ``reply_to``
-    was given but no matching thread existed, so a new thread was created
-    carrying ``replies_to`` for a durable cross-thread link.
-    """
-
-    msg_id: str
-    thread_path: Path
-    appended: bool
-    orphan: bool
-
-
-def post_inbox_message(
-    *,
-    recipient: str,
-    sender: str,
-    kind: str,
-    body: str,
-    persist_to_memory: bool = False,
-    reply_to: Optional[str] = None,
-    refs: Optional[dict[str, str]] = None,
-    msg_id: Optional[str] = None,
-    word_count: Optional[int] = None,
-    origin: Optional[str] = None,
-    subject: Optional[str] = None,
-) -> PostResult:
-    """Post a project-addressed inbox message (the durable write path).
-
-    Pure data layer (no Typer): reproduces ``fno agents mail send`` semantics so
-    ``fno agents mail send --to-project`` can carry the inbox kinds the recipient
-    drain dispatches on (heads-up -> triage, question -> wake-signal, fyi /
-    fyi+persist). Validation raises ``ValueError``; the caller maps it to a
-    CLI exit. With ``reply_to`` set it appends to the matching thread, else
-    creates an orphan-reply thread; otherwise it writes a fresh thread.
-    """
-    if kind not in VALID_KINDS:
-        raise ValueError(
-            f"invalid kind: {kind!r}; expected one of {sorted(VALID_KINDS)}"
-        )
-    if persist_to_memory and kind != Kind.FYI.value:
-        raise ValueError("persist_to_memory is only valid with kind 'fyi'")
-
-    if reply_to:
-        existing = find_thread_by_msg_id(recipient, reply_to)
-        if existing is not None:
-            new_id = append_to_thread(
-                existing.path,
-                sender,
-                body,
-                msg_id=msg_id,
-                word_count=word_count,
-                origin=origin,
-            )
-            return PostResult(
-                msg_id=new_id, thread_path=existing.path, appended=True, orphan=False
-            )
-        # No thread under recipient carries reply_to: create one with
-        # replies_to set so the cross-thread link survives (matches the
-        # old inbox-send orphan-reply path).
-        handle = write_new_thread(
-            recipient, sender, kind, body,
-            msg_id=msg_id,
-            replies_to=reply_to,
-            persist_to_memory=persist_to_memory,
-            refs=refs,
-            owner=DurableOwner.INBOX_DRAIN.value,
-            word_count=word_count,
-            origin=origin,
-            subject=subject,
-        )
-        return PostResult(
-            msg_id=handle.thread_id, thread_path=handle.path, appended=False, orphan=True
-        )
-
-    handle = write_new_thread(
-        recipient, sender, kind, body,
-        msg_id=msg_id,
-        persist_to_memory=persist_to_memory,
-        refs=refs,
-        owner=DurableOwner.INBOX_DRAIN.value,
-        word_count=word_count,
-        origin=origin,
-        subject=subject,
-    )
-    return PostResult(
-        msg_id=handle.thread_id, thread_path=handle.path, appended=False, orphan=False
     )
 
 
@@ -847,250 +306,59 @@ def write_new_thread(
     word_count: Optional[int] = None,
     origin: Optional[str] = None,
     subject: Optional[str] = None,
-) -> ThreadHandle:
-    """Create a new thread file. Returns the resulting handle.
+) -> str:
+    """Append one durable envelope to the bus log. Returns its msg-id.
 
-    Filename: ``{YYYY-MM-DD}-{slug}.md`` (slug from first 5 words of body).
-    On collision, appends ``-1``, ``-2``, ... until an unused name is found.
-
-    ``owner``/``ttl_at`` stamp the durable thread's terminal classification (US6):
-    who will drain it and when the dead-letter sweep should reclassify it if they
-    have not. They ride the bus envelope ``meta`` (the system of record the sweep
-    reads), so a caller that omits them writes a thread indistinguishable from
-    before.
+    ``owner``/``ttl_at`` stamp the terminal classification (US6): who will
+    drain the message and when the dead-letter sweep should reclassify it if
+    they have not. They ride the envelope ``meta``, the record the sweep reads.
+    A bus failure raises: the message is not durably stored.
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid kind: {kind!r}; expected one of {sorted(VALID_KINDS)}")
+    _validate_recipient(recipient)
     if msg_id is None:
         msg_id = generate_msg_id()
     if timestamp is None:
         timestamp = datetime.now(tz=timezone.utc)
-    # Derive the sweep horizon from the owner class once the created timestamp is
-    # known, so every caller passes only the classification. An explicit ttl_at
-    # (e.g. a caller reclassifying) wins.
+    # An explicit ttl_at (a caller reclassifying) wins over the owner's horizon.
     if owner is not None and ttl_at is None:
         ttl_at = ttl_at_for(owner, timestamp)
 
-    inbox = inbox_dir_for(recipient)
-    inbox.mkdir(parents=True, exist_ok=True)
-
-    date_part = timestamp.astimezone(timezone.utc).strftime("%Y-%m-%d")
-    slug = _slug_for(body, fallback_msg_id=msg_id)
-    base = f"{date_part}-{slug}"
-    target: Optional[Path] = None
-    suffix = ""
-    n = 0
-    # Atomically claim the filename via O_CREAT|O_EXCL. The previous
-    # check-then-acquire was racy: two senders could observe the same
-    # name unused, both proceed, and clobber each other's content under
-    # the lock. Now whichever caller wins the create() owns the name and
-    # the loser bumps the suffix.
-    while True:
-        candidate = inbox / f"{base}{suffix}.md"
-        try:
-            fd = os.open(str(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            os.close(fd)
-            target = candidate
-            break
-        except FileExistsError:
-            n += 1
-            suffix = f"-{n}"
-            if n > 1000:
-                raise RuntimeError(
-                    f"could not allocate a thread filename under {inbox} "
-                    f"(tried {n} suffixes)"
-                )
-
-    handle = ThreadHandle(
+    _append_to_bus(
+        msg_id=msg_id,
         thread_id=msg_id,
-        path=target,
-        from_project=sender,
-        to_project=recipient,
+        sender=sender,
+        recipient=recipient,
         kind=kind,
-        origin=origin,
-        created=timestamp,
-        read_at=None,
-        replies_to=replies_to,
+        body=body,
+        timestamp=timestamp,
+        in_reply_to=replies_to,
         persist_to_memory=persist_to_memory,
-        refs=dict(refs or {}),
-        messages=[
-            ThreadMessage(
-                msg_id=msg_id,
-                timestamp=timestamp,
-                from_project=sender,
-                body=body,
-            )
-        ],
+        refs=refs,
+        from_harness=from_harness,
+        to_harness=to_harness,
+        from_session=from_session,
+        from_model=from_model,
+        to_kind=to_kind,
+        owner=owner,
+        ttl_at=ttl_at,
+        word_count=word_count,
+        origin=origin,
+        subject=subject,
     )
-
-    # Durable-first (LD2): the bus-log append is the write the caller depends on.
-    # If it fails the send fails; remove the reserved (empty) render file so a
-    # failed durable send leaves no orphan render masquerading as a real message.
-    try:
-        _append_to_bus(
-            msg_id=msg_id,
-            thread_id=msg_id,
-            sender=sender,
-            recipient=recipient,
-            kind=kind,
-            body=body,
-            timestamp=timestamp,
-            in_reply_to=replies_to,
-            persist_to_memory=persist_to_memory,
-            refs=refs,
-            render_path=target,
-            from_harness=from_harness,
-            to_harness=to_harness,
-            from_session=from_session,
-            from_model=from_model,
-            to_kind=to_kind,
-            owner=owner,
-            ttl_at=ttl_at,
-            word_count=word_count,
-            origin=origin,
-            subject=subject,
-        )
-    except Exception:
-        try:
-            target.unlink()
-        except OSError:
-            pass
-        raise
-
-    # Best-effort: the derived markdown render. A failure is logged, not fatal.
-    _write_render_best_effort(target, _format_thread(handle))
 
     from fno.mail.budget import is_control
 
     if is_control(body):
         _mark_control_pending(recipient)
 
-    return handle
-
-
-def append_to_thread(
-    thread_path: Path,
-    sender: str,
-    body: str,
-    *,
-    msg_id: Optional[str] = None,
-    timestamp: Optional[datetime] = None,
-    word_count: Optional[int] = None,
-    origin: Optional[str] = None,
-) -> str:
-    """Append a message block to an existing thread file. Returns new msg-id."""
-    if not thread_path.exists():
-        raise FileNotFoundError(f"thread file not found: {thread_path}")
-    if msg_id is None:
-        msg_id = generate_msg_id()
-    if timestamp is None:
-        timestamp = datetime.now(tz=timezone.utc)
-
-    # Read the thread's metadata (thread_id, owner, kind) for the bus envelope.
-    existing = read_thread(thread_path)
-    if existing is None:
-        raise ValueError(f"malformed thread file: {thread_path}")
-
-    # Durable-first (LD2): append the reply envelope to the canonical bus log.
-    # It stays addressed to the thread owner (existing.to_project) so the same
-    # recipient's drain/cursor sees the reply, matching the model where appends
-    # resurface the owner's thread. A bus failure raises (the reply is not
-    # durably stored).
-    # NOTE for a future move: when the triage drain is rewired to read the bus
-    # cursor, a reply authored BY the thread owner back to the original sender
-    # will still carry to==owner here; that addressing must be revisited so
-    # owner-authored replies route to the original sender rather than the owner.
-    _append_to_bus(
-        msg_id=msg_id,
-        thread_id=existing.thread_id,
-        sender=sender,
-        recipient=existing.to_project,
-        kind=existing.kind,
-        body=body,
-        timestamp=timestamp,
-        in_reply_to=existing.thread_id,
-        render_path=thread_path,
-        word_count=word_count,
-        origin=origin,
-    )
-
-    # Best-effort: update the derived markdown render under the per-path lock.
-    # A reply to an already-read thread resets read_at so the md view resurfaces
-    # it for drain. A render failure is logged, not fatal - the durable bus
-    # append already landed and the log keeps the message.
-    lock = _acquire_lock(thread_path)
-    try:
-        current = read_thread(thread_path)
-        if current is None:
-            log_inbox_error("render_reread_failed", path=str(thread_path))
-        else:
-            current.messages.append(
-                ThreadMessage(
-                    msg_id=msg_id,
-                    timestamp=timestamp,
-                    from_project=sender,
-                    body=body,
-                )
-            )
-            current.read_at = None
-            try:
-                _atomic_write_text(thread_path, _format_thread(current))
-            except Exception as exc:  # noqa: BLE001 - render is derived; never fatal
-                log_inbox_error(
-                    "render_write_failed",
-                    path=str(thread_path),
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-                print(
-                    f"warning: markdown render update failed for {thread_path} "
-                    f"({type(exc).__name__}: {exc}); the reply is durable on the "
-                    f"bus log",
-                    file=sys.stderr,
-                )
-    finally:
-        _release_lock(lock)
-
-    from fno.mail.budget import is_control
-
-    if is_control(body):
-        _mark_control_pending(existing.to_project)
-
     return msg_id
-
-
-def mark_thread_read(thread_path: Path, ts: Optional[datetime] = None) -> None:
-    """Set ``read_at`` in the thread's frontmatter. Idempotent."""
-    if ts is None:
-        ts = datetime.now(tz=timezone.utc)
-    lock = _acquire_lock(thread_path)
-    try:
-        h = read_thread(thread_path)
-        if h is None:
-            raise ValueError(f"malformed thread file: {thread_path}")
-        h.read_at = ts
-        _atomic_write_text(thread_path, _format_thread(h))
-    finally:
-        _release_lock(lock)
 
 
 # ---------------------------------------------------------------------------
 # Project resolution
 # ---------------------------------------------------------------------------
-
-def _git_root() -> Path:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            return Path(result.stdout.strip())
-    except FileNotFoundError:
-        pass
-    return Path.cwd()
-
 
 def _project_id_from_settings(data: dict) -> Optional[str]:
     """Extract the project id from parsed settings.yaml data.

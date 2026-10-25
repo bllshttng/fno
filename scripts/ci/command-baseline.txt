@@ -117,13 +117,10 @@ outstanding reindex
 paths
 phase kill-check
 plan
-plugins
 pr-watch
 project init
 research
-restart
 resume
-retro
 roles
 route
 scoreboard

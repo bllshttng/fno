@@ -100,11 +100,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
-    "plugins": (
-        "fno.plugins.cli:plugins_app",
-        "Install, verify, activate, and inspect function packs.",
-        {"hidden": True},
-    ),
     "mail": (
         "fno.mail.cli:mail_app",
         "Durable polled mailbox: send/unread/ack/reply/drain/status.",
@@ -156,11 +151,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
-        {"hidden": True},
-    ),
-    "retro": (
-        "fno.retro.cli:retro_app",
-        "Consume retro-triage triggers; file left-out work as backlog nodes.",
         {"hidden": True},
     ),
     "think": (
@@ -276,11 +266,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
-    "restart": (
-        "fno.restart:restart_command",
-        "Restart running fno processes (agents daemon; mux with --mux) onto fresh builds.",
-        {"hidden": True},
-    ),
 }
 
 # T1 actions are parsed by the group dispatcher and keep their existing typing.
@@ -305,10 +290,8 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "observer": set(),
     "paths": set(),
     "plan": set(),
-    "plugins": set(),
     "pr-watch": set(),
     "resume": set(),
-    "retro": set(),
     "roles": set(),
     "route": set(),
     "setup": set(),

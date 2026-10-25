@@ -1,0 +1,98 @@
+{
+  "conditions": [
+    {
+      "checked": true,
+      "detail": "id=dependent version=0.2.0rc1",
+      "family": "identity",
+      "name": "pack-id",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "7c96b9127f95eba0b00ae76bc85b2c008a3b9308b5db8df57c740a8ffb54d093",
+      "family": "identity",
+      "name": "digest-stability",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-ids-safe",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-ids-case-unique",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-and-function-ids-unique",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "no roles",
+      "family": "identity",
+      "name": "function-set",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "roles=0; skills=0; workflows=0; adapters=0; evaluators=0; assets=0; permissions=1; scenarios=0",
+      "family": "schema",
+      "name": "declarations-parse",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "alpha resolved to 1.0.0",
+      "family": "dependency",
+      "name": "dependency:alpha",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "capability",
+      "name": "declarations-are-not-grants",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "running footnote <VERSION> within declared range",
+      "family": "compatibility",
+      "name": "footnote-compat-range",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "0 role(s) parsed as RoleManifest",
+      "family": "compatibility",
+      "name": "role-manifest-schema",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "pack declares no benchmark scenarios; nothing to fail",
+      "family": "declared-test",
+      "name": "no-declared-scenarios",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "pack declares no evaluators; nothing to fail",
+      "family": "schema",
+      "name": "no-declared-evaluators",
+      "result": "passed"
+    }
+  ],
+  "ok": true,
+  "pack_path": "<PACKS>/dependent",
+  "version": 1
+}

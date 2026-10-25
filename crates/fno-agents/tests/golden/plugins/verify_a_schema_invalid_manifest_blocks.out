@@ -1,0 +1,14 @@
+{
+  "conditions": [
+    {
+      "checked": true,
+      "detail": "manifest <PACKS>/invalid-schema/plugin.yaml failed schema validation: <ERROR>",
+      "family": "schema",
+      "name": "manifest-schema",
+      "result": "blocked"
+    }
+  ],
+  "ok": false,
+  "pack_path": "<PACKS>/invalid-schema",
+  "version": 1
+}

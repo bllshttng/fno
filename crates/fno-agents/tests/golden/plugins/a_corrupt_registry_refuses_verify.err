@@ -1,0 +1,1 @@
+registry corrupt; cannot verify dependencies: registry at <ROOT>/.pack-registry.json is not valid JSON: <ERROR>

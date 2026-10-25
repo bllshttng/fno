@@ -26,18 +26,12 @@ export MEMORY_DIR="$STATE_DIR/memory"
 export HOOK_LOGS_DIR="$STATE_DIR/hook-logs"
 export LATCHES_DIR="$STATE_DIR/latches"
 export PLANS_DIR="$REPO_ROOT/.fno/plans"
-export INBOX_DIR="$REPO_ROOT/.fno/inbox"
 export HANDOFFS_DIR="$STATE_DIR/handoffs/$(basename "$REPO_ROOT")"
 export CONFIG_FILE="$STATE_DIR/config.toml"
 
 paths_plan_file() {
   local name="$1"
   echo "${PLANS_DIR}/${name}"
-}
-
-paths_inbox_thread() {
-  local thread="$1"
-  echo "${INBOX_DIR}/${thread}"
 }
 
 # Mirrors fno.paths.project_log(): <repo>/.fno/<name>, anchored to

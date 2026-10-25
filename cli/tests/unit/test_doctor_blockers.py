@@ -1,8 +1,7 @@
 """Unit tests for fno doctor's single blocker authority, `_blockers()`.
 
-One pure function reading the assembled `result` dict that `fno doctor` and
-the setup wizard both call (x-75dc): see `_emit_blockers` in doctor.py and
-`report_machine_blockers` in setup_cli.py.
+One pure function reading the assembled `result` dict that every `fno doctor`
+path calls: see `_emit_blockers` in doctor.py.
 """
 from __future__ import annotations
 
@@ -46,7 +45,10 @@ def test_missing_report_keys_do_not_raise_and_produce_no_lines():
         ),
         ({"fd_limit": {"verdict": "low", "launchd_soft": 256}}, "256"),
         ({"plugin_hooks": {"failed": 2}}, "2 plugin hook"),
-        ({"plugin_cache": {"status": "stale"}}, "plugin cache is stale"),
+        (
+            {"plugin_cache": {"status": "stale", "roots": [{"blocker": "plugin root /s (live) differs"}]}},
+            "plugin root /s (live) differs",
+        ),
     ],
 )
 def test_each_signal_produces_a_blocker_line(overrides, expect_substring):

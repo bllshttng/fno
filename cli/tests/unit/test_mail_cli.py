@@ -177,7 +177,7 @@ def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox)
     assert result.exit_code == 2
     assert "already delivered (hosted)" in (result.stderr or "")
     assert read_cursor("web") is None
-    assert [m.id for m in scan_unread("web")] == [durable.thread_id]
+    assert [m.id for m in scan_unread("web")] == [durable]
 
 
 def test_unknown_agent_heads_up_exits_16_without_writing(
@@ -427,3 +427,23 @@ def test_full_and_legacy_ambient_self_queue_to_canonical_without_inject(
     payload = json.loads(drained.stdout.strip().splitlines()[-1])
     assert payload and payload[0]["to"] == "019fb417"
 
+
+
+@pytest.mark.parametrize(
+    ("name", "replacement"),
+    [
+        ("list", "fno agents mail unread"),
+        ("drain", "fno agents mail drain-self"),
+        ("status", "fno agents mail unread"),
+        ("triage", "fno agents mail show <id>"),
+    ],
+)
+def test_retired_markdown_readers_exit_1_and_name_their_replacement(
+    runner, name, replacement
+):
+    from fno.mail.cli import mail_app
+
+    res = runner.invoke(mail_app, [name, "--any", "args"])
+    assert res.exit_code == 1
+    assert f"mail {name} is retired" in res.stderr
+    assert replacement in res.stderr
