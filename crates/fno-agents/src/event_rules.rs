@@ -323,6 +323,13 @@ fn stop_block(
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
     }
+    // fnod scores the same message beside the keyword verdict. Advice only:
+    // the keyword answer already fired this block, and the span carries both
+    // so `intel --lens rules` can compare them.
+    if row.when.iter().any(|p| p == "last_message_decision_ask") {
+        attrs.insert("keyword_ask".to_string(), json!(true));
+        attrs.extend(crate::fnod::is_ask(ctx.cwd, &ctx.last_message).attrs());
+    }
     write_fire_span(
         journal,
         ctx,
@@ -1028,9 +1035,20 @@ mod tests {
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let rig = Rig::new(true);
         let ask = "1. merge 2. hold. Your call?";
+        let (url, fnod) = crate::fnod::tests::serve_once(
+            r#"{"answers":{"is_ask":{"type":"noul","noul":0.12}}}"#,
+            std::time::Duration::ZERO,
+        );
+        std::fs::create_dir_all(rig.cwd.join(".fno")).unwrap();
+        std::fs::write(
+            rig.cwd.join(".fno/config.toml"),
+            format!("[fnod]\nurl = \"{url}\"\ntimeout_ms = 2000\n"),
+        )
+        .unwrap();
 
         // AC3: the block names the rule and the ask command, and the journal
-        // holds one block span.
+        // holds one block span. The span carries the keyword verdict and
+        // fnod's score side by side, and fnod's low score changes nothing.
         let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(ask));
         let block = fires
             .iter()
@@ -1042,6 +1060,9 @@ mod tests {
         assert_eq!(spans.len(), 1, "one block span for one fire");
         assert_eq!(spans[0]["data"]["span_kind"], "block");
         assert_eq!(spans[0]["data"]["rule"], "chat_ask_unfiled");
+        assert_eq!(spans[0]["data"]["keyword_ask"], true);
+        assert_eq!(spans[0]["data"]["fnod_is_ask"], 0.12);
+        fnod.join().unwrap();
 
         // AC4: the same ask with a question filed this turn allows.
         rig.question("q-rig01", None);

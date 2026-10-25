@@ -87,6 +87,14 @@ The fixed match lives in `event_rules.rs::predicate`. A row names any of these, 
 
 Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `notify` and the attrs `rule` and `matched_event`. `rule` + `matched_event` is the dedupe ledger. A nudge or notify fires once per matched event. A block counts its prior fires per turn key.
 
+### The fnod score beside the keyword verdict
+
+A block on a row that names `last_message_decision_ask` also asks fnod, the local decision model, the `is_ask` question about the same message. The span then carries `keyword_ask: true` and either `fnod_is_ask` (the probability) with `fnod_ms`, or `fnod_error` with the reason the score is missing. The score is advice only. The keyword verdict has already fired the block, and fnod's answer changes nothing.
+
+fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). An empty value turns the score off. `fnod.timeout_ms` bounds the whole call (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
+
+`fno-agents intel --lens rules [--days N] [--json]` reads the spans back. Per rule it counts fires, the fires the same session followed with a filed question within 10 minutes, and the fnod yes and no splits against that proxy (yes = `fnod_is_ask` at least 0.5).
+
 ## Overrides
 
 `event_rules.<id> = true|false` in fno config (project or global) flips any row, read with `config_value_deep`. With no override the row takes its `default`. `chat_ask_unfiled_worker` ships `default = false`. It is the same chat-ask block for untitled sessions. A config turns it on.
