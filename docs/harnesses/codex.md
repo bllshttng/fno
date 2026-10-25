@@ -20,7 +20,7 @@ Codex caches plugins by version, so local edits at the same manifest version req
 fno config plugin install codex --force
 ```
 
-Install first validates the requested marketplace and plugin in an isolated temporary `CODEX_HOME`, leaving the working install untouched when the candidate is invalid. It then replaces the source behind `fno`, verifies the installed version and complete loadable payload, and writes the channel marker only after that verification succeeds. Every failed live switch restores the previous marketplace registration, plugin, and exact marker bytes. A rollback failure is persisted and reported distinctly by `fno doctor`.
+Install first validates the requested marketplace and plugin in an isolated temporary `CODEX_HOME`. If the candidate is invalid, the working install stays untouched. Install then replaces the source behind `fno` and verifies the installed version and the complete loadable payload. It writes the channel marker only after that check passes. Every failed live switch restores the previous marketplace registration, plugin, and exact marker bytes. A rollback failure is persisted and reported distinctly by `fno doctor`.
 
 Install also removes legacy registrations and their cache. They are `footnote-dev` (`fno@footnote-dev`) and `footnote` (`fno@footnote`). `footnote` is the marketplace name before the rename to `fno`. Until install runs, `fno doctor` reports an old `fno@footnote` install as `legacy-marketplace`.
 
