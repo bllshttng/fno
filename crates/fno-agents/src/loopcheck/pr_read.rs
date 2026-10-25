@@ -224,7 +224,7 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
         }
         max_terminal.is_some_and(|bound| *number <= bound)
     });
-    rows.first().map(|(number, _)| number.to_string())
+    rows.first().map(|(number, _, _)| number.to_string())
 }
 
 /// The node's live replacement PR when the bound one reads CLOSED: the
