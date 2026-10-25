@@ -208,7 +208,11 @@ fn cancel_matches_the_python_goldens() {
     case("cancel sets the signal", p, &argv);
     let sentinel = space(p).join("leads/epic-y.cancelled");
     assert!(sentinel.is_file(), "the set left no sentinel");
-    let journal = fs::read_to_string(space(p).join("events.jsonl")).unwrap();
+    // The journal is a store behind events.jsonl; read it through the store.
+    let query = fno_agents::event_store::EventQuery::of_types(&["cancel_signal_set"]);
+    let journal =
+        fno_agents::event_store::journal_text_checked(&space(p).join("events.jsonl"), &query)
+            .unwrap();
     let set: serde_json::Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
     assert_eq!(set["type"], "cancel_signal_set");
     assert_eq!(set["data"]["path"], sentinel.display().to_string());
