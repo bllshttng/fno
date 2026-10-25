@@ -397,9 +397,8 @@ fn mail_send_captured(argv: &[String]) -> (u32, String) {
             .unwrap_or_else(|| "no detail".to_string());
         return (code, first);
     }
-    // The command's own evidence line ("delivered (hosted)", "queued
-    // (durable)") is the delivery truth; exit 0 alone cannot tell landed
-    // from parked.
+    // The child's own evidence line is the delivery truth; exit 0 alone
+    // cannot tell a live landing from a durable park.
     let detail = stdout.trim().lines().last().unwrap_or("").to_string();
     (0, detail)
 }
