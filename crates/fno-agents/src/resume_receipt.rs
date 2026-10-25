@@ -1,9 +1,20 @@
 //! Resume's preserved-record fallback (task 4): where a resume
-//! finds a retired session.
+//! finds a retired session. The typed resume receipt (write/validate/show)
+//! lives in the submodules beside it: this file is the family's named Rust
+//! landing, and the argv door is [`door::run`].
 
 use std::path::Path;
 
 use crate::paths::AgentsHome;
+
+pub mod door;
+pub mod model;
+pub mod revalidate;
+
+/// The argv entry: `fno-agents resume-receipt <command> [options]`.
+pub fn run(args: &[String]) -> i32 {
+    door::run(args)
+}
 
 /// The preserved-record fallback (task 4): a session-shaped resume
 /// miss consults the reap-receipts store before refusing. A retirement that

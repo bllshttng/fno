@@ -985,20 +985,20 @@ fn repo_root_of(path: &Path) -> Option<PathBuf> {
 /// canonicalize the deepest existing ancestor and re-append the missing tail,
 /// so a symlinked root (/var vs /private/var) compares equal even when the
 /// destination's own directory is created only by the move itself.
-fn canonical_best_effort(path: &Path) -> PathBuf {
+pub(crate) fn canonical_best_effort(path: &Path) -> PathBuf {
     let mut missing: Vec<std::ffi::OsString> = Vec::new();
     let mut probe = path.to_path_buf();
     loop {
-        match probe.parent() {
-            Some(parent) if probe.file_name().is_some() => {
-                if let Ok(canonical) = std::fs::canonicalize(parent) {
-                    let mut out = canonical;
-                    for component in missing.iter().rev() {
-                        out.push(component);
-                    }
-                    return out;
-                }
-                missing.push(probe.file_name().unwrap().to_os_string());
+        if let Ok(canonical) = std::fs::canonicalize(&probe) {
+            let mut out = canonical;
+            for component in missing.iter().rev() {
+                out.push(component);
+            }
+            return out;
+        }
+        match (probe.file_name(), probe.parent()) {
+            (Some(name), Some(parent)) => {
+                missing.push(name.to_os_string());
                 probe = parent.to_path_buf();
             }
             _ => return path.to_path_buf(),

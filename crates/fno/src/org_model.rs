@@ -43,27 +43,6 @@ pub struct OrgTree {
     pub unowned: Vec<AgentRow>,
     pub measured_at: u64,
 }
-#[derive(Debug, Clone, Default)]
-pub struct OrgSnapshot {
-    pub tree: Option<OrgTree>,
-    pub error: Option<String>,
-    pub error_at: Option<u64>,
-}
-impl OrgSnapshot {
-    pub fn apply(&mut self, inputs: &OrgInputs, now: u64) {
-        match derive(inputs, now) {
-            Ok(tree) => {
-                self.tree = Some(tree);
-                self.error = None;
-                self.error_at = None;
-            }
-            Err(reason) => {
-                self.error = Some(reason);
-                self.error_at = Some(now);
-            }
-        }
-    }
-}
 pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> OrgInputs {
     let teams: Vec<Value> = agents.iter().filter(|a| !a.exited).filter_map(|a| {
         Some(serde_json::json!({"scope": a.role_scope.as_ref()?, "level": a.role_level?, "holder": a.name}))

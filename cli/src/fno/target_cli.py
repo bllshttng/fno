@@ -1089,7 +1089,7 @@ def status(
     line resolves independently; an unresolvable line prints `unknown` plus the
     one command that resolves it. Re-run bare after compaction to re-orient.
     """
-    from fno.target.orient import load_orientation, render
+    from fno import rust_binary
 
     try:
         from fno.paths import resolve_repo_root
@@ -1097,11 +1097,20 @@ def status(
         root = resolve_repo_root()
     except Exception:  # noqa: BLE001 - degrade to cwd when not in a repo
         root = Path.cwd()
-    lines = load_orientation(root, node_id=node, plan_path=plan_path)
+    try:
+        answer = rust_binary.command_call(
+            "target-status",
+            {"root": str(root), "node": node, "plan_path": plan_path},
+        )
+    except rust_binary.CommandUnavailable as exc:
+        typer.echo(f"target status: {exc}", err=True)
+        raise typer.Exit(3)
+    lines = [(str(label), str(value)) for label, value in answer.get("lines", [])]
     if json_output:
-        typer.echo(json.dumps({ln.label: ln.value for ln in lines}, indent=2))
+        typer.echo(json.dumps(dict(lines), indent=2))
     else:
-        typer.echo(render(lines))
+        width = max((len(label) for label, _ in lines), default=0) + 1  # +1 for ':'
+        typer.echo("\n".join(f"{(label + ':'):<{width + 1}} {value}" for label, value in lines))
 
 
 def _resolve_node_id(node: str, entries: Optional[list] = None) -> str:

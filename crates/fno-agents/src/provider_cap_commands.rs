@@ -27,11 +27,54 @@ pub fn run_provider_cap(args: &[String]) -> i32 {
         Some((action, rest)) if action == "status" => cap_status(rest),
         Some((action, rest)) if action == "decide" => cap_decide(rest),
         Some((action, rest)) if action == "vault" => crate::claude_vault::run(rest),
+        Some((action, rest)) if action == "claude-transcript" => claude_transcript_door(rest),
         _ => {
-            eprintln!("usage: provider-cap status [--json] [--max-age-s N] | decide <lane> --answer all|some:<id,id>|wait | vault sync|refresh|login");
+            eprintln!("usage: provider-cap status [--json] [--max-age-s N] | decide <lane> --answer all|some:<id,id>|wait | vault sync|refresh|login | claude-transcript [--projects <dir>] <session-id>");
             2
         }
     }
+}
+
+/// `provider-cap claude-transcript [--projects <dir>] <session-id>`: the
+/// switch-safety read the recovery revival uses - can the target account's
+/// claude see this session's transcript? One id, one fresh store walk through
+/// the same resolver the sweep's claude leg uses. The answer is one JSON line,
+/// `{"path": <str or null>}`: transport-only, a miss exits 0, so an empty
+/// store reads no-transcript to the caller, never a failure.
+fn claude_transcript_door(args: &[String]) -> i32 {
+    let mut projects: Option<PathBuf> = None;
+    let mut id: Option<&str> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--projects" {
+            match iter.next() {
+                Some(dir) => projects = Some(PathBuf::from(dir)),
+                None => {
+                    eprintln!("provider-cap claude-transcript: --projects needs a directory");
+                    return 2;
+                }
+            }
+        } else if arg.starts_with("--") {
+            eprintln!("provider-cap claude-transcript: unknown flag {arg}");
+            return 2;
+        } else if id.is_none() {
+            id = Some(arg.as_str());
+        } else {
+            eprintln!("provider-cap claude-transcript: one session id only");
+            return 2;
+        }
+    }
+    let Some(id) = id else {
+        eprintln!("usage: provider-cap claude-transcript [--projects <dir>] <session-id>");
+        return 2;
+    };
+    let root = projects.unwrap_or_else(crate::claude_drive::claude_projects_dir);
+    let path = crate::claude_transcript_paths::resolve_transcript(&root, id);
+    println!(
+        "{}",
+        json!({ "path": path.map(|p| p.to_string_lossy().to_string()) })
+    );
+    0
 }
 
 fn cap_status(args: &[String]) -> i32 {

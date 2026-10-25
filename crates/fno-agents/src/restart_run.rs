@@ -350,9 +350,10 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
     // holds none of its own. Its JSON object folds into the summary below,
     // so the operator sees the preserved list the kill measured.
     let selector = if mux { "--all" } else { "--stale-idle" };
-    let mux_out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["mux", "kill-server", selector, "--json"])
-        .output();
+    // Bounded: a wedged server must fail the mux leg, not park the restart.
+    let mut kill = std::process::Command::new(crate::scrape::fno_bin());
+    kill.args(["mux", "kill-server", selector, "--json"]);
+    let mux_out = crate::bounded_cmd::output_with_timeout_result(kill, 600);
     // The selector's stderr carries the human narratives (the spared line,
     // the unkept refusal): relay them - capturing and dropping them is the
     // exact gap that deleted this leg from the operator's view.

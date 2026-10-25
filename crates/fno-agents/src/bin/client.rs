@@ -185,6 +185,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("gh-cache") {
         std::process::exit(fno_agents::gh_cache::run());
     }
+    // `target-status`: the orientation report door; Python's `fno do target
+    // status` reaches it through command_call, transport-only.
+    if args.first().map(String::as_str) == Some("target-status") {
+        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's
     // ensure_launch_workdir reaches it through command_call, and a `hold`
@@ -232,6 +237,20 @@ fn main() {
     // it dispatches before the runtime builds, with the other early arms.
     if args.first().map(String::as_str) == Some("mail-hold") {
         std::process::exit(fno_agents::mail_hold::run_mail_hold(&args[1..]));
+    }
+    // The resume receipt's argv door: transport-only, like mail-hold. The
+    // forwarding leaf (cli/src/fno/resume_receipt_cli.py) shells the do
+    // command here with the same options; the menu counter never sees
+    // transport arms.
+    if args.first().map(String::as_str) == Some("resume-receipt") {
+        std::process::exit(fno_agents::resume_receipt::run(&args[1..]));
+    }
+    // `delivery-evaluate`: the native evaluator behind the `fno delivery
+    // evaluate` forward leaf; transport-only (no client action - the shrink
+    // law allows none), answers in microseconds, so it dispatches before the
+    // runtime builds, with the other early arms.
+    if args.first().map(String::as_str) == Some("delivery-evaluate") {
+        std::process::exit(fno_agents::delivery_eval::run(&args[1..]));
     }
     // `mail-notify-self`: transport-only; the inject-mail-notify hook is the caller; early arm, answers in microseconds.
     if args.first().map(String::as_str) == Some("mail-notify-self") {
@@ -933,11 +952,10 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`. Daemon-free read, `==` dispatch like
-    // org-fold: Python resolves the caller's team scope and pins the
-    // journal path, the native side owns the scan so the file-budget
-    // Python-tree ratchet holds. `--verdict` reads the same journals as a
-    // tenure verdict and rides as an argument (law d-fe66560a).
+    // `fno agents org history`, exec'd by the front door. Daemon-free
+    // `==` dispatch like org-fold: the caller's team scope and the
+    // live journals resolve natively when the argv names none. `--verdict`
+    // reads the same journals as a tenure verdict (law d-fe66560a).
     if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);
@@ -1022,9 +1040,9 @@ async fn run(args: Vec<String>) -> i32 {
 
     // `board`: the lead board collector, read-only, daemon-free. Not a
     // routable `fno agents` command (same `matches!` treatment as graph-get): the
-    // Python surface is `fno inbox board` / `fno lead board`, whose typer
-    // command shells HERE and renders, and the stop hook reads the collector
-    // in-process. Matched with `==` beside graph-get so the routable-command
+    // front door execs `board --user-command` for `fno inbox board` / `fno lead
+    // board`, which renders the text page here, and the stop hook reads the
+    // collector in-process. Matched with `==` beside graph-get so the routable-command
     // parity guard does not see it - no advertised fno command is added.
     if command == "board" {
         return fno_agents::org_board::run_board(&args[1..]);

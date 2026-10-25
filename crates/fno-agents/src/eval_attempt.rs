@@ -507,9 +507,7 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created";
     let mut best: Option<(i64, String)> = None;
     for db in dbs {
-        let Ok(conn) =
-            rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
+        let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
         let Ok(mut stmt) = conn.prepare(SESSION_SQL) else {
@@ -534,9 +532,7 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
     let mut model: Option<String> = None;
     let mut usage: Option<UsageSum> = None;
     for db in dbs {
-        let Ok(conn) =
-            rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
+        let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
         let Ok(mut stmt) = conn.prepare(MESSAGE_SQL) else {

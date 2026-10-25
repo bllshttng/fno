@@ -1828,9 +1828,9 @@ pub(crate) use overlay_lines::nav_overlay_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
-mod org_detail;
-mod org_graph;
-mod org_table;
+mod org_pages;
+mod org_seats;
+mod org_tabs;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
@@ -7245,7 +7245,7 @@ async fn attach_and_run(
         tokio::sync::mpsc::unbounded_channel::<theme_import_ui::ImportMsg>();
     let (board_tx, mut board_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, backlog_board::BoardMsg)>();
-    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_detail::OrgMsg)>();
+    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_board::OrgMsg)>();
     let (share_tx, mut share_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
     view.share_tx = Some(share_tx);
@@ -7994,7 +7994,7 @@ async fn attach_and_run(
                 }
             }
             Some((gen, msg)) = org_rx.recv() => {
-                org_detail::apply(&mut view, gen, msg);
+                org_board::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }

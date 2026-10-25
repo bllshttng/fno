@@ -401,7 +401,7 @@ def run_doctor() -> int:
             print(f"[doctor] error: settings.yaml not found at {missing}")
         else:
             print("[doctor] error: no settings.yaml found")
-        print("[doctor] run 'fno config setup migrate-paths' to create settings.yaml")
+        print("[doctor] run 'fno config set <key> <value>' to write one")
         return 1
 
     # Handle load errors gracefully (AC4-FR)
@@ -414,7 +414,7 @@ def run_doctor() -> int:
     except Exception as exc:
         print(f"[doctor] error: could not load settings.yaml: {exc}")
         print(f"[doctor] settings source: {found_path}")
-        print("[doctor] run 'fno config setup migrate-paths' to recreate settings.yaml")
+        print("[doctor] fix the file named above, then re-run fno config doctor")
         return 1
 
     # Use loader's authoritative path: load_settings() can fall through to
@@ -479,7 +479,7 @@ def run_doctor() -> int:
         print(f"\n[doctor] {len(issues)} suspicious path(s) detected:")
         for name, path_str, reason in issues:
             print(f"  - {name} = {path_str}: {reason}")
-        print("\nRun 'fno config setup migrate-paths --force' to regenerate paths.")
+        print("\nSet a durable path with 'fno config set <key> <path>'.")
 
     # One shape, eight checks: heading, the reasons, the remedy line.
     reports: tuple[tuple[str, list[str], str], ...] = (
