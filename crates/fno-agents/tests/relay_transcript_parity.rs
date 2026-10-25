@@ -105,9 +105,21 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
         );
         let golden = std::fs::read_to_string(golden_dir.join(&key))
             .unwrap_or_else(|e| panic!("missing golden {key}: {e}"));
-        let masked = stdout.replace(case_root.to_str().unwrap(), "<CASE>");
+        // The verdict is the contract, not the envelope spelling: the frozen
+        // bytes carry the Python leg's `json.dumps` spacing, the door prints
+        // compact serde_json, and both parse to the same captured shape. The
+        // throwaway root masks out of the answered path the way the driver
+        // masked it out of the frozen one.
+        let captured: serde_json::Value = serde_json::from_str(golden.trim())
+            .unwrap_or_else(|e| panic!("golden {key} is not the door's JSON: {e}"));
+        let mut answered: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("[{label}] door stdout is not JSON: {e}"));
+        if let Some(p) = answered.get("path").and_then(|v| v.as_str()) {
+            answered["path"] =
+                serde_json::Value::String(p.replace(case_root.to_str().unwrap(), "<CASE>"));
+        }
         assert_eq!(code, 0, "[{label}] exit", label = case.label);
-        assert_eq!(masked, golden, "[{label}] stdout", label = case.label);
+        assert_eq!(answered, captured, "[{label}] verdict", label = case.label);
     }
 
     // Rust-only, no golden: a prefix-shaped id resolves against the store.
@@ -123,9 +135,15 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
     );
     let (code, stdout) = run_door(&projects, "d8996f9b");
     assert_eq!(code, 0);
-    let masked = stdout.replace(case_root.to_str().unwrap(), "<CASE>");
+    let answered: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("door stdout is not JSON: {e}"));
     assert_eq!(
-        masked,
-        format!("{{\"path\": \"<CASE>/projects/{PROJ_DIR}/{CASE_UUID}.jsonl\"}}\n")
+        answered["path"].and_then(|p| p.as_str()),
+        Some(
+            projects
+                .join(format!("{CASE_UUID}.jsonl"))
+                .to_str()
+                .unwrap()
+        )
     );
 }
