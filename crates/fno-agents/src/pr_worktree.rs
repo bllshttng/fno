@@ -93,7 +93,14 @@ fn resolve_pr_with_timeout(
 }
 
 pub fn resolve_pr_with(cwd: &Path, pr: &str, gh_bin: &str) -> Result<PathBuf, String> {
-    resolve_pr_with_timeout(cwd, pr, gh_bin, Duration::from_secs(30))
+    resolve_pr_with_timeout(cwd, pr, gh_bin, merge_gh_read_bound(cwd))
+}
+
+/// The one merge-path gh read bound: `bounds.merge_gh_read_secs` from the
+/// config root the read runs in, so a stalled shim is tuned in one place
+/// instead of hardcoded 30s at every site.
+fn merge_gh_read_bound(cwd: &Path) -> Duration {
+    Duration::from_secs(crate::agents_config::merge_gh_read_secs(cwd))
 }
 
 pub fn run() -> i32 {
@@ -129,7 +136,7 @@ pub fn run() -> i32 {
         .and_then(Value::as_u64)
         .filter(|seconds| *seconds > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30));
+        .unwrap_or_else(|| merge_gh_read_bound(&cwd));
     let result = match pr {
         Some(pr) => resolve_pr_with_timeout(&cwd, &pr, "gh", timeout),
         None => payload

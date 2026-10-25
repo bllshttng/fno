@@ -80,12 +80,13 @@ crossing	crates/fno-agents/src/prove_it_verdicts.rs	let mut cmd = Command::new(c
 crossing	crates/fno-agents/src/provider.rs	let out = match std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/provider_cap_commands.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/provider_cap_commands.rs	let fno = crate::scrape::fno_bin();
-crossing	crates/fno-agents/src/restart_run.rs	let mux_out = std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/restart_run.rs	let mut kill = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/resume_wake.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/resume_wake.rs	std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/retask/transport.rs	fn fno_bin() -> String {
 crossing	crates/fno-agents/src/retask/transport.rs	crate::scrape::fno_bin().to_string_lossy().into_owned()
 crossing	crates/fno-agents/src/retask/transport.rs	let mut cmd = Command::new(fno_bin());
+crossing	crates/fno-agents/src/retro/keep_going.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/route_slot.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/rundown.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/scrape.rs	pub fn fno_bin() -> std::ffi::OsString {

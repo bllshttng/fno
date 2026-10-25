@@ -67,7 +67,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agents/src/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agents/src/attest.rs `resolve_retractor_identity`. |
 | `FNO_AUTO_CONTINUE` | rs | Env override of the merge-triggered auto-continue gate; truthy-set membership on the whole value, mirrored exactly from Python. |
-| `FNO_BG` | py+rs | unclear: cli/src/fno/target/orient.py:254 |
+| `FNO_BG` | rs | unclear: crates/fno-agents/src/target_init.rs:591 |
 | `FNO_BIN` | py+rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/backlog_view.rs:333 |
 | `FNO_BOOTSTRAP_WHEEL` | rs | unclear: crates/fno/src/bootstrap.rs:280 |
@@ -97,7 +97,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CODEX_SESSIONS_DIR` | py+rs | Overrides the codex sessions root the announce status scan reads. |
 | `FNO_CODEX_VERSION` | py+rs | Pins the codex version the hook-trust gate reads, so tests and private roots skip the `codex --version` probe. |
 | `FNO_CONFIG` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:436 |
-| `FNO_CONFIG_SEARCH_ROOT` | py | unclear: cli/src/fno/config_io.py:66 |
+| `FNO_CONFIG_SEARCH_ROOT` | py | Test-only bound on config discovery, read by the Rust readers (`within_search_ceiling`). Python only widens it to the pytest basetemp (conftest). |
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agents/src/context_run.rs |
 | `FNO_CONTROL_PLANE_SCHEDULER` | py+rs | unclear: cli/src/fno/control_plane.py:22; native twin crates/fno-agents/src/backlog/reconcile_cli.rs |
 | `FNO_CURSOR_AGENT_MODEL` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:326 |
@@ -132,6 +132,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
 | `FNO_INBOX_ROOT` | py+rs | unclear: cli/src/fno/inbox/store.py:218 |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
+| `FNO_KEEP_GOING` | py+rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
 | `FNO_LAUNCH_ACCOUNT` | py+rs | Launch account resolved onto a spawn's exec seam; scrubbed before resolve so a stale value never mislabels the next spawn. |
@@ -322,7 +323,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SMOKE_FAILURE_RECORD` | py | unclear: cli/src/fno/test_cmd.py:2066 |
 | `SMOKE_REGISTRY_FILE` | py | unclear: cli/src/fno/test_cmd.py:2046 |
 | `SSH_CONNECTION` | rs | Set by sshd to `client_ip client_port server_ip server_port`. `fno mux serve --observe` names the watcher `user from client_ip` from it. |
-| `STARSHIP_CONFIG` | py | unclear: cli/src/fno/setup/starship.py:47 |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | py | unclear: cli/src/fno/cost/_register.py:480 |
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
@@ -333,7 +333,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `TARGET_SESSION_ID` | py+rs | Run id a driver pre-assigns its workers; init adopts it verbatim as session id and claim owner, and the decide door matches it against a live claim's `target-session:<id>` holder to say whether this caller holds the node. |
 | `TARGET_SIZE` | rs | Size profile the init door hands the writer. The blast read also takes it from the caller's env as an operator pin that a low-blast downgrade must not strip. Read in crates/fno-agents/src/target_init.rs `run`. |
 | `TARGET_SUMMARY_PATH` | py | unclear: cli/src/fno/cost/_register.py:446 |
-| `TARGET_UNATTENDED` | py+rs | unclear: cli/src/fno/target/orient.py:255 |
+| `TARGET_UNATTENDED` | rs | unclear: crates/fno-agents/src/target_orient.rs:329 |
 | `TASK_DO_TTL_HOURS` | rs | unclear: crates/fno-agents/src/graph_store.rs:1046 |
 | `TASK_LOCK_TTL_HOURS` | py+rs | unclear: cli/src/fno/graph/_constants.py:331 |
 | `TERM` | rs | Terminal type; a Rust front terminal capability check reads it. |

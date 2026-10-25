@@ -1,0 +1,1 @@
+lead manifest-path: role scope epic-z is stamped but no manifest exists at <ROOT>/leads/epic-z.md. Manifests live under the space dir; omit --state-root to take it.

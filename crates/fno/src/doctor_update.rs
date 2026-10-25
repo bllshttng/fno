@@ -1055,6 +1055,84 @@ pub(crate) fn component_lines(report: Option<&Value>, prefix: &str) -> Vec<Strin
         .unwrap_or_default()
 }
 
+/// The 12-char display form of a build rev, shared by the side-by-side
+/// lines. A plain fn, not a closure: elision names the returned lifetime
+/// here, where a closure's inferred type cannot.
+fn short_rev(rev: &str) -> &str {
+    &rev[..rev.len().min(12)]
+}
+
+/// The component name and self-reported build rev of every cargo row whose
+/// probe answered. The python-tool row stays out: its marker carries the
+/// source HEAD the wheel installed from, not the crates/ rev the cargo rows
+/// report, so counting it would read a python-only advance as a mixed build.
+pub(crate) fn component_build_revs(components: Option<&Value>) -> Vec<(String, String)> {
+    let Some(rows) = components
+        .and_then(|c| c.get("components"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter(|c| c.get("component").and_then(Value::as_str) != Some("python-tool"))
+        .filter_map(|c| {
+            Some((
+                c.get("component")?.as_str()?.to_string(),
+                c.get("observed_rev")?.as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// The mixed-build line, or None when no mix is provable: fewer than two
+/// cargo rows answered, or every reported build rev matches. Binary vs
+/// binary only; a row behind the source pin is the stale verdict's finding
+/// (`component_lines`), while two installed builds that disagree with each
+/// other cannot talk straight no matter which rev is current.
+pub(crate) fn mixed_component_line(components: Option<&Value>) -> Option<String> {
+    let revs = component_build_revs(components);
+    let (_, first) = revs.first()?;
+    let (_, other) = revs.iter().find(|(_, rev)| rev != first)?;
+    let at = |rev: &str| -> String {
+        revs.iter()
+            .filter(|(_, r)| r == rev)
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(" and ")
+    };
+    Some(format!(
+        "mixed component builds: {} at {} vs {} at {}",
+        at(first),
+        short_rev(first),
+        at(other),
+        short_rev(other)
+    ))
+}
+
+/// The one side-by-side line for the update modal: every build rev the check
+/// compared, each under its label. None when nothing answered and no pin was
+/// read, so a dark machine adds no empty row.
+pub(crate) fn revisions_summary(
+    build_revs: &[(String, String)],
+    pin: Option<&str>,
+) -> Option<String> {
+    if build_revs.is_empty() && pin.is_none() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !build_revs.is_empty() {
+        let named: Vec<String> = build_revs
+            .iter()
+            .map(|(n, r)| format!("{n} {}", short_rev(r)))
+            .collect();
+        parts.push(format!("build revs: {}", named.join(", ")));
+    }
+    if let Some(pin) = pin {
+        parts.push(format!("crates/ pin {}", short_rev(pin)));
+    }
+    Some(parts.join("; "))
+}
+
 /// Deduped install-location dirs that already host >=1 of the triad bins.
 /// NEVER seeds a new location (locked decision 4). Candidates: the uv tool
 /// venv bin and PATH. The cargo dir may appear via PATH; the caller skips it.
@@ -3023,6 +3101,31 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
         .unwrap_or(Value::Null),
         _ => Value::Null,
     };
+    let build_revs = component_build_revs(Some(&components));
+    let mixed_line = mixed_component_line(Some(&components));
+    let summary = revisions_summary(&build_revs, subtree.as_deref());
+    let observed: serde_json::Map<String, Value> = build_revs
+        .into_iter()
+        .map(|(name, rev)| (name, Value::String(rev)))
+        .collect();
+    let revisions = serde_json::json!({
+        // Every rev this check compared, named side by side: each installed
+        // cargo binary's self-reported build rev, the installed-rev marker,
+        // the crates/ rev the verdict pins on, and the source checkout's
+        // HEAD. `mixed` is null when the verdict could not answer at all, so
+        // a dark probe never reads as a clean bill.
+        "observed": observed,
+        "installed_rev": installed_rev,
+        "rust_subtree_rev": subtree,
+        "source_rev": src_rev,
+        "mixed": if components.is_null() {
+            Value::Null
+        } else {
+            serde_json::json!(mixed_line.is_some())
+        },
+        "mixed_detail": mixed_line,
+        "summary": summary,
+    });
     let probes = serde_json::json!({
         "installed_rev": installed_rev,
         "rust_subtree_rev": subtree,
@@ -3054,6 +3157,7 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
             "source": source_wire,
             "bump": wire_bump,
         },
+        "revisions": revisions,
         "shells": if shells_known { serde_json::json!(shells) } else { Value::Null },
         "shells_ended": if shells_known { serde_json::json!(shells_ended) } else { Value::Null },
         "sessions": if shells_known { serde_json::json!(sessions) } else { Value::Null },

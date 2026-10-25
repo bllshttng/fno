@@ -113,7 +113,7 @@ FIELD_META: dict[str, Meta] = {
         default_source="readme",
     ),
     # --- config.blueprint.* ---
-    "blueprint.max_prs_per_epic": Meta("advanced", "Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it."),
+    "blueprint.max_prs_per_epic": Meta("advanced", "Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more."),
     "blueprint.python_repair_added_lines": Meta("advanced", "Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh."),
     "plan.default_diff_budget": Meta("advanced", "Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off)."),
     # --- config.backlog.* ---
@@ -461,6 +461,8 @@ FIELD_META: dict[str, Meta] = {
     ),
     "mux.open_with": Meta("advanced", "Where a clicked file path opens: inmux (default; text, source files, images and PDFs open in the mux viewer, other files in the platform opener) | obsidian (files under the configured vault open in Obsidian, others fall back to system) | system (the platform opener). Read by the Rust client.", default_source="default"),
     "mux.viewer": Meta("advanced", "Shape of the in-mux file viewer: panel (default, docks at the right edge) | modal. Read by the Rust client.", default_source="default"),
+    "mux.wheel_lines": Meta("advanced", "Lines one wheel notch scrolls a pane whose app does NOT own the mouse (default 1). A notch here is one cell of trackpad travel; a wheel-mouse user wanting the classic 3-detent step sets 3. Read once at mux server birth.", default_source="default"),
+    "mux.wheel_passthrough_rate": Meta("advanced", "Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops.", default_source="default"),
     # --- config.split.* ---
     "split.opens": Meta("advanced", "Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.", default_source="default"),
     # --- config.dev.* (: maintainer local-dev) ---

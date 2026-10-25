@@ -153,6 +153,7 @@ pub fn run(args: &[String]) -> i32 {
             | "migrate-priorities"
             | "migrate-difficulty"
             | "migrate-updated-at"
+            | "retro"
     ) && !carries(resolved.tail, &["--help", "-h"])
     {
         if let Some(code) = super::workflows::refuse_non_graph_backend(resolved.legacy) {
@@ -352,6 +353,7 @@ pub fn run(args: &[String]) -> i32 {
         "discover" => super::finale::run_discover(resolved.tail),
         "pick" => super::finale::run_pick(resolved.tail),
         "requeue" => super::finale::run_requeue(resolved.tail),
+        "retro" => crate::retro::run(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

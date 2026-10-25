@@ -103,6 +103,16 @@ def test_committed_example_toml_is_fresh() -> None:
     )
 
 
+def test_embedded_wizard_plan_is_fresh() -> None:
+    """crates/fno/wizard-plan.json, which `fno config setup plan` embeds,
+    must equal the generator's output."""
+    plan = _repo_root() / "crates" / "fno" / "wizard-plan.json"
+    assert plan.read_text(encoding="utf-8") == schema_gen.wizard_plan() + "\n", (
+        "crates/fno/wizard-plan.json is stale; run "
+        "`fno config schema --wizard-plan > crates/fno/wizard-plan.json`"
+    )
+
+
 def _model_defaults() -> dict[str, object]:
     """Map config.<dotted> -> model default for every leaf (bash reads config.K)."""
     return {leaf.path: leaf.default for leaf in schema_gen.iter_leaves()}

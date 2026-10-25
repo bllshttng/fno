@@ -1,4 +1,4 @@
-"""`fno setup migrate-config` — legacy settings.yaml -> flat config.toml.
+"""The legacy settings.yaml -> flat config.toml migration the loader runs.
 
 The migrate round-trip is the load-bearing safety check for the hard cut: an
 install must load identical values before (yaml) and after (migrated toml).
@@ -12,7 +12,6 @@ import pytest
 
 from fno.config import (
     _migrate_yaml_to_toml,
-    run_config_migration,
     settings_from_files,
 )
 
@@ -39,12 +38,10 @@ def test_ac3_hp_migrate_and_load_parity(tmp_path):
     # Baseline: values loaded straight from the legacy yaml.
     from_yaml = settings_from_files([yaml_path])
 
-    results = run_config_migration([yaml_path])
-
     toml_path = fno / "config.toml"
+    assert _migrate_yaml_to_toml(yaml_path) == toml_path
     assert toml_path.is_file(), "migrate must write config.toml"
     assert not yaml_path.exists(), "the legacy yaml is deleted (hard cut)"
-    assert (toml_path, "migrated") in results
 
     # Invariant: loaded-from-yaml == loaded-from-migrated-toml.
     from_toml = settings_from_files([toml_path])
@@ -61,10 +58,8 @@ def test_ac3_err_idempotent_noop_when_toml_exists(tmp_path):
     toml_path = fno / "config.toml"
     toml_path.write_text('[review]\nrequired_bots = ["existing"]\n', encoding="utf-8")
 
-    results = run_config_migration([fno / "settings.yaml"])
-
-    # config.toml wins and is NOT clobbered; report says already-migrated.
-    assert (toml_path, "already-migrated") in results
+    # config.toml wins and is NOT clobbered.
+    assert _migrate_yaml_to_toml(fno / "settings.yaml") == toml_path
     assert settings_from_files([toml_path]).review.required_bots == ["existing"]
 
 

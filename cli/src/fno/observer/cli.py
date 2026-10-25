@@ -58,17 +58,20 @@ def _read_postmortems(postmortems_dir: Path) -> list[dict]:
     gists (RawItems) for the inbox; the fold wants the raw attribution keys, so
     read them directly. Tolerant: a missing dir or a malformed file is skipped,
     never fatal (mirrors ``harvest_postmortems``)."""
-    from fno.retro.harvest import _split_frontmatter
+    import yaml
+
+    from fno.agent.state import _extract_frontmatter
 
     if not postmortems_dir.is_dir():
         return []
     out: list[dict] = []
     for path in sorted(postmortems_dir.glob("*.md")):
         try:
-            fm, _body = _split_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            fm = _extract_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
             continue
-        fm = fm or {}
+        except ValueError:
+            fm = {}  # an unclosed fence carries no attribution keys
         blocked = fm.get("blocked_reason")
         kind = str(blocked.get("kind")) if isinstance(blocked, dict) and blocked.get("kind") else None
         out.append(

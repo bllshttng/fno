@@ -98,8 +98,6 @@ lead done
 lead drain
 lead escalate
 lead init
-lead manifest-path
-lead shape
 lead term
 lint
 loops
@@ -120,9 +118,7 @@ plan
 pr-watch
 project init
 research
-restart
 resume
-retro
 roles
 route
 scoreboard

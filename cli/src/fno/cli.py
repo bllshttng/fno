@@ -96,7 +96,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "delivery": (
-        "fno.delivery.cli:delivery_app",
+        "fno.do_cli:delivery_app",
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
@@ -151,11 +151,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
-        {"hidden": True},
-    ),
-    "retro": (
-        "fno.retro.cli:retro_app",
-        "Consume retro-triage triggers; file left-out work as backlog nodes.",
         {"hidden": True},
     ),
     "think": (
@@ -271,11 +266,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
-    "restart": (
-        "fno.restart:restart_command",
-        "Restart running fno processes (agents daemon; mux with --mux) onto fresh builds.",
-        {"hidden": True},
-    ),
 }
 
 # T1 actions are parsed by the group dispatcher and keep their existing typing.
@@ -302,7 +292,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "retro": set(),
     "roles": set(),
     "route": set(),
     "setup": set(),
@@ -369,8 +358,7 @@ def _check_migration() -> None:
     """Fast-path stat check; runs migration on first invocation post-upgrade.
 
     The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.  Hard-fail path
-    remains ``fno config setup migrate-paths`` (called explicitly).
+    best-effort startup convenience, not load-bearing.
 
     Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
     (pytest sets this automatically in all test processes) for isolation.

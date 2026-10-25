@@ -20,6 +20,9 @@ use crate::paths::{dirs_home, AgentsHome};
 
 const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
 const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
+/// The reclaim pass an install chains: every lane except the uv cache prune,
+/// which can hold a first install for its full 120s cap.
+const RECLAIM_ON_INSTALL: [&str; 2] = ["--apply", "--no-uv-prune"];
 const RC_MARK: &str = "# fno: cargo build-dir";
 
 /// Same shape as the Python gate in cli/src/fno/hook_config.py:29.
@@ -1682,7 +1685,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                         println!("removed stale copies: {}", joined.join(", "));
                     }
                     let home = AgentsHome::from_env();
-                    let _ = crate::reclaim::run_reclaim(&["--apply".to_string()], &home);
+                    let _ =
+                        crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
                     0
                 }
                 Err(e) => {
@@ -1883,7 +1887,7 @@ fn run_opencode_arm(
                 say(format!("removed stale copies: {}", joined.join(", ")));
             }
             let home = AgentsHome::from_env();
-            let _ = crate::reclaim::run_reclaim(&["--apply".to_string()], &home);
+            let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
             prime_plugin_root_pointer(&state_root().join("plugin-stage").join(STAGE_DIR));
             if receipt.status == "partial" {
                 3

@@ -97,6 +97,19 @@ pub(crate) fn record_finished(run: &Run<'_>, exit_code: i32, elapsed: Duration) 
     );
 }
 
+/// A refused run spawns no child, so no started/finished pair ever names
+/// it: this row is the durable record of a door refusal (slots busy, fleet
+/// stop, a frozen build), carrying the exit the caller saw and the pid of
+/// the process that answered. The stats fold reads started/finished pairs
+/// only, so a refusal never reads as a duration.
+pub(crate) fn record_refused(run: &Run<'_>, reason: &str, exit_code: i32, pid: u32) {
+    append(
+        run,
+        "refused",
+        json!({ "reason": reason, "exit_code": exit_code, "pid": pid }),
+    );
+}
+
 /// Linear-interpolated percentile of an ascending list.
 fn percentile(sorted: &[u64], p: f64) -> f64 {
     let rank = p * (sorted.len() - 1) as f64;
@@ -242,5 +255,50 @@ mod tests {
         let summary = summarize(&text);
         assert_eq!(summary.unfinished, 1);
         assert_eq!(summary.durations_ms["pytest"], vec![2000]);
+    }
+
+    #[test]
+    fn refused_row_is_durable_and_never_a_duration() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // The events store routes by env: the journal path's parent must be
+        // the agents home's parent, or the row lands in whatever store the
+        // ambient home holds instead of this test's own.
+        let home = std::env::temp_dir().join(format!(
+            "fno-journal-refused-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join("agents-home")).unwrap();
+        let journal = home.join("events.jsonl");
+        let _home_guard = crate::claims::EnvVarGuard::set(
+            "FNO_AGENTS_HOME",
+            &home.join("agents-home").display().to_string(),
+        );
+        let _pin =
+            crate::claims::EnvVarGuard::set("FNO_EVENTS_PATH", &journal.display().to_string());
+        let run = Run {
+            run_id: "r1",
+            argv: &argv(&["cargo", "test", "--lib"]),
+            whole: false,
+        };
+        record_refused(&run, "local-slots-full", crate::test_run::SLOT_BUSY, 4242);
+        // Read back the way `test-run stats` does: through the store reader,
+        // not the raw path.
+        let text = crate::event_store::journal_text(&events_path(), &["test_run"]);
+        assert!(text.contains("\"stage\":\"refused\""), "{text}");
+        assert!(text.contains("\"exit_code\":86"), "{text}");
+        assert!(text.contains("\"pid\":4242"), "{text}");
+        assert!(text.contains("\"reason\":\"local-slots-full\""), "{text}");
+        // The stats fold reads started/finished pairs only: a refusal is
+        // neither unfinished work nor a duration.
+        let summary = summarize(&text);
+        assert_eq!(summary.unfinished, 0);
+        assert!(summary.durations_ms.is_empty(), "{summary:?}");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
