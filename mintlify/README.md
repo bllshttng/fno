@@ -36,4 +36,4 @@ Put merge-policy checks before launching a target. Keep the practice worker avai
 
 Distinguish a launch receipt from a completed result. A queued message or a ready preview is not proof of delivery or visual inspection.
 
-Record any verification you could not perform in the PR. Do not turn a refused browser check into a visual pass.
+Record any unperformed verification in the PR. Do not turn a refused browser check into a visual pass.

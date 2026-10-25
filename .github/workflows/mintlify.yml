@@ -1,0 +1,34 @@
+name: Mintlify docs
+
+on:
+  pull_request:
+    paths:
+      - mintlify/**
+      - .github/workflows/mintlify.yml
+  push:
+    branches: [main]
+    paths:
+      - mintlify/**
+      - .github/workflows/mintlify.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mintlify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check documentation links and anchors
+        working-directory: mintlify
+        run: npx --yes mint@4.2.1125 broken-links --check-anchors
