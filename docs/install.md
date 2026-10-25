@@ -103,7 +103,7 @@ fno config setup plan --advanced   # the advanced config tier, as JSON
 
 Both walk the same schema-derived question plan and write through the validated config writer, so a typo or an out-of-range value is rejected, not silently stored.
 
-The terminal wizard also offers, defaulting to No, to wire fno's SessionStart context into Codex and Gemini user config. You can do the same later with `fno config setup cli-hooks`.
+To wire fno's SessionStart context into Codex and Gemini user config, run `fno config setup cli-hooks`. The wizard does not do this step.
 
 ### Reading and editing config directly
 
