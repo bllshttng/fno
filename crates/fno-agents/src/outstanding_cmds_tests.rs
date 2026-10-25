@@ -196,3 +196,67 @@ fn the_json_list_carries_n_text_done_node_rows() {
         r#"{"mine":[{"n":1,"text":"finished","done":true,"node":"fno-e5f6"}]}"#
     );
 }
+
+fn ask_row(qid: &str, question: &str) -> String {
+    format!(
+        r#"{{"ts":"2026-10-24T09:00:00Z","type":"operator_question","source":"test","data":{{"question_id":"{qid}","question":"{question}","blocks":[]}}}}"#
+    )
+}
+
+#[test]
+fn reindex_folds_journal_rows_into_the_index_once() {
+    let root = sandbox("reindex");
+    let index = root.join("questions.jsonl");
+    let journal = root.join("project").join("events.jsonl");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    std::fs::write(
+        &journal,
+        format!(
+            "{}\n{}\n",
+            ask_row("q-r1", "first?"),
+            ask_row("q-r2", "second?")
+        ),
+    )
+    .unwrap();
+    let (added, already, total) = reindex_fold(&index, &[journal.clone()]).unwrap();
+    assert_eq!((added, already, total), (2, 0, 2));
+    // Idempotent: a second fold reports already-indexed, adds nothing.
+    let (added, already, total) = reindex_fold(&index, &[journal]).unwrap();
+    assert_eq!((added, already, total), (0, 2, 2));
+    let indexed = std::fs::read_to_string(&index).unwrap();
+    assert!(indexed.contains("q-r1") && indexed.contains("q-r2"));
+}
+
+#[test]
+fn reindex_skips_decision_rows_and_unreadable_journals() {
+    let root = sandbox("reindex-skip");
+    let index = root.join("questions.jsonl");
+    let journal = root.join("project").join("events.jsonl");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    let decision = r#"{"ts":"2026-10-24T09:05:00Z","type":"operator_decision","source":"test","data":{"decision_id":"d-1"}}"#;
+    std::fs::write(&journal, format!("{}\n", decision)).unwrap();
+    let (added, already, total) = reindex_fold(&index, &[journal.clone()]).unwrap();
+    assert_eq!((added, already, total), (0, 0, 0));
+    // A journal path parked on a directory is unreadable, and that is not
+    // fatal: the fold degrades to zero rows from it.
+    let mut broken = journal.clone();
+    broken.pop();
+    std::fs::remove_dir_all(&broken).ok();
+    let as_dir = broken;
+    std::fs::create_dir_all(&as_dir).unwrap();
+    std::fs::write(as_dir.join("events.jsonl"), ask_row("q-x", "x?")).unwrap();
+    let (added, _already, _total) = reindex_fold(&index, &[as_dir.join("events.jsonl")]).unwrap();
+    assert_eq!(added, 0, "an unreadable journal contributes nothing");
+}
+
+#[test]
+fn an_unreadable_machine_index_refuses_the_fold() {
+    let root = sandbox("reindex-refuse");
+    let index = root.join("blocked");
+    std::fs::create_dir_all(&index).unwrap();
+    let journal = root.join("project").join("events.jsonl");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    std::fs::write(&journal, ask_row("q-r9", "y?")).unwrap();
+    let err = reindex_fold(&index, &[journal]).unwrap_err();
+    assert!(!err.is_empty(), "the index read failure names itself");
+}

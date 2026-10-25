@@ -21,8 +21,121 @@ use std::path::PathBuf;
 pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
     match word {
         "mine" => Some(run_mine(rest)),
+        "reindex" => Some(run_reindex(rest)),
         _ => None,
     }
+}
+
+/// The reindex arm: fold every ask/close identity from graph-named project
+/// journals into the machine index. A missing project journal degrades to
+/// zero rows; the one fatal read is the machine index itself.
+fn run_reindex(args: &[String]) -> i32 {
+    for a in args {
+        match a.as_str() {
+            "-h" | "--help" => {
+                println!("usage: fno inbox outstanding reindex");
+                return 0;
+            }
+            other => {
+                eprintln!("outstanding: unknown argument {other:?}");
+                return 2;
+            }
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let src = crate::outstanding::sources(&cwd);
+    let index = src.questions.clone();
+    let journals: Vec<PathBuf> = crate::outstanding::capture_project_roots(&src)
+        .iter()
+        .map(|root| crate::paths::project_log(root, "events.jsonl"))
+        .collect();
+    match reindex_fold(&index, &journals) {
+        Ok((added, already, total)) => println!(
+            "{} event(s) added; {} already indexed; {} total",
+            added, already, total
+        ),
+        Err(e) => {
+            eprintln!("outstanding: failed to read: {e}");
+            return 1;
+        }
+    }
+    0
+}
+
+/// The fold behind the reindex arm: every ask/close identity from the named
+/// journals lands in the machine index exactly once. Missing or unreadable
+/// project journals degrade to zero rows; the machine index is the one store
+/// a failed read refuses, because reporting an unreadable index as an empty
+/// one would tell the operator the fold is current when it never ran.
+fn reindex_fold(
+    index: &std::path::Path,
+    journals: &[PathBuf],
+) -> Result<(usize, usize, usize), String> {
+    let query = crate::event_store::EventQuery::of_types(&[
+        "operator_question",
+        "operator_question_closed",
+    ]);
+    let existing = crate::event_store::journal_text_checked(index, &query)?;
+    let mut known: std::collections::HashSet<(String, String)> =
+        existing.lines().filter_map(question_identity).collect();
+    let preexisting = known.clone();
+    let mut added = 0usize;
+    let mut already: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    for journal in journals {
+        // The store beside the journal is the write boundary: a journal whose
+        // bytes never landed still owns a readable store, so the dedupe key
+        // stats the store when the live file is absent.
+        let live = crate::event_store::live_journal(journal);
+        let probe = if live.exists() {
+            live
+        } else {
+            crate::event_store::store_path(journal)
+        };
+        let Ok(meta) = std::fs::metadata(&probe) else {
+            continue;
+        };
+        let key = (meta.dev(), meta.ino());
+        if !seen.insert(key) {
+            continue;
+        }
+        let text = match crate::event_store::journal_text_checked(journal, &query) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        for line in text.lines() {
+            let Some(identity) = question_identity(line) else {
+                continue;
+            };
+            if known.contains(&identity) {
+                if preexisting.contains(&identity) {
+                    already.insert(identity);
+                }
+                continue;
+            }
+            if crate::event_store::append_envelope(index, line, None).is_err() {
+                continue;
+            }
+            known.insert(identity);
+            added += 1;
+        }
+    }
+    Ok((added, already.len(), known.len()))
+}
+
+/// The ask/close identity one journal row folds into the dedupe set: the
+/// event type plus the question id. Decision rows carry no identity here.
+fn question_identity(line: &str) -> Option<(String, String)> {
+    let rec: Value = serde_json::from_str(line).ok()?;
+    let kind = rec.get("type").and_then(Value::as_str)?;
+    if kind != "operator_question" && kind != "operator_question_closed" {
+        return None;
+    }
+    let qid = rec
+        .pointer("/data/question_id")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())?;
+    Some((kind.to_string(), qid.to_string()))
 }
 
 /// The mine arm: list the operator's ranked lane, or apply one collapsed
