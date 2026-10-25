@@ -1,7 +1,7 @@
 //! `lead-history`: the team-scope `lead_checkin` readback behind
 //! `fno agents org history`.
 //!
-//! The front door execs this for the verb. The caller's team scope comes
+//! The front door execs this for the command. The caller's team scope comes
 //! from the registry and, with no `--events-path`, the journals from
 //! [`default_journals`]. The paths reduce to unique live journals (the
 //! `.ephemeral` siblings never carry durable rows, and a `.1` generation is
@@ -523,7 +523,7 @@ pub(crate) fn default_journals(cwd: &Path) -> Vec<PathBuf> {
 /// With no `--scope`, the caller's team scope is resolved natively from the
 /// registry (the retired Python `resolve_scope`). With no `--events-path`,
 /// the read takes [`default_journals`] for the cwd: this is the
-/// `fno agents org history` verb.
+/// `fno agents org history` command.
 ///
 /// rc 0 read (any match count), 1 a store that cannot be opened or synced
 /// (the message names the store path), 2 usage failure.
@@ -959,15 +959,15 @@ fn scan_readings(
     Ok((r, scanned, duplicates, skipped, journals))
 }
 
-/// `lead-history --verdict [--user-verb] [SCOPE | --scope SCOPE] [--manifest PATH]
+/// `lead-history --verdict [--user-command] [SCOPE | --scope SCOPE] [--manifest PATH]
 /// [--cwd DIR] [--events-path PATH ...] [--json]`
 ///
 /// `--cwd` defaults to the process cwd and the journals to
 /// [`default_journals`]. rc 0 verdict read (any verdict), 1 refused or
 /// unreadable input (the message names the failed reading), 2 usage failure.
-/// `--user-verb` is `fno agents org verdict [scope]`: the scope may ride
+/// `--user-command` is `fno agents org verdict [scope]`: the scope may ride
 /// positionally, a failed reading refuses as `lead verdict unreadable: ...`
-/// at rc 2, and the harness note stays off stderr, as the Python verb
+/// at rc 2, and the harness note stays off stderr, as the Python command
 /// printed them. The read assembles
 /// its own inputs: team, manifest, config, graph scope, window,
 /// and delivery split come from `lead_verdict_inputs`; accepting
@@ -980,19 +980,19 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     let mut cwd: Option<PathBuf> = None;
     let mut events_paths: Vec<PathBuf> = Vec::new();
     let mut as_json = false;
-    let mut user_verb = false;
+    let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--verdict" => {
                 i += 1;
             }
-            "--user-verb" => {
-                user_verb = true;
+            "--user-command" => {
+                user_command = true;
                 i += 1;
             }
-            positional if user_verb && scope.is_none() && !positional.starts_with('-') => {
-                // An empty word is the verb's "default: this session's own".
+            positional if user_command && scope.is_none() && !positional.starts_with('-') => {
+                // An empty word is the command's "default: this session's own".
                 scope = Some(positional.to_string()).filter(|s| !s.is_empty());
                 i += 1;
             }
@@ -1019,7 +1019,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
             other => {
                 eprintln!("fno-agents lead-history --verdict: unknown flag {other}");
                 eprintln!(
-                    "fno-agents lead-history --verdict: [--user-verb] [SCOPE | --scope SCOPE] \
+                    "fno-agents lead-history --verdict: [--user-command] [SCOPE | --scope SCOPE] \
                      [--manifest PATH] [--cwd DIR] [--events-path PATH ...] [--json]"
                 );
                 return 2;
@@ -1027,7 +1027,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
         }
     }
     let unreadable = |code: i32, msg: &str| -> i32 {
-        if user_verb {
+        if user_command {
             eprintln!("lead verdict unreadable: fno-agents lead-history --verdict: {msg}");
             2
         } else {
@@ -1146,7 +1146,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     readings.inherited_closed_in_window = inputs.inherited_closed_in_window;
     let (v, bounds) = verdict(&readings);
     let summary = bound_summary(v, &bounds);
-    if let Some(note) = inputs.harness_disagreement.as_ref().filter(|_| !user_verb) {
+    if let Some(note) = inputs.harness_disagreement.as_ref().filter(|_| !user_command) {
         eprintln!("lead-history --verdict: harness disagreement: {note}");
     }
     let payload = json!({

@@ -1263,7 +1263,7 @@ pub fn run_org_vacancies(args: &[String]) -> i32 {
 
 /// `fno-agents lead-state`: print one LeadState as JSON, exit 0.
 pub fn run_lead_state(args: &[String]) -> i32 {
-    // The read verbs ride this action as arguments (law d-fe66560a).
+    // The read commands ride this action as arguments (law d-fe66560a).
     match args.first().map(String::as_str) {
         Some("--manifest-path") => return crate::lead_reads::run_manifest_path(&args[1..]),
         Some("--faq") => return crate::lead_reads::run_faq(&args[1..]),
@@ -1346,8 +1346,8 @@ pub fn run_lead_state(args: &[String]) -> i32 {
 /// law bars a second command for this: an argument of an existing action,
 /// never a new action).
 pub fn run_lead_shape_or_term(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--user-verb") {
-        crate::lead_reads::run_shape_verb(args)
+    if args.iter().any(|a| a == "--user-command") {
+        crate::lead_reads::run_shape_command(args)
     } else if args.iter().any(|a| a == "--term") {
         run_lead_term(args)
     } else {

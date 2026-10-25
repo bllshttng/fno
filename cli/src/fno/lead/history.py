@@ -1,7 +1,7 @@
 """The native ``lead-history --verdict`` relay that ``escalate`` still reads.
 
 ``fno agents org history`` and ``verdict`` answer at the front door now; this
-relay stays only for the Python ``escalate`` verb. Contract:
+relay stays only for the Python ``escalate`` command. Contract:
 docs/architecture/lead.md.
 """
 from __future__ import annotations

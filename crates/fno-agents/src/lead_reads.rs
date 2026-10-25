@@ -1,12 +1,12 @@
-//! The user surfaces of the lead read verbs: `fno agents org chart
+//! The user surfaces of the lead read commands: `fno agents org chart
 //! manifest-path`, `fno agents org faq list|add`, the caller ladder behind
 //! `fno agents org chart shape`, and the `fno inbox board` text page.
 //!
 //! The front door (`crates/fno`) execs these through arguments of existing
 //! actions, because law d-fe66560a bars a new one: `lead-state
-//! --manifest-path`, `lead-state --faq`, `lead-shape --user-verb` and
-//! `board --user-verb`. The words each one prints are the retired Python
-//! verbs' words, frozen in `tests/golden/lead_reads/`.
+//! --manifest-path`, `lead-state --faq`, `lead-shape --user-command` and
+//! `board --user-command`. The words each one prints are the retired Python
+//! commands' words, frozen in `tests/golden/lead_reads/`.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -179,7 +179,7 @@ pub fn run_faq(args: &[String]) -> i32 {
     }
 }
 
-fn flag_pairs(args: &[String], known: &[&str], verb: &str) -> Result<Vec<(String, String)>, i32> {
+fn flag_pairs(args: &[String], known: &[&str], sub: &str) -> Result<Vec<(String, String)>, i32> {
     let mut pairs = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -189,7 +189,7 @@ fn flag_pairs(args: &[String], known: &[&str], verb: &str) -> Result<Vec<(String
             }
             _ => {
                 eprintln!(
-                    "fno-agents lead-state --faq {verb}: unknown flag {}",
+                    "fno-agents lead-state --faq {sub}: unknown flag {}",
                     args[i]
                 );
                 return Err(2);
@@ -348,14 +348,14 @@ fn own_role(scope: &str) -> Result<(String, String, PathBuf), String> {
     Ok((own, row_session, root))
 }
 
-/// `lead-shape --user-verb pass|team [--scope S]`: `fno agents org chart shape`.
-pub fn run_shape_verb(args: &[String]) -> i32 {
+/// `lead-shape --user-command pass|team [--scope S]`: `fno agents org chart shape`.
+pub fn run_shape_command(args: &[String]) -> i32 {
     let mut shape: Option<&str> = None;
     let mut scope = String::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--user-verb" => i += 1,
+            "--user-command" => i += 1,
             "--scope" if i + 1 < args.len() => {
                 scope = args[i + 1].clone();
                 i += 2;
@@ -365,7 +365,7 @@ pub fn run_shape_verb(args: &[String]) -> i32 {
                 i += 1;
             }
             other => {
-                eprintln!("fno-agents lead-shape --user-verb: unknown argument {other}");
+                eprintln!("fno-agents lead-shape --user-command: unknown argument {other}");
                 return 2;
             }
         }
@@ -400,7 +400,7 @@ pub fn run_shape_verb(args: &[String]) -> i32 {
 /// Per-queue render cap for the human board view.
 pub(crate) const DEFAULT_BOARD_ROWS: usize = 25;
 
-/// The board's default scope at the user verb: a lead reads its own board, so
+/// The board's default scope at the user command: a lead reads its own board, so
 /// the role it holds is the scope it means. Anything else reads fleet-wide.
 pub(crate) fn board_default_state() -> Option<PathBuf> {
     caller_manifest()

@@ -686,7 +686,7 @@ def board_cmd(
     """Ask whether a lead walk terminated recently (``--last-run``).
 
     The board read itself answers at the front door (``fno-agents board
-    --user-verb``). This leg keeps ``--last-run`` because its predicate,
+    --user-command``). This leg keeps ``--last-run`` because its predicate,
     ``last_run_is_fresh``, is the one the PR watcher's lead wake reads.
     """
     if not last_run:

@@ -318,7 +318,7 @@ enum Role {
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
     /// `fno agents org` history, verdict, faq, `chart shape`, `chart
-    /// manifest-path`, and `fno inbox board`: the lead read verbs, exec'd as
+    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
     /// arguments of existing fno-agents actions. Their Python legs are gone.
     LeadRead(fno::lead_reads_route::Claim),
     AccountsCli(Vec<OsString>),

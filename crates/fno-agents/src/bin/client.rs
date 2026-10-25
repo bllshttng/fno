@@ -1019,7 +1019,7 @@ async fn run(args: Vec<String>) -> i32 {
 
     // `board`: the lead board collector, read-only, daemon-free. Not a
     // routable `fno agents` command (same `matches!` treatment as graph-get): the
-    // front door execs `board --user-verb` for `fno inbox board` / `fno lead
+    // front door execs `board --user-command` for `fno inbox board` / `fno lead
     // board`, which renders the text page here, and the stop hook reads the
     // collector in-process. Matched with `==` beside graph-get so the routable-command
     // parity guard does not see it - no advertised fno command is added.

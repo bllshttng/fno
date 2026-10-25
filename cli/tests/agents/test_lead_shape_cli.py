@@ -1,8 +1,8 @@
 """The caller ladder `fno agents org chart term` still runs in Python.
 
-`shape` answers natively now (`fno-agents lead-shape --user-verb`, pinned by
+`shape` answers natively now (`fno-agents lead-shape --user-command`, pinned by
 the lead_reads goldens). `_own_role_argv` stays for `term` until the lifecycle
-verbs port.
+commands port.
 """
 from __future__ import annotations
 

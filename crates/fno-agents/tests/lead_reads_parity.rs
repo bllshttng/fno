@@ -1,9 +1,9 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.lead.cli (faq list, manifest-path, history, verdict, shape)
 //!
-//! Characterization for the lead read verbs on their native argvs. The
+//! Characterization for the lead read commands on their native argvs. The
 //! goldens under tests/golden/lead_reads/ were captured on 2026-10-24 from
-//! the deployed Python verbs over the fixtures in tests/fixtures/lead_reads/,
+//! the deployed Python commands over the fixtures in tests/fixtures/lead_reads/,
 //! before the Python legs were deleted. Capture mode refuses: a golden can
 //! only be captured while the old leg runs.
 //!
@@ -283,7 +283,7 @@ fn verdict_matches_the_python_goldens() {
             fs::create_dir_all(space.join("leads")).unwrap();
             fs::copy(fixture("manifest-epic-y.md"), space.join("leads/epic-y.md")).unwrap();
         }
-        let mut argv = vec!["lead-history", "--verdict", "--user-verb"];
+        let mut argv = vec!["lead-history", "--verdict", "--user-command"];
         argv.extend_from_slice(flags);
         case(label, p, &repo, &argv, p);
     }
@@ -297,14 +297,14 @@ fn shape_refusals_match_the_python_goldens() {
         "shape refuses an unknown shape",
         p,
         p,
-        &["lead-shape", "--user-verb", "wide"],
+        &["lead-shape", "--user-command", "wide"],
         p,
     );
     case(
         "shape refuses an attended shell",
         p,
         p,
-        &["lead-shape", "--user-verb", "team"],
+        &["lead-shape", "--user-command", "team"],
         p,
     );
 }
