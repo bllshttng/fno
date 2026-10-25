@@ -119,7 +119,6 @@ phase kill-check
 plan
 pr-watch
 project init
-research
 resume
 roles
 route
@@ -132,7 +131,6 @@ status-fanout tick
 stub-manifest
 target
 test
-think
 uninstall
 update
 version

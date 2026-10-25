@@ -21,12 +21,11 @@ heading against the section text - a deterministic floor, not a judge.
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-
-from fno.research.core import read_sources
 
 _CLAIM_RE = re.compile(r"^\s*[-*]\s+(.+)$")
 _CITE_RE = re.compile(r"\[S(\d+)\]")
@@ -38,6 +37,36 @@ _NORM_RE = re.compile(r"[^a-z0-9]+")
 
 class GradeError(RuntimeError):
     """Unrecoverable scorer setup error (missing brief / golden / sidecar)."""
+
+
+@dataclass
+class _SourceRow:
+    url: str
+    verified: bool
+    reason: str
+
+
+def _sidecar_rows(path: Path) -> list[_SourceRow]:
+    """The sources.jsonl rows the grade reads; a malformed or url-less row is skipped."""
+    rows: list[_SourceRow] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict) or not isinstance(d.get("url"), str):
+            continue
+        rows.append(
+            _SourceRow(
+                url=d["url"],
+                verified=bool(d.get("verified", False)),
+                reason=str(d.get("reason", "")),
+            )
+        )
+    return rows
 
 
 @dataclass
@@ -154,7 +183,7 @@ def grade(
         raise GradeError(f"sources sidecar not found: {sidecar}")
 
     try:
-        rows = read_sources(sidecar)
+        rows = _sidecar_rows(sidecar)
     except OSError as e:  # unreadable sidecar (permissions, etc.) - setup error, exit 2
         raise GradeError(f"failed to read sources sidecar {sidecar}: {e}") from e
     sidecar_urls = {r.url for r in rows}
