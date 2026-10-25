@@ -706,6 +706,26 @@ def test_resolve_attester_identity_refuses_mixed_family_env():
     assert resolve_attester_identity(env) == ("", "env_only")
 
 
+@pytest.mark.parametrize("denied", ["argv", "parent"])
+def test_attester_identity_survives_process_inspection_denied(monkeypatch, denied):
+    from types import SimpleNamespace
+    import psutil
+    from fno import harness_identity as identity
+
+    def unavailable():
+        raise PermissionError("process inspection denied")
+
+    def cmdline():
+        return unavailable() if denied == "argv" else ["sh"]
+
+    process = SimpleNamespace(pid=1234, cmdline=cmdline, parent=unavailable)
+    monkeypatch.setattr(psutil, "Process", lambda _: process)
+    monkeypatch.setattr(identity, "_read_ancestor_marker", lambda *_: None)
+    assert identity.resolve_attester_identity({"CODEX_THREAD_ID": "own-session"}) == (
+        "own-session", "env_only"
+    )
+
+
 def _proc_environ_strictly_readable() -> bool:
     """Whether this OS GUARANTEES reading an ancestor's environment: linux
     /proc does. darwin's `ps eww` is PARTIAL - it exposed the harness chain's
