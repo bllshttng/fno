@@ -301,12 +301,51 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
 /// The shared hold's (until, kind) on the real store; (0, "") when absent
 /// or unreadable. `admit` reads the deadline, `snapshot` also prefers the
 /// peer's kind whenever a peer hold stands past the local one.
+///
+/// Every gh call asks, so the answer is cached on disk for
+/// [`SHARED_HOLD_TTL_MS`] across processes, and a failed read is cached too.
+/// Without the cache each gh call paid one remote round trip, and a primary
+/// that stalled for its 15s reply wait made every gh call on the machine wait
+/// that long. A hold lasts at least [`BASE_BACKOFF_MS`], so a short-stale
+/// answer still sees it.
 fn shared_hold(now: i64) -> (i64, String) {
-    crate::claim_store::budget_hold_read(None, now)
+    shared_hold_cached(&shared_hold_cache_path(), now, || {
+        crate::claim_store::budget_hold_read(None, now)
+            .ok()
+            .flatten()
+            .map(|(until, _, _, kind)| (until, kind))
+    })
+}
+
+const SHARED_HOLD_TTL_MS: i64 = 15_000;
+
+fn shared_hold_cache_path() -> PathBuf {
+    PathBuf::from(format!("{}.fleet-hold", ledger_path().display()))
+}
+
+fn shared_hold_cached(
+    cache: &Path,
+    now: i64,
+    read: impl FnOnce() -> Option<(i64, String)>,
+) -> (i64, String) {
+    let cached = std::fs::read_to_string(cache)
         .ok()
-        .flatten()
-        .map(|(until, _, _, kind)| (until, kind))
-        .unwrap_or((0, String::new()))
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(row) = cached {
+        let read_at = row.get("read_at").and_then(Value::as_i64).unwrap_or(0);
+        if (0..SHARED_HOLD_TTL_MS).contains(&(now - read_at)) {
+            let until = row.get("until").and_then(Value::as_i64).unwrap_or(0);
+            let kind = row.get("kind").and_then(Value::as_str).unwrap_or("");
+            return (until, kind.to_string());
+        }
+    }
+    let (until, kind) = read().unwrap_or((0, String::new()));
+    let tmp = PathBuf::from(format!("{}.{}", cache.display(), std::process::id()));
+    let body = json!({"read_at": now, "until": until, "kind": kind}).to_string();
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(&tmp, cache);
+    }
+    (until, kind)
 }
 
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
@@ -516,6 +555,15 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
 /// lock actually holds instead of a straggler copy.
 fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
+    // The shared hold rides only the REAL ledger: tests stage temp paths,
+    // and a test's world must not read (or inherit) the dev machine's fleet
+    // hold. It is read before the ledger lock: a remote read under the lock
+    // makes every gh caller on the machine wait on the primary.
+    let shared_until = if ledger_override.is_none() && points != 0 {
+        shared_hold(now).0
+    } else {
+        0
+    };
     let (_lock, path) = ledger_lock(ledger_override);
     let (mut ledger, state) = read_ledger(&path);
 
@@ -566,14 +614,6 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
         }
     }
 
-    // The shared hold rides only the REAL ledger: tests stage temp paths,
-    // and a test's world must not read (or inherit) the dev machine's fleet
-    // hold.
-    let shared_until = if ledger_override.is_none() {
-        shared_hold(now).0
-    } else {
-        0
-    };
     let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
 
     if now < backoff_until_ms {
@@ -1255,6 +1295,38 @@ mod tests {
         } else {
             verdict.refusal
         }
+    }
+
+    #[test]
+    fn shared_hold_read_is_cached_and_a_failed_read_is_cached_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("budget.json.fleet-hold");
+        let reads = std::cell::Cell::new(0);
+        let failing = || {
+            reads.set(reads.get() + 1);
+            None
+        };
+        assert_eq!(
+            shared_hold_cached(&cache, 1_000, failing),
+            (0, String::new())
+        );
+        // Inside the TTL the failed read answers from the cache: no second
+        // round trip to a primary that just stalled.
+        assert_eq!(
+            shared_hold_cached(&cache, 9_000, failing),
+            (0, String::new())
+        );
+        assert_eq!(reads.get(), 1);
+        let held = || Some((90_000, "secondary".to_string()));
+        let later = 1_000 + SHARED_HOLD_TTL_MS;
+        assert_eq!(
+            shared_hold_cached(&cache, later, held),
+            (90_000, "secondary".into())
+        );
+        assert_eq!(
+            shared_hold_cached(&cache, later + 1, || panic!("cached")),
+            (90_000, "secondary".into())
+        );
     }
 
     /// The injected refusal seam with the fleet row staged by the test.
