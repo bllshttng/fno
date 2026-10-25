@@ -1,0 +1,2 @@
+1
+{"ok": false, "reason": "malformed_receipt", "error": "/privateFIXTURE/malformed/repo/.fno/artifacts/handoff/receipt-x-1-do-g1-02a5dd7474c2.json: not valid JSON: Expecting value: line 1 column 26 (char 25)", "path": "/privateFIXTURE/malformed/repo/.fno/artifacts/handoff/receipt-x-1-do-g1-02a5dd7474c2.json"}

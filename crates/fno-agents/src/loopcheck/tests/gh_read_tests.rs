@@ -382,6 +382,19 @@ fn graphql_field_sets_extend_the_metadata_set() {
         info_extra,
         ",url,body,mergedAt,mergeCommit,autoMergeRequest"
     );
+    // The other leg: the adapter routes a read to REST only when every field
+    // sits in its metadata set, and to the broker when one does not.
+    use crate::pr_status::adapter::METADATA_FIELDS;
+    for field in PR_VIEW_FIELDS.split(',') {
+        assert!(
+            METADATA_FIELDS.contains(&field),
+            "{field} is in PR_VIEW_FIELDS but not the adapter's REST set"
+        );
+    }
+    assert!(
+        !METADATA_FIELDS.contains(&"url"),
+        "url must route to the broker"
+    );
 }
 
 /// The retry the earned fallback makes: same argv, broker-routing field

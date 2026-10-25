@@ -437,14 +437,28 @@ pub fn is_unreachable(error: &str) -> bool {
     error.starts_with("remote store ") && error.contains(UNREACHABLE)
 }
 
+/// A read error in words. A read that hit [`REPLY_WAIT`] says so: macOS
+/// reports it as os error 35, "Resource temporarily unavailable", which
+/// reads like a refused connection when the primary took the request and
+/// went quiet.
+fn io_error(error: std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!(
+            "no reply within {}s (the primary took the request and went quiet)",
+            REPLY_WAIT.as_secs()
+        ),
+        _ => error.to_string(),
+    }
+}
+
 fn read_response(mut reader: impl BufRead) -> Result<String, String> {
     let mut status = String::new();
-    reader.read_line(&mut status).map_err(|e| e.to_string())?;
+    reader.read_line(&mut status).map_err(io_error)?;
     let code = status.split_whitespace().nth(1).unwrap_or("");
     let (mut length, mut chunked) = (None, false);
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+        if reader.read_line(&mut line).map_err(io_error)? == 0 {
             break;
         }
         let line = line.trim_end();
@@ -463,11 +477,11 @@ fn read_response(mut reader: impl BufRead) -> Result<String, String> {
     if chunked {
         loop {
             let mut size = String::new();
-            reader.read_line(&mut size).map_err(|e| e.to_string())?;
+            reader.read_line(&mut size).map_err(io_error)?;
             let size = usize::from_str_radix(size.trim().split(';').next().unwrap_or(""), 16)
                 .map_err(|_| "bad chunk size in reply".to_string())?;
             let mut chunk = vec![0; size + 2];
-            reader.read_exact(&mut chunk).map_err(|e| e.to_string())?;
+            reader.read_exact(&mut chunk).map_err(io_error)?;
             if size == 0 {
                 break;
             }
@@ -475,9 +489,9 @@ fn read_response(mut reader: impl BufRead) -> Result<String, String> {
         }
     } else if let Some(length) = length {
         body.resize(length, 0);
-        reader.read_exact(&mut body).map_err(|e| e.to_string())?;
+        reader.read_exact(&mut body).map_err(io_error)?;
     } else {
-        reader.read_to_end(&mut body).map_err(|e| e.to_string())?;
+        reader.read_to_end(&mut body).map_err(io_error)?;
     }
     let body = String::from_utf8_lossy(&body).into_owned();
     if code != "200" {

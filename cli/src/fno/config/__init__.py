@@ -60,7 +60,6 @@ from fno.config._attention import AttentionBlock
 from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
-from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
 from fno.config_io import _deep_merge as _deep_merge
 from fno.config_io import _global_settings_path as _global_settings_path
 from fno.config_io import _load_raw as _load_raw
@@ -4386,46 +4385,6 @@ def _migrate_yaml_to_toml(
     return toml_path
 
 
-def run_config_migration(
-    locations: Optional[list[Path]] = None,
-) -> list[tuple[Path, str]]:
-    """Convert every legacy settings.yaml (+ its settings.local.yaml) in the
-    candidate chain to a flat config.toml, returning ``(toml_path, action)`` per
-    file for the CLI to report. ``action`` is ``migrated`` | ``already-migrated``
-    | ``absent``. The explicit ``fno config setup migrate-config`` command over the same
-    one-shot conversion the loader runs, so a deployed install converts on demand
-    (comments are NOT carried across the round-trip). Idempotent + atomic.
-    """
-    out: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-    for yaml_path in locations if locations is not None else _settings_yaml_locations():
-        if yaml_path.name != "settings.yaml":
-            continue
-        real = (
-            Path(os.path.realpath(yaml_path)) if yaml_path.is_symlink() else yaml_path
-        )
-        for src, toml_name in (
-            (yaml_path, "config.toml"),
-            (real.with_name("settings.local.yaml"), "config.local.toml"),
-        ):
-            toml_path = real.with_name(toml_name)
-            if str(toml_path) in seen:
-                continue
-            seen.add(str(toml_path))
-            # settings.local.yaml is a real per-worktree file; skip a symlinked one.
-            if toml_name == "config.local.toml" and (
-                not src.is_file() or src.is_symlink()
-            ):
-                continue
-            if toml_path.exists():
-                out.append((toml_path, "already-migrated"))
-            elif _migrate_yaml_to_toml(src, toml_name) is not None:
-                out.append((toml_path, "migrated"))
-            else:
-                out.append((toml_path, "absent"))
-    return out
-
-
 def _ensure_migrated(locations: list[Path]) -> None:
     """Convert every legacy settings.yaml (+ its settings.local.yaml) in
     ``locations`` to a flat config.toml, once. The load-time hard-cut safety net:
@@ -4503,7 +4462,7 @@ def _settings_yaml_locations(root: Optional[Path] = None) -> list[Path]:
     if canonical_candidate not in candidates and not suppress_canonical:
         candidates.append(canonical_candidate)
     candidates.append(_global_settings_path())
-    return _apply_search_ceiling(candidates)
+    return candidates
 
 
 def _candidate_paths(root: Optional[Path] = None) -> list[Path]:

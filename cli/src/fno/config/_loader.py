@@ -104,7 +104,6 @@ def _settings_key() -> _SettingsKey:
     return (
         env("FNO_CONFIG"),
         env("FNO_GLOBAL_SETTINGS_PATH"),
-        env("FNO_CONFIG_SEARCH_ROOT"),
         env("FNO_NO_CANONICAL_CONFIG"),
         env("HOME"),
         str(repo_root),
@@ -113,7 +112,7 @@ def _settings_key() -> _SettingsKey:
 
 
 _SettingsKey = tuple[
-    Optional[str], Optional[str], Optional[str], Optional[str], Optional[str],
+    Optional[str], Optional[str], Optional[str], Optional[str],
     str, tuple[tuple[str, int, int], ...],
 ]
 

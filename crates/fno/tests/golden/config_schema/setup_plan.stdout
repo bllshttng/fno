@@ -1,0 +1,76 @@
+{
+  "fields": [
+    {
+      "path": "obsidian.enabled",
+      "type": "bool",
+      "default": false,
+      "tier": "always",
+      "question": "Use an Obsidian vault for plans and design docs?",
+      "default_source": "",
+      "doc": "Whether this project uses an Obsidian vault for plans/docs."
+    },
+    {
+      "path": "obsidian.vault",
+      "type": "str (optional)",
+      "default": null,
+      "tier": "always",
+      "question": "Obsidian vault area name?",
+      "default_source": "auto-detect",
+      "doc": "Vault area name (NOT a filesystem path)."
+    },
+    {
+      "path": "project.vision",
+      "type": "str (optional)",
+      "default": null,
+      "tier": "always",
+      "question": "One-line project vision (what is this and why)?",
+      "default_source": "readme",
+      "doc": "One-paragraph statement of what this codebase is and why."
+    },
+    {
+      "path": "user.name",
+      "type": "str",
+      "default": "",
+      "tier": "always",
+      "question": "What should fno call you?",
+      "default_source": "git-user-name",
+      "doc": "What fno calls you. Empty falls back to `git config user.name`."
+    },
+    {
+      "path": "backlog.id_prefix",
+      "type": "str (optional)",
+      "default": null,
+      "tier": "always",
+      "question": "Backlog node-ID prefix?",
+      "default_source": "repo-slug",
+      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-)."
+    },
+    {
+      "path": "review.posture",
+      "type": "str (optional)",
+      "default": null,
+      "tier": "always",
+      "question": "How much review must a code PR have before it can merge? (default: self_review)",
+      "default_source": "",
+      "doc": "How much review a code PR must have before it can merge, as one rung of a nine-step ladder (no_review | tests_pass | self_review | independent_review | github_review | peer_review | self_and_github | self_and_peer | self_github_and_peer). Default self_review: one real final-head review, author context allowed. Auto-merge (config grants, env grants, finalize, GitHub-native arming) refuses below self_review and names the remedy. Unset infers one visible posture from the legacy settings and prints the exact `fno config set review.posture <rung>` command that makes it permanent."
+    },
+    {
+      "path": "review.external_reviewers",
+      "type": "list[str]",
+      "default": [],
+      "tier": "always",
+      "question": "Which external reviewer(s) should review your PRs (gemini/codex/none)?",
+      "default_source": "",
+      "doc": "Which AI reviewers /pr requests a review from (the INVOCATION list)."
+    },
+    {
+      "path": "auto_merge.enabled",
+      "type": "bool",
+      "default": false,
+      "tier": "always",
+      "question": "Auto-merge PRs once checks pass and the review posture is satisfied?",
+      "default_source": "",
+      "doc": "Auto-merge a PR once CI is green AND the review posture is satisfied. There is no 'external review' step unless the review posture demands one: with review.posture below self_review (the floor) the merge refuses and names the rung to set. Read review.posture for what the rung requires before enabling this."
+    }
+  ]
+}

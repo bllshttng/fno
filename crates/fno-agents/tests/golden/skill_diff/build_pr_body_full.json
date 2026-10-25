@@ -1,0 +1,36 @@
+{
+ "expected": "## Skill-diff proposal: `fno:review`\n\nSynthesized from observer run `r9`. Every hunk below cites the observed failure it responds to; a reviewer judges the evidence the same way they would any PR description.\n\n- skill version observed by the sweep: `same`\n- skill version this diff is against: `same`\n\n> **bloat_review_needed**: this skill's last 1 proposals net +190 lines (threshold 120). Flagged, not blocked - the merge gate is the control point.\n\n### Justification (additive-only diff)\n\nthe checklists were stale\n\n> Replay v1 covers /blueprint only. This /review diff is validated by sweep-mode evidence and post-merge sweeps, not a pre-merge replay comparison.\n\n### Cited hunks\n\n**1. `skills/blueprint/SKILL.md`** \u2014 addresses: s1, s2\n  first\n\n**2. `skills/blueprint/references/x.md`** \u2014 addresses: s3\n\n---\n_Structurally motivated by replay/sweep evidence; outcome confirmation accrues from post-merge observer sweeps. A human merges - this loop is assisted, never unattended._",
+ "input": {
+  "bloat": {
+   "net_growth": 190,
+   "threshold": 120,
+   "window": 1
+  },
+  "hunks": [
+   {
+    "cited_finding_ids": [
+     "s1",
+     "s2"
+    ],
+    "file": "skills/blueprint/SKILL.md",
+    "new_text": "b",
+    "old_text": "a",
+    "rationale": "first"
+   },
+   {
+    "cited_finding_ids": [
+     "s3"
+    ],
+    "file": "skills/blueprint/references/x.md",
+    "new_text": "added",
+    "old_text": "",
+    "rationale": ""
+   }
+  ],
+  "justification": "the checklists were stale",
+  "run_id": "r9",
+  "skill_id": "fno:review",
+  "version_against": "same",
+  "version_observed": "same"
+ }
+}

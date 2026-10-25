@@ -23,7 +23,6 @@ import pytest
 
 from fno.agents.stale_escalate import dedupe_key
 from fno.lead.escalate import escalate
-from fno.outstanding.core import read_open_questions
 
 STALLED = ["undispatched:x-1234", "undispatched:x-5678"]
 
@@ -147,7 +146,8 @@ def test_an_empty_refused_set_never_reaches_the_transport(
         _run(tmp_path, [])
 
     assert captured == []
-    assert read_open_questions(tmp_path) == []
+    # The refusal precedes any write: the machine question index never appears.
+    assert not (tmp_path / "questions.jsonl").exists()
 
 
 # ---------------------------------------------------------------------------

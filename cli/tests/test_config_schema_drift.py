@@ -5,8 +5,9 @@ of truth, and these tests fail CI the moment a derived artifact drifts.
 
 Three guards plus the outage floors:
   1. registry completeness  - every model leaf has exactly one registry entry.
-  2. docs freshness         - docs/configuration-guide.md and
-                              docs/config.example.toml match the generator.
+  2. table freshness        - crates/fno/config_schema.json matches the model.
+                              The native `fno config schema` renders the docs
+                              from it, and a crates/fno test holds the docs.
   3. bash-default equality  - each `get_config "K" "D"` whose config.K is a
                               modeled leaf has D equal to the model default.
 """
@@ -77,29 +78,16 @@ def test_provider_outage_config_defaults_and_minima_are_fail_closed() -> None:
             RecoveryBlock.model_validate({field: value})
 
 
-def test_committed_docs_are_fresh() -> None:
-    """docs/configuration-guide.md must equal the generator's output.
+def test_committed_schema_table_is_fresh() -> None:
+    """crates/fno/config_schema.json must equal the table the model generates.
 
-    Regenerate with `fno config schema --markdown --write`.
+    Regenerate with `cd cli && uv run python -m fno.config.schema_gen --write`.
     """
-    docs = _repo_root() / "docs" / "configuration-guide.md"
-    committed = docs.read_text(encoding="utf-8")
-    assert committed == schema_gen.render_markdown(), (
-        "docs/configuration-guide.md is stale; run "
-        "`fno config schema --markdown --write`"
-    )
-
-
-def test_committed_example_toml_is_fresh() -> None:
-    """docs/config.example.toml must equal the generator's output.
-
-    Regenerate with `fno config schema --toml --write`.
-    """
-    example = _repo_root() / "docs" / "config.example.toml"
-    committed = example.read_text(encoding="utf-8")
-    assert committed == schema_gen.render_example_toml(), (
-        "docs/config.example.toml is stale; run "
-        "`fno config schema --toml --write`"
+    table = _repo_root() / "crates" / "fno" / "config_schema.json"
+    committed = table.read_text(encoding="utf-8")
+    assert committed == schema_gen.table(), (
+        "crates/fno/config_schema.json is stale; run "
+        "`cd cli && uv run python -m fno.config.schema_gen --write`"
     )
 
 

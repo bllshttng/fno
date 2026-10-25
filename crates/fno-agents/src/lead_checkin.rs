@@ -2435,7 +2435,7 @@ fn render_lines_with(
 // ---------------------------------------------------------------------------
 // faq prompt + emit
 
-fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
+pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
     let mut entries: Vec<(SystemTime, String)> = Vec::new();
     let Ok(it) = std::fs::read_dir(faqs_dir) else {
         return Vec::new();

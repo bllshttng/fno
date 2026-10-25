@@ -62,6 +62,7 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
         FNO_AGENTS_HOME=str(Path(real_home) / ".fno" / "agents"),
     )
     env.pop("FNO_CONFIG_SEARCH_ROOT", None)
+    env.pop("FNO_NO_CANONICAL_CONFIG", None)
     env.pop("FNO_CLAUDE_SESSIONS_DIR", None)
     env.pop("FNO_CODEX_SESSIONS_DIR", None)
     env.pop("FNO_PANE_BINDING_WINDOW_S", None)
@@ -106,6 +107,7 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
             "FNO_AGENTS_HOME", str(Path(real_home) / ".fno" / "agents")
         )
         monkeypatch.delenv("FNO_CONFIG_SEARCH_ROOT", raising=False)
+        monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
         monkeypatch.delenv("FNO_CODEX_SESSIONS_DIR", raising=False)
         dev_binary = repo / "crates" / "fno-agents" / "target" / "debug" / "fno-agents"
         assert dev_binary.is_file(), f"build the smoke binary first: {dev_binary}"
@@ -202,6 +204,7 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
             "FNO_AGENTS_HOME", str(Path(real_home) / ".fno" / "agents")
         )
         monkeypatch.delenv("FNO_CONFIG_SEARCH_ROOT", raising=False)
+        monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
         last_receipt = run_retask(
             worker,
             node=target,
