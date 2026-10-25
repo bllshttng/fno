@@ -1,5 +1,5 @@
-//! The lead read commands answered natively: `fno agents org` history, verdict,
-//! faq, `chart shape`, `chart manifest-path`, and `fno inbox board`.
+//! The lead commands answered natively: `fno agents org` history, verdict,
+//! faq, checkin, `chart shape`, `chart manifest-path`, and `fno inbox board`.
 //!
 //! The agents menu rewrites every `org` spelling to `agents lead <command>`
 //! first, so this route claims that argv, the deprecated root `fno lead
@@ -51,6 +51,13 @@ const ROUTES: &[Route] = &[
         help: "Usage: fno agents org chart manifest-path --harness-session-id ID \
                [--harness H] [--state-root DIR]\n\n\
                Print this live promoted session's existing scope manifest path.\n",
+    },
+    Route {
+        name: "checkin",
+        native: &["lead-checkin", "--user-command"],
+        help: "Usage: fno agents org checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
+               [--change TEXT] [--no-emit] [--json]\n\n\
+               Run the term check-in: gather, print, diff against the last beat, journal.\n",
     },
 ];
 
@@ -184,6 +191,10 @@ mod tests {
                 &["lead-state", "--manifest-path", "--harness-session-id", "x"],
             ),
             (
+                &["agents", "lead", "checkin", "--no-emit"],
+                &["lead-checkin", "--user-command", "--no-emit"],
+            ),
+            (
                 &["inbox", "board", "--json"],
                 &["board", "--user-command", "--json"],
             ),
@@ -217,9 +228,7 @@ mod tests {
         // --last-run shares its predicate with the PR watcher's lead wake.
         assert_eq!(classify(&os(&["inbox", "board", "--last-run"])), None);
         // The lifecycle commands are still Python's.
-        for name in [
-            "init", "checkin", "done", "cancel", "escalate", "drain", "term",
-        ] {
+        for name in ["init", "done", "cancel", "escalate", "drain", "term"] {
             assert_eq!(classify(&os(&["agents", "lead", name])), None, "{name}");
         }
         assert_eq!(classify(&os(&["agents", "lead", "board"])), None);

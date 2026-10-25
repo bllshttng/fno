@@ -1,0 +1,46 @@
+Gavin-fixture, Lead of fixture lead (epic-y)
+machine: unmeasured
+telemetry: 0 API rows in the last hour, 0 live Claude workers, 0 uncovered, 2 unknown (missing); check the receiver and restart an uninstrumented supervisor after its hosted sessions finish
+READER FAILED user_notes: no canon handoff doc for scope epic-y
+READER FAILED board: undriven_pr queue unreadable: undriven_pr: exit 75: GraphQL discretionary read refused: quota instrument unavailable. Use `fno do pr list` for a REST-backed PR listing; stop retrying GraphQL until reset. `fno do pr status` still contains optional review-thread and coverage reads that are GraphQL; those reads preserve the reserved coverage budget.
+READER FAILED blueprint: no session id; cannot count this lead's blueprint subagents
+READER FAILED escalations: unreadable (No such file or directory (os error 2))
+blocked_child: 0
+READER FAILED answered: questions folder <ROOT>/spaces/<ROOTSLUG>-repo/questions unreadable: No such file or directory (os error 2)
+READER FAILED held: the attention arm has not written items.json
+READER FAILED repeated_asks: no session id resolved from the ambient environment
+READER FAILED skill_drift: no session id resolved from the ambient environment
+evals: unmeasured (no bank rows in the eval history)
+epic-y: 0 owned active of 0 active, 4 nodes
+epics: epic-y 2/- (cap unset)
+lineup:
+| node | title | difficulty | PR | harness/model | status |
+|---|---|---|---|---|---|
+quiet: none in scope
+territory: 3 scopes
+  epic-y rung 2 mission epic-y live 0/4
+  epic-z rung 2 mission epic-z live 0/4
+  fno rung 1 mission - live 0/4 leadless
+READER FAILED capacity: gate payload did not parse: EOF while parsing a value at line 1 column 0: 
+READER FAILED workers: every status_age_s is null
+worker activity unmeasured: every status_age_s is null
+READER FAILED subagents: no session id resolved from the ambient environment
+READER FAILED layout: layout unavailable: no stderr
+team: - teams, double-ruled 0, stale-teamed 1, manifest-splits -, disagreements -
+  stale team epic-y on lead-exited (stored status exited); fno agents rm lead-exited (tool-call reading: no transcript for session sess-exited)
+READER FAILED posture: no session id resolved from the ambient environment
+READER FAILED refusal_rate: no session id resolved from the ambient environment
+READER FAILED pushback: no session id; cannot attribute pushback spans
+READER FAILED wake_meter: no session id resolved from the ambient environment
+READER FAILED correction_meter: no session id resolved from the ambient environment
+READER FAILED drain: drain payload did not parse: EOF while parsing a value at line 1 column 0: 
+READER FAILED main_ci: gh api branches/main returned no head sha
+control plane: <FOLDED>
+READER FAILED self_hold: current session identity is unavailable
+READER FAILED state_root_drift: inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor <ROOT>/plugin-stage/fno/docs/state-root-inventory.md is a file; run `fno doctor update` to restage the plugin
+parked: none
+coverage: 13 of 34 readings ok
+failed readers: user_notes (no canon handoff doc for scope epic-y), board (undriven_pr queue unreadable: undriven_pr: exit 75: GraphQL discretionary read refused: quota instrument unavailable. Use `fno do pr list` for a REST-backed PR listing; stop retrying GraphQL until reset. `fno do pr status` still contains optional review-thread and coverage reads that are GraphQL; those reads preserve the reserved coverage budget.), blueprint (no session id; cannot count this lead's blueprint subagents), escalations (unreadable (No such file or directory (os error 2))), state_root_drift (inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor <ROOT>/plugin-stage/fno/docs/state-root-inventory.md is a file; run `fno doctor update` to restage the plugin), capacity (gate payload did not parse: EOF while parsing a value at line 1 column 0: ), layout (layout unavailable: no stderr), workers (every status_age_s is null), answered (questions folder <ROOT>/spaces/<ROOTSLUG>-repo/questions unreadable: No such file or directory (os error 2)), posture (no session id resolved from the ambient environment), refusal_rate (no session id resolved from the ambient environment), pushback (no session id; cannot attribute pushback spans), subagents (no session id resolved from the ambient environment), wake_meter (no session id resolved from the ambient environment), correction_meter (no session id resolved from the ambient environment), drain (drain payload did not parse: EOF while parsing a value at line 1 column 0: ), held (the attention arm has not written items.json), repeated_asks (no session id resolved from the ambient environment), skill_drift (no session id resolved from the ambient environment), main_ci (gh api branches/main returned no head sha), self_hold (current session identity is unavailable)
+vs last beat (2026-10-24T10:00:00Z): owned_active 5 -> 0
+change: attention: <FOLDED>
+fno agents org faq add --question "..." --answer "..." --specimen "<node or PR>, <date>" --exit "<the change that retires this>"

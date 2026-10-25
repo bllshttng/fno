@@ -602,57 +602,6 @@ def term_cmd(ctx: typer.Context) -> None:
     typer.echo(f"scope:  {own}")
 
 
-def checkin_cmd(ctx: typer.Context) -> None:
-    """Run the term check-in body: gather, print, diff, journal.
-
-    Flags pass through to the native ``lead-checkin`` beat: [--scope
-    <scope>] [--no-emit] [--json]. The beat resolves the caller's role
-    scope, level and board state natively; this shell supplies the paths
-    Python owns. The beat never decides.
-    """
-    import subprocess
-
-    from fno._subprocess_util import propagate_returncode
-    from fno.paths import (
-        event_journals,
-        graph_json,
-        handoffs_dir,
-        lead_faqs_dir,
-        project_events_json,
-    )
-    from fno.rust_binary import resolve_binary
-
-    passed = list(ctx.args)
-    binary = resolve_binary()
-    if binary is None:
-        _refuse(
-            "lead: the fno-agents binary was not found, and the check-in beat "
-            "runs there. Reinstall fno, run `fno doctor update --rust`, or set "
-            "FNO_AGENTS_BIN."
-        )
-    argv = [
-        str(binary),
-        "lead-checkin",
-        *passed,
-        "--graph",
-        str(graph_json()),
-        "--handoffs-dir",
-        str(handoffs_dir()),
-        "--faqs-dir",
-        str(lead_faqs_dir()),
-        "--emit-path",
-        str(project_events_json()),
-    ]
-    for path in event_journals():
-        argv += ["--events-path", str(path)]
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
-    if proc.stdout:
-        typer.echo(proc.stdout.rstrip("\n"))
-    if proc.stderr:
-        typer.echo(proc.stderr.rstrip("\n"), err=True)
-    raise typer.Exit(code=propagate_returncode(proc.returncode))
-
-
 def ledger_cmd(
     out: Optional[Path] = typer.Option(
         None, "--out", help="Write the page here instead of the layout table's lead page."
@@ -846,10 +795,6 @@ agents_lead_app.command(
     "term",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(term_cmd)
-agents_lead_app.command(
-    "checkin",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)(checkin_cmd)
 agents_lead_app.command("ledger")(ledger_cmd)
 
 

@@ -2645,12 +2645,16 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let mut theme: Option<String> = None;
     let mut keep_name_from: Option<String> = None;
     let mut queue_arg: Option<String> = None;
+    let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
         let flag = |name: &str| args[i] == name && i + 1 < args.len();
         if flag("--scope") {
             ctx.scope = args[i + 1].clone();
             i += 2;
+        } else if args[i] == "--user-command" {
+            user_command = true;
+            i += 1;
         } else if flag("--change") {
             model_change = Some(args[i + 1].clone());
             i += 2;
@@ -2704,9 +2708,30 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                  [--faqs-dir PATH] [--board-state PATH] [--emit-path PATH] \
                  [--change TEXT] [--name NAME] [--theme THEME] \
                  [--keep-name-from OLD-SCOPE] [--queue IDS] \
-                 [--no-emit] [--json]"
+                 [--no-emit] [--json] [--user-command]"
             );
             return 2;
+        }
+    }
+    if user_command {
+        // `fno agents org checkin`: the paths the retired Python shell passed,
+        // resolved here for any the caller left out.
+        if ctx.events_paths.is_empty() {
+            ctx.events_paths = crate::lead_history::default_journals(&ctx.cwd);
+        }
+        if ctx.graph.as_os_str().is_empty() {
+            ctx.graph = crate::backlog::settings::graph_path();
+        }
+        if ctx.handoffs_dir.as_os_str().is_empty() {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            ctx.handoffs_dir =
+                crate::finalize::resolve_handoffs_dir(None, None, &ctx.cwd, home.as_deref());
+        }
+        if ctx.faqs_dir.is_none() {
+            ctx.faqs_dir = crate::backlog::autobrief::briefs_dir().map(|d| d.join("lead-faqs"));
+        }
+        if ctx.emit_path.is_none() {
+            ctx.emit_path = Some(crate::claims::claim_events_path(None, &ctx.cwd));
         }
     }
     if ctx.events_paths.is_empty()
