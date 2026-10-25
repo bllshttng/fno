@@ -6610,6 +6610,7 @@ def dispatch_send(
         name=name, message=message, from_name=from_name, name_is_address=True
     )
 
+    from fno import paths
     from fno.time_budget import validate_timeout_budget
 
     validate_timeout_budget(
@@ -6919,7 +6920,7 @@ def dispatch_send(
                 if not family1_attemptable:
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
-                    from fno import paths, rust_binary
+                    from fno import rust_binary
                     from fno.mail.envelope import wrap_fno_mail
 
                     record: dict[str, Any] = dict(

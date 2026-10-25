@@ -292,7 +292,7 @@ pub(crate) fn read_bus_segments_reported(live: &Path) -> (Vec<PositionedBusRow>,
         let text = match std::fs::read_to_string(p) {
             Ok(text) => text,
             Err(e) => {
-                warnings.push(format!("bus log: cannot read segment {p}: {e}"));
+                warnings.push(format!("bus log: cannot read segment {}: {e}", p.display()));
                 continue;
             }
         };
