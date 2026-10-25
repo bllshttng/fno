@@ -23,7 +23,7 @@ def _commands(app) -> set[str]:
 def test_agents_registers_the_six_folded_roots() -> None:
     # One launch command, and it is spawn. `restart` answers at the Rust front
     # door, so it is no folded root. mcp left the fold: the family is native
-    # and the front's agents-mcp route answers the verb.
+    # and the front's agents-mcp route answers the send command.
     from fno.agents.cli import agents_app
 
     assert {

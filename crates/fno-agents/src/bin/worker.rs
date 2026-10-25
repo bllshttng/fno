@@ -24,8 +24,8 @@
 //!   mux never links the runtime (product boundary). Callers build this
 //!   argv; humans never type it.
 //! - `--mcp-exec`: the MCP channel family's process door (mcp/mod.rs).
-//!   `send` routes one stdin envelope to a registered channel (exit 0/1/2
-//!   as the deleted Python verb spelled), `status` prints the sidecar
+//!   `send` routes one stdin envelope to a registered channel (the exit
+//!   codes the deleted Python leg answered), `status` prints the sidecar
 //!   status JSON, `serve` runs the per-session stdio channel server CC
 //!   spawns, `sidecar` runs the per-user sidecar daemon the client
 //!   lazy-starts. The front's `fno agents mcp send` route and the client's
