@@ -1250,7 +1250,7 @@ def _model_reachable_by(model: str, provider: str) -> bool:
     the guard only ever DROPS a confirmed cross-harness pick, never a valid one.
     """
     try:
-        from fno.rust_binary import CommandUnavailable, command_call
+        from fno.rust_binary import command_call
 
         gather = command_call("route-slot", {"mode": "inventory"})
         row = next(

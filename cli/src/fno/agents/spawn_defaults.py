@@ -715,7 +715,7 @@ def resolve_lane_vendor(
         harness = _flag_value(toks, "--harness", "-H")
     if not (harness and str(harness).strip()):
         try:
-            from fno.rust_binary import CommandUnavailable, command_call
+            from fno.rust_binary import command_call
 
             answer = command_call("dispatch-harness", {"explicit": None, "env": dict(env)})
             env_harness = answer.get("harness")
@@ -892,7 +892,7 @@ def routing_enforcement_state(settings: object = None) -> str:
     degrades open, and a strict seam refuses upstream."""
     del settings
     try:
-        from fno.rust_binary import CommandUnavailable, command_call
+        from fno.rust_binary import command_call
 
         answer = command_call("route-slot", {"mode": "policy"})
         return "enforced" if answer.get("enforce_inventory") else "unenforced"
