@@ -756,10 +756,6 @@ def cmd_spawn(
         message = read_text_arg(message or None, prompt_file, what="the prompt") or ""
 
     from fno.agents.dispatch import DispatchAskError, SpawnResult, dispatch_spawn
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        resolve_dispatch_harness,
-    )
 
     workdir = _resolve_dispatch_workdir(cwd, fresh, here)
     # `-c` is `--cwd` on spawn: codex's own `-c key=value` config spelling
@@ -786,11 +782,20 @@ def cmd_spawn(
     # --model, --effort and --permission-mode are the harness's own flags: the
     # pre-pass moves them behind the fence, so this leg never reads them.
     model = effort = permission_mode = None
+    from fno.rust_binary import CommandUnavailable, command_call
+
     try:
-        harness, harness_source = resolve_dispatch_harness(harness)
-    except DispatchFlagError as exc:
-        print(str(exc), file=sys.stderr)
+        answer = command_call(
+            "dispatch-harness", {"explicit": harness, "env": dict(os.environ)}
+        )
+    except CommandUnavailable as exc:
+        print(f"spawn: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
+    if "refusal" in answer:
+        print(answer["refusal"], file=sys.stderr)
+        raise typer.Exit(code=2)
+    harness = answer.get("harness")
+    harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.

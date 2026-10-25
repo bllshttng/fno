@@ -15,7 +15,6 @@ from fno.evals.bank import GradeCheck, TaskSpec
 from fno.evals.grading import grade
 import fno.evals.runner as _runner
 from fno.evals.runner import SpawnResult, run_task
-from fno.route_resolve import InventoryRow
 
 
 def _rows(path):
@@ -56,6 +55,15 @@ def _task(**kw) -> TaskSpec:
     base = dict(id="t", tier="regression", grade=[GradeCheck("exit", command="true")])
     base.update(kw)
     return TaskSpec(**base)  # type: ignore[arg-type]
+
+
+def _row(**kw):
+    """A lane row in the shape bank.resolve_lane answers: the inventory
+    field vocabulary as a SimpleNamespace (the fold lives native)."""
+    from types import SimpleNamespace
+    base = dict(name="", harness="", model="", route="", account="", effort="")
+    base.update(kw)
+    return SimpleNamespace(**base)
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +317,7 @@ def _never_called_spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResu
 # lane requested/observed evidence - AC1-HP, AC1-EDGE, AC1-ERR
 # --------------------------------------------------------------------------- #
 
-_LANE = InventoryRow(name="astra-high", harness="codex", model="gpt-6-astra", effort="high")
+_LANE = _row(name="astra-high", harness="codex", model="gpt-6-astra", effort="high")
 
 
 def test_lane_hp_records_requested_and_observed_configuration(tmp_path: Path) -> None:
@@ -455,11 +463,9 @@ def _patch_account_env(monkeypatch, registered_ids=()) -> None:
 def test_lane_account_rides_only_for_a_registered_account(monkeypatch) -> None:
     """A registered, resolvable lane account rides --account; an empty one
     rides nothing; both return no refusal and no drop note."""
-    from fno.route_resolve import InventoryRow
-
     _patch_account_env(monkeypatch, registered_ids=["acct-ok"])
-    registered = InventoryRow(name="a", harness="claude", model="m", route="v/m", account="acct-ok")
-    empty = InventoryRow(name="c", harness="claude", model="m", route="v/m", account="")
+    registered = _row(name="a", harness="claude", model="m", route="v/m", account="acct-ok")
+    empty = _row(name="c", harness="claude", model="m", route="v/m", account="")
 
     assert _runner._lane_account(registered) == ("acct-ok", "", "")
     assert _runner._lane_account(empty) == (None, "", "")
@@ -469,11 +475,9 @@ def test_lane_account_drops_only_an_unregistered_id_on_a_routed_lane(monkeypatch
     """The zai case: an alias the registry does not hold drops --account on a
     routed lane (the seat form) with a drop note for the row. The same alias
     on a route-less lane refuses the spawn instead."""
-    from fno.route_resolve import InventoryRow
-
     _patch_account_env(monkeypatch, registered_ids=[])
-    routed = InventoryRow(name="z", harness="claude", model="m", route="zai/glm", account="zai")
-    routeless = InventoryRow(name="n", harness="claude", model="m", route="", account="zai")
+    routed = _row(name="z", harness="claude", model="m", route="zai/glm", account="zai")
+    routeless = _row(name="n", harness="claude", model="m", route="", account="zai")
 
     flag, refusal, drop_note = _runner._lane_account(routed)
     assert flag is None and refusal == "" and "zai" in drop_note
@@ -485,10 +489,8 @@ def test_lane_account_drops_only_an_unregistered_id_on_a_routed_lane(monkeypatch
 def test_lane_account_fails_closed_on_every_other_refusal(monkeypatch) -> None:
     """A registered account whose login/config_dir is gone, and a crashing
     registry, refuse the spawn; neither may degrade to the seat form."""
-    from fno.route_resolve import InventoryRow
-
     _patch_account_env(monkeypatch, registered_ids=["acct-broken"])
-    broken = InventoryRow(name="b", harness="claude", model="m", route="v/m", account="acct-broken")
+    broken = _row(name="b", harness="claude", model="m", route="v/m", account="acct-broken")
     flag, refusal, _ = _runner._lane_account(broken)
     assert flag is None and "acct-broken" in refusal
 
@@ -505,10 +507,8 @@ def test_lane_account_fails_closed_on_every_other_refusal(monkeypatch) -> None:
 def test_default_spawn_refuses_closed_before_any_worker(monkeypatch, tmp_path) -> None:
     """The fail-closed refusal is a graded spawn failure, decided before the
     worker name is minted and before any subprocess runs."""
-    from fno.route_resolve import InventoryRow
-
     _patch_account_env(monkeypatch, registered_ids=[])
-    row = InventoryRow(name="n", harness="claude", model="m", route="", account="zai")
+    row = _row(name="n", harness="claude", model="m", route="", account="zai")
     got = _runner._default_spawn("p", tmp_path, 60, lane=row)
     assert not got.ok
     assert "not registered" in got.reason
@@ -532,9 +532,7 @@ def test_lane_row_shows_a_dropped_account(tmp_path) -> None:
                 "observed_model": "glm-5.3-flash", "substituted": False,
                 "lane_status": "ok", "usage": None, "usage_source": None}
 
-    from fno.route_resolve import InventoryRow
-
-    lane = InventoryRow(name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+    lane = _row(name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
                         route="zai/glm-5.3-flash[1m]", account="zai")
     task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
     run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
@@ -559,9 +557,7 @@ def test_lane_row_keeps_a_registered_account_clean(tmp_path) -> None:
         return {"requested_lane": "pinned", "observed_model": "m", "substituted": False,
                 "lane_status": "ok", "usage": None, "usage_source": None}
 
-    from fno.route_resolve import InventoryRow
-
-    lane = InventoryRow(name="pinned", harness="claude", model="m", route="v/m", account="acct-ok")
+    lane = _row(name="pinned", harness="claude", model="m", route="v/m", account="acct-ok")
     task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
     run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
              lane=lane, observe=observe)

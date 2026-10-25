@@ -171,9 +171,15 @@ def resolve_target_coordinate(
     )
     harness = _flag_value(resolved, "--harness", "-H")
     if not harness:
-        from fno.dispatch_flags import resolve_dispatch_harness
+        from fno.rust_binary import CommandUnavailable, command_call
 
-        harness = resolve_dispatch_harness(None, env=env)[0]
+        try:
+            answer = command_call(
+                "dispatch-harness", {"explicit": None, "env": dict(env)}
+            )
+            harness = answer.get("harness")
+        except CommandUnavailable:
+            harness = None
     route = _flag_value(resolved, "--route")
     provider = _flag_value(resolved, "--provider", "-P")
     route_model: Optional[str] = None

@@ -207,16 +207,34 @@ class LaneError(ValueError):
 
 
 def resolve_lane(name: str):
-    """Resolve a named lane through the existing route_resolve inventory -
-    the same fold ``agents.profiles.*.lanes`` joins against, never a second
-    model/effort enum. Raises :class:`LaneError` naming known lanes on a miss."""
-    from fno.route_resolve import resolve_inventory
+    """Resolve a named lane through the route-slot command's inventory
+    answer - the same fold ``agents.profiles.*.lanes`` joins against, never a
+    second model/effort enum. Raises :class:`LaneError` naming known lanes
+    on a miss."""
+    from types import SimpleNamespace
 
-    inventory = resolve_inventory()
-    row = inventory.rows.get(name)
+    from fno.rust_binary import CommandUnavailable, command_call
+
+    try:
+        gather = command_call("route-slot", {"mode": "inventory"})
+    except CommandUnavailable:
+        gather = {}
+    rows = [r for r in gather.get("rows") or [] if isinstance(r, dict)]
+    row = next(
+        (r for r in rows if str(r.get("name", "")) == name),
+        None,
+    )
     if row is None:
-        raise LaneError(f"unknown lane {name!r}; declared lanes: {sorted(inventory.rows)}")
-    return row
+        known = sorted(str(r.get("name", "")) for r in rows)
+        raise LaneError(f"unknown lane {name!r}; declared lanes: {known}")
+    return SimpleNamespace(
+        name=str(row.get("name", "") or ""),
+        harness=str(row.get("harness", "") or ""),
+        model=str(row.get("model", "") or ""),
+        route=str(row.get("route", "") or ""),
+        account=str(row.get("account", "") or ""),
+        effort=str(row.get("effort", "") or ""),
+    )
 
 
 COHORTS_FILENAME = "cohorts.yaml"

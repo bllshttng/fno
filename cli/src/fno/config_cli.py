@@ -38,19 +38,9 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     # Hidden: the menu cap is 12 and config already curates nine visible
     # commands; `fno help config --all` lists these.
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "route": (
-        "fno.route_cli:route_app",
-        "Provider route lanes: ls / set / unset / env (GLM build lane).",
-        {"hidden": True},
-    ),
-    # The routing-inventory surface under its plan-named spelling: same app as
-    # `route`, so `fno config routing init` and `fno config route init` both
-    # resolve. Hidden like its sibling.
-    "routing": (
-        "fno.route_cli:route_app",
-        "Declared model-routing inventory: init (sample) / inventory (reach).",
-        {"hidden": True},
-    ),
+    # `config route` / `config routing` (the provider route lanes and the
+    # declared-inventory reads) answer natively: the front classifies both
+    # spellings onto the config-route command, so no Python mount remains.
     # (d-344fe242): `project init` gives a checkout its own fno state
     # root, which is state-root configuration - config's territory. Same
     # lazy+hidden treatment as its siblings above.
@@ -836,18 +826,46 @@ def _report_band_routing() -> None:
     """Say when band routing is routing nothing, and why. Silent once any
     command's slot would take a lane; ``model_routing.roles`` is a DIFFERENT
     axis and reads as already on."""
-    from fno import route_resolve
+    from fno.rust_binary import CommandUnavailable, command_call
 
-    inventory = route_resolve.resolve_inventory()
-    read_commands = route_resolve.slot_commands()
+    def _slot_call(payload: dict, fallback: dict) -> dict:
+        try:
+            return command_call("route-slot", payload)
+        except CommandUnavailable:
+            return fallback
+
+    gather = _slot_call({"mode": "inventory"}, {})
+    declared_names = sorted(
+        str(row.get("name", "") or "")
+        for row in gather.get("rows") or []
+        if str(row.get("name", "") or "")
+    )
+    read_commands = [
+        str(v) for v in gather.get("verbs") or [] if str(v)
+    ] or ["think", "blueprint", "target", "review", "role"]
     # Silent once any command's slot would take a lane: routing is armed, and
     # the unconfigured commands are a per-command choice, not a dead router.
-    empty_commands = [
-        command for command in read_commands
-        if not str(route_resolve.slot_states(
-            command
-        ).get("would_take", "")).startswith(f"agents.profiles.{command}.lanes")
-    ]
+    empty_commands = []
+    for command in read_commands:
+        states = _slot_call(
+            {
+                "mode": "states",
+                "rung_base": f"agents.profiles.{command}",
+                "node": None,
+                "substrate": None,
+                "permission_mode": None,
+                "constrain_harness": None,
+                "explicit_lane": False,
+                "gate_bypassed": False,
+                "model_occupied": False,
+                "work_command": command,
+            },
+            {},
+        )
+        if not str(states.get("would_take", "")).startswith(
+            f"agents.profiles.{command}.lanes"
+        ):
+            empty_commands.append(command)
     if len(empty_commands) < len(read_commands):
         return
     settings = None
@@ -865,7 +883,7 @@ def _report_band_routing() -> None:
         "row(s), and no command slot has a lane that resolves: "
         f"{', '.join(empty_commands)}\n"
         f"      The built-in rows keep a tier request answerable: "
-        f"{', '.join(sorted(inventory.rows)) or 'none'}\n"
+        f"{', '.join(declared_names) or 'none'}\n"
         "      Declare [[routing.models]] rows plus [agents.profiles.<command>] "
         "lanes to activate "
         "(docs/architecture/role-based-model-routing.md)"

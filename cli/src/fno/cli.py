@@ -187,11 +187,9 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Worktree lifecycle and worker registration (now `fno agents workspace`).",
         {"hidden": True},
     ),
-    "route": (
-        "fno.route_cli:route_app",
-        "Provider route lanes: ls / set / unset / env (GLM build lane).",
-        {"hidden": True},
-    ),
+    # `fno route` (the hidden root spelling of the provider route lanes)
+    # answers natively: the front classifies it onto the config-route
+    # command, so no Python mount remains.
     "evals": (
         "fno.evals.cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
@@ -293,7 +291,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "pr-watch": set(),
     "resume": set(),
     "roles": set(),
-    "route": set(),
     "setup": set(),
     "skill-diff": set(),
     "state": set(),

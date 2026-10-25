@@ -30,11 +30,11 @@ Seven of the original nine prohibited imports were misplaced leaf utilities, and
 |---|---|---|
 | `fno.graph._constants.RESERVED_PREFIXES` read by `fno.config` | owned by `fno.config` | a three-element frozenset whose only reader was the importing validator |
 | `fno.agents.events.emit` called by `fno backlog undefer` / `unsupersede` | `fno.graph.failure.emit_undefer_boundary` | the log is graph-owned and `fno.graph.failure` already reads it; the agents emitter was serving as a bare append-a-JSON-line helper |
-| `fno.agents.provider_resolve` | `fno.dispatch_flags` | seven callers spanning every layer; the only remaining dependency is the harness-marker table, and see the caveat below |
+| `fno.agents.provider_resolve` | `fno.dispatch_flags` (since retired whole: the fold lives native behind the dispatch-harness door) | seven callers spanning every layer; the only remaining dependency was the harness-marker table, and see the caveat below |
 | `fno.agents.drive_authority` | `fno.drive_authority` | a read-only `state.json` reader whose only dependency is `fno.paths` |
 | `fno.agents.rust_runtime.resolve_binary` | `fno.rust_binary` | a stdlib-only filesystem lookup; `rust_runtime` keeps the dispatch half and depends downward on it |
 
-Applying this document's own test to the third row: `fno.dispatch_flags` was the one move that did not remove the dependency, only the direct spelling of it.
+Applying this document's own test to the third row: `fno.dispatch_flags` was the one move that did not remove the dependency, only the direct spelling of it, and the module has since retired whole - the marker fold now rides the native dispatch-harness door, whose identity twin lives beside `fno.harness_identity`.
 It imported `fno.harness_identity`, which built `LEGACY_HANDLE_RE` at import time from `fno.agents.harness_map.known_harnesses()`, so `import fno.dispatch_flags` pulled in `fno.agents`.
 That edge is now closed: the harness-name set lives at L0 (`fno.harness_names`), so `fno.harness_identity` builds the regex from L0 data with no runtime import, and both `fno.harness_identity` and `fno.harness_names` are declared in the boundary map so the now-absent edge is visible rather than hidden in an unmapped blind spot.
 The runtime capability table (`fno.agents.harness_map`) asserts its keys stay in sync with the name list, so adding a harness stays a single coupled change.

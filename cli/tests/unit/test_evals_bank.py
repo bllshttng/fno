@@ -91,14 +91,20 @@ def test_seed_bank_loads() -> None:
 
 
 def test_resolve_lane_reads_matching_routing_models_row(monkeypatch) -> None:
-    """resolve_lane rides resolve_inventory: the same fold the slot lanes
-    join against, never a second model/effort enum."""
-    from fno import route_resolve as rr
+    """resolve_lane rides the route-slot command's inventory answer: the same
+    fold the slot lanes join against, never a second model/effort enum."""
+    from fno import rust_binary
 
-    row = rr.InventoryRow(name="astra-high", harness="codex",
-                          model="gpt-6-astra", effort="high")
-    inv = rr.Inventory(rows={"astra-high": row}, declared=True)
-    monkeypatch.setattr(rr, "resolve_inventory", lambda: inv)
+    def fake_call(_command: str, payload: dict, *a, **k):
+        assert payload["mode"] == "inventory"
+        return {
+            "rows": [
+                {"name": "astra-high", "harness": "codex",
+                 "model": "gpt-6-astra", "effort": "high"},
+            ],
+        }
+
+    monkeypatch.setattr(rust_binary, "command_call", fake_call)
     coord = bank.resolve_lane("astra-high")
     assert coord.name == "astra-high"
     assert coord.harness == "codex"
@@ -107,10 +113,17 @@ def test_resolve_lane_reads_matching_routing_models_row(monkeypatch) -> None:
 
 
 def test_resolve_lane_unknown_name_raises_naming_known_lanes(monkeypatch) -> None:
-    from fno import route_resolve as rr
+    from fno import rust_binary
 
-    rows = {n: rr.InventoryRow(name=n, harness="", model="")
-            for n in ("astra-high", "sol-low")}
-    monkeypatch.setattr(rr, "resolve_inventory", lambda: rr.Inventory(rows=rows, declared=True))
+    monkeypatch.setattr(
+        rust_binary,
+        "command_call",
+        lambda _c, _p, *a, **k: {
+            "rows": [
+                {"name": "astra-high", "harness": "", "model": ""},
+                {"name": "sol-low", "harness": "", "model": ""},
+            ],
+        },
+    )
     with pytest.raises(bank.LaneError, match=r"astra-high.*sol-low|sol-low.*astra-high"):
         bank.resolve_lane("no-such-lane")

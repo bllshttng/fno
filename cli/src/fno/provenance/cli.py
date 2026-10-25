@@ -94,11 +94,6 @@ def dispatch(
     offered, 1 skipped (e.g. dedup / daily-cap), 2 bad input (no live session id
     or node not found).
     """
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        reject_empty_model,
-        resolve_dispatch_harness,
-    )
     from fno.graph.cli import _session_provenance
     from fno.graph.fuzzy import resolve_node
     from fno.provenance.spawn_think import dispatch_conversational
@@ -111,17 +106,28 @@ def dispatch(
     # This command's `--provider/-p` is spelled on the wrong axis and carries a
     # HARNESS: the value is compared against "claude" below and gates on what
     # the bg substrate can host. The flag spelling is a CLI contract and does
-    # not move here; `flag=` keeps the refusal naming what the operator typed.
-    try:
-        model = reject_empty_model(model)
-        resolved_harness = (
-            resolve_dispatch_harness(provider, flag="--provider")[0]
-            if provider is not None
-            else None
-        )
-    except DispatchFlagError as exc:
-        typer.echo(f"fno do think dispatch: {exc}", err=True)
+    # not move here; the door's `flag` keeps the refusal naming what the
+    # operator typed.
+    if model is not None and not model.strip():
+        typer.echo("fno do think dispatch: --model must not be empty", err=True)
         raise typer.Exit(code=2)
+    if provider is not None:
+        from fno.rust_binary import CommandUnavailable, command_call
+
+        try:
+            answer = command_call(
+                "dispatch-harness",
+                {"explicit": provider, "flag": "--provider"},
+            )
+        except CommandUnavailable as exc:
+            typer.echo(f"fno do think dispatch: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        if "refusal" in answer:
+            typer.echo(f"fno do think dispatch: {answer['refusal']}", err=True)
+            raise typer.Exit(code=2)
+        resolved_harness = answer.get("harness")
+    else:
+        resolved_harness = None
 
     # Resolve the LIVE session pointer ambiently across all three harnesses (the
     # same capture node-birth provenance uses), so the command works in a

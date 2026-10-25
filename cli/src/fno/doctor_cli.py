@@ -20,7 +20,6 @@ from fno.evals.cli import evals_app
 from fno.events.cli import cli as event_app
 from fno.lint_cli import lint
 from fno.observer.cli import observer_app
-from fno.route_cli import inventory_cmd
 from fno.scratch_cli import scratch_app
 from fno.skill_diff.cli import skill_diff_app
 from fno.status_fanout import status_fanout_app
@@ -146,10 +145,9 @@ def harness_matrix_command(
 ) -> None:
     _route_harness("harness-matrix", ["harness-matrix"] + ["--write"] * write)
 doctor_app.command("plugin-file", hidden=True)(plugin_file_command)
-# `doctor route` is the reachability read: what this installation's declared
-# routing inventory can actually reach (absorbs the old "no surface answers
-# this" gap). Hidden per the new-command convention; `fno help doctor --all`.
-doctor_app.command("route", hidden=True)(inventory_cmd)
+# `doctor route` (the declared-inventory reachability read) answers natively:
+# the front classifies the spelling onto the config-route command, so no
+# Python mount remains here.
 doctor_app.add_typer(observer_app, name="observer")
 # `doctor scratch` is the scratch-shape sweep; the Rust binary is
 # the only implementation and the leaf refuses without it.

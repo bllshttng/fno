@@ -100,6 +100,11 @@ NATIVE_SERVED_LEAVES = {
     "backlog session close",
     "backlog session open",
     "backlog session reap-open",
+    # The route spellings answer through the front classifier now; the
+    # Python registry dropped every mount in the route-family port.
+    "config route",
+    "config routing",
+    "doctor route",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",

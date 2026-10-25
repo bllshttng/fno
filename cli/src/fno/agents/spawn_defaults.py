@@ -715,9 +715,10 @@ def resolve_lane_vendor(
         harness = _flag_value(toks, "--harness", "-H")
     if not (harness and str(harness).strip()):
         try:
-            from fno.dispatch_flags import resolve_dispatch_harness
+            from fno.rust_binary import CommandUnavailable, command_call
 
-            env_harness = resolve_dispatch_harness(None, env=env)[0]
+            answer = command_call("dispatch-harness", {"explicit": None, "env": dict(env)})
+            env_harness = answer.get("harness")
         except Exception:
             env_harness = "claude"
     try:
@@ -891,9 +892,10 @@ def routing_enforcement_state(settings: object = None) -> str:
     degrades open, and a strict seam refuses upstream."""
     del settings
     try:
-        from fno.route_resolve import _routing_enforced
+        from fno.rust_binary import CommandUnavailable, command_call
 
-        return "enforced" if _routing_enforced() else "unenforced"
+        answer = command_call("route-slot", {"mode": "policy"})
+        return "enforced" if answer.get("enforce_inventory") else "unenforced"
     except Exception:  # noqa: BLE001 - unknown reads as legacy, never as strict
         return "unenforced"
 

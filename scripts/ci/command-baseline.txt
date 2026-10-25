@@ -122,7 +122,6 @@ project init
 research
 resume
 roles
-route
 scoreboard
 setup
 skill-diff

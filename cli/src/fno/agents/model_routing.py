@@ -1042,7 +1042,7 @@ def declared_lane(
     (provider, model), as a plain dict. The match rule lives in the
     route-slot command beside the inventory fold; an unmatched or unreadable
     lane reads None and the spawn still launches."""
-    from fno.route_slot_client import route_slot_call
+    from fno.rust_binary import command_call
 
     ask: dict = {"mode": "lane"}
     if name is not None:
@@ -1055,7 +1055,7 @@ def declared_lane(
         ask["provider"] = provider
         ask["model"] = model
     try:
-        answer = route_slot_call(ask)
+        answer = command_call("route-slot", ask)
     except Exception:  # noqa: BLE001 - a lane read never breaks a spawn
         return None
     return dict(answer) if answer.get("found") else None

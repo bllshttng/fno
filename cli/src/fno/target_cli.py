@@ -1166,7 +1166,7 @@ def _resolve_node_model(
 ) -> tuple[Optional[str], str]:
     """``(model, decision_source)`` for a node's ``model`` pin.
 
-    The single Python projection of ``route_resolve`` at the ``target start`` seam
+    The single model-resolution projection at the ``target start`` seam
     (the same precedence ``advance.py`` uses), so pin resolution lives in exactly
     ONE place. An explicit ``-m`` wins without loading the node. ``provider`` scopes
     resolution to the spawn harness so a pick never crosses harnesses;
@@ -1186,10 +1186,8 @@ def _resolve_node_model(
     ``model_tier`` gave it before the field retired).
     """
     try:
-        from fno import route_resolve
-
         node = None if explicit else _find_node(node_id)
-        model, source, _chain = route_resolve.resolve_dispatch_model(
+        model, source, _chain = _resolve_dispatch_model(
             explicit=explicit,
             task_model=(node or {}).get("model"),
             task_difficulty=(
@@ -1202,6 +1200,47 @@ def _resolve_node_model(
         return explicit, "explicit" if explicit else "provider-default"
 
 
+def _resolve_dispatch_model(
+    *,
+    explicit: Optional[str] = None,
+    task_model: Optional[str] = None,
+    task_difficulty: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> tuple[Optional[str], str, list[str]]:
+    """The dispatch-model precedence at this seam: pins bypass the command
+    without a round trip - superuser authority outranks routing - and the
+    rest answers through the route-slot command's dispatch_model mode.
+    Chain strings come back verbatim; a missing binary is a named refusal.
+    """
+    if explicit:
+        return explicit, "explicit", ["explicit"]
+    if task_model:
+        return task_model, "task-pin", ["task-pin"]
+    from fno.rust_binary import CommandUnavailable, command_call
+
+    try:
+        out = command_call(
+            "route-slot",
+            {
+                "mode": "dispatch_model",
+                "explicit": explicit,
+                "task_model": task_model,
+                "task_difficulty": task_difficulty,
+                "plan_model": None,
+                "plan_difficulty": None,
+                "provider": provider,
+            },
+        )
+        return out.get("model"), str(out.get("source") or ""), [
+            str(line) for line in (out.get("chain") or [])
+        ]
+    except CommandUnavailable:
+        return None, "provider-default(no-difficulty)", [
+            "provider-default(no-difficulty)",
+            "dispatch-model route-slot-unavailable",
+        ]
+
+
 def _model_reachable_by(model: str, provider: str) -> bool:
     """True if ``model`` maps to the ``provider`` harness (per the declared inventory).
 
@@ -1211,10 +1250,21 @@ def _model_reachable_by(model: str, provider: str) -> bool:
     the guard only ever DROPS a confirmed cross-harness pick, never a valid one.
     """
     try:
-        from fno.route_resolve import resolve_inventory
+        from fno.rust_binary import CommandUnavailable, command_call
 
-        row = resolve_inventory().rows.get(model)
-        return row is None or not row.harness or not row.model or row.harness == provider
+        gather = command_call("route-slot", {"mode": "inventory"})
+        row = next(
+            (
+                r
+                for r in gather.get("rows") or []
+                if isinstance(r, dict) and str(r.get("name", "")) == model
+            ),
+            None,
+        )
+        if row is None:
+            return True
+        harness = str(row.get("harness", "") or "")
+        return not harness or not str(row.get("model", "") or "") or harness == provider
     except Exception:  # noqa: BLE001 - never block a dispatch on a lookup error
         return True
 
@@ -1239,7 +1289,7 @@ def resolve_model(
 ) -> None:
     """Print the dispatch model a node resolves to (its ``model`` pin).
 
-    The one Python projection of ``route_resolve`` for bash dispatchers
+    The one model-resolution projection for bash dispatchers
     (``dispatch-node.sh``), so a pinned node's worker spawns on the pin
     without bash ever reimplementing resolution. Prints the resolved model on
     stdout, or nothing when the node has no pin (the caller uses the harness

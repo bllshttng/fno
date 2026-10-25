@@ -61,15 +61,16 @@ def launch_is_pinned(
     ):
         return True
     try:
-        from fno.config import load_settings, load_settings_for_repo
-        from fno.dispatch_flags import configured_dispatch_harness
+        from fno.rust_binary import CommandUnavailable, command_call
 
-        s = load_settings_for_repo(Path(node_cwd)) if node_cwd else load_settings()
         # One read for the whole configured-harness rung: the stage table with
         # the deprecated dispatch.harness folded beneath it, so a launch routed
         # by the home key pins exactly like one routed by the legacy key.
-        harness, _note = configured_dispatch_harness(s)
-        return bool((harness or "").strip())
+        answer = command_call(
+            "dispatch-harness",
+            {"mode": "configured", "cwd": str(Path(node_cwd)) if node_cwd else None},
+        )
+        return bool((answer.get("harness") or "").strip())
     except Exception:  # noqa: BLE001 - unreadable config pins nothing
         return False
 

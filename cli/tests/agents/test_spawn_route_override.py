@@ -16,6 +16,7 @@ from typing import Any, Dict
 import pytest
 from typer.testing import CliRunner
 
+from fno import rust_binary
 from fno.paths_testing import use_tmpdir
 
 
@@ -415,10 +416,22 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
+    real_call = rust_binary.command_call
+
+    def _slot_call(command, payload, *a, **k):
+        """The route-slot transport, stubbed at the command door: the lane
+        ask rides the row, every other ask reads empty, and the harness
+        fold answers its built-in default (the native door's semantics are
+        golden-frozen on the Rust side)."""
+        if command == "route-slot":
+            if payload.get("mode") == "lane":
+                return dict(row, found=True)
+            return {"found": False}
+        if command == "dispatch-harness":
+            return {"harness": "claude", "source": "builtin-default"}
+        return real_call(command, payload, *a, **k)
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
@@ -822,10 +835,22 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
+    real_call = rust_binary.command_call
+
+    def _slot_call(command, payload, *a, **k):
+        """The route-slot transport, stubbed at the command door: the lane
+        ask rides the row, every other ask reads empty, and the harness
+        fold answers its built-in default (the native door's semantics are
+        golden-frozen on the Rust side)."""
+        if command == "route-slot":
+            if payload.get("mode") == "lane":
+                return dict(row, found=True)
+            return {"found": False}
+        if command == "dispatch-harness":
+            return {"harness": "claude", "source": "builtin-default"}
+        return real_call(command, payload, *a, **k)
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
     from fno.agents import spawn_lineage
 
     monkeypatch.setattr(
@@ -885,10 +910,22 @@ def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monk
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
+    real_call = rust_binary.command_call
+
+    def _slot_call(command, payload, *a, **k):
+        """The route-slot transport, stubbed at the command door: the lane
+        ask rides the row, every other ask reads empty, and the harness
+        fold answers its built-in default (the native door's semantics are
+        golden-frozen on the Rust side)."""
+        if command == "route-slot":
+            if payload.get("mode") == "lane":
+                return dict(row, found=True)
+            return {"found": False}
+        if command == "dispatch-harness":
+            return {"harness": "claude", "source": "builtin-default"}
+        return real_call(command, payload, *a, **k)
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
     dispatched: list[dict] = []
 
     def fake_dispatch(**kw):

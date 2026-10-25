@@ -81,26 +81,38 @@ def test_dispatch_door_keeps_the_legacy_key_alone() -> None:
     assert not any("ignored" in entry for entry in out["decision"])
 
 
-def test_spawn_door_answers_the_same_harness(tmp_path, monkeypatch) -> None:
+def test_spawn_door_answers_the_same_harness(monkeypatch) -> None:
     """The measured failure this file pins: one node through both doors must
-    not land on two vendors. The spawn-axis retirement moved the launch line
-    to the lane template, so the composed argv no longer carries the harness
-    axis; both doors read the one stage-table rung, and the two readers this
-    file exercises must keep answering one harness for one command row."""
-    from fno.dispatch_flags import configured_dispatch_harness
+    not land on two vendors. The config rung moved native, so the invariant
+    at this seam is the wiring: the dispatch fold asks the ONE door with the
+    same command key the spawn path asks, and the settings fold agrees with
+    the rung the door answered. The door's own config semantics are
+    golden-frozen on the Rust side."""
+    from fno import rust_binary
+    from fno.agents.harness_map import _load_dispatch_cfg
 
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        '[agents.profiles.target]\nprovider = "codex"\n', encoding="utf-8"
-    )
-    monkeypatch.setenv("FNO_CONFIG", str(config_path))
-    monkeypatch.setenv("FNO_NO_CANONICAL_CONFIG", "1")
+    asks: list[tuple[str, dict]] = []
 
-    harness, _note = configured_dispatch_harness()
-    assert harness == "codex"
+    def door(command, payload, *a, **k):
+        asks.append((command, payload))
+        if payload.get("mode") == "configured":
+            return {"harness": "codex", "note": None, "route": None}
+        raise rust_binary.CommandUnavailable(f"{command} hermetic")
+
+    monkeypatch.setattr(rust_binary, "command_call", door)
+
+    cfg = _load_dispatch_cfg(None, command="target")
+    assert cfg.get("harness") == "codex"
 
     out = resolve_dispatch(settings=_settings(profile_provider="codex"))
     assert out["harness"] == "codex"
+
+    assert asks, "the config rung must ride the door"
+    assert all(name == "dispatch-harness" for name, _ in asks)
+    assert all(
+        payload.get("mode") == "configured" and payload.get("command") == "target"
+        for _, payload in asks
+    )
 
 
 def test_dispatch_door_carries_the_stage_table_route() -> None:
