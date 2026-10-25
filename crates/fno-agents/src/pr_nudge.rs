@@ -255,9 +255,9 @@ fn ladder_run(argv: &[String], cwd: &str) -> (i32, String, String) {
 /// then drop the state files of sessions that no longer carry one.
 pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow], grace_secs: i64) {
     let now = crate::daemon::now_epoch_secs();
-    let graph = crate::gc_sweep::read_graph_rows(home).unwrap_or_default();
+    let graph = crate::gc_sweep::read_graph_rows(home);
     for row in rows {
-        let held = merge_hold_in(home, row, &graph);
+        let held = merge_hold_in(home, row, graph.as_deref());
         let state = load_state(home, &row.session_id);
         apply(
             home,
@@ -274,8 +274,8 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
 }
 
 /// Every hold that forbids the merge this ladder would drive, over graph
-/// rows the caller read once for the whole sweep.
-fn merge_hold_in(home: &AgentsHome, row: &OpenPrRow, graph: &[Value]) -> bool {
+/// rows the caller read once for the whole sweep (`None`: unreadable).
+fn merge_hold_in(home: &AgentsHome, row: &OpenPrRow, graph: Option<&[Value]>) -> bool {
     merge_order_hold(home, &row.node)
         || authorized_merge_hold(home, row)
         || merge_freeze_hold(home, row)
@@ -283,14 +283,18 @@ fn merge_hold_in(home: &AgentsHome, row: &OpenPrRow, graph: &[Value]) -> bool {
 }
 
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    let graph = crate::gc_sweep::read_graph_rows(home).unwrap_or_default();
-    merge_hold_in(home, row, &graph) || loop_pause_hold(home, row)
+    let graph = crate::gc_sweep::read_graph_rows(home);
+    merge_hold_in(home, row, graph.as_deref()) || loop_pause_hold(home, row)
 }
 
 /// The node's `dispatch_hold` (plan frontmatter, or the node row when there
 /// is no plan), walked up its ancestors as the merge gate walks it. An
-/// invalid hold also pauses: the gate refuses that merge too.
-fn node_dispatch_hold_rows(node: &str, entries: &[Value]) -> bool {
+/// invalid hold also pauses: the gate refuses that merge too. So does an
+/// unreadable graph, which the gate's probe never reads as unheld.
+fn node_dispatch_hold_rows(node: &str, entries: Option<&[Value]>) -> bool {
+    let Some(entries) = entries else {
+        return true;
+    };
     let by_id: std::collections::BTreeMap<String, Value> = entries
         .iter()
         .filter_map(|e| crate::graph_store::entry_id(e).map(|id| (id.to_string(), e.clone())))
@@ -1029,11 +1033,11 @@ pub fn plan_with(
     runner: Runner,
 ) -> Vec<(String, String)> {
     let now = crate::daemon::now_epoch_secs();
-    let graph = crate::gc_sweep::read_graph_rows(home).unwrap_or_default();
+    let graph = crate::gc_sweep::read_graph_rows(home);
     rows.iter()
         .map(|row| {
             let state = load_state(home, &row.session_id);
-            let merge_order = merge_hold_in(home, row, &graph);
+            let merge_order = merge_hold_in(home, row, graph.as_deref());
             let loop_paused = loop_pause_hold(home, row);
             let action = decide_with_read(
                 row,
@@ -1210,10 +1214,14 @@ mod tests {
             serde_json::json!({"id": "x-child", "parent": "x-held"}),
             serde_json::json!({"id": "x-free"}),
         ];
-        assert!(node_dispatch_hold_rows("x-held", &rows));
-        assert!(node_dispatch_hold_rows("x-child", &rows));
-        assert!(!node_dispatch_hold_rows("x-free", &rows));
-        assert!(!node_dispatch_hold_rows("x-missing", &rows));
+        assert!(node_dispatch_hold_rows("x-held", Some(&rows)));
+        assert!(node_dispatch_hold_rows("x-child", Some(&rows)));
+        assert!(!node_dispatch_hold_rows("x-free", Some(&rows)));
+        assert!(!node_dispatch_hold_rows("x-missing", Some(&rows)));
+        assert!(
+            node_dispatch_hold_rows("x-free", None),
+            "an unreadable graph never reads as unheld"
+        );
     }
 
     /// The status payload the real command writes to stdout whatever the exit
