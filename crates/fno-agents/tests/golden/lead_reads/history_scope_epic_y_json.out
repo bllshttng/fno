@@ -1,0 +1,93 @@
+{
+  "scope": "epic-y",
+  "journals": [
+    {
+      "path": "<ROOT>/state/events.jsonl",
+      "store": "<ROOT>/state/events.db",
+      "ingested": 0,
+      "corrupt": 0,
+      "scanned": 0,
+      "matched": 0,
+      "rejected": 0,
+      "coverage": {
+        "status": "partial",
+        "complete_since": "<NOW>",
+        "observed_first": null,
+        "observed_last": null,
+        "reason": null
+      }
+    },
+    {
+      "path": "<ROOT>/home/events.jsonl",
+      "store": "<ROOT>/home/events.db",
+      "ingested": 0,
+      "corrupt": 0,
+      "scanned": 0,
+      "matched": 0,
+      "rejected": 0,
+      "coverage": {
+        "status": "partial",
+        "complete_since": "<NOW>",
+        "observed_first": null,
+        "observed_last": null,
+        "reason": null
+      }
+    },
+    {
+      "path": "<ROOT>/project/events.jsonl",
+      "store": "<ROOT>/project/events.db",
+      "ingested": 5,
+      "corrupt": 0,
+      "scanned": 3,
+      "matched": 2,
+      "rejected": 1,
+      "coverage": {
+        "status": "partial",
+        "complete_since": "<NOW>",
+        "observed_first": "2026-10-24T09:00:00.000Z",
+        "observed_last": "2026-10-24T09:30:00.000Z",
+        "reason": null
+      }
+    }
+  ],
+  "scanned": 3,
+  "matched": 2,
+  "events": [
+    {
+      "ts": "2026-10-24T09:20:00Z",
+      "type": "lead_checkin",
+      "session_id": "sess-lead",
+      "data": {
+        "scope": "epic-y",
+        "beat": 2,
+        "change": "PR 3854 ready, merge held"
+      }
+    },
+    {
+      "ts": "2026-10-24T09:00:00Z",
+      "type": "lead_checkin",
+      "session_id": "sess-lead",
+      "data": {
+        "scope": "epic-y",
+        "beat": 1,
+        "change": "first beat: three workers seated"
+      }
+    }
+  ],
+  "rejected": 1,
+  "rejected_legacy": [
+    {
+      "forbidden": [
+        "role_scope"
+      ],
+      "missing": [
+        "scope"
+      ],
+      "file": "<ROOT>/project/events.db",
+      "ts": "2026-10-24T09:30:00Z"
+    }
+  ],
+  "duplicates": 0,
+  "ingested": 5,
+  "complete_since": "<NOW>"
+}

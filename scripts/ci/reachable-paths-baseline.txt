@@ -101,13 +101,12 @@ A	daemon: no pre-spawn baseline, oracle disabled for this spawn	py=cli/src/fno/a
 A	deliberate reopen postdates the merge	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	delivered (hosted){live}{corr}	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}	py=cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/mail_cli/send/engine.rs|crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
-A	delivery-evaluate-response.v1	py=cli/src/fno/delivery/contracts.py;rs=crates/fno-agents/src/delivery_completion.rs	# CLASSIFY protocol|msg-twin|data
+A	delivery, effect, evidence, and observation refs require a work_order	py=cli/src/fno/company/contracts.py;rs=crates/fno-agents/src/delivery_eval.rs	# CLASSIFY protocol|msg-twin|data the work_order refusal is frozen by the delivery goldens; the python twin is the surviving company-contract validator
 A	different model family required	py=cli/src/fno/config/__init__.py;rs=crates/fno-agents/src/loopcheck/posture.rs	# CLASSIFY protocol|msg-twin|data
 A	direct needs model and effort placeholders	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	dispatch_selection_diverged	py=cli/src/fno/backlog/undispatched.py;rs=crates/fno-agents/src/backlog/advance.rs|crates/fno-agents/src/backlog/next.rs	# CLASSIFY protocol|msg-twin|data
 A	dnd (bus-only): recipient polls the bus at each turn boundary	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	docs/state-root-inventory.md	py=cli/src/fno/graph/_state_root_inventory.py;rs=crates/fno-agents/src/state_root_drift.rs	# CLASSIFY protocol|msg-twin|data
-A	durable answers a promoted session leaves behind.	py=cli/src/fno/lead/lead_faq.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	effective_context_window_percent	py=cli/src/fno/doctor.py;rs=crates/fno-agents/src/context_window.rs	# CLASSIFY protocol|msg-twin|data
 A	effort must be a non-empty string when provided	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	empty supported {action}	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
@@ -189,6 +188,7 @@ A	kept_transcript_unresolved	py=cli/src/fno/agents/retirement.py;rs=crates/fno-a
 A	key and holder must be non-empty	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	lane cap full (max_lanes={max_lanes})	py=cli/src/fno/claims/cli.py;rs=crates/fno-agents/src/claim_lanes_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	launchd:sh.fno.pr-watcher	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/tick_ledger.rs	# CLASSIFY protocol|msg-twin|data
+A	lead: this session holds no role, so there is no term to declare on.	py=cli/src/fno/lead/cli.py;rs=crates/fno-agents/src/lead_reads.rs	# CLASSIFY protocol|msg-twin|data the shape ladder ported; the python twin is the term ladder, which deletes when term ports
 A	ledger has no entries list	py=cli/src/fno/mail/budget.py;rs=crates/fno-agents/src/mail_cli/send/mod.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	ledger holds a malformed entry	py=cli/src/fno/mail/budget.py;rs=crates/fno-agents/src/mail_cli/send/mod.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	ledger unreadable: {exc}	py=cli/src/fno/carveout/cli.py;rs=crates/fno-agents/src/ledger_axes.rs	# CLASSIFY protocol|msg-twin|data the one infra-reason text both sides print for an unreadable ledger
@@ -238,6 +238,7 @@ A	pid_unavailable requires a ttl claim	py=cli/src/fno/claims/core.py|cli/src/fno
 A	plan_path_owner_conflict	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	placement:{session}:global	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/mod.rs	# CLASSIFY data the placement lease key format both legs write to the same claims store
 A	plist unchanged; not re-registered ({caller})	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
+A	post_merge.parking_lot_path	py=cli/src/fno/config/registry.py;rs=crates/fno/src/setup_cmds.rs	# CLASSIFY protocol|msg-twin|data the registry owns the key; the native setup scaffold writes it through fno config set
 A	post_merge_noninteractive	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/post_merge/ritual.rs	# CLASSIFY protocol|msg-twin|data one env-var name read by both the forwarder and the native arm
 A	provider unknown, non-anthropic, or keyless	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/spawn_route.rs	# CLASSIFY protocol|msg-twin|data the --route refusal reason: the Python leg serves pane and account-composed routes until row 2b ports them
 A	route requires auth=api_key	py=cli/src/fno/adapters/providers/model.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY msg-twin: the account records port keeps the Python loader's refusal text and reserved keys until the adapters package is deleted
@@ -371,7 +372,6 @@ A	queued (durable){live}{corr} [{reason}]{window_tail}	py=cli/src/fno/mail/cli.p
 A	sender_provenance_unknown	py=cli/src/fno/agents/sender_provenance.py;rs=crates/fno-agents/src/mail_cli/send/engine.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	usage: fno agents mail send --to-lead <scope> <message>	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	{one_line} - run `fno agents mail drain-self`	py=cli/src/fno/mail/receipts.py;rs=crates/fno-agents/src/mail_cli/send/verify.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
-A	durable answers a promoted session leaves behind.	py=cli/src/fno/lead/lead_faq.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	fn retired_command_pointer(command:	py=cli/src/fno/lint_command_ratchet.py;rs=crates/fno/src/menu_caps.rs	# shared-vocabulary: the source anchor both command guards scan in fno-agents client.rs
 A	instruments over the harness capability table.	py=cli/src/fno/agents/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted
 A	mcp sidecar client commands.	py=cli/src/fno/mcp/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python agents group is deleted

@@ -1532,7 +1532,7 @@ fn mint_retraction_id() -> String {
 
 /// 8 hex chars from getrandom, with a pid+clock fallback. A collision costs
 /// one duplicate id.
-fn random_hex8() -> String {
+pub(crate) fn random_hex8() -> String {
     let mut buf = [0u8; 4];
     if getrandom::fill(&mut buf).is_err() {
         // Fallback entropy: pid + clock. A collision costs one duplicate id.

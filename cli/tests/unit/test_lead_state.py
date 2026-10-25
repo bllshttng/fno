@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -24,33 +23,6 @@ def test_scope_keyed_manifest_path_refuses_escape_spellings(tmp_path, scope):
 
 
 @pytest.mark.dev_build
-def test_live_registry_role_resolves_scope_path_after_session_id_changes(tmp_path):
-    import fno.lead.state as state
-
-    resolve = getattr(state, "resolve_lead_manifest_path", None)
-    assert resolve is not None, "live role manifest resolver is missing"
-    row = SimpleNamespace(
-        status="live",
-        role_scope="x-f3d0",
-        harness="codex",
-        harness_session_id="new-session",
-        cc_session_id=None,
-        short_id=None,
-    )
-    path = state.lead_manifest_path("x-f3d0", state_root=tmp_path / ".fno")
-    write_manifest(path, scope="x-f3d0", harness_session_id="old-session")
-
-    resolved, reason = resolve(
-        "new-session",
-        "codex",
-        state_root=tmp_path / ".fno",
-        registry=[row],
-    )
-    assert resolved == path
-    assert reason == ""
-
-
-@pytest.mark.dev_build
 def test_cleanup_does_not_delete_a_successors_refreshed_manifest(tmp_path):
     import fno.lead.state as state
 
@@ -62,57 +34,6 @@ def test_cleanup_does_not_delete_a_successors_refreshed_manifest(tmp_path):
         "alpha", state_root=root, expected_harness_session_id="vacating-owner"
     ) is False
     assert parse_manifest(path)["harness_session_id"] == "successor"
-
-
-@pytest.mark.dev_build
-def test_a_crashed_lead_s_leftover_manifest_captures_nobody(tmp_path):
-    """Expiry must not depend on the command being called, and it does not.
-
-    A lead that crashes never runs the expire command, so its scope manifest
-    stays on disk. The registry row is authority: the dead lead's own read
-    resolves nothing (terminal row), and a successor session resolving over
-    the same file also gets nothing (its row holds no role over that
-    scope). If either read ever returned the path, a leftover file would
-    capture a session that was never promoted by it.
-    """
-    import fno.lead.state as state
-
-    resolve = state.resolve_lead_manifest_path
-    root = tmp_path / ".fno"
-    path = state.lead_manifest_path("x-f3d0", state_root=root)
-    write_manifest(path, scope="x-f3d0", harness_session_id="dead-session")
-    crashed_lead = SimpleNamespace(
-        # A reconcile flipped the row terminal; the role fields stay stamped
-        # because nothing ran to vacate them.
-        status="orphaned",
-        role_scope="x-f3d0",
-        harness="claude",
-        harness_session_id="dead-session",
-        cc_session_id=None,
-        short_id=None,
-    )
-    successor = SimpleNamespace(
-        status="live",
-        role_scope=None,
-        harness="claude",
-        harness_session_id="successor-session",
-        cc_session_id=None,
-        short_id=None,
-    )
-
-    dead_resolved, dead_reason = resolve(
-        "dead-session", "claude", state_root=root, registry=[crashed_lead]
-    )
-    assert dead_resolved is None
-    assert "orphaned" in dead_reason and "terminal" in dead_reason
-    successor_resolved, successor_reason = resolve(
-        "successor-session", "claude", state_root=root, registry=[successor]
-    )
-    assert successor_resolved is None
-    assert "role_scope" in successor_reason and "unstamped" in successor_reason
-    # The file is still there - inert, not deleted. Crash safety is row
-    # authority, not cleanup.
-    assert path.is_file()
 
 
 # --- the freshness predicate ------------------------------------------------

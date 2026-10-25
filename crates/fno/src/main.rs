@@ -74,6 +74,9 @@ enum Role {
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno config setup plan|post-merge` and the root `fno setup` twins:
+    /// the wizard question plan and the post-merge scaffold.
+    SetupCmd(fno::setup_cmds::Cmd),
     /// `fno do wizard`: the interactive terminal host for the wizard flow.
     /// Native, because it owns the raw-mode terminal and must run before any
     /// Python wheel exists on a fresh machine.
@@ -328,6 +331,10 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
+    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
+    /// arguments of existing fno-agents actions. Their Python legs are gone.
+    LeadRead(fno::lead_reads_route::Claim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -835,6 +842,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(claim) = fno::lead_reads_route::classify(args) {
+        return Role::LeadRead(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -980,6 +990,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
+    }
+    if let Some(cmd) = fno::setup_cmds::classify(args) {
+        return Role::SetupCmd(cmd);
     }
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
@@ -1246,6 +1259,7 @@ fn main() {
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
@@ -1283,6 +1297,7 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1830,6 +1845,11 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "wizard", "--json"]), false),
             Role::Wizard(os(&["--json"]))
+        );
+        // So do the wizard plan and the post-merge scaffold.
+        assert_eq!(
+            decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
+            Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
         );
     }
 

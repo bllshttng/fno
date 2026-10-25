@@ -1,10 +1,8 @@
-"""`fno agents lead shape`: declaring a term's shape is a command, not prose.
+"""The caller ladder `fno agents org chart term` still runs in Python.
 
-The Stop nudge reads the manifest's shape field to learn whether live spawned
-workers are an answered team or an unshaped pass. These tests pin the CLI
-half: the holder declares, on its own promoted manifest, idempotently. The
-write itself lives in Rust (`fno-agents lead-shape`, pinned by lead_state.rs
-tests); the two write tests run the real binary and skip when it is not built.
+`shape` answers natively now (`fno-agents lead-shape --user-command`, pinned by
+the lead_reads goldens). `_own_role_argv` stays for `term` until the lifecycle
+commands port.
 """
 from __future__ import annotations
 
@@ -12,10 +10,7 @@ import types
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.agents.registry import AgentEntry, update_registry
-from fno.lead.state import lead_manifest_path, lead_state_root, parse_manifest, write_manifest
 from fno.paths_testing import use_tmpdir
 
 CALLER_SESSION = "5d4c3b2a-1111-4000-8000-000000000001"
@@ -34,106 +29,15 @@ def _clear_parent_markers(monkeypatch):
         monkeypatch.delenv(marker, raising=False)
 
 
-@pytest.fixture
-def team(tmp_path, monkeypatch):
-    from tests.agents._fake_claude import install_fake_claude
-
-    use_tmpdir(monkeypatch, tmp_path)
-    bin_dir = tmp_path / "bin"
-    install_fake_claude(bin_dir)
-    monkeypatch.setenv("PATH", str(bin_dir))
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER_SESSION)
-    # The command keys the manifest root on the caller row's cwd; the seated row
-    # carries that cwd (see _seat's cwd argument).
-    monkeypatch.chdir(tmp_path)
-    built = Path(__file__).parents[3] / (
-        "crates/fno-agents/target/debug/fno-agents"
-    )
-    if built.is_file():
-        monkeypatch.setenv("FNO_AGENTS_BIN", str(built))
-    return tmp_path
-
-
-def _binary_available() -> bool:
-    import os
-
-    if os.environ.get("FNO_AGENTS_BIN"):
-        return Path(os.environ["FNO_AGENTS_BIN"]).is_file()
-    return (Path(__file__).parents[3] / "crates/fno-agents/target/debug/fno-agents").is_file()
-
-
-def _seat(
-    name: str,
-    session: str,
-    *,
-    scope: str | None = SCOPE,
-    status: str = "busy",
-    cwd: str = "/tmp",
-):
-    update_registry(
-        lambda rows: rows
-        + [
-            AgentEntry(
-                name=name,
-                cwd=cwd,
-                log_path="",
-                harness="claude",
-                harness_session_id=session,
-                status=status,
-                role_level=2 if scope else None,
-                role_scope=scope,
-                role_grantor="human" if scope else None,
-            )
-        ]
-    )
-
-
-def _manifest(team, scope: str = SCOPE, session: str = CALLER_SESSION):
-    # The command keys the manifest root on the caller row's cwd, so the fixture
-    # writes through the same call the resolver makes.
-    path = lead_manifest_path(scope, state_root=lead_state_root(Path(team)))
-    write_manifest(path, scope=scope, harness_session_id=session)
-    return path
-
-
-def _shape(*args: str):
-    from fno.lead.cli import agents_lead_app
-
-    return CliRunner().invoke(agents_lead_app, ["shape", *args])
-
-
-@pytest.mark.skipif(not _binary_available(), reason="fno-agents binary not built")
-@pytest.mark.dev_build
-def test_shape_team_lands_on_the_manifest_and_echoes(team) -> None:
-    _seat("serving-lead", CALLER_SESSION, cwd=str(team))
-    manifest = _manifest(team)
-
-    result = _shape("team")
-
-    assert result.exit_code == 0, result.output
-    assert "shape declared: team" in result.output
-    assert parse_manifest(manifest)["shape"] == "team"
-
-
-def test_shape_refuses_a_foreign_scope(team) -> None:
-    _seat("serving-lead", CALLER_SESSION)
-
-    result = _shape("team", "--scope", "epic-other")
-
-    assert result.exit_code == 2, result.output
-    assert "only its own term" in result.output
-
-
-def test_own_role_argv_keys_the_root_on_the_caller_row_cwd(
-    team, monkeypatch
-) -> None:
+def test_own_role_argv_keys_the_root_on_the_caller_row_cwd(tmp_path, monkeypatch) -> None:
     """--root must name the caller row's space, so a lead whose shell sits
     outside the repo still declares on its own manifest (x-8387)."""
     import fno.agents.role as role_mod
     from fno.lead.cli import _own_role_argv
     from fno.lead.state import lead_state_root as _ksr
 
-    kingrepo = team / "kingrepo"
+    use_tmpdir(monkeypatch, tmp_path)
+    kingrepo = tmp_path / "kingrepo"
     kingrepo.mkdir()
     row = types.SimpleNamespace(
         harness_session_id=CALLER_SESSION,
@@ -143,10 +47,8 @@ def test_own_role_argv_keys_the_root_on_the_caller_row_cwd(
         cwd=str(kingrepo),
     )
     monkeypatch.setattr(role_mod, "calling_agent_row", lambda: row)
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_binary", lambda: Path("/fake/fno-agents")
-    )
-    elsewhere = team / "elsewhere"
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/fake/fno-agents"))
+    elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
 
