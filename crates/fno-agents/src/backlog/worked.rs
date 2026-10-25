@@ -906,17 +906,17 @@ pub(crate) fn classify_node_workers(rows: &[FleetRow]) -> (Vec<&FleetRow>, Vec<&
 
 pub(crate) const UNMEASURABLE_LABEL_MARK: &str = "(unmeasurable:";
 
-/// The node's open execute rows in the graph, newest last, by session id.
-/// The spawn gate's worker-row refusal names these: its evidence is this
-/// row at least as often as the roster row it crosschecked, and a row a
-/// bare `claim release` left open is exactly the stale state an operator
-/// has to close by hand.
-pub(crate) fn open_execute_row_ids(node_id: &str) -> Vec<String> {
+/// The node's open execute rows in the graph, newest last, as
+/// `(harness, session_id)` pairs. The spawn gate's worker-row refusal names
+/// these rows and prints one reap-open command per row, so a row's harness
+/// must ride beside its session id: the reap is identity-aware, and a bare
+/// session id cannot address the row.
+pub(crate) fn open_execute_row_ids(node_id: &str) -> Vec<(String, String)> {
     let graph = super::settings::graph_path();
     let Ok(entries) = crate::graph_store::read_rows_strict(&graph) else {
         return Vec::new();
     };
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<(String, String)> = Vec::new();
     for entry in &entries {
         if entry.get("id").and_then(Value::as_str) != Some(node_id) {
             continue;
@@ -928,8 +928,11 @@ pub(crate) fn open_execute_row_ids(node_id: &str) -> Vec<String> {
             .flatten()
         {
             if is_open_phase_row(row, "execute") {
-                if let Some(sid) = row.get("session_id").and_then(Value::as_str) {
-                    out.push(sid.to_string());
+                if let (Some(h), Some(sid)) = (
+                    row.get("harness").and_then(Value::as_str),
+                    row.get("session_id").and_then(Value::as_str),
+                ) {
+                    out.push((h.to_string(), sid.to_string()));
                 }
             }
         }
@@ -1364,7 +1367,10 @@ mod tests {
             Some(v) => std::env::set_var("FNO_STATE_DIR", v),
             None => std::env::remove_var("FNO_STATE_DIR"),
         }
-        assert_eq!(rows, vec!["sess-open-1".to_string()]);
+        assert_eq!(
+            rows,
+            vec![("claude".to_string(), "sess-open-1".to_string())]
+        );
         assert!(open_execute_row_ids("x-absent").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }

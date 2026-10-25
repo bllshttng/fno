@@ -216,9 +216,11 @@ fn run_keyed(a: &LeafArgs, key: &str) -> i32 {
                 } else {
                     // The default closes the do row the acquire opened: a bare
                     // release that left it open made the spawn gate refuse a
-                    // fresh seat as already-running. --stamp-do stays as the
-                    // explicit spelling, and the stamp fills only timestamps
-                    // the row left open, so an already-closed row is a no-op.
+                    // fresh seat as already-running. --rollback-do is the
+                    // explicit spelling for a release of work that never ran,
+                    // and the default fill never appends: a node with no
+                    // matching row records nothing, so a release that forgot
+                    // the flag still cannot invent a completion.
                     stamp_do_on_release(key, &claim, &a.holder);
                 }
             }

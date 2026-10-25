@@ -212,13 +212,21 @@ fn blocked(
             ));
         }
         if !rows.is_empty() {
+            let list: Vec<String> = rows.iter().map(|(h, sid)| format!("{h}:{sid}")).collect();
+            let reaps: Vec<String> = rows
+                .iter()
+                .map(|(h, sid)| {
+                    format!(
+                        "fno backlog session reap-open {} --phase execute --harness {} --session-id {}",
+                        req.node_id, h, sid
+                    )
+                })
+                .collect();
             remedy.push_str(&format!(
                 "; the occupied row is the node's open graph execute row {}. \
-                 A bare `fno agents claim release` leaves it open; close it with \
-                 `fno backlog session add {} --phase execute --require-session <sid> \
-                 --ended-at <utc-now>`",
-                rows.join(", "),
-                req.node_id
+                 Once the peek proves the run is over, close it with `{}`",
+                list.join(", "),
+                reaps.join("`, then `")
             ));
         }
         out.insert("verdict".into(), json!("already-running"));
