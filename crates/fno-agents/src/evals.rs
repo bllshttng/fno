@@ -9,7 +9,9 @@
 pub mod bank;
 pub mod grading;
 pub mod graduate;
+pub mod history;
 pub mod research_grade;
+pub mod runner;
 
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
@@ -25,6 +27,7 @@ pub fn run(args: &[String]) -> i32 {
         "macro" => crate::evals_arm::run_evals_arm(&macro_argv(rest)),
         "grade" => crate::evals::research_grade::run(rest),
         "graduate" => crate::evals::graduate::run(rest),
+        "run" => run_verb(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
@@ -193,6 +196,218 @@ fn agents_home() -> std::path::PathBuf {
         }
     }
     dirs_home().join(".fno").join("agents")
+}
+
+/// The run command: bank discovery, the discipline gates, the confirm line
+/// above 20 total runs, the cohort split validation, the sweep, and the
+/// per-task loop. The exit codes are the leaf's: 0 graded, 1 refusal, 2 a
+/// load-time discipline violation.
+fn run_verb(rest: &[String]) -> i32 {
+    let repeat: u32 = match flag_lookup(rest, "--repeat")
+        .or_else(|| flag_lookup(rest, "-k"))
+        .and_then(|v| v.parse().ok())
+    {
+        Some(k) => k,
+        None => 1,
+    };
+    if repeat < 1 {
+        eprintln!("Error: --repeat must be >= 1");
+        return 1;
+    }
+    let variant = flag_lookup(rest, "--variant").unwrap_or_else(|| "baseline".into());
+    let ref_arg = flag_lookup(rest, "--ref");
+    if !crate::evals::runner::variant_ok(&variant) {
+        eprintln!("Error: --variant must be 'baseline' or 'v<N>', got '{variant}'");
+        return 1;
+    }
+    if (variant == "baseline") != ref_arg.is_none() {
+        eprintln!("Error: --variant v<N> and --ref REF must be used together");
+        return 1;
+    }
+    let lane_coord = match flag_lookup(rest, "--lane") {
+        Some(name) => match crate::evals::runner::resolve_lane(&name) {
+            Ok(row) => Some(row),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                return 1;
+            }
+        },
+        None => None,
+    };
+    let bank_dir = resolve_bank_dir(flag_lookup(rest, "--bank"));
+    let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            if e.0.contains("not found") {
+                eprintln!(
+                    "Error: no bank at {} (expected evals/bank/*.yaml).",
+                    bank_dir.display()
+                );
+                return 1;
+            }
+            eprintln!("Error: {e}");
+            return 2;
+        }
+    };
+    let task_filter = flag_lookup(rest, "--task");
+    let tier_filter = flag_lookup(rest, "--tier");
+    let selected: Vec<_> = tasks
+        .iter()
+        .filter(|t| task_filter.as_deref().map(|f| t.id == f).unwrap_or(true))
+        .filter(|t| tier_filter.as_deref().map(|f| t.tier == f).unwrap_or(true))
+        .collect();
+    if selected.is_empty() {
+        eprintln!("Error: selection matched no bank tasks.");
+        return 1;
+    }
+    let mut provider = flag_lookup(rest, "--provider");
+    if provider.is_none() && lane_coord.is_none() && selected.iter().any(|t| t.prompt.is_some()) {
+        provider = Some("claude".into());
+        println!("no --provider given; defaulting prompt-bearing tasks to claude headless");
+    }
+    let total_runs = selected.len() as u32 * repeat;
+    let yes = rest.iter().any(|a| a == "--yes" || a == "-y");
+    if total_runs > 20 && !yes {
+        println!(
+            "About to run {} task(s) x {repeat} = {total_runs} live runs.",
+            selected.len()
+        );
+        print!("Proceed? [y/N]: ");
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        let answer = answer.trim().to_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("Aborted.");
+            return 0;
+        }
+    }
+    let repo_root = canonical_repo_root();
+    // The cohort split validates BEFORE any worker call: one native door
+    // call (membership, overlap, duplicates, bank rev).
+    let cohorts_yaml = bank_dir.join("cohorts.yaml");
+    if cohorts_yaml.exists() {
+        match cohort_gate(&bank_dir, &tasks, &repo_root) {
+            Ok(line) => println!("{line}"),
+            Err(text) => {
+                eprintln!("Error: cohort split refused: {text}");
+                return 2;
+            }
+        }
+    }
+    let swept = crate::evals::runner::sweep_orphans(&repo_root);
+    if swept > 0 {
+        println!("swept {swept} orphaned eval worktree(s) from a prior run");
+    }
+    let history = history_path();
+    let cohort = flag_lookup(rest, "--cohort");
+    let mut all_passed = true;
+    for task in &selected {
+        let results = crate::evals::runner::run_task(
+            task,
+            &repo_root,
+            repeat,
+            &history,
+            provider.as_deref(),
+            &variant,
+            ref_arg.as_deref().unwrap_or(&task.repo_fixture),
+            lane_coord.as_ref(),
+            cohort.as_deref(),
+        );
+        let passes = results.iter().filter(|r| r.passed).count();
+        let passk = if passes == repeat as usize {
+            "PASS"
+        } else {
+            "FAIL"
+        };
+        println!(
+            "  {:<11} {} [{}]: {}/{} pass  (pass^{repeat}={passk})",
+            task.tier, task.id, variant, passes, repeat
+        );
+        for r in &results {
+            if !r.passed {
+                println!("      run {}: {}", r.repeat_index, r.reason);
+            }
+        }
+        if passes < repeat as usize {
+            all_passed = false;
+        }
+    }
+    println!(
+        "{}",
+        if all_passed {
+            "done."
+        } else {
+            "done (some runs failed; see history)."
+        }
+    );
+    0
+}
+
+/// The cohort split gate: one native door call, the same argv the Python
+/// leaf assembled (membership, overlap, duplicates, bank rev).
+fn cohort_gate(
+    bank_dir: &std::path::Path,
+    tasks: &[crate::evals::bank::TaskSpec],
+    repo_root: &std::path::Path,
+) -> Result<String, String> {
+    let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+    let known = serde_json::to_string(&ids).unwrap_or_default();
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agents"));
+    let out = std::process::Command::new(exe)
+        .args(["evals-attempt"])
+        .args(["--cohorts-yaml"])
+        .arg(bank_dir.join("cohorts.yaml"))
+        .args(["--known-ids", &known])
+        .args(["--repo"])
+        .arg(repo_root)
+        .output()
+        .map_err(|e| format!("native cohort door failed ({e})"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let last = stdout.trim().lines().last().unwrap_or("");
+    let payload: serde_json::Value = serde_json::from_str(last)
+        .map_err(|_| "native cohort door returned unreadable output".to_string())?;
+    if payload
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        return Err(payload["error"].as_str().unwrap_or_default().to_string());
+    }
+    if !out.status.success() || payload.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
+    {
+        let errs = payload
+            .get("errors")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "native cohort door failed ({})",
+                    out.status.code().unwrap_or(-1)
+                )
+            });
+        return Err(errs);
+    }
+    let unchanged = payload
+        .get("bank_unchanged")
+        .and_then(serde_json::Value::as_bool);
+    Ok(if unchanged == Some(false) {
+        return Err(
+            "cohort split is pinned to a bank rev the bank has changed since; redeclare cohorts.yaml against the current bank"
+                .into(),
+        );
+    } else if unchanged == Some(true) {
+        "validated cohort split against the current bank".to_string()
+    } else {
+        "validated cohort split against its pin".to_string()
+    })
 }
 
 /// One --name value / --name=value token from a raw argv tail.
