@@ -724,7 +724,6 @@ def test_recoverable_apply_refuses_unusable_candidate_without_writing(tmp_path):
 
     results = watchdog.apply_recoverable(
         CodexRecoveryScan((candidate,), True, 1, 0, 0, ()),
-        scope_cwd=tmp_path,
         adopt_fn=lambda *args, **kwargs: adopted.append(args),
     )
 
@@ -781,7 +780,6 @@ def test_recoverable_apply_refuses_transcript_loss_after_adoption(tmp_path):
 
     results = watchdog.apply_recoverable(
         CodexRecoveryScan((candidate,), True, 1, 0, 0, ()),
-        scope_cwd=tmp_path,
         adopt_fn=adopt,
         load_registry_fn=lambda path: list(registry_rows),
         update_registry_fn=update_registry,
@@ -805,7 +803,6 @@ def test_recoverable_apply_requires_complete_coverage_before_adoption(monkeypatc
 
     results = watchdog.apply_recoverable(
         scan,
-        scope_cwd=tmp_path,
         adopt_fn=lambda *args, **kwargs: adopted.append(args),
     )
 
@@ -852,7 +849,6 @@ def test_recoverable_apply_checks_the_exact_adopted_registry_row(tmp_path):
 
     results = watchdog.apply_recoverable(
         scan,
-        scope_cwd=tmp_path,
         adopt_fn=adopt,
         load_registry_fn=lambda path: [SimpleNamespace(
             harness="codex",
@@ -894,7 +890,6 @@ def test_recoverable_apply_refuses_a_row_without_the_follow_up_path(tmp_path):
 
     results = watchdog.apply_recoverable(
         CodexRecoveryScan((candidate,), True, 1, 0, 0, ()),
-        scope_cwd=tmp_path,
         adopt_fn=lambda hit, **kwargs: None,
         load_registry_fn=lambda path: [SimpleNamespace(
             harness="codex",
@@ -918,7 +913,6 @@ def test_recoverable_apply_names_a_vanished_candidate(tmp_path):
     candidate.rollout_path.unlink()
     results = watchdog.apply_recoverable(
         CodexRecoveryScan((candidate,), True, 1, 0, 0, ()),
-        scope_cwd=tmp_path,
     )
 
     assert results[0]["outcome"] == "refused"

@@ -268,7 +268,6 @@ def _recovery_transcript_readback(candidate: Any) -> tuple[Optional[dict], Optio
 def apply_recoverable(
     scan: Any,
     *,
-    scope_cwd: Path,
     registry_path: Optional[Path] = None,
     adopt_fn: Optional[Callable] = None,
     load_registry_fn: Optional[Callable] = None,
