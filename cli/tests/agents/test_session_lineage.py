@@ -99,6 +99,39 @@ def _open_questions() -> list[dict]:
     return [rec for qid, rec in asked.items() if qid not in closed]
 
 
+def _hermetic_append_door(monkeypatch) -> None:
+    """The append door and its dedupe read, hermetic: the smoke shards run
+    with no fno-agents binary, so both seams the branch mint shells answer
+    here. The stub appends the envelope verbatim to the two paths the
+    payload names - the same rows the real door writes - and the dedupe
+    reads the machine index through the store reader. The real door's
+    contract is pinned by the Rust intake tests."""
+    import json as _json
+
+    import fno.agents.register_session as rs
+    import fno.rust_binary as rb
+
+    def _fake_command_call(command, payload, unavailable=rb.CommandUnavailable, **_):
+        if command != "question-intake" or payload.get("op") != "append":
+            raise unavailable(f"the stub answers only the append door, not {command}")
+        event = payload["event"]
+        line = _json.dumps(event)
+        for key in ("journal_path", "index_path"):
+            target = Path(payload[key])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        return {"exit_code": 0, "lines": [], "qid": event["data"]["question_id"]}
+
+    monkeypatch.setattr(rb, "command_call", _fake_command_call)
+
+    def _fake_open(root, key):
+        needle = f"[{rs._BRANCH_QUESTION_MARKER}:{key}]"
+        return any(needle in q["data"].get("question", "") for q in _open_questions())
+
+    monkeypatch.setattr(rs, "_branch_question_open", _fake_open)
+
+
 # ---------------------------------------------------------------------------
 # Registry-level classification (record_session_observation)
 # ---------------------------------------------------------------------------
@@ -267,6 +300,7 @@ def test_main_claude_branch_records_the_two_option_operator_question(
     touches no claim lockfile at all."""
     use_tmpdir(monkeypatch, tmp_path)
     _isolate_daemon_log(monkeypatch, tmp_path)
+    _hermetic_append_door(monkeypatch)
     _spawned_row()
     assert _main(
         monkeypatch, tmp_path, REMINT, _reading("reachable", "transcript"),
