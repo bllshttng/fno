@@ -3373,7 +3373,7 @@ def cmd_watchdog(
 
         def _apply_and_emit():
             # One move shared by both lanes: apply, then the JSON emit.
-            results = wd.apply_recoverable(scan, scope_cwd=scope_cwd)
+            results = wd.apply_recoverable(scan)
             if json_out:
                 sys.stdout.write(
                     json.dumps(
