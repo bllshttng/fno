@@ -40,6 +40,7 @@ fn run_door(projects: &std::path::Path, id: &str) -> (i32, String) {
             projects.to_str().unwrap(),
             id,
         ])
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("run fno-agents provider-cap claude-transcript");
     (
