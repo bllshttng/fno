@@ -4,6 +4,81 @@
 
 use super::*;
 
+/// Per-phase elapsed clock for one lead fire. The x-a6d6 drain message told
+/// the truth about the drain's own slice, but the kills it reported (margins
+/// of 260-297ms) were spent BEFORE the drain, and no row recorded where. This
+/// clock stamps each pre-drain phase as it completes; the receipt is emitted
+/// immediately before the drain read, so a fire the harness kills mid-drain
+/// still leaves the row that names the spender.
+pub(crate) struct PhaseClock {
+    started: std::time::Instant,
+    phases: Vec<(&'static str, u64)>,
+    open: Option<&'static str>,
+}
+
+impl PhaseClock {
+    pub(crate) fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            phases: Vec::new(),
+            open: None,
+        }
+    }
+}
+
+impl Default for PhaseClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhaseClock {
+    /// Close the open phase (if any) and open `name`.
+    pub(crate) fn mark(&mut self, name: &'static str) {
+        let elapsed = self.started.elapsed().as_millis() as u64;
+        if let Some(open) = self.open.take() {
+            self.phases.push((open, elapsed));
+        }
+        self.open = Some(name);
+    }
+
+    /// The `lead_fire_phases` row: every completed phase with its cumulative
+    /// elapsed ms, the pre-drain total, and what the fire clock still held.
+    /// Cumulative (not per-phase) so the reader can see each phase's own
+    /// length by subtraction without two clocks agreeing to disagree.
+    pub(crate) fn receipt_body(&self, session_id: &str, scope: &str) -> serde_json::Value {
+        let mut phases_ms = serde_json::Map::new();
+        for (name, ms) in &self.phases {
+            phases_ms.insert((*name).to_string(), serde_json::json!(ms));
+        }
+        let pre_drain_total_ms = self.started.elapsed().as_millis() as u64;
+        serde_json::json!({
+            "session_id": session_id,
+            "scope": scope,
+            "phases_ms": phases_ms,
+            "pre_drain_total_ms": pre_drain_total_ms,
+            "budget_remaining_ms": crate::loopcheck::stopgate_fire_remaining_ms(),
+            "harness_margin_remaining_ms": crate::loopcheck::stopgate_harness_margin_remaining_ms(),
+        })
+    }
+}
+
+/// The drain invocation and its pre-drain receipt, one seam so the ordering
+/// the kills depend on (row on disk BEFORE the drain starts) is testable
+/// without driving a full board read: the caller's `emit` fires first, then
+/// the drain runs, then both results return together.
+pub(super) fn drain_with_phase_receipt(
+    fno_bin: &str,
+    cwd: &Path,
+    scope: &str,
+    session_id: &str,
+    emit: &impl Fn(&str, serde_json::Value),
+    phases: &PhaseClock,
+) -> (i64, Option<crate::loop_lead::ScopeDrainError>) {
+    emit("lead_fire_phases", phases.receipt_body(session_id, scope));
+    crate::loop_lead::scope_undelivered_with_reserve_watch(fno_bin, cwd, scope, session_id, emit)
+}
+
 pub(super) fn lead_decide(
     parsed: &LoopCheckArgs,
     // The registry the session-binding gate already loaded on the Team
@@ -40,6 +115,7 @@ pub(super) fn lead_decide(
     // both ask about THIS arm, not the lead - a pre-re-scope terminal must
     // not end the re-armed loop (AC7-EDGE).
     let lead = crate::team_names::lead_view(&manifest);
+    let mut phases = PhaseClock::new();
 
     let project_events = parsed
         .events_path
@@ -111,10 +187,14 @@ pub(super) fn lead_decide(
         );
     }
 
-    let history = crate::loop_lead::lead_fire_history(&project_events, &session_id);
+    let history = {
+        phases.mark("history");
+        crate::loop_lead::lead_fire_history(&project_events, &session_id)
+    };
     // The hook's half of the lead record: a beat the model skipped still
     // lands a row. Sits after the cancel-sentinel check, so a cancelled team
     // writes none. The return value is ignored, so no decision changes.
+    phases.mark("hook_beat");
     crate::lead_history::hook_beat(
         &project_events,
         &parsed.cwd,
@@ -194,6 +274,7 @@ pub(super) fn lead_decide(
         (0, lead_output("block", None, message, actionable, dry + 1))
     };
 
+    phases.mark("stand_down");
     if let Some(gate) =
         crate::lead_termination::stand_down_gate(&manifest, &parsed.transcript_path, &parsed.cwd)
     {
@@ -202,6 +283,7 @@ pub(super) fn lead_decide(
     if let Some(result) = crate::lead_term::gate(&reading, &manifest.scope, dry, &blind_block) {
         return result;
     }
+    phases.mark("stale_doc");
     if let Some((gate_reading, gate_message)) = stale_team_doc_gate(
         &lead,
         &parsed.transcript_path,
@@ -212,6 +294,7 @@ pub(super) fn lead_decide(
         return blind_block(&gate_reading, &gate_message, 0, dry);
     }
 
+    phases.mark("board");
     let board = match read_org_board(
         &parsed.fno_bin,
         &parsed.cwd,
@@ -286,12 +369,14 @@ pub(super) fn lead_decide(
         let (undelivered, drain_error) = if manifest.scope.is_empty() {
             (0, None)
         } else {
-            crate::loop_lead::scope_undelivered_with_reserve_watch(
+            phases.mark("pre_drain");
+            drain_with_phase_receipt(
                 &parsed.fno_bin,
                 &parsed.cwd,
                 &manifest.scope,
                 &session_id,
                 &emit,
+                &phases,
             )
         };
         if undelivered == 0 {
@@ -568,6 +653,13 @@ fn stale_team_doc_gate(
     fno_bin: &str,
     now: std::time::SystemTime,
 ) -> Option<(String, String)> {
+    // Past the reserve line a transcript scan spends the drain's slice: this
+    // gate already fails open (None) on any fact it cannot measure, so a
+    // spent fire takes the same silence instead of scanning. The board makes
+    // the identical refusal (lead_termination.rs read_org_board).
+    if crate::loopcheck::stopgate_pre_drain_spent() {
+        return None;
+    }
     if manifest.harness.as_deref().unwrap_or("claude") != "claude" {
         return None;
     }
@@ -761,6 +853,121 @@ mod stale_team_doc_tests {
         assert_eq!(reading, crate::lead_escalation::reading_stale_team_doc());
         assert!(message.contains("precompact-canon-doc.sh"), "{message}");
         assert!(message.contains("4 > 3"), "{message}");
+    }
+
+    #[test]
+    fn a_spent_fire_skips_the_transcript_gates() {
+        // The identical fixture unspent blocks (the test above); a spent
+        // fire takes the fail-open silence BEFORE the scan, so the drain's
+        // slice is never spent on a transcript read. The reserve literal is
+        // the production 16s.
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
+        let handoffs = tmp.path().join("handoffs");
+        seed_doc(&handoffs);
+        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
+        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
+        super::stopgate_stamp_fire(0, std::time::Instant::now(), 16_000);
+        assert!(crate::loopcheck::stopgate_pre_drain_spent());
+        let gate = stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now);
+        assert!(gate.is_none(), "{gate:?}");
+        let mut held = manifest("claude");
+        held.harness_session_id = Some("holder-session".into());
+        assert!(crate::lead_termination::stand_down_gate(&held, &transcript, tmp.path()).is_none());
+    }
+
+    #[test]
+    fn the_phases_row_lands_before_the_drain_read() {
+        // AC1: the receipt is emitted BEFORE the drain child spawns, so a
+        // fire the harness kills mid-drain still leaves the row that names
+        // the spender. The stub drain sleeps far past its injected bound, so
+        // the call returns TimedOut - and the receipt is already recorded.
+        let dir = tempfile::tempdir().unwrap();
+        let fno = crate::write_exec_stub(
+            dir.path(),
+            "fno",
+            "#!/bin/sh\nif [ \"$3\" = drain ]; then sleep 5; printf '{\"undelivered\": 2}\\n'; fi\n",
+        );
+        super::stopgate_stamp_fire(150, std::time::Instant::now() + Duration::from_secs(50), 0);
+        let mut phases = PhaseClock::new();
+        for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
+            phases.mark(name);
+        }
+        phases.mark("pre_drain");
+        let recorded: std::rc::Rc<std::cell::RefCell<Vec<(String, serde_json::Value)>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = recorded.clone();
+        let emit = move |event_type: &str, data: serde_json::Value| {
+            sink.borrow_mut().push((event_type.to_string(), data));
+        };
+        let (undelivered, error) = drain_with_phase_receipt(
+            fno.to_str().unwrap(),
+            dir.path(),
+            "footnote",
+            "lead-session",
+            &emit,
+            &phases,
+        );
+        assert_eq!(undelivered, i64::MAX, "the wedged drain must time out");
+        assert!(
+            matches!(
+                error,
+                Some(crate::loop_lead::ScopeDrainError::TimedOut { .. })
+            ),
+            "{error:?}"
+        );
+        let rows = recorded.borrow();
+        assert_eq!(
+            rows[0].0, "lead_fire_phases",
+            "the receipt precedes every other event"
+        );
+        let body = &rows[0].1;
+        let phases_ms = body["phases_ms"].as_object().unwrap();
+        for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
+            assert!(phases_ms.contains_key(name), "{phases_ms:?}");
+        }
+        assert!(body["pre_drain_total_ms"].as_u64().unwrap() > 0);
+        assert!(body["budget_remaining_ms"].as_u64().unwrap() > 0);
+        assert!(body.get("harness_margin_remaining_ms").is_some());
+    }
+
+    #[test]
+    fn no_phases_row_before_the_drain_path() {
+        // A fire that never reaches the drain writes no receipt: the row is
+        // the drain's pre-read record, not a per-fire heartbeat.
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = LoopCheckArgs {
+            state_path: dir.path().join("no-such-lead.md"),
+            transcript_path: dir.path().join("t.jsonl"),
+            cwd: dir.path().to_path_buf(),
+            global_settings_path: None,
+            events_path: Some(dir.path().join("events.jsonl")),
+            global_events_path: Some(dir.path().join("global-events.jsonl")),
+            settings_path: None,
+            ledger_path: None,
+            gh_budget_ledger: None,
+            now_override: None,
+            gh_bin: "/nonexistent-gh".into(),
+            git_bin: "/nonexistent-git".into(),
+            author_harness_override: Some("none".into()),
+            hook_input_stdin: false,
+            driver: "lead".into(),
+            fno_bin: "/nonexistent-fno".into(),
+            read_timeout_ms: None,
+            harness: None,
+            harness_session: None,
+        };
+        super::stopgate_stamp_fire(0, std::time::Instant::now() + Duration::from_secs(50), 0);
+        let (code, out) = lead_decide(&parsed, None);
+        assert_eq!(code, 0);
+        assert!(out.contains("no lead manifest"), "{out}");
+        for path in [
+            parsed.events_path.clone().unwrap(),
+            parsed.global_events_path.clone().unwrap(),
+        ] {
+            let body = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(!body.contains("lead_fire_phases"), "{body}");
+        }
     }
 }
 
