@@ -6919,8 +6919,7 @@ def dispatch_send(
                 if not family1_attemptable:
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
-                    from fno import rust_binary
-                    from fno.bus.log import record_hosted_delivery, stage_before_live
+                    from fno import paths, rust_binary
                     from fno.mail.envelope import wrap_fno_mail
 
                     record: dict[str, Any] = dict(
@@ -6939,11 +6938,13 @@ def dispatch_send(
                         word_count=rust_binary.style_word_count(message),
                         subject=mail_ctx.subject,
                     )
+                    bus_live = str(paths.bus_dir() / "messages.jsonl")
+                    staged_fields = {k: v for k, v in record.items() if v is not None}
                     # Stage before the inject; a staging failure demotes to the
                     # durable floor. An empty recipient (mcp-only row) stages nothing.
                     try:
                         if record["recipient"]:
-                            stage_before_live(**record)
+                            rust_binary.chats_command(["stage", bus_live], staged_fields)
                     except Exception as exc:  # noqa: BLE001 - demote to durable
                         print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
                         live_miss_reason = "stage-failed"
@@ -6961,7 +6962,10 @@ def dispatch_send(
                         if _live_delivered:
                             delivery = "hosted"
                             try:
-                                record_hosted_delivery(**record)
+                                rust_binary.chats_command(
+                                    ["stage", bus_live, "--delivery", "hosted"],
+                                    staged_fields,
+                                )
                             except Exception as exc:  # noqa: BLE001 - delivery already succeeded
                                 print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
                         else:

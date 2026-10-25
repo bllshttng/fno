@@ -233,7 +233,7 @@ def _append_to_bus(
     A failure here FAILS the caller's send - the message is NOT durably stored,
     so reporting success would be a silent loss. This raises (it does NOT swallow).
     """
-    from fno.bus.log import Envelope, append as _bus_append
+    from fno import paths, rust_binary
 
     meta: dict[str, object] = {}
     if refs:
@@ -247,30 +247,40 @@ def _append_to_bus(
         meta["owner"] = owner
     if ttl_at is not None:
         meta["ttl_at"] = _format_dt(ttl_at)
-    # Origin rides the Envelope field only (from_json_line falls back to the
-    # legacy meta copy for pre-field rows); writing both channels left two
-    # places a future edit could update divergently.
-    _bus_append(
-        Envelope(
-            id=msg_id,
-            thread=thread_id,
-            from_=sender,
-            to=recipient,
-            kind=kind,
-            body=body,
-            ts=_format_dt(timestamp),
-            in_reply_to=in_reply_to,
-            meta=meta,
-            from_harness=from_harness,
-            to_harness=to_harness,
-            from_session=from_session,
-            from_model=from_model,
-            to_kind=to_kind,
-            word_count=word_count,
-            origin=origin,
-            subject=subject,
-        )
-    )
+    # The envelope is the door's contract (v1, canonical key order, optional
+    # tags omitted when unset, body last); the append door owns the lock, the
+    # rotation and the record seam.
+    row: dict[str, object] = {
+        "v": 1,
+        "id": msg_id,
+        "ts": _format_dt(timestamp),
+        "thread": thread_id,
+        "from": sender,
+        "to": recipient,
+        "kind": kind,
+    }
+    if from_harness:
+        row["from_harness"] = from_harness
+    if to_harness:
+        row["to_harness"] = to_harness
+    if in_reply_to:
+        row["in_reply_to"] = in_reply_to
+    if from_session:
+        row["from_session"] = from_session
+    if from_model:
+        row["from_model"] = from_model
+    if to_kind:
+        row["to_kind"] = to_kind
+    if word_count is not None:
+        row["word_count"] = word_count
+    if origin:
+        row["origin"] = origin
+    if subject:
+        row["subject"] = subject
+    if meta:
+        row["meta"] = meta
+    row["body"] = body
+    rust_binary.chats_command(["bus-append", str(paths.bus_dir() / "messages.jsonl")], row)
 
 
 def _mark_control_pending(recipient: str) -> None:
