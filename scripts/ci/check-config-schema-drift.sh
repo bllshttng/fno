@@ -22,12 +22,19 @@ if ! command -v uv >/dev/null 2>&1; then
     echo "check-config-schema-drift: 'uv' is not available" >&2
     exit 2
 fi
-FNO="${FNO_BIN:-fno}"
-if ! command -v "$FNO" >/dev/null 2>&1; then
-    echo "check-config-schema-drift: '$FNO' is not available (set FNO_BIN to the in-tree build)" >&2
-    exit 2
+# The table is embedded at compile time, so an installed `fno` would check the
+# docs against its own old table and pass. Build this checkout's front door
+# unless FNO_BIN names one.
+if [ -n "${FNO_BIN:-}" ]; then
+    FNO=("$FNO_BIN")
+else
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "check-config-schema-drift: 'cargo' is not available (or set FNO_BIN to this checkout's build)" >&2
+        exit 2
+    fi
+    FNO=(cargo run --quiet --manifest-path crates/fno/Cargo.toml --bin fno --)
 fi
 
 (cd cli && uv run python -m fno.config.schema_gen --check)
-"$FNO" config schema --markdown --check
-"$FNO" config schema --toml --check
+"${FNO[@]}" config schema --markdown --check
+"${FNO[@]}" config schema --toml --check
