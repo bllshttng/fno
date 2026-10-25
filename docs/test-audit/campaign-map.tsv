@@ -83,7 +83,6 @@ K1	cli/tests/unit/test_config_optouts.py	py	13
 K1	cli/tests/unit/test_config_receipt.py	py	2
 K1	cli/tests/unit/test_config_routing.py	py	9
 K1	cli/tests/unit/test_config_schema.py	py	10
-K1	cli/tests/unit/test_config_search_ceiling.py	py	2
 K1	cli/tests/unit/test_config_set.py	py	16
 K1	cli/tests/unit/test_config_toml_readers.py	py	4
 K1	cli/tests/unit/test_config_unset.py	py	5
