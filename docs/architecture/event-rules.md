@@ -89,7 +89,7 @@ Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `no
 
 ## Measuring a rule
 
-Each row is a guess about a failure, so check it against its fires. `fno-agents intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. Spans written before excerpts existed print `(no excerpt)`. Judge those from the session transcript.
+Each row is a guess about a failure, so check it against its fires. `fno-agents intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. A fire with no excerpt prints its matched event instead. That is a question id, a span id, or the `stop:<session>:<turn>` key of the transcript turn. The lens reads this project's journal only, so it refuses the scope flags.
 
 ## Overrides
 

@@ -1221,6 +1221,11 @@ pub fn run_intel(args: &[String]) -> i32 {
         eprintln!("fno-agents intel: --labels needs --lens rules");
         return 2;
     }
+    let scoped = all_projects || !projects.is_empty() || !harness_spec.is_empty();
+    if lens.is_some() && (scoped || session.is_some() || node.is_some()) {
+        eprintln!("fno-agents intel: --lens reads this project's journal; drop the scope flags");
+        return 2;
+    }
     if json && lens.as_deref() == Some("rules") {
         eprintln!("fno-agents intel: --lens rules prints text only; drop --json");
         return 2;

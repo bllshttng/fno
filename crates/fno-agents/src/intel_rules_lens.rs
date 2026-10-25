@@ -14,8 +14,9 @@ pub struct Fire {
     pub span_id: String,
     pub ts: String,
     pub session: String,
-    /// The reply tail the span kept; absent on fires from before it kept one.
-    pub excerpt: Option<String>,
+    /// What a judge reads: a block's reply tail, else the matched event (a
+    /// question id, a span id, or the `stop:<session>:<turn>` key).
+    pub evidence: Option<String>,
 }
 
 pub struct RuleRow {
@@ -78,7 +79,10 @@ pub fn fold(
             span_id: text(&data["trace"]["span_id"]),
             ts: text(&v["ts"]),
             session: text(&data["trace"]["actor_session"]),
-            excerpt: data["excerpt"].as_str().map(str::to_string),
+            evidence: data["excerpt"]
+                .as_str()
+                .or(data["matched_event"].as_str())
+                .map(str::to_string),
         };
         let key = (rule.to_string(), text(&data["span_kind"]));
         by_rule.entry(key).or_default().push((*ts_ms, fire));
@@ -176,9 +180,9 @@ pub(crate) fn run_lens(
     for r in report.iter().filter(|r| !r.sample.is_empty()) {
         println!("sample {} ({}):", r.rule, r.kind);
         for f in &r.sample {
-            let none = "(no excerpt: fired before spans kept one)";
-            let excerpt = f.excerpt.as_deref().unwrap_or(none).replace('\n', " / ");
-            println!("  {} {} {}: {excerpt}", f.span_id, f.ts, f.session);
+            let evidence = f.evidence.as_deref().unwrap_or("(no evidence)");
+            let evidence = evidence.replace('\n', " / ");
+            println!("  {} {} {}: {evidence}", f.span_id, f.ts, f.session);
         }
     }
     println!("label: append {{\"span_id\":\"s-...\",\"verdict\":\"true\"|\"false\"}} lines to a file, then pass --labels <file>");
@@ -230,7 +234,7 @@ mod tests {
         // The unlabeled fire leads the sample so the next pass labels it.
         let ids: Vec<&str> = chat.sample.iter().map(|f| f.span_id.as_str()).collect();
         assert_eq!(ids, vec!["s-2", "s-1"]);
-        assert_eq!(chat.sample[1].excerpt.as_deref(), Some("Which one?"));
+        assert_eq!(chat.sample[1].evidence.as_deref(), Some("Which one?"));
         assert_eq!(fold(&rows, &labels, 30 * DAY_MS, None)[0].sample.len(), 3);
         assert!(parse_labels("{\"span_id\":\"s-1\",\"verdict\":\"maybe\"}").is_err());
     }
