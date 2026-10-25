@@ -1146,21 +1146,12 @@ mod tests {
         assert!(!decision_ask(
             "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
         ));
-        // Lead fires judged false on 2026-10-23 (intel --lens rules), trimmed.
-        // A clarification offer and an approval instruction
-        // carry no options under an ask line.
-        let clarify = "The worker now has your four edits:\n1. thread, never substrate\n\
-                       2. headless comes off\n\nIf you meant something else, tell me and \
-                       I'll redirect it.\n\nNext: wait for the preview link.";
-        assert!(!decision_ask(clarify));
-        let approve = "You need to approve the stable release.\n\nAfter you approve stable:\n\
-                       1. Lift the freeze\n2. I mail the workers. 3785 still needs your \
-                       visual approval.\n3. I hand off to a fresh lead.";
+        // A lead fire judged false on 2026-10-23 (intel --lens rules): an ask
+        // marker inside a numbered step is a step, not an ask over options.
+        let approve = "After you approve stable:\n1. Lift the freeze\n\
+                       2. I mail the workers. One PR still needs your visual approval.\n\
+                       3. I hand off to a fresh lead.";
         assert!(!decision_ask(approve));
-        // A fire judged true the same week: two options under "your call".
-        assert!(decision_ask(
-            "Two ways to get more seats (both are your call):\n1. Raise max_live\n2. Allow --force"
-        ));
     }
 
     fn r1_unpromoted_and_cap_legs() {

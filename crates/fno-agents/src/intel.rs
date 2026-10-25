@@ -1221,6 +1221,10 @@ pub fn run_intel(args: &[String]) -> i32 {
         eprintln!("fno-agents intel: --labels needs --lens rules");
         return 2;
     }
+    if json && lens.as_deref() == Some("rules") {
+        eprintln!("fno-agents intel: --lens rules prints text only; drop --json");
+        return 2;
+    }
     if let Some(name) = lens.as_deref() {
         return match name {
             "decisions" => crate::intel_lens::run_lens(days, json),
