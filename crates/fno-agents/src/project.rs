@@ -284,11 +284,13 @@ fn load_registry() -> Result<Vec<(String, String)>, String> {
     let settings = home.as_ref().map(|h| h.join(".fno").join("config.toml"));
     let legacy = home.as_ref().map(|h| h.join(".fno").join("settings.yaml"));
 
-    // Python chose the legacy file whenever config.toml was absent and
-    // refused only when NEITHER existed, naming the config.toml path.
+    // Python chose the legacy file whenever config.toml was absent
+    // (exists(), so an unreadable path still counts as chosen and degrades
+    // to an empty registry with a warning) and refused only when NEITHER
+    // existed, naming the config.toml path.
     let chosen: Option<(&PathBuf, bool)> = match (&settings, &legacy) {
-        (Some(p), _) if p.is_file() => Some((p, false)),
-        (_, Some(l)) if l.is_file() => Some((l, true)),
+        (Some(p), _) if p.exists() => Some((p, false)),
+        (_, Some(l)) if l.exists() => Some((l, true)),
         _ => None,
     };
     let Some((path, is_yaml)) = chosen else {
@@ -299,8 +301,16 @@ fn load_registry() -> Result<Vec<(String, String)>, String> {
         ));
     };
 
-    let text = std::fs::read_to_string(path)
-        .map_err(|err| format!("refusing: could not read {}: {err}\n", path.display()))?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!(
+                "config file at {} could not be read: {err}; using defaults",
+                path.display()
+            );
+            return Ok(Vec::new());
+        }
+    };
     if is_yaml {
         registry_from_yaml(&text, path)
     } else {
@@ -327,7 +337,9 @@ fn resolve_in(map: &[(String, String)], name: &str) -> Result<String, String> {
     ))
 }
 
-/// Build the alias list from a config.toml body, in document order.
+/// Build the alias list from a config.toml body, in document order. The
+/// reader also lifts a `config = { work = ... }` wrapper (the Python reader
+/// unwrapped both shapes), wrapper values winning nested conflicts.
 fn registry_from_toml(text: &str, path: &Path) -> Result<Vec<(String, String)>, String> {
     let doc: DocumentMut = match text.parse() {
         Ok(doc) => doc,
@@ -340,7 +352,7 @@ fn registry_from_toml(text: &str, path: &Path) -> Result<Vec<(String, String)>, 
         }
     };
     let mut map: Vec<(String, String)> = Vec::new();
-    let Some(work) = doc.get("work").and_then(Item::as_table) else {
+    let Some(work) = merged_work_toml(&doc) else {
         return Ok(map);
     };
     let Some(workspaces) = work.get("workspaces").and_then(Item::as_table) else {
@@ -372,6 +384,38 @@ fn registry_from_toml(text: &str, path: &Path) -> Result<Vec<(String, String)>, 
         }
     }
     Ok(map)
+}
+
+/// The `work` table of a config.toml, a `config = { work = ... }` wrapper
+/// lifted and merged over any top-level `work` (wrapper values win on
+/// nested-table conflicts, lists and scalars replace wholesale), matching
+/// the Python reader's unwrap.
+fn merged_work_toml(doc: &DocumentMut) -> Option<Table> {
+    let top = doc.get("work").and_then(Item::as_table);
+    let wrapped = doc
+        .get("config")
+        .and_then(Item::as_table)
+        .and_then(|c| c.get("work"))
+        .and_then(Item::as_table);
+    match (top, wrapped) {
+        (None, None) => None,
+        (Some(one), None) | (None, Some(one)) => Some(one.clone()),
+        (Some(base), Some(wins)) => Some(merge_tables(base, wins)),
+    }
+}
+
+/// Recursive table merge with the Python reader's direction: `wins` replaces
+/// non-table values wholesale and merges table values key by key.
+fn merge_tables(base: &Table, wins: &Table) -> Table {
+    let mut out = base.clone();
+    for (key, item) in wins.iter() {
+        let merged = match (out.get(key).and_then(Item::as_table), item.as_table()) {
+            (Some(existing), Some(wins_table)) => Item::Table(merge_tables(existing, wins_table)),
+            _ => item.clone(),
+        };
+        out.insert(key, merged);
+    }
+    out
 }
 
 /// Register one project entry from its key lookup, canonical first.

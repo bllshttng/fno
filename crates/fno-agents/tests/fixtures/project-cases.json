@@ -85,6 +85,16 @@
     ]
   },
   {
+    "label": "resolve reads a config wrapped toml shape",
+    "home_files": {
+      ".fno/config.toml": "config = { work = { workspaces = { ws1 = { projects = [ {name = \"alpha\", short_name = \"a\"} ] } } } }\n"
+    },
+    "argv": [
+      "resolve",
+      "a"
+    ]
+  },
+  {
     "label": "resolve reads the legacy config wrapped shape",
     "home_files": {
       ".fno/settings.yaml": "config:\n  work:\n    workspaces:\n      main:\n        projects:\n          - name: example-pipeline\n            short_name: etl\n"
