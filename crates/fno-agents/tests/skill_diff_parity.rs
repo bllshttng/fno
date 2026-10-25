@@ -278,20 +278,27 @@ fn guards_goldens() {
                 case.slug
             );
         } else if slug_starts(&case, "bloat_flag") {
+            // The golden freezes the Python dict; the Rust triple renders as
+            // an object, not a three-element array.
             let as_map = |key: &str| -> Vec<serde_json::Map<String, serde_json::Value>> {
                 case.input[key]
                     .as_array()
                     .map(|a| a.iter().filter_map(|x| x.as_object().cloned()).collect())
                     .unwrap_or_default()
             };
+            let flag_json = |flag: Option<(i64, usize, i64)>| {
+                flag.map(|(net, window, threshold)| {
+                    serde_json::json!({"net_growth": net, "window": window, "threshold": threshold})
+                })
+            };
             assert_eq!(
-                serde_json::to_value(bloat_flag(&as_map("over"))).unwrap(),
+                serde_json::to_value(flag_json(bloat_flag(&as_map("over")))).unwrap(),
                 case.expected["over"],
                 "case {}",
                 case.slug
             );
             assert_eq!(
-                serde_json::to_value(bloat_flag(&as_map("under"))).unwrap(),
+                serde_json::to_value(flag_json(bloat_flag(&as_map("under")))).unwrap(),
                 case.expected["under"],
                 "case {}",
                 case.slug
