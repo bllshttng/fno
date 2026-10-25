@@ -15,7 +15,10 @@
 //! golden, so the door answers with the row as parsed; a row whose required
 //! id/from/to/kind is present but non-string skips as malformed. The door
 //! sorts the sets answer for a stable contract where the oracle returned a
-//! set; consumers test membership, not order.
+//! set; consumers test membership, not order. The door's warnings print to
+//! its own stderr, which the Python door transport captures and surfaces
+//! only on failure, where the oracle printed them to the caller's terminal;
+//! the binary's direct surfaces still see them.
 //!
 //! Every case runs the client binary on a fresh temp root. The fixture ids,
 //! bodies and timestamps are fixed strings, so the output carries no clock
@@ -173,11 +176,19 @@ const CASES: &[Case] = &[
         label: "unread lists the deliverable rows after the cursor",
         log: PAIRS_LOG,
         cursor: Some(("worker", CURSOR_M2)),
+        args: &["unread", "--name", "worker"],
     },
     Case {
         label: "unread rescans when the cursor rotated out",
         log: PAIRS_LOG,
         cursor: Some(("worker", CURSOR_ROTATED)),
+        args: &["unread", "--name", "worker"],
+    },
+    Case {
+        label: "unread warns on a corrupt cursor and rescans",
+        log: PAIRS_LOG,
+        cursor: Some(("worker", "{ invalid")),
+        args: &["unread", "--name", "worker"],
     },
     Case {
         label: "unread excludes senders by name and session",
@@ -229,8 +240,9 @@ fn bus_read_matches_goldens() {
 }
 
 /// `chats stage --delivery hosted` mints the receipt row the hosted lane
-/// wrote: the shared id, the delivery tag in its slot, and the
-/// to_session/to_harness meta copy the landed check reads.
+/// wrote: the shared id, the delivery tag in its slot, the to_harness
+/// envelope field the audit render reads, and the to_session/to_harness
+/// meta copy the landed check reads.
 #[test]
 fn stage_mints_the_hosted_receipt() {
     use std::io::Write as _;
@@ -283,6 +295,7 @@ fn stage_mints_the_hosted_receipt() {
             "from",
             "to",
             "kind",
+            "to_harness",
             "delivery",
             "to_kind",
             "word_count",

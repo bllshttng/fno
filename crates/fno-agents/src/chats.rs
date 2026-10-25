@@ -2220,6 +2220,17 @@ fn run_bus_read(args: &[String]) -> i32 {
             for w in &warnings {
                 eprintln!("{w}");
             }
+            // The scan's own cursor read is silent (the drain paths share
+            // it); the oracle warned on a corrupt cursor here, so the door
+            // names the corruption before the rescan answer.
+            for name in &names {
+                let (_cursor, cursor_warnings) = crate::mail_control_drain::read_cursor_file(
+                    &bus_dir.join("cursors").join(format!("{name}.json")),
+                );
+                for w in &cursor_warnings {
+                    eprintln!("{w}");
+                }
+            }
             let mut out = serde_json::Map::new();
             for name in &names {
                 let unread = crate::mail_control_drain::unread_messages_excluding(
