@@ -143,6 +143,9 @@ NATIVE_SERVED_LEAVES = {
     "do pr sync-canonical",
     "do pr verify",
     "do pr wait",
+    # The project family answers from the native spawn-overlay door now
+    # (init/resolve/map); the config group's click tree no longer mounts it.
+    "config project",
 }
 
 # Two people hit these gates cold within an hour and both reverse-engineered the

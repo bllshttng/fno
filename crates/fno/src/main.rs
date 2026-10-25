@@ -346,6 +346,10 @@ enum Role {
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
     /// The bool is the moved spelling, which prints its one stderr note.
     PluginsCli(Vec<OsString>, bool),
+    /// `fno config project ...` and the moved `fno project ...` spelling: the
+    /// whole project group execs `fno-agents spawn-overlay project`. The bool
+    /// is the moved spelling, which prints its one stderr note.
+    ProjectCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -618,6 +622,16 @@ fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
 }
 
+/// `fno config project ...` or `fno project ...` (moved): the args after the
+/// group. The project family answers natively whole, so both spellings claim
+/// here and never reach the Python forward.
+fn classify_project(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    if args.first()?.to_str()? == "project" {
+        return Some((args[1..].to_vec(), true));
+    }
+    classify_group_command(args, "config", "project").map(|rest| (rest, false))
+}
+
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
 /// in `fno-agents claim`, and the Python claim group names its actions one
 /// by one, so the front claims these two and execs the native binary.
@@ -873,6 +887,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some((rest, moved)) = classify_plugins(args) {
         return Role::PluginsCli(rest, moved);
+    }
+    if let Some((rest, moved)) = classify_project(args) {
+        return Role::ProjectCli(rest, moved);
     }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
@@ -1343,6 +1360,16 @@ fn main() {
             std::process::exit(fno_agents_exec(
                 "fno config plugins",
                 &["spawn-overlay", "plugins"],
+                &rest,
+            ))
+        }
+        Role::ProjectCli(rest, moved) => {
+            if moved {
+                eprintln!("fno project is now fno config project");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config project",
+                &["spawn-overlay", "project"],
                 &rest,
             ))
         }
@@ -2053,6 +2080,19 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["config", "plugin", "claude"]), false),
             Role::PluginsCli(os(&["claude"]), false)
+        );
+        // The project group is native whole, under both spellings.
+        assert_eq!(
+            decide_role(&os(&["config", "project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
+        );
+        assert_eq!(
+            decide_role(&os(&["project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), true)
+        );
+        assert_ne!(
+            decide_role(&os(&["config", "projects", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
         );
     }
 
