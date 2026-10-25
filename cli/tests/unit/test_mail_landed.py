@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 
 from fno.agents import discover
-from fno.bus.log import iter_messages, landed_ids, new_msg_id, record_hosted_delivery
 from fno.mail.landed import _sent_unclaimed, landed_states, nag_line
 from fno.paths_testing import use_tmpdir
+from tests.fixtures.bus_rows import append_row, new_msg_id, read_rows, withdrawn_and_landed
 
 SENDER_SESSION = "sender0001"
 RECIPIENT_SESSION = "recipient01"
@@ -50,7 +50,7 @@ def _envelope_line(msg_id: str) -> str:
 def _backdate_last(ts: str) -> None:
     """Envelopes are immutable once appended; rewrite the just-written line's
     timestamp in place so age-bound tests can backdate a send."""
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     path = bus_log_path()
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -73,11 +73,23 @@ def _send_hosted(
     body: str | None = None,
 ) -> str:
     msg_id = new_msg_id()
-    record_hosted_delivery(
-        msg_id=msg_id, sender="alice", recipient=recipient,
-        body=body if body is not None else f'<fno_mail from="alice" id="{msg_id}">hi</fno_mail>',
-        from_session=from_session, to_session=to_session, to_harness=to_harness,
-    )
+    row = {
+        "id": msg_id,
+        "from": "alice",
+        "to": recipient,
+        "kind": "send",
+        "delivery": "hosted",
+        "from_session": from_session,
+        "body": body if body is not None else f'<fno_mail from="alice" id="{msg_id}">hi</fno_mail>',
+    }
+    meta = {}
+    if to_session:
+        meta["to_session"] = to_session
+    if to_harness:
+        meta["to_harness"] = to_harness
+    if meta:
+        row["meta"] = meta
+    append_row(row)
     if ts is not None:
         _backdate_last(ts)
     return msg_id
@@ -88,25 +100,23 @@ def test_ac1_landed_true_when_id_is_in_recipient_transcript(tmp_path, monkeypatc
     mid = _send_hosted()
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, _envelope_line(mid))
 
-    all_msgs = list(iter_messages())
-    states = landed_states(all_msgs, all_msgs)
+    all_msgs = read_rows()
+    states = landed_states(withdrawn_and_landed()[1], all_msgs)
 
     assert states[mid] is True
 
     # the post-send verify reads the same transcript RAW, so the id
     # inside a rendered tool output (an `unread` poll result) counts as the
     # pickup the record parsers drop. No <fno_mail> tag anywhere.
-    from fno.bus.log import Envelope, append
     from fno.mail.landed import post_send_landed
 
-    send = Envelope.new(from_="alice", to="bob", kind="send", body="raw pickup")
-    append(send)
+    send_id = append_row({"from": "alice", "to": "bob", "kind": "send", "body": "raw pickup"})
     tool_output = json.dumps(
-        {"type": "tool_result", "content": f"{send.id} queued (durable) for bob"}
+        {"type": "tool_result", "content": f"{send_id} queued (durable) for bob"}
     ) + "\n"
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, tool_output)
     assert post_send_landed(
-        send.id, to="bob", to_harness="claude", to_session=RECIPIENT_SESSION
+        send_id, to="bob", to_harness="claude", to_session=RECIPIENT_SESSION
     ) == (True, "recipient transcript")
 
 
@@ -119,9 +129,9 @@ def test_ac3_unresolvable_transcript_reads_null_never_false(tmp_path, monkeypatc
     projects.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv(discover.PROJECTS_DIR_ENV, str(projects))
 
-    all_msgs = list(iter_messages())
+    all_msgs = read_rows()
 
-    assert landed_states(all_msgs, all_msgs)[mid] is None
+    assert landed_states(withdrawn_and_landed()[1], all_msgs)[mid] is None
 
 
 def test_ac5_landed_proof_survives_transcript_rotation(tmp_path, monkeypatch):
@@ -139,14 +149,14 @@ def test_ac5_landed_proof_survives_transcript_rotation(tmp_path, monkeypatch):
     outstanding = _sent_unclaimed("alice", ttl_seconds=0)
     assert outstanding == []  # landed at first sighting; recorded, not returned
 
-    all_msgs = list(iter_messages())
-    assert mid in landed_ids(all_msgs)
+    assert mid in withdrawn_and_landed()[1]
 
     # The transcript is gone now (rotated away, session dead); the durable
-    # proof must still hold.
+    # proof must still hold. The landed set rides in FIRST, so the proven id
+    # never re-greets the cleared transcript.
     _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, "")
-    all_msgs = list(iter_messages())
-    assert landed_states(all_msgs, all_msgs)[mid] is True
+    all_msgs = read_rows()
+    assert landed_states(withdrawn_and_landed()[1], all_msgs)[mid] is True
 
 
 def test_ac2_err_readable_transcript_without_the_id_nags(tmp_path, monkeypatch):
@@ -158,7 +168,7 @@ def test_ac2_err_readable_transcript_without_the_id_nags(tmp_path, monkeypatch):
 
     outstanding = _sent_unclaimed("alice", ttl_seconds=0)
 
-    assert [m.id for m in outstanding] == [mid]
+    assert [m["id"] for m in outstanding] == [mid]
     assert "bob" in (nag_line(outstanding) or "")
 
 
@@ -166,27 +176,25 @@ def test_ac3_edge_durable_row_with_unread_cursor_still_nags(tmp_path, monkeypatc
     """The durable rule does not move: a past-TTL row whose recipient cursor
     is still behind it is outstanding even with no landed verdict."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.bus.log import Envelope, append
 
-    send = Envelope.new(
-        from_="alice", to="lead", kind="send", body="status report", ts=_ts_ago(3600)
+    send_id = append_row(
+        {"from": "alice", "to": "lead", "kind": "send", "body": "status report", "ts": _ts_ago(3600)}
     )
-    append(send)
 
     outstanding = _sent_unclaimed("alice", ttl_seconds=0)
 
-    assert [m.id for m in outstanding] == [send.id]
+    assert [m["id"] for m in outstanding] == [send_id]
 
     # the sender-side verify reads the same cursor, and an advanced
     # cursor IS the pickup proof - the bus claim the transcript grep is blind
     # to. Before the claim the verdict is a proven False; the nag above still
     # applies its own TTL rule, which this arm does not touch.
-    from fno.bus.cursor import write_cursor
+    from tests.fixtures.bus_rows import write_cursor
     from fno.mail.landed import post_send_landed
 
-    assert post_send_landed(send.id, to="lead") == (False, "")
-    write_cursor("lead", send.id)
-    assert post_send_landed(send.id, to="lead") == (
+    assert post_send_landed(send_id, to="lead") == (False, "")
+    write_cursor("lead", send_id)
+    assert post_send_landed(send_id, to="lead") == (
         True,
         "bus claim (recipient read past it)",
     )
@@ -200,20 +208,17 @@ def test_ac9_self_send_refuses_the_resolution(tmp_path, monkeypatch):
     mid = _send_hosted(to_session=SENDER_SESSION, from_session=SENDER_SESSION)
     _write_transcript(tmp_path, monkeypatch, SENDER_SESSION, _envelope_line(mid))
 
-    all_msgs = list(iter_messages())
+    all_msgs = read_rows()
 
-    assert landed_states(all_msgs, all_msgs)[mid] is None
+    assert landed_states(withdrawn_and_landed()[1], all_msgs)[mid] is None
 
 
 def _durable_send_and_ack(*, to: str = "lead") -> str:
     """One durable `send` row plus the `landed` row acknowledging it: the exact
     pair the field incident rendered as a blank message (x-22ce)."""
-    from fno.bus.log import Envelope, append, record_landed
-
-    send = Envelope.new(from_="worker", to=to, kind="send", body="status report")
-    append(send)
-    record_landed(msg_id=send.id, sender="worker", recipient=to)
-    return send.id
+    send_id = append_row({"from": "worker", "to": to, "kind": "send", "body": "status report"})
+    append_row({"from": "worker", "to": to, "kind": "landed", "body": "", "meta": {"landed": send_id}})
+    return send_id
 
 
 def test_reader_1_scan_unread_shows_the_message_never_the_ack(
@@ -223,12 +228,12 @@ def test_reader_1_scan_unread_shows_the_message_never_the_ack(
     equality names the surviving id, kind and body; a merely-shorter list would
     also pass for a reader that hid everything."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.bus.cursor import scan_unread
+    from tests.fixtures.bus_rows import scan_unread
 
     send_id = _durable_send_and_ack()
 
     unread = scan_unread("lead")
 
-    assert [(m.id, m.kind, m.body) for m in unread] == [
+    assert [(m["id"], m["kind"], m.get("body", "")) for m in unread] == [
         (send_id, "send", "status report")
     ]

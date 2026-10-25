@@ -40,9 +40,9 @@ def _invoke(runner: CliRunner, *args: str):
 
 
 def _rows(to: str) -> list:
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    return [m for m in iter_messages() if m.to == to]
+    return [m for m in read_rows() if m["to"] == to]
 
 
 def test_ac3_kind_send_projectless_error_names_real_flags(isolated, runner) -> None:
@@ -207,9 +207,9 @@ def test_cmd_send_from_self_without_identity_fails_loud(isolated, runner, monkey
 
 
 def _bus_len() -> int:
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    return len(list(iter_messages()))
+    return len(read_rows())
 
 
 def test_ac10_kind_fyi_to_handle_refused(isolated, runner):

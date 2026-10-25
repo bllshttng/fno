@@ -844,8 +844,7 @@ def test_an_absent_respawn_ceiling_defaults_to_four_like_the_walk(tmp_path):
 
 
 def test_the_wake_fires_on_a_real_bus_row_and_drains_by_cursor(tmp_path, monkeypatch):
-    from fno.bus.cursor import advance_cursor, read_cursor, scan_unread
-    from fno.bus.log import Envelope, append
+    from tests.fixtures.bus_rows import append_row, read_cursor, scan_unread, write_cursor
 
     monkeypatch.setenv("FNO_BUS_DIR", str(tmp_path / "bus"))
     rec = _Recorder()
@@ -861,14 +860,13 @@ def test_the_wake_fires_on_a_real_bus_row_and_drains_by_cursor(tmp_path, monkeyp
     roles = [{"holder": "lead-x", "scope": "epic-x", "status": "live"}]
 
     # A worker mails the absent lead: addressed to its reply handle.
-    waking = Envelope.new(
-        from_="worker-a",
-        to="aa11bb22",
-        kind="note",
-        body="merge landed for x-1, board refilled",
-        to_kind="name",
-    )
-    append(waking)
+    waking_id = append_row({
+        "from": "worker-a",
+        "to": "aa11bb22",
+        "kind": "note",
+        "body": "merge landed for x-1, board refilled",
+        "to_kind": "name",
+    })
 
     # Positive control inside the same run: the reader sees the row.
     assert len(scan_unread("aa11bb22")) == 1, "the reader must see the waking row"
@@ -889,8 +887,8 @@ def test_the_wake_fires_on_a_real_bus_row_and_drains_by_cursor(tmp_path, monkeyp
     assert rec.dispatches == [("epic-x", "mail", "aa11bb22", None)], f"woke: {rec.dispatches}"
 
     # The respawned session drains: the ack command advances the cursor.
-    assert advance_cursor("aa11bb22", waking.id) is True
-    assert read_cursor("aa11bb22") == waking.id, "the cursor names the waking id"
+    write_cursor("aa11bb22", waking_id)
+    assert read_cursor("aa11bb22") == waking_id, "the cursor names the waking id"
 
     # Next tick: no undrained mail, no board, nothing actionable -> no wake.
     rec2 = _Recorder()

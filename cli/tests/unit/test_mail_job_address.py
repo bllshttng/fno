@@ -57,9 +57,9 @@ def _acquire_node(node_id: str, session_id: str, *, harness: str = "claude") -> 
 
 
 def _bus_to(recipient: str):
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    return [m for m in iter_messages() if m.to == recipient]
+    return [m for m in read_rows() if m["to"] == recipient]
 
 
 def _set_identity(monkeypatch, session_id: str) -> None:
@@ -136,12 +136,12 @@ def test_send_live_miss_durables_to_job_address(runner, isolated, monkeypatch):
     assert "queued (durable)" in res.stdout
     msgs = _bus_to("node:miss-abcd")
     assert len(msgs) == 1
-    assert msgs[0].to == "node:miss-abcd"
+    assert msgs[0]["to"] == "node:miss-abcd"
     # Addressed to the JOB, never the holder's session handle.
     assert _bus_to("22222222") == []
     # Owner is wake-daemon: the holder exists but waits for a drain, not a turn.
-    assert msgs[0].meta.get("owner") == "wake-daemon"
-    assert msgs[0].to_kind == "node"
+    assert (msgs[0].get("meta") or {}).get("owner") == "wake-daemon"
+    assert msgs[0].get("to_kind") == "node"
 
 
 # ---------------------------------------------------------------------------
@@ -155,21 +155,20 @@ def test_drain_self_surfaces_job_mail_for_holder(runner, isolated, monkeypatch):
     _write_target_state(isolated, session_id=sid, claim_key="node:drain-abcd")
 
     # Seed job-addressed mail on the bus (as if a sender durable-floored it).
-    from fno.bus.log import append as bus_append
-    from fno.bus.log import Envelope
     from datetime import datetime, timezone
 
-    bus_append(
-        Envelope(
-            id="msg-drain-1",
-            thread="msg-drain-1",
-            from_="lead",
-            to="node:drain-abcd",
-            kind="send",
-            body="reached the successor",
-            ts=datetime.now(tz=timezone.utc).isoformat(),
-            to_kind="node",
-        )
+    from tests.fixtures.bus_rows import append_row
+
+    append_row(
+        {
+            "id": "msg-drain-1",
+            "from": "lead",
+            "to": "node:drain-abcd",
+            "kind": "send",
+            "body": "reached the successor",
+            "ts": datetime.now(tz=timezone.utc).isoformat(),
+            "to_kind": "node",
+        }
     )
 
     # Ambient identity = the holding session, so drain-self resolves to it.
@@ -212,21 +211,20 @@ def test_drain_self_skips_job_mail_when_not_holder(runner, isolated, monkeypatch
     _acquire_node("mine-abcd", sid)
     _write_target_state(isolated, session_id=sid, claim_key="node:mine-abcd")
 
-    from fno.bus.log import append as bus_append
-    from fno.bus.log import Envelope
     from datetime import datetime, timezone
 
-    bus_append(
-        Envelope(
-            id="msg-other-1",
-            thread="msg-other-1",
-            from_="lead",
-            to="node:other-abcd",
-            kind="send",
-            body="not for me",
-            ts=datetime.now(tz=timezone.utc).isoformat(),
-            to_kind="node",
-        )
+    from tests.fixtures.bus_rows import append_row
+
+    append_row(
+        {
+            "id": "msg-other-1",
+            "from": "lead",
+            "to": "node:other-abcd",
+            "kind": "send",
+            "body": "not for me",
+            "ts": datetime.now(tz=timezone.utc).isoformat(),
+            "to_kind": "node",
+        }
     )
 
     _set_identity(monkeypatch, sid)
