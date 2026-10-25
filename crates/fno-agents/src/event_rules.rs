@@ -21,6 +21,10 @@ const TABLE: &str = include_str!("event_rules.toml");
 /// and the fire's span carries `cap_reached`.
 pub(crate) const BLOCK_CAP: usize = 3;
 
+/// The reply tail a Stop block keeps on its span, so `intel --lens rules`
+/// can show a judge what the rule fired on. The tail is where asks sit.
+const EXCERPT_CHARS: usize = 600;
+
 /// The four classes only the user decides; `class_user_only` reads them off
 /// a question's escalate route span.
 const USER_CLASSES: &[&str] = &[
@@ -322,6 +326,13 @@ fn stop_block(
     let mut attrs = Map::new();
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
+    }
+    let chars: Vec<char> = ctx.last_message.chars().collect();
+    let excerpt: String = chars[chars.len().saturating_sub(EXCERPT_CHARS)..]
+        .iter()
+        .collect();
+    if !excerpt.trim().is_empty() {
+        attrs.insert("excerpt".to_string(), json!(excerpt));
     }
     write_fire_span(
         journal,
@@ -1041,6 +1052,10 @@ mod tests {
         let spans = rig.spans();
         assert_eq!(spans.len(), 1, "one block span for one fire");
         assert_eq!(spans[0]["data"]["span_kind"], "block");
+        assert_eq!(
+            spans[0]["data"]["excerpt"], ask,
+            "the span keeps the reply tail a judge reads"
+        );
         assert_eq!(spans[0]["data"]["rule"], "chat_ask_unfiled");
 
         // AC4: the same ask with a question filed this turn allows.
@@ -1133,6 +1148,25 @@ mod tests {
         ));
         assert!(!decision_ask(
             "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
+        ));
+        // Lead fires judged false on 2026-10-23 (intel --lens rules), trimmed.
+        // A clarification offer, a help menu and an approval instruction
+        // carry no options under an ask line.
+        let clarify = "The worker now has your four edits:\n1. thread, never substrate\n\
+                       2. headless comes off\n\nIf you meant something else, tell me and \
+                       I'll redirect it.\n\nNext: wait for the preview link.";
+        assert!(!decision_ask(clarify));
+        let menu = "KEY PATTERNS from the research:\n1. the model is swappable\n\
+                    2. review caps output\n\nSome things I can help with:\n- Answer the \
+                    open question, \"what should a harness handle?\", as a post\n\nJust ask.";
+        assert!(!decision_ask(menu));
+        let approve = "You need to approve the stable release.\n\nAfter you approve stable:\n\
+                       1. Lift the freeze\n2. I mail the workers. 3785 still needs your \
+                       visual approval.\n3. I hand off to a fresh lead.";
+        assert!(!decision_ask(approve));
+        // A fire judged true the same week: two options under "your call".
+        assert!(decision_ask(
+            "Two ways to get more seats (both are your call):\n1. Raise max_live\n2. Allow --force"
         ));
     }
 
