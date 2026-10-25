@@ -402,9 +402,8 @@ fn clear_completion_fields(
     // scalars. Left in place, pr_number keeps the store recompute deriving
     // in_review over the rung status this write just set, and the patch
     // door holds every later status move on it. The history mark keeps the
-    // promise and evidence gates from reading the dead row as a promised
-    // split ship, and stamps it terminal when the reopen's own gh read
-    // answered MERGED and the row carried no stamp of its own.
+    // promise and evidence gates from counting the dead row as a promised
+    // split ship; the reopen's own MERGED verdict stamps an unstamped row.
     let number = obj.get("pr_number").and_then(Value::as_i64);
     if let Some(number) = number {
         let url = obj.get("pr_url").cloned().unwrap_or(Value::Null);
