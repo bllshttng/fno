@@ -7,13 +7,14 @@
 //! session id, the lane store, the mail delivery - resolves here, so the
 //! front door can claim the spellings outright with no forward shell.
 //!
-//! Parity contract: every verb spelling, refusal line and exit code matches
-//! the deleted Python leg byte for byte; the characterization tests pin the
-//! lines the operator or a script can be mid-read on.
+//! Parity contract: every command spelling, refusal line and exit code
+//! matches the deleted Python leg byte for byte; the characterization tests
+//! pin the lines the operator or a script can be mid-read on.
 
 use crate::graph_store::BoundedLock;
 use crate::org_board::queues::parse_lane;
 use serde_json::{json, Value};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 /// Route one `fno inbox outstanding <word>` tail. `None` is not a
@@ -424,7 +425,7 @@ fn run_reindex(args: &[String]) -> i32 {
     let index = src.questions.clone();
     let journals: Vec<PathBuf> = crate::outstanding::capture_project_roots(&src)
         .iter()
-        .map(|root| crate::paths::project_log(root, "events.jsonl"))
+        .map(|root| crate::outstanding::project_log(root, "events.jsonl"))
         .collect();
     match reindex_fold(&index, &journals) {
         Ok((added, already, total)) => println!(

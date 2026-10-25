@@ -228,7 +228,7 @@ fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
 
 /// `<space>/<name>` for a project log, or the pre-space `<root>/.fno/<name>`
 /// a checkout still holds before its first migrating write.
-fn project_log(root: &Path, name: &str) -> PathBuf {
+pub(crate) fn project_log(root: &Path, name: &str) -> PathBuf {
     if let Some(space) = crate::paths::space_dir_opt(root) {
         let path = space.join(name);
         if path.exists() || crate::event_store::store_path(&path).exists() {
@@ -1143,7 +1143,7 @@ pub fn run_outstanding(args: &[String]) -> i32 {
     }
     let ctx = RenderCtx {
         session_id: session_id(&cwd),
-        promoted: is_promoted(&home),
+        promoted: is_promoted(&crate::paths::AgentsHome::from_env()),
         cwd_name: cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

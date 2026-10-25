@@ -542,7 +542,10 @@ def run_lead_wake(
         from fno import paths
         from fno.events.store_client import read_projection
 
-        answered_fn = lambda: read_projection(paths.questions_jsonl(), "--answered-questions", {})
+        def _answered():
+            return read_projection(paths.questions_jsonl(), "--answered-questions", {})
+
+        answered_fn = _answered
     if entries_fn is None:
         entries_fn = graph_entries
 

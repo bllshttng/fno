@@ -615,7 +615,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         return 2;
     };
     // The deleted Python relay expanded the journals; with no caller-supplied
-    // --events-path the native verb resolves the same stores itself.
+    // --events-path the native leg resolves the same stores itself.
     if event_paths.is_empty() {
         event_paths = default_event_journals(home);
     }
