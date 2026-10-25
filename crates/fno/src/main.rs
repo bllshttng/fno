@@ -325,6 +325,10 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    /// `fno agents mcp send ...`: the ported MCP channel family's verb,
+    /// exec'd through the worker's --mcp-exec lane with the tail
+    /// byte-verbatim.
+    AgentsMcp(Vec<OsString>),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -832,6 +836,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(rest) = fno::agents_mcp_route::classify(args) {
+        return Role::AgentsMcp(rest);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -1276,6 +1283,7 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::AgentsMcp(rest) => std::process::exit(fno::agents_mcp_route::run(&rest)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],

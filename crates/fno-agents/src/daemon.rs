@@ -6739,56 +6739,32 @@ fn handle_push_to_channel(ctx: &Ctx, req: &Request) -> Response {
             return Response::ok(req.id, json!({"routed": true}));
         }
     };
-    // Deliver via the Python sidecar (`fno agents mcp send`), inheriting its lazy-start
-    // + socket discovery instead of reimplementing it in Rust. `delivered: true`
-    // only when the sidecar accepted the envelope; on failure `reason` is
-    // MANDATORY so a caller can tell route-exists from delivered.
-    match deliver_envelope(&channel_id, &envelope) {
+    // Deliver via the sidecar client in-process (the ported mcp family):
+    // the client inherits lazy-start + socket discovery, and `delivered:
+    // true` only when the sidecar accepted the envelope; on failure
+    // `reason` is MANDATORY so a caller can tell route-exists from
+    // delivered.
+    match crate::mcp::client::send_to_channel(
+        &channel_id,
+        &envelope,
+        None,
+        crate::mcp::client::DEFAULT_TIMEOUT,
+    ) {
         Ok(()) => Response::ok(req.id, json!({"routed": true, "delivered": true})),
-        Err(reason) => Response::ok(
+        Err(e) => Response::ok(
             req.id,
-            json!({"routed": true, "delivered": false, "reason": reason}),
+            json!({"routed": true, "delivered": false, "reason": reason_of(&e)}),
         ),
     }
 }
 
-/// Shell `fno agents mcp send --session <id>` with `envelope` on stdin (never argv - it
-/// can be large). Returns `Err(reason)` on any failure (spawn or non-zero exit),
-/// with the stderr tail as the reason.
-fn deliver_envelope(channel_id: &str, envelope: &Value) -> Result<(), String> {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = crate::loop_dispatch::fno_cmd("fno")
-        .args(["agents", "mcp", "send", "--session-id", channel_id])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn `fno agents mcp send` failed: {e}"))?;
-    // Write + close stdin (drop => EOF) so the child's `stdin.read()` completes.
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "child stdin unavailable".to_string())?;
-        let bytes = serde_json::to_vec(envelope).map_err(|e| format!("serialize envelope: {e}"))?;
-        stdin
-            .write_all(&bytes)
-            .map_err(|e| format!("write envelope to `fno agents mcp send`: {e}"))?;
+/// The machine-stable reason for a delivery failure, matching the shape the
+/// shelled `fno agents mcp send` used to surface (its stderr tail).
+fn reason_of(e: &crate::mcp::client::ClientError) -> String {
+    match e {
+        crate::mcp::client::ClientError::Sidecar { reason } => reason.clone(),
+        crate::mcp::client::ClientError::Unreachable { reason } => reason.clone(),
     }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("wait for `fno agents mcp send`: {e}"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let tail = stderr.trim().rsplit('\n').next().unwrap_or("").trim();
-    Err(if tail.is_empty() {
-        format!("`fno agents mcp send` exited {}", out.status)
-    } else {
-        tail.to_string()
-    })
 }
 
 // ---------------------------------------------------------------------------

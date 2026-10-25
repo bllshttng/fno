@@ -10,6 +10,7 @@
 
 pub mod accounts_route;
 pub mod agents_history;
+pub mod agents_mcp_route;
 pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;

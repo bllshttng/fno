@@ -23,6 +23,13 @@
 //!   door's code. The front's `fno inbox law` commands spawn it, because the
 //!   mux never links the runtime (product boundary). Callers build this
 //!   argv; humans never type it.
+//! - `--mcp-exec`: the MCP channel family's process door (mcp/mod.rs).
+//!   `send` routes one stdin envelope to a registered channel (exit 0/1/2
+//!   as the deleted Python verb spelled), `status` prints the sidecar
+//!   status JSON, `serve` runs the per-session stdio channel server CC
+//!   spawns, `sidecar` runs the per-user sidecar daemon the client
+//!   lazy-starts. The front's `fno agents mcp send` route and the client's
+//!   lazy-start build this argv; humans never type it.
 //! - `--paths-exec`: the one-shot paths lane (paths_cli.rs). Serves ONE
 //!   `config paths` command argv (emit-shell and shell-stub so far; siblings
 //!   still answer in Python) and exits with the command's code. The front's
@@ -87,6 +94,13 @@ fn main() {
     if args.iter().any(|a| a == "--law-exec") {
         law_exec_lane();
         return;
+    }
+    // The MCP channel family's process door: send | status | serve |
+    // sidecar. The front's `fno agents mcp` route and the client's
+    // lazy-start build this argv; humans type `fno agents mcp send`.
+    // Callers build this argv; humans never type it.
+    if args.iter().any(|a| a == "--mcp-exec") {
+        std::process::exit(fno_agents::mcp::run_mcp_exec(&args));
     }
     if let Some(idx) = args.iter().position(|a| a == "--law-exec-arg") {
         let request = args
