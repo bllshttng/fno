@@ -580,35 +580,8 @@ fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
     if lines.is_empty() {
         lines.push("O\twave strategy checks passed".to_string());
     }
-    lines.extend(pr_ceiling_line(plan, root));
+    lines.extend(crate::plan_doc::stamp::pr_ceiling_line(plan, root));
     Ok(lines)
-}
-
-/// One `W` line when the plan declares more PRs than the project ceiling:
-/// the larger of its `max_prs` and its declared ship count, against
-/// `decompose::pr_ceiling`. An unreadable plan or ceiling says nothing here;
-/// decompose refuses a bad ceiling where it binds.
-fn pr_ceiling_line(plan: &Path, root: &Path) -> Option<String> {
-    use crate::plan_doc::codec::{self, Value as Fv};
-    let (_, fields, _) = codec::read_plan_file(plan).ok()?;
-    let ships = crate::plan_doc::stamp::declared_ships(&fields, plan);
-    let max_prs = match fields.get("max_prs") {
-        Some(Fv::Scalar(s)) => s.trim().parse::<i64>().unwrap_or(0),
-        _ => 0,
-    };
-    let (count, source) = if max_prs > ships {
-        (max_prs, "max_prs")
-    } else {
-        (ships, "declared ships")
-    };
-    let (ceiling, ceiling_src) = crate::backlog::decompose::pr_ceiling(root).ok()?;
-    (count > ceiling).then(|| {
-        format!(
-            "W\tplan declares {count} PRs ({source}), over the PR ceiling {ceiling} ({ceiling_src}); \
-             bundle the work into at most {ceiling} PRs (set expected_url_count when the waves ship as one PR), \
-             or raise the ceiling with config.blueprint.max_prs_per_epic in the project's .fno/config.toml"
-        )
-    })
 }
 
 fn run_check(args: &[String]) -> i32 {
