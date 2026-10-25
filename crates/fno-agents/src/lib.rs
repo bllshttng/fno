@@ -1509,6 +1509,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
+    // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
+    // the per-pass summary row and its pause-skip row.
+    "shell_writers_sweep",
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
     // birth write, a node or parent filled on a later beat, a short-id row
     // renamed, and the per-beat budget deferral.
