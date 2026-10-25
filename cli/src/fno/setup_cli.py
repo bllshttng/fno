@@ -240,29 +240,6 @@ def _install_cli_hooks(
     return None
 
 
-@app.command("plan")
-def plan_cmd(
-    advanced: bool = typer.Option(
-        False, "--advanced", help="Include the 'advanced' tier, not just 'always'."
-    ),
-) -> None:
-    """Emit the wizard question plan as JSON.
-
-    The headless / scriptable path over the SAME schema walker the /fno:setup
-    skill consumes, so the question set is derived from the model + registry,
-    never hardcoded. By default emits only the ``always`` fields (the ~4-6 real
-    per-project decisions); ``--advanced`` also includes ``advanced`` fields.
-    """
-    import json
-
-    from fno.config import schema_gen
-
-    raw = json.loads(schema_gen.wizard_plan())
-    if not advanced:
-        raw["fields"] = [f for f in raw["fields"] if f.get("tier") == "always"]
-    typer.echo(json.dumps(raw, indent=2))
-
-
 @app.command("migrate-paths")
 def migrate_paths_cmd(
     force: bool = typer.Option(False, "--force", "-F", help="Re-run even if sentinel exists"),

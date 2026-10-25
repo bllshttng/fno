@@ -68,6 +68,7 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigSchema(fno::config_schema::Claim),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
@@ -989,6 +990,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
     }
+    if let Some(claim) = fno::config_schema::classify(args) {
+        return Role::ConfigSchema(claim);
+    }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
         FrontDoor::Usage { message } => {
@@ -1238,6 +1242,7 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigSchema(claim) => std::process::exit(fno::config_schema::run(&claim)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
