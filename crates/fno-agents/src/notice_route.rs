@@ -781,8 +781,13 @@ fn consume_file(
         })
         .collect();
     if warnings.is_empty() {
-        // Every row settled (or the payload holds nothing routable):
-        // report the path so the caller can consume it.
+        if dropped == 0 {
+            // Nothing routable and nothing settled (malformed or empty
+            // payload): keep the file on disk, as before - a future
+            // reader may understand a shape this reader does not.
+            return None;
+        }
+        // Every row settled: report the path so the caller consumes it.
         return Some((path.to_path_buf(), Vec::new(), dropped));
     }
     let mut fed: Vec<String> = Vec::new();
@@ -1992,5 +1997,13 @@ mod tests {
         assert_eq!(dropped_done, 1);
         assert!(fed_done.is_empty());
         assert!(done_groups.is_empty());
+
+        // A payload this reader cannot route and cannot settle stays on
+        // disk: a future reader may understand the shape.
+        let bad_res = _root.path().join("bad-result.json");
+        std::fs::write(&bad_res, "{not json").unwrap();
+        let mut bad_groups = BTreeMap::new();
+        let bad = consume_file(&bad_res, &w, &mut bad_groups, ReconcileReader);
+        assert!(bad.is_none());
     }
 }
