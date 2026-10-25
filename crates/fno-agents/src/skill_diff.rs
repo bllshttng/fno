@@ -1113,7 +1113,7 @@ fn file_no_diff_node(
          dimension again is chasing a local maximum. Needs a design look, not another wording \
          tweak - the failure is likely architectural. See observer run {run_id}'s failure ranking."
     );
-    let mut argv: Vec<String> = [
+    let argv: Vec<String> = [
         "fno",
         "backlog",
         "idea",
@@ -1576,11 +1576,6 @@ fn tick_core(deps: &mut TickDeps, journals: &[PathBuf], skill: &str, skill_id: &
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let rel = deps
-        .skill_files
-        .first()
-        .map(|(p, _)| p.clone())
-        .unwrap_or_else(|| format!("skills/{skill}/SKILL.md"));
     let body = build_pr_body(
         &run_id,
         skill_id,
@@ -2064,7 +2059,7 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            static SEQ: std::sync::AtomicU64 = std::sync::AtomicU64::new(0);
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let dir = std::env::temp_dir()
                 .join(format!("fno-skill-diff-{}-{n}-{name}", std::process::id()));
@@ -2519,9 +2514,10 @@ mod tests {
         );
         let scratch = Scratch::new("reconcile");
         let mut deps = empty_reconcile_deps(events);
-        let played = std::cell::RefCell::new(Vec::new());
+        let played = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let played_log = std::rc::Rc::clone(&played);
         deps.run_replay = Box::new(move |ci, rref, rid| {
-            played
+            played_log
                 .borrow_mut()
                 .push((ci.to_string(), rref.to_string(), rid.to_string()));
             0
