@@ -343,6 +343,9 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
+    /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
+    /// tail is the `fno-agents compaction outstanding` argv.
+    InboxOutstanding(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -910,6 +913,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::law_cli::classify_inbox_decide(args) {
         return Role::InboxDecide(rest);
     }
+    if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
+        return Role::InboxOutstanding(rest);
+    }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
     {
@@ -1409,6 +1415,11 @@ fn main() {
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
         }
+        Role::InboxOutstanding(rest) => std::process::exit(fno_agents_exec(
+            "fno inbox outstanding",
+            &["compaction", "outstanding"],
+            &rest,
+        )),
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {

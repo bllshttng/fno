@@ -3658,8 +3658,8 @@ Swapouts: 3444531.\n";
         );
     }
 
-    /// workers hold its full share refuses exit 80 even with fleet slots free,
-    /// because waiting cannot help while the caller's own workers hold it.
+    /// workers hold its full share refuses exit 80 even with a fleet slot
+    /// free, when that slot is owed to a lead still under its share.
     #[test]
     fn lead_share_refuses_when_the_caller_holds_its_full_share() {
         let _g = claims::test_env_lock()
@@ -3706,18 +3706,20 @@ Swapouts: 3444531.\n";
                 r#"{{"name":"{name}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{session}"}}"#
             )
         };
-        // 2 leads -> share 2; the caller holds its full share with 2 rows, so
-        // 2 slots remain fleet-wide and the lead share still refuses.
+        // 2 leads -> share 2; the caller holds its full share with 2 rows and
+        // an unteamed session's row takes a third seat. The one free slot is
+        // owed to lead-b, so there is none to borrow and the lead share refuses.
         let reg = dir.join("registry.json");
         std::fs::write(
             &reg,
             format!(
-                r#"{{"schema_version":{},"entries":[{},{},{},{}]}}"#,
+                r#"{{"schema_version":{},"entries":[{},{},{},{},{}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
                 teamed("lead-a", "session-aaaaaaaa"),
                 teamed("lead-b", "session-bbbbbbbb"),
                 live("w1", "session-aaaaaaaa"),
                 live("w2", "session-aaaaaaaa"),
+                live("w-other", "session-cccccccc"),
             ),
         )
         .unwrap();

@@ -399,7 +399,10 @@ pub trait Probes {
     fn auto_merge_enabled(&self, cwd: &Path) -> bool;
     fn posture_floor_block(&self, cwd: &Path) -> Option<String>;
     fn strategy(&self, cwd: &Path) -> String;
-    /// Run `gh` with these arguments. `Ok((success, combined_output))`.
+    /// Run `gh` with these arguments. `Ok((success, output))` where output
+    /// is stdout alone on success and stdout followed by stderr on failure:
+    /// the JSON-parsing consumers read the success string, and the proxy's
+    /// stderr banner must never ride a 200 read.
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String>;
     /// Shell the `fno` CLI for a gate probe: `Ok((exit_code, stdout, stderr))`,
     /// None code = signal death. The fidelity gate rides this, so Fake-based
@@ -1833,7 +1836,9 @@ refusing to assume no review is running"
             ),
             ".behind_by",
         ) {
-            // run_gh appends stderr, so a gh proxy notice can follow the value.
+            // The line scan predates the clean-stdout contract and survives
+            // it: gh --jq prints the bare value, and a stray non-numeric
+            // line is skipped either way.
             Ok((true, output)) => match output.lines().find_map(|l| l.trim().parse::<u64>().ok()) {
                 Some(value) => value,
                 None => {
@@ -2039,9 +2044,16 @@ refusing to assume no review is running"
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);
         let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
-        let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
-        combined.push_str(&String::from_utf8_lossy(&out.stderr));
-        Ok((out.status.success(), combined))
+        // stdout rides alone on success: every success-path consumer parses
+        // it as JSON, and the fno gh proxy's stderr banner appended to a
+        // 200 read is how "page was not JSON" fired on a healthy PR (and how
+        // an override-label read silently answered false). stderr appends
+        // only to a FAILED read, where every consumer reads a message tail.
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+        }
+        Ok((out.status.success(), text))
     }
 }
 

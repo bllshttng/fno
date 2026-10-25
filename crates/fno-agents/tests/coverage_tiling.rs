@@ -2302,3 +2302,75 @@ fn rebase_rows() {
     assert!(!tiling.tiled);
     assert!(tiling.carried.is_empty());
 }
+
+#[test]
+fn a_verify_fixes_round_clears_an_empty_fix_delta() {
+    // The fix landed before the first attested head, so the raise and the
+    // verify-fixes round pin the SAME sha and the head-move witness can
+    // never fire. The invocation trace is the witness: the round recording
+    // the fixed disposition carried --verify-fixes (its review_invocation
+    // row), and the disposition gate reads that trace from the same events
+    // text. Without the flags row the identical chain stays blocked.
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    let k = "s.rs:82:conventions";
+    let head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let raise = serde_json::json!({
+        "ts": "2026-08-26T19:00:00Z",
+        "type": "review_attestation",
+        "source": "hook",
+        "data": {
+            "reviewer": "code-review",
+            "head_sha": head,
+            "verdict": "fail",
+            "branch": BRANCH,
+            "invocation_id": "v-raise",
+            "reviewed_line_count": 20,
+            "reviewed_file_count": 2,
+            "findings": [finding(k, "conventions", None, true)],
+        }
+    })
+    .to_string();
+    let verify = serde_json::json!({
+        "ts": "2026-08-26T19:10:00Z",
+        "type": "review_attestation",
+        "source": "hook",
+        "data": {
+            "reviewer": "code-review",
+            "head_sha": head,
+            "verdict": "pass",
+            "branch": BRANCH,
+            "invocation_id": "v-verify",
+            "reviewed_line_count": 20,
+            "reviewed_file_count": 2,
+            "dispositions": [
+                {"finding_key": k, "disposition": "fixed", "reason": "verified at the raise head"},
+            ],
+        }
+    })
+    .to_string();
+    let flags_row = serde_json::json!({
+        "ts": "2026-08-26T19:09:00Z",
+        "type": "review_invocation",
+        "source": "hook",
+        "data": {
+            "invocation_id": "v-verify",
+            "stage": "started",
+            "verb": "/code-review",
+            "flags": ["--verify-fixes"],
+        }
+    })
+    .to_string();
+
+    let with_flags = events_file(repo, &[raise.clone(), flags_row, verify.clone()]);
+    let blockers = disposition_blockers(&with_flags, BRANCH, head);
+    assert!(
+        blockers.is_empty(),
+        "the verify-fixes disposition is terminal at the head it reviewed: {blockers:?}"
+    );
+
+    let without_flags = events_file(repo, &[raise, verify]);
+    let blockers = disposition_blockers(&without_flags, BRANCH, head);
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].axis, "fixed-unreviewed");
+}

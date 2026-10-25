@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.backlog.single_flight import acquire_flight, advance_flight_key
+from fno.backlog.single_flight import acquire_flight
 from fno.claims.core import acquire_claim, claim_status
 from fno.rust_binary import find_dev_binary
 from tests._table_seed import read_claim_row
@@ -42,7 +42,7 @@ def iso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def test_a_dead_holder_does_not_wedge_the_scope(iso):
     """A holder whose process died is reclaimed on the pid probe, not the
     TTL: the next acquirer takes the scope and runs."""
-    key = advance_flight_key(None)
+    key = "flight:backlog-advance"
     child = subprocess.Popen(["true"])
     child.wait()
     acquire_claim(key, "dead-run", ttl_ms=600_000, pid=child.pid)
@@ -70,9 +70,9 @@ def test_acquire_flight_takes_a_name_root_and_ttl(iso):
 
 
 def test_distinct_epics_hold_distinct_gates(iso):
-    first = acquire_flight(advance_flight_key("x-epic-a"), scope="advance --epic a")
-    other = acquire_flight(advance_flight_key("x-epic-b"), scope="advance --epic b")
-    same = acquire_flight(advance_flight_key("x-epic-a"), scope="advance --epic a")
+    first = acquire_flight("flight:backlog-advance:epic:x-epic-a", scope="advance --epic a")
+    other = acquire_flight("flight:backlog-advance:epic:x-epic-b", scope="advance --epic b")
+    same = acquire_flight("flight:backlog-advance:epic:x-epic-a", scope="advance --epic a")
     assert first is not None and not first.held
     assert other is not None and not other.held
     assert same is not None and same.held
