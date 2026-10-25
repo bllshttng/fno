@@ -2354,19 +2354,17 @@ mod tests {
         // The walk: the fixture's enforced test: row retires (its own test
         // above), and an unproved enforced gate row stays live with the
         // probe verdict as its evidence.
-        let gate_row = serde_json::json!({
-            "type": "operator_decision",
-            "ts": "2026-09-02T00:00:00Z",
-            "data": {
-                "decision_id": "d-gate0007",
-                "subject": "topic-g",
-                "decision": "Ruling.",
-                "authority_source": "operator",
-                "graduation": {"kind": "enforced", "artifact": "gate:no-such-gate"}
-            }
-        });
+        // The gate row goes through the same store reader as the fixture, so
+        // it carries the store-row shape the listing expects.
+        let (gate_rows, _) = rows_from_jsonl(&envelope(
+            "d-gate0007",
+            "2026-09-02T00:00:00Z",
+            "operator",
+            "topic-h",
+            ",\"graduation\":{\"kind\":\"enforced\",\"artifact\":\"gate:no-such-gate\"}",
+        ));
         let mut rows2 = seed_fixture();
-        rows2.push(gate_row);
+        rows2.extend(gate_rows);
         let mut entries2: Option<Vec<Value>> = Some(Vec::new());
         let out2 = list_core_over(
             rows2,
