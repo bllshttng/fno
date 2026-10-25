@@ -98,7 +98,6 @@ One row per K1 file. A "Kept:" cell lists the surviving tests by name where the 
 |---|---:|---:|---|
 | `cli/benchmarks/test_measure_fno.py` | 8 | 7 | Kept: decision rule boundary rows, parse session data accepts valid and rejects bad rows, parse session data strict field types, aggregate ratio rows, probe outcome rows, phase scaled call count rows, phase 0 decision event builder rows. |
 | `cli/src/fno/paths_testing.py` | 1 | 1 | No test here: the match is the `def test_foo` usage line in the fixture docstring. |
-| `cli/src/fno/setup/test_recommended_rules.py` | 6 | 5 | Install links each rule, never RULES.md, a user-edited rule survives, a rerun is idempotent, the source resolves as package data, the wizard step defaults to No. |
 | `cli/src/fno/test_worktree_paths.py` | 23 | 11 | `..`, separator and empty names refused (escape from the base), project-id precedence config, top-level, shorthand, remote, SCP URL, basename, unsafe id refused. |
 | `cli/tests/agents/test_command_answer_blueprint_floor.py` | 5 | 4 | Kept: floor rides with the row, unreadable config omits the floor, blueprint floor validator degrades a typo to the lean default, blueprint floor validator accepts the widened ladder. |
 | `cli/tests/goldens/test_advance_golden.py` | 3 | 3 | Kept: advance without auto continue skips itself, advance explain reports the selection grid and declines to act, advance explain with no candidates declines to route. |

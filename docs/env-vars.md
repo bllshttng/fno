@@ -323,7 +323,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SMOKE_FAILURE_RECORD` | py | unclear: cli/src/fno/test_cmd.py:2066 |
 | `SMOKE_REGISTRY_FILE` | py | unclear: cli/src/fno/test_cmd.py:2046 |
 | `SSH_CONNECTION` | rs | Set by sshd to `client_ip client_port server_ip server_port`. `fno mux serve --observe` names the watcher `user from client_ip` from it. |
-| `STARSHIP_CONFIG` | py | unclear: cli/src/fno/setup/starship.py:47 |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | py | unclear: cli/src/fno/cost/_register.py:480 |
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |

@@ -242,6 +242,9 @@ enum Role {
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents restart ...` and root `fno restart ...`: exec'd as
+    /// `fno-agents restart`, the one implementation.
+    AgentsRestart(Vec<OsString>),
     /// `fno agents status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
@@ -494,6 +497,15 @@ fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
 
 fn classify_agents_command(args: &[OsString], command: &str) -> Option<Vec<OsString>> {
     classify_group_command(args, "agents", command)
+}
+
+/// `fno agents restart ...` and its permanent root alias `fno restart ...`:
+/// the command is `fno-agents restart`, so the front door execs it directly.
+fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first().and_then(|a| a.to_str()) == Some("restart") {
+        return Some(args[1..].to_vec());
+    }
+    classify_agents_command(args, "restart")
 }
 
 /// `fno agents status ...`: claimed natively like agents_top. The one
@@ -853,6 +865,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_command(args, "top") {
         return Role::AgentsTop(rest);
+    }
+    if let Some(rest) = classify_agents_restart(args) {
+        return Role::AgentsRestart(rest);
     }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
@@ -1326,6 +1341,9 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
+        Role::AgentsRestart(rest) => {
+            std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
+        }
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],
@@ -1881,6 +1899,15 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
+        );
+        // `restart` answers natively in both spellings, flags carried.
+        assert_eq!(
+            decide_role(&os(&["agents", "restart", "--mux", "--json"]), false),
+            Role::AgentsRestart(os(&["--mux", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["restart", "--force"]), false),
+            Role::AgentsRestart(os(&["--force"]))
         );
         // Every `roles` op is the Rust door's in every spelling, group
         // options carried; an unknown op forwards.

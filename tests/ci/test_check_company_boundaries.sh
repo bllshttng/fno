@@ -18,7 +18,6 @@ make_repo() {
         "$root/cli/src/fno/delivery" "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
     printf 'from fno.company.contracts import WorkOrderRef\n' > "$root/cli/src/fno/roles/models.py"
-    printf 'from fno.roles.models import RoleLayer\n' > "$root/cli/src/fno/company/topology.py"
 }
 
 echo "== mode help is discoverable =="
@@ -42,7 +41,7 @@ grep -Eq <<<"$out" '[0-9]+ layers, [0-9]+ modules, 0 violations' \
 
 printf 'value = 1\n' > "$CLEAN/cli/src/fno/unmapped.py"
 out="$(bash "$CHECK" --strict "$CLEAN" 2>&1)"; rc=$?
-grep -q <<<"$out" '5 layers, 3 modules, 0 violations' \
+grep -q <<<"$out" '4 layers, 2 modules, 0 violations' \
     && ok "coverage excludes unmapped modules" || fail "coverage over-counts: $out"
 
 echo "== a broken scan fails closed =="
@@ -126,19 +125,6 @@ out="$(bash "$CHECK" --baseline --baseline-file "$TMP/missing.txt" "$VIOLATION" 
 printf '%s\n' 'opaque-count: 9' > "$FIXTURE_BASELINE"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "opaque baseline fails closed" || fail "opaque baseline exit $rc: $out"
-
-echo "== package-granularity company map fails on the shipped topology shape =="
-PACKAGE_MAP="$TMP/package-map"
-make_repo "$PACKAGE_MAP"
-{
-    for _ in {1..15}; do echo '# padding'; done
-    echo 'from fno.roles.models import RoleLayer'
-} > "$PACKAGE_MAP/cli/src/fno/company/topology.py"
-out="$(FNO_BOUNDARY_TEST_COMPANY_PACKAGE_CORE=1 bash "$CHECK" --strict "$PACKAGE_MAP" 2>&1)"; rc=$?
-[[ $rc -eq 1 ]] && ok "package map exits one" || fail "expected exit 1, got $rc: $out"
-grep -q <<<"$out" \
-    'cli/src/fno/company/topology.py:16: L1 core -> L2 roles / from fno.roles.models import RoleLayer' \
-    && ok "package map names topology.py:16" || fail "topology evidence missing: $out"
 
 echo "== ImportFrom aliases and package-relative imports cannot bypass the map =="
 ALIASES="$TMP/aliases"

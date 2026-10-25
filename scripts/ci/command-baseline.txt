@@ -120,7 +120,6 @@ plan
 pr-watch
 project init
 research
-restart
 resume
 roles
 route

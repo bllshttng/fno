@@ -423,7 +423,6 @@ pr-watch status	T1	pr-watch status	3
 pr-watch tick	T1	pr-watch tick	2
 pr-watch uninstall	T1	pr-watch uninstall	1
 research	KEEP	research	18	single-leaf group
-restart	KEEP	restart	17	single-leaf group
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
@@ -440,12 +439,10 @@ setup cli-hooks	T1	setup cli-hooks	8
 setup cli-hooks-codex	T1	setup cli-hooks-codex	4
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-setup github-cli	T1	setup github-cli	0
 setup migrate-config	T1	setup migrate-config	1
 setup migrate-paths	T1	setup migrate-paths	8
 setup plan	T1	setup plan	7
 setup post-merge	T1	setup post-merge	6
-setup wizard	T1	setup wizard	10
 skill-diff reconcile	T1	skill-diff reconcile	1
 skill-diff tick	T1	skill-diff tick	4
 state archive	T1	state archive	1
