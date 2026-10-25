@@ -629,7 +629,7 @@ fn stale_doc_block(
     (
         crate::lead_escalation::reading_stale_team_doc(),
         format!(
-            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: bash \"$PLUGIN_ROOT/hooks/precompact-canon-doc.sh\" < /dev/null"
+            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: fno agents org refresh-canon (runs the precompact-canon-doc.sh hook)"
         ),
     )
 }
