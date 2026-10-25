@@ -170,7 +170,12 @@ fn findings_ranking_and_actionable_goldens() {
 
 #[test]
 fn local_maxima_goldens() {
-    for case in cases().iter().filter(|c| slug_starts(c, "local_maxima_")) {
+    // The short-window case froze its verdict at run id r2; the dedicated
+    // test below carries it. The generic loop runs only the r3 cases.
+    for case in cases()
+        .iter()
+        .filter(|c| slug_starts(c, "local_maxima_") && c.slug != "local_maxima_short_window")
+    {
         let evs = events(&case.input);
         assert_eq!(
             serde_json::Value::Bool(local_maxima_tripped(&evs, "fno:blueprint", "r3")),
