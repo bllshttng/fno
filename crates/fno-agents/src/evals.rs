@@ -7,6 +7,7 @@
 //! Python owns transport only.
 
 pub mod bank;
+pub mod grading;
 pub mod graduate;
 pub mod research_grade;
 
