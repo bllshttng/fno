@@ -680,8 +680,7 @@ fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
     );
     let journal = scratch.0.join("iso-agents").join("events.jsonl");
     let healed = fno::event_store::journal_text(&journal, &["mux_session_healed"]);
-    // The silent-empty failure mode names nothing, so the panic carries the
-    // checked read's own Err and what the store directory actually holds.
+    // The silent-empty failure mode names nothing, so the panic carries the checked read's own Err and what the store directory actually holds.
     let checked = fno::event_store::journal_text_checked(
         &journal,
         &fno::event_store::EventQuery::of_types(&["mux_session_healed"]),

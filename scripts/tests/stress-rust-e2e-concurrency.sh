@@ -86,8 +86,7 @@ build_test_binary() {
     local candidate
     if ! cargo test --manifest-path "$manifest" --test "$test_name" --no-run --message-format=json >>"$build_log" 2>&1; then
         echo "stress_setup=unavailable binary=$key log=$build_log" >&2
-        # The failure reason lives only in this file, which dies with the
-        # runner: say the tail here so CI names the compile-or-link error.
+        # The failure reason lives only in this file, which dies with the runner: say the tail here so CI names the compile-or-link error.
         tail -40 "$build_log" >&2 || true
         if grep -Eq 'Blocking waiting for file lock|could not acquire.*lock|resource temporarily unavailable' "$build_log"; then
             echo "stress_setup_note=cargo-artifact-lock-contention (not counted as a test failure)" >&2
