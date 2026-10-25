@@ -333,9 +333,9 @@ enum Role {
     /// arguments of existing fno-agents actions. Their Python legs are gone.
     LeadRead(fno::lead_reads_route::Claim),
     /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
-    /// the ported MCP channel family's verb, exec'd through the worker's
-    /// --mcp-exec lane with the tail byte-verbatim. The bool is the root
-    /// spelling, whose move notice prints before the same exec.
+    /// the ported MCP channel family's send command, exec'd through the
+    /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
+    /// root spelling, whose move notice prints before the same exec.
     AgentsMcpRoot(bool, Vec<OsString>),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the

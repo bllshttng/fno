@@ -1,20 +1,21 @@
-//! `fno agents mcp send`: the MCP channel family's verb, answered natively.
+//! `fno agents mcp send`: the MCP channel family's send command, answered
+//! natively.
 //!
 //! The family ported whole to crates/fno-agents/src/mcp (the worker's
-//! `--mcp-exec` lanes), so the verb keeps its spelling through the front
+//! `--mcp-exec` lanes), so the command keeps its spelling through the front
 //! door: `fno agents mcp send` (and the menu spelling `fno agents mail
 //! admin mcp send`, which the menu already rewrites here) claims and execs
 //! `fno-agents-worker --mcp-exec send` with the tail byte-verbatim. The
 //! deprecated root spelling `fno mcp send` claims here too, printing its
 //! move notice and running the same door; nothing routes through the
-//! deleted Python fold. One verb, one PR (d-450caaeb).
+//! deleted Python fold. One command per PR (d-450caaeb).
 
 use std::ffi::OsString;
 use std::process::Command;
 
-/// Classify the verb: `fno agents mcp send ...` or the deprecated root
+/// Classify the command: `fno agents mcp send ...` or the deprecated root
 /// `fno mcp send ...` (the bool is the root spelling; its move notice
-/// prints before the same exec). Only `send` claims, one verb per PR
+/// prints before the same exec). Only `send` claims, one command per PR
 /// (d-450caaeb); an unknown sub-word forwards, which refuses as unknown
 /// like any other dead leaf.
 pub fn classify(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
