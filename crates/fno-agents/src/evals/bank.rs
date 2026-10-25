@@ -5,8 +5,6 @@
 //! and file, and an all-trivial grade warns so a task cannot silently
 //! always-pass. The goldens pin the bytes.
 
-use serde_json::json;
-
 pub const VALID_TIERS_REPR: &str = "('capability', 'regression')";
 pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep')";
 

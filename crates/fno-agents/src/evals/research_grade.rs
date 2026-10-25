@@ -170,9 +170,6 @@ fn stem_of(p: &std::path::Path) -> String {
 }
 
 pub struct GradeResult {
-    brief: String,
-    golden: String,
-    sidecar: String,
     pub uncited_claims: u32,
     pub dead_urls: u32,
     pub sections_uncovered: Vec<String>,
@@ -248,9 +245,6 @@ pub fn grade(
     let refs = ref_map(&brief_text);
     let sections = content_sections(&body);
     let mut res = GradeResult {
-        brief: brief_path.to_string(),
-        golden: golden_path.to_string(),
-        sidecar: sidecar_path.display().to_string(),
         uncited_claims: 0,
         dead_urls: 0,
         sections_uncovered: Vec::new(),
