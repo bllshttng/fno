@@ -187,8 +187,9 @@ mod tests {
         assert!(!path.with_file_name("minted.db-wal").exists());
         let mode = std::fs::metadata(dir.path()).unwrap().permissions();
         {
+            use std::os::unix::fs::PermissionsExt;
             let mut ro = mode.clone();
-            std::os::unix::fs::PermissionsExt::set_mode(&mut ro, ro.mode() & !0o200);
+            ro.set_mode(ro.mode() & !0o200);
             std::fs::set_permissions(dir.path(), ro).unwrap();
         }
         let plain = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY);
