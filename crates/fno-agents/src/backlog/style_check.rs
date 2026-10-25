@@ -786,7 +786,7 @@ fn stem_hit(token: &str, dict: &BTreeSet<&'static str>) -> bool {
 /// Greedy longest-prefix split that must consume the whole token into parts
 /// of `GLUE_MIN_PART`+ letters. No backtracking: a miss ends the split, which
 /// keeps the trigger conservative.
-fn greedy_split(token: &str, dict: &BTreeSet<&'static str>) -> Option<Vec<&str>> {
+fn greedy_split<'a>(token: &'a str, dict: &BTreeSet<&'static str>) -> Option<Vec<&'a str>> {
     let n = token.len();
     if n < 2 * GLUE_MIN_PART {
         return None;
