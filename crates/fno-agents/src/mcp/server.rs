@@ -237,7 +237,7 @@ async fn sidecar_forward_loop(
         use tokio::io::AsyncWriteExt;
         let mut line = serde_json::to_vec(&register_req).unwrap_or_default();
         line.push(b'\n');
-        let mut writer = reader.get_mut();
+        let writer = reader.get_mut();
         if writer.write_all(&line).await.is_err() {
             stderr_line("register_channel write failed");
             return;

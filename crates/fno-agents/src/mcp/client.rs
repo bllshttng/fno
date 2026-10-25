@@ -194,7 +194,7 @@ fn spawn_detached_sidecar(sock_path: &Path) -> Option<()> {
             Ok(())
         });
     }
-    command.spawn().ok().map(|_| ()).spawn().ok().map(|_| ())
+    command.spawn().ok().map(|_| ())
 }
 
 /// The sidecar's log path: `$XDG_STATE_HOME/fno/sidecar.log`, default
