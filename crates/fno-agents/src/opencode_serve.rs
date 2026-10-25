@@ -112,7 +112,7 @@ const STEER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// as Basic auth: the serve is booted with `OPENCODE_SERVER_PASSWORD`, so a
 /// loopback listener with an allow-all permission posture is not reachable by
 /// arbitrary local processes.
-fn http_json(
+pub(crate) fn http_json(
     base_url: &str,
     method: &str,
     path_and_query: &str,
@@ -124,8 +124,12 @@ fn http_json(
         .strip_prefix("http://")
         .ok_or_else(|| format!("serve base url {base_url:?} is not http:// loopback"))?;
     let authority = after_scheme.trim_end_matches('/');
-    let mut stream =
-        TcpStream::connect(authority).map_err(|e| format!("connect {authority}: {e}"))?;
+    let addr = std::net::ToSocketAddrs::to_socket_addrs(authority)
+        .ok()
+        .and_then(|mut a| a.next())
+        .ok_or_else(|| format!("resolve {authority}: no address"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)
+        .map_err(|e| format!("connect {authority}: {e}"))?;
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|e| format!("read timeout: {e}"))?;

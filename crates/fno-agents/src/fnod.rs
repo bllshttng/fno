@@ -4,8 +4,6 @@
 //! malformed reply costs the score and nothing else.
 
 use serde_json::{json, Map, Value};
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -62,7 +60,19 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Answer {
         "questions": {"is_ask": {"type": "noul", "instructions": IS_ASK}},
     });
     let start = Instant::now();
-    match post(&url, "/v1/systemone", &body, Duration::from_millis(timeout)) {
+    let reply = crate::opencode_serve::http_json(
+        &url,
+        "POST",
+        "/v1/systemone",
+        Some(&body),
+        None,
+        Duration::from_millis(timeout),
+    )
+    .and_then(|(status, text)| match status {
+        200 => serde_json::from_str::<Value>(&text).map_err(|e| format!("reply is not JSON: {e}")),
+        _ => Err(format!("HTTP {status}")),
+    });
+    match reply {
         Ok(reply) => match reply
             .pointer("/answers/is_ask/noul")
             .and_then(Value::as_f64)
@@ -86,74 +96,10 @@ fn tail(text: &str, max: usize) -> &str {
     &text[skip..]
 }
 
-/// One JSON POST to a loopback `http://host:port` base. The whole exchange,
-/// connect to last byte, shares one deadline.
-fn post(base: &str, route: &str, body: &Value, timeout: Duration) -> Result<Value, String> {
-    let authority = base
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("fnod.url {base:?} is not http://"))?
-        .trim_end_matches('/');
-    let deadline = Instant::now() + timeout;
-    let addr = authority
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve {authority}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("resolve {authority}: no address"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| format!("connect {authority}: {e}"))?;
-    let left = || {
-        deadline
-            .checked_duration_since(Instant::now())
-            .filter(|d| !d.is_zero())
-            .ok_or_else(|| format!("no reply within {}ms", timeout.as_millis()))
-    };
-    stream
-        .set_write_timeout(Some(left()?))
-        .map_err(|e| e.to_string())?;
-    let payload = body.to_string();
-    let head = format!(
-        "POST {route} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n",
-        payload.len()
-    );
-    stream
-        .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(payload.as_bytes()))
-        .map_err(|e| format!("write {authority}: {e}"))?;
-    let mut raw = Vec::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        stream
-            .set_read_timeout(Some(left()?))
-            .map_err(|e| e.to_string())?;
-        match stream.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => raw.extend_from_slice(&buf[..n]),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                return Err(format!("no reply within {}ms", timeout.as_millis()))
-            }
-            Err(e) => return Err(format!("read {authority}: {e}")),
-        }
-    }
-    let text = String::from_utf8_lossy(&raw);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| format!("malformed reply from {authority}"))?;
-    let status = head.split_whitespace().nth(1).unwrap_or("");
-    if status != "200" {
-        return Err(format!("HTTP {status}"));
-    }
-    serde_json::from_str(body).map_err(|e| format!("reply is not JSON: {e}"))
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::io::{Read, Write};
     use std::net::TcpListener;
 
     /// A one-shot kev stand-in on an ephemeral port: it reads one request,
@@ -226,7 +172,7 @@ pub(crate) mod tests {
         let started = Instant::now();
         let answer = is_ask(cwd.path(), "Which lane?");
         assert!(started.elapsed() < Duration::from_millis(500));
-        assert!(matches!(&answer, Answer::Unavailable(e) if e.contains("no reply")));
+        assert!(matches!(&answer, Answer::Unavailable(e) if e.starts_with("read from")));
         assert!(answer.attrs().contains_key("fnod_error"));
         server.join().ok();
 
