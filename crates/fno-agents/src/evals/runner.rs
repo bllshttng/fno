@@ -584,14 +584,14 @@ mod tests {
             "ev-th-evals-1-2",
             "/tmp/wt",
             60,
-            Some("claude"),
+            Some("codex"),
             Some(&lane),
             "do the thing",
         );
         let joined = argv.join(" ");
         assert!(
             joined.contains("--harness codex"),
-            "the lane harness wins over the provider: {joined}"
+            "the resolved lane harness rides the argv: {joined}"
         );
         assert!(joined.contains("--route openai/gpt-5.6"));
         assert!(joined.contains("--account acme"));
@@ -609,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_with_an_empty_harness_falls_back_to_the_provider() {
+    fn a_lane_flags_ride_even_when_its_harness_is_empty() {
         let lane = LaneRow {
             name: "r".into(),
             harness: String::new(),
@@ -619,5 +619,8 @@ mod tests {
         let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), Some(&lane), "p");
         let i = argv.iter().position(|a| a == "--harness").unwrap();
         assert_eq!(argv[i + 1], "claude");
+        assert!(argv.contains(&"--route".to_string()));
+        assert!(argv.contains(&"zai/glm".to_string()));
+        assert!(argv.contains(&"--account".to_string()));
     }
 }

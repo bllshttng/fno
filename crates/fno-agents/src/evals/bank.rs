@@ -301,7 +301,7 @@ mod tests {
         let err = load_task(&p).unwrap_err();
         assert!(err.0.contains("task 'no-grade'"), "{0}", err.0);
         assert!(
-            err.0.contains("(a) no runnable grade is invalid"),
+            err.0.contains("(a task with no runnable grade is invalid)"),
             "{0}",
             err.0
         );
