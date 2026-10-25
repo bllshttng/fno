@@ -505,7 +505,7 @@ pub struct MuxRoot {
 /// `mux web`'s operation set.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum WebOp {
-    /// `mux web reap [--json]`: remove every bridge marker whose port refuses
+    /// `mux web reap [--json]`: remove every bridge marker whose recorded pid is gone or whose port refuses
     #[command(disable_help_flag = true)]
     Reap(MuxTail),
 }

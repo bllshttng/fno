@@ -2,16 +2,11 @@
 
 Phase 1 surface:
 
-- ``KNOWN_PROVIDERS`` — frozen tuple of supported provider names.
+- ``KNOWN_PROVIDERS`` - roster-backed tuple of supported provider names.
 - ``is_provider_available(name)`` — wraps ``shutil.which`` for a single CLI.
 - ``select_provider(name, requested_provider)`` — registry-aware selection
   that catches the "wrong provider on follow-up" mistake before any
   subprocess fires.
-
-The ask follow-up orchestration that used to live here
-(``dispatch_ask``) was ported to the Rust runtime and deleted; its
-parity harnesses frozen against goldens are the surviving contract
-(``crates/fno-agents/tests/{claude_ask,codex_ask}_parity.rs``).
 
 The spawn subprocess invocation per provider lives in
 ``fno.agents.harnesses.{claude,codex}``. Gemini is a legacy readable identity,
@@ -62,7 +57,6 @@ from fno.agents.harness_map import DispatchResolveError, render_seed
 from fno.config._dispatch_commands import is_command_seed
 from fno.agents.lane_heal import lane_heal as _lane_heal
 from fno.agents.lock import AgentLockTimeout, hold_agent_lock
-from fno.agents.harnesses import KNOWN_PROVIDERS
 from fno.agents.keeper_thread import _mint_thread_session_id
 from fno.harness_names import unknown_thread_harness_message
 from fno.agents.harnesses.base import ProviderResult, ReachabilityProbeError
@@ -276,6 +270,8 @@ class ProviderMismatchError(RuntimeError):
 
 
 def _check_known_provider(name: str) -> None:
+    from fno.agents.harnesses import KNOWN_PROVIDERS  # call-time read (import-time crashes stale binaries)
+
     if name not in KNOWN_PROVIDERS:
         raise ValueError(f"unknown provider {name!r}; supported: {', '.join(KNOWN_PROVIDERS)}")
 
@@ -324,6 +320,8 @@ def select_provider(name: str, requested_provider: Optional[str]) -> str:
         )
 
     if requested_provider is None:
+        from fno.agents.harnesses import KNOWN_PROVIDERS  # call-time read (import-time crashes stale binaries)
+
         raise ValueError(
             f"provider is required for new agent {name!r}; "
             f"pass --provider one of: {', '.join(KNOWN_PROVIDERS)}"

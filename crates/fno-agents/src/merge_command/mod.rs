@@ -326,9 +326,11 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
         hold_clear(&mut flow, pr);
         return flow;
     }
-    let stamped = rows
-        .iter()
-        .any(|row| node_pr_refs(row).iter().any(|(n, _)| *n == pr));
+    // One read carries every binding key's source (head ref, url, body), and
+    // the door selects candidates through the ONE predicate the merge gate
+    // selects through (`org_board::prs::pr_binding_keys`). The door used to
+    // match url and number only, so a PR whose branch names a held node read
+    // clear here and refused at the gate.
     let ctx = match command_call(
         "pr-closure-context",
         &json!({"pr": pr, "repo": Value::Null, "cwd": cwd.to_string_lossy()}),
@@ -351,68 +353,31 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     };
     let url = ctx.get("url").and_then(Value::as_str).unwrap_or("");
     let body = ctx.get("body").and_then(Value::as_str).unwrap_or("");
-    let mut candidates: Vec<String> = Vec::new();
-    if stamped {
-        match find_pr_node_id(&rows, pr, url) {
-            Some(id) => candidates.push(id),
-            None => {
-                // The ref match collapsed to None - a safe skip for
-                // reconcile, but here None reads as "no binding". Surface the
-                // ambiguity and fail closed instead of assuming unheld.
-                if let Some(our_slug) = repo_slug_from_url(url) {
-                    let ambiguous = repo_scoped_number_matches(&rows, pr, &our_slug);
-                    if ambiguous.len() > 1 {
-                        hold_refusal(
-                            &mut flow,
-                            pr,
-                            &base,
-                            &format!(
-                                "dispatch-hold-invalid: PR {pr} maps ambiguously to graph \
-                                 nodes {}; refusing to assume unheld; disambiguate the \
-                                 entries' pr_url and retry",
-                                ambiguous.join(", ")
-                            ),
-                        );
-                        return flow;
-                    }
-                }
-            }
-        }
-    }
-    // A parse read that fails refuses like every other hold-read fault: the
-    // leg crashed here, which is the same fail-closed answer in a different
-    // shape - never a silent narrowing of the candidate set.
-    let parsed = match command_call(
-        "pr-closure-parse",
-        &json!({"body": body}),
-        Duration::from_secs(30),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            hold_refusal(
-                &mut flow,
-                pr,
-                &base,
-                &format!(
-                    "dispatch-hold-invalid: hold lookup unavailable: the closure-line parse \
-                     could not run: {}; retry the hold lookup; do not edit the PR body",
-                    e.message
-                ),
-            );
-            return flow;
-        }
-    };
-    for claimed in parsed
-        .get("ids")
-        .and_then(Value::as_array)
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
-    {
-        if let Some(id) = claimed.as_str() {
-            if !candidates.iter().any(|c| c == id) {
-                candidates.push(id.to_string());
-            }
-        }
+    let head_ref = ctx.get("head_ref").and_then(Value::as_str).unwrap_or("");
+    // The same project scope as the gate. A graph that names no project for
+    // this root scopes nothing, so every row stays a candidate.
+    let project = crate::backlog_ready::detect_project(&rows, &root);
+    let (candidates, ambiguous) = hold_candidates(
+        pr,
+        head_ref,
+        url,
+        Some(body),
+        &rows,
+        &by_id,
+        project.as_deref(),
+    );
+    if let Some(bare) = ambiguous {
+        hold_refusal(
+            &mut flow,
+            pr,
+            &base,
+            &format!(
+                "dispatch-hold-ambiguous: several nodes bind PR {pr} with no discriminating \
+                 pr_url ({}); refusing to assume unheld",
+                bare.join(", ")
+            ),
+        );
+        return flow;
     }
     if candidates.is_empty() {
         hold_clear(&mut flow, pr);
@@ -420,27 +385,6 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     }
     let graph_path = hold_graph_path(&base);
     for id in &candidates {
-        if !by_id.contains_key(id.as_str()) {
-            if stamped && candidates.first() == Some(id) {
-                disarm_queued_auto_merge(
-                    &mut flow,
-                    pr,
-                    &base,
-                    &format!(
-                        "dispatch-hold-invalid: graph node {id} disappeared during hold lookup"
-                    ),
-                );
-                let why = format!(
-                    "dispatch-hold-invalid: graph node {id} disappeared during hold lookup"
-                );
-                flow.lines
-                    .push((true, format!("{why}; refusing to assume unheld\n")));
-                flow.exit_code = 3;
-                return flow;
-            }
-            // A trailer can name an id this graph slice does not carry.
-            continue;
-        }
         let receipt = match command_call(
             "authorized-merge",
             &json!({"op": "hold-verdict", "node": id, "graph": graph_path.to_string_lossy()}),
@@ -767,106 +711,72 @@ fn normalize_path(raw: &str) -> String {
     expanded.trim_end_matches('/').to_string()
 }
 
-/// `(pr_number, pr_url)` pairs for a node, primary first, dedup by number.
-fn node_pr_refs(entry: &Value) -> Vec<(i64, Option<String>)> {
-    let mut refs: Vec<(i64, Option<String>)> = Vec::new();
-    if let Some(n) = entry.get("pr_number").and_then(Value::as_i64) {
-        refs.push((
-            n,
-            entry
-                .get("pr_url")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        ));
-    }
-    if let Some(extras) = entry.get("additional_prs").and_then(Value::as_array) {
-        for extra in extras {
-            let Some(n) = extra.get("number").and_then(Value::as_i64) else {
-                continue;
-            };
-            if refs.iter().any(|(seen, _)| *seen == n) {
-                continue;
-            }
-            refs.push((
-                n,
-                extra.get("url").and_then(Value::as_str).map(str::to_string),
-            ));
+/// The door's hold candidates, selected through the SAME predicate as the
+/// merge gate: [`crate::org_board::prs::pr_binding_keys`] walked in the
+/// gate's ladder order (branch, trailer, backref), scoped to the gate's
+/// project filter, plus the gate's bare-number arm for url-less rows. Pure,
+/// so door-and-gate agreement is unit-testable without a PR on disk. The
+/// second tuple member is `Some` when several url-less rows bind the number
+/// with no discriminating url: the caller fails closed on it, exactly as the
+/// gate's probe answers Inconclusive there.
+fn hold_candidates(
+    number: i64,
+    head_ref: &str,
+    url: &str,
+    body: Option<&str>,
+    rows: &[Value],
+    by_id: &std::collections::BTreeMap<String, &Value>,
+    project: Option<&str>,
+) -> (Vec<String>, Option<Vec<String>>) {
+    let keys = crate::org_board::prs::pr_binding_keys(number, head_ref, Some(url), body, rows);
+    let mut candidates: Vec<String> = Vec::new();
+    for id in keys
+        .branch
+        .iter()
+        .chain(keys.trailer.iter())
+        .chain(keys.backrefs.iter())
+    {
+        if candidates.iter().any(|c| c == id) {
+            continue;
         }
-    }
-    refs
-}
-
-/// The graph node linked to this PR, resolved by REPOSITORY: an exact
-/// `pr_url` (primary or additional) match wins; else a number match scoped
-/// to the url's `owner/repo` slug (a url-less node counts as best-effort).
-/// None when nothing resolves unambiguously.
-fn find_pr_node_id(rows: &[Value], pr: i64, pr_url: &str) -> Option<String> {
-    let url = pr_url.trim();
-    if !url.is_empty() {
-        for row in rows {
-            if row.get("pr_url").and_then(Value::as_str).map(str::trim) == Some(url) {
-                return row.get("id").and_then(Value::as_str).map(str::to_string);
-            }
-            for extra in row
-                .get("additional_prs")
-                .and_then(Value::as_array)
-                .map(|a| a.as_slice())
-                .unwrap_or(&[])
-            {
-                if extra.get("url").and_then(Value::as_str).map(str::trim) == Some(url) {
-                    return row.get("id").and_then(Value::as_str).map(str::to_string);
-                }
-            }
-        }
-    }
-    let our_slug = repo_slug_from_url(url)?;
-    let uniq = repo_scoped_number_matches(rows, pr, &our_slug);
-    if uniq.len() == 1 {
-        uniq.into_iter().next()
-    } else {
-        None
-    }
-}
-
-/// Every node id whose PR number matches in the slug's repo. A url-less
-/// same-number node counts (its repo cannot be proven foreign); slugs
-/// compare case-insensitively.
-fn repo_scoped_number_matches(rows: &[Value], pr: i64, our_slug: &str) -> Vec<String> {
-    let mut matches: Vec<String> = Vec::new();
-    for row in rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else {
+        let Some(entry) = by_id.get(id.as_str()) else {
             continue;
         };
-        for (num, url) in node_pr_refs(row) {
-            if num != pr {
+        if !crate::backlog_ready::row_matches_project(entry, project) {
+            continue;
+        }
+        candidates.push(id.clone());
+    }
+    // The backref key needs a comparable url; a url-less row bound by bare
+    // number is the one shape the keys miss. One such row is a candidate;
+    // several refuse to assume unheld.
+    let mut bare: Vec<String> = Vec::new();
+    if keys.backrefs.is_empty() {
+        for row in rows {
+            let Some(id) = row.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if candidates.iter().any(|c| c == id) {
                 continue;
             }
-            match url.as_deref().and_then(repo_slug_from_url) {
-                Some(node_slug) if !node_slug.eq_ignore_ascii_case(our_slug) => {}
-                _ => matches.push(id.to_string()),
+            let number_ok = row.get("pr_number").and_then(Value::as_i64) == Some(number);
+            let row_url = row.get("pr_url").and_then(Value::as_str).unwrap_or("");
+            if number_ok
+                && row_url.is_empty()
+                && crate::backlog_ready::row_matches_project(row, project)
+            {
+                bare.push(id.to_string());
             }
-            break;
         }
     }
-    let mut seen: std::collections::BTreeSet<String> = Default::default();
-    matches.retain(|m| seen.insert(m.clone()));
-    matches
-}
-
-/// `owner/repo` from a GitHub PR url, or None: scheme and credentials
-/// optional, host exact, path exactly `owner/repo(.git)?/(pull|issues)/<n>`,
-/// case-insensitive - the `_PR_URL_RE` grammar the Python leaf used.
-fn repo_slug_from_url(url: &str) -> Option<String> {
-    use std::sync::OnceLock;
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(
-            r"^(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:[^/@]*@)?github\.com(?::\d+)?/([^/\s]+)/([^/\s]+?)(?:\.git)?/(?:pull|issues)/(\d+)(?:[/?#]|$)",
-        )
-        .expect("pr url grammar")
-    });
-    let caps = re.captures(url.trim())?;
-    Some(format!("{}/{}", &caps[1], &caps[2]))
+    match bare.len() {
+        0 => (candidates, None),
+        1 => {
+            candidates.push(bare.remove(0));
+            (candidates, None)
+        }
+        _ => (candidates, Some(bare)),
+    }
 }
 
 pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) -> FlowResult {
@@ -1679,4 +1589,135 @@ fn acquire_merge_lock(cwd: &Path, pr: i64) -> LockOutcome {
         None => "merge serialized: another merge holds the lock; retry".to_string(),
     };
     LockOutcome::Held(reason)
+}
+
+#[cfg(test)]
+mod hold_candidates_tests {
+    use super::hold_candidates;
+    use serde_json::{json, Value};
+    use std::collections::BTreeMap;
+
+    fn by_id(rows: &[Value]) -> BTreeMap<String, &Value> {
+        rows.iter()
+            .filter_map(|r| {
+                r.get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| (id.to_string(), r))
+            })
+            .collect()
+    }
+
+    /// The shape the two readers used to disagree on: the PR's branch names
+    /// the node, no back-pointer and no closure line does. The door matched
+    /// url and number only and read clear; the gate's branch key refused.
+    /// The graph names no project, which scopes nothing rather than clearing.
+    #[test]
+    fn a_branch_named_node_is_a_candidate_the_url_arms_never_saw() {
+        let rows = vec![json!({"id": "x-aaaa"})];
+        let map = by_id(&rows);
+        let (candidates, ambiguous) = hold_candidates(
+            9,
+            "feature/x-aaaa-slug",
+            "https://github.com/o/r/pull/9",
+            None,
+            &rows,
+            &map,
+            None,
+        );
+        assert_eq!(candidates, vec!["x-aaaa".to_string()]);
+        assert!(ambiguous.is_none());
+    }
+
+    #[test]
+    fn candidates_walk_the_gate_ladder_order_behind_the_project_filter() {
+        let rows = vec![
+            json!({"id": "x-aaaa", "project": "fno"}),
+            json!({"id": "x-bbbb", "project": "fno", "pr_number": 9,
+                   "pr_url": "https://github.com/o/r/pull/9"}),
+            json!({"id": "x-cccc", "project": "other"}),
+            json!({"id": "x-eeee", "project": "fno"}),
+        ];
+        let map = by_id(&rows);
+        let (candidates, ambiguous) = hold_candidates(
+            9,
+            "feature/x-aaaa-fix",
+            "https://github.com/o/r/pull/9",
+            Some("Fixes x-eeee"),
+            &rows,
+            &map,
+            Some("fno"),
+        );
+        // Branch first, then trailer, then backref; x-cccc names the branch
+        // too but belongs to another project, exactly what the gate skips.
+        assert_eq!(
+            candidates,
+            vec![
+                "x-aaaa".to_string(),
+                "x-eeee".to_string(),
+                "x-bbbb".to_string()
+            ]
+        );
+        assert!(ambiguous.is_none());
+    }
+
+    #[test]
+    fn a_unique_url_less_row_is_the_bare_candidate() {
+        let rows = vec![json!({"id": "x-dddd", "project": "fno", "pr_number": 9})];
+        let map = by_id(&rows);
+        let (candidates, ambiguous) = hold_candidates(
+            9,
+            "main",
+            "https://github.com/o/r/pull/9",
+            None,
+            &rows,
+            &map,
+            Some("fno"),
+        );
+        assert_eq!(candidates, vec!["x-dddd".to_string()]);
+        assert!(ambiguous.is_none());
+    }
+
+    #[test]
+    fn several_url_less_rows_refuse_to_assume_unheld() {
+        let rows = vec![
+            json!({"id": "x-dddd", "project": "fno", "pr_number": 9}),
+            json!({"id": "x-ffff", "project": "fno", "pr_number": 9}),
+        ];
+        let map = by_id(&rows);
+        let (candidates, ambiguous) = hold_candidates(
+            9,
+            "main",
+            "https://github.com/o/r/pull/9",
+            None,
+            &rows,
+            &map,
+            Some("fno"),
+        );
+        assert!(candidates.is_empty());
+        assert_eq!(
+            ambiguous,
+            Some(vec!["x-dddd".to_string(), "x-ffff".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_backref_url_differences_never_count_as_bare() {
+        // A node whose url names another PR keeps the bare arm quiet: the
+        // number matches, the url does not, and a comparable url on the row
+        // is exactly the discriminator the bare arm exists to lack.
+        let rows = vec![json!({"id": "x-dddd", "project": "fno", "pr_number": 9,
+            "pr_url": "https://github.com/o/r/pull/8"})];
+        let map = by_id(&rows);
+        let (candidates, ambiguous) = hold_candidates(
+            9,
+            "main",
+            "https://github.com/o/r/pull/9",
+            None,
+            &rows,
+            &map,
+            Some("fno"),
+        );
+        assert!(candidates.is_empty());
+        assert!(ambiguous.is_none());
+    }
 }
