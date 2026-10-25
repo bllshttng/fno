@@ -22,6 +22,7 @@ case "${1:-} ${2:-} ${3:-}" in
   "agents lead faq") exec fno-agents lead-state --faq "${@:4}" ;;
   "agents lead shape") exec fno-agents lead-shape --user-command "${@:4}" ;;
   "agents lead manifest-path") exec fno-agents lead-state --manifest-path "${@:4}" ;;
+  "agents lead init") exec fno-agents lead-state --init "${@:4}" ;;
   "agents lead checkin") exec fno-agents lead-checkin --user-command "${@:4}" ;;
   "agents lead cancel") exec fno-agents lead-state --cancel "${@:4}" ;;
   "agents lead term") exec fno-agents lead-state --term "${@:4}" ;;

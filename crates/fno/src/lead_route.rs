@@ -1,5 +1,5 @@
 //! The lead commands answered natively: `fno agents org` history, verdict,
-//! faq, checkin, cancel, term, `chart shape`, `chart manifest-path`, and
+//! faq, init, checkin, cancel, term, `chart shape`, `chart manifest-path`, and
 //! `fno inbox board`.
 //!
 //! The agents menu rewrites every `org` spelling to `agents lead <command>`
@@ -52,6 +52,13 @@ const ROUTES: &[Route] = &[
         help: "Usage: fno agents org chart manifest-path --harness-session-id ID \
                [--harness H] [--state-root DIR]\n\n\
                Print this live promoted session's existing scope manifest path.\n",
+    },
+    Route {
+        name: "init",
+        native: &["lead-state", "--init"],
+        help: "Usage: fno agents org init --scope SCOPE [--scope SCOPE...] \
+               --harness-session-id ID [--max-iterations N] [--respawn-ceiling N] [--force]\n\n\
+               Write this role scope's manifest, which the lead loop arms read.\n",
     },
     Route {
         name: "checkin",
@@ -206,6 +213,10 @@ mod tests {
                 &["lead-state", "--manifest-path", "--harness-session-id", "x"],
             ),
             (
+                &["agents", "lead", "init", "--scope", "s"],
+                &["lead-state", "--init", "--scope", "s"],
+            ),
+            (
                 &["agents", "lead", "cancel", "--scope", "s"],
                 &["lead-state", "--cancel", "--scope", "s"],
             ),
@@ -251,7 +262,7 @@ mod tests {
         // --last-run shares its predicate with the PR watcher's lead wake.
         assert_eq!(classify(&os(&["inbox", "board", "--last-run"])), None);
         // The lifecycle commands are still Python's.
-        for name in ["init", "done", "escalate", "drain", "ledger"] {
+        for name in ["done", "escalate", "drain", "ledger"] {
             assert_eq!(classify(&os(&["agents", "lead", name])), None, "{name}");
         }
         assert_eq!(classify(&os(&["agents", "lead", "board"])), None);

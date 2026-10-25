@@ -114,7 +114,7 @@ pub(crate) fn manifest_path(root: &Path, scope: &str) -> Result<PathBuf, String>
         || scope.contains('\\')
         || scope.contains('\0')
     {
-        return Err(format!("unsafe lead scope for manifest path: {scope:?}"));
+        return Err(format!("unsafe lead scope for manifest path: '{scope}'"));
     }
     // `root` is the state root itself (the repo's space), matching Python's
     // lead_manifest_path: leads sit at <root>/leads, NOT <root>/.fno/leads.
@@ -1267,6 +1267,7 @@ pub fn run_lead_state(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("--manifest-path") => return crate::lead_reads::run_manifest_path(&args[1..]),
         Some("--faq") => return crate::lead_reads::run_faq(&args[1..]),
+        Some("--init") => return crate::lead_lifecycle::run_init(&args[1..]),
         Some("--cancel") => return crate::lead_lifecycle::run_cancel(&args[1..]),
         Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),
         _ => {}

@@ -1,5 +1,5 @@
 //! parity-stage: characterization
-//! parity-oracle: fno.lead.cli (checkin, cancel, term)
+//! parity-oracle: fno.lead.cli (checkin, init, cancel, term)
 //!
 //! Characterization for the lead lifecycle commands on their native argvs.
 //! The goldens under tests/golden/lead_lifecycle/ were captured on 2026-10-25
@@ -10,7 +10,7 @@
 //! The temp root folds to `<ROOT>` (raw and canonical spellings) and its slug
 //! to `<ROOTSLUG>`. The check-in's control-plane rows name the host's service
 //! manager, so that block and the attention line that repeats it fold to
-//! `<FOLDED>`.
+//! `<FOLDED>`. A freshly minted manifest's `fno_id` folds to `<FNO_ID>`.
 
 use common::{assert_golden, Golden};
 use std::fs;
@@ -51,6 +51,10 @@ fn normalize(text: &str, root: &Path) -> String {
             continue;
         }
         in_block = false;
+        if line.starts_with("fno_id: ") {
+            out.push("fno_id: <FNO_ID>".to_string());
+            continue;
+        }
         if line.starts_with("change: attention: ") {
             out.push("change: attention: <FOLDED>".to_string());
             continue;
@@ -237,4 +241,116 @@ fn term_matches_the_python_goldens() {
     );
     let manifest = fs::read_to_string(space(p).join("leads/epic-y.md")).unwrap();
     assert!(manifest.contains("term: span:48h"), "{manifest}");
+}
+
+#[test]
+fn init_matches_the_python_goldens() {
+    let tmp = world("events-first.jsonl");
+    let p = tmp.path();
+    let init = |session: &str, scope: &str, force: bool| {
+        let mut argv = vec![
+            "lead-state",
+            "--init",
+            "--scope",
+            scope,
+            "--harness-session-id",
+        ];
+        argv.push(session);
+        if force {
+            argv.push("--force");
+        }
+        argv.into_iter().map(String::from).collect::<Vec<_>>()
+    };
+    let run = |label: &str, extra: &[(&str, &str)], argv: Vec<String>| {
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        case_in(label, p, "repo", extra, &argv);
+    };
+    run(
+        "init with the lead loop off",
+        &[],
+        init("sess-lead", "epic-y", false),
+    );
+    let config = p.join(".fno/config.toml");
+    let mut text = fs::read_to_string(&config).unwrap();
+    text.push_str("\n[lead]\nenabled = true\n");
+    fs::write(&config, text).unwrap();
+    case(
+        "init without a session id",
+        p,
+        &["lead-state", "--init", "--scope", "epic-y"],
+    );
+    run(
+        "init with a blank scope",
+        &[],
+        init("sess-lead", " ", false),
+    );
+    run(
+        "init refused at admission",
+        &[],
+        init("sess-new", "epic-y", false),
+    );
+    // Admission reads the space journal for each session's measured
+    // snapshot and the Stop fire after it.
+    fs::create_dir_all(space(p)).unwrap();
+    fs::copy(
+        fixture("readiness-events.jsonl"),
+        space(p).join("events.jsonl"),
+    )
+    .unwrap();
+    run(
+        "init writes the manifest",
+        &[],
+        init("sess-lead", "epic-y", false),
+    );
+    let manifest = fs::read_to_string(space(p).join("leads/epic-y.md")).unwrap();
+    assert!(
+        manifest.contains("harness_session_id: sess-lead"),
+        "{manifest}"
+    );
+    run(
+        "init refuses an existing manifest",
+        &[],
+        init("sess-lead", "epic-y", false),
+    );
+    let lead = [("CLAUDE_CODE_SESSION_ID", "sess-lead")];
+    run(
+        "init over the holder's own role",
+        &lead,
+        init("sess-lead", "epic-y", true),
+    );
+    run(
+        "init over other territory",
+        &lead,
+        init("sess-lead", "epic-z", true),
+    );
+    let plain = [("CLAUDE_CODE_SESSION_ID", "sess-plain")];
+    run(
+        "init from a row with no role",
+        &plain,
+        init("sess-plain", "epic-y", true),
+    );
+    // Every spelling of one epic set arms the same sorted, deduped file.
+    case(
+        "init over an epic set",
+        p,
+        &[
+            "lead-state",
+            "--init",
+            "--scope",
+            "epic-z",
+            "--scope",
+            "epic-y",
+            "--scope",
+            "epic-z",
+            "--harness-session-id",
+            "sess-lead",
+            "--force",
+        ],
+    );
+    assert!(space(p).join("leads/epic-y,epic-z.md").is_file());
+    run(
+        "init refuses a path-unsafe scope",
+        &[],
+        init("sess-lead", "a/b", false),
+    );
 }

@@ -44,7 +44,6 @@ agents lead-checkin	T1	agents lead-checkin	0
 agents lead done	T1	agents lead done	5
 agents lead drain	T1	agents lead drain	1
 agents lead escalate	T1	agents lead escalate	1
-agents lead init	T1	agents lead init	7
 agents lead ledger	T1	agents lead ledger	0
 agents lead-history	T1	agents lead-history	0
 agents list	KEEP	agents list	81	deliberate readability slack for a high-traffic distinct operation
