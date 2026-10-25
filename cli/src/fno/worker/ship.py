@@ -250,7 +250,7 @@ def ship(
         try:
             dup = command_call(
                 "pr-create",
-                {"check_only": True, "title": title, "base": f"origin/{base_branch}", "cwd": os.getcwd()},
+                {"check_only": True, "title": title, "base": f"origin/{base_branch}", "cwd": os.getcwd(), "body": body},
             ).get("refusal", "")
         except Exception:  # noqa: BLE001 - a failed twin scan never blocked create
             dup = ""
