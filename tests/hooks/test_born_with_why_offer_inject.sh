@@ -74,7 +74,7 @@ mkdir -p "$WORK/.fno"
 EVENTS="$WORK/.fno/events.jsonl"
 CURSOR="$WORK/.fno/.think-offer-cursor"
 # offered_line carries an offer_line WITH the origin-transcript comment, exactly
-# as spawn_think records it for a resolved offer.
+# as the birth hook records it for a resolved offer.
 offered_line()    { printf '{"ts":"%s","type":"think_offered","source":"backlog","data":{"node_id":"%s","offer_line":"/think %s  # origin transcript: /tmp/%s.jsonl"}}\n' "$1" "$2" "$2" "$2"; }
 offered_no_line() { printf '{"ts":"%s","type":"think_offered","source":"backlog","data":{"node_id":"%s"}}\n' "$1" "$2"; }
 other_line()      { printf '{"ts":"%s","type":"think_spawned","source":"backlog","data":{"node_id":"%s"}}\n' "$1" "$2"; }

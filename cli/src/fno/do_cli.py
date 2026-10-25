@@ -14,7 +14,6 @@ from fno.loops import loops_app
 from fno.phase import phase_app
 from fno.plan import plan_app
 from fno.pr_watch.cli import cli as pr_watch_app
-from fno.provenance.cli import think_app
 from fno.research import research_command
 from fno.resume.cli import cli as resume_app
 from fno.state.cli import cli as state_app
@@ -49,4 +48,3 @@ do_app.command("research")(research_command)
 do_app.add_typer(resume_app, name="resume")
 do_app.add_typer(state_app, name="state")
 do_app.add_typer(target_app, name="target")
-do_app.add_typer(think_app, name="think")

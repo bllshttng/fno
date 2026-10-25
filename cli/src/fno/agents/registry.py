@@ -403,7 +403,7 @@ class AgentEntry:
     # None/absent means "an operator asked for this directly." Format is
     # "<dispatcher>:<reason>", e.g. "think_spawn:work-start" or
     # "think_spawn:conversational" - the only producer today is
-    # fno.provenance.spawn_think._spawn_think_worker. Before the only
+    # the Rust think dispatch (think_dispatch.rs). Before the only
     # evidence for "did a birth trigger spawn this?" was a timestamp gap
     # between a node's created_at and a worker's registry row.
     spawn_trigger: Optional[str] = None

@@ -1,5 +1,4 @@
-//! The born-with-why birth hook, ported from
-//! `cli/src/fno/provenance/spawn_think.py` for the birth branch: gate-first,
+//! The born-with-why birth hook: gate-first,
 //! strictly non-fatal, and an unforced birth NEVER auto-spawns - the worst
 //! outcome is one durable `think_offered` event plus its stderr offer line.
 //! The auto-spawn tail (day cap, dedup token, bg dispatch) is unreachable for
