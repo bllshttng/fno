@@ -334,7 +334,6 @@ def _seed(monkeypatch, tmp_path, rows) -> None:
 
 def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     from fno.harness_identity import AMBIENT_IDENTITY_ENV
-    from fno.projects import resolve as proj_resolve
 
     # The lock-time identity match runs through Rust's role-identity kind
     # (the lock-time identity match runs through Rust now), so pin this
@@ -352,14 +351,27 @@ def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     _seed(monkeypatch, tmp_path, [replace(row, cwd=str(tmp_path)) for row in rows])
     for name in AMBIENT_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = tmp_path / "config.toml"
-    config.write_text(
-        '[work.workspaces.ws1]\n'
-        'projects = [{ name = "alpha", short_name = "a" }, { name = "beta" }]\n',
+    # The project resolver is native (the project-family port): _canonical_project
+    # answers through one fno-agents round trip, so the fixture registry
+    # rides a stub binary pinned over FNO_AGENTS_BIN (env outranks the dev
+    # build) instead of a pinned settings path. $4 is the name to resolve;
+    # every other spawn-overlay shape execs the real binary (the ladder
+    # door rides the same env pin).
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  case "$4" in\n'
+        "    alpha|a) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n"
+        f'exec "{binary}" "$@"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", config)
-    proj_resolve._clear_cache()
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
 
 
 def _invoke_role(*args: str):

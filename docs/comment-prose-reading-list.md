@@ -51,7 +51,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 4.2x | 21 | 5 | `cli/src/fno/agents/harnesses/codex.py:266` | `_effective_yolo` |
 | 4.2x | 21 | 5 | `cli/src/fno/target_cli.py:824` | `check_review_gate` |
 | 4.0x | 24 | 6 | `cli/src/fno/worktree.py:393` | `archive` |
-| 3.83x | 23 | 6 | `cli/src/fno/projects/resolve.py:132` | `resolve_project_name` |
 | 3.8x | 19 | 5 | `cli/src/fno/provenance/spawn_think.py:677` | `_worker_agent_name` |
 | 3.75x | 15 | 4 | `cli/src/fno/claims/hostid.py:113` | `machine_id` |
 | 3.75x | 15 | 4 | `cli/src/fno/dispatch.py:349` | `_cutover_command` |

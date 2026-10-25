@@ -26,21 +26,39 @@ def _entry(name: str, **kw):
     return AgentEntry(name=name, log_path="", harness=harness, **kw)
 
 
+def _stub_project_resolver(monkeypatch, tmp_path) -> None:
+    """Pin the native project resolver's door (the project-family port) to a stub binary:
+    `_canonical_project` answers through one fno-agents round trip, so the
+    fixture registry rides FNO_AGENTS_BIN instead of a pinned settings path.
+    $4 is the name to resolve; every other spawn-overlay shape execs the real
+    binary (the ladder door rides the same env pin)."""
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    real = find_dev_binary() or resolve_binary()
+    stub = tmp_path / "agents-stub"
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  case "$4" in\n'
+        "    alpha|a) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n" + fallback,
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
+
+
 def _prepare(monkeypatch, tmp_path, rows, graph_entries=None) -> None:
     from fno import paths
     from fno.agents.registry import write_registry
-    from fno.projects import resolve as proj_resolve
 
     use_tmpdir(monkeypatch, tmp_path)
     write_registry(rows)
-    config = tmp_path / "config.toml"
-    config.write_text(
-        '[work.workspaces.ws1]\n'
-        'projects = [{ name = "alpha", short_name = "a" }, { name = "beta" }]\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", config)
-    proj_resolve._clear_cache()
+    _stub_project_resolver(monkeypatch, tmp_path)
     if graph_entries is not None:
         graph_path = paths.graph_json()
         graph_path.parent.mkdir(parents=True, exist_ok=True)

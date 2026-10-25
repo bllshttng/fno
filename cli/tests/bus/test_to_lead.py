@@ -65,26 +65,36 @@ def test_a_set_role_answers_to_each_member_epic(env):
 
 
 def test_a_portfolio_role_does_not_answer_for_one_of_its_projects(env, monkeypatch):
-    """Projects go through the real resolver, never a stub."""
+    """Projects resolve through the native door, and a portfolio role never
+    answers for one member. The resolver itself is Rust since the project-family port
+    (its parity goldens live in crates/fno-agents/tests/project_parity.rs);
+    what this file holds is the door contract: the canonical answer rides the
+    binary, a non-project name refuses."""
     from fno.agents.role import resolve_to_lead
-    from fno.projects import resolve as proj_resolve
 
-    cfg = env / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\n'
-        'projects = [{ name = "alpha" }, { name = "beta" }]\n',
+    stub = env / "agents-stub"
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    real = find_dev_binary() or resolve_binary()
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  case "$4" in\n'
+        "    alpha) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n" + fallback,
         encoding="utf-8",
     )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
-    try:
-        _register("lead-portfolio", scope="alpha,beta", level=0)
-        _register("lead-alpha", scope="alpha", level=1)
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
+    _register("lead-portfolio", scope="alpha,beta", level=0)
+    _register("lead-alpha", scope="alpha", level=1)
 
-        assert resolve_to_lead("alpha") == ["lead-alpha"]
-        assert resolve_to_lead("alpha,beta") == ["lead-portfolio"]
-    finally:
-        proj_resolve._clear_cache()
+    assert resolve_to_lead("alpha") == ["lead-alpha"]
+    assert resolve_to_lead("alpha,beta") == ["lead-portfolio"]
 
 
 # ---------------------------------------------------------------------------

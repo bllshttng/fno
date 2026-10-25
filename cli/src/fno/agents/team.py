@@ -80,15 +80,12 @@ def _conflicts(rows: list) -> list[dict[str, Any]]:
     """
     import sys
 
-    from fno import projects as projects_mod
     from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
-    # An unreadable settings table must not take the view down: omitting
-    # the key sends the scanner to its cwd read and its degrade rule.
-    try:
-        projects = projects_mod.resolve._get_cache()
-    except Exception:  # noqa: BLE001 - the scanner's own degrade rule owns this
-        projects = None
+    # The scanner reads the project table itself (its cwd config read); an
+    # unreadable one downgrades every check to raw member overlap, the
+    # scanner's own documented degrade rule. The table's native reader
+    # arrived with the project-family port.
     try:
         answer = spawn_overlay_call({
             "kind": "team-rivals",
@@ -100,7 +97,6 @@ def _conflicts(rows: list) -> list[dict[str, Any]]:
                 }
                 for row in rows
             ],
-            **({"projects": projects} if projects is not None else {}),
         })
         return answer["pairs"]
     except (SpawnOverlayUnavailable, LookupError, TypeError) as exc:
