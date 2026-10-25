@@ -401,7 +401,7 @@ def run_doctor() -> int:
             print(f"[doctor] error: settings.yaml not found at {missing}")
         else:
             print("[doctor] error: no settings.yaml found")
-        print("[doctor] run 'fno do wizard' to write a config")
+        print("[doctor] run 'fno config set <key> <value>' to write one")
         return 1
 
     # Handle load errors gracefully (AC4-FR)
@@ -414,7 +414,7 @@ def run_doctor() -> int:
     except Exception as exc:
         print(f"[doctor] error: could not load settings.yaml: {exc}")
         print(f"[doctor] settings source: {found_path}")
-        print("[doctor] fix the file, or run 'fno do wizard' to write a new config")
+        print("[doctor] fix the file named above, then re-run fno config doctor")
         return 1
 
     # Use loader's authoritative path: load_settings() can fall through to
