@@ -6,6 +6,8 @@
 //! (the port protocol in docs/architecture/dual-implementation-inventory.md).
 //! Python owns transport only.
 
+pub mod research_grade;
+
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
@@ -18,6 +20,7 @@ pub fn run(args: &[String]) -> i32 {
         "trend" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "trend")),
         "report" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "report")),
         "macro" => crate::evals_arm::run_evals_arm(&macro_argv(rest)),
+        "grade" => crate::evals::research_grade::run(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
@@ -96,21 +99,94 @@ fn dirs_home() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-/// The event journals the macro fold reads, in the Python leaf's order.
+/// The event journals the macro fold reads, in the Python leaf's order:
+/// the machine journal, the agents-home journal, and the canonical project
+/// journal; each contributes its `.ephemeral` sibling when it exists plus
+/// that base's numeric rotations (newest first), deduped after resolution.
 pub fn event_journals() -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    let state = if let Ok(carrier) = std::env::var("FNO_STATE_DIR") {
-        std::path::PathBuf::from(carrier)
-    } else {
-        let mut p = dirs_home();
-        p.push(".fno");
-        p
-    };
-    for name in ["events.jsonl", "events.jsonl.ephemeral"] {
-        let p = state.join(name);
-        if p.exists() {
-            out.push(p);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let global = crate::paths_cli::global_events_json(&cwd);
+    let agents = agents_home().join("events.jsonl");
+    let project = crate::law_match::project_events_journal();
+    let mut resolved: Vec<std::path::PathBuf> = Vec::new();
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    for live in [global, agents, project] {
+        let resolved_live = live.canonicalize().unwrap_or_else(|_| absolute(&live));
+        let mut bases = vec![resolved_live.clone()];
+        let name = resolved_live
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        let ephemeral =
+            resolved_live.with_file_name(format!("{}.ephemeral", name.to_string_lossy()));
+        if ephemeral.exists() {
+            bases.push(ephemeral);
+        }
+        for base in bases {
+            let mut rotated: Vec<(u64, std::path::PathBuf)> = Vec::new();
+            let prefix = format!(
+                "{}.",
+                base.file_name().unwrap_or_default().to_string_lossy()
+            );
+            if let Ok(entries) =
+                std::fs::read_dir(base.parent().unwrap_or(std::path::Path::new(".")))
+            {
+                for entry in entries.flatten() {
+                    let candidate = entry.path();
+                    let candidate_name = candidate
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let Some(suffix) = candidate_name.strip_prefix(&prefix) else {
+                        continue;
+                    };
+                    if suffix.chars().all(|c| c.is_ascii_digit())
+                        && !suffix.is_empty()
+                        && candidate.exists()
+                    {
+                        if let Ok(n) = suffix.parse::<u64>() {
+                            rotated.push((n, candidate));
+                        }
+                    }
+                }
+            }
+            rotated.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, path) in &rotated {
+                push_unique(&mut resolved, &mut seen, path);
+            }
+            push_unique(&mut resolved, &mut seen, &base);
         }
     }
-    out
+    resolved
+}
+
+fn push_unique(
+    out: &mut Vec<std::path::PathBuf>,
+    seen: &mut std::collections::HashSet<std::path::PathBuf>,
+    path: &std::path::Path,
+) {
+    let resolved = path.canonicalize().unwrap_or_else(|_| absolute(path));
+    if seen.insert(resolved.clone()) {
+        out.push(resolved);
+    }
+}
+
+fn absolute(path: &std::path::Path) -> std::path::PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(path)
+    }
+}
+
+/// The agents runtime home: FNO_AGENTS_HOME, else $HOME/.fno/agents.
+fn agents_home() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("FNO_AGENTS_HOME") {
+        if !root.is_empty() {
+            return std::path::PathBuf::from(root);
+        }
+    }
+    dirs_home().join(".fno").join("agents")
 }
