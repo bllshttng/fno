@@ -96,6 +96,7 @@ agents registry-repair	T1	agents registry-repair	4
 agents rename	T1	agents rename	0
 agents revival-check	T1	agents revival-check	1
 agents report	T1	agents report	3
+agents restart	T1	agents restart	6
 agents resume	KEEP	agents resume	43	deliberate readability slack for a high-traffic distinct operation
 agents retask	T1	agents retask	2
 agents review-coverage	T1	agents review-coverage	34
