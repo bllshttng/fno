@@ -837,7 +837,7 @@ fn consume_file(
 /// the writer replaces the path between the read and the rename. Read off
 /// the open handle, so it describes what was parsed, never whatever sits
 /// at the path later.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct FileIdentity {
     dev: u64,
     ino: u64,
