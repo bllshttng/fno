@@ -462,10 +462,13 @@ def neutralise(
     # sandboxed HOME already relocates ~/.fno/config.toml, and the ceiling below
     # bounds the rest of the chain.
     #
-    # The ceiling is the part HOME cannot do. The candidate chain climbs to the
-    # canonical checkout through ``git worktree list``, and git ignores HOME, so
-    # without a ceiling a suite run from a real checkout reads that checkout's
-    # config and local-red never equals CI-red.
+    # The canonical climb is the part HOME cannot do. The candidate chain
+    # climbs to the canonical checkout through ``git worktree list``, and git
+    # ignores HOME, so without a bound a suite run from a real checkout reads
+    # that checkout's config and local-red never equals CI-red. Both loaders
+    # drop that candidate under FNO_NO_CANONICAL_CONFIG=1. Only the Rust
+    # readers also honor the search ceiling below.
+    out["FNO_NO_CANONICAL_CONFIG"] = "1"
     #
     # TMPDIR is in the ceiling because a test's OWN config has to be findable.
     # Shell harnesses build their fixture under `mktemp -d` and pytest builds
