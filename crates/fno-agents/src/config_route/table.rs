@@ -43,7 +43,7 @@ pub(crate) fn table_json(cwd: &Path) -> Value {
     for r in DEFAULT_ROUTED_ROLES
         .into_iter()
         .chain(KNOWN_LANE_ROLES)
-        .chain(config_sorted)
+        .chain(config_sorted.iter().map(String::as_str))
         .chain(PROTECTED_ROLES)
     {
         let r = r.to_string();
