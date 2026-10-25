@@ -615,18 +615,10 @@ mod tests {
         };
         let rows = vec![
             mk("node:x-9", "blueprint-session:s1"),
-            x8_row(),
+            mk("node:x-8", "blueprint-session:s2"),
             mk("node:x-7", "spawn-handover:t-w"),
         ];
         assert_eq!(running_blueprint_ids(&rows, "s1"), vec!["x-9".to_string()]);
         assert!(running_blueprint_ids(&rows, "s3").is_empty());
-    }
-
-    fn x8_row() -> crate::claims::ClaimRecord {
-        serde_json::from_value(json!({
-            "key": "node:x-8", "holder": "blueprint-session:s2",
-            "acquired_at": 0, "pid": null, "host": "t"
-        }))
-        .unwrap()
     }
 }
