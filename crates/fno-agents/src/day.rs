@@ -511,6 +511,70 @@ fn graph_path(home: &crate::paths::AgentsHome) -> PathBuf {
     crate::state_layout::graph_anchor(&root)
 }
 
+/// The journals the deleted Python relay expanded from
+/// `fno.paths.event_journals()`: the global journal (state root), the agents
+/// home journal, and the project journal, each contributing its ephemeral
+/// sibling and its numeric rotations when they exist, resolved and deduped,
+/// the project journal first. The commit arm takes this order as-is: [0] is
+/// the live project journal.
+pub(crate) fn default_event_journals(home: &crate::paths::AgentsHome) -> Vec<PathBuf> {
+    fn expand(journal: &Path) -> Vec<PathBuf> {
+        let live = crate::event_store::live_journal(journal);
+        let ephemeral = live.with_extension("jsonl.ephemeral");
+        let mut bases: Vec<PathBuf> = vec![live.clone()];
+        if ephemeral.exists() {
+            bases.push(ephemeral);
+        }
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for base in bases {
+            let parent = base.parent().unwrap_or_else(|| Path::new("."));
+            let prefix = format!(
+                "{}.",
+                base.file_name().unwrap_or_default().to_string_lossy()
+            );
+            let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let Some(suffix) = name.strip_prefix(&prefix) else {
+                        continue;
+                    };
+                    let Ok(n) = suffix.parse::<u32>() else {
+                        continue;
+                    };
+                    if entry.path().exists() {
+                        rotated.push((n, entry.path()));
+                    }
+                }
+            }
+            rotated.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+            rotated.dedup_by_key(|(n, _)| *n);
+            for (_, path) in rotated {
+                candidates.push(crate::paths::resolve_loose(&path));
+            }
+            candidates.push(crate::paths::resolve_loose(&base));
+        }
+        let mut out: Vec<PathBuf> = Vec::new();
+        for path in candidates {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let global = if let Some(dir) = std::env::var_os("FNO_STATE_DIR") {
+        PathBuf::from(dir).join("events.jsonl")
+    } else {
+        crate::decision_index::default_state_path("events.jsonl")
+    };
+    let mut journals = Vec::new();
+    journals.extend(expand(&global));
+    journals.extend(expand(&home.events_jsonl()));
+    journals.extend(expand(&crate::paths::events_path(&cwd)));
+    journals
+}
+
 pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
     let mut kind = None;
     let mut now = Utc::now().to_rfc3339();
@@ -550,6 +614,11 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         eprintln!("fno-agents day: --kind start|end is required");
         return 2;
     };
+    // The deleted Python relay expanded the journals; with no caller-supplied
+    // --events-path the native verb resolves the same stores itself.
+    if event_paths.is_empty() {
+        event_paths = default_event_journals(home);
+    }
     let state_dir = home
         .root()
         .parent()

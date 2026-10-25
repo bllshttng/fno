@@ -343,9 +343,13 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
-    /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
-    /// tail is the `fno-agents compaction outstanding` argv.
+    /// `fno inbox outstanding [--json|-J]`: the native listing and its
+    /// subcommands; the carried tail is the `fno-agents compaction
+    /// outstanding` argv.
     InboxOutstanding(Vec<OsString>),
+    /// `fno inbox day start|end`: the native day boundary; the carried tail
+    /// is the `fno-agents day` argv.
+    InboxDay(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -916,6 +920,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
         return Role::InboxOutstanding(rest);
     }
+    if let Some(argv) = fno::inbox_user::classify_inbox_day(args) {
+        return Role::InboxDay(argv);
+    }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
     {
@@ -1420,6 +1427,9 @@ fn main() {
             &["compaction", "outstanding"],
             &rest,
         )),
+        Role::InboxDay(argv) => {
+            std::process::exit(fno_agents_exec("fno inbox day", &["day"], &argv))
+        }
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
