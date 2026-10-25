@@ -27,6 +27,7 @@ pub const DEFAULT_MAX_RESULTS: i64 = 10;
 const FETCH_TIMEOUT_S: u64 = 15;
 const DDGS_TIMEOUT_S: u64 = 30;
 const BODY_CAP_BYTES: u64 = 2_000_000;
+const TRANSFER_CAP_FACTOR: u64 = 8;
 const UA: &str = "fno-research/0.1 (+https://github.com/jasonnoahchoi/footnote)";
 // urllib's HTTPRedirectHandler limits.
 const MAX_REDIRECTIONS: usize = 10;
@@ -594,6 +595,7 @@ pub fn decode_body(raw: &[u8], charset: &str) -> String {
 struct Hop {
     status: i64,
     content_type: String,
+    remote_ip: String,
     redirect_url: String,
     body_path: PathBuf,
 }
@@ -603,9 +605,18 @@ fn curl_once(url: &str, dir: &Path, n: usize) -> Result<Hop, String> {
     let mut cmd = Command::new("curl");
     cmd.args(["-sS", "-g", "--proto", "=http,https"])
         .args(["--max-time", &FETCH_TIMEOUT_S.to_string()])
+        // The extract reads only the first BODY_CAP_BYTES; this bounds what a
+        // hostile page can stream to disk before that cut.
+        .args([
+            "--max-filesize",
+            &(BODY_CAP_BYTES * TRANSFER_CAP_FACTOR).to_string(),
+        ])
         .args(["-A", UA, "-o"])
         .arg(&body_path)
-        .args(["-w", "%{http_code}\\n%{content_type}\\n%{redirect_url}"])
+        .args([
+            "-w",
+            "%{http_code}\\n%{content_type}\\n%{remote_ip}\\n%{redirect_url}",
+        ])
         .arg(url);
     let out = match crate::bounded_cmd::output_with_timeout_result(cmd, FETCH_TIMEOUT_S + 5) {
         Ok(out) => out,
@@ -623,7 +634,7 @@ fn curl_once(url: &str, dir: &Path, n: usize) -> Result<Hop, String> {
         None => return Err("fetch error: timed out".to_string()),
     }
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let mut lines = stdout.splitn(3, '\n');
+    let mut lines = stdout.splitn(4, '\n');
     let status = lines
         .next()
         .unwrap_or("")
@@ -631,10 +642,12 @@ fn curl_once(url: &str, dir: &Path, n: usize) -> Result<Hop, String> {
         .parse::<i64>()
         .unwrap_or(0);
     let content_type = lines.next().unwrap_or("").trim().to_string();
+    let remote_ip = lines.next().unwrap_or("").trim().to_string();
     let redirect_url = lines.next().unwrap_or("").trim().to_string();
     Ok(Hop {
         status,
         content_type,
+        remote_ip,
         redirect_url,
         body_path,
     })
@@ -650,6 +663,19 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     file.take(BODY_CAP_BYTES).read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// True when curl routes `url` through a proxy from its environment.
+fn proxied(url: &str) -> bool {
+    let scheme = split_url(url).scheme;
+    let names: &[&str] = if scheme == "https" {
+        &["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]
+    } else {
+        &["http_proxy", "all_proxy", "ALL_PROXY"]
+    };
+    names
+        .iter()
+        .any(|n| std::env::var_os(n).is_some_and(|v| !v.is_empty()))
 }
 
 /// GET `url`, re-vetting every redirect hop. A non-text or failed response
@@ -672,6 +698,23 @@ pub fn fetch_url(url: &str) -> FetchResult {
             Err(reason) => return FetchResult::failed(None, reason),
         };
         hop_n += 1;
+        // curl parses the URL and resolves the host again on its own, so a
+        // parser disagreement or a DNS rebind can reach an address the guard
+        // never judged. The connected address decides; its response is
+        // discarded. Behind a proxy that address is the proxy's.
+        if let Some(ip) = hop
+            .remote_ip
+            .parse::<IpAddr>()
+            .ok()
+            .filter(|_| !proxied(&current))
+        {
+            if let Some(judged) = blocked_ip(ip) {
+                return FetchResult::failed(
+                    None,
+                    format!("blocked non-public host: connected to {judged}"),
+                );
+            }
+        }
         let code = hop.status;
         if matches!(code, 301 | 302 | 303 | 307 | 308) {
             let next = hop.redirect_url;
