@@ -4,11 +4,9 @@
 
 use super::*;
 
-/// Per-phase elapsed clock for one lead fire. The x-a6d6 drain message told
-/// the truth about the drain's own slice, but the kills it reported (margins
-/// of 260-297ms) were spent BEFORE the drain, and no row recorded where. This
-/// clock stamps each pre-drain phase as it completes; the receipt is emitted
-/// immediately before the drain read, so a fire the harness kills mid-drain
+/// Per-phase elapsed clock for one lead fire. The x-a6d6 kills (260-297ms
+/// margins) were spent BEFORE the drain and no row recorded where. The
+/// receipt emits immediately before the drain read, so a mid-drain kill
 /// still leaves the row that names the spender.
 pub(crate) struct PhaseClock {
     started: std::time::Instant,
@@ -65,8 +63,7 @@ impl PhaseClock {
 
 /// The drain invocation and its pre-drain receipt, one seam so the ordering
 /// the kills depend on (row on disk BEFORE the drain starts) is testable
-/// without driving a full board read: the caller's `emit` fires first, then
-/// the drain runs, then both results return together.
+/// without driving a full board read.
 pub(super) fn drain_with_phase_receipt(
     fno_bin: &str,
     cwd: &Path,

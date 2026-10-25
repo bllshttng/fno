@@ -397,11 +397,8 @@ mod tests {
         // The invariant the 260-297ms kills broke: pre-drain reads taken at
         // stopgate_read_timeout() cannot push the fire past the reserve
         // line, so a drain that starts after the WORST legal pre-drain spend
-        // still meets its floor. Worst case: a read consumes its whole bound
-        // (remaining-minus-reserve at stamp time), so the drain's start
-        // state is `remaining == reserve`; the re-stamp below fast-forwards
-        // the clock to exactly that state - Instant arithmetic the test API
-        // owns - without sleeping.
+        // still meets its floor. The re-stamp fast-forwards the clock to the
+        // spent state (remaining == reserve) without sleeping.
         let deadline = std::time::Instant::now() + STOPGATE_FIRE_BUDGET;
         STOPGATE_READS.with(|cell| {
             *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
