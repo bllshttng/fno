@@ -14,26 +14,9 @@ use std::io::Read;
 /// Lowercase, split on anything outside `[a-z0-9]`, then drop digit-only
 /// tokens, 4-8 character hex tokens that contain a digit (node ids like
 /// `14c8`, `cf6a`), and the stop set. A hex word with no digit (`added`,
-/// `face`) survives.
-pub fn tokens(s: &str) -> BTreeSet<String> {
-    const STOP: [&str; 19] = [
-        "pr", "x", "ab", "q", "d", "a", "an", "the", "of", "to", "and", "or", "for", "on", "in",
-        "is", "it", "no", "not",
-    ];
-    s.to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .filter(|t| !t.bytes().all(|b| b.is_ascii_digit()))
-        .filter(|t| {
-            let hex_with_digit = (4..=8).contains(&t.len())
-                && t.bytes().all(|b| b.is_ascii_hexdigit())
-                && t.bytes().any(|b| b.is_ascii_digit());
-            !hex_with_digit
-        })
-        .filter(|t| !STOP.contains(t))
-        .map(str::to_owned)
-        .collect()
-}
+/// `face`) survives. Moved to the fno crate with the rule matcher; this
+/// re-export keeps the law-side scorers on the one implementation.
+pub use fno::rules::tokens;
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
