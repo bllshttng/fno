@@ -720,9 +720,9 @@ pub fn word_count(text: &str) -> usize {
 
 /// Rule 7 against `cap`, which the refusal names. The number is an argument
 /// rather than a module read so the refusal always states the cap enforced.
-fn check_message_length(text: &str, cap: usize) -> Vec<Violation> {
-    let masked = mask(text);
-    let count = word_count(text);
+/// The masked text and its word count arrive precomputed: the capped branch
+/// of `check` masks once and feeds both this and the glue check.
+fn check_message_length(masked: &str, count: usize, cap: usize) -> Vec<Violation> {
     if count <= cap {
         return Vec::new();
     }
@@ -857,11 +857,12 @@ fn number_glue(token: &str) -> bool {
 }
 
 /// Rule 9 against glued tokens, on the capped surfaces only: the word cap is
-/// the pressure that pays for gluing, so the refusal travels with it.
-fn check_glue(text: &str) -> Vec<Violation> {
+/// the pressure that pays for gluing, so the refusal travels with it. The
+/// masked text arrives precomputed from `check`.
+fn check_glue(masked: &str) -> Vec<Violation> {
     let dict = dictionary();
     let mut violations = Vec::new();
-    for raw in mask(text).split_whitespace() {
+    for raw in masked.split_whitespace() {
         let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric());
         if tok.is_empty() || !tok.is_ascii() || !tok.bytes().all(|b| b.is_ascii_alphanumeric()) {
             continue;
@@ -906,11 +907,14 @@ fn check_glue(text: &str) -> Vec<Violation> {
 pub fn check(text: &str, surface: &str, word_cap: Option<usize>) -> Vec<Violation> {
     let mut violations = run(text);
     if matches!(surface, "mail" | "encounter") {
+        let masked = mask(text);
+        let count = masked.split_whitespace().count();
         violations.extend(check_message_length(
-            text,
+            &masked,
+            count,
             word_cap.unwrap_or(MESSAGE_WORD_CAP),
         ));
-        violations.extend(check_glue(text));
+        violations.extend(check_glue(&masked));
     }
     violations
 }
