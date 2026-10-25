@@ -354,6 +354,7 @@ pub(crate) fn read_org_board(
     fno_bin: &str,
     cwd: &Path,
     state_path: &Path,
+    registry: Option<&crate::state::Registry>,
 ) -> Result<OrgBoard, String> {
     let _ = fno_bin;
     // Past the reserve line the board refuses instead of reading at the 1ms
@@ -367,6 +368,7 @@ pub(crate) fn read_org_board(
         max_pr_reads: crate::org_board::DEFAULT_MAX_PR_READS,
         state_path: Some(state_path.to_path_buf()),
         cwd: Some(cwd.to_path_buf()),
+        registry: registry.cloned(),
     };
     let payload = crate::org_board::read_board(&opts);
     let floor = crate::agents_config::config_lookup(cwd, &["dispatch", "blueprint_floor"])

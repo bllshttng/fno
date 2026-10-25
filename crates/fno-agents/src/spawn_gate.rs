@@ -1350,12 +1350,19 @@ pub fn run_gate(
             );
             // Every gate refusal leaves a feed-visible row: a refused
             // launch previously wrote nothing, so the feed showed nothing
-            // for a launch the operator watched refuse.
-            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "spawn-gate").emit(
+            // for a launch the operator watched refuse. The node rides the
+            // row when the payload named one: the stop gate's held-refusal
+            // fold reads the freshest cap refusal FOR A NODE back, and only
+            // a row that names the node can prove the hold. The source is
+            // the schema's one allowed source for this type (`daemon`, the
+            // dispatch door's own refusal rows); "spawn-gate" was refused by
+            // the judge at write time, so the feed showed nothing after all.
+            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "daemon").emit(
                 "agent_spawn_refused",
                 &serde_json::json!({
                     "argv": std::env::args().skip(1).collect::<Vec<String>>(),
                     "exit_code": r.exit_code,
+                    "node": node,
                     "reason": verdict_line(&r),
                 }),
             );
