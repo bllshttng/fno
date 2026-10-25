@@ -6,7 +6,7 @@
 //!
 //! The parity contract was `tests/golden/target_init/`, frozen from the
 //! Python leg and asserted by `tests/target_init_parity.rs` until the
-//! python `status` verb repointed to this orienter and both deleted
+//! python `status` command repointed to this orienter and both deleted
 //! (the orienter is now the one implementation). The
 //! review-capability, dispatch-hold, and containment preflights are NOT
 //! ported: when a node resolves they stay unset-stamped, so the helper's own

@@ -1170,7 +1170,7 @@ pub fn report(project_root: &Path) -> String {
 }
 
 /// The `target-status` transport door: one `command_call` round-trip for the
-/// python `fno do target status` verb. Request: `{"root": path, "node": id?,
+/// python `fno do target status` command. Request: `{"root": path, "node": id?,
 /// "plan_path": path?}`; answer: `{"lines": [["label", "value"], ...]}` in
 /// report order, so the caller renders text or `--json` byte-exactly as its
 /// twin did. Exit 3 names a bad request on stderr.
