@@ -920,7 +920,7 @@ fn emit_landed(ctx: &PushCtx, branch: &str) {
         "harness": harness,
     });
     if let Err(e) =
-        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "cli")
+        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "rust")
             .emit("pr_push_landed", &row)
     {
         eprintln!(
