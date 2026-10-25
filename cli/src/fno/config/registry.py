@@ -113,7 +113,7 @@ FIELD_META: dict[str, Meta] = {
         default_source="readme",
     ),
     # --- config.blueprint.* ---
-    "blueprint.max_prs_per_epic": Meta("advanced", "Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it."),
+    "blueprint.max_prs_per_epic": Meta("advanced", "Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more."),
     "blueprint.python_repair_added_lines": Meta("advanced", "Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh."),
     "plan.default_diff_budget": Meta("advanced", "Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off)."),
     # --- config.backlog.* ---

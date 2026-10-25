@@ -101,7 +101,7 @@ name = ""
 on_unavailable = "refuse"
 
 [blueprint]
-# Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it.
+# Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more.
 max_prs_per_epic = 4
 # Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh.
 python_repair_added_lines = 30
