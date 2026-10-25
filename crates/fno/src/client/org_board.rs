@@ -235,7 +235,7 @@ impl OrgBoard {
                 None => "   reading the fleet map".into(),
             };
             return (
-                vec![title("Topology", width)],
+                vec![title("Fleet", width)],
                 vec![super::org_tabs::meta(state)],
             );
         };
@@ -248,12 +248,17 @@ impl OrgBoard {
                 let machine = &f.machines[m];
                 let lead = &machine.leads[p];
                 (
-                    vec![title("Seat", width)],
+                    vec![title(&lead.seats[s].name, width)],
                     super::org_pages::seat(machine, lead, &lead.seats[s], width, now),
                 )
             }
             _ => {
                 use super::org_tabs as t;
+                let name = match item {
+                    Item::Host(m) => f.machines[m].host.as_str(),
+                    Item::Lead(m, p) => f.machines[m].leads[p].name.as_str(),
+                    _ => "Fleet",
+                };
                 let rows = t::scope(f, &item);
                 let body = match self.tab {
                     OrgTab::Table => {
@@ -266,7 +271,7 @@ impl OrgBoard {
                 };
                 (
                     vec![
-                        title("Topology", width),
+                        title(name, width),
                         t::header(f, &item, self.tab),
                         t::blank(),
                     ],
@@ -314,23 +319,23 @@ impl OrgBoard {
         }
     }
 
-    /// `topology · fleet → bb16 → fno → seat`.
+    /// `fleet → bb16 → rowan → scout`.
     fn crumb(&self) -> String {
         let item = self.current();
         let Some(f) = &self.fleet else {
-            return "topology \u{b7} fleet".into();
+            return "fleet".into();
         };
         match item {
             Item::Feed => "feed".into(),
             Item::System => "system \u{b7} machines".into(),
-            Item::Root => "topology \u{b7} fleet".into(),
-            Item::Host(m) => format!("topology \u{b7} fleet \u{2192} {}", f.machines[m].host),
+            Item::Root => "fleet".into(),
+            Item::Host(m) => format!("fleet \u{2192} {}", f.machines[m].host),
             Item::Lead(m, p) => format!(
-                "topology \u{b7} fleet \u{2192} {} \u{2192} {}",
+                "fleet \u{2192} {} \u{2192} {}",
                 f.machines[m].host, f.machines[m].leads[p].name
             ),
             Item::Seat(m, p, s) => format!(
-                "topology \u{b7} fleet \u{2192} {} \u{2192} {} \u{2192} {}",
+                "fleet \u{2192} {} \u{2192} {} \u{2192} {}",
                 f.machines[m].host,
                 f.machines[m].leads[p].name,
                 f.machines[m].leads[p].seats[s].name

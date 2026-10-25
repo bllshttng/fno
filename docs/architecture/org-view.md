@@ -20,7 +20,7 @@ Below 80 columns the explorer paints alone, and the bottom bar names `F` for ful
 
 ## Look
 
-The view wears the panel slots every fno view wears: body text, bold for emphasis and the dim slot for meta. It paints no accent color and no all-caps word. Headers such as Explorer, Topology, Seat and Current work are bold sentence case. Tabs, column heads and entries use sentence case too.
+The view wears the panel slots every fno view wears: body text, bold for emphasis and the dim slot for meta. It paints no accent color and no all-caps word. Headers such as Explorer, Feed, System and Current work are bold sentence case. The right pane's title names the selection: Fleet, a machine such as bb16, a lead or a seat. Tabs, column heads and entries use sentence case too.
 
 ## Keys
 
@@ -28,7 +28,7 @@ Use `j` and `k` or the arrows to move in the explorer. The cursor opens each lea
 
 Enter on the fleet, a machine or a lead moves to the next row, so Enter on a lead opens its first seat. Enter on a seat attaches it. Space peeks, `x` stops and `P` opens the portal picker. A tap selects a row, a tab or a graph box. A second tap on the selected seat acts like Enter.
 
-The bottom bar is the key bar. It leads with the keys that act on the selection, in body text. The breadcrumb (`topology · fleet → bb16 → rowan → scout`) and the read state follow in the dim slot.
+The bottom bar is the key bar. It leads with the keys that act on the selection, in body text. The breadcrumb (`fleet → bb16 → rowan → scout`) and the read state follow in the dim slot.
 
 ## Reads
 

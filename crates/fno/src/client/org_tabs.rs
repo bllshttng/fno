@@ -224,7 +224,7 @@ pub(crate) struct Entry {
     pub(crate) depth: usize,
 }
 
-/// The explorer: the topology tree (fleet, machines, leads, the expanded
+/// The explorer: the fleet tree (fleet, machines, leads, the expanded
 /// lead's seats), then feed and system.
 pub(crate) fn explorer(
     fleet: Option<&Fleet>,
@@ -234,10 +234,7 @@ pub(crate) fn explorer(
     feed_count: Option<usize>,
     width: usize,
 ) -> Vec<Line> {
-    let mut out = vec![
-        Lb::default().s(" Explorer", BRole::Head).done(),
-        Lb::default().s(" Topology", BRole::Body).done(),
-    ];
+    let mut out = vec![Lb::default().s(" Explorer", BRole::Head).done()];
     let tree: Vec<&Entry> = entries
         .iter()
         .filter(|e| !matches!(e.item, Item::Feed | Item::System))
@@ -315,7 +312,7 @@ pub(crate) fn explorer(
         out.push(
             Lb::default()
                 .s(if on { "\u{25b6}" } else { " " }, BRole::Head)
-                .s(fit(label, width.saturating_sub(5)), BRole::Body)
+                .s(fit(label, width.saturating_sub(5)), BRole::Head)
                 .s(
                     count.map_or_else(|| "  ? ".to_string(), |n| format!("{n:>3} ")),
                     BRole::Meta,
