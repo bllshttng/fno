@@ -862,43 +862,18 @@ fn synthesize(prompt: &str) -> Result<Proposal, String> {
     parse_proposal(&stdout)
 }
 
-/// Run a command with a poll-then-kill bound (the blueprint_judge shape: a
-/// hung lane ignores argv timeouts, so the enforcement lives here). Returns
-/// (exit code, stdout, stderr); a timeout reports code 124.
-fn bounded_run(mut cmd: &mut Command, timeout_secs: u64) -> Result<(i32, String, String), String> {
-    let child = cmd
+/// Run a command under the shared poll-then-kill bound: spawn it in its own
+/// process group, then wait through `blueprint_judge::bounded_wait`, the one
+/// implementation both the judge's headless spawn and this family's one-shots
+/// share. Returns (exit code, stdout, stderr); a timeout reports code 124.
+fn bounded_run(cmd: &mut Command, timeout_secs: u64) -> Result<(i32, String, String), String> {
+    let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => {
-                let out = child.wait_with_output().map_err(|e| e.to_string())?;
-                return Ok((
-                    status.code().unwrap_or(1),
-                    String::from_utf8_lossy(&out.stdout).into_owned(),
-                    String::from_utf8_lossy(&out.stderr).into_owned(),
-                ));
-            }
-            None => {
-                if std::time::Instant::now() >= deadline {
-                    // The process group cannot be ours (we just spawned it),
-                    // so the signal cannot reach this process.
-                    let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-                    return Ok((
-                        124,
-                        String::from_utf8_lossy(&out.stdout).into_owned(),
-                        format!("timed out after {timeout_secs}s"),
-                    ));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1000));
-            }
-        }
-    }
+    crate::blueprint_judge::bounded_wait(&mut child, timeout_secs)
 }
 
 // ---------------------------------------------------------------------------

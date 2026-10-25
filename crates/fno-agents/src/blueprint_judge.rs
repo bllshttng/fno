@@ -301,10 +301,20 @@ pub(crate) fn headless_spawn(
         .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
-    // Poll-then-kill (the sandbox_probe shape): `--timeout` only rides argv
-    // to the child harness, which a hung lane ignores, so the enforcement
-    // lives here. The reply is small, so the unread pipes cannot deadlock it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(kill_after_secs);
+    bounded_wait(&mut child, kill_after_secs)
+}
+
+/// The one bounded-wait implementation both the judge's headless spawn and
+/// the skill-diff proposer's one-shots share: poll-then-kill (the
+/// sandbox_probe shape), `--timeout` only rides argv to the child harness,
+/// which a hung lane ignores, so the enforcement lives here. The reply is
+/// small, so the unread pipes cannot deadlock it. A timeout returns code 124
+/// with a named stderr line when the child wrote none.
+pub(crate) fn bounded_wait(
+    child: &mut std::process::Child,
+    timeout_secs: u64,
+) -> Result<(i32, String, String), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => {
@@ -327,7 +337,7 @@ pub(crate) fn headless_spawn(
                     let out = child.wait_with_output().map_err(|e| e.to_string())?;
                     let err = String::from_utf8_lossy(&out.stderr).into_owned();
                     let named = format!(
-                        "reader timed out after {kill_after_secs}s: model lane slow or provider wait"
+                        "timed out after {timeout_secs}s: model lane slow or provider wait"
                     );
                     return Ok((
                         124,
