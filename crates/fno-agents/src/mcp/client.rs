@@ -381,7 +381,7 @@ mod tests {
     async fn the_send_door_delivers_to_a_registered_channel() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("s.sock");
-        let state = super::super::sidecar::SidecarState::new(1800);
+        let state = std::sync::Arc::new(super::super::sidecar::SidecarState::new(1800));
         let server_sock = sock.clone();
         let server = tokio::spawn(async move {
             super::super::sidecar::bind_and_serve(state, &server_sock).await;
