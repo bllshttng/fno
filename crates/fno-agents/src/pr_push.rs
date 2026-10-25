@@ -893,6 +893,42 @@ fn emit_bypass_row(ctx: &PushCtx) {
     );
 }
 
+/// The `pr_push_landed` row the `ci_cadence` arm schedules its checks from.
+/// Best-effort: a lost row costs the cadence, never the push.
+fn emit_landed(ctx: &PushCtx, branch: &str) {
+    let sha = run_labeled(
+        "pr-push",
+        &ctx.git_bin,
+        &["rev-parse", "HEAD"],
+        &ctx.cwd,
+        READ_TIMEOUT,
+    )
+    .map(|(_, out, _)| out.trim().to_string())
+    .unwrap_or_default();
+    if sha.is_empty() {
+        return;
+    }
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return;
+    };
+    let (session_id, harness) = crate::claims::resolve_identity();
+    let row = json!({
+        "branch": branch,
+        "sha": sha,
+        "cwd": ctx.cwd.to_string_lossy(),
+        "session_id": session_id,
+        "harness": harness,
+    });
+    if let Err(e) =
+        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "cli")
+            .emit("pr_push_landed", &row)
+    {
+        eprintln!(
+            "pr-push: the pr_push_landed row did not land ({e}); no CI cadence for this push"
+        );
+    }
+}
+
 /// The current branch, for the bypass journal row.
 fn current_branch_quoted(ctx: &PushCtx) -> String {
     run_labeled(
@@ -1694,6 +1730,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             ci,
             remote_branch,
         } => {
+            emit_landed(&ctx, &remote_branch);
             println!(
                 "pr-push: origin/main behind-before={before} behind-after={after} integrate={integrate} \
                  preflight={} ci={ci} sha={sha} ref=refs/heads/{remote_branch} pushed=1",
