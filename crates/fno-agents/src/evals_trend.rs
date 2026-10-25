@@ -759,6 +759,34 @@ fn print_summary(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
     0
 }
 
+/// The health projection (the deleted Python leg's evals_health_summary
+/// shape): the summary's fields under the health keys, or the literal null
+/// when no history or no baseline rows exist. One denominator authority:
+/// the callers never re-fold.
+fn print_health(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
+    let payload = summary_payload(history, stale_days, now);
+    let row_count = payload
+        .get("row_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if row_count == 0 {
+        println!("null");
+        return 0;
+    }
+    let health = json!({
+        "regression_pass_rate": payload.get("regression_pass_rate").cloned().unwrap_or(Value::Null),
+        "flake_count": payload.get("flake_count").and_then(Value::as_i64).unwrap_or(0),
+        "regression_alarm": payload.get("regression_alarm").cloned().unwrap_or(json!([])),
+        "regressed": payload.get("regressed").cloned().unwrap_or(json!([])),
+        "window_days": stale_days,
+        "age_days": payload.get("age_days").cloned().unwrap_or(Value::Null),
+        "stale": payload.get("stale").and_then(Value::as_bool).unwrap_or(false),
+        "never_ran": payload.get("never_ran").and_then(Value::as_bool).unwrap_or(false),
+    });
+    println!("{}", serde_json::to_string(&health).unwrap_or_default());
+    0
+}
+
 /// The qualification projection surface, shared by the `--qualification`
 /// flag and the stdin `{"op": "qualification"}` payload. A missing history
 /// file folds over zero rows: every scenario reports missing, which is the
@@ -847,6 +875,20 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                         .to_string();
                     let stale_days = v.get("stale_days").and_then(Value::as_i64).unwrap_or(7);
                     return print_summary(&history, stale_days, Utc::now());
+                }
+                // The health projection: the deleted Python leg's
+                // evals_health_summary (report.py) shape, now the door's own
+                // answer. None rules (no history, no rows) read as the
+                // literal null so the callers keep their None-on-error
+                // posture.
+                if v.get("op").and_then(Value::as_str) == Some("health") {
+                    let history = v
+                        .get("history")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let stale_days = v.get("stale_days").and_then(Value::as_i64).unwrap_or(7);
+                    return print_health(&history, stale_days, Utc::now());
                 }
                 if v.get("op").and_then(Value::as_str) == Some("qualification") {
                     let history = v
