@@ -23,6 +23,7 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "mine" => Some(run_mine(rest)),
         "reindex" => Some(run_reindex(rest)),
         "clear" => Some(run_clear_cmd(rest)),
+        "ask" => Some(run_ask(rest)),
         _ => None,
     }
 }
@@ -795,6 +796,309 @@ fn mine_list_at(path: &std::path::Path, as_json: bool) -> i32 {
             .map(|n| format!(" -> {n}"))
             .unwrap_or_default();
         println!("{}. [{}] {}{}", i + 1, mark, item.text, node);
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
+// ask
+// ---------------------------------------------------------------------------
+
+/// The laws the intake's law gate matches against (d-0fa92eb9: no agent asks
+/// a question the operator already settled): the live law-lane rows, read
+/// through the same decisions door the decide flow shells. A failed read is
+/// fail-open by design - the question is recorded anyway, with the failure
+/// named on stderr.
+fn live_law_rows() -> Vec<crate::law_match::LawRow> {
+    let argv = vec![
+        crate::mail_cli::send_raw::agents_binary(),
+        "backlog".to_string(),
+        "decisions".to_string(),
+        "--lane".to_string(),
+        "law".to_string(),
+        "--state".to_string(),
+        "live".to_string(),
+        "--json".to_string(),
+    ];
+    let (_, stdout) = match captured_stdout(&argv, 30.0) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("outstanding: live-law lookup failed ({e}); recording anyway");
+            return Vec::new();
+        }
+    };
+    let parsed: Value = match serde_json::from_str(stdout.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("outstanding: live-law lookup failed ({e}); recording anyway");
+            return Vec::new();
+        }
+    };
+    let rows = parsed
+        .get("decisions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    rows.iter()
+        .filter_map(|row| serde_json::from_value::<crate::law_match::LawRow>(row.clone()).ok())
+        .collect()
+}
+
+/// One bounded self-exec reading stdout: `(code, stdout)` on a completed
+/// child, `Err` naming the failure on spawn error or timeout.
+fn captured_stdout(argv: &[String], timeout_secs: f64) -> Result<(i32, String), String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|e| format!("{e}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(timeout_secs);
+    let stdout_handle = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = out.read_to_string(&mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = err.read_to_string(&mut buf);
+            buf
+        })
+    });
+    let mut code = 0;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                code = status.code().unwrap_or(1);
+                break;
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(_) => {
+                code = 127;
+                break;
+            }
+        }
+    }
+    let stdout = stdout_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    if timed_out {
+        return Err("timed out".to_string());
+    }
+    if code != 0 {
+        let detail = stderr
+            .lines()
+            .chain(stdout.lines())
+            .find(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("exit {code}"));
+        return Err(detail);
+    }
+    Ok((code, stdout))
+}
+
+/// The ask arm: every fact the deleted shim resolved Python-side - identity,
+/// live law rows, storage root, session id, the user's stated name -
+/// resolves here, then one intake runs and its answer echoes verbatim.
+fn run_ask(args: &[String]) -> i32 {
+    let mut question: Option<String> = None;
+    let mut question_file: Option<String> = None;
+    let mut ask: Option<String> = None;
+    let mut options: Vec<String> = Vec::new();
+    let mut blocks: Vec<String> = Vec::new();
+    let mut node: Option<String> = None;
+    let mut subject: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-h" | "--help" => {
+                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>]");
+                return 0;
+            }
+            "--question-file" => match args.get(index + 1) {
+                Some(value) => {
+                    question_file = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --question-file needs a value");
+                    return 2;
+                }
+            },
+            "--ask" => match args.get(index + 1) {
+                Some(value) => {
+                    ask = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --ask needs a value");
+                    return 2;
+                }
+            },
+            "--option" => match args.get(index + 1) {
+                Some(value) => {
+                    options.push(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --option needs a value");
+                    return 2;
+                }
+            },
+            "--blocks" => match args.get(index + 1) {
+                Some(value) => {
+                    blocks.push(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --blocks needs a value");
+                    return 2;
+                }
+            },
+            "--node" => match args.get(index + 1) {
+                Some(value) => {
+                    node = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --node needs a value");
+                    return 2;
+                }
+            },
+            "--subject" => match args.get(index + 1) {
+                Some(value) => {
+                    subject = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            other if other.starts_with('-') => {
+                eprintln!("outstanding: unknown argument {other:?}");
+                return 2;
+            }
+            other => {
+                if question.is_some() {
+                    eprintln!(
+                        "error: got an extra argument: {other:?}. Provide the question once."
+                    );
+                    return 2;
+                }
+                question = Some(other.to_string());
+            }
+        }
+        index += 1;
+    }
+    // 'template' rides --question-file: the flag surface is shrink-only.
+    let template = question_file.as_deref() == Some("template");
+    if template {
+        question_file = None;
+    }
+    let text = match (&question, &question_file) {
+        (Some(_), Some(_)) => {
+            eprintln!("error: provide the question once - inline or as a file, not both");
+            return 1;
+        }
+        (None, None) => {
+            eprintln!("error: provide the question - positionally or --question-file");
+            return 2;
+        }
+        (Some(q), None) => q.clone(),
+        (None, Some(file)) => {
+            if file == "-" {
+                let mut buf = String::new();
+                use std::io::Read;
+                if std::io::stdin().read_to_string(&mut buf).is_err() {
+                    eprintln!("error: cannot read -: stdin failed");
+                    return 1;
+                }
+                buf
+            } else {
+                match std::fs::read_to_string(file) {
+                    Ok(text) => text,
+                    Err(e) => {
+                        eprintln!("error: cannot read {file}: {e}");
+                        return 1;
+                    }
+                }
+            }
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = crate::paths::AgentsHome::from_env();
+    let ident = crate::spawn_context::resolve_self_identity(
+        &|name| std::env::var(name).ok(),
+        None,
+        None,
+        &home,
+    );
+    let session = crate::outstanding::session_id(&cwd);
+    let asker = match (&ident.session_id, &ident.harness) {
+        (Some(s), Some(_)) => Some(crate::identity::canonical_handle(s)),
+        _ => None,
+    };
+    // Nothing is recorded on a template request, so no law row can refuse it.
+    let laws = if template {
+        Vec::new()
+    } else {
+        live_law_rows()
+    };
+    let who = crate::backlog::birth::display_name(&crate::paths::worktree_repo_root(&cwd));
+    let request = crate::question_intake::IntakeRequest {
+        question: text,
+        template,
+        ask,
+        options,
+        blocks,
+        node,
+        subject,
+        session_id: session,
+        cwd: Some(cwd.to_string_lossy().into_owned()),
+        asker,
+        laws,
+        storage_root: crate::outstanding::storage_root(&cwd),
+        index_path: Some(crate::provider_cap::questions_path(&home)),
+        journal_path: Some(crate::paths::events_path(&cwd)),
+        display_name: Some(who),
+        render_cap: None,
+        op: None,
+        event: None,
+    };
+    let answer = crate::question_intake::run_intake(&request, &home);
+    for line in &answer.lines {
+        if template {
+            print!("{line}");
+        } else {
+            eprintln!("{line}");
+        }
+    }
+    if answer.exit_code != 0 {
+        return answer.exit_code;
+    }
+    if let Some(qid) = &answer.qid {
+        if !template {
+            println!("{qid}");
+        }
     }
     0
 }

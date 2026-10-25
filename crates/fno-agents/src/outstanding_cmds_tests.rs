@@ -326,3 +326,15 @@ fn the_delivery_stamp_and_exception_are_the_named_ones() {
         "operator answer verbatim: quoted decision text, not authored prose"
     );
 }
+
+#[test]
+fn an_ask_with_no_question_text_refuses_before_any_read() {
+    assert_eq!(run_ask(&[]), 2);
+}
+
+#[test]
+fn a_template_request_records_nothing_and_passes_no_laws() {
+    // The template arm returns before any write; the ask resolves identity
+    // and the user's name, never the law read.
+    assert_eq!(run_ask(&args(&["--question-file", "template"])), 0);
+}
