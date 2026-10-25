@@ -33,8 +33,10 @@ use std::path::{Path, PathBuf};
 const CHAT_PREFIX: &str = "chat-";
 const PARTICIPANT_SEP: char = '\u{1f}';
 /// The bus kinds recorded as conversation messages. Everything else is
-/// control traffic (withdraw, announce-wake) or a receipt (below).
-pub(crate) const MESSAGE_KINDS: &[&str] = &["send", "announce"];
+/// control traffic (withdraw, announce-wake) or a receipt (below). The note
+/// kinds (`--kind fyi|heads-up|question`) are messages too: the store is
+/// their only record, and a reply finds its parent here.
+pub(crate) const MESSAGE_KINDS: &[&str] = &["send", "announce", "fyi", "heads-up", "question"];
 /// Per-chat lock bound; mirrors announce.rs LOCK_TIMEOUT.
 const CHAT_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -498,17 +500,8 @@ fn chat_holds_message(chat_dir: &Path, id: &str) -> bool {
 /// `from_name` (the fleet name a delivered header shows) else its `from`
 /// address. `None` when no row holds the id or the row names no sender.
 pub(crate) fn message_sender_at(chats_dir: &Path, db: &Path, id: &str) -> Option<String> {
-    let chat_id = chat_of_message(chats_dir, db, id).ok()??;
-    let text = std::fs::read_to_string(chats_dir.join(&chat_id).join("messages.jsonl")).ok()?;
-    for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if v.get("type").and_then(Value::as_str) != Some("message")
-            || v.get("id").and_then(Value::as_str) != Some(id)
-        {
-            continue;
-        }
+    let v = message_row_at(chats_dir, db, id)?;
+    {
         let handle = v.get("from").and_then(Value::as_str).unwrap_or("");
         let session = v
             .get("from_session")
@@ -540,12 +533,29 @@ pub(crate) fn message_sender_at(chats_dir: &Path, db: &Path, id: &str) -> Option
                 crate::agent_ref::Join::Ambiguous | crate::agent_ref::Join::None => None,
             }
         })();
-        let sender = named
+        named
             .or_else(|| from_name.map(str::to_string))
-            .or_else(|| (!handle.is_empty()).then(|| handle.to_string()))?;
-        return Some(sender);
+            .or_else(|| (!handle.is_empty()).then(|| handle.to_string()))
     }
-    None
+}
+
+/// The stored message line for `id`: the bus envelope verbatim, with its
+/// `thread`, `kind`, `from` and `to`. `None` when no chat holds the id.
+pub(crate) fn message_row_at(chats_dir: &Path, db: &Path, id: &str) -> Option<Value> {
+    let chat_id = chat_of_message(chats_dir, db, id).ok()??;
+    let text = std::fs::read_to_string(chats_dir.join(&chat_id).join("messages.jsonl")).ok()?;
+    text.lines()
+        .filter(|line| line.contains(id))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|v| {
+            v.get("type").and_then(Value::as_str) == Some("message")
+                && v.get("id").and_then(Value::as_str) == Some(id)
+        })
+}
+
+/// [`message_row_at`] against the live store paths.
+pub(crate) fn message_row(id: &str) -> Option<Value> {
+    message_row_at(&chats_dir(), &index_path(), id)
 }
 
 /// The trust lookup against the live store paths ([`message_sender_at`]).
@@ -558,23 +568,11 @@ pub(crate) fn message_sender(id: &str) -> Option<String> {
 /// `<user>:<host>/<name>`. `None` when no row holds the id or the row
 /// names no sender.
 pub(crate) fn message_from(id: &str) -> Option<String> {
-    let chat_id = chat_of_message(&chats_dir(), &index_path(), id).ok()??;
-    let text = std::fs::read_to_string(chats_dir().join(&chat_id).join("messages.jsonl")).ok()?;
-    for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if v.get("type").and_then(Value::as_str) == Some("message")
-            && v.get("id").and_then(Value::as_str) == Some(id)
-        {
-            return v
-                .get("from")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
-        }
-    }
-    None
+    message_row(id)?
+        .get("from")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 // ---------------------------------------------------------------------------
 // Index (derived; the JSONL is the only record)
@@ -2062,13 +2060,6 @@ pub(crate) fn resolve_prefix(prefix: &str) -> Result<Resolved, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-// ---------------------------------------------------------------------------
 // Tests (one fn: the gate is shrink-only, and every contract below asserts a
 // distinct AC of the store)
 // ---------------------------------------------------------------------------
@@ -2194,6 +2185,19 @@ mod tests {
             assert_eq!(dir_mode & 0o777, 0o700, "chat dirs are owner-only");
             assert_eq!(file_mode & 0o777, 0o600, "chat files are owner-only");
         }
+
+        // --- record: a note kind is a message, and a reply finds its parent's
+        // thread, kind and sender in the stored row (no markdown render).
+        let note = bus_line("fmail-abcabcabcabc", "web", "fno", "heads-up");
+        assert!(matches!(
+            record_at(&chats, &db, &bus, &note).unwrap(),
+            Recorded::Message { .. }
+        ));
+        let parent = message_row_at(&chats, &db, "fmail-abcabcabcabc").expect("note recorded");
+        assert_eq!(parent["kind"], "heads-up");
+        assert_eq!(parent["from"], "web");
+        assert_eq!(parent["thread"], "fmail-abcabcabcabc");
+        assert!(message_row_at(&chats, &db, "fmail-ffffffffffff").is_none());
 
         // --- record: announce scopes diverge; unregistered addressee keys raw;
         // control rows and receipts for unknown ids skip (AC3-ERR, AC1-ERR).

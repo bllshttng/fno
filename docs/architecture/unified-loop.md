@@ -259,7 +259,7 @@ A plan may therefore declare `done_probes` in its frontmatter - up to 3 shell co
 
 ```yaml
 done_probes:
-  - "fno agents mail list --kind report --since 24h | grep -q groom"
+  - "fno agents mail unread --json | grep -q groom"
 ```
 
 `loop-check` runs them as the **final** conjunct, only once every other conjunct already holds, and refuses `DonePRGreen` until each exits 0.

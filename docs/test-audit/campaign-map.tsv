@@ -799,7 +799,6 @@ K5	cli/tests/unit/test_relatedness_consolidation.py	py	3
 K5	cli/tests/unit/test_relatedness_dedup.py	py	13
 K5	cli/tests/unit/test_render_targets.py	py	22
 K5	cli/tests/unit/test_render_trigger.py	py	3
-K5	cli/tests/unit/test_retro_reconcile_findings.py	py	9
 K5	cli/tests/unit/test_rollup_maintain.py	py	10
 K5	cli/tests/unit/test_scoreboard.py	py	35
 K5	cli/tests/unit/test_stale_escalate.py	py	4
@@ -934,7 +933,6 @@ K6	cli/tests/events/test_schema_files.py	py	12
 K6	cli/tests/events/test_schema_manifest.py	py	8
 K6	cli/tests/integration/test_authorized_merge.py	py	7
 K6	cli/tests/integration/test_pr_watch_auto_merge.py	py	1
-K6	cli/tests/integration/test_retro_pr_scope.py	py	25
 K6	cli/tests/integration/test_worktree_cleanup_merged.py	py	63
 K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
@@ -1153,8 +1151,6 @@ K7	cli/tests/integration/test_blueprint_mutation.py	py	56
 K7	cli/tests/integration/test_fno_plan_brief.py	py	24
 K7	cli/tests/integration/test_product_delivery_journey.py	py	6
 K7	cli/tests/integration/test_provenance_cmd.py	py	18
-K7	cli/tests/integration/test_retro_land.py	py	11
-K7	cli/tests/integration/test_retro_sentinel_consumer.py	py	19
 K7	cli/tests/integration/test_target_start.py	py	101
 K7	cli/tests/observer/test_cli.py	py	30
 K7	cli/tests/observer/test_fold.py	py	23
@@ -1223,12 +1219,6 @@ K7	cli/tests/unit/test_research_core.py	py	26
 K7	cli/tests/unit/test_research_deliverable.py	py	17
 K7	cli/tests/unit/test_research_grade.py	py	10
 K7	cli/tests/unit/test_resolve_executor_emit.py	py	5
-K7	cli/tests/unit/test_retro_classify.py	py	11
-K7	cli/tests/unit/test_retro_dedup.py	py	7
-K7	cli/tests/unit/test_retro_gate_escape.py	py	4
-K7	cli/tests/unit/test_retro_harvest.py	py	56
-K7	cli/tests/unit/test_retro_postmortems.py	py	27
-K7	cli/tests/unit/test_retro_sweep.py	py	28
 K7	cli/tests/unit/test_target_cli.py	py	73
 K7	cli/tests/unit/test_target_denominator.py	py	10
 K7	cli/tests/unit/test_target_start_bound.py	py	9
@@ -1676,7 +1666,6 @@ K10	cli/tests/unit/test_agy_plugin_payload.py	py	4
 K10	cli/tests/unit/test_alias_conflict_suppression.py	py	5
 K10	cli/tests/unit/test_ambient_canary.py	py	1
 K10	cli/tests/unit/test_ambient_surface.py	py	5
-K10	cli/tests/unit/test_anchor_check.py	py	11
 K10	cli/tests/unit/test_annotate.py	py	4
 K10	cli/tests/unit/test_archive_in_db.py	py	6
 K10	cli/tests/unit/test_archive_sweep.py	py	37
@@ -1689,7 +1678,6 @@ K10	cli/tests/unit/test_batch_policy.py	py	15
 K10	cli/tests/unit/test_bundle_cli.py	py	8
 K10	cli/tests/unit/test_cached_state_surface.py	py	9
 K10	cli/tests/unit/test_cascade_reopen_guard.py	py	37
-K10	cli/tests/unit/test_causal_fields.py	py	17
 K10	cli/tests/unit/test_check_migration.py	py	2
 K10	cli/tests/unit/test_cleanup_lane.py	py	5
 K10	cli/tests/unit/test_cli_help.py	py	5
@@ -1735,7 +1723,6 @@ K10	cli/tests/unit/test_human_touch.py	py	8
 K10	cli/tests/unit/test_incarnation_fence.py	py	17
 K10	cli/tests/unit/test_inherited_tier_remap.py	py	49
 K10	cli/tests/unit/test_internal_gh.py	py	12
-K10	cli/tests/unit/test_keep_going.py	py	14
 K10	cli/tests/unit/test_keeper_lane.py	py	31
 K10	cli/tests/unit/test_keyless_smoke.py	py	1
 K10	cli/tests/unit/test_law_command_form_gate.py	py	5

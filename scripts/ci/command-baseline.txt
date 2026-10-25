@@ -122,7 +122,6 @@ project init
 research
 restart
 resume
-retro
 roles
 route
 scoreboard

@@ -471,6 +471,30 @@ pub fn default_diff_budget(cwd: &Path) -> u32 {
         .unwrap_or(DEFAULT_PLAN_DIFF_BUDGET)
 }
 
+/// Default wall bound for one merge-path gh read (the pr-worktree resolve
+/// that backs the merge gate and the push command): the 30s the call sites
+/// hardcoded, now one config key. The shim's own stall under load is the
+/// reason reads missed it; a longer bound hides a stall, it does not fix
+/// one.
+pub const DEFAULT_MERGE_GH_READ_SECS: u64 = 30;
+
+/// Resolve `bounds.merge_gh_read_secs` with the shared precedence: env
+/// override, config, default. 0 reads as unset (a zero bound would refuse
+/// every read).
+pub fn merge_gh_read_secs(cwd: &Path) -> u64 {
+    if let Some(v) = non_empty_env("FNO_MERGE_GH_READ_SECS")
+        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
+        .filter(|v| *v > 0)
+    {
+        return v;
+    }
+    config_lookup(cwd, &["bounds", "merge_gh_read_secs"])
+        .and_then(|v| v.as_integer())
+        .and_then(|i| u64::try_from(i).ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MERGE_GH_READ_SECS)
+}
+
 /// Apply the shared headless confinement boundary for harnesses whose own argv
 /// has no usable sandbox backend. Explicit bypass remains an operator choice;
 /// otherwise the configured policy decides whether the child may spawn.
@@ -2209,6 +2233,55 @@ mod tests {
         let f = dir.join("explicit.toml");
         std::fs::write(&f, body).unwrap();
         f
+    }
+
+    /// The merge-path gh read bound reads `bounds.merge_gh_read_secs` and
+    /// falls back to the 30s default when nothing is set.
+    #[test]
+    fn merge_gh_read_secs_reads_config_over_the_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let bare = write_project_settings("merge-read-bare", "schema_version = 1\n");
+        assert_eq!(
+            merge_gh_read_secs(&bare),
+            DEFAULT_MERGE_GH_READ_SECS,
+            "no key anywhere reads the default"
+        );
+        let project =
+            write_project_settings("merge-read-config", "[bounds]\nmerge_gh_read_secs = 90\n");
+        assert_eq!(merge_gh_read_secs(&project), 90);
+        clear_config_env();
+    }
+
+    /// The env outranks the config, and a zero reads as unset in both
+    /// tiers - a zero bound would refuse every read.
+    #[test]
+    fn merge_gh_read_secs_env_outranks_config_and_zero_reads_unset() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let project =
+            write_project_settings("merge-read-env", "[bounds]\nmerge_gh_read_secs = 90\n");
+        std::env::set_var("FNO_MERGE_GH_READ_SECS", "5");
+        assert_eq!(
+            merge_gh_read_secs(&project),
+            5,
+            "the env outranks the config"
+        );
+        std::env::set_var("FNO_MERGE_GH_READ_SECS", "0");
+        assert_eq!(
+            merge_gh_read_secs(&project),
+            90,
+            "a zero env reads as unset"
+        );
+        std::env::remove_var("FNO_MERGE_GH_READ_SECS");
+        let zeroed =
+            write_project_settings("merge-read-zero", "[bounds]\nmerge_gh_read_secs = 0\n");
+        assert_eq!(
+            merge_gh_read_secs(&zeroed),
+            DEFAULT_MERGE_GH_READ_SECS,
+            "a zero config reads as unset"
+        );
+        clear_config_env();
     }
 
     // --- guardrail presets --------------------------------------

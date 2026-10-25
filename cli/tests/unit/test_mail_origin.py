@@ -21,21 +21,17 @@ def test_mail_envelope_carries_and_validates_origin(monkeypatch):
 
 
 def test_durable_thread_round_trips_origin(tmp_path, monkeypatch):
-    from fno.inbox.store import read_thread, write_new_thread
+    from fno.inbox.store import write_new_thread
     from fno.paths_testing import use_tmpdir
 
     use_tmpdir(monkeypatch, tmp_path)
-    handle = write_new_thread(
+    write_new_thread(
         "recipient",
         "sender",
         "send",
         "hello",
         origin="recovery",
     )
-    parsed = read_thread(handle.path)
-    assert parsed is not None
-    assert parsed.origin == "recovery"
-    assert "origin: recovery" in handle.path.read_text()
     from fno.bus.log import iter_messages
 
     assert list(iter_messages())[0].origin == "recovery"
