@@ -891,9 +891,25 @@ fn generic_completion_finalize_consumes_selected_verdict_without_pr_paths() {
     let handoff = fs::read_to_string(&handoff_files(&env)[0]).unwrap();
     assert!(handoff.contains("fno-delivery://ab-testnode/attempt-1/sha256:abc"));
     assert!(handoff.contains("generic delivery receipt"));
-    assert!(fs::read_to_string(&env.gh_calls)
-        .unwrap_or_default()
-        .is_empty());
+    // The register leg's last-resort PR probe fires on a PR-less finalize and
+    // stays best-effort: the stub declines, the row records no PR, the exit
+    // stays green. (The old assert read "no gh at all", but only because the
+    // stubbed register-task never reached its own fallback.)
+    let gh_log = fs::read_to_string(&env.gh_calls).unwrap_or_default();
+    assert_eq!(
+        gh_log.lines().count(),
+        1,
+        "exactly the last-resort gh pr view probe: {gh_log}"
+    );
+    assert!(
+        gh_log.contains("pr view"),
+        "the last-resort probe, not another surface: {gh_log}"
+    );
+    assert!(
+        rows[0]["pr_number"].is_null(),
+        "no PR recorded on a delivery finalize: {}",
+        rows[0]
+    );
     assert_eq!(count_event(&env.events, "termination", "S-delivery"), 1);
     assert!(store_text(&env.events).contains("DoneDelivery"));
 }
